@@ -1,4 +1,3 @@
-/** LaunchAgent stop semantics and in-service maintenance parking. */
 import { isDeepStrictEqual } from "node:util";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";

@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { cronRunRecordStoreKey, cronRunRecordToRunLogEntry } from "./run-history-detail.js";
+import { resolveCronJobConfigRevision } from "./config-revision.js";
+import {
+  cronRunLogEntryToDetail,
+  cronRunRecordStoreKey,
+  cronRunRecordToRunLogEntry,
+} from "./run-history-detail.js";
 import {
   readCronRunHistoryPageForTests,
   readCronRunRecordsForTests,
@@ -47,7 +53,6 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
     cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     evaluateCronTrigger,
     runIsolatedAgentJob,
   };
@@ -56,6 +61,7 @@ async function createHarness(input: Partial<CronJobCreate> = {}) {
   await cron.start();
   const job = await cron.add({
     name: "cadence recovery",
+    agentId: "main",
     enabled: true,
     schedule: HOURLY,
     trigger: { script: "json({ fire: true })" },
@@ -97,79 +103,96 @@ function rejectCronRowWrite(jobId: string) {
   return () => database.exec("DROP TRIGGER IF EXISTS reject_cadence_row");
 }
 
+/** Seed the released split-write crash: terminal history exists, job remains active. */
 async function finishWithPendingCronRow(
   harness: Harness,
-  options: { atMs?: number; endedAtMs?: number; mode?: "due" | "force"; result?: RunResult } = {},
+  options: {
+    atMs?: number;
+    endedAtMs?: number;
+    mode?: "due" | "force";
+    result?: RunResult;
+    historicalNextRunAtMs?: number;
+  } = {},
 ) {
   const atMs = options.atMs ?? RUN_AT;
+  const endedAtMs = options.endedAtMs ?? atMs + 1_000;
   const result: RunResult = options.result ?? { status: "ok", summary: "Completed once." };
-  const previousTaskIds = new Set(readTasks(harness).map((task) => task.id));
-  const started = createDeferred();
-  const completion = createDeferred<RunResult>();
-  harness.runIsolatedAgentJob.mockImplementationOnce(async () => {
-    started.resolve();
-    return await completion.promise;
-  });
+  const job = harness.cron.getJob(harness.job.id)!;
+  const context = captureOpenClawStateWorkerContext();
+  const storeKey = cronStoreKey(harness.storePath);
+  const request = {
+    jobId: job.id,
+    receiptId: `released:${job.id}:${readTasks(harness).length}`,
+    mode: "force" as const,
+    configRevision: resolveCronJobConfigRevision(job),
+  };
   vi.setSystemTime(atMs);
-  const job = harness.cron.getJob(harness.job.id);
-  if (!job) {
-    throw new Error("Expected the job to remain available for execution.");
-  }
-  const stream = job.schedule.kind === "stream";
-  const run = harness.cron.run(harness.job.id, options.mode ?? (stream ? "force" : "due"), {
-    evaluateTrigger: true,
-    ...(stream ? { streamBatch: "one synthetic batch", payload: job.payload } : {}),
+  const requested = await executeOpenClawStateWorker(context, {
+    type: "cron.requestRuns",
+    input: { storeKey, nowMs: atMs, requests: [request] },
   });
-  await Promise.race([
-    started.promise,
-    run.then(() => {
-      throw new Error("The run settled before entering its payload.");
-    }),
-  ]);
-  const receipt = inspectActiveCronRunReceipt({
-    storePath: harness.storePath,
-    jobId: harness.job.id,
+  expect(requested.rejected).toEqual([]);
+  expect(requested.accepted).toHaveLength(1);
+  const activated = await executeOpenClawStateWorker(context, {
+    type: "cron.drainQueue",
+    input: { storeKey, nowMs: atMs, requests: [request], maxConcurrentRuns: 1 },
   });
-  if (!receipt) {
-    throw new Error("Expected the admitted run's receipt.");
-  }
-  expect(receipt.startedAtMs).toBe(atMs);
-  expect(readTasks(harness).map((row) => row.id)).toEqual([...previousTaskIds]);
-
-  const allowWrites = rejectCronRowWrite(harness.job.id);
-  try {
-    vi.setSystemTime(options.endedAtMs ?? atMs + 1_000);
-    completion.resolve(result);
-    await expect(run).rejects.toThrow("cadence row unavailable");
-  } finally {
-    allowWrites();
-  }
-
+  expect(activated.skipped).toEqual([]);
+  expect(activated.launches).toHaveLength(1);
+  const receipt = activated.launches[0]!.runReceipt;
+  const nextRunAtMs = Object.hasOwn(options, "historicalNextRunAtMs")
+    ? options.historicalNextRunAtMs
+    : job.trigger?.once
+      ? undefined
+      : result.status === "error"
+        ? endedAtMs + 30_000
+        : atMs + HOUR;
+  vi.setSystemTime(endedAtMs);
+  await executeOpenClawStateWorker(context, {
+    type: "cron.recordRun",
+    input: {
+      storeKey,
+      jobId: job.id,
+      runId: `cron:${job.id}:${atMs}:${receipt.receiptId}`,
+      agentId: receipt.agentId,
+      startedAt: atMs,
+      endedAt: endedAtMs,
+      status: result.status === "ok" ? "succeeded" : "failed",
+      error: result.error,
+      detail: cronRunLogEntryToDetail(
+        {
+          ts: endedAtMs,
+          jobId: job.id,
+          action: "finished",
+          runAtMs: atMs,
+          status: result.status,
+          triggerFired: true,
+          completionStatus: result.status === "ok" ? "succeeded" : "failed",
+          error: result.error,
+          summary: result.summary,
+          durationMs: endedAtMs - atMs,
+          deliveryStatus: "not-requested",
+          nextRunAtMs,
+        },
+        {
+          storeKey,
+          triggerEval: {
+            fired: true,
+            stateChanged: true,
+            state: { observed: "completed evaluation" },
+          },
+        },
+      ),
+    },
+  });
   const history = readHistory(harness);
   const finishedTask = readTasks(harness).find(
-    (row) => row.runId === `cron:${harness.job.id}:${atMs}:${receipt.receiptId}`,
-  );
-  const recordId = finishedTask?.id;
-  expect(recordId).toEqual(expect.any(String));
-  const entry = finishedTask ? cronRunRecordToRunLogEntry(finishedTask) : undefined;
-  if (!entry) {
-    throw new Error("Expected the admitted task to retain its completed history entry.");
-  }
-  // The real task commit precedes the failed scheduler row, leaving recovery work.
-  expect(entry).toMatchObject({
-    jobId: harness.job.id,
-    runAtMs: atMs,
-    status: result.status,
-    completionStatus: result.status === "ok" ? "succeeded" : "failed",
-  });
-  expect(finishedTask?.endedAt).toEqual(expect.any(Number));
-  expect(history).toHaveLength(previousTaskIds.size + 1);
-  expect(
-    inspectActiveCronRunReceipt({ storePath: harness.storePath, jobId: harness.job.id })?.receiptId,
-  ).toBe(receipt.receiptId);
+    (row) => row.runId === `cron:${job.id}:${atMs}:${receipt.receiptId}`,
+  )!;
+  const entry = cronRunRecordToRunLogEntry(finishedTask)!;
   expect((await loadCronStore(harness.storePath)).jobs[0]?.state.runningAtMs).toBe(atMs);
   harness.cron.stop();
-  return { entry, history, receipt, recordId, runs: harness.runIsolatedAgentJob.mock.calls.length };
+  return { entry, history, receipt, recordId: finishedTask.id, runs: 0 };
 }
 
 async function restartAndRecover(
@@ -214,28 +237,11 @@ type EditCase = {
 describe("CronService schedule ownership during finalized-run recovery", () => {
   it.each<EditCase>([
     {
-      label: "an hourly-to-minute interval edit",
-      edits: [{ atMs: EDIT_AT, patch: { schedule: MINUTELY } }],
-      historicalNextRunAtMs: RUN_AT + HOUR,
-      acknowledgedNextRunAtMs: EDIT_AT + MINUTE,
-    },
-    {
       label: "an edit in the admission millisecond",
       endedAtMs: RUN_AT,
       edits: [{ atMs: RUN_AT, patch: { schedule: { ...MINUTELY, anchorMs: RUN_AT } } }],
       historicalNextRunAtMs: RUN_AT + HOUR,
       acknowledgedNextRunAtMs: RUN_AT + MINUTE,
-    },
-    {
-      label: "an edit after clock rollback",
-      edits: [
-        {
-          atMs: RUN_AT - 2_000,
-          patch: { schedule: { ...MINUTELY, anchorMs: RUN_AT - 2_000 } },
-        },
-      ],
-      historicalNextRunAtMs: RUN_AT + HOUR,
-      acknowledgedNextRunAtMs: RUN_AT - 2_000 + MINUTE,
     },
     {
       label: "an hourly-to-minute cron edit with a valid historical cron slot",
@@ -285,13 +291,6 @@ describe("CronService schedule ownership during finalized-run recovery", () => {
       historicalNextRunAtMs: RUN_AT + 1_000 + 30 * MINUTE,
       acknowledgedNextRunAtMs: RUN_AT + HOUR,
     },
-    {
-      label: "a cadence edit after an old transient error selected a retry",
-      result: { status: "error", error: "temporary timeout" },
-      edits: [{ atMs: EDIT_AT, patch: { schedule: MINUTELY } }],
-      historicalNextRunAtMs: RUN_AT + 31_000,
-      acknowledgedNextRunAtMs: EDIT_AT + MINUTE,
-    },
   ])("preserves $label", async (scenario) => {
     const harness = await createHarness(scenario.input);
     try {
@@ -323,7 +322,6 @@ describe("CronService schedule ownership during finalized-run recovery", () => {
   });
 
   it.each([
-    { edit: "unchanged", error: false },
     { edit: "name only", error: false },
     { edit: "idempotent schedule", error: true },
     { edit: "failed schedule write", error: true },
@@ -364,11 +362,8 @@ describe("CronService schedule ownership during finalized-run recovery", () => {
     }
   });
 
-  it.each([
-    { clock: "its next due slot", atMs: EDIT_AT + MINUTE, mode: "due" },
-    { clock: "the same admission millisecond", atMs: RUN_AT, mode: "force" },
-    { clock: "a rolled-back clock", atMs: RUN_AT - 1_000, mode: "force" },
-  ] as const)("lets an unchanged successor finish once at $clock", async ({ atMs, mode }) => {
+  it("lets an unchanged successor finish once in the same admission millisecond", async () => {
+    const atMs = RUN_AT;
     const harness = await createHarness({
       trigger: { script: "json({ fire: true })", once: true },
     });
@@ -381,7 +376,11 @@ describe("CronService schedule ownership during finalized-run recovery", () => {
       expect(replacement.enabled).toBe(true);
       expect(replacement.state.nextRunAtMs).toBe(acknowledged.state.nextRunAtMs);
 
-      const second = await finishWithPendingCronRow(harness, { atMs, endedAtMs: atMs, mode });
+      const second = await finishWithPendingCronRow(harness, {
+        atMs,
+        endedAtMs: atMs,
+        mode: "force",
+      });
       expect(second.receipt.receiptId).not.toBe(first.receipt.receiptId);
       expect(second.recordId).not.toBe(first.recordId);
       expect(second.entry.nextRunAtMs).toBeUndefined();

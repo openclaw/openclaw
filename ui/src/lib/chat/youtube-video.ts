@@ -1,10 +1,4 @@
-export type YouTubeVideo = {
-  videoId: string;
-  startSeconds: number;
-  watchUrl: string;
-  embedUrl: string;
-  thumbnailUrl: string;
-};
+export type YouTubeVideo = NonNullable<ReturnType<typeof parseYouTubeVideoUrl>>;
 
 const YOUTUBE_HOSTS = new Set(["youtube.com", "www.youtube.com", "m.youtube.com"]);
 const YOUTUBE_EMBED_HOSTS = new Set(["youtube-nocookie.com", "www.youtube-nocookie.com"]);
@@ -28,7 +22,7 @@ function parseStartSeconds(value: string | null): number | undefined {
 }
 
 /** Resolves supported video links into fixed YouTube player and image origins. */
-export function parseYouTubeVideoUrl(raw: string | undefined): YouTubeVideo | undefined {
+export function parseYouTubeVideoUrl(raw: string | undefined) {
   if (!raw) {
     return undefined;
   }
@@ -44,9 +38,9 @@ export function parseYouTubeVideoUrl(raw: string | undefined): YouTubeVideo | un
   ) {
     return undefined;
   }
-  let videoId: string | undefined;
+  let videoId: string | null | undefined;
   if (YOUTUBE_HOSTS.has(url.hostname) && url.pathname === "/watch") {
-    videoId = query.get("v") ?? undefined;
+    videoId = query.get("v");
   } else {
     if (query.has("v")) {
       return undefined;
@@ -75,8 +69,6 @@ export function parseYouTubeVideoUrl(raw: string | undefined): YouTubeVideo | un
     embedUrl.searchParams.set("start", String(startSeconds));
   }
   return {
-    videoId,
-    startSeconds,
     watchUrl: watchUrl.href,
     embedUrl: embedUrl.href,
     thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,

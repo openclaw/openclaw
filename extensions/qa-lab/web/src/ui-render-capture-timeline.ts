@@ -3,6 +3,29 @@ import type { CaptureViewModel } from "./ui-render-capture-model.js";
 import { redactCapturePayloadPreview } from "./ui-render-capture-redaction.js";
 import { esc, formatTime } from "./ui-render-utils.js";
 
+const TIMELINE_STATS = {
+  request: ["requests", "R"],
+  response: ["responses", "S"],
+  focus: ["focused flow events", "F"],
+  background: ["background events", "B"],
+  error: ["errors", "!"],
+} as const;
+
+function renderTimelineStat(
+  kind: keyof typeof TIMELINE_STATS,
+  count: number,
+  visible = true,
+): string {
+  if (!visible) {
+    return "";
+  }
+  const [title, label] = TIMELINE_STATS[kind];
+  return `<span class="capture-timeline-stat${kind === "error" ? " capture-timeline-stat-danger" : ""}" title="${title}">
+    <span class="capture-timeline-stat-key capture-timeline-stat-key-${kind}">${label}</span>
+    <span class="capture-timeline-stat-value">${count}</span>
+  </span>`;
+}
+
 export function renderCaptureTimeline(model: CaptureViewModel): string {
   const {
     state,
@@ -342,14 +365,8 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                               }
                               ${renderLaneSparkline(lane.events, lane.id)}
                               <div class="capture-timeline-lane-stats">
-                                <span class="capture-timeline-stat" title="requests">
-                                  <span class="capture-timeline-stat-key capture-timeline-stat-key-request">R</span>
-                                  <span class="capture-timeline-stat-value">${laneRequestCount}</span>
-                                </span>
-                                <span class="capture-timeline-stat" title="responses">
-                                  <span class="capture-timeline-stat-key capture-timeline-stat-key-response">S</span>
-                                  <span class="capture-timeline-stat-value">${laneResponseCount}</span>
-                                </span>
+                                ${renderTimelineStat("request", laneRequestCount)}
+                                ${renderTimelineStat("response", laneResponseCount)}
                                 ${
                                   laneMovement == null || laneMovement === 0
                                     ? ""
@@ -362,30 +379,9 @@ export function renderCaptureTimeline(model: CaptureViewModel): string {
                                     ? `<span class="capture-chip capture-chip-severity capture-timeline-inline-chip">severity ${lane.score.toFixed(1)}</span>`
                                     : ""
                                 }
-                                ${
-                                  focusSelectedFlow
-                                    ? `<span class="capture-timeline-stat" title="focused flow events">
-                                        <span class="capture-timeline-stat-key capture-timeline-stat-key-focus">F</span>
-                                        <span class="capture-timeline-stat-value">${laneFocusedEventCount}</span>
-                                      </span>`
-                                    : ""
-                                }
-                                ${
-                                  focusSelectedFlow && laneBackgroundEventCount > 0
-                                    ? `<span class="capture-timeline-stat" title="background events">
-                                        <span class="capture-timeline-stat-key capture-timeline-stat-key-background">B</span>
-                                        <span class="capture-timeline-stat-value">${laneBackgroundEventCount}</span>
-                                      </span>`
-                                    : ""
-                                }
-                                ${
-                                  laneErrorCount > 0
-                                    ? `<span class="capture-timeline-stat capture-timeline-stat-danger" title="errors">
-                                        <span class="capture-timeline-stat-key capture-timeline-stat-key-error">!</span>
-                                        <span class="capture-timeline-stat-value">${laneErrorCount}</span>
-                                      </span>`
-                                    : ""
-                                }
+                                ${renderTimelineStat("focus", laneFocusedEventCount, focusSelectedFlow)}
+                                ${renderTimelineStat("background", laneBackgroundEventCount, focusSelectedFlow && laneBackgroundEventCount > 0)}
+                                ${renderTimelineStat("error", laneErrorCount, laneErrorCount > 0)}
                               </div>
                               ${
                                 laneSelected &&

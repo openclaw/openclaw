@@ -16,6 +16,7 @@ import {
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
+import { SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES } from "../../system-agent/operator-approval.js";
 import { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
@@ -26,6 +27,7 @@ import {
   handlePendingApprovalRequest,
 } from "./approval-shared.js";
 import type { GatewaySystemAgentSession } from "./shared-types.js";
+import { persistSystemAgentEngineHistory } from "./system-agent-chat-turn.js";
 import { runSystemAgentGatewayTask } from "./system-agent-execution.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -156,7 +158,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
   const assertLiveApprovalAuthority = () => {
     if (!isAuthorityActive() || params.sessions.get(params.sessionId) !== params.session) {
       throw new Error(
-        "OpenClaw change cancelled: system-agent approval authority is no longer active. Retry the request if it is still needed.",
+        `${SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES.cancelled} The system-agent approval authority is no longer active.`,
       );
     }
   };
@@ -282,12 +284,12 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         completion: completion.promise,
       };
       const cancelledReply = {
-        text: "OpenClaw change cancelled. No change. Retry the request if it is still needed.",
+        text: SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES.cancelled,
         action: "none" as const,
         applied: false,
       };
       const failedReply = {
-        text: "OpenClaw change failed to complete. Check the current settings and OpenClaw status before retrying.",
+        text: SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES.failed,
         action: "none" as const,
         applied: false,
       };
@@ -399,10 +401,11 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                     params.session.engine.noteAssistantMessage(failedReply.text);
                     return { reply: failedReply, correction: undefined };
                   } finally {
-                    const at = Date.now();
-                    for (const turn of params.session.engine.historySince(historyStart)) {
-                      await transcript.appendTurn({ ...turn, at });
-                    }
+                    await persistSystemAgentEngineHistory(
+                      params.session.engine,
+                      historyStart,
+                      transcript,
+                    );
                   }
                 }),
               "system-agent:task",

@@ -1,11 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
-import type { NpmIntegrityDriftPayload } from "../infra/npm-integrity.js";
 import { isPackageVersionDowngrade } from "../infra/package-update-utils.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import { installPluginFromGitSpec } from "./git-install.js";
+import { installWithSourceFallback } from "./install-channel-specs.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
@@ -128,32 +128,6 @@ export function isClawHubTrustSkippedOutcome(outcome: { status: string; code?: s
   );
 }
 
-function createPluginUpdateIntegrityDriftHandler(params: {
-  pluginId: string;
-  dryRun: boolean;
-  logger: PluginUpdateLogger;
-  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-}) {
-  return async (drift: NpmIntegrityDriftPayload) => {
-    const payload: PluginUpdateIntegrityDriftParams = {
-      pluginId: params.pluginId,
-      spec: drift.spec,
-      expectedIntegrity: drift.expectedIntegrity,
-      actualIntegrity: drift.actualIntegrity,
-      resolvedSpec: drift.resolution.resolvedSpec,
-      resolvedVersion: drift.resolution.version,
-      dryRun: params.dryRun,
-    };
-    if (params.onIntegrityDrift) {
-      return await params.onIntegrityDrift(payload);
-    }
-    params.logger.warn?.(
-      `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
-    );
-    return false;
-  };
-}
-
 type PluginUpdateSpecPlan = {
   installSpec?: string;
   recordSpec?: string;
@@ -187,22 +161,13 @@ type PluginUpdateSuccess = Extract<PluginUpdateInstallResult, { ok: true }>;
 
 type PluginUpdateAttemptState = {
   activeClawHubInstallSpec?: string;
+  npmFallbackSpec?: string;
   channelFallbackSuffix: string;
 };
 
 type PluginUpdateAttemptResult =
   | { kind: "exception"; message: string; error: unknown }
   | ({ kind: "result"; result: PluginUpdateInstallResult } & PluginUpdateAttemptState);
-
-function isPluginUpdateUnchanged(
-  params: Parameters<typeof buildPluginUpdateVersionOutcome>[0],
-): boolean {
-  const { record, result, currentVersion, nextVersion } = params;
-  const nextCommit = record.source === "git" && "git" in result ? result.git.commit : undefined;
-  return record.gitCommit && nextCommit
-    ? record.gitCommit === nextCommit
-    : Boolean(currentVersion && nextVersion && currentVersion === nextVersion);
-}
 
 type PluginUpdateVersionOutcomeParams = {
   pluginId: string;
@@ -216,12 +181,6 @@ type PluginUpdateVersionOutcomeParams = {
   timeoutMs?: number;
 };
 
-export async function buildPluginUpdateVersionOutcome(
-  params: PluginUpdateVersionOutcomeParams,
-): Promise<PluginUpdateOutcome> {
-  return await buildPluginUpdateOutcome(params, "update");
-}
-
 export async function buildDryRunPluginUpdateOutcome(
   params: Omit<PluginUpdateVersionOutcomeParams, "nextVersion"> & {
     effectiveSpec?: string;
@@ -234,20 +193,25 @@ export async function buildDryRunPluginUpdateOutcome(
     params.result.version ??
     npmProbeVersion ??
     (params.record.source === "npm" ? resolveExactNpmSpecVersion(params.effectiveSpec) : undefined);
-  return await buildPluginUpdateOutcome(
+  return await buildPluginUpdateVersionOutcome(
     { ...params, nextVersion: resolvedProbeVersion },
     "check",
     npmProbeVersion,
   );
 }
 
-async function buildPluginUpdateOutcome(
+export async function buildPluginUpdateVersionOutcome(
   params: PluginUpdateVersionOutcomeParams & { hasSpecOverride?: boolean },
-  phase: "check" | "update",
+  phase: "check" | "update" = "update",
   npmProbeVersion?: string,
 ): Promise<PluginUpdateOutcome> {
   const currentLabel = params.currentVersion ?? "unknown";
-  const unchanged = isPluginUpdateUnchanged(params);
+  const { record, result, currentVersion, nextVersion } = params;
+  const nextCommit = record.source === "git" && "git" in result ? result.git.commit : undefined;
+  const unchanged =
+    record.gitCommit && nextCommit
+      ? record.gitCommit === nextCommit
+      : Boolean(currentVersion && nextVersion && currentVersion === nextVersion);
   const newerExactPinnedDefaultLine =
     phase === "check" && unchanged && params.record.source === "npm" && !params.hasSpecOverride
       ? await resolveNewerExactPinnedNpmDefaultLine({
@@ -322,6 +286,7 @@ export async function runPluginUpdateAttempt(params: {
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
   clawhubSpecs?: PluginUpdateSpecPlan;
+  officialNpmFallback?: { installSpec: string; recordSpec: string; expectedIntegrity?: string };
   trustedSourceLinkedOfficialInstall: boolean;
   expectedReplacementPluginId?: string;
   onNpmInstall: () => void;
@@ -356,7 +321,24 @@ export async function runPluginUpdateAttempt(params: {
             trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
             expectedReplacementPluginId: params.expectedReplacementPluginId,
             expectedIntegrity: params.expectedIntegrity,
-            onIntegrityDrift: createPluginUpdateIntegrityDriftHandler(params),
+            onIntegrityDrift: async (drift) => {
+              const payload: PluginUpdateIntegrityDriftParams = {
+                pluginId: params.pluginId,
+                spec: drift.spec,
+                expectedIntegrity: drift.expectedIntegrity,
+                actualIntegrity: drift.actualIntegrity,
+                resolvedSpec: drift.resolution.resolvedSpec,
+                resolvedVersion: drift.resolution.version,
+                dryRun: params.dryRun,
+              };
+              if (params.onIntegrityDrift) {
+                return await params.onIntegrityDrift(payload);
+              }
+              params.logger.warn?.(
+                `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
+              );
+              return false;
+            },
           })
         : params.record.source === "clawhub"
           ? await installPluginFromClawHub({
@@ -407,10 +389,45 @@ export async function runPluginUpdateAttempt(params: {
     activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
   }
 
-  return {
+  const attempt: PluginUpdateAttemptResult = {
     kind: "result",
     result,
     activeClawHubInstallSpec,
     channelFallbackSuffix,
   };
+  const fallback = params.officialNpmFallback;
+  if (params.record.source !== "clawhub" || !fallback || !activeClawHubInstallSpec) {
+    return attempt;
+  }
+  const selected = await installWithSourceFallback<PluginUpdateAttemptResult>({
+    sources: [
+      { source: "clawhub", spec: activeClawHubInstallSpec },
+      { source: "npm", spec: fallback.installSpec },
+    ],
+    install: async (source) => {
+      if (source.source === "clawhub") {
+        return attempt;
+      }
+      const npmAttempt = await runPluginUpdateAttempt(
+        copyPluginInstallTransactionRequest(params, {
+          ...params,
+          record: { source: "npm", spec: fallback.recordSpec },
+          effectiveSpec: fallback.installSpec,
+          npmMetadata: undefined,
+          expectedIntegrity: fallback.expectedIntegrity,
+          trustedSourceLinkedOfficialInstall: true,
+          officialNpmFallback: undefined,
+        }),
+      );
+      return npmAttempt.kind === "result"
+        ? { ...npmAttempt, npmFallbackSpec: fallback.recordSpec, channelFallbackSuffix }
+        : npmAttempt;
+    },
+    result: (entry) => (entry.kind === "result" ? entry.result : { ok: false }),
+    onFallback: (message) => {
+      channelFallbackSuffix += ` ${message}`;
+      params.logger.warn?.(message);
+    },
+  });
+  return selected.attempt;
 }

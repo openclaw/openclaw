@@ -6,10 +6,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION } from "./provenance-agent-origin.js";
 import {
-  initializeCachedClawInstallSchemaVersions,
+  clawSchemaVersionNotifications,
   prepareClawInstallSchemaVersions,
   readCachedClawInstallSchemaVersions,
-  registerClawInstallSchemaVersionSnapshotListener,
 } from "./provenance-runtime-read.js";
 import { CLAW_INSTALL_RECORD_SCHEMA_VERSION } from "./provenance-schema-version.js";
 import {
@@ -25,9 +24,6 @@ type PreparedClawToolPolicy =
 const preparedClawToolPolicies = new WeakMap<object, PreparedClawToolPolicy>();
 let preparedCandidates: ClawToolPolicyCandidate[] = [];
 let preparedStateOptions: OpenClawStateDatabaseOptions = {};
-const uninitializedStateError = new Error(
-  "OpenClaw state database has not initialized Claw consent provenance.",
-);
 
 export function markFrozenClawToolAllowPolicy(policy: object | undefined): void {
   if (policy) {
@@ -48,7 +44,7 @@ function applyPreparedClawToolPolicyConsent(
     if (snapshot.kind === "uninitialized") {
       preparedClawToolPolicies.set(candidate.tools, {
         kind: "state-error",
-        error: uninitializedStateError,
+        error: new Error("OpenClaw state database has not initialized Claw consent provenance."),
       });
       continue;
     }
@@ -79,14 +75,19 @@ function applyPreparedClawToolPolicyConsent(
     const current =
       adopted || schemaVersionRead.schemaVersion === CLAW_INSTALL_RECORD_SCHEMA_VERSION;
     try {
-      if (
-        current &&
-        schemaVersionRead.agentConfigDigest !==
-          (adopted
-            ? candidate.adoptedAgentConfigDigest(stateOptions.env)
-            : candidate.agentConfigDigest)
-      ) {
-        throw new Error("Claw agent configuration does not match its consent provenance.");
+      if (current) {
+        const accepted = adopted
+          ? candidate.adoptedAgentConfigDigests(stateOptions.env)
+          : {
+              owned: candidate.agentConfigDigest,
+              legacy: candidate.legacyAgentConfigDigest,
+            };
+        if (
+          schemaVersionRead.agentConfigDigest !== accepted.owned &&
+          schemaVersionRead.agentConfigDigest !== accepted.legacy
+        ) {
+          throw new Error("Claw agent configuration does not match its consent provenance.");
+        }
       }
     } catch (error) {
       preparedClawToolPolicies.set(candidate.tools, {
@@ -122,10 +123,6 @@ function replaceClawToolPolicyCandidates(
 
 function prepareClawToolPolicyConsent(config: OpenClawConfig): void {
   replaceClawToolPolicyCandidates(collectClawToolPolicyCandidates(config));
-  initializeCachedClawInstallSchemaVersions({
-    ...preparedStateOptions,
-    artifactPreservingReadOnly: false,
-  });
   applyPreparedClawToolPolicyConsent();
 }
 
@@ -147,7 +144,7 @@ async function prepareClawToolPolicyConsentAsync(
   };
 }
 
-registerClawInstallSchemaVersionSnapshotListener(() => applyPreparedClawToolPolicyConsent());
+clawSchemaVersionNotifications.onChanged = () => applyPreparedClawToolPolicyConsent();
 registerRuntimeConfigSnapshotPreparer(prepareClawToolPolicyConsent, {
   prepareAsync: prepareClawToolPolicyConsentAsync,
 });
@@ -157,10 +154,11 @@ class ClawToolProfileConsentError extends Error {
     super(
       options.unboundedFullProfile
         ? `Claw-managed agent ${JSON.stringify(agentId)} uses the legacy unbounded full tool profile. ` +
-            "Add an explicit tools.allow list to its package OpenClaw profile, then " +
-            `run \`openclaw claws update ${agentId}\` and approve the refreshed tool authority.`
+            "Its tool consent cannot be refreshed in place. Add the Claw again to create an " +
+            "ordinary agent with an explicit tool allowlist, then move your work before deleting this agent."
         : `Claw-managed agent ${JSON.stringify(agentId)} uses a legacy dynamic tool policy. ` +
-            `Run \`openclaw claws update ${agentId}\` and approve the refreshed tool authority before running it.`,
+            "Its tool consent cannot be refreshed in place. Add the Claw again to create an " +
+            "ordinary agent, then move your work before deleting this agent.",
     );
     this.name = "ClawToolProfileConsentError";
   }

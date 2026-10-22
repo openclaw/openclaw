@@ -21,7 +21,7 @@ export const BuzzAccountIdSchema = z
   .string()
   .regex(
     /^(?!(?:constructor|prototype)$)[a-z0-9][a-z0-9_-]{0,63}$/u,
-    "Buzz account IDs must be canonical lowercase account keys",
+    "Buzz account IDs must be lowercase account keys",
   );
 
 const BuzzAccountConfigSchema = z

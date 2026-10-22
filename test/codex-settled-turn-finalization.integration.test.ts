@@ -8,11 +8,12 @@ import {
   normalizeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
 } from "../src/agents/agent-run-terminal-outcome.js";
-import { resolveSettledToolBatchEvidence } from "../src/agents/embedded-agent-runner/run/incomplete-turn-recovery.js";
 import { resolveReplayInvalidFlag } from "../src/agents/embedded-agent-runner/run/incomplete-turn-resolution.js";
 import { prepareTerminalWithSettledTurnFinalization } from "../src/agents/embedded-agent-runner/run/settled-turn-finalization.js";
 import { createSettledFinalizationTestInput } from "../src/agents/embedded-agent-runner/run/settled-turn-finalization.test-support.js";
 import { isEmbeddedRunTerminalTimeout } from "../src/agents/embedded-agent-runner/run/terminal-outcome.js";
+import { resolveEmbeddedRunTerminal } from "../src/agents/embedded-agent-runner/run/terminal-resolution.js";
+import { makeTerminalInput } from "../src/agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { resolveEmbeddedRunTerminalTimeout } from "../src/agents/embedded-agent-runner/run/terminal-timeout.js";
 
 const { createCodexSettledFinalizerTestFixture, registerCodexEventProjectorTestLifecycle } =
@@ -35,19 +36,6 @@ describe("registered Codex finalizer host silence contract", () => {
   async function createInput(options: { failedTool?: boolean; timedOut?: boolean } = {}) {
     fixture = await createCodexSettledFinalizerTestFixture(options);
     const { attempt, params } = fixture;
-    expect(attempt.terminal.kind).toBe("failed");
-    expect(attempt.itemLifecycle).toMatchObject({ activeCount: 0, completedCount: 1 });
-    expect(attempt.didSendViaMessagingTool).toBe(false);
-    expect(attempt.messagingToolSentTexts).toEqual([]);
-    expect(attempt.messagingToolSentMediaUrls).toEqual([]);
-    expect(resolveSettledToolBatchEvidence(attempt)).toMatchObject({
-      allToolCallsRecorded: true,
-      allToolsProvenSettled: true,
-      hasUnsettledToolError: false,
-    });
-    expect(attempt.settledTurnFinalizationContext).toMatchObject({
-      data: expect.arrayContaining([expect.objectContaining({ type: "function_call_output" })]),
-    });
     if (options.timedOut) {
       // Deadline ownership follows native projection; a timeout must block finalization.
       attempt.terminal = normalizeAgentRunAttemptTerminal({
@@ -64,7 +52,7 @@ describe("registered Codex finalizer host silence contract", () => {
     input.terminalBase.activeErrorContext = { provider: params.provider, model: params.modelId };
     Object.assign(input.terminalBase.runParams, {
       trigger: "heartbeat",
-      terminalReplyExpectation: "optional",
+      terminalReplyExpectation: "required",
       sourceReplyDeliveryMode: "automatic",
     });
     return input;
@@ -83,42 +71,101 @@ describe("registered Codex finalizer host silence contract", () => {
   }
 
   it.each([
-    { text: " NO_REPLY\n", expectation: "optional", allowEmpty: false, answered: true },
-    { text: "NO_REPLY", expectation: "required", allowEmpty: true, answered: false },
-    { text: " ", expectation: "optional", allowEmpty: true, answered: false },
+    { text: " NO_REPLY\n", expectation: "required", calls: 1 },
+    { text: "NO_REPLY", expectation: "required", calls: 1 },
+    { text: "NO_REPLY", expectation: "result-required", calls: 2 },
+    { text: " ", expectation: "required", calls: 2 },
+    { text: undefined, expectation: "optional", calls: 0 },
   ] as const)(
-    "distinguishes $expectation $text output",
-    async ({ text, expectation, allowEmpty, answered }) => {
+    "preserves the provider failure after $expectation $text output",
+    async ({ text, expectation, calls }) => {
       const input = await createInput();
+      const runAttempt = vi.spyOn(input.finalization.harness, "runAttempt");
       input.terminalBase.runParams.terminalReplyExpectation = expectation;
-      input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = allowEmpty;
-      returnBoundedText(text);
-      const result = await prepareTerminalWithSettledTurnFinalization(input);
-      expect(fixture.runBounded).toHaveBeenCalledTimes(answered ? 1 : 2);
-      expect(result.finalizationOutcome).toBe(answered ? "answered" : "failed");
-      if (answered) {
-        expect(fixture.runBounded).toHaveBeenCalledWith(
-          expect.objectContaining({
-            isolation: "private-stdio",
-            requireNoExternalCapabilities: true,
-          }),
-        );
-        expect(result.attempt.assistantTexts).toEqual(["NO_REPLY"]);
-        expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
-      } else {
-        expect(result.attempt.terminal).toBe(input.initial.attempt.terminal);
-        expect(result.prepared.payloadsWithToolMedia).toEqual([
-          expect.objectContaining({
-            text: "The AI service is temporarily overloaded. Please try again in a moment.",
-          }),
-        ]);
+      if (text !== undefined) {
+        returnBoundedText(text);
       }
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+      expect(fixture.runBounded).toHaveBeenCalledTimes(calls);
+      expect(result.finalizationOutcome).toBe(calls === 0 ? "not-attempted" : "failed");
+      expect(result.attempt).toBe(input.initial.attempt);
+      expect(result.terminalState).toBe(input.initial.terminalState);
+      expect(result.attempt.terminal).toMatchObject({ kind: "failed" });
+      expect(result.terminalState.outcome.error).toContain("Provider overloaded");
+      if (calls === 0) {
+        expect(runAttempt).not.toHaveBeenCalled();
+        expect(fixture.mirror).not.toHaveBeenCalled();
+        return;
+      }
+      expect(fixture.runBounded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isolation: "private-stdio",
+          requireNoExternalCapabilities: true,
+        }),
+      );
+      // Native tool-only failures have no completed assistant to prepare a
+      // payload from; terminal resolution owns their provider guidance.
+      const terminalInput = makeTerminalInput({
+        ...result.prepared,
+        attempt: result.attempt,
+        attemptAssistant: result.attemptAssistant,
+        terminalState: result.terminalState,
+        runParams: input.terminalBase.runParams,
+        settledTurnFinalizationOutcome: result.finalizationOutcome,
+        replayState: { hadPotentialSideEffects: true, replayInvalid: true },
+        resolveReplayInvalid: () => true,
+      });
+      const resolved = await resolveEmbeddedRunTerminal(terminalInput);
+      expect(terminalInput.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
+      expect(resolved.action).toBe("complete");
+      if (resolved.action !== "complete") {
+        throw new Error("Provider failure must settle without replay");
+      }
+      expect(resolved.result.meta).toMatchObject({
+        stopReason: "error",
+        replayInvalid: true,
+        error: { message: expect.stringContaining("Provider overloaded"), fallbackSafe: false },
+      });
+      expect(resolved.result.payloads).toEqual([
+        expect.objectContaining({ text: expect.stringMatching(/try again/i), isError: true }),
+      ]);
+      expect(resolved.result.payloads?.[0]?.text).toContain(
+        "some tool actions may have already been executed",
+      );
+      expect(runAttempt).not.toHaveBeenCalled();
       expect(fixture.mirror).not.toHaveBeenCalled();
     },
   );
 
+  it("replaces provider failure with the ordinary finalizer answer", async () => {
+    const text = "The command completed and returned: settled.";
+    const input = await createInput();
+    input.terminalBase.runParams.terminalReplyExpectation = "result-required";
+    const runAttempt = vi.spyOn(input.finalization.harness, "runAttempt");
+    returnBoundedText(text);
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(fixture.runBounded).toHaveBeenCalledOnce();
+    expect(result.finalizationOutcome).toBe("answered");
+    expect(result.attempt.terminal).toEqual({ kind: "ok" });
+    expect(result.terminalState.outcome.error).toBeUndefined();
+    expect(result.attempt.assistantTexts).toEqual([text]);
+    expect(result.attempt.preparedTerminalReply).toEqual({
+      text,
+      terminalReply: { disposition: "visible", text },
+    });
+    expect(result.prepared.payloadsWithToolMedia).toEqual([expect.objectContaining({ text })]);
+    expect(result.prepared.payloadsWithToolMedia?.some((payload) => payload.isError)).toBe(false);
+    expect(runAttempt).not.toHaveBeenCalled();
+    expect(fixture.mirror).toHaveBeenCalledOnce();
+    expect(fixture.mirror.mock.calls[0]?.[0].messages).toEqual([
+      expect.objectContaining({ role: "assistant", content: [{ type: "text", text }] }),
+    ]);
+  });
+
   it.each(["failedTool", "timedOut", "cancelled"] as const)(
-    "does not hide an original failure with authored silence: %j",
+    "preserves tool failures and interruption ownership despite authored silence: %j",
     async (failure) => {
       const input = await createInput({
         failedTool: failure === "failedTool",
@@ -132,17 +179,16 @@ describe("registered Codex finalizer host silence contract", () => {
           controller.abort(new Error("cancelled"));
           return boundedResult;
         });
-      } else {
-        input.terminalBase.runParams.allowEmptyAssistantReplyAsSilent = true;
       }
 
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-      expect(fixture.runBounded).toHaveBeenCalledTimes(
-        failure === "timedOut" ? 0 : failure === "cancelled" ? 1 : 2,
-      );
+      expect(fixture.runBounded).toHaveBeenCalledTimes(failure === "timedOut" ? 0 : 1);
       expect(result.finalizationOutcome).toBe(failure === "timedOut" ? "not-attempted" : "failed");
       expect(result.attempt).toBe(input.initial.attempt);
+      if (failure === "failedTool") {
+        expect(result.attempt.lastToolError).toEqual(input.initial.attempt.lastToolError);
+      }
       if (failure === "timedOut") {
         expect(isEmbeddedRunTerminalTimeout(result.terminalState.outcome)).toBe(true);
         expect(result.prepared.timedOutDuringPrompt).toBe(true);

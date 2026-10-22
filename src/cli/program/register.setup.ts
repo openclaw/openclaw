@@ -9,10 +9,11 @@ import { hasExplicitOptions, listExplicitOptionFlagsExcept } from "../command-op
 import { shouldStartLocalOnboarding } from "../fresh-install-config.js";
 import {
   registerOnboardAuthOptions,
+  registerOnboardFlowOptions,
   registerOnboardGatewayOptions,
   registerOnboardRemoteOptions,
   registerOnboardRuntimeOptions,
-  resolveOnboardCommandOptions,
+  runOnboardCommand,
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
@@ -32,38 +33,6 @@ async function runSystemAgentEntry(
     },
     runtime,
   );
-}
-
-async function runOnboardingEntry(
-  options: Record<string, unknown>,
-  commandRuntime: Command,
-  runtime: RuntimeEnv,
-): Promise<void> {
-  if (options.baseline) {
-    const unsupportedOptions = listExplicitOptionFlagsExcept(commandRuntime, BASELINE_OPTION_NAMES);
-    if (unsupportedOptions.length > 0) {
-      const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
-      const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
-      rejectOnboardingOption({ json: options.json === true }, runtime, message);
-      return;
-    }
-    const { setupCommand } = await import("../../commands/setup.js");
-    await setupCommand(
-      {
-        workspace: readStringValue(options.workspace),
-        skipBootstrap: options.skipBootstrap === true,
-        json: Boolean(options.json),
-      },
-      runtime,
-    );
-    return;
-  }
-  const onboardingOptions = await resolveOnboardCommandOptions(options, commandRuntime, runtime);
-  if (!onboardingOptions) {
-    return;
-  }
-  const { setupWizardCommand } = await import("../../commands/onboard.js");
-  await setupWizardCommand(onboardingOptions, runtime);
 }
 
 function addSystemAgentOptions(command: Command): Command {
@@ -107,16 +76,8 @@ export function registerSetupCommand(program: Command): void {
       "Reset config + credentials + sessions before running onboarding (workspace only with --reset-scope full)",
     )
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
-    .option("--non-interactive", "Run onboarding without prompts", false)
-    .option("--classic", "Use the classic multi-step setup wizard", false)
-    .option("--tui", "Use the terminal hatch instead of the browser handoff", false)
-    .option(
-      "--accept-risk",
-      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
-      false,
-    )
-    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
-    .option("--mode <mode>", "Onboard mode: local|remote");
+    .option("--non-interactive", "Run onboarding without prompts", false);
+  registerOnboardFlowOptions(command);
 
   registerOnboardAuthOptions(command);
   registerOnboardGatewayOptions(command);
@@ -143,7 +104,29 @@ export function registerSetupCommand(program: Command): void {
         await runSystemAgentEntry(options, defaultRuntime);
         return;
       }
-      await runOnboardingEntry(options, commandRuntime, defaultRuntime);
+      if (options.baseline) {
+        const unsupportedOptions = listExplicitOptionFlagsExcept(
+          commandRuntime,
+          BASELINE_OPTION_NAMES,
+        );
+        if (unsupportedOptions.length > 0) {
+          const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+          const message = `--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`;
+          rejectOnboardingOption({ json: options.json === true }, defaultRuntime, message);
+          return;
+        }
+        const { setupCommand } = await import("../../commands/setup.js");
+        await setupCommand(
+          {
+            workspace: readStringValue(options.workspace),
+            skipBootstrap: options.skipBootstrap === true,
+            json: Boolean(options.json),
+          },
+          defaultRuntime,
+        );
+        return;
+      }
+      await runOnboardCommand(options, commandRuntime, defaultRuntime);
     });
   });
 

@@ -1,7 +1,7 @@
 // Registers the recent-session resume verb while keeping its TUI runtime lazy.
 import type { Command } from "commander";
 import { formatErrorMessage } from "../infra/errors.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { formatDocsHelp } from "./help-format.js";
 import { addTuiOptions } from "./tui-cli-options.js";
 
@@ -13,7 +13,6 @@ export type ResumeCliOptions = {
   tlsFingerprint?: string;
 };
 
-/** Register the Gateway-backed session resume command. */
 export function registerResumeCli(program: Command) {
   const command = program
     .command("resume")
@@ -27,6 +26,9 @@ export function registerResumeCli(program: Command) {
         const { runResumeCommand } = await import("./resume-cli.runtime.js");
         await runResumeCommand(query, opts);
       } catch (error) {
+        if (error instanceof ExitError) {
+          throw error;
+        }
         defaultRuntime.error(formatErrorMessage(error));
         defaultRuntime.exit(1);
       }

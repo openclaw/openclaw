@@ -1,21 +1,18 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listRawChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveConfiguredChannelPresencePolicy } from "../../../plugins/channel-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../../../plugins/gateway-startup-plugin-ids.js";
 import { collectConfiguredSpeechProviderIds } from "../../../plugins/gateway-startup-speech-providers.js";
 import { isNativeSessionCatalogOptOutOnly } from "../../../plugins/native-session-catalog-config.js";
-import {
-  resolveOfficialExternalProviderContractPluginIds,
-  resolveOfficialExternalWebProviderContractPluginIdsForEnv,
-} from "../../../plugins/official-external-plugin-catalog.js";
+import { resolveOfficialExternalProviderContractPluginIds } from "../../../plugins/official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import {
-  resolveWebSearchInstallCatalogEntriesForEnv,
-  resolveWebSearchInstallCatalogEntry,
-} from "../../../plugins/web-search-install-catalog.js";
+import { normalizeLowercaseStringSet } from "../../../shared/normalized-string-set.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
+import {
+  collectConfiguredWebFetchPluginIds,
+  collectConfiguredWebSearchPluginIds,
+} from "./configured-provider-plugin-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { collectConfiguredRuntimePluginIds } from "./configured-runtime-plugin-owners.js";
 
@@ -48,17 +45,8 @@ export function collectConfiguredPluginIds(
     }
     addConfiguredPluginId(ids, pluginId);
   }
-  const searchProvider = normalizeOptionalLowercaseString(cfg.tools?.web?.search?.provider);
-  if (cfg.tools?.web?.search?.enabled !== false && searchProvider) {
-    const installEntry = resolveWebSearchInstallCatalogEntry({ providerId: searchProvider });
-    if (installEntry?.pluginId) {
-      ids.add(installEntry.pluginId);
-    }
-  } else if (cfg.tools?.web?.search?.enabled !== false) {
-    // Only auto-detect from environment credentials when no provider was selected.
-    for (const entry of resolveWebSearchInstallCatalogEntriesForEnv(env ?? process.env)) {
-      ids.add(entry.pluginId);
-    }
+  for (const pluginId of collectConfiguredWebSearchPluginIds(cfg, env ?? process.env, "selected")) {
+    ids.add(pluginId);
   }
   for (const pluginId of collectConfiguredRuntimePluginIds(cfg, { env })) {
     ids.add(pluginId);
@@ -81,23 +69,8 @@ export function collectConfiguredPluginIds(
   })) {
     ids.add(pluginId);
   }
-  const webFetch = cfg.tools?.web?.fetch;
-  if (webFetch?.enabled !== false) {
-    const providerId = normalizeOptionalLowercaseString(webFetch?.provider);
-    if (providerId) {
-      for (const pluginId of resolveOfficialExternalProviderContractPluginIds({
-        contract: "webFetchProviders",
-        providerIds: new Set([providerId]),
-      })) {
-        ids.add(pluginId);
-      }
-    }
-    for (const pluginId of resolveOfficialExternalWebProviderContractPluginIdsForEnv({
-      contract: "webFetchProviders",
-      env: env ?? process.env,
-    })) {
-      ids.add(pluginId);
-    }
+  for (const pluginId of collectConfiguredWebFetchPluginIds(cfg, env ?? process.env)) {
+    ids.add(pluginId);
   }
   return ids;
 }
@@ -148,11 +121,7 @@ export function collectEffectiveConfiguredChannelOwnerPluginIds(params: {
   configuredChannelIds: ReadonlySet<string>;
 }): Map<string, Set<string>> {
   const owners = new Map<string, Set<string>>();
-  const configuredChannelIds = new Set(
-    [...params.configuredChannelIds]
-      .map((channelId) => normalizeOptionalLowercaseString(channelId))
-      .filter((channelId): channelId is string => Boolean(channelId)),
-  );
+  const configuredChannelIds = normalizeLowercaseStringSet(params.configuredChannelIds);
   if (configuredChannelIds.size === 0) {
     return owners;
   }

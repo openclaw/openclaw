@@ -4,7 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import { z } from "zod";
 import { searchClawHubSkills } from "../infra/clawhub-skills.js";
-import type { InstalledAppsResult } from "../infra/installed-apps.js";
+import type { InstalledApp, InstalledAppsResult } from "../infra/installed-apps.js";
 import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalChannelCatalogEntries,
@@ -15,6 +15,7 @@ import {
   type OfficialExternalPluginCatalogEntry,
 } from "../plugins/official-external-plugin-catalog.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { OnboardingRecommendationMatch } from "../state/onboarding-recommendations.js";
 import { completeSetupInference } from "./setup-inference.js";
 
@@ -32,23 +33,9 @@ const CANDIDATE_SOURCE_ORDER: Record<SetupAppCandidateSource, number> = {
   "clawhub-skill": 3,
 };
 
-type SetupAppInventoryItem = {
-  label: string;
-  bundleId?: string;
-};
-
-type SetupAppCandidateSource =
-  | "official-plugin"
-  | "official-channel"
-  | "official-provider"
-  | "clawhub-skill";
-
-type SetupAppCandidate = {
-  id: string;
-  displayName: string;
-  summary: string;
-  source: SetupAppCandidateSource;
-};
+type SetupAppInventoryItem = Pick<InstalledApp, "label" | "bundleId">;
+type SetupAppCandidate = Omit<OnboardingRecommendationMatch["candidate"], "downloads">;
+type SetupAppCandidateSource = SetupAppCandidate["source"];
 
 type SetupAppCandidateGroup = {
   app: SetupAppInventoryItem;
@@ -62,17 +49,7 @@ export type SetupAppScanPhase =
   | { kind: "candidates"; appCount: number; sampleLabels: string[] }
   | { kind: "matching"; appCount: number };
 
-export type SetupAppRecommendationsResult =
-  | {
-      status: "ok";
-      apps: SetupAppInventoryItem[];
-      groups: SetupAppCandidateGroup[];
-      matches: SetupAppRecommendationMatch[];
-    }
-  | {
-      status: "skipped";
-      reason: "unsupported" | "no-apps" | "no-candidates" | "model-failed" | "no-matches";
-    };
+export type SetupAppRecommendationsResult = Awaited<ReturnType<typeof getSetupAppRecommendations>>;
 
 // Tolerant on purpose: models add extra keys and overlong reasons; a strict
 // schema here would turn one sloppy field into a feature-wide "model-failed".
@@ -179,15 +156,9 @@ function compareCandidates(left: SetupAppCandidate, right: SetupAppCandidate): n
 }
 
 function dedupeCandidates(candidates: SetupAppCandidate[]): SetupAppCandidate[] {
-  const seen = new Set<string>();
-  return candidates.toSorted(compareCandidates).filter((candidate) => {
-    const key = candidate.id.toLocaleLowerCase("en-US");
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
+  return dedupeByKey(candidates.toSorted(compareCandidates), (candidate) =>
+    candidate.id.toLocaleLowerCase("en-US"),
+  );
 }
 
 async function gatherSetupAppCandidates(
@@ -283,14 +254,14 @@ export async function getSetupAppRecommendations(params: {
   inventorySource: () => Promise<InstalledAppsResult | SetupAppInventoryItem[]>;
   runtime: RuntimeEnv;
   onPhase?: (phase: SetupAppScanPhase) => void;
-}): Promise<SetupAppRecommendationsResult> {
+}) {
   const inventory = await params.inventorySource();
   if (!Array.isArray(inventory) && inventory.status === "unsupported") {
-    return { status: "skipped", reason: "unsupported" };
+    return { status: "skipped" as const, reason: "unsupported" as const };
   }
   const apps = normalizeInventory(Array.isArray(inventory) ? inventory : inventory.apps);
   if (apps.length === 0) {
-    return { status: "skipped", reason: "no-apps" };
+    return { status: "skipped" as const, reason: "no-apps" as const };
   }
   params.onPhase?.({
     kind: "candidates",
@@ -299,7 +270,7 @@ export async function getSetupAppRecommendations(params: {
   });
   const groups = await gatherSetupAppCandidates(apps);
   if (groups.every((group) => group.candidates.length === 0)) {
-    return { status: "skipped", reason: "no-candidates" };
+    return { status: "skipped" as const, reason: "no-candidates" as const };
   }
   let completion: Awaited<ReturnType<typeof completeSetupInference>>;
   try {
@@ -309,14 +280,14 @@ export async function getSetupAppRecommendations(params: {
       runtime: params.runtime,
     });
   } catch {
-    return { status: "skipped", reason: "model-failed" };
+    return { status: "skipped" as const, reason: "model-failed" as const };
   }
   if (!completion.ok) {
-    return { status: "skipped", reason: "model-failed" };
+    return { status: "skipped" as const, reason: "model-failed" as const };
   }
   const parsed = MatcherOutputSchema.safeParse(parseMatcherJson(completion.text));
   if (!parsed.success) {
-    return { status: "skipped", reason: "model-failed" };
+    return { status: "skipped" as const, reason: "model-failed" as const };
   }
   // Case-insensitive lookups: models normalize label/id casing in their output.
   const matches = parsed.data.matches.flatMap((match): SetupAppRecommendationMatch[] => {
@@ -331,10 +302,10 @@ export async function getSetupAppRecommendations(params: {
     return candidate ? [{ ...match, appLabel: group?.app.label ?? match.appLabel, candidate }] : [];
   });
   if (matches.length === 0) {
-    return { status: "skipped", reason: "no-matches" };
+    return { status: "skipped" as const, reason: "no-matches" as const };
   }
   return {
-    status: "ok",
+    status: "ok" as const,
     apps,
     groups,
     matches: matches.toSorted(

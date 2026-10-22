@@ -238,6 +238,19 @@ private fun controlUiWebViewContext(
 
 private const val NATIVE_GATEWAY_AUTH_BRIDGE = "OpenClawNativeGatewayAuth"
 
+internal fun controlUiFocusUrlBuilder(
+  baseUrl: String,
+  surface: String,
+): android.net.Uri.Builder =
+  baseUrl
+    .trimEnd('/')
+    .toUri()
+    .buildUpon()
+    .clearQuery()
+    .fragment(null)
+    .appendPath("focus")
+    .appendPath(surface)
+
 // Encoded separators are valid session-key data, but must not hide traversal
 // segments that a reverse proxy can decode outside the accepted Control UI mount.
 private val controlUiDotSegmentPattern = Regex("""(?:^|/|%2f|%5c)(?:\.|%2e){1,2}(?=$|/|%2f|%5c)""", RegexOption.IGNORE_CASE)
@@ -341,32 +354,29 @@ private class ControlUiWebViewClient(
             reply.postMessage(response)
           }
         }
-      } else {
-        // Platform WebMessagePort is available since API 23, below our minimum SDK.
-        usesMessagePort = true
+        authInstalled = true
+        val payload = controlUiStartupAuth(page)
+        authScript =
+          WebViewCompat.addDocumentStartJavaScript(
+            view,
+            """
+            (() => {
+              if (window.top !== window) return;
+              const base = ${JsonPrimitive(root)};
+              if (new RegExp(${JsonPrimitive(controlUiDotSegmentPattern.pattern)}, "i").test(location.pathname)) return;
+              if (base && location.pathname !== base && !location.pathname.startsWith(base + "/")) return;
+              Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
+                value: $payload,
+                configurable: true,
+              });
+            })();
+            """.trimIndent(),
+            setOf(origin),
+          )
         return true
       }
-      authInstalled = true
-      val payload = controlUiStartupAuth(page)
-      authScript =
-        WebViewCompat.addDocumentStartJavaScript(
-          view,
-          """
-          (() => {
-            if (window.top !== window) return;
-            const base = ${JsonPrimitive(root)};
-            if (new RegExp(${JsonPrimitive(controlUiDotSegmentPattern.pattern)}, "i").test(location.pathname)) return;
-            if (base && location.pathname !== base && !location.pathname.startsWith(base + "/")) return;
-            Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
-              value: $payload,
-              configurable: true,
-            });
-          })();
-          """.trimIndent(),
-          setOf(origin),
-        )
-      return true
     }
+    // Platform WebMessagePort is available since API 23, below our minimum SDK.
     usesMessagePort = true
     return true
   }

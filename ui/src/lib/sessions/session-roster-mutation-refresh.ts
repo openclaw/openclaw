@@ -1,15 +1,15 @@
-import type { SessionRefreshOptions, SessionRefreshOutcome } from "./session-capability.ts";
 import {
   sessionListAgentMatcher,
   sessionMutationRefreshOutcome,
   type SessionRefreshAttempt,
 } from "./session-list-query.ts";
 import type { SessionListRefreshHost } from "./session-managed-list-refresh.ts";
+import type { SessionRefreshOptions, SessionRefreshOutcome } from "./session-types.ts";
 
 type MutationRefreshOperations = {
   foreground: () => { agentId?: string; initial: boolean };
   replacementOptions: (agentId?: string | null) => SessionRefreshOptions;
-  invalidate: (agentId?: string | null) => void;
+  invalidate: (agentId?: string | null, immediate?: boolean) => void;
   refresh: (
     options: SessionRefreshOptions,
     isErrorCurrent?: () => boolean,
@@ -28,12 +28,13 @@ export function createSessionMutationRefresh(
   return async (
     agentId?: string | null,
     isErrorCurrent?: () => boolean,
+    immediate = false,
   ): Promise<SessionRefreshOutcome> => {
     const scope = host.connection.capture();
     if (!scope) {
       return { status: "stale" };
     }
-    roster.invalidate(agentId);
+    roster.invalidate(agentId, immediate);
     const foreground = roster.foreground();
     if (sessionListAgentMatcher(agentId)(foreground.agentId)) {
       const options = roster.replacementOptions(foreground.initial ? agentId : undefined);

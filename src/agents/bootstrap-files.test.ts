@@ -37,6 +37,7 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
+import { buildBootstrapContextFiles } from "./embedded-agent-helpers/bootstrap.js";
 import { createRemoteShellSandboxFsBridge } from "./sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "./sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
@@ -555,17 +556,17 @@ describe("resolveBootstrapContextForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
 
-  it("keeps bootstrap context empty in lightweight heartbeat mode", async () => {
+  it("keeps bootstrap context empty in lightweight scheduled mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
       contextMode: "lightweight",
-      runKind: "heartbeat",
+      runKind: "cron",
     });
 
-    // Heartbeat context comes from cron scratch via the heartbeat runner now.
+    // Lightweight runs omit bootstrap context.
     expect(files).toStrictEqual([]);
   });
 });
@@ -738,6 +739,39 @@ describe("hasCompletedBootstrapTurn", () => {
 });
 
 describe("makeBootstrapWarn", () => {
+  it("keeps content revisions distinct when decorating truncation warnings", () => {
+    const warnings: string[] = [];
+    const workspaceDir = `/tmp/${randomUUID()}`;
+    for (const { sessionLabel, content } of [
+      { sessionLabel: "first", content: "a" },
+      { sessionLabel: "second", content: "a" },
+      { sessionLabel: "first", content: "b" },
+    ]) {
+      buildBootstrapContextFiles(
+        [
+          {
+            name: "AGENTS.md",
+            path: `${workspaceDir}/AGENTS.md`,
+            content: content.repeat(1000),
+            missing: false,
+          },
+        ],
+        {
+          maxChars: 200,
+          warn: makeBootstrapWarn({
+            sessionLabel,
+            workspaceDir,
+            warn: (message) => warnings.push(message),
+          }),
+        },
+      );
+    }
+    expect(warnings).toEqual([
+      "workspace bootstrap file AGENTS.md is 1000 chars (limit 200); truncating in injected context (sessionKey=first)",
+      "workspace bootstrap file AGENTS.md is 1000 chars (limit 200); truncating in injected context (sessionKey=first)",
+    ]);
+  });
+
   it("deduplicates repeated warnings for the same session and message", () => {
     const warnings: string[] = [];
     const warn = makeBootstrapWarn({

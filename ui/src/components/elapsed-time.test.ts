@@ -1,35 +1,47 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import "./elapsed-time.ts";
+import { mountSolid } from "../test-helpers/solid-render.tsx";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { ElapsedTime } from "./elapsed-time.tsx";
 
-type ElapsedTimeElement = HTMLElement & {
-  startMs: number | null;
-  endMs: number | null;
-  minimumUnit: "second" | "minute";
-  singleUnit: boolean;
-  updateComplete: Promise<boolean>;
-  render: () => unknown;
-};
+type ElapsedTimeProps = Parameters<typeof ElapsedTime>[0];
 
 const NOW = 2_000_000_000;
 
 describe("openclaw-elapsed-time", () => {
-  let element: ElapsedTimeElement;
+  let element: HTMLElement;
+  let view: ReturnType<typeof mountSolid<ElapsedTimeProps>>;
+  let props: ElapsedTimeProps;
+  const update = (changes: Partial<ElapsedTimeProps>) => {
+    props = { ...props, ...changes };
+    view.update(props);
+  };
   let visibility: DocumentVisibilityState;
+  let observer: MutationObserver;
+
+  const observeText = () => {
+    const changed = vi.fn();
+    observer = new MutationObserver(changed);
+    observer.observe(element, { characterData: true, childList: true, subtree: true });
+    return changed;
+  };
 
   beforeEach(async () => {
     await i18n.setLocale("en");
     vi.useFakeTimers({ now: NOW });
     visibility = "visible";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-    element = document.createElement("openclaw-elapsed-time") as ElapsedTimeElement;
-    element.startMs = NOW;
-    document.body.appendChild(element);
+    props = { startMs: NOW };
+    const container = document.body.appendChild(document.createElement("div"));
+    view = mountSolid(ElapsedTime, props, container);
+    element = container.querySelector<HTMLElement>("openclaw-elapsed-time")!;
   });
 
   afterEach(() => {
-    element.remove();
+    observer?.disconnect();
+    view.dispose();
+    view.container.remove();
     vi.restoreAllMocks();
     vi.useRealTimers();
   });
@@ -41,61 +53,76 @@ describe("openclaw-elapsed-time", () => {
   ] as const)(
     "updates %s labels only when their displayed duration changes (single unit: %s, elapsed: %i)",
     async (minimumUnit, singleUnit, elapsedMs, advanceMs, initial, first, second, renders) => {
-      element.minimumUnit = minimumUnit;
-      element.singleUnit = singleUnit;
-      element.startMs = NOW - elapsedMs;
-      await element.updateComplete;
+      update({ minimumUnit, singleUnit, startMs: NOW - elapsedMs });
       expect(element.textContent?.trim()).toBe(initial);
-      const render = vi.spyOn(element, "render");
+      const changed = observeText();
       await vi.advanceTimersByTimeAsync(advanceMs);
-      expect(render).toHaveBeenCalledTimes(renders);
+      expect(changed).toHaveBeenCalledTimes(renders);
       expect(element.textContent?.trim()).toBe(first);
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(render).toHaveBeenCalledTimes(renders + 1);
+      expect(changed).toHaveBeenCalledTimes(renders + 1);
       expect(element.textContent?.trim()).toBe(second);
     },
   );
 
+  it.each([
+    [60_000, "1m", "1m 0s"],
+    [3_665_000, "1h 1m", "1h 1m 5s"],
+  ] as const)(
+    "retains seconds only when opted in at %i ms",
+    async (elapsedMs, compact, withSeconds) => {
+      update({ startMs: NOW - elapsedMs, endMs: NOW });
+      expect(element.textContent?.trim()).toBe(compact);
+
+      update({ includeSeconds: true });
+      expect(element.textContent?.trim()).toBe(withSeconds);
+
+      update({ includeSeconds: false });
+      expect(element.textContent?.trim()).toBe(compact);
+    },
+  );
+
   it("applies timing and format property changes even when the current label is unchanged", async () => {
-    element.minimumUnit = "minute";
-    element.startMs = NOW - 65_000;
-    await element.updateComplete;
-    element.endMs = NOW;
-    await element.updateComplete;
-    const render = vi.spyOn(element, "render");
+    update({ minimumUnit: "minute", startMs: NOW - 65_000 });
+    update({ endMs: NOW });
+    const changed = observeText();
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(render).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
     expect(element.textContent?.trim()).toBe("1m");
 
-    element.endMs = null;
-    await element.updateComplete;
+    update({ endMs: null });
     expect(element.textContent?.trim()).toBe("2m");
-    element.minimumUnit = "second";
-    await element.updateComplete;
+    update({ minimumUnit: "second" });
     expect(element.textContent?.trim()).toBe("2m 5s");
     await vi.advanceTimersByTimeAsync(1_000);
     expect(element.textContent?.trim()).toBe("2m 6s");
   });
 
   it("pauses hidden polling, catches up on return, and stops after removal", async () => {
-    await element.updateComplete;
-    const render = vi.spyOn(element, "render");
+    const changed = observeText();
     visibility = "hidden";
     document.dispatchEvent(new Event("visibilitychange"));
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(render).not.toHaveBeenCalled();
+    expect(changed).not.toHaveBeenCalled();
     expect(element.textContent?.trim()).toBe("1s");
 
     visibility = "visible";
     document.dispatchEvent(new Event("visibilitychange"));
-    await element.updateComplete;
-    expect(render).toHaveBeenCalledOnce();
+    flush();
+    await Promise.resolve();
+    expect(changed).toHaveBeenCalledOnce();
     expect(element.textContent?.trim()).toBe("1m");
 
-    element.remove();
+    view.dispose();
+    view.container.remove();
+    // Settle disposal and the resulting observer notification before checking for ticks.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(vi.getTimerCount()).toBe(0);
+    changed.mockClear();
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(render).toHaveBeenCalledOnce();
+    expect(changed).not.toHaveBeenCalled();
   });
 });

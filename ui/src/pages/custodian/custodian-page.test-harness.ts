@@ -1,5 +1,5 @@
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
-import { vi } from "vitest";
+import { type Mock, vi } from "vitest";
 import type {
   GatewayBrowserClient,
   GatewayEventFrame,
@@ -16,7 +16,7 @@ import {
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
-import "./custodian-page.ts";
+import "./custodian-page.tsx";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
@@ -36,15 +36,24 @@ type ContextHarness = {
 };
 
 export function createContext(
-  request: ReturnType<typeof vi.fn>,
+  request: Mock,
   methods: string[] = ["openclaw.chat"],
   options: {
     agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
     channelsSnapshot?: ChannelsStatusSnapshot | null;
     gatewayCapabilities?: string[];
+    healthRequest?: typeof request;
   } = {},
 ): ContextHarness {
-  const client = { request } as unknown as GatewayBrowserClient;
+  let healthSnapshot: unknown = { channels: {} };
+  const client = {
+    request: (method: string, ...args: unknown[]) =>
+      method === "health"
+        ? (options.healthRequest?.(method, ...args) ?? Promise.resolve(healthSnapshot))
+        : method === "openclaw.chat.history" && !methods.includes(method)
+          ? Promise.resolve({ turns: [] })
+          : request(method, ...args),
+  } as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: "connected",
@@ -97,11 +106,13 @@ export function createContext(
     channelsLoadingProbe: null,
     channelsRefreshSeq: 0,
     channelsSnapshot: options.channelsSnapshot ?? null,
+    channelsRead: null,
     channelsError: null,
     channelsLastSuccess: options.channelsSnapshot ? Date.now() : null,
     pairingLoading: false,
     pairingRefreshSeq: 0,
     pairingSnapshot: null,
+    pairingRead: null,
     pairingError: null,
     pairingLastSuccess: null,
     pairingBusyRequestId: null,
@@ -111,16 +122,26 @@ export function createContext(
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };
+  let settleChannels: ((error: string | null) => void) | undefined;
   const refreshChannels = vi.fn(() => {
+    settleChannels?.(null);
+    const { promise, resolve } = Promise.withResolvers<string | null>();
+    settleChannels = resolve;
+    channelState.channelsRead = { completion: promise };
     channelState.channelsLoading = true;
     for (const listener of channelListeners) {
       listener(channelState);
     }
-    return new Promise<void>(() => {});
+    return promise.then(() => undefined);
   });
   const routeListeners = new Set<() => void>();
   const context = {
     gateway,
+    runtimeConfig: {
+      state: { configSnapshot: null, configLoading: false, lastError: null },
+      ensureLoaded: vi.fn(async () => undefined),
+      subscribe: () => () => undefined,
+    },
     router: {
       getState: () => ({ location: { pathname: window.location.pathname } }),
       subscribe: (listener: () => void) => {
@@ -175,6 +196,8 @@ export function createContext(
       connection.token = credentials.token;
     },
     setChannelsConnected: (connected) => {
+      settleChannels?.(null);
+      channelState.channelsRead = null;
       channelState.connected = connected;
       channelState.channelsLoading = false;
       channelState.channelsError = null;
@@ -185,6 +208,9 @@ export function createContext(
     setChannelsSnapshot: (nextSnapshot) => {
       channelState.channelsSnapshot = nextSnapshot;
       channelState.channelsLastSuccess = nextSnapshot ? Date.now() : null;
+      channelState.channelsLoading = false;
+      channelState.channelsError = null;
+      settleChannels?.(null);
       for (const listener of channelListeners) {
         listener(channelState);
       }
@@ -192,11 +218,15 @@ export function createContext(
     setChannelsError: (error: string | null) => {
       channelState.channelsLoading = false;
       channelState.channelsError = error;
+      settleChannels?.(error);
       for (const listener of channelListeners) {
         listener(channelState);
       }
     },
     emitGatewayEvent: (event) => {
+      if (event.event === "health") {
+        healthSnapshot = event.payload;
+      }
       for (const listener of eventListeners) {
         listener(event as GatewayEventFrame);
       }

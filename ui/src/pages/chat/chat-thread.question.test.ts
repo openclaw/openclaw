@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import { buildCachedChatItems, coalesceStreamRuns, resetChatThreadState } from "./chat-thread.ts";
-import { renderChatQuestionSummary } from "./components/chat-question-card.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
+import { coalesceStreamRuns } from "./chat-turn-presentation.ts";
+import { ChatQuestionSummary } from "./components/chat-question-summary.tsx";
 
 function prompt(status: QuestionPrompt["status"]): QuestionPrompt {
   return {
@@ -92,7 +93,7 @@ describe("question chat items", () => {
     question.answers = { answers: { format: ["Compact"] } };
     const container = document.createElement("div");
 
-    render(renderChatQuestionSummary(question), container);
+    mountSolid(ChatQuestionSummary, { prompt: question }, container);
     expect(
       container.querySelector(".chat-question-summary")?.textContent?.replace(/\s+/g, " "),
     ).toContain(`Which format? Format: ${outcome}`);
@@ -115,7 +116,7 @@ describe("question chat items", () => {
     answered.answers = { answers: { api_key: ["fake-secret-never-render"] } };
     const container = document.createElement("div");
 
-    render(renderChatQuestionSummary(answered), container);
+    mountSolid(ChatQuestionSummary, { prompt: answered }, container);
 
     expect(container.textContent?.replace(/\s+/g, " ")).toContain("API key: Answered");
     expect(container.textContent).toContain("Provide the deployment API key");

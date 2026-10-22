@@ -40,15 +40,6 @@ export function startConfigWrite(
   return { harness, operation: handler(harness.options) };
 }
 
-export async function invokeConfigSchema() {
-  const harness = createConfigHandlerHarness({ method: "config.schema" });
-  await expectDefined(
-    configHandlers["config.schema"],
-    'configHandlers["config.schema"] test invariant',
-  )(harness.options);
-  return harness;
-}
-
 export async function invokeConfigOpenFile() {
   const harness = createConfigHandlerHarness({ method: "config.openFile" });
   await expectDefined(

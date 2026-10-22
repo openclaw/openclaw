@@ -71,14 +71,6 @@ export async function runMatrixSetupBootstrapAfterConfigWrite(params: {
   accountId: string;
   runtime: RuntimeEnv;
 }): Promise<void> {
-  const nextAccountConfig = resolveMatrixAccountConfig({
-    cfg: params.cfg,
-    accountId: params.accountId,
-  });
-  if (nextAccountConfig.encryption !== true) {
-    return;
-  }
-
   const bootstrap = await maybeBootstrapNewEncryptedMatrixAccount({
     previousCfg: params.previousCfg,
     cfg: params.cfg,

@@ -8,13 +8,13 @@ import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js
 
 /** Forward the original source and binding to a real native fault/observation backend. */
 export function observeMemoryForgetWorker(db: DatabaseSync, options: MemoryForgetFault) {
-  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
   const observer = vi
-    .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+    .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2")
     .mockImplementation(async (...args) => {
       const [admission, source, worker] = args;
       if (
-        source !== db ||
+        admission.path !== db.location() ||
         worker.moduleUrl.href !==
           resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins).href
       ) {

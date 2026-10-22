@@ -6,6 +6,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { listSessionEntriesCore } from "./session-accessor.entry.js";
 import { upsertSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
@@ -15,6 +16,7 @@ afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 it("reuses current participants across transcript appends and publishes new actors", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const scope = {
       agentId: "main",
       env: state.env,
@@ -30,7 +32,9 @@ it("reuses current participants across transcript appends and publishes new acto
     const database = openOpenClawAgentDatabase(scope);
     const reads = observeSqliteReadSql(StatementSync.prototype);
     const participantReads = () =>
-      reads.queries.filter((sql) => sql.startsWith('select * from "session_participants"')).length;
+      reads.queries.filter((sql) =>
+        sql.startsWith('select "session_key", "identity_namespace", "actor_id"'),
+      ).length;
     const append = (index: number) =>
       persistSessionTranscriptTurn(scope, {
         touchSessionEntry: true,

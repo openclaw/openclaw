@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import {
   OAuthClientInformationSchema,
@@ -6,7 +5,7 @@ import {
   OAuthProtectedResourceMetadataSchema,
   OAuthTokensSchema,
   OpenIdProviderDiscoveryMetadataSchema,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
@@ -15,6 +14,7 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -35,7 +35,12 @@ const UNINITIALIZED_STORE_FIELDS = new Set(["credentialState", "pendingAuthoriza
 function assertOptionalString(
   storeKey: string,
   store: Record<string, unknown>,
-  field: "codeVerifier" | "lastAuthorizationUrl" | "redirectUrl",
+  field:
+    | "codeVerifier"
+    | "lastAuthorizationUrl"
+    | "redirectUrl"
+    | "authorizationId"
+    | "refreshClaim",
 ): void {
   const value = store[field];
   if (value !== undefined && (typeof value !== "string" || value.length === 0)) {
@@ -177,6 +182,14 @@ export function parseMcpOAuthStoreJson(storeKey: string, raw: string): McpOAuthS
   assertOptionalString(storeKey, value, "codeVerifier");
   assertOptionalString(storeKey, value, "lastAuthorizationUrl");
   assertOptionalString(storeKey, value, "redirectUrl");
+  assertOptionalString(storeKey, value, "authorizationId");
+  assertOptionalString(storeKey, value, "refreshClaim");
+  if (
+    value.refreshClaim !== undefined &&
+    (!isRecord(value.tokens) || !value.tokens.refresh_token)
+  ) {
+    throw new McpOAuthStoreCorruptionError(storeKey, "refreshClaim requires a refresh grant");
+  }
   assertDiscoveryState(storeKey, value.discoveryState);
   assertAuthorizationChallenge(storeKey, value.pendingAuthorizationChallenge);
   // SAFETY: SDK schemas and the field guards above validate known fields; preserve extension fields.
@@ -200,7 +213,7 @@ function storeFromRow(
 }
 
 export function readMcpOAuthStoreInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKey: string,
 ): McpOAuthStore {
   const row = executeSqliteQueryTakeFirstSync(
@@ -224,7 +237,7 @@ export type McpOAuthReadOnlyOperations = {
 };
 
 export function readMcpOAuthStoreIfPresentInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKey: string,
 ): McpOAuthStore {
   return tableExists(database, "mcp_oauth_stores")
@@ -233,7 +246,7 @@ export function readMcpOAuthStoreIfPresentInDatabase(
 }
 
 export function readMcpOAuthStatusesInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKeys: readonly string[],
 ): McpOAuthPrincipalStatus[] {
   if (!tableExists(database, "mcp_oauth_stores")) {
@@ -253,7 +266,10 @@ export function readMcpOAuthStatusesInDatabase(
   );
 }
 
-export function listMcpOAuthStoreKeysInDatabase(database: DatabaseSync, prefix: string): string[] {
+export function listMcpOAuthStoreKeysInDatabase(
+  database: EngineConnection,
+  prefix: string,
+): string[] {
   if (!tableExists(database, "mcp_oauth_stores")) {
     return [];
   }
@@ -268,7 +284,10 @@ export function listMcpOAuthStoreKeysInDatabase(database: DatabaseSync, prefix: 
   return rows.map((row) => row.store_key);
 }
 
-export function countMcpOAuthPrincipalsInDatabase(database: DatabaseSync, prefix: string): number {
+export function countMcpOAuthPrincipalsInDatabase(
+  database: EngineConnection,
+  prefix: string,
+): number {
   if (!tableExists(database, "mcp_oauth_stores")) {
     return 0;
   }
@@ -290,7 +309,7 @@ export function countMcpOAuthPrincipalsInDatabase(database: DatabaseSync, prefix
 }
 
 export function readMcpOAuthPendingInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   state: string,
 ): string | undefined {
   if (!tableExists(database, "mcp_oauth_pending_authorizations")) {
@@ -307,10 +326,10 @@ export function readMcpOAuthPendingInDatabase(
 }
 
 export function replaceMcpOAuthStoreInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKey: string,
   next: McpOAuthStore,
-  assertOwnedInTransaction?: (database: DatabaseSync) => void,
+  assertOwnedInTransaction?: (database: EngineConnection) => void,
 ): McpOAuthStore {
   const storeJson = JSON.stringify(next);
   parseMcpOAuthStoreJson(storeKey, storeJson);

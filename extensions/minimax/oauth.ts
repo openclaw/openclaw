@@ -6,11 +6,19 @@ import {
   resolvePositiveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
-import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
+import {
+  generatePkceVerifierChallenge,
+  toFormUrlEncoded,
+  type OAuthCredential,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
+import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   ensureGlobalUndiciEnvProxyDispatcher,
   sleepWithAbort,
@@ -64,6 +72,8 @@ type MiniMaxOAuthToken = {
   expires: number;
   resourceUrl?: string;
   notification_message?: string;
+  /** Regional token endpoint that issued the credential; refresh is bound to it. */
+  tokenEndpoint?: string;
 };
 
 type TokenResult =
@@ -71,114 +81,18 @@ type TokenResult =
   | { status: "pending"; message?: string }
   | { status: "error"; message: string };
 
-async function requestOAuthCode(params: {
-  challenge: string;
-  state: string;
-  region: MiniMaxRegion;
-  signal?: AbortSignal;
-  assertCurrent: () => void;
-}): Promise<MiniMaxOAuthAuthorization> {
-  const endpoints = getOAuthEndpoints(params.region);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: endpoints.codeEndpoint,
-    init: {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-        "x-request-id": randomUUID(),
-      },
-      body: toFormUrlEncoded({
-        response_type: "code",
-        client_id: endpoints.clientId,
-        scope: MINIMAX_OAUTH_SCOPE,
-        code_challenge: params.challenge,
-        code_challenge_method: "S256",
-        state: params.state,
-      }),
-    },
-    ...(params.signal ? { signal: params.signal } : {}),
-    beforeRequest: params.assertCurrent,
-    timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
-    policy: { allowedHostnames: [endpoints.hostname] },
-    auditContext: "minimax.oauth.code",
-  });
-  try {
-    if (!response.ok) {
-      const text = await readResponseTextLimited(response, MINIMAX_OAUTH_ERROR_BODY_LIMIT_BYTES);
-      throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
-    }
-
-    const payload = await readProviderJsonResponse<MiniMaxOAuthAuthorization & { error?: string }>(
-      response,
-      "minimax.oauth-code",
-    );
-    if (!payload.user_code || !payload.verification_uri) {
-      throw new Error(
-        payload.error ??
-          "MiniMax OAuth authorization returned an incomplete payload (missing user_code or verification_uri).",
-      );
-    }
-    if (payload.state !== params.state) {
-      throw new Error("MiniMax OAuth state mismatch: possible CSRF attack or session corruption.");
-    }
-    const expiredIn = asSafeIntegerInRange(payload.expired_in, {
-      min: 1,
-      max: MAX_DATE_TIMESTAMP_MS,
-    });
-    if (expiredIn === undefined) {
-      throw new Error("MiniMax OAuth authorization returned invalid expired_in.");
-    }
-    return { ...payload, expired_in: expiredIn };
-  } finally {
-    await release();
-  }
-}
-
-async function pollOAuthToken(params: {
-  userCode: string;
-  verifier: string;
-  region: MiniMaxRegion;
-  signal?: AbortSignal;
-  assertCurrent: () => void;
-}): Promise<TokenResult> {
-  const endpoints = getOAuthEndpoints(params.region);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: endpoints.tokenEndpoint,
-    init: {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
-      body: toFormUrlEncoded({
-        grant_type: MINIMAX_OAUTH_GRANT_TYPE,
-        client_id: endpoints.clientId,
-        user_code: params.userCode,
-        code_verifier: params.verifier,
-      }),
-    },
-    ...(params.signal ? { signal: params.signal } : {}),
-    beforeRequest: params.assertCurrent,
-    timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
-    policy: { allowedHostnames: [endpoints.hostname] },
-    auditContext: "minimax.oauth.token",
-  });
-  try {
-    return await parseMiniMaxOAuthTokenResponse(response);
-  } finally {
-    await release();
-  }
-}
-
-async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<TokenResult> {
+async function parseMiniMaxOAuthTokenResponse(
+  response: Response,
+  previousRefresh?: string,
+): Promise<TokenResult> {
   const text = await readResponseTextLimited(response, MINIMAX_OAUTH_ERROR_BODY_LIMIT_BYTES);
   let payload:
     | {
         status?: string;
+        error?: unknown;
         base_resp?: { status_code?: number; status_msg?: string };
-        access_token?: string | null;
-        refresh_token?: string | null;
+        access_token?: unknown;
+        refresh_token?: unknown;
         expired_in?: unknown;
         resource_url?: string;
         notification_message?: string;
@@ -190,6 +104,16 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
     } catch {
       payload = undefined;
     }
+  }
+
+  if (
+    previousRefresh !== undefined &&
+    (!response.ok ||
+      payload?.error !== undefined ||
+      payload?.status === "error" ||
+      (payload?.base_resp?.status_code !== undefined && payload.base_resp.status_code !== 0))
+  ) {
+    throw createOAuthRefreshResponseError("MiniMax OAuth refresh", response.status, payload);
   }
 
   if (!response.ok) {
@@ -205,14 +129,25 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
   }
 
   if (payload.status === "error") {
-    return { status: "error", message: "An error occurred. Please try again later" };
+    return {
+      status: "error",
+      message: payload.base_resp?.status_msg || "An error occurred. Please try again later",
+    };
   }
 
   if (payload.status !== "success") {
     return { status: "pending", message: "current user code is not authorized" };
   }
 
-  if (!payload.access_token || !payload.refresh_token || !payload.expired_in) {
+  // A refresh response may omit refresh_token when the server does not rotate it.
+  const refresh = payload.refresh_token === undefined ? previousRefresh : payload.refresh_token;
+  if (
+    typeof payload.access_token !== "string" ||
+    !payload.access_token.trim() ||
+    typeof refresh !== "string" ||
+    !refresh.trim() ||
+    !payload.expired_in
+  ) {
     return { status: "error", message: "MiniMax OAuth returned incomplete token payload." };
   }
   const expires = resolveExpiresAtMsFromDurationOrEpoch(payload.expired_in, {
@@ -228,11 +163,99 @@ async function parseMiniMaxOAuthTokenResponse(response: Response): Promise<Token
     status: "success",
     token: {
       access: payload.access_token,
-      refresh: payload.refresh_token,
+      refresh,
       expires,
       resourceUrl: payload.resource_url,
       notification_message: payload.notification_message,
     },
+  };
+}
+
+function resolveMiniMaxRegionFromBaseUrl(baseUrl: string | undefined): MiniMaxRegion | undefined {
+  let hostname: string;
+  try {
+    hostname = new URL(baseUrl ?? "").hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  if (hostname === "api.minimax.cn") {
+    return "cn";
+  }
+  const regions: MiniMaxRegion[] = ["global", "cn"];
+  return regions.find(
+    (region) => new URL(MINIMAX_OAUTH_CONFIG[region].baseUrl).hostname === hostname,
+  );
+}
+
+const MINIMAX_SIGN_IN_AGAIN =
+  "Run `openclaw models auth login --provider minimax-portal` to sign in again.";
+
+/**
+ * Refresh a MiniMax Portal OAuth credential at the token endpoint its login
+ * recorded. The refresh token is only sent back to that regional endpoint:
+ * credentials without a recorded endpoint (saved before refresh existed) and
+ * credentials whose configured base URL now names the other region are refused
+ * before any request, since either could send the token across regions.
+ */
+export async function refreshMiniMaxPortalOAuthCredential(
+  credential: OAuthCredential,
+  providerBaseUrl: string | undefined,
+): Promise<OAuthCredential> {
+  const regions: MiniMaxRegion[] = ["global", "cn"];
+  const region = regions.find(
+    (candidate) => getOAuthEndpoints(candidate).tokenEndpoint === credential.tokenEndpoint,
+  );
+  if (!region) {
+    throw new Error(
+      `MiniMax OAuth credential does not record the account region it was issued for. ${MINIMAX_SIGN_IN_AGAIN}`,
+    );
+  }
+  const configuredRegion = resolveMiniMaxRegionFromBaseUrl(providerBaseUrl);
+  if (configuredRegion && configuredRegion !== region) {
+    throw new Error(
+      `MiniMax OAuth credential was issued for the ${region === "cn" ? "CN" : "Global"} region, but models.providers.minimax-portal.baseUrl now points to ${MINIMAX_OAUTH_CONFIG[configuredRegion].baseUrl}. ${MINIMAX_SIGN_IN_AGAIN}`,
+    );
+  }
+  if (!credential.refresh) {
+    throw new Error(`MiniMax OAuth credential has no refresh token. ${MINIMAX_SIGN_IN_AGAIN}`);
+  }
+  ensureGlobalUndiciEnvProxyDispatcher();
+  const endpoints = getOAuthEndpoints(region);
+  const { response, release } = await fetchWithSsrFGuard({
+    url: endpoints.tokenEndpoint,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: toFormUrlEncoded({
+        grant_type: "refresh_token",
+        client_id: endpoints.clientId,
+        refresh_token: credential.refresh,
+      }),
+    },
+    timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
+    policy: { allowedHostnames: [endpoints.hostname] },
+    auditContext: "minimax.oauth.refresh",
+  });
+  let result: TokenResult;
+  try {
+    result = await parseMiniMaxOAuthTokenResponse(response, credential.refresh);
+  } finally {
+    await release();
+  }
+  if (result.status !== "success") {
+    throw createOAuthRefreshError(
+      "MiniMax OAuth refresh returned invalid credentials. Sign in again.",
+      { version: 1, phase: "after-token-response", outcome: "unknown" },
+    );
+  }
+  return {
+    ...credential,
+    access: result.token.access,
+    refresh: result.token.refresh,
+    expires: result.token.expires,
   };
 }
 
@@ -257,13 +280,94 @@ export async function loginMiniMaxPortalOAuth(params: {
   };
   const { verifier, challenge } = generatePkceVerifierChallenge();
   const state = randomBytes(16).toString("base64url");
-  const oauth = await requestOAuthCode({
-    challenge,
-    state,
-    region,
-    ...(params.signal ? { signal: params.signal } : {}),
-    assertCurrent,
-  });
+  async function requestOAuthCode(): Promise<MiniMaxOAuthAuthorization> {
+    const endpoints = getOAuthEndpoints(region);
+    const { response, release } = await fetchWithSsrFGuard({
+      url: endpoints.codeEndpoint,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+          "x-request-id": randomUUID(),
+        },
+        body: toFormUrlEncoded({
+          response_type: "code",
+          client_id: endpoints.clientId,
+          scope: MINIMAX_OAUTH_SCOPE,
+          code_challenge: challenge,
+          code_challenge_method: "S256",
+          state,
+        }),
+      },
+      ...(params.signal ? { signal: params.signal } : {}),
+      beforeRequest: assertCurrent,
+      timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
+      policy: { allowedHostnames: [endpoints.hostname] },
+      auditContext: "minimax.oauth.code",
+    });
+    try {
+      if (!response.ok) {
+        const text = await readResponseTextLimited(response, MINIMAX_OAUTH_ERROR_BODY_LIMIT_BYTES);
+        throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
+      }
+
+      const payload = await readProviderJsonResponse<
+        MiniMaxOAuthAuthorization & { error?: string }
+      >(response, "minimax.oauth-code");
+      if (!payload.user_code || !payload.verification_uri) {
+        throw new Error(
+          payload.error ??
+            "MiniMax OAuth authorization returned an incomplete payload (missing user_code or verification_uri).",
+        );
+      }
+      if (payload.state !== state) {
+        throw new Error(
+          "MiniMax OAuth state mismatch: possible CSRF attack or session corruption.",
+        );
+      }
+      const expiredIn = asSafeIntegerInRange(payload.expired_in, {
+        min: 1,
+        max: MAX_DATE_TIMESTAMP_MS,
+      });
+      if (expiredIn === undefined) {
+        throw new Error("MiniMax OAuth authorization returned invalid expired_in.");
+      }
+      return { ...payload, expired_in: expiredIn };
+    } finally {
+      await release();
+    }
+  }
+  const oauth = await requestOAuthCode();
+  async function pollOAuthToken(): Promise<TokenResult> {
+    const endpoints = getOAuthEndpoints(region);
+    const { response, release } = await fetchWithSsrFGuard({
+      url: endpoints.tokenEndpoint,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body: toFormUrlEncoded({
+          grant_type: MINIMAX_OAUTH_GRANT_TYPE,
+          client_id: endpoints.clientId,
+          user_code: oauth.user_code,
+          code_verifier: verifier,
+        }),
+      },
+      ...(params.signal ? { signal: params.signal } : {}),
+      beforeRequest: assertCurrent,
+      timeoutMs: MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
+      policy: { allowedHostnames: [endpoints.hostname] },
+      auditContext: "minimax.oauth.token",
+    });
+    try {
+      return await parseMiniMaxOAuthTokenResponse(response);
+    } finally {
+      await release();
+    }
+  }
   assertCurrent();
   const verificationUrl = oauth.verification_uri;
 
@@ -296,17 +400,11 @@ export async function loginMiniMaxPortalOAuth(params: {
 
   while (Date.now() < expireTimeMs) {
     params.progress.update("Waiting for MiniMax OAuth approval…");
-    const result = await pollOAuthToken({
-      userCode: oauth.user_code,
-      verifier,
-      region,
-      ...(params.signal ? { signal: params.signal } : {}),
-      assertCurrent,
-    });
+    const result = await pollOAuthToken();
     assertCurrent();
 
     if (result.status === "success") {
-      return result.token;
+      return { ...result.token, tokenEndpoint: getOAuthEndpoints(region).tokenEndpoint };
     }
 
     if (result.status === "error") {

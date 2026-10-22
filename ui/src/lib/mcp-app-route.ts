@@ -11,9 +11,7 @@ function validMcpAppDeepLink(value: string): boolean {
   return (
     value.startsWith("/") &&
     !value.startsWith("//") &&
-    !value.includes("#") &&
-    !value.includes("\\") &&
-    !value.includes(" ") &&
+    !/[#\\ ]/u.test(value) &&
     !containsAsciiControlCharacter(value)
   );
 }

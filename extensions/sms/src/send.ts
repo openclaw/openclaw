@@ -103,11 +103,15 @@ export function toSmsPlainText(text: string): string {
     .trim();
 }
 
-function chunkSmsPlainText(text: string, limit: number): string[] {
+function prepareSmsTextChunks(params: { text: string; configuredLimit: number }): string[] {
+  const text = toSmsPlainText(params.text);
+  if (!text) {
+    return [];
+  }
   const ir: MarkdownIR = { text, styles: [], links: [] };
   return renderMarkdownIRChunksWithinLimit({
     ir,
-    limit,
+    limit: Math.min(params.configuredLimit, TWILIO_MESSAGE_BODY_MAX_LENGTH),
     assistantTranscriptRoleMessageBoundaries: true,
     // A soft split can promote mid-line prose to a new SMS boundary. Re-run
     // the semantic annotation while measuring so the marker stays in-budget.
@@ -119,70 +123,6 @@ function chunkSmsPlainText(text: string, limit: number): string[] {
   })
     .map(({ rendered }) => rendered)
     .filter(Boolean);
-}
-
-function prepareSmsTextChunks(params: { text: string; configuredLimit: number }): string[] {
-  const text = toSmsPlainText(params.text);
-  if (!text) {
-    return [];
-  }
-  return chunkSmsPlainText(text, Math.min(params.configuredLimit, TWILIO_MESSAGE_BODY_MAX_LENGTH));
-}
-
-async function sendSmsProviderMessage(params: {
-  account: ResolvedSmsAccount;
-  to: string;
-  text?: string;
-  mediaUrls?: readonly string[];
-  onPlatformSendDispatch?: () => Promise<void>;
-}): Promise<SmsSendResult> {
-  let platformDispatchStarted = false;
-  let result: SmsSendResult;
-  try {
-    result = await sendSmsViaTwilio({
-      account: params.account,
-      to: params.to,
-      ...(params.text !== undefined ? { text: params.text } : {}),
-      ...(params.mediaUrls !== undefined ? { mediaUrls: params.mediaUrls } : {}),
-      onPlatformSendDispatch: async () => {
-        // Twilio validates locally before this callback and performs HTTP after it.
-        // Only failures before a persisted dispatch marker are proven safe to replay.
-        await params.onPlatformSendDispatch?.();
-        platformDispatchStarted = true;
-      },
-    });
-  } catch (error) {
-    if (platformDispatchStarted || error instanceof PlatformMessageNotDispatchedError) {
-      throw error;
-    }
-    throw new PlatformMessageNotDispatchedError(
-      `SMS send failed before Twilio dispatch: ${formatErrorMessage(error)}`,
-      { cause: error },
-    );
-  }
-  await recordInitialDeliveryBestEffort(params.account, result);
-  return result;
-}
-
-async function recordInitialDeliveryBestEffort(
-  account: ResolvedSmsAccount,
-  result: SmsSendResult,
-): Promise<void> {
-  try {
-    await recordInitialSmsDeliveryResult({ account, result });
-  } catch (error) {
-    try {
-      getSmsRuntime()
-        .logging.getChildLogger({ plugin: "sms", feature: "delivery-status" })
-        .warn("SMS delivery initial state could not be persisted.", {
-          messageSid: result.sid,
-          errorType: error instanceof Error ? error.name : typeof error,
-        });
-    } catch {
-      // The provider send already succeeded; unavailable logging cannot turn
-      // observation persistence into a resend or user-visible send failure.
-    }
-  }
 }
 
 type SmsSendContext = {
@@ -217,12 +157,45 @@ async function sendSmsMessages(
   const results: SmsSendResult[] = [];
   try {
     for (const [index, message] of messages.entries()) {
-      const result = await sendSmsProviderMessage({
-        account: params.account,
-        to: params.to,
-        ...message,
-        onPlatformSendDispatch: params.onPlatformSendDispatch,
-      });
+      let platformDispatchStarted = false;
+      let result: SmsSendResult;
+      try {
+        result = await sendSmsViaTwilio({
+          account: params.account,
+          to: params.to,
+          ...(message.text !== undefined ? { text: message.text } : {}),
+          ...(message.mediaUrls !== undefined ? { mediaUrls: message.mediaUrls } : {}),
+          onPlatformSendDispatch: async () => {
+            // Twilio validates locally before this callback and performs HTTP after it.
+            // Only failures before a persisted dispatch marker are proven safe to replay.
+            await params.onPlatformSendDispatch?.();
+            platformDispatchStarted = true;
+          },
+        });
+      } catch (error) {
+        if (platformDispatchStarted || error instanceof PlatformMessageNotDispatchedError) {
+          throw error;
+        }
+        throw new PlatformMessageNotDispatchedError(
+          `SMS send failed before Twilio dispatch: ${formatErrorMessage(error)}`,
+          { cause: error },
+        );
+      }
+      try {
+        await recordInitialSmsDeliveryResult({ account: params.account, result });
+      } catch (error) {
+        try {
+          getSmsRuntime()
+            .logging.getChildLogger({ plugin: "sms", feature: "delivery-status" })
+            .warn("SMS delivery initial state could not be persisted.", {
+              messageSid: result.sid,
+              errorType: error instanceof Error ? error.name : typeof error,
+            });
+        } catch {
+          // The provider send already succeeded; unavailable logging cannot turn
+          // observation persistence into a resend or user-visible send failure.
+        }
+      }
       results.push(result);
       await params.onDeliveryResult?.(
         createSmsSendResult({ results: [result], kind: index === 0 ? kind : "text" }),

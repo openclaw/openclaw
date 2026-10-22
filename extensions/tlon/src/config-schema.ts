@@ -42,10 +42,8 @@ const tlonCommonConfigFields = {
   responsePrefix: z.string().optional(),
   requireMentionInBotThreads: z.boolean().optional(),
   implicitMentions: ChannelImplicitMentionsSchema.optional(),
-  // Auto-accept settings
   autoAcceptDmInvites: z.boolean().optional(), // Auto-accept DMs from ships in dmAllowlist
-  autoAcceptGroupInvites: z.boolean().optional(), // Auto-accept all group invites
-  // Owner ship for approval system
+  autoAcceptGroupInvites: z.boolean().optional(),
   ownerShip: ShipSchema.optional(), // Ship that receives approval requests and can approve/deny
 } satisfies z.ZodRawShape;
 

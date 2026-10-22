@@ -144,30 +144,28 @@ export async function runDoctorPluginConvergence(params: {
     deferInstallation: false,
   });
   const deferredPlugins = new Map(pending.map((plugin) => [plugin.pluginId, plugin]));
+  const deferPlugin = (pluginId: string, reason: string) => {
+    deferredPlugins.set(pluginId, {
+      ...deferredPlugins.get(pluginId),
+      pluginId,
+      reason,
+      command: "openclaw update repair",
+    });
+  };
   for (const warning of convergence.warnings) {
     if (warning.pluginId) {
-      deferredPlugins.set(warning.pluginId, {
-        ...deferredPlugins.get(warning.pluginId),
-        pluginId: warning.pluginId,
-        reason: warning.reason,
-        command: "openclaw update repair",
-      });
+      deferPlugin(warning.pluginId, warning.reason);
     }
   }
   for (const plugin of quarantinedPlugins) {
-    deferredPlugins.set(plugin.pluginId, {
-      ...deferredPlugins.get(plugin.pluginId),
-      pluginId: plugin.pluginId,
-      reason: plugin.diagnostic.detail,
-      command: "openclaw update repair",
-    });
+    deferPlugin(plugin.pluginId, plugin.diagnostic.detail);
   }
   return {
     ...(warnings.length > 0 ? { warnings } : {}),
     quarantinedPlugins,
     ...(migrationInspection.requiredPluginIds.length > 0 ||
     migrationInspection.inspectionRequiredPluginIds.length > 0 ||
-    migrationInspection.statelessPluginIds.length > 0
+    migrationInspection.statelessPlugins.length > 0
       ? { migrationInspection }
       : {}),
     ...(deferredPlugins.size > 0 ? { deferredPlugins: [...deferredPlugins.values()] } : {}),

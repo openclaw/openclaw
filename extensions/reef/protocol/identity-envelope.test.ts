@@ -16,15 +16,15 @@ const replyTo = "01JZ0000000000000000000001";
 const thread = "01JZ0000000000000000000002";
 
 function fixture(overrides: Partial<Parameters<typeof seal>[0]> = {}) {
-  const alice = generateIdentity();
-  const bob = generateIdentity();
+  const { signing } = generateIdentity();
+  const { encryption } = generateIdentity();
   const sealOptions = {
     id,
     from: "alice#1",
     to: "bob#1",
     body: { text: "hello", replyTo, thread },
-    senderSigningSecretKey: alice.signing.secretKey,
-    recipientEncryptionPublicKey: bob.encryption.publicKey,
+    senderSigningSecretKey: signing.secretKey,
+    recipientEncryptionPublicKey: encryption.publicKey,
     ts: now,
     ...overrides,
   };
@@ -32,50 +32,50 @@ function fixture(overrides: Partial<Parameters<typeof seal>[0]> = {}) {
   const options = {
     envelope,
     self: "bob#1",
-    recipientEncryptionSecretKey: bob.encryption.secretKey,
-    senderSigningPublicKey: alice.signing.publicKey,
+    recipientEncryptionSecretKey: encryption.secretKey,
+    senderSigningPublicKey: signing.publicKey,
     replayStore: new MemoryReplayStore(),
     now,
   };
-  return { sealOptions, envelope, options };
+  return {
+    sealOptions,
+    envelope,
+    options,
+    open: (changes: Partial<Parameters<typeof openClaimed>[0]> = {}) =>
+      openClaimed({ ...options, ...changes }),
+    sealBody: (body: Parameters<typeof seal>[0]["body"]) => seal({ ...sealOptions, body }),
+  };
 }
 
-describe("identity", () => {
-  it("formats, parses, and fingerprints identities stably", () => {
-    const identity = generateIdentity();
-    expect(parseHandleEpoch(formatHandleEpoch("reef-bot", 3))).toEqual({
-      handle: "reef-bot",
-      keyEpoch: 3,
-    });
-    expect(fingerprint(identity.signing.publicKey)).toMatch(/^(?:[0-9a-f]{4} ){15}[0-9a-f]{4}$/);
+const claimed = (body: Parameters<typeof seal>[0]["body"]) => ({
+  claim: "new",
+  body,
+  envelopeHash: expect.any(String),
+});
+
+it("formats, parses, and fingerprints identities stably", () => {
+  const identity = generateIdentity();
+  expect(parseHandleEpoch(formatHandleEpoch("reef-bot", 3))).toEqual({
+    handle: "reef-bot",
+    keyEpoch: 3,
   });
+  expect(fingerprint(identity.signing.publicKey)).toMatch(/^(?:[0-9a-f]{4} ){15}[0-9a-f]{4}$/);
 });
 
 describe("envelope", () => {
   it("releases a failed envelope claim for retry", async () => {
-    const { options } = fixture();
-    await expect(openClaimed({ ...options, now: now - 301 })).rejects.toMatchObject({
-      code: "expired",
-    });
-    await expect(openClaimed({ ...options, now })).resolves.toEqual({
-      claim: "new",
-      body: { text: "hello", replyTo, thread },
-      envelopeHash: expect.any(String),
-    });
+    const { open } = fixture();
+    await expect(open({ now: now - 301 })).rejects.toMatchObject({ code: "expired" });
+    await expect(open()).resolves.toEqual(claimed({ text: "hello", replyTo, thread }));
   });
 
   it("rejects free-form body identifiers when sealing", () => {
-    const { sealOptions } = fixture();
-    expect(() =>
-      seal({
-        ...sealOptions,
-        body: { text: "hello", replyTo: "prior message" },
-      }),
-    ).toThrow(MalformedError);
+    const { sealBody } = fixture();
+    expect(() => sealBody({ text: "hello", replyTo: "prior message" })).toThrow(MalformedError);
   });
 
   it("verifies every signed field before acting on it", async () => {
-    const { options, envelope } = fixture();
+    const { open, envelope } = fixture();
     const mutations: Array<Parameters<typeof openClaimed>[0]["envelope"]> = [
       { ...envelope, v: 2 },
       { ...envelope, id: `${envelope.id.slice(0, -1)}1` },
@@ -88,9 +88,7 @@ describe("envelope", () => {
       { ...envelope, sig: flip(envelope.sig) },
     ];
     for (const mutated of mutations) {
-      await expect(openClaimed({ ...options, envelope: mutated })).rejects.toMatchObject({
-        code: "bad_signature",
-      });
+      await expect(open({ envelope: mutated })).rejects.toMatchObject({ code: "bad_signature" });
     }
   });
 
@@ -100,48 +98,27 @@ describe("envelope", () => {
   });
 
   it("rejects the wrong recipient", async () => {
-    const { options } = fixture();
-    await expect(openClaimed({ ...options, self: "carol#1" })).rejects.toMatchObject({
-      code: "wrong_recipient",
-    });
-  });
-
-  it("accepts store-and-forward delivery ten minutes later", async () => {
-    const { options } = fixture({
-      body: { text: "delayed" },
-      ts: now - 10 * 60,
-    });
-    await expect(openClaimed(options)).resolves.toEqual({
-      claim: "new",
-      body: { text: "delayed" },
-      envelopeHash: expect.any(String),
-    });
+    const { open } = fixture();
+    await expect(open({ self: "carol#1" })).rejects.toMatchObject({ code: "wrong_recipient" });
   });
 
   it("rejects envelopes older than relay retention", async () => {
-    const { options } = fixture({
-      body: { text: "ancient" },
-      ts: now - 40 * 24 * 60 * 60,
-    });
-    await expect(openClaimed(options)).rejects.toMatchObject({ code: "expired" });
+    const { open } = fixture({ body: { text: "ancient" }, ts: now - 40 * 24 * 60 * 60 });
+    await expect(open()).rejects.toMatchObject({ code: "expired" });
   });
 
   it("permanently binds an id to the first verified envelope hash", async () => {
-    const { options, sealOptions } = fixture();
-    await openClaimed(options);
-    const replacement = seal({
-      ...sealOptions,
-      from: "alice#2",
-      body: { text: "different" },
-    });
-    await expect(openClaimed({ ...options, envelope: replacement })).rejects.toMatchObject({
+    const { open, sealOptions } = fixture();
+    await open();
+    const replacement = seal({ ...sealOptions, from: "alice#2", body: { text: "different" } });
+    await expect(open({ envelope: replacement })).rejects.toMatchObject({
       code: "replayed",
       message: "replay id binding mismatch",
     });
   });
 
   it("namespaces identical envelope ids by authenticated sender handle", async () => {
-    const { options, sealOptions } = fixture({ body: { text: "from alice" } });
+    const { open, sealOptions } = fixture({ body: { text: "from alice" } });
     const carol = generateIdentity();
     const carolEnvelope = seal({
       ...sealOptions,
@@ -149,27 +126,18 @@ describe("envelope", () => {
       body: { text: "from carol" },
       senderSigningSecretKey: carol.signing.secretKey,
     });
-    await expect(openClaimed(options)).resolves.toEqual({
-      claim: "new",
-      body: { text: "from alice" },
-      envelopeHash: expect.any(String),
-    });
+    await expect(open()).resolves.toEqual(claimed({ text: "from alice" }));
     await expect(
-      openClaimed({
-        ...options,
+      open({
         envelope: carolEnvelope,
         senderSigningPublicKey: carol.signing.publicKey,
       }),
-    ).resolves.toEqual({
-      claim: "new",
-      body: { text: "from carol" },
-      envelopeHash: expect.any(String),
-    });
+    ).resolves.toEqual(claimed({ text: "from carol" }));
   });
 
   it("atomically admits exactly one concurrent open", async () => {
-    const { options } = fixture();
-    const results = await Promise.allSettled([openClaimed(options), openClaimed(options)]);
+    const { open } = fixture();
+    const results = await Promise.allSettled([open(), open()]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const rejected = results.find((result) => result.status === "rejected");
     expect(rejected).toMatchObject({
@@ -179,37 +147,21 @@ describe("envelope", () => {
   });
 
   it("enforces the plaintext cap", () => {
-    const { sealOptions } = fixture();
-    expect(() =>
-      seal({
-        ...sealOptions,
-        body: { text: "x".repeat(33 * 1024) },
-      }),
-    ).toThrow(ProtocolError);
+    const { sealBody } = fixture();
+    expect(() => sealBody({ text: "x".repeat(33 * 1024) })).toThrow(ProtocolError);
   });
 
-  it("rejects oversized ciphertext before base64 decoding", async () => {
-    const { options, envelope } = fixture();
-    const oversized = { ...envelope, ct: "!".repeat(44_753) };
-    await expect(openClaimed({ ...options, envelope: oversized })).rejects.toBeInstanceOf(
+  it.each([
+    ["oversized ciphertext before decoding", { ct: "!".repeat(44_753) }, TooLargeError],
+    ["size boundary at signature validation", { ct: "A".repeat(44_752) }, BadSignatureError],
+    [
+      "huge peer before decoding ciphertext",
+      { from: "a".repeat(10 * 1024 * 1024), ct: "!" },
       TooLargeError,
-    );
-  });
-
-  it("accepts the ciphertext size boundary for signature validation", async () => {
-    const { options, envelope } = fixture();
-    const boundary = { ...envelope, ct: "A".repeat(44_752) };
-    await expect(openClaimed({ ...options, envelope: boundary })).rejects.toBeInstanceOf(
-      BadSignatureError,
-    );
-  });
-
-  it("rejects huge peer fields before decoding ciphertext", async () => {
-    const { options, envelope } = fixture();
-    const oversized = { ...envelope, from: "a".repeat(10 * 1024 * 1024), ct: "!" };
-    await expect(openClaimed({ ...options, envelope: oversized })).rejects.toBeInstanceOf(
-      TooLargeError,
-    );
+    ],
+  ])("rejects %s", async (_name, fields, error) => {
+    const { open, envelope } = fixture();
+    await expect(open({ envelope: { ...envelope, ...fields } })).rejects.toBeInstanceOf(error);
   });
 });
 

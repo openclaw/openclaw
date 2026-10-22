@@ -35,6 +35,7 @@ const FRESH_CRON_CARRIED_PREFERENCE_FIELDS = [
   "ttsAuto",
   "responseUsage",
   "pinnedAt",
+  "sidebarRoot",
   "label",
   "displayName",
 ] as const satisfies readonly (keyof SessionEntry)[];
@@ -112,7 +113,7 @@ function preserveNonAutoModelOverride(target: Partial<SessionEntry>, entry: Sess
 
 function preserveUserAuthOverride(target: Partial<SessionEntry>, entry: SessionEntry): void {
   const source = resolveSessionAuthProfileOverrideSource(entry);
-  if (source === "user") {
+  if (source === "user" || source === "user-link") {
     if (entry.authProfileOverride !== undefined) {
       target.authProfileOverride = entry.authProfileOverride;
     }
@@ -166,6 +167,11 @@ type CronSessionParams = {
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
+  /**
+   * The run executes in a hidden `:run:` row, so the base row's revision names
+   * this run's generation for continuation ownership and must be minted per run.
+   */
+  exactRunSession?: boolean;
   hookExternalContentSource?: SessionEntry["hookExternalContentSource"];
 };
 
@@ -190,7 +196,7 @@ export async function prepareCronSession(params: CronSessionParams) {
   });
 }
 
-/** Resolves prepared rows; heartbeat can supply its writer-owned current row. */
+/** Resolves prepared rows for ordinary cron execution. */
 export function resolveCronSession(
   params: CronSessionParams & {
     store: Record<string, SessionEntry>;
@@ -209,16 +215,9 @@ export function resolveCronSession(
   const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
   const targetEntry = store[params.sessionKey];
   const entry = store[sourceSessionKey || params.sessionKey];
-  // Guard the run's target row even when a differing source session seeds the
-  // carried preferences. A forced isolated heartbeat may replace its archived
-  // synthetic row, but trusted initialization must still finish first.
-  const canRollArchivedHeartbeat =
-    params.forceNew === true &&
-    targetEntry?.archivedAt !== undefined &&
-    targetEntry.initializationPending !== true &&
-    Boolean(targetEntry.heartbeatIsolatedBaseSessionKey?.trim());
+  // Guard the target row even when a differing source seeds its preferences.
   const sessionWorkStartError = resolveSessionWorkStartError(params.sessionKey, targetEntry);
-  if (sessionWorkStartError && !canRollArchivedHeartbeat) {
+  if (sessionWorkStartError) {
     throw new Error(sessionWorkStartError);
   }
 
@@ -271,7 +270,13 @@ export function resolveCronSession(
       : entry
     : undefined;
 
-  const lifecycleRevision = crypto.randomUUID();
+  // Reusing an incarnation in place keeps its revision: spawned children and
+  // memory-audience leases bind to it and treat any change as a new incarnation.
+  const reusedLifecycleRevision =
+    !isNewSession && !sourceSessionDiffers && !params.exactRunSession
+      ? entry?.lifecycleRevision
+      : undefined;
+  const lifecycleRevision = reusedLifecycleRevision ?? crypto.randomUUID();
   const sessionEntry: SessionEntry = {
     // Fresh cron sessions keep user preference/auth overrides but drop resume
     // handles and auto-fallback model overrides that belong to the old run.

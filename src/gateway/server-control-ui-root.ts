@@ -8,6 +8,7 @@ import {
   resolveControlUiRootOverrideSync,
   resolveControlUiRootSync,
 } from "../infra/control-ui-assets.js";
+import type { HttpRepresentationEncoding } from "../infra/http-content-encoding.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
@@ -18,10 +19,6 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
-import {
-  createControlUiAssetRetention,
-  type ControlUiAssetRetention,
-} from "./control-ui-asset-retention.js";
 import type {
   ControlUiFileRead,
   ControlUiFileSnapshot,
@@ -35,7 +32,6 @@ export type ControlUiRootState =
       kind: "bundled";
       path: string;
       realPath?: string;
-      retainedAssets?: ControlUiAssetRetention;
       publicAssetBuildId?: string;
     }
   | { kind: "resolved"; path: string; realPath?: string }
@@ -48,6 +44,7 @@ export type ControlUiRootState =
 type ReadyRoot = Extract<ControlUiRootState, { path: string; kind: "bundled" | "resolved" }>;
 type RootFiles = {
   controller: AbortController;
+  cacheEnabled: boolean;
   pending: Map<string, Promise<ControlUiRootAsset | null>>;
   cached: LruCache<{ asset: ControlUiRootAsset; bytes: number }>;
 };
@@ -76,6 +73,7 @@ function rootFiles(runtime: FileRuntime, root: ControlUiRootState): RootFiles {
   if (!files) {
     files = {
       controller: new AbortController(),
+      cacheEnabled: true,
       pending: new Map(),
       cached: new LruCache(MAX_PREPARED_ENTRIES, {
         maxBytes: MAX_PREPARED_BYTES,
@@ -92,33 +90,43 @@ export function readControlUiRootAsset(
   root: ReadyRoot,
   fileRel: string,
   readBody: boolean,
+  encodings: readonly HttpRepresentationEncoding[] = ["identity"],
 ): Promise<ControlUiRootAsset | null> {
   const runtime = fileRuntime();
   const owner = rootFiles(runtime, root);
   owner.controller.signal.throwIfAborted();
-  const key = `${readBody ? "body" : "metadata"}:${fileRel}`;
-  const cachedKey = owner.cached.peek(`body:${fileRel}`) ? `body:${fileRel}` : key;
+  const preferences =
+    root.kind === "bundled" &&
+    fileRel.startsWith("assets/") &&
+    isControlUiCompressibleAsset(fileRel)
+      ? encodings
+      : (["identity"] as const);
+  const identity = `${preferences.join(",")}:${fileRel}`;
+  const key = `${readBody ? "body" : "metadata"}:${identity}`;
+  const bodyKey = `body:${identity}`;
+  const cachedKey = owner.cached.peek(bodyKey) ? bodyKey : key;
   const cached = owner.cached.get(cachedKey);
   if (cached) {
     return Promise.resolve(cached.asset);
   }
-  const pending =
-    owner.pending.get(key) ?? (!readBody ? owner.pending.get(`body:${fileRel}`) : undefined);
+  const pending = owner.pending.get(key) ?? (!readBody ? owner.pending.get(bodyKey) : undefined);
   if (pending) {
     return pending;
   }
   const pool = (runtime.pool ??= new WorkerTaskPool({
     workerUrl: resolveRuntimeProcessEntrypointUrl("controlUiFile"),
-    maxWorkers: 2,
-    sharedCompute: true,
+    workerClass: "file-reader",
+    // Reuse the bounded reader pool across UI visits several minutes apart.
+    idleTimeoutMs: 10 * 60_000,
     maxPendingTasks: 2_048,
     maxPendingBytes: 8 * 1024 * 1024,
   }));
   const read = async (
     input: Omit<ControlUiFileRead, "readBody">,
+    includeBody: boolean,
   ): Promise<ControlUiPreparedFile | null> => {
     const file = await pool.run(
-      { ...input, readBody },
+      { ...input, readBody: includeBody },
       {
         signal: owner.controller.signal,
         inputBytes:
@@ -134,40 +142,48 @@ export function readControlUiRootAsset(
     );
   };
   const preparation = (async (): Promise<ControlUiRootAsset | null> => {
-    let location = {
+    const location = {
       rootPath: root.path,
       rootRealPath: root.realPath,
       filePath: path.resolve(root.path, fileRel),
       rejectHardlinks: root.kind !== "bundled",
     };
-    let file = await read(location);
-    if (!file && root.kind === "bundled" && fileRel.startsWith("assets/")) {
-      const retained = await root.retainedAssets?.resolveAsset(fileRel);
-      if (retained) {
-        location = { ...retained, rootPath: retained.rootRealPath, rejectHardlinks: true };
-        file = await read(location);
-      }
-    }
+    // Pin the source's metadata and canonical path even when serving a sidecar.
+    const file = await read(location, readBody && preferences[0] === "identity");
     if (!file) {
       return null;
     }
     const asset: ControlUiRootAsset = { file };
-    if (
-      root.kind === "bundled" &&
-      fileRel.startsWith("assets/") &&
-      isControlUiCompressibleAsset(fileRel)
-    ) {
-      const sourcePath = file.path;
-      const sidecar = (suffix: string) =>
-        read({ ...location, filePath: `${sourcePath}${suffix}` }).catch((error: unknown) =>
-          error instanceof Error ? error : new Error(String(error)),
-        );
-      [asset.br, asset.gzip] = await Promise.all([sidecar(".br"), sidecar(".gz")]);
+    for (const encoding of preferences) {
+      if (encoding === "identity") {
+        if (readBody && !file.body) {
+          const body = await read(location, true);
+          if (!body) {
+            return null;
+          }
+          asset.file = body;
+        }
+        break;
+      }
+      const sidecar = await read(
+        { ...location, filePath: `${file.path}${encoding === "br" ? ".br" : ".gz"}` },
+        readBody,
+      ).catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
+      asset[encoding] = sidecar;
+      // A missing file falls through; the selector owns errors for the chosen encoding.
+      if (sidecar) {
+        break;
+      }
     }
     owner.controller.signal.throwIfAborted();
-    if (root.kind === "bundled" && !(asset.br instanceof Error) && !(asset.gzip instanceof Error)) {
+    if (
+      root.kind === "bundled" &&
+      owner.cacheEnabled &&
+      !(asset.br instanceof Error) &&
+      !(asset.gzip instanceof Error)
+    ) {
       const bytes =
-        (file.body?.byteLength ?? 0) +
+        (asset.file.body?.byteLength ?? 0) +
         (asset.br?.body?.byteLength ?? 0) +
         (asset.gzip?.body?.byteLength ?? 0);
       if (bytes <= MAX_PREPARED_BYTES) {
@@ -227,7 +243,6 @@ function prepareResolvedRootState({
           kind: "bundled",
           ...resolvedRoot,
           publicAssetBuildId,
-          retainedAssets: createControlUiAssetRetention(root),
         }
       : { kind: "resolved", ...resolvedRoot };
   } catch (error) {
@@ -320,16 +335,6 @@ export function createGatewayControlUiRootLifecycle(
         const detail = error instanceof Error ? error.message : String(error);
         params.log.warn(`gateway: Control UI assets build failed: ${detail}`);
       }
-      return;
-    }
-    if (state.kind === "bundled") {
-      await state.retainedAssets?.prepare({ signal }).catch((error: unknown) => {
-        if (isStopped()) {
-          return;
-        }
-        const detail = error instanceof Error ? error.message : String(error);
-        params.log.warn(`gateway: Control UI asset retention failed: ${detail}`);
-      });
     }
   };
   const start = (): Promise<void> => {
@@ -362,6 +367,11 @@ export function createGatewayControlUiRootLifecycle(
         return;
       }
       enabled = nextEnabled;
+      // Admitted HTTP reads may finish; only enabled roots cache their results.
+      // Stop still joins every outstanding read.
+      const files = rootFiles(fileRuntime(), state);
+      files.cacheEnabled = enabled;
+      files.cached.clear();
       if (enabled) {
         if (state.kind === "failed") {
           Object.assign(state, { kind: "preparing" });

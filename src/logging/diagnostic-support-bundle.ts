@@ -3,24 +3,10 @@ import path from "node:path";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 
-export type DiagnosticSupportBundleFile = {
-  path: string;
-  mediaType: string;
-  content: string;
-};
-
-/** Manifest entry for one written support bundle file. */
-export type DiagnosticSupportBundleContent = {
-  path: string;
-  mediaType: string;
-  bytes: number;
-};
+export type DiagnosticSupportBundleFile = ReturnType<typeof jsonSupportBundleFile>;
 
 /** Creates a JSON support-bundle file with a safe relative path. */
-export function jsonSupportBundleFile(
-  pathName: string,
-  value: unknown,
-): DiagnosticSupportBundleFile {
+export function jsonSupportBundleFile(pathName: string, value: unknown) {
   return {
     path: assertSafeBundleRelativePath(pathName),
     mediaType: "application/json",
@@ -53,9 +39,7 @@ export function textSupportBundleFile(
 }
 
 /** Summarizes support-bundle files for the bundle manifest. */
-export function supportBundleContents(
-  files: readonly DiagnosticSupportBundleFile[],
-): DiagnosticSupportBundleContent[] {
+export function supportBundleContents(files: readonly DiagnosticSupportBundleFile[]) {
   return files.map((file) => ({
     path: file.path,
     mediaType: file.mediaType,
@@ -90,7 +74,7 @@ function resolveSupportBundleFilePath(outputDir: string, pathName: string): stri
 export async function writeSupportBundleDirectory(params: {
   outputDir: string;
   files: readonly DiagnosticSupportBundleFile[];
-}): Promise<DiagnosticSupportBundleContent[]> {
+}) {
   await fsp.mkdir(path.dirname(params.outputDir), { recursive: true, mode: 0o700 });
   await fsp.mkdir(params.outputDir, { mode: 0o700 });
   for (const file of params.files) {

@@ -1,4 +1,3 @@
-/** Delivers prepared block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
@@ -10,7 +9,6 @@ import {
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
-import { isSilentReplyPayloadText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -22,7 +20,7 @@ import {
 } from "./reply-dispatch-outcome.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-type ReplyDirectiveParseMode = "always" | "auto" | "never";
+type ReplyDirectiveParseMode = "always" | "auto";
 
 export type DirectBlockDelivery = Awaited<ReturnType<typeof deliverBlockReply>> & {
   payload: ReplyPayload;
@@ -45,34 +43,27 @@ export async function resolveReplyFailureVisibility(
   );
 }
 
-/** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
-  silentToken?: string;
   trimLeadingWhitespace?: boolean;
   parseMode?: ReplyDirectiveParseMode;
   extractMarkdownImages?: boolean;
-  extractMediaDirectives?: boolean;
-}): { payload: ReplyPayload; isSilent: boolean } {
+}): { payload: ReplyPayload } {
   const parseMode = params.parseMode ?? "always";
-  const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
   const sourceText = params.payload.text ?? "";
 
   const shouldParse =
     parseMode === "always" ||
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
-        (params.extractMediaDirectives !== false && /media:/i.test(sourceText)) ||
-        (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText)) ||
-        sourceText.includes(silentToken)));
+        /media:/i.test(sourceText) ||
+        (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText))));
 
   const parsed = shouldParse
     ? parseReplyDirectives(sourceText, {
         currentMessageId: params.currentMessageId,
-        silentToken,
         extractMarkdownImages: params.extractMarkdownImages,
-        extractMediaDirectives: params.extractMediaDirectives,
       })
     : undefined;
 
@@ -98,50 +89,9 @@ export function normalizeReplyPayloadDirectives(params: {
       }),
       parsed?.mediaFailures,
     ),
-    isSilent: parsed?.isSilent ?? false,
   };
 }
 
-async function sendDirectBlockReply(params: {
-  onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
-  directBlockDeliveries: DirectBlockDelivery[];
-  payload: ReplyPayload;
-  context?: BlockReplyContext;
-}) {
-  const attempt: DirectBlockDelivery = {
-    payload: params.payload,
-    outcome: "failed-deliver",
-    pending: true,
-  };
-  params.directBlockDeliveries.push(attempt);
-  const delivery = await deliverBlockReply(() =>
-    params.context
-      ? params.onBlockReply(params.payload, params.context)
-      : params.onBlockReply(params.payload),
-  ).catch((error: unknown) => {
-    attempt.outcome = resolveReplyDispatchErrorOutcome(error);
-    attempt.pending = false;
-    throw error;
-  });
-  Object.assign(attempt, delivery, { pending: delivery.pending === true });
-  if (
-    params.context?.deliveryIntentId !== undefined &&
-    !delivery.pending &&
-    shouldRetryReplyDispatch(delivery.outcome)
-  ) {
-    throw new ReplyDispatchDeliveryError(delivery.outcome);
-  }
-  if (
-    delivery.outcome === "delivered" &&
-    !delivery.pending &&
-    delivery.source?.complete !== false &&
-    isReplyPayloadTerminalContent(params.payload)
-  ) {
-    attempt.terminalDeliveryConfirmed = true;
-  }
-}
-
-/** Creates the handler used for assistant block replies during streaming/tool phases. */
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   currentMessageId?: string;
@@ -159,6 +109,34 @@ export function createBlockReplyDeliveryHandler(params: {
   payload: ReplyPayload,
   options?: BlockReplyContext & { completed?: boolean },
 ) => Promise<void> {
+  const sendDirectBlockReply = async (payload: ReplyPayload, context?: BlockReplyContext) => {
+    const attempt: DirectBlockDelivery = { payload, outcome: "failed-deliver", pending: true };
+    params.directBlockDeliveries.push(attempt);
+    const delivery = await deliverBlockReply(() =>
+      context ? params.onBlockReply(payload, context) : params.onBlockReply(payload),
+    ).catch((error: unknown) => {
+      attempt.outcome = resolveReplyDispatchErrorOutcome(error);
+      attempt.pending = false;
+      throw error;
+    });
+    Object.assign(attempt, delivery, { pending: delivery.pending === true });
+    if (
+      context?.deliveryIntentId !== undefined &&
+      !delivery.pending &&
+      shouldRetryReplyDispatch(delivery.outcome)
+    ) {
+      throw new ReplyDispatchDeliveryError(delivery.outcome);
+    }
+    if (
+      delivery.outcome === "delivered" &&
+      !delivery.pending &&
+      delivery.source?.complete !== false &&
+      isReplyPayloadTerminalContent(payload)
+    ) {
+      attempt.terminalDeliveryConfirmed = true;
+    }
+  };
+
   return async (payload, options) => {
     // Suppressed display lanes must not enter delivery bookkeeping: callers use
     // that evidence to decide whether an otherwise empty turn needs a fallback.
@@ -169,10 +147,7 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
     const { text, skip } = params.normalizeStreamingText(payload);
-    const isSilent =
-      getReplyPayloadMetadata(payload)?.silentReply === true ||
-      isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) ||
-      (skip && isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN));
+    const isSilent = getReplyPayloadMetadata(payload)?.silentReply === true;
     if (
       skip &&
       !hasOutboundReplyContent({ ...payload, text: undefined }) &&
@@ -256,11 +231,9 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
     // Enabled display lanes never merge into final text, even with streaming off.
-    await sendDirectBlockReply({
-      onBlockReply: params.onBlockReply,
-      directBlockDeliveries: params.directBlockDeliveries,
-      payload: blockPayload,
-      context: options?.deliveryIntentId !== undefined ? options : undefined,
-    });
+    await sendDirectBlockReply(
+      blockPayload,
+      options?.deliveryIntentId !== undefined ? options : undefined,
+    );
   };
 }

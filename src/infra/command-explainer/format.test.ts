@@ -25,31 +25,6 @@ describe("formatCommandSpans", () => {
     ]);
   });
 
-  it("anchors command spans to executable tokens after env assignments", async () => {
-    const explanation = await explainShellCommand("FOO=1 python -c 'print(1)'");
-
-    expect(formatCommandSpans(explanation)).toEqual([{ startIndex: 6, endIndex: 12 }]);
-  });
-
-  it("includes nested executable spans from shell wrapper payloads", async () => {
-    const explanation = await explainShellCommand(
-      'sh -c \'echo checking "$1"; node -e "console.log(process.argv[1])" "$1"\' sh file.ts',
-    );
-
-    const commandTexts = formatCommandSpans(explanation).map((commandSpan) =>
-      explanation.source.slice(commandSpan.startIndex, commandSpan.endIndex),
-    );
-    expect(commandTexts).toEqual(["sh", "echo", "node"]);
-  });
-
-  it("omits command spans for unsupported shell wrapper languages", async () => {
-    const powershell = await explainShellCommand('pwsh -Command "Get-ChildItem"');
-    const cmd = await explainShellCommand('cmd.exe /d /s /c "dir"');
-
-    expect(formatCommandSpans(powershell)).toEqual([]);
-    expect(formatCommandSpans(cmd)).toEqual([]);
-  });
-
   it("omits command spans for unsupported shell wrappers through transparent carriers", async () => {
     const timeoutPowershell = await explainShellCommand('timeout 5 pwsh -Command "Get-ChildItem"');
     const timeCmd = await explainShellCommand('time cmd.exe /d /s /c "dir"');

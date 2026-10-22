@@ -19,6 +19,13 @@ type GatewayCloseFixtureMocks = Pick<
 };
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 
+/** Read the captured first close-effect call without changing its mock behavior. */
+export function firstMockCall<T extends readonly unknown[]>(mock: {
+  mock: { calls: readonly T[] };
+}) {
+  return mock.mock.calls[0];
+}
+
 export function createGatewayCloseTestHandlerFactory({
   prepareGatewayClose,
   completeGatewayClose,
@@ -35,10 +42,12 @@ export function createTestChatRunState() {
 }
 
 export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMocks) {
+  const resolveGatewayContext = () => undefined;
   return (overrides: Partial<GatewayCloseParams> = {}): GatewayCloseParams => {
     return {
-      resolveGatewayContext: () => undefined,
+      resolveGatewayContext,
       preparePluginRegistryClose: async () => [],
+      drainWorktreeRunEnd: vi.fn(async () => {}),
       closePluginRegistry: async (onRetirement) => {
         let retirement: ReturnType<GatewayCloseParams["pluginMetadata"]["close"]> | undefined;
         const retire = () =>
@@ -73,7 +82,7 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
       closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
       cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
+      stopScheduledServices: vi.fn(async () => {}),
       updateCheckStop: null,
       broadcast: vi.fn(),
       maintenance: {
@@ -84,12 +93,9 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       },
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       agentUnsub: null,
-      heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: createTestChatRunState(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       restartRecoveryCandidates: new Map(),
       removeChatRun: vi.fn(),
       agentRunSeq: new Map(),

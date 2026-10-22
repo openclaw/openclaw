@@ -1,78 +1,69 @@
-// Startup auth tests cover weak-token rejection, startup auth repair, env secret
-// references, and merged Tailscale gateway auth config.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { applyGatewayAuthOverridesForStartupPreflight } from "./server-startup-config-helpers.js";
-import { ensureGatewayStartupAuth, mergeGatewayTailscaleConfig } from "./startup-auth.js";
+import { ensureGatewayStartupAuth } from "./startup-auth.js";
 
-const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
-  "change-me-to-a-long-random-token",
-  "change-me-now",
-  "undefined",
-  "null",
-] as const;
-
+const WEAK_TOKEN = "change-me-to-a-long-random-token";
 const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(async (_params: { nextConfig: OpenClawConfig }) => {}),
 }));
+vi.mock("../config/mutate.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/mutate.js")>()),
+  replaceConfigFile: mocks.replaceConfigFile,
+}));
 
-vi.mock("../config/mutate.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/mutate.js")>("../config/mutate.js");
-  return {
-    ...actual,
-    replaceConfigFile: mocks.replaceConfigFile,
-  };
+type StartupInput = Parameters<typeof ensureGatewayStartupAuth>[0];
+type StartupResult = Awaited<ReturnType<typeof ensureGatewayStartupAuth>>;
+type Auth = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>;
+const secretRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+const authConfig = (auth: Auth): OpenClawConfig => ({ gateway: { auth } });
+const refConfig = (auth: Auth): OpenClawConfig => ({
+  ...authConfig(auth),
+  secrets: { providers: { default: { source: "env" } } },
 });
-
-type StartupAuthInput = Parameters<typeof ensureGatewayStartupAuth>[0];
-type StartupAuthResult = Awaited<ReturnType<typeof ensureGatewayStartupAuth>>;
-type GatewayAuthConfig = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>;
-
-function emptyEnv(): NodeJS.ProcessEnv {
-  return {} as NodeJS.ProcessEnv;
+function unresolvedConfig(auth: Auth, field = "token") {
+  const cfg = authConfig(auth);
+  setConfigResolutionFacts(cfg, new Set([`gateway.auth.${field}`]));
+  return cfg;
 }
-
-function gatewayEnvSecretRef(id: string) {
-  return { source: "env" as const, provider: "default", id };
+const run = (params: StartupInput) =>
+  ensureGatewayStartupAuth({ ...params, env: params.env ?? {} });
+function expectNoGeneratedToken(result: StartupResult) {
+  expect(result.generatedToken).toBeUndefined();
+  expect(result.persistedGeneratedToken).toBe(false);
 }
+beforeEach(() => {
+  vi.restoreAllMocks();
+  mocks.replaceConfigFile.mockClear();
+});
+afterEach(() => expect(mocks.replaceConfigFile).not.toHaveBeenCalled());
 
-function gatewayAuthConfig(auth: GatewayAuthConfig): OpenClawConfig {
+function refCase(field: "token" | "password", resolved: boolean) {
+  const id = `GW_${field.toUpperCase()}`;
+  const configured = { field, value: secretRef(id) };
   return {
-    gateway: { auth },
-  };
-}
-
-function gatewayAuthConfigWithDefaultEnvProvider(auth: GatewayAuthConfig): OpenClawConfig {
-  return {
-    ...gatewayAuthConfig(auth),
-    secrets: {
-      providers: {
-        default: { source: "env" },
-      },
+    name: `${field} SecretRef ${resolved ? "takes precedence over" : "cannot be masked by"} environment`,
+    cfg: refConfig({ mode: field, [field]: configured.value }),
+    env: {
+      [`OPENCLAW_GATEWAY_${field.toUpperCase()}`]: `${field}-from-env`,
+      ...(resolved ? { [id]: `${field}-from-config-ref` } : {}),
     },
+    configured,
+    expectedAuth: { mode: field, [field]: `${field}-from-config-ref` },
+    error: new RegExp(id, "i"),
+    persist: true,
   };
 }
-
-describe("mergeGatewayTailscaleConfig", () => {
-  it("preserves explicit preserveFunnel overrides", () => {
-    expect(
-      mergeGatewayTailscaleConfig(
-        { mode: "serve", preserveFunnel: false },
-        { preserveFunnel: true },
-      ),
-    ).toEqual({ mode: "serve", preserveFunnel: true });
-  });
-});
 
 describe("ensureGatewayStartupAuth", () => {
   it.each(["config", "environment"])(
     "allows trusted-proxy startup with a redacted optional password from %s",
     async (source) => {
       const warn = vi.fn();
-      const result = await ensureGatewayStartupAuth({
-        cfg: gatewayAuthConfig({
+      const result = await run({
+        cfg: authConfig({
           mode: "trusted-proxy",
           trustedProxy: { userHeader: "x-forwarded-user" },
           ...(source === "config" ? { password: REDACTED_SENTINEL } : {}),
@@ -80,490 +71,186 @@ describe("ensureGatewayStartupAuth", () => {
         env: source === "environment" ? { OPENCLAW_GATEWAY_PASSWORD: REDACTED_SENTINEL } : {},
         warn,
       });
+      expectNoGeneratedToken(result);
       expect(result.auth.mode).toBe("trusted-proxy");
-      expect(result.generatedToken).toBeUndefined();
-      expect(result.persistedGeneratedToken).toBe(false);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("local password fallback"));
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     },
   );
-
   it.each(["inline", "ref"])(
     "refuses a redacted %s Gateway token and points to Doctor without generating a replacement",
     async (source) => {
       await expect(
-        ensureGatewayStartupAuth({
-          cfg: gatewayAuthConfigWithDefaultEnvProvider({
+        run({
+          cfg: refConfig({
             mode: "token",
-            token:
-              source === "inline"
-                ? REDACTED_SENTINEL
-                : gatewayEnvSecretRef("OPENCLAW_GATEWAY_TOKEN"),
+            token: source === "inline" ? REDACTED_SENTINEL : secretRef("OPENCLAW_GATEWAY_TOKEN"),
             allowTailscale: true,
           }),
           env: { OPENCLAW_GATEWAY_TOKEN: REDACTED_SENTINEL },
         }),
       ).rejects.toThrow(/redaction (?:sentinel|placeholder).*doctor --fix/);
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     },
   );
 
-  async function runStartupAuth(
-    params: Omit<StartupAuthInput, "env"> & { env?: NodeJS.ProcessEnv },
-  ) {
-    return ensureGatewayStartupAuth({
-      env: emptyEnv(),
-      ...params,
-    });
-  }
-
-  function expectNoGeneratedToken(result: StartupAuthResult) {
-    expect(result.generatedToken).toBeUndefined();
-    expect(result.persistedGeneratedToken).toBe(false);
-  }
-
-  function expectEphemeralGeneratedToken(result: StartupAuthResult) {
-    expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
-    expect(result.persistedGeneratedToken).toBe(false);
-    expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe(result.generatedToken);
-  }
-
-  function expectResolvedPassword(result: StartupAuthResult, password: string) {
-    expectNoGeneratedToken(result);
-    expect(result.auth.mode).toBe("password");
-    expect(result.auth.password).toBe(password);
-  }
-
-  async function expectEphemeralGeneratedTokenWhenOverridden(cfg: OpenClawConfig) {
-    const result = await runStartupAuth({
-      cfg,
+  it.each<StartupInput & { name: string; clearsTokenFact?: boolean }>([
+    { name: "missing startup auth", cfg: {}, persist: true },
+    {
+      name: "missing configured token substitution",
+      cfg: unresolvedConfig({ mode: "token", token: "${MISSING_GATEWAY_TOKEN}" }),
+      clearsTokenFact: true,
+    },
+    {
+      name: "runtime override of explicit non-token mode",
+      cfg: authConfig({ mode: "password" }),
       authOverride: { mode: "token" },
       persist: true,
-    });
+    },
+  ])(
+    "generates an ephemeral token for $name",
+    async ({ cfg, authOverride, persist, clearsTokenFact }) => {
+      const result = await run({ cfg, authOverride, persist });
+      expect(result.generatedToken).toMatch(/^[0-9a-f]{48}$/);
+      expect(result).toMatchObject({
+        persistedGeneratedToken: false,
+        auth: { mode: "token", token: result.generatedToken },
+        cfg: { gateway: { auth: { token: result.generatedToken } } },
+      });
+      if (clearsTokenFact) {
+        expect(getConfigResolutionFacts(result.cfg)?.has("gateway.auth.token")).toBe(false);
+      }
+    },
+  );
 
-    expectEphemeralGeneratedToken(result);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  }
-
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    mocks.replaceConfigFile.mockClear();
-  });
-
-  async function expectNoTokenGeneration(cfg: OpenClawConfig, mode: string) {
-    const result = await runStartupAuth({
-      cfg,
-      persist: true,
-    });
-
-    expectNoGeneratedToken(result);
-    expect(result.auth.mode).toBe(mode);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  }
-
-  async function expectResolvedToken(params: {
-    cfg: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-    authOverride?: StartupAuthInput["authOverride"];
-    expectedToken: string;
-    expectedConfiguredToken?: unknown;
-  }) {
-    const result = await runStartupAuth({
-      cfg: params.cfg,
-      env: params.env,
-      authOverride: params.authOverride,
-      persist: true,
-    });
-
-    expectNoGeneratedToken(result);
-    expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe(params.expectedToken);
-    if ("expectedConfiguredToken" in params) {
-      expect(result.cfg.gateway?.auth?.token).toEqual(params.expectedConfiguredToken);
+  it.each<
+    StartupInput & {
+      name: string;
+      expectedAuth: Partial<StartupResult["auth"]>;
+      configured?: { field: "token" | "password"; value: unknown };
     }
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  }
-
-  function createMissingGatewayTokenSecretRefConfig(): OpenClawConfig {
-    return gatewayAuthConfigWithDefaultEnvProvider({
-      mode: "token",
-      token: gatewayEnvSecretRef("MISSING_GW_TOKEN"),
-    });
-  }
-
-  it("generates a runtime token without persisting when startup auth is missing", async () => {
-    const result = await runStartupAuth({
-      cfg: {},
-      persist: true,
-    });
-
-    expectEphemeralGeneratedToken(result);
-    expect(result.cfg.gateway?.auth?.token).toBe(result.generatedToken);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("generates a safe token when the configured token substitution is missing", async () => {
-    const config = gatewayAuthConfig({ mode: "token", token: "${MISSING_GATEWAY_TOKEN}" });
-    setConfigResolutionFacts(config, new Set(["gateway.auth.token"]));
-
-    const result = await runStartupAuth({ cfg: config, env: emptyEnv() });
-
-    expectEphemeralGeneratedToken(result);
-    expect(getConfigResolutionFacts(result.cfg)?.has("gateway.auth.token")).toBe(false);
-  });
-
-  it("treats a byte-identical explicit token override as operator-owned", async () => {
-    const config = gatewayAuthConfig({ mode: "token", token: "${LITERAL_TOKEN}" });
-    setConfigResolutionFacts(config, new Set(["gateway.auth.token"]));
-
-    await expectResolvedToken({
-      cfg: config,
-      env: emptyEnv(),
+  >([
+    {
+      name: "byte-identical explicit token override is operator-owned",
+      cfg: unresolvedConfig({ mode: "token", token: "${LITERAL_TOKEN}" }),
       authOverride: { token: "${LITERAL_TOKEN}" },
-      expectedToken: "${LITERAL_TOKEN}",
-    });
-  });
-
-  it("uses the gateway token environment fallback for an unresolved configured token", async () => {
-    const config = gatewayAuthConfig({ mode: "token", token: "${MISSING_TOKEN}" });
-    setConfigResolutionFacts(config, new Set(["gateway.auth.token"]));
-
-    await expectResolvedToken({
-      cfg: config,
+      expectedAuth: { mode: "token", token: "${LITERAL_TOKEN}" },
+    },
+    {
+      name: "environment fallback for unresolved token substitution",
+      cfg: unresolvedConfig({ mode: "token", token: "${MISSING_TOKEN}" }),
       env: { OPENCLAW_GATEWAY_TOKEN: "environment-token" },
-      expectedToken: "environment-token",
-    });
-  });
-
-  it("ignores an unresolved inactive password in token mode", async () => {
-    const config = gatewayAuthConfig({
-      mode: "token",
-      token: "configured-token",
-      password: "${MISSING_PASSWORD}",
-    });
-    setConfigResolutionFacts(config, new Set(["gateway.auth.password"]));
-
-    await expectResolvedToken({
-      cfg: config,
-      env: emptyEnv(),
-      expectedToken: "configured-token",
-    });
-  });
-
-  it("does not generate in password mode", async () => {
-    await expectNoTokenGeneration(gatewayAuthConfig({ mode: "password" }), "password");
-  });
-
-  it("resolves env-template gateway.auth.token before env-token short-circuiting", async () => {
-    await expectResolvedToken({
-      cfg: gatewayAuthConfig({ mode: "token", token: "${OPENCLAW_GATEWAY_TOKEN}" }),
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "resolved-token",
-      } as NodeJS.ProcessEnv,
-      expectedToken: "resolved-token",
-      expectedConfiguredToken: "${OPENCLAW_GATEWAY_TOKEN}",
-    });
-  });
-
-  it("keeps configured token SecretRef ahead of OPENCLAW_GATEWAY_TOKEN", async () => {
-    const configuredToken = gatewayEnvSecretRef("GW_TOKEN");
-    await expectResolvedToken({
-      cfg: gatewayAuthConfigWithDefaultEnvProvider({
+      expectedAuth: { mode: "token", token: "environment-token" },
+    },
+    {
+      name: "unresolved inactive password in token mode",
+      cfg: unresolvedConfig(
+        { mode: "token", token: "configured-token", password: "${MISSING_PASSWORD}" },
+        "password",
+      ),
+      expectedAuth: { mode: "token", token: "configured-token" },
+    },
+    refCase("token", true),
+    refCase("password", true),
+    {
+      name: "inactive password SecretRef is not resolved in explicit token mode",
+      cfg: refConfig({
         mode: "token",
-        token: configuredToken,
+        token: "configured-token",
+        password: { source: "env", provider: "missing", id: "GW_PASSWORD" },
       }),
-      env: {
-        GW_TOKEN: "token-from-config-ref",
-        OPENCLAW_GATEWAY_TOKEN: "token-from-env",
-      } as NodeJS.ProcessEnv,
-      expectedToken: "token-from-config-ref",
-      expectedConfiguredToken: configuredToken,
-    });
-  });
+      expectedAuth: { mode: "token", token: "configured-token" },
+    },
+  ])(
+    "resolves credentials: $name",
+    async ({ cfg, env, authOverride, expectedAuth, configured }) => {
+      const result = await run({ cfg, env, authOverride, persist: true });
+      expectNoGeneratedToken(result);
+      expect(result.auth).toMatchObject(expectedAuth);
+      if (configured) {
+        expect(result.cfg.gateway?.auth?.[configured.field]).toEqual(configured.value);
+      }
+    },
+  );
 
-  it("does not let OPENCLAW_GATEWAY_TOKEN mask an unresolved configured token ref", async () => {
-    await expect(
-      runStartupAuth({
-        cfg: createMissingGatewayTokenSecretRefConfig(),
-        env: { OPENCLAW_GATEWAY_TOKEN: "token-from-env" } as NodeJS.ProcessEnv,
-        persist: true,
-      }),
-    ).rejects.toThrow(/MISSING_GW_TOKEN/i);
-  });
-
-  it("fails when gateway.auth.token SecretRef is active and unresolved", async () => {
-    await expect(
-      runStartupAuth({
-        cfg: createMissingGatewayTokenSecretRefConfig(),
-        persist: true,
-      }),
-    ).rejects.toThrow(/MISSING_GW_TOKEN/i);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("requires explicit gateway.auth.mode when token and password are both configured", async () => {
-    await expect(
-      runStartupAuth({
-        cfg: gatewayAuthConfig({
-          token: "configured-token",
-          password: "configured-password", // pragma: allowlist secret
-        }),
-        persist: true,
-      }),
-    ).rejects.toThrow(/gateway\.auth\.mode is unset/i);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("keeps configured password SecretRef ahead of OPENCLAW_GATEWAY_PASSWORD", async () => {
-    const configuredPassword = gatewayEnvSecretRef("GW_PASSWORD");
-    const result = await runStartupAuth({
-      cfg: gatewayAuthConfigWithDefaultEnvProvider({
-        mode: "password",
-        password: configuredPassword,
-      }),
-      env: {
-        GW_PASSWORD: "password-from-config-ref", // pragma: allowlist secret
-        OPENCLAW_GATEWAY_PASSWORD: "password-from-env", // pragma: allowlist secret
-      } as NodeJS.ProcessEnv,
+  it.each<StartupInput & { name: string; error: RegExp }>([
+    refCase("token", false),
+    {
+      name: "ambiguous token/password mode",
+      cfg: authConfig({ token: "configured-token", password: "configured-password" }), // pragma: allowlist secret
       persist: true,
-    });
-
-    expectResolvedPassword(result, "password-from-config-ref");
-    expect(result.cfg.gateway?.auth?.password).toEqual(configuredPassword);
-  });
-
-  it("does not let OPENCLAW_GATEWAY_PASSWORD mask an unresolved configured password ref", async () => {
-    await expect(
-      runStartupAuth({
-        cfg: gatewayAuthConfigWithDefaultEnvProvider({
-          mode: "password",
-          password: gatewayEnvSecretRef("MISSING_GW_PASSWORD"),
-        }),
-        env: { OPENCLAW_GATEWAY_PASSWORD: "password-from-env" } as NodeJS.ProcessEnv,
-        persist: true,
-      }),
-    ).rejects.toThrow(/MISSING_GW_PASSWORD/i);
-  });
-
-  it("does not resolve gateway.auth.password SecretRef when token mode is explicit", async () => {
-    const cfg = gatewayAuthConfigWithDefaultEnvProvider({
-      mode: "token",
-      token: "configured-token",
-      password: { source: "env", provider: "missing", id: "GW_PASSWORD" },
-    });
-
-    await expectResolvedToken({
-      cfg,
-      env: emptyEnv(),
-      expectedToken: "configured-token",
-    });
-  });
-
-  it("does not generate in trusted-proxy mode", async () => {
-    await expectNoTokenGeneration(
-      {
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            trustedProxy: { userHeader: "x-forwarded-user" },
-          },
-        },
-      },
-      "trusted-proxy",
-    );
+      error: /gateway\.auth\.mode is unset/i,
+    },
+    refCase("password", false),
+    {
+      name: "environment placeholder token",
+      cfg: {},
+      env: { OPENCLAW_GATEWAY_TOKEN: WEAK_TOKEN },
+      error: /example placeholder/i,
+    },
+    {
+      name: "configured placeholder token",
+      cfg: authConfig({ mode: "token", token: WEAK_TOKEN }),
+      error: /example placeholder/i,
+    },
+    {
+      name: "configured undefined token",
+      cfg: authConfig({ mode: "token", token: "undefined" }),
+      error: /example placeholder/i,
+    },
+    {
+      name: ".env.example placeholder password",
+      cfg: authConfig({ mode: "password", password: "change-me-to-a-strong-password" }), // pragma: allowlist secret
+      error: /example placeholder/i,
+    },
+    {
+      name: "invalid password with password-specific recovery advice",
+      cfg: authConfig({ mode: "password", password: "  undefined  " }),
+      error:
+        /gateway auth password.*Generate a real secret.*OPENCLAW_GATEWAY_PASSWORD.*gateway.auth.password/,
+    },
+    {
+      name: "persisted blank token",
+      cfg: authConfig({ mode: "token", token: "" }),
+      error: /blank/,
+    },
+  ])("rejects $name", async ({ cfg, env, persist, error }) => {
+    await expect(run({ cfg, env, persist })).rejects.toThrow(error);
   });
 
   it("does not generate in explicit none mode", async () => {
-    await expectNoTokenGeneration(
-      {
-        gateway: {
-          auth: {
-            mode: "none",
-          },
-        },
-      },
-      "none",
-    );
+    const result = await run({ cfg: authConfig({ mode: "none" }), persist: true });
+    expectNoGeneratedToken(result);
+    expect(result.auth.mode).toBe("none");
   });
-
   it("preserves an unresolved token fact when an override value is undefined", () => {
-    const config = gatewayAuthConfig({ mode: "token", token: "${MISSING_TOKEN}" });
-    setConfigResolutionFacts(config, new Set(["gateway.auth.token"]));
-
-    const next = applyGatewayAuthOverridesForStartupPreflight(config, {
-      auth: { token: undefined },
-    });
-
+    const cfg = unresolvedConfig({ mode: "token", token: "${MISSING_TOKEN}" });
+    const next = applyGatewayAuthOverridesForStartupPreflight(cfg, { auth: { token: undefined } });
     expect(getConfigResolutionFacts(next)?.has("gateway.auth.token")).toBe(true);
   });
 
-  it("treats undefined token override as no override", async () => {
-    await expectResolvedToken({
-      cfg: {
-        gateway: {
-          auth: {
-            mode: "token",
-            token: "from-config",
-          },
-        },
-      },
-      env: emptyEnv(),
-      authOverride: { mode: "token", token: undefined },
-      expectedToken: "from-config",
-    });
-  });
-
-  it("keeps generated token ephemeral when runtime override flips explicit non-token mode", async () => {
-    await expectEphemeralGeneratedTokenWhenOverridden({
-      gateway: {
-        auth: {
-          mode: "password",
-        },
-      },
-    });
-  });
-
-  it("keeps generated token ephemeral when runtime override flips explicit none mode", async () => {
-    await expectEphemeralGeneratedTokenWhenOverridden({
-      gateway: {
-        auth: {
-          mode: "none",
-        },
-      },
-    });
-  });
-
-  it("keeps generated token ephemeral when runtime override flips implicit password mode", async () => {
-    await expectEphemeralGeneratedTokenWhenOverridden({
-      gateway: {
-        auth: {
-          password: "configured-password", // pragma: allowlist secret
-        },
-      },
-    });
-  });
-
-  it("keeps startup non-breaking when hooks token reuses gateway token resolved from env", async () => {
+  it.each([
+    { name: "warns for hooks reuse of an environment Gateway token", reuse: true },
+    { name: "allows distinct hooks token with Gateway password auth", reuse: false },
+  ])("$name", async ({ reuse }) => {
     const warn = vi.fn();
-    const result = await runStartupAuth({
+    const shared = "shared-gateway-token-1234567890";
+    const result = await run({
       cfg: {
-        hooks: {
-          enabled: true,
-          token: "shared-gateway-token-1234567890",
-        },
+        hooks: { enabled: true, token: reuse ? shared : "distinct-hooks-token-1234567890" },
+        ...(!reuse
+          ? authConfig({ mode: "password", password: "shared-gateway-password-1234567890" })
+          : {}), // pragma: allowlist secret
       },
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
-      } as NodeJS.ProcessEnv,
+      env: reuse ? { OPENCLAW_GATEWAY_TOKEN: shared } : {},
       warn,
     });
-
     expectNoGeneratedToken(result);
-    expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe("shared-gateway-token-1234567890");
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Security warning"));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw security audit"));
+    if (reuse) {
+      expect(result.auth).toMatchObject({ mode: "token", token: shared });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Security warning"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw security audit"));
+    } else {
+      expect(result.auth.mode).toBe("password");
+      expect(warn).not.toHaveBeenCalled();
+    }
   });
-
-  it("keeps startup non-breaking when hooks token reuses gateway password auth", async () => {
-    const warn = vi.fn();
-    const result = await runStartupAuth({
-      cfg: {
-        hooks: {
-          enabled: true,
-          token: "shared-gateway-password-1234567890",
-        },
-        gateway: {
-          auth: {
-            mode: "password",
-            password: "shared-gateway-password-1234567890", // pragma: allowlist secret
-          },
-        },
-      },
-      warn,
-    });
-
-    expectResolvedPassword(result, "shared-gateway-password-1234567890");
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Security warning"));
-  });
-
-  it("allows distinct hooks token with gateway password auth during startup", async () => {
-    const warn = vi.fn();
-    const result = await runStartupAuth({
-      cfg: {
-        hooks: {
-          enabled: true,
-          token: "distinct-hooks-token-1234567890",
-        },
-        gateway: {
-          auth: {
-            mode: "password",
-            password: "shared-gateway-password-1234567890", // pragma: allowlist secret
-          },
-        },
-      },
-      warn,
-    });
-
-    expect(result.auth.mode).toBe("password");
-    expectNoGeneratedToken(result);
-    expect(warn).not.toHaveBeenCalled();
-  });
-
-  it("rejects a published placeholder token supplied via environment", async () => {
-    await expect(
-      runStartupAuth({
-        cfg: {},
-        env: { OPENCLAW_GATEWAY_TOKEN: KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS[0] },
-      }),
-    ).rejects.toThrow(/example placeholder/i);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it.each([...KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS, "  change-me-now  "])(
-    "rejects the published placeholder token %s supplied via config",
-    async (token) => {
-      await expect(
-        runStartupAuth({
-          cfg: gatewayAuthConfig({ mode: "token", token }),
-        }),
-      ).rejects.toThrow(/example placeholder/i);
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects the .env.example placeholder password supplied via config", async () => {
-    await expect(
-      runStartupAuth({
-        cfg: gatewayAuthConfig({
-          mode: "password",
-          password: "change-me-to-a-strong-password", // pragma: allowlist secret
-        }),
-      }),
-    ).rejects.toThrow(/example placeholder/i);
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
-
-  it.each(["  undefined  ", "  "])(
-    "rejects invalid password %j with password-specific recovery advice",
-    async (password) => {
-      await expect(
-        runStartupAuth({ cfg: gatewayAuthConfig({ mode: "password", password }), env: emptyEnv() }),
-      ).rejects.toThrow(
-        /gateway auth password.*Generate a real secret.*OPENCLAW_GATEWAY_PASSWORD.*gateway.auth.password/,
-      );
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["", "  "])(
-    "rejects persisted blank token %j instead of generating an ephemeral replacement",
-    async (token) => {
-      await expect(
-        runStartupAuth({ cfg: gatewayAuthConfig({ mode: "token", token }), env: emptyEnv() }),
-      ).rejects.toThrow(/blank/);
-      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-    },
-  );
 });

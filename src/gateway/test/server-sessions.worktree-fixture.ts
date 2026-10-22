@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, onTestFinished, vi } from "vitest";
-import { getRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
@@ -91,6 +91,7 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       onComplete: vi.fn(),
       onError: vi.fn(),
     });
+    await clock.advanceBy(130_000);
     onTestFinished(async () => {
       await maintenance.stop();
       await scheduler.stop();

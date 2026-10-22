@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import * as outboxPayloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -20,11 +21,8 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import * as chatSendSupport from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import {
-  listStoredChatOutboxes,
-  loadChatComposerSnapshot,
-  updateStoredChatComposerQueueItem,
-} from "./composer-persistence.ts";
+import { loadChatComposerState } from "./composer-draft-storage.ts";
+import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
 import { cacheChatSessionSnapshot, readChatMessagesFromCache } from "./session-message-cache.ts";
@@ -126,7 +124,7 @@ describe("chat attachment terminal retirement", () => {
       await handleSendChat(source);
       holdHistory = true;
       const item = expectDefined(
-        loadChatComposerSnapshot(source, sessionKey)?.queue[0],
+        loadChatComposerState(source, sessionKey).snapshot?.queue[0],
         "Blob-backed terminal send",
       );
       expect(item.attachmentPayload).toBeDefined();
@@ -157,7 +155,6 @@ describe("chat attachment terminal retirement", () => {
           chatMessagesBySession: new Map(),
           connectionEpoch: 1,
           pendingSessionMessageReloadSessionKey: null,
-          requestUpdate: vi.fn(),
         });
       }
       cacheChatSessionSnapshot(
@@ -244,15 +241,19 @@ describe("chat attachment terminal retirement", () => {
           : null;
       if (handoff === "new-attempt") {
         expect(
-          updateStoredChatComposerQueueItem(
+          updateStoredChatComposerQueueItems(
             visible,
             sessionKey,
-            item,
-            {
-              ...item,
-              sendRunId: "replacement-attempt",
-              sendAttempts: 2,
-            },
+            [
+              {
+                expected: item,
+                next: {
+                  ...item,
+                  sendRunId: "replacement-attempt",
+                  sendAttempts: 2,
+                },
+              },
+            ],
             item.agentId,
           ),
         ).toBe(true);
@@ -283,7 +284,7 @@ describe("chat attachment terminal retirement", () => {
       }
       if (handoff === "new-credentials" || handoff === "new-attempt") {
         expect(cleanup).not.toHaveBeenCalled();
-        expect(loadChatComposerSnapshot(visible, sessionKey)?.queue[0]).toMatchObject({
+        expect(loadChatComposerState(visible, sessionKey).snapshot?.queue[0]).toMatchObject({
           id: item.id,
           attachmentPayload: item.attachmentPayload,
           sendRunId: handoff === "new-attempt" ? "replacement-attempt" : item.sendRunId,

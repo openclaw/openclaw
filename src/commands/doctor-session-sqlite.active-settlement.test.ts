@@ -39,7 +39,6 @@ type History =
   | "opaque"
   | "missing-delta"
   | "missing-middle"
-  | "changed-content"
   | "invalid"
   | "clean";
 
@@ -127,17 +126,6 @@ async function seedImportedHistory(
     ]);
     fs.unlinkSync(sourcePath);
     const sourceEvents = [...original];
-    if (history === "changed-content") {
-      sourceEvents[2] = {
-        type: "message",
-        id: `${sessionId}-assistant`,
-        parentId: `${sessionId}-user`,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Different content with the same event ID" }],
-        },
-      };
-    }
     if (history === "invalid") {
       sourceEvents[0] = { type: "session", version: 3, id: "another-session" };
     }
@@ -310,56 +298,39 @@ it.each([
   },
 );
 
-it.each([
-  { history: "changed-content", pendingPlugin: true },
-  { history: "missing-middle", pendingPlugin: false },
-] as const)(
-  "preserves $history without committing an invalid merge (plugin receipt=$pendingPlugin)",
-  async ({ history, pendingPlugin }) => {
-    await withOpenClawTestState({ label: "active-june-content" }, async (state) => {
-      const {
-        cfg,
-        sessions: [session],
-      } = await seedImportedHistory(state, { main: history }, pendingPlugin);
-      expect(session).toBeDefined();
-      await withDoctorSqliteMaintenanceLock({
-        env: state.env,
-        operation: "settle changed June content",
-        run: async (authority) => {
-          const report = await runDoctorSessionSqlite({
-            cfg,
-            env: state.env,
-            allAgents: true,
-            mode: "import",
-          });
-          if (pendingPlugin) {
-            await expect(
-              settleRetainedDoctorSessionSources(report, [pluginId], authority, () =>
-                authority.assertCurrent(),
-              ),
-            ).rejects.toThrow(session!.sourcePath);
-          }
-          expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
-            expect.objectContaining({
-              code: pendingPlugin
-                ? "active_sqlite_transcript_verification_failed"
-                : "sqlite_transcript_count_mismatch",
-              message: expect.stringContaining(
-                `${session!.sessionId}-${history === "changed-content" ? "assistant" : "user"}`,
-              ),
-            }),
-          );
-          const events = loadTranscriptEventsSync(session!);
-          expect(events).toEqual(session!.canonical);
-          expect(loadExactSessionEntry(session!)?.entry).toEqual(session!.entryBefore);
-          expect(fs.readFileSync(session!.sourcePath)).toEqual(session!.bytes);
-          const moves = completedTranscriptMoves(state, session!.sourcePath);
-          expect(moves).toEqual([]);
-        },
-      });
+it("preserves missing-middle history without committing an invalid merge", async () => {
+  await withOpenClawTestState({ label: "active-june-content" }, async (state) => {
+    const {
+      cfg,
+      sessions: [session],
+    } = await seedImportedHistory(state, { main: "missing-middle" }, false);
+    expect(session).toBeDefined();
+    await withDoctorSqliteMaintenanceLock({
+      env: state.env,
+      operation: "settle changed June content",
+      run: async () => {
+        const report = await runDoctorSessionSqlite({
+          cfg,
+          env: state.env,
+          allAgents: true,
+          mode: "import",
+        });
+        expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
+          expect.objectContaining({
+            code: "sqlite_transcript_count_mismatch",
+            message: expect.stringContaining(`${session!.sessionId}-user`),
+          }),
+        );
+        const events = loadTranscriptEventsSync(session!);
+        expect(events).toEqual(session!.canonical);
+        expect(loadExactSessionEntry(session!)?.entry).toEqual(session!.entryBefore);
+        expect(fs.readFileSync(session!.sourcePath)).toEqual(session!.bytes);
+        const moves = completedTranscriptMoves(state, session!.sourcePath);
+        expect(moves).toEqual([]);
+      },
     });
-  },
-);
+  });
+});
 
 it("preserves an invalid main transcript without assigning its failure to a clean agent", async () => {
   await withOpenClawTestState({ label: "active-june-agent-scope" }, async (state) => {

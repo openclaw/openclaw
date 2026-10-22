@@ -1,6 +1,5 @@
-/** Detects reminder commitments that were not backed by scheduled cron jobs. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { loadCronJobsStore, resolveCronJobsStorePath } from "../../cron/store.js";
+import { loadCronJobsStore } from "../../cron/store.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -33,7 +32,7 @@ export function hasUnbackedReminderCommitment(text: string): boolean {
  */
 export async function hasSessionRelatedCronJobs(sessionKey: string | undefined): Promise<boolean> {
   try {
-    const store = await loadCronJobsStore(resolveCronJobsStorePath());
+    const store = await loadCronJobsStore();
     return Boolean(
       sessionKey && store.jobs.some((job) => job.enabled && job.sessionKey === sessionKey),
     );
@@ -47,17 +46,16 @@ export async function hasSessionRelatedCronJobs(sessionKey: string | undefined):
 export function appendUnscheduledReminderNote(payloads: ReplyPayload[]): ReplyPayload[] {
   let appended = false;
   return payloads.map((payload) => {
-    if (appended || payload.isError || typeof payload.text !== "string") {
+    if (appended || payload.isError || payload.text === undefined) {
       return payload;
     }
     if (!hasUnbackedReminderCommitment(payload.text)) {
       return payload;
     }
     appended = true;
-    const trimmed = payload.text.trimEnd();
     return copyReplyPayloadMetadata(payload, {
       ...payload,
-      text: `${trimmed}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
+      text: `${payload.text.trimEnd()}\n\n${UNSCHEDULED_REMINDER_NOTE}`,
     });
   });
 }

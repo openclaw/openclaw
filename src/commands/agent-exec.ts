@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
 import {
@@ -18,8 +19,10 @@ import {
   getInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
+import { applyProcessEnvKeys } from "../infra/process-env.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 import {
+  applyExecConfigOverrides,
   buildExecRunConfig,
   resolveAgentExecPrompt,
   resolveExecBaseConfig,
@@ -41,14 +44,9 @@ function normalizeCodeMode(
   if (value === undefined) {
     return undefined;
   }
-  if (value === "direct") {
-    return false;
-  }
-  if (value === "auto") {
-    return "auto";
-  }
-  if (value === "code") {
-    return true;
+  const modes = { direct: false, auto: "auto", code: true } as const;
+  if (typeof value === "string" && Object.hasOwn(modes, value)) {
+    return modes[value];
   }
   throw new Error("--code-mode must be one of direct, auto, code.");
 }
@@ -93,15 +91,7 @@ function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () 
   process.env.OPENCLAW_STATE_DIR = params.stateDir;
   delete process.env.OPENCLAW_CONFIG_PATH;
   process.env.OPENCLAW_WORKSPACE_DIR = params.cwd;
-  return () => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
+  return () => applyProcessEnvKeys(Object.keys(previous), previous);
 }
 
 function formatActiveGatewayExecRefusal(identity: GatewayLockIdentity): string {
@@ -114,15 +104,10 @@ function isStructuredTimeoutError(error: unknown): boolean {
   }
   let candidate = error;
   for (let depth = 0; depth < 4; depth += 1) {
-    if (!candidate || typeof candidate !== "object") {
+    const record = asOptionalObjectRecord(candidate);
+    if (!record) {
       return false;
     }
-    const record = candidate as {
-      cause?: unknown;
-      code?: unknown;
-      name?: unknown;
-      reason?: unknown;
-    };
     if (
       record.name === "TimeoutError" ||
       record.code === "ETIMEDOUT" ||
@@ -190,6 +175,7 @@ export async function agentExecCommand(
   let temporaryStateDir: string | undefined;
   let restoreEnvironment: (() => void) | undefined;
   let restoreConfigEnvironment: (() => void) | undefined;
+  let restoreOverrideEnvironment: (() => void) | undefined;
   let restoreRuntimeConfigSnapshot: (() => void) | undefined;
   let runtimePaths: typeof import("../config/paths.js") | undefined;
   let configIo: typeof import("../config/io.js") | undefined;
@@ -207,8 +193,13 @@ export async function agentExecCommand(
   try {
     signal.throwIfAborted();
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
-    const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile, process.stdin);
+    const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile);
     const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
+    const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
+      await import("../infra/embedded-state-lock.js");
+    // Admit cancellation before creating state so signals unwind temporary runs too.
+    signalBridge = createEmbeddedStateSignalBridge();
+    abortSignal = AbortSignal.any([signal, signalBridge.signal]);
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
       : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-"));
@@ -229,7 +220,7 @@ export async function agentExecCommand(
     // cannot inherit these credentials. The loader rolls back its own failed loads.
     const { restoreEnvChangesIfUnchanged, snapshotEnv } = configIo;
     const envBeforeConfigLoad = snapshotEnv(process.env);
-    const baseConfig = await resolveExecBaseConfig(opts);
+    const loadedConfig = await resolveExecBaseConfig(opts);
     const envAfterConfigLoad = snapshotEnv(process.env);
     restoreConfigEnvironment = () =>
       restoreEnvChangesIfUnchanged({
@@ -237,6 +228,14 @@ export async function agentExecCommand(
         before: envBeforeConfigLoad,
         after: envAfterConfigLoad,
       });
+    const baseConfig = await applyExecConfigOverrides(loadedConfig, opts.configOverride);
+    if (opts.configOverride?.length) {
+      const { prepareConfigRuntimeEnv } = await import("../config/config-env-vars.js");
+      restoreOverrideEnvironment = prepareConfigRuntimeEnv({
+        previousConfig: loadedConfig,
+        nextConfig: baseConfig,
+      }).publish();
+    }
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
     // Plugin discovery and its index keep the operator's roots after state moves.
     const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
@@ -284,11 +283,6 @@ export async function agentExecCommand(
       temporaryDatabaseScope = createOpenClawDatabaseMaintenanceScope();
     }
     if (opts.stateDir) {
-      const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
-        await import("../infra/embedded-state-lock.js");
-      signalBridge = createEmbeddedStateSignalBridge(process);
-      // Retained-state signals and caller cancellation both own the turn's lifetime.
-      abortSignal = AbortSignal.any([abortSignal, signalBridge.signal]);
       stateLock = await acquireEmbeddedStateLock({
         signal: abortSignal,
         formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
@@ -393,6 +387,9 @@ export async function agentExecCommand(
           "Agent runtime cleanup did not settle; state ownership retained until this process exits",
         )
       : undefined;
+  const recordCleanupError = (error: unknown) => {
+    cleanupError = error;
+  };
   const stopAudit = async () => await stopLocalAuditWriter?.();
   await (temporaryDatabaseScope ? temporaryDatabaseScope.run(stopAudit) : stopAudit()).catch(
     () => undefined,
@@ -402,9 +399,7 @@ export async function agentExecCommand(
   if (!cleanupError && temporaryStateDir) {
     const { closeOpenClawAgentDatabasesAsync } =
       await import("../state/openclaw-agent-db-lifecycle.js");
-    await closeOpenClawAgentDatabasesAsync(temporaryStateDir).catch((error: unknown) => {
-      cleanupError = error;
-    });
+    await closeOpenClawAgentDatabasesAsync(temporaryStateDir).catch(recordCleanupError);
   }
   if (!cleanupError && temporaryStateDir) {
     const [{ closeOpenClawStateDatabaseByPathAsync }, { resolveOpenClawStateSqlitePath }] =
@@ -416,19 +411,13 @@ export async function agentExecCommand(
       ...process.env,
       OPENCLAW_STATE_DIR: temporaryStateDir,
     });
-    await closeOpenClawStateDatabaseByPathAsync(temporaryStatePath).catch((error: unknown) => {
-      cleanupError = error;
-    });
+    await closeOpenClawStateDatabaseByPathAsync(temporaryStatePath).catch(recordCleanupError);
   }
   if (!cleanupError) {
-    await temporaryDatabaseScope?.close().catch((error: unknown) => {
-      cleanupError = error;
-    });
+    await temporaryDatabaseScope?.close().catch(recordCleanupError);
   }
   if (!cleanupError) {
-    await stateLock?.release().catch((error: unknown) => {
-      cleanupError = error;
-    });
+    await stateLock?.release().catch(recordCleanupError);
   }
   const runCleanupStep = (step: () => void) => {
     try {
@@ -438,6 +427,7 @@ export async function agentExecCommand(
     }
   };
   runCleanupStep(() => restoreEnvironment?.());
+  runCleanupStep(() => restoreOverrideEnvironment?.());
   runCleanupStep(() => restoreConfigEnvironment?.());
   runCleanupStep(() => configIo?.clearConfigCache());
   runCleanupStep(() =>
@@ -459,7 +449,12 @@ export async function agentExecCommand(
       `Agent exec cleanup failed: ${formatErrorMessage(cleanupError)}`,
     );
     if (commandResult.envelope.ok) {
-      commandResult = resultForEnvelope(errorEnvelope(cleanupFailure, sessionId));
+      commandResult = resultForEnvelope({
+        ...commandResult.envelope,
+        ok: false,
+        status: "error",
+        error: { message: cleanupFailure.message, kind: "cleanup" },
+      });
     } else {
       runtime.error(cleanupFailure.message);
     }

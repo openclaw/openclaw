@@ -1,6 +1,5 @@
 // Transcript projection reconciliation owner. Startup maintenance runs after ready;
 // request paths may wait boundedly for their session's projection.
-// Native timers keep accepted work runnable after a caller replaces its timer globals.
 import { randomUUID } from "node:crypto";
 import { setImmediate as yieldToGateway, setTimeout as delay } from "node:timers/promises";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
@@ -11,14 +10,14 @@ import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.j
 import { isPathInside } from "../../infra/path-guards.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
 import {
   borrowOpenClawAgentDatabase,
-  isIncognitoOpenClawAgentSqlitePath,
+  deferOpenClawAgentPostCommitPublication,
   resolveOpenClawAgentSqlitePath,
+  type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
@@ -34,34 +33,32 @@ import { resolveStateDir } from "../paths.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
   resolveSqliteTranscriptReadScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  withIncognitoProjection,
-  type IncognitoProjectionBinding,
-  type IncognitoProjectionSource,
-} from "./session-incognito-projection.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
-  hasOrphanedTranscriptIndexRows,
-  hasSessionsNeedingTranscriptIndexReconcile,
   listSessionsNeedingTranscriptIndexReconcile,
+  markSessionTranscriptIndexDirtyInTransaction,
+  reconcileSessionTranscriptIndexInTransaction,
 } from "./session-transcript-index.js";
-import type { TranscriptProjectionPublicationOperations } from "./session-transcript-projection-publication.worker.js";
+import type {
+  ProjectionPublisher,
+  TranscriptProjectionPublicationOperations,
+} from "./session-transcript-projection-publication.worker.js";
 import {
   appendPreparedProjectionChunk,
   claimPreparedSessionTranscriptProjection,
   finalizePreparedProjection,
+  readTranscriptIndexBacklog,
   runProjectionWrite,
   type ActivePreparedProjection,
-  type ProjectionPublisher,
   type ReconcileDatabaseOptions,
 } from "./session-transcript-projection-writer.js";
-import { captureMemoryTranscriptProjectionSource } from "./session-transcript-reconcile-memory.js";
 import {
   finishSessionTranscriptReconcileTask,
-  isSessionTranscriptReconcileGenerationCurrent,
+  isSessionTranscriptReconcileWorkerPoolClosing,
   runSessionTranscriptReconcileOperation,
   type SessionTranscriptReconcileOperation,
 } from "./session-transcript-reconcile-pool.js";
@@ -75,17 +72,11 @@ import type {
   SessionTranscriptReconcileWorkerInput,
   SessionTranscriptReconcileWorkerMessage,
 } from "./session-transcript-reconcile.worker.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 const log = createSubsystemLogger("sessions/transcript-index");
 const PROJECTION_READY_POLL_MS = 10;
-// Repeated pending passes can keep respawning workers for a contended snapshot.
-// Do not reset on aggregate progress: other sessions may finish while it races.
-// Zero preserves one immediate retry; ready targets poll independently.
 const RECONCILE_RETRY_BACKOFF_MS: readonly number[] = [0, 50, 200, 500, 1_000];
-
 type RunningReconcile = {
-  generation: number;
   assertCurrent?: () => void;
   pending: boolean;
   signal?: AbortSignal;
@@ -99,69 +90,100 @@ export type SessionTranscriptReconcileResult = {
   reconciledSessions: number;
 };
 
-type ReconcilePassResult = SessionTranscriptReconcileResult & { yielded: boolean };
+type PreparedReconcileResult = SessionTranscriptReconcileResult & { pending: boolean };
+type ReconcilePassResult = PreparedReconcileResult & { yielded: boolean };
 
-function reconcileKey(
-  params: OpenClawAgentDatabaseOptions,
-  incognito?: IncognitoProjectionBinding,
-): string {
-  const path = resolveOpenClawAgentSqlitePath(params);
-  return incognito
-    ? `${path}#${JSON.stringify([incognito.actor.identity, incognito.target ?? null])}`
-    : path;
+export function reconcileRewrittenTranscriptIndex(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  rebuildSynchronously: boolean,
+): void {
+  // Dirty state revokes prepared claims and hides old rows; reconcile alone owns their deletion.
+  markSessionTranscriptIndexDirtyInTransaction(database.db, sessionId);
+  if (rebuildSynchronously) {
+    reconcileSessionTranscriptIndexInTransaction(database.db, sessionId);
+  } else {
+    scheduleTranscriptProjectionReconcile(database, sessionId, true, {});
+  }
+}
+
+export function scheduleTranscriptProjectionReconcile(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  projectionNeedsRebuild: boolean,
+  options: { scheduleProjectionReconcile?: boolean },
+): void {
+  if (!projectionNeedsRebuild || options.scheduleProjectionReconcile === false) {
+    return;
+  }
+  // Dirty state is durable: a missed post-commit kick is recovered by startup/search reconciliation.
+  deferOpenClawAgentPostCommitPublication(database, (databaseOptions) =>
+    startSessionTranscriptIndexReconcile({
+      ...databaseOptions,
+      preferredSessionId: sessionId,
+    }),
+  );
 }
 
 /** Prepares full trees off-thread, then commits bounded chunks through the runtime writer owner. */
 export async function reconcileSessionTranscriptIndexes(
   params: SessionTranscriptReconcileParams,
-  incognito?: IncognitoProjectionBinding,
 ): Promise<SessionTranscriptReconcileResult> {
-  const prepared = prepareReconcileParams(params, incognito);
-  const run = () =>
-    runSessionTranscriptReconcileOperation(
-      prepared.generation,
-      (operation) => reconcilePreparedTranscriptIndexes(prepared, operation),
-      incognito || isIncognitoOpenClawAgentSqlitePath(reconcileKey(prepared), prepared)
-        ? undefined
-        : { agentId: prepared.agentId, path: reconcileKey(prepared) },
+  if (
+    captureSessionActorStorageOwner(
+      { ...params, storePath: params.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
+    return { reconciledSessions: 0 };
+  }
+  const prepared = prepareReconcileParams(params);
+  const execution = supportsOpenClawAgentDatabaseExecution(prepared)
+    ? captureOpenClawAgentDatabaseExecution(prepared)
+    : undefined;
+  try {
+    const result = await runSessionTranscriptReconcileOperation(
+      (operation) => reconcilePreparedTranscriptIndexes(prepared, operation, execution),
+      { agentId: prepared.agentId, path: resolveOpenClawAgentSqlitePath(prepared) },
       prepared.signal,
     );
-  const binding = prepared.incognito;
-  return binding
-    ? runOutsideAsyncWorkScope(() => binding.actor.sessions.withSharedState(run))
-    : run();
+    if (result.pending) {
+      try {
+        prepared.signal?.throwIfAborted();
+        prepared.assertCurrent?.();
+        execution?.assertCurrent();
+        startPreparedSessionTranscriptIndexReconcile(prepared);
+      } catch {
+        // Refused continuation admission cannot replace acknowledged publication receipts.
+        // The next owner rediscovers the remaining durable projection work.
+      }
+    }
+    return { reconciledSessions: result.reconciledSessions };
+  } finally {
+    await execution?.release();
+  }
 }
 
 async function reconcilePreparedTranscriptIndexes(
   params: PreparedReconcileParams,
   operation: SessionTranscriptReconcileOperation,
-  heldExecution?: OpenClawAgentDatabaseExecution,
-): Promise<SessionTranscriptReconcileResult> {
+  execution?: OpenClawAgentDatabaseExecution,
+): Promise<PreparedReconcileResult> {
   let reconciledSessions = 0;
-  try {
-    while (true) {
-      operation.signal.throwIfAborted();
-      const run = (source?: IncognitoProjectionSource) =>
-        reconcilePreparedTranscriptIndexesPass(params, operation, heldExecution, source);
-      // Resumed passes need fresh pending inventory and unconsumed framing sources.
-      const result = await (params.incognito
-        ? withIncognitoProjection(params.incognito, params, run)
-        : run());
-      reconciledSessions += result.reconciledSessions;
-      if (!result.yielded) {
-        return { reconciledSessions };
-      }
+  while (true) {
+    operation.signal.throwIfAborted();
+    const result = await reconcilePreparedTranscriptIndexesPass(params, operation, execution);
+    reconciledSessions += result.reconciledSessions;
+    if (!result.yielded) {
+      return { reconciledSessions, pending: result.pending };
     }
-  } finally {
-    operation.cancelReservation();
   }
 }
 
 async function reconcilePreparedTranscriptIndexesPass(
   params: PreparedReconcileParams,
   operation: SessionTranscriptReconcileOperation,
-  heldExecution?: OpenClawAgentDatabaseExecution,
-  actorSource?: IncognitoProjectionSource,
+  execution?: OpenClawAgentDatabaseExecution,
 ): Promise<ReconcilePassResult> {
   operation.signal.throwIfAborted();
   params.assertCurrent?.();
@@ -175,46 +197,20 @@ async function reconcilePreparedTranscriptIndexesPass(
       params.assertCurrent?.();
     },
   };
-  const execution =
-    heldExecution ??
-    (supportsOpenClawAgentDatabaseExecution(databaseOptions)
-      ? captureOpenClawAgentDatabaseExecution(databaseOptions)
-      : undefined);
+  const assertCurrent = () => {
+    databaseOptions.assertCurrent?.();
+    execution?.assertCurrent();
+  };
   let publicationClient:
     | OpenClawAgentSqliteWorkerStore<TranscriptProjectionPublicationOperations>
     | undefined;
   let publication: ProjectionPublisher | undefined;
   let releaseDatabase: (() => void) | undefined;
-  const memorySource = actorSource
-    ? undefined
-    : captureMemoryTranscriptProjectionSource(databaseOptions);
-  let memorySessionIds: string[] = [];
-  let backlog = 0;
+  let sessionIds: string[];
+  let pending = false;
   try {
-    if (actorSource) {
-      publication = actorSource.publication;
-      memorySessionIds = actorSource.sessionIds;
-      if (memorySessionIds.length === 0) {
-        return { reconciledSessions: 0, yielded: false };
-      }
-    } else if (execution) {
+    if (execution) {
       execution.assertCurrent();
-      const pending = await runExclusiveSqliteSessionWrite(
-        databaseOptions,
-        async () => {
-          databaseOptions.assertCurrent?.();
-          execution.assertCurrent();
-          return await withSessionHistoryWorkerDatabase(databaseOptions, (owner) =>
-            owner.readProjectionStatus({ env: params.env }, operation.signal),
-          ).catch(() => true);
-        },
-        "sessions.transcript-index.preflight",
-      );
-      execution.assertCurrent();
-      databaseOptions.assertCurrent?.();
-      if (!pending) {
-        return { reconciledSessions: 0, yielded: false };
-      }
       operation.signal.throwIfAborted();
       const client =
         await openOpenClawAgentSqliteWorkerStore<TranscriptProjectionPublicationOperations>(
@@ -229,94 +225,46 @@ async function reconcilePreparedTranscriptIndexesPass(
         );
       publicationClient = client;
       publication = {
-        execute: (command) =>
-          client.execute(
-            command,
-            () => {
-              databaseOptions.assertCurrent?.();
-              execution.assertCurrent();
-            },
-            { signal: operation.signal },
-          ),
+        execute: (command) => client.execute(command, assertCurrent, { signal: operation.signal }),
       };
-      backlog = await publication.execute({ type: "preflight", input: undefined });
-      if (!backlog) {
-        return { reconciledSessions: 0, yielded: false };
+      const status = await readTranscriptIndexBacklog(client, assertCurrent, operation.signal);
+      sessionIds = status.sessionIds;
+      pending = status.hasMore;
+      if (sessionIds.length === 0) {
+        return { reconciledSessions: 0, pending, yielded: false };
       }
     } else {
-      if (!memorySource) {
-        const clean = await runExclusiveSqliteSessionWrite(
-          databaseOptions,
-          async () => {
-            databaseOptions.assertCurrent?.();
-            try {
-              const pending = withOpenClawAgentDatabaseReadOnly(
-                ({ db }) =>
-                  runSqliteDeferredTransactionSync(
-                    db,
-                    () =>
-                      hasSessionsNeedingTranscriptIndexReconcile(db) ||
-                      hasOrphanedTranscriptIndexRows(db),
-                  ),
-                databaseOptions,
-              );
-              return pending.found && !pending.value;
-            } catch {
-              // Preserve the writable owner's repair and integrity refusal for uncertain reads.
-              return false;
-            }
-          },
-          "sessions.transcript-index.preflight",
-        );
-        databaseOptions.assertCurrent?.();
-        if (clean) {
-          return { reconciledSessions: 0, yielded: false };
-        }
-      }
       operation.signal.throwIfAborted();
-      // Recheck under write admission: a request may commit after the read-only probe.
-      // Keep the post-worker orphan sweep for writers racing projection publication.
-      await runProjectionWrite(
+      sessionIds = await runProjectionWrite(
         databaseOptions,
         "sessions.transcript-index.preflight",
         (database) => {
           deleteOrphanedTranscriptIndexRowsInTransaction(database.db);
-          const sessionIds = listSessionsNeedingTranscriptIndexReconcile(database.db);
-          backlog = sessionIds.length;
-          if (sessionIds.length > 0) {
-            // Retain this verified handle across worker awaits; explicit disposal still revokes it.
+          const candidates = listSessionsNeedingTranscriptIndexReconcile(database.db);
+          if (candidates.length > 0) {
             releaseDatabase = borrowOpenClawAgentDatabase(databaseOptions).release;
-            if (memorySource) {
-              const preferred = params.preferredSessionId;
-              memorySessionIds =
-                preferred && sessionIds.includes(preferred)
-                  ? [preferred, ...sessionIds.filter((sessionId) => sessionId !== preferred)]
-                  : sessionIds;
-            }
           }
+          return candidates;
         },
-        memorySource,
       );
-      if (!releaseDatabase) {
-        return { reconciledSessions: 0, yielded: false };
+      if (sessionIds.length === 0) {
+        return { reconciledSessions: 0, pending, yielded: false };
       }
     }
-    if (memorySource || actorSource) {
-      backlog = memorySessionIds.length;
+    const preferred = params.preferredSessionId;
+    if (preferred && sessionIds.includes(preferred)) {
+      sessionIds = [preferred, ...sessionIds.filter((sessionId) => sessionId !== preferred)];
     }
-    const input: SessionTranscriptReconcileWorkerInput =
-      memorySource || actorSource
-        ? { mode: "memory", sessionIds: memorySessionIds }
-        : {
-            mode: "disk",
-            leaseId: randomUUID(),
-            agentId: params.agentId,
-            path: databasePath,
-            stateDir: resolveStateDir(params.env),
-            externallySupervised: isGatewayExternallySupervised(params.env),
-            ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
-          };
-    const task = await operation.startTask(input, backlog);
+    const input: SessionTranscriptReconcileWorkerInput = {
+      mode: "disk",
+      sessionIds,
+      leaseId: randomUUID(),
+      agentId: params.agentId,
+      path: databasePath,
+      stateDir: resolveStateDir(params.env),
+      externallySupervised: isGatewayExternallySupervised(params.env),
+    };
+    const task = await operation.startTask(input);
     const worker = task.port;
     let handlingMessage: Promise<void> | undefined;
     let terminalReceived = false;
@@ -351,38 +299,40 @@ async function reconcilePreparedTranscriptIndexesPass(
               return;
             }
             try {
-              if (publication) {
-                // Finalized receipts survive retirement before new cleanup admission.
-                // A later preflight still detects and removes derived orphan rows.
-                if (!operation.signal.aborted && (!actorSource || actorSource.storeWide)) {
-                  await publication.execute({ type: "sweep", input: undefined });
+              // Finalized receipts survive retirement before new cleanup admission.
+              // A later preflight still detects and removes derived orphan rows.
+              if (publicationClient) {
+                if (!operation.signal.aborted) {
+                  const status = await drainTranscriptIndexStatus(() =>
+                    publicationClient!.execute({ type: "sweep", input: undefined }, assertCurrent, {
+                      signal: operation.signal,
+                    }),
+                  );
+                  pending ||= status.hasMore || status.sessionIds.length > 0;
                 }
               } else {
                 await runProjectionWrite(
                   databaseOptions,
                   "sessions.transcript-index.orphan-sweep",
                   (database) => deleteOrphanedTranscriptIndexRowsInTransaction(database.db),
-                  memorySource,
                 );
               }
             } catch (error) {
-              settle(() => reject(toStringifiedError(error)));
-              return;
+              // Only a refused cleanup admission preserves earlier receipts; SQL failures still fail.
+              if (
+                !operation.signal.aborted ||
+                error instanceof AggregateError ||
+                (error !== operation.signal.reason &&
+                  !(error instanceof AgentDatabaseExecutionAdmissionClosedError))
+              ) {
+                settle(() => reject(toStringifiedError(error)));
+                return;
+              }
             }
-            settle(() => resolve({ reconciledSessions, yielded: message.yielded }));
+            settle(() => resolve({ reconciledSessions, pending, yielded: message.yielded }));
             return;
           }
           try {
-            if (message.type === "source-read") {
-              const source = actorSource ?? memorySource;
-              if (!source || !memorySessionIds.includes(message.sessionId)) {
-                throw new Error("session transcript worker requested an unavailable memory source");
-              }
-              const frame = await source.read(message.sessionId);
-              await yieldToGateway();
-              worker.postMessage(frame, frame.type === "source-frame" ? [frame.bytes.buffer] : []);
-              return;
-            }
             if (message.type === "plan-start") {
               if (active) {
                 throw new Error("session transcript reconcile worker started overlapping plans");
@@ -390,10 +340,10 @@ async function reconcilePreparedTranscriptIndexesPass(
               active = await claimPreparedSessionTranscriptProjection(
                 databaseOptions,
                 message.plan,
-                memorySource,
                 publication,
               );
               worker.postMessage({ accepted: active !== undefined, type: "continue" }, []);
+              recordWorkerMessage("admission", "to_worker");
               return;
             }
             if (!active || active.plan.sessionId !== message.sessionId) {
@@ -405,7 +355,6 @@ async function reconcilePreparedTranscriptIndexesPass(
               const finalized = await finalizePreparedProjection(
                 databaseOptions,
                 active,
-                memorySource,
                 publication,
               );
               active = undefined;
@@ -416,25 +365,23 @@ async function reconcilePreparedTranscriptIndexesPass(
                 {
                   accepted: finalized,
                   type: "continue",
-                  ...(operation.shouldYield(message.remainingSessions) ? { yield: true } : {}),
+                  ...(operation.shouldYield() ? { yield: true } : {}),
                 },
                 [],
               );
+              recordWorkerMessage("admission", "to_worker");
               return;
             }
-            const owned = await appendPreparedProjectionChunk(
+            await appendPreparedProjectionChunk(
               databaseOptions,
               active,
               message.type === "active-chunk"
                 ? { activeRows: message.rows }
                 : { ftsChunk: message.chunk },
-              memorySource,
               publication,
             );
-            if (!owned) {
-              active = undefined;
-            }
-            worker.postMessage({ accepted: owned, type: "continue" }, []);
+            worker.postMessage({ accepted: true, type: "continue" }, []);
+            recordWorkerMessage("admission", "to_worker");
           } catch (error) {
             settle(() => reject(toStringifiedError(error)));
           }
@@ -478,40 +425,33 @@ async function reconcilePreparedTranscriptIndexesPass(
       outcome,
     });
   } finally {
-    memorySource?.clear();
     releaseDatabase?.();
-    try {
-      await publicationClient?.close();
-    } finally {
-      if (!heldExecution) {
-        await execution?.release();
-      }
-    }
+    await publicationClient?.close();
   }
 }
 
 /** Starts one deferred reconcile. No transcript rows are read on the caller's stack. */
 export function startSessionTranscriptIndexReconcile(
   input: SessionTranscriptReconcileParams,
-  incognito?: IncognitoProjectionBinding,
 ): void {
-  startPreparedSessionTranscriptIndexReconcile(prepareReconcileParams(input, incognito));
+  if (
+    captureSessionActorStorageOwner(
+      { ...input, storePath: input.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
+    return;
+  }
+  startPreparedSessionTranscriptIndexReconcile(prepareReconcileParams(input));
 }
 
 function startPreparedSessionTranscriptIndexReconcile(params: PreparedReconcileParams): void {
-  if (!isSessionTranscriptReconcileGenerationCurrent(params.generation)) {
+  if (isSessionTranscriptReconcileWorkerPoolClosing()) {
     return;
   }
-  const { incognito } = params;
-  const key = reconcileKey(params, incognito);
+  const key = resolveOpenClawAgentSqlitePath(params);
   const running = runningReconciles.get(key);
-  let runningCurrent = true;
-  try {
-    running?.assertCurrent?.();
-  } catch {
-    runningCurrent = false;
-  }
-  if (running?.generation === params.generation && (running.signal?.aborted || runningCurrent)) {
+  if (running) {
     // The active pass snapshots dirty sessions. Latch later writes so it
     // rescans before ownership is released instead of losing their work.
     running.pending = true;
@@ -519,117 +459,91 @@ function startPreparedSessionTranscriptIndexReconcile(params: PreparedReconcileP
     return;
   }
   const state: RunningReconcile = {
-    generation: params.generation,
     pending: false,
     ...(params.preferredSessionId ? { preferredSessionId: params.preferredSessionId } : {}),
   };
-  // Capture before the first yield: disposal must revoke this scheduled owner,
-  // including a later pass, before preflight can reopen its sentinel.
-  const memorySource = incognito ? undefined : captureMemoryTranscriptProjectionSource(params);
-  const execution =
-    !incognito && supportsOpenClawAgentDatabaseExecution(params)
-      ? captureOpenClawAgentDatabaseExecution(params)
-      : undefined;
-  state.assertCurrent = incognito
-    ? () => {
-        incognito.actor.assertCurrent();
-        incognito.authority.assertCurrent();
-      }
-    : execution
-      ? () => execution.assertCurrent()
-      : undefined;
-  let entered = false;
-  let executionCurrent = true;
-  const pending = runSessionTranscriptReconcileOperation(
-    params.generation,
+  state.assertCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+  };
+  const accepted = runSessionTranscriptReconcileOperation(
     async (operation) => {
-      entered = true;
+      const execution = supportsOpenClawAgentDatabaseExecution(params)
+        ? captureOpenClawAgentDatabaseExecution(params)
+        : undefined;
       state.signal = operation.signal;
       try {
         await yieldToGateway();
         let reconciledSessions = 0;
         let retryCount = 0;
-        while (true) {
+        do {
           operation.signal.throwIfAborted();
-          // A retired pass cannot consume a successor's pending request.
-          memorySource?.assertCurrentOwner();
           state.assertCurrent?.();
           state.pending = false;
-          const preferredSessionId = state.preferredSessionId;
+          const pass = { ...params, preferredSessionId: state.preferredSessionId };
           delete state.preferredSessionId;
-          const pass = { ...params, preferredSessionId };
-          const reconcile = () => reconcilePreparedTranscriptIndexes(pass, operation, execution);
-          const result = await (incognito ? runOutsideAsyncWorkScope(reconcile) : reconcile());
+          const result = await reconcilePreparedTranscriptIndexes(pass, operation, execution);
           reconciledSessions += result.reconciledSessions;
+          state.pending ||= result.pending;
+          // Sustained writes can outpace rebuilding; bound the repeated parsing cost (#115908).
           if (state.pending) {
-            retryCount += 1;
-            await delay(computeBackoffSchedule(RECONCILE_RETRY_BACKOFF_MS, retryCount));
-            continue;
+            await delay(computeBackoffSchedule(RECONCILE_RETRY_BACKOFF_MS, ++retryCount));
           }
-          if (runningReconciles.get(key) === state) {
-            runningReconciles.delete(key);
-          }
-          return { reconciledSessions };
-        }
-      } catch (error) {
-        try {
-          state.assertCurrent?.();
-        } catch {
-          executionCurrent = false;
-        }
-        throw error;
+        } while (state.pending);
+        // New work gets its own operation while the completed one releases its resources.
+        runningReconciles.delete(key);
+        return { reconciledSessions };
       } finally {
         await execution?.release();
       }
     },
-    incognito || isIncognitoOpenClawAgentSqlitePath(key, params)
-      ? undefined
-      : { agentId: params.agentId, path: key },
-  ).catch(async (error: unknown) => {
-    // Registration can refuse before the callback takes custody of this borrow.
-    if (!entered) {
-      await execution?.release();
-    }
-    log.warn(
-      `session transcript reconcile failed agent=${params.agentId} error=${error instanceof Error ? error.message : String(error)}`,
-    );
-    const shouldHandoff = state.pending;
-    const preferredSessionId = state.preferredSessionId;
-    if (runningReconciles.get(key) === state) {
-      runningReconciles.delete(key);
-    }
-    if (
-      shouldHandoff &&
-      executionCurrent &&
-      state.signal &&
-      !state.signal.aborted &&
-      (!memorySource || captureMemoryTranscriptProjectionSource(params))
-    ) {
-      startPreparedSessionTranscriptIndexReconcile({
-        ...params,
-        ...(preferredSessionId ? { preferredSessionId } : {}),
-      });
-      await waitForSessionTranscriptIndexReconcile(params, incognito);
-    }
-    return { reconciledSessions: 0 };
-  });
-  state.promise = incognito ? incognito.actor.sessions.withSharedState(() => pending) : pending;
+    { agentId: params.agentId, path: key },
+    params.signal,
+  );
+  const pending = accepted
+    .catch((error: unknown) => {
+      // Failed background work is rediscovered by the next request or restart.
+      log.warn(
+        `session transcript reconcile failed agent=${params.agentId} error=${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { reconciledSessions: 0 };
+    })
+    .finally(() => {
+      if (runningReconciles.get(key) === state) {
+        runningReconciles.delete(key);
+      }
+    });
+  state.promise = pending;
   runningReconciles.set(key, state);
 }
 
 export function isSessionTranscriptIndexReconcileRunning(
   params: OpenClawAgentDatabaseOptions,
-  incognito?: IncognitoProjectionBinding,
 ): boolean {
-  return runningReconciles.has(reconcileKey(params, incognito));
+  if (
+    captureSessionActorStorageOwner(
+      { ...params, storePath: params.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
+    return false;
+  }
+  return runningReconciles.has(resolveOpenClawAgentSqlitePath(params));
 }
 
 /** Test and maintenance wait hook for an already-scheduled reconcile. */
 export async function waitForSessionTranscriptIndexReconcile(
   params: OpenClawAgentDatabaseOptions,
-  incognito?: IncognitoProjectionBinding,
 ): Promise<void> {
-  await runningReconciles.get(reconcileKey(params, incognito))?.promise;
+  if (
+    captureSessionActorStorageOwner(
+      { ...params, storePath: params.path },
+      { assertCurrent() {}, authorize() {} },
+    )
+  ) {
+    return;
+  }
+  await runningReconciles.get(resolveOpenClawAgentSqlitePath(params))?.promise;
 }
 
 /** Test and maintenance drain for scheduled reconciles owned by one state directory. */
@@ -652,35 +566,24 @@ export async function waitForSessionTranscriptIndexReconcilesInStateDir(
 export async function waitForSessionTranscriptProjection(
   scope: SessionTranscriptReadScope,
   abortSignal?: AbortSignal,
-  incognito?: IncognitoProjectionBinding,
 ): Promise<void> {
+  if (captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} })) {
+    abortSignal?.throwIfAborted();
+    return;
+  }
   const resolved = resolveSqliteTranscriptReadScope(scope);
-  const databaseOptions = prepareReconcileParams(toDatabaseOptions(resolved), incognito);
-  const wait = () =>
-    waitForPreparedSessionTranscriptProjection(resolved.sessionId, databaseOptions, abortSignal);
-  return databaseOptions.incognito
-    ? databaseOptions.incognito.actor.sessions.withSharedState(wait)
-    : wait();
-}
-
-async function waitForPreparedSessionTranscriptProjection(
-  sessionId: string,
-  databaseOptions: PreparedReconcileParams,
-  abortSignal?: AbortSignal,
-): Promise<void> {
-  const { incognito } = databaseOptions;
-  const key = reconcileKey(databaseOptions, incognito);
+  const databaseOptions = prepareReconcileParams(toDatabaseOptions(resolved));
+  const key = resolveOpenClawAgentSqlitePath(databaseOptions);
   let running = runningReconciles.get(key);
   if (!running) {
     return;
   }
   const needsReconcile = () =>
-    readSessionTranscriptProjectionStatus(databaseOptions, sessionId, abortSignal);
+    readSessionTranscriptProjectionStatus(databaseOptions, resolved.sessionId, abortSignal);
   try {
     while (running) {
       abortSignal?.throwIfAborted();
-      // Revoked work retains its close fence until settlement. Do not admit a reader
-      // or recreate a disposed incognito owner while that fence is held.
+      // Revoked work retains its close fence until settlement; wait before admitting a reader.
       if (!running.signal?.aborted) {
         running.assertCurrent?.();
         if (!(await needsReconcile())) {
@@ -692,19 +595,6 @@ async function waitForPreparedSessionTranscriptProjection(
         undefined,
         abortSignal ? { signal: abortSignal } : undefined,
       );
-      if (
-        !runningReconciles.has(key) &&
-        running.signal?.aborted &&
-        isSessionTranscriptReconcileGenerationCurrent(running.generation) &&
-        (await needsReconcile())
-      ) {
-        // Re-admit through the existing owner after cache turnover, within the same lifecycle.
-        startPreparedSessionTranscriptIndexReconcile({
-          ...databaseOptions,
-          generation: running.generation,
-          preferredSessionId: sessionId,
-        });
-      }
       running = runningReconciles.get(key);
     }
   } catch (error) {

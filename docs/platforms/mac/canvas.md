@@ -98,10 +98,10 @@ precedence over the older setting. Doctor removes the root setting only after no
 legacy documents remain. If directory access or a document copy fails, doctor
 warns and retains the source locator for retry. It may move the older setting
 into the plugin config while preserving the path. A root that already points to
-canonical storage, including through a symlink, needs no copy.
+the default storage folder, including through a symlink, needs no copy.
 
 Fix the reported permissions or target conflict, then rerun the command. Do not
-remove the root setting yourself. Hosted routes serve only the canonical folder,
+remove the root setting yourself. Hosted routes serve only the default storage folder,
 so remaining legacy documents are unavailable until migration completes.
 
 ## Related

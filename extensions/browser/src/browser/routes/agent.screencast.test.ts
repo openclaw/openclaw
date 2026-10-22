@@ -1,17 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-support/browser-security.mock.js";
+import * as navigationGuard from "../navigation-guard.js";
 import {
   clearBrowserScreencastTokens,
   consumeBrowserScreencastToken,
 } from "../screencast/tokens.js";
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import type { BrowserRouteContext } from "../server-context.js";
 import {
   getOrCreateProfileRuntime,
   getProfileLifecycle,
   markBrowserRuntimeStopping,
 } from "../server-context.lifecycle.js";
 import { makeBrowserProfile, makeBrowserServerState } from "../server-context.test-harness.js";
-import { registerBrowserAgentScreencastRoutes } from "./agent.screencast.js";
+import { expectResponseContaining, runRoute } from "./agent-route.test-support.js";
+import { handleRouteError, resolveSafeRouteTabUrl } from "./agent.shared.js";
+import { registerBrowserRoutes } from "./index.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
@@ -22,7 +25,24 @@ vi.mock("../pw-ai-module.js", () => ({
   getLoadedPwAiModule: () => null,
 }));
 
-function setup(options: { existingSession?: boolean; url?: string; listedUrl?: string } = {}) {
+function requesterFixture() {
+  const connection = new AbortController();
+  const requester = {
+    invalidated: false,
+    signal: connection.signal,
+    isCurrent: () => !requester.invalidated && !connection.signal.aborted,
+  };
+  return { connection, requester };
+}
+
+function setup(
+  options: {
+    existingSession?: boolean;
+    url?: string;
+    listedUrl?: string;
+    emptyListing?: boolean;
+  } = {},
+) {
   const profile = makeBrowserProfile(options.existingSession ? { driver: "existing-session" } : {});
   const state = makeBrowserServerState({
     profile,
@@ -31,35 +51,28 @@ function setup(options: { existingSession?: boolean; url?: string; listedUrl?: s
   const runtime = getOrCreateProfileRuntime(state, profile);
   const tab = {
     targetId: "resolved-tab",
-    title: "Example",
     url: options.url ?? "https://example.com/",
-    type: "page",
   };
   const ensureTabAvailable = vi.fn(async () => tab);
-  const profileCtx = {
-    profile,
-    ensureTabAvailable,
-    listTabs: async () => [{ ...tab, url: options.listedUrl ?? tab.url }],
-  } as unknown as ProfileContext;
   const ctx = {
     state: () => state,
-    forProfile: () => profileCtx,
+    forProfile: () => ({
+      profile,
+      ensureTabAvailable,
+      listTabs: async () =>
+        options.emptyListing ? [] : [{ ...tab, url: options.listedUrl ?? tab.url }],
+    }),
   } as unknown as BrowserRouteContext;
   const { app, postHandlers } = createBrowserRouteApp();
-  registerBrowserAgentScreencastRoutes(app, ctx);
+  registerBrowserRoutes(app, ctx);
   const route = postHandlers.get("/screencast")!;
   return {
     state,
     runtime,
     ensureTabAvailable,
-    request: async (
-      body: Record<string, unknown> = {},
-      requester?: BrowserRequest["requester"],
-    ) => {
-      const response = createBrowserRouteResponse();
-      await route({ params: {}, query: {}, body, requester }, response.res);
-      return response;
-    },
+    ctx,
+    request: (body: Record<string, unknown> = {}, requester?: BrowserRequest["requester"]) =>
+      runRoute(route, { body, requester }),
   };
 }
 
@@ -70,49 +83,32 @@ describe("browser screencast mint route", () => {
 
   afterEach(() => {
     clearBrowserScreencastTokens();
+    vi.restoreAllMocks();
   });
 
   it.each([
     { when: "before request", abort: true },
     { when: "during tab resolution", abort: false },
   ])("rejects a requester invalidated $when (socket closed: $abort)", async ({ when, abort }) => {
-    const connection = new AbortController();
-    const requester = {
-      invalidated: false,
-      signal: connection.signal,
-      isCurrent: () => !requester.invalidated && !connection.signal.aborted,
-    };
-    const revoke = () => {
-      if (abort) {
-        connection.abort();
-      } else {
-        requester.invalidated = true;
-      }
-    };
+    const { connection, requester } = requesterFixture();
     const { request, ensureTabAvailable } = setup();
     if (when === "before request") {
-      revoke();
+      connection.abort();
     } else {
       const resolveTab = ensureTabAvailable.getMockImplementation()!;
       ensureTabAvailable.mockImplementationOnce(async () => {
-        revoke();
+        requester.invalidated = true;
         return await resolveTab();
       });
     }
     const response = await request({}, requester);
     expect(connection.signal.aborted).toBe(abort);
-    expect(response.statusCode).toBe(401);
-    expect(response.body).toMatchObject({ code: "SCREENCAST_REQUESTER_GONE" });
+    expectResponseContaining(response, { code: "SCREENCAST_REQUESTER_GONE" }, 401);
     expect(response.body).not.toHaveProperty("token");
   });
 
   it.each(["socket close", "invalidation"])("binds a minted token to requester %s", async (end) => {
-    const connection = new AbortController();
-    const requester = {
-      invalidated: false,
-      signal: connection.signal,
-      isCurrent: () => !requester.invalidated && !connection.signal.aborted,
-    };
+    const { connection, requester } = requesterFixture();
     const { request } = setup();
     const response = await request({}, requester);
     const token = (response.body as { token: string }).token;
@@ -131,25 +127,25 @@ describe("browser screencast mint route", () => {
     { existingSession: false, playwright: false, reason: "playwright" },
   ])("reports $reason as unsupported", async ({ existingSession, playwright, reason }) => {
     pw.available = playwright;
-    const { request } = setup({ existingSession });
-    const response = await request();
-
-    expect(response.statusCode).toBe(501);
-    expect(response.body).toMatchObject({
-      error: expect.any(String),
-      code: "SCREENCAST_UNSUPPORTED",
-      reason,
-    });
+    const response = await setup({ existingSession }).request();
+    expectResponseContaining(
+      response,
+      {
+        error: expect.any(String),
+        code: "SCREENCAST_UNSUPPORTED",
+        reason,
+      },
+      501,
+    );
   });
 
   it("mints an expiring token scoped to the resolved target with bounded capture options", async () => {
-    const { request, ensureTabAvailable } = setup();
+    const { request, ensureTabAvailable } = setup({ emptyListing: true });
     const startedAt = Date.now();
     const response = await request({ targetId: "t1", maxWidth: 17, maxHeight: 9000, quality: 99 });
     const body = response.body as { token: string; wsPath: string; expiresAtMs: number };
 
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({
+    expectResponseContaining(response, {
       token: expect.stringMatching(/^[a-f0-9]{48}$/),
       wsPath: `/browser/screencast?token=${body.token}`,
       targetId: "resolved-tab",
@@ -177,16 +173,13 @@ describe("browser screencast mint route", () => {
     await expect(token.checkNavigationAllowed("http://127.0.0.1/")).resolves.toBeUndefined();
     state.resolved.ssrfPolicy = { allowPrivateNetwork: false };
     await expect(token.checkNavigationAllowed("http://127.0.0.1/")).rejects.toThrow();
-    getProfileLifecycle(runtime).generation += 1;
+    getProfileLifecycle(runtime).controller.abort();
     expect(() => token.assertCurrent()).toThrow("superseded");
   });
 
   it("blocks minting for a disallowed current tab through the shared route guard", async () => {
-    const { request } = setup({ url: "http://127.0.0.1/private" });
-    const response = await request();
-
-    expect(response.statusCode).toBe(400);
-    expect(response.body).toMatchObject({ reason: "navigation_blocked" });
+    const response = await setup({ url: "http://127.0.0.1/private" }).request();
+    expectResponseContaining(response, { reason: "navigation_blocked" }, 400);
     expect(response.body).not.toHaveProperty("token");
   });
 
@@ -208,10 +201,46 @@ describe("browser screencast mint route", () => {
   );
 
   it("redacts a newly blocked listed URL in the mint response", async () => {
-    const { request } = setup({ listedUrl: "http://127.0.0.1/private" });
-    const response = await request();
+    const response = await setup({ listedUrl: "http://127.0.0.1/private" }).request();
+    expectResponseContaining(response, { token: expect.any(String), url: undefined });
+  });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.body).toMatchObject({ token: expect.any(String), url: undefined });
+  it("redacts credentials from unmapped route errors", () => {
+    const response = createBrowserRouteResponse();
+    handleRouteError(
+      response.res,
+      new Error(
+        "connect failed for wss://browser-user:browser-password@browserless.example/cdp?token=browser-token",
+      ),
+    );
+    expectResponseContaining(
+      response,
+      { error: expect.stringContaining("browserless.example") },
+      500,
+    );
+    expect(JSON.stringify(response.body)).not.toMatch(
+      /browser-user|browser-password|browser-token/,
+    );
+  });
+
+  it("propagates cancelled URL verification instead of returning a redacted URL", async () => {
+    const controller = new AbortController();
+    const reason = new Error("browser navigation verification deadline expired");
+    const guard = vi
+      .spyOn(navigationGuard, "assertBrowserNavigationResultAllowed")
+      .mockImplementationOnce(async () => {
+        controller.abort(reason);
+        throw reason;
+      });
+    const { ctx } = setup();
+    await expect(
+      resolveSafeRouteTabUrl({
+        ctx,
+        profileCtx: ctx.forProfile(),
+        targetId: "resolved-tab",
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(reason);
+    expect(guard).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
   });
 });

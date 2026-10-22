@@ -94,11 +94,14 @@ export function resolveEstimatedSessionCostUsd(params: {
   model?: string;
   entry?: Pick<
     SessionEntry,
-    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
+    "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite" | "usageReport"
   >;
   explicitCostUsd?: number;
   rowContext?: SessionListRowContext;
 }): number | undefined {
+  if (params.entry?.usageReport?.state === "unavailable") {
+    return undefined;
+  }
   const explicitCostUsd = asNonNegativeFiniteNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
   );
@@ -153,7 +156,6 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
   }
   // Store-only child links lack a live registry entry; retain recent unknown-state rows.
   return (
-    entry.status === "running" ||
     isFinitePositiveTimestamp(entry.startedAt) ||
     (isFinitePositiveTimestamp(entry.updatedAt) &&
       now - entry.updatedAt <= STALE_STORE_ONLY_CHILD_LINK_MS)
@@ -164,7 +166,6 @@ const emptyChildOwners: readonly string[] = Object.freeze([]);
 const sessionChildOwners = new WeakMap<
   SessionEntry,
   {
-    revision: object;
     key: string;
     controller?: string;
     parent?: string;
@@ -175,6 +176,7 @@ const sessionChildOwners = new WeakMap<
 /** Reuse owner identities, but recheck time and live authority on every read. */
 export function resolveSessionChildOwners(params: {
   key: string;
+  parsedKey?: ReturnType<typeof parseAgentSessionKey>;
   entry: SessionEntry;
   now: number;
   subagentRuns: SessionListRowContext["subagentRuns"];
@@ -199,16 +201,15 @@ export function resolveSessionChildOwners(params: {
     : undefined;
   // Persistent dashboard navigation outlives the individual run, including forks.
   const parent =
-    keep || parseAgentSessionKey(key)?.rest.startsWith("dashboard:")
+    keep ||
+    (params.parsedKey === undefined
+      ? parseAgentSessionKey(key)
+      : params.parsedKey
+    )?.rest.startsWith("dashboard:")
       ? normalizeOptionalString(entry.parentSessionKey)
       : undefined;
   const cached = sessionChildOwners.get(entry);
-  if (
-    cached?.revision === subagentRuns.revision &&
-    cached.key === key &&
-    cached.controller === controller &&
-    cached.parent === parent
-  ) {
+  if (cached?.key === key && cached.controller === controller && cached.parent === parent) {
     return cached.owners;
   }
   const owners: string[] = [];
@@ -220,7 +221,6 @@ export function resolveSessionChildOwners(params: {
   }
   const result = owners.length ? Object.freeze(owners) : emptyChildOwners;
   sessionChildOwners.set(entry, {
-    revision: subagentRuns.revision,
     key,
     controller,
     parent,

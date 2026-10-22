@@ -30,17 +30,37 @@ function choice(overrides: Partial<ProviderAuthChoiceMetadata> = {}): ProviderAu
 describe("provider login choices", () => {
   beforeEach(() => declarations.read.mockReturnValue([]));
 
-  it("keeps undeclared credential-only support on setup and filters hidden or media choices", () => {
+  it("offers guided auth without stored credentials and filters hidden, discovery, or media choices", () => {
     const choices = [
-      choice({ docsUrl: "https://docs.example.com/authentication" }),
-      choice({ choiceId: "setup", credentialOnly: undefined }),
+      choice(),
+      choice({
+        pluginId: "meta",
+        providerId: "meta",
+        methodId: "muse-code",
+        groupId: "meta",
+        groupLabel: "Meta",
+        choiceId: "muse-code",
+        choiceLabel: "Muse Code",
+        appGuidedAuth: "device-code",
+        credentialOnly: undefined,
+      }),
+      choice({ choiceId: "discovery", appGuidedDiscovery: true }),
+      choice({
+        choiceId: "secret-setup",
+        credentialOnly: undefined,
+        appGuidedAuth: undefined,
+        appGuidedSecret: true,
+      }),
       choice({ choiceId: "hidden", assistantVisibility: "manual-only" }),
       choice({ choiceId: "undetected", assistantVisibility: "detected-only" }),
       choice({ choiceId: "media", onboardingScopes: ["image-generation"] }),
     ];
-    expect(listProviderLoginOptions(choices)).toMatchObject([
-      { id: "demo/demo-device", docsUrl: "https://docs.example.com/authentication" },
+    const options = listProviderLoginOptions(choices);
+    expect(options).toMatchObject([
+      { id: "demo/demo-device" },
+      { id: "meta/muse-code", brandId: "meta", kind: "device-code", requiresSetup: true },
     ]);
+    expect(options[0]).not.toHaveProperty("requiresSetup");
   });
 
   it("orders login methods by the provider's declared priority", () => {

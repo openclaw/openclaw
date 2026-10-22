@@ -16,6 +16,8 @@ export function toSessionBindingRecord(
   record: TelegramThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
 ): SessionBindingRecord {
+  const lifecycleDuration = (field: "idleTimeoutMs" | "maxAgeMs") =>
+    typeof record[field] === "number" ? Math.max(0, Math.floor(record[field])) : defaults[field];
   return projectThreadBindingRecord(record, {
     conversation: {
       channel: "telegram",
@@ -28,14 +30,8 @@ export function toSessionBindingRecord(
         defaultIdleTimeoutMs: defaults.idleTimeoutMs,
         defaultMaxAgeMs: defaults.maxAgeMs,
       }),
-      idleTimeoutMs:
-        typeof record.idleTimeoutMs === "number"
-          ? Math.max(0, Math.floor(record.idleTimeoutMs))
-          : defaults.idleTimeoutMs,
-      maxAgeMs:
-        typeof record.maxAgeMs === "number"
-          ? Math.max(0, Math.floor(record.maxAgeMs))
-          : defaults.maxAgeMs,
+      idleTimeoutMs: lifecycleDuration("idleTimeoutMs"),
+      maxAgeMs: lifecycleDuration("maxAgeMs"),
     },
     metadata: (lifecycleMetadata) => ({ ...lifecycleMetadata, ...record.metadata }),
   });
@@ -78,16 +74,13 @@ export function fromSessionBindingInput(params: {
     },
   };
 
-  if (typeof metadata.idleTimeoutMs === "number" && Number.isFinite(metadata.idleTimeoutMs)) {
-    record.idleTimeoutMs = Math.max(0, Math.floor(metadata.idleTimeoutMs));
-  } else if (typeof existing?.idleTimeoutMs === "number") {
-    record.idleTimeoutMs = existing.idleTimeoutMs;
-  }
-
-  if (typeof metadata.maxAgeMs === "number" && Number.isFinite(metadata.maxAgeMs)) {
-    record.maxAgeMs = Math.max(0, Math.floor(metadata.maxAgeMs));
-  } else if (typeof existing?.maxAgeMs === "number") {
-    record.maxAgeMs = existing.maxAgeMs;
+  for (const key of ["idleTimeoutMs", "maxAgeMs"] as const) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      record[key] = Math.max(0, Math.floor(value));
+    } else if (typeof existing?.[key] === "number") {
+      record[key] = existing[key];
+    }
   }
 
   return record;

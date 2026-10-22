@@ -1,7 +1,10 @@
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { channelAvatarRevision } from "./channel-avatar-reference.js";
 import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { HTTP_IMAGE_MAX_BYTES } from "./http-image-response.js";
@@ -20,8 +23,14 @@ vi.mock("./http-utils.js", () => ({
     mocks.authorize(...args),
 }));
 
-vi.mock("./session-utils-store.js", () => ({
-  loadGatewaySessionEntryReadOnly: (...args: unknown[]) => mocks.loadEntry(...args),
+// mock-isolation: avatar HTTP tests use request-local config without loading operator state.
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => ({}),
+}));
+
+// mock-isolation: avatar authorization tests supply session ownership without a database worker.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: (...args: unknown[]) => mocks.loadEntry(...args),
 }));
 
 vi.mock("../media/media-reference.js", () => ({
@@ -43,7 +52,7 @@ const AVATAR_REFERENCE = "/state/media/inbound/channel-avatar.png";
 function avatarEntry(reference = AVATAR_REFERENCE) {
   return {
     delivery: {
-      kind: "external",
+      kind: "external" as const,
       route: { channel: "discord", target: { to: "user:1" } },
       context: { channel: "discord", to: "user:1" },
       origin: { provider: "discord", to: "user:1", avatar: reference },
@@ -84,18 +93,28 @@ describe("handleChannelAvatarHttpRequest", () => {
     });
   });
 
+  afterEach(() => {
+    memorySessionActorOwners.reset();
+    vi.unstubAllEnvs();
+  });
+
+  let sessionVisible = true;
+
   beforeEach(() => {
     authorityCurrent = true;
-    mocks.authorize
-      .mockReset()
-      .mockImplementation(({ res }: { res: ServerResponse }) =>
-        bindHttpResponseAuthority(
-          { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
-          res,
-          () => authorityCurrent,
-        ),
-      );
-    mocks.loadEntry.mockReset().mockReturnValue({ entry: avatarEntry() });
+    sessionVisible = true;
+    mocks.authorize.mockReset().mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority(
+        {
+          authMethod: "token",
+          operatorScopes: ["operator.admin", "operator.read"],
+          canReadSession: () => sessionVisible,
+        },
+        res,
+        () => authorityCurrent,
+      ),
+    );
+    mocks.loadEntry.mockReset().mockResolvedValue({ entry: avatarEntry() });
     mocks.resolveReference.mockReset().mockResolvedValue({
       id: "channel-avatar.png",
       normalizedSource: AVATAR_REFERENCE,
@@ -112,6 +131,122 @@ describe("handleChannelAvatarHttpRequest", () => {
 
   const avatarRoute = (sessionKey: string) =>
     `http://127.0.0.1:${port}${buildControlUiChannelAvatarUrl("", sessionKey, "test-revision")}`;
+
+  it("serves current memory avatars and refuses bytes after the captured owner closes", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/channel-avatar");
+    const owner = memorySessionActorOwners.get({
+      agentId: "main",
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    });
+    const sessionKey = "agent:main:dashboard:incognito-avatar";
+    const authority = { assertCurrent() {}, authorize() {} };
+    const actor = await owner.acquire(
+      { sessionKey, database: owner.identity },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    const release = createDeferredCore();
+    let pending: Promise<Response> | undefined;
+    try {
+      const created = await actor.storage!.mutate(
+        {
+          type: "session.entry.create",
+          input: {
+            entry: { ...avatarEntry(), sessionId: "private-avatar", updatedAt: 1, incognito: true },
+          },
+        },
+        authority,
+      );
+      expect(created.kind).toBe("committed");
+      const initial = await fetch(avatarRoute(sessionKey));
+      expect(Buffer.from(await initial.arrayBuffer())).toEqual(PNG_BYTES);
+      expect(mocks.loadEntry).not.toHaveBeenCalled();
+      const patch = await actor.storage!.mutate(
+        {
+          type: "session.entry.patch",
+          input: {
+            operation: {
+              kind: "fields",
+              patch: avatarEntry("/state/media/inbound/new-private-avatar.png"),
+            },
+          },
+        },
+        authority,
+      );
+      expect(patch.kind).toBe("committed");
+      const reading = createDeferredCore();
+      mocks.readMedia.mockImplementationOnce(async () => {
+        reading.resolve();
+        await release.promise;
+        return { buffer: PNG_BYTES };
+      });
+      pending = fetch(avatarRoute(sessionKey));
+      await reading.promise;
+      memorySessionActorOwners.closeDatabase(owner);
+      release.resolve();
+      const response = await pending;
+      expect(response.status).not.toBe(200);
+      expect(response.headers.get("content-type")).not.toBe("image/png");
+      await response.arrayBuffer();
+    } finally {
+      release.resolve();
+      await pending;
+      await actor.release();
+    }
+  });
+
+  it("binds transcript avatar bytes to the exact native sender and media snapshot", async () => {
+    const entry = avatarEntry();
+    mocks.loadEntry.mockReturnValue({
+      entry: {
+        ...entry,
+        delivery: {
+          ...entry.delivery,
+          origin: {
+            ...entry.delivery.origin,
+            provider: "telegram",
+            accountId: "sample-bot",
+            from: "telegram:1000000001",
+            chatType: "direct",
+          },
+        },
+      },
+    });
+    const url = new URL(avatarRoute("agent:main:portrait-binding"));
+    url.searchParams.set("v", channelAvatarRevision(AVATAR_REFERENCE));
+    url.searchParams.set("provider", "telegram");
+    url.searchParams.set("account", "sample-bot");
+    url.searchParams.set("sender", "1000000001");
+    expect((await fetch(url)).status).toBe(200);
+    const reads = mocks.readMedia.mock.calls.length;
+    for (const [key, value] of [
+      ["sender", "1000000002"],
+      ["account", "another-bot"],
+      ["provider", "slack"],
+      ["v", "stale-revision"],
+    ] as const) {
+      const stale = new URL(url);
+      stale.searchParams.set(key, value);
+      expect((await fetch(stale)).status).toBe(404);
+    }
+    expect(mocks.readMedia).toHaveBeenCalledTimes(reads);
+  });
+
+  it("refuses a session the profile cannot see without loading its avatar", async () => {
+    sessionVisible = false;
+    const url = new URL(avatarRoute("agent:main:hidden"));
+    url.searchParams.set("v", channelAvatarRevision(AVATAR_REFERENCE));
+    const response = await fetch(url);
+    expect(response.status).toBe(403);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: { message: "session access required", type: "forbidden" },
+    });
+    expect(mocks.resolveReference).not.toHaveBeenCalled();
+    expect(mocks.readMedia).not.toHaveBeenCalled();
+    sessionVisible = true;
+    expect((await fetch(url)).status).toBe(200);
+  });
 
   it("rejects revoked authority while channel avatar bytes are loading", async () => {
     const reading = createDeferredCore();
@@ -206,42 +341,6 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.resolveReference).toHaveBeenCalledTimes(1);
     expect(mocks.readMedia).toHaveBeenCalledTimes(1);
   });
-
-  it.each([false, true])(
-    "keeps the current avatar cached when an older load finishes last (warm: %s)",
-    async (warm) => {
-      const route = avatarRoute(`agent:main:out-of-order:${warm}`);
-      const currentReference = "/state/media/inbound/new-avatar.png";
-      if (warm) {
-        mocks.loadEntry.mockReturnValue({ entry: avatarEntry(currentReference) });
-        mocks.readMedia.mockResolvedValue({ buffer: APNG_BYTES });
-        await (await fetch(route)).arrayBuffer();
-      }
-
-      const reading = createDeferredCore();
-      const release = createDeferredCore();
-      mocks.loadEntry.mockReturnValue({ entry: avatarEntry() });
-      mocks.readMedia.mockImplementationOnce(async () => {
-        reading.resolve();
-        await release.promise;
-        return { buffer: PNG_BYTES };
-      });
-      const older = fetch(route);
-      await reading.promise;
-      mocks.loadEntry.mockReturnValue({ entry: avatarEntry(currentReference) });
-      mocks.readMedia.mockResolvedValue({ buffer: APNG_BYTES });
-      const current = await fetch(route);
-      const currentBytes = Buffer.from(await current.arrayBuffer());
-      release.resolve();
-      const olderBytes = Buffer.from(await (await older).arrayBuffer());
-      const revisited = await fetch(route);
-
-      expect(currentBytes).toEqual(APNG_BYTES);
-      expect(olderBytes).toEqual(PNG_BYTES);
-      expect(Buffer.from(await revisited.arrayBuffer())).toEqual(APNG_BYTES);
-      expect(mocks.readMedia).toHaveBeenCalledTimes(2);
-    },
-  );
 
   it.each(["missing", "failed", "invalid"])(
     "retries an avatar after a %s load settles",

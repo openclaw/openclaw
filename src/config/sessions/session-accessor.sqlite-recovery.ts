@@ -1,7 +1,9 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   retainSessionEntryWorkerPublication,
   type SessionEntryReplacementPublication,
@@ -17,15 +19,17 @@ import {
   prepareSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 export type { RestartTombstoneRecoveryResult } from "./session-accessor.sqlite-recovery.types.js";
 
-/** Clone and publish through the canonical worker while retaining the caller's live authority. */
+const log = createSubsystemLogger("sessions/recovery");
+
+/** Publish through the canonical worker while retaining the caller's live authority. */
 export async function recoverSessionEntryFromRestartTombstone(
   params: RestartTombstoneRecoveryParams,
 ): Promise<RestartTombstoneRecoveryResult> {
-  const { commitGuard, storePath, ...values } = params;
-  const input = structuredClone(values);
+  const { commitGuard, storePath, ...input } = params;
   const scope = captureLifecycleDatabaseScope(
     await prepareSqliteScope({
       agentId: input.agentId,
@@ -62,7 +66,7 @@ export async function recoverSessionEntryFromRestartTombstone(
           (error: unknown) => ({ ok: false as const, error }),
         );
         if (admitted) {
-          await admitted.retained.settled;
+          const settlement = await admitted.retained.settled;
           const facts = admitted.admission.committed?.facts;
           let receipt = outcome.ok ? outcome.value.publication : undefined;
           if (isRecord(facts) && facts.kind === "session-entry-replacements") {
@@ -85,12 +89,26 @@ export async function recoverSessionEntryFromRestartTombstone(
             );
           }
           if (unknown) {
-            const error = new SqliteWorkerError(
+            throw wrapSqliteWorkerError(
               "Session recovery has no confirmed native completion and commit receipt",
               "outcome-unknown",
+              outcome.ok ? undefined : outcome.error,
+              settlement.kind !== "completed" ? settlement.error : undefined,
             );
-            error.cause = outcome.ok ? undefined : outcome.error;
-            throw error;
+          }
+          if (receipt) {
+            try {
+              execution.assertCurrent();
+              startSessionTranscriptIndexReconcile({
+                ...options,
+                preferredSessionId: input.successorEntry.sessionId,
+              });
+            } catch (error) {
+              // Retirement cannot replace the acknowledged recovery or its delivery error.
+              log.warn(
+                `Recovery committed; transcript repair remains pending: ${formatErrorMessage(error)}`,
+              );
+            }
           }
         }
         if (!outcome.ok) {
@@ -115,7 +133,22 @@ export async function recoverSessionEntryFromRestartTombstone(
       ) {
         throw new Error("Session recovery commit omitted its publication keys");
       }
-      publication.begin(receipt.changedKeys, []);
+      // SAFETY: The paired recovery kernel supplies this pre-COMMIT publication.
+      const planned = receipt as SessionEntryReplacementPublication;
+      publication.begin(
+        planned.changedKeys,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        new Map(
+          [...planned.current].filter(
+            ([key]) => !planned.unavailableParticipantKeys?.includes(key),
+          ),
+        ),
+        undefined,
+        planned.fullEntries,
+      );
     },
   );
 }

@@ -7,7 +7,7 @@ import type {
 import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentMessage } from "../plugin-sdk/agent-core.js";
-import { withSessionTranscriptWriteLock } from "../plugin-sdk/session-transcript-runtime.js";
+import { withSessionTranscriptWrite } from "../plugin-sdk/session-transcript-runtime.js";
 import { wrapExternalContent } from "../security/external-content.js";
 
 const SESSION_CATALOG_CONTINUATION_LIMITS = { maxItems: 200, maxBytes: 512 * 1024 };
@@ -118,6 +118,7 @@ export async function readBoundedSessionCatalogHistory(params: {
   limits: { maxItems: number; maxBytes: number };
 }): Promise<SessionCatalogHistory> {
   const items: SessionCatalogTranscriptItem[] = [];
+  const seenCursors = new Set<string>();
   let cursor: string | undefined;
   let bytes = 0;
   let totalItems = 0;
@@ -127,7 +128,8 @@ export async function readBoundedSessionCatalogHistory(params: {
     totalItems,
     complete: complete && retainedAll,
   });
-  while (items.length < params.limits.maxItems) {
+  // Bound empty and sparse pages without shrinking larger transcript imports.
+  for (let requests = 0; requests < params.limits.maxItems; requests += 1) {
     const page = await params.read({
       limit: Math.min(
         SESSION_CATALOG_HISTORY_IMPORT_PAGE_LIMIT,
@@ -165,9 +167,10 @@ export async function readBoundedSessionCatalogHistory(params: {
     if (!page.nextCursor) {
       return result(true);
     }
-    if (page.nextCursor === cursor) {
+    if (seenCursors.has(page.nextCursor)) {
       return result(false);
     }
+    seenCursors.add(page.nextCursor);
     cursor = page.nextCursor;
   }
   return result(false);
@@ -190,7 +193,7 @@ export async function importSessionCatalogHistory(params: {
     limits: SESSION_CATALOG_CONTINUATION_LIMITS,
   });
   const fallbackTimestamp = Date.now();
-  await withSessionTranscriptWriteLock(params, async (transcript) => {
+  await withSessionTranscriptWrite(params, async (transcript) => {
     for (const [index, item] of items.entries()) {
       const imported = importedSessionCatalogMessage({
         catalogId: params.catalogId,
@@ -208,7 +211,7 @@ export async function importSessionCatalogHistory(params: {
         message,
         idempotencyLookup: "scan",
         cwd: params.cwd,
-        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
+        ...(params.commitGuard ? { preparation: { source: params.commitGuard } } : {}),
       });
     }
     const notice = params.continuationNotice?.trim();
@@ -225,7 +228,7 @@ export async function importSessionCatalogHistory(params: {
         },
         idempotencyLookup: "scan",
         cwd: params.cwd,
-        ...(params.commitGuard ? { beforeCommitInTransaction: params.commitGuard } : {}),
+        ...(params.commitGuard ? { preparation: { source: params.commitGuard } } : {}),
       });
     }
   });
@@ -247,7 +250,7 @@ export async function preserveSessionCatalogHistory(params: {
   const occurrences = new Map<string, number>();
   let importedItems = 0;
   params.commitGuard?.();
-  await withSessionTranscriptWriteLock(params, async (transcript) => {
+  await withSessionTranscriptWrite(params, async (transcript) => {
     params.commitGuard?.();
     await transcript.appendMessage({
       message: {
@@ -262,8 +265,10 @@ export async function preserveSessionCatalogHistory(params: {
       idempotencyLookup: "scan",
       // Replays retain the first notice's timestamp, just as source items retain
       // their first fallback timestamp and randomized untrusted-content boundary.
-      prepareMessageAfterIdempotencyCheck: (message) => message,
-      beforeFreshMessageCommit: params.commitGuard,
+      preparation: {
+        prepareMessage: async (message) => message,
+        source: params.commitGuard,
+      },
     });
     for (const [index, item] of params.history.items.entries()) {
       const imported = importedSessionCatalogMessage({
@@ -299,24 +304,26 @@ export async function preserveSessionCatalogHistory(params: {
         // Despite its name, scan uses the transcript identity index, not a
         // transcript walk. Each source item needs one indexed lookup.
         idempotencyLookup: "scan",
-        prepareMessageAfterIdempotencyCheck: (message) => {
-          const wrapped = importedSessionCatalogMessage({
-            catalogId: params.catalogId,
-            item: {
-              ...item,
-              text: wrapExternalContent(
-                item.text?.trim() || "[Unsupported catalog transcript item]",
-                {
-                  source: "unknown",
-                  includeWarning: false,
-                },
-              ),
-            },
-            fallbackTimestamp: fallbackTimestamp + index + 1,
-          });
-          return wrapped ? { ...wrapped, idempotencyKey } : message;
+        preparation: {
+          prepareMessage: async (message) => {
+            const wrapped = importedSessionCatalogMessage({
+              catalogId: params.catalogId,
+              item: {
+                ...item,
+                text: wrapExternalContent(
+                  item.text?.trim() || "[Unsupported catalog transcript item]",
+                  {
+                    source: "unknown",
+                    includeWarning: false,
+                  },
+                ),
+              },
+              fallbackTimestamp: fallbackTimestamp + index + 1,
+            });
+            return wrapped ? { ...wrapped, idempotencyKey } : message;
+          },
+          source: params.commitGuard,
         },
-        beforeFreshMessageCommit: params.commitGuard,
       });
       if (appended?.appended) {
         importedItems += 1;

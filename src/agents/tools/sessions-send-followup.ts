@@ -1,5 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import {
@@ -9,7 +8,6 @@ import {
 import { withFollowupRequest } from "../subagents/completion/session-followup-completion.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
-import type { AgentStepSession } from "./agent-step.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -22,6 +20,7 @@ import {
   startSessionsSendAgentRun,
   trySessionsSendActiveRunDelivery,
 } from "./sessions-send-tool.delivery.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
 import { jsonResult } from "./tool-results.js";
 
 /** Reconcile only the original admission; an uncertain ACK never starts a replacement. */
@@ -56,7 +55,7 @@ export async function startSessionsSendFollowup(
         start: {
           ...start,
           result: jsonResult({
-            ...(isRecord(start.result.details) ? start.result.details : {}),
+            ...start.result.details,
             sentBeforeError: true,
           }),
         },
@@ -82,6 +81,7 @@ export async function dispatchSessionsSendFollowup(
     message: string;
     ownChild: boolean;
     nativeChild: boolean;
+    claimRequesterTurnCompletion: boolean;
     watch: boolean;
     requesterSessionKey: string;
     requesterAgentId: string;
@@ -101,7 +101,7 @@ export async function dispatchSessionsSendFollowup(
     : undefined;
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
   const requesterTurn =
-    params.allowActiveRunQueueDelivery &&
+    options.claimRequesterTurnCompletion &&
     !params.expectedSessionId &&
     options.nativeChild &&
     !isCronRunSessionKey(options.requesterSessionKey) &&
@@ -300,6 +300,16 @@ export async function dispatchSessionsSendFollowup(
     start,
     completion,
     registryCompletion: Boolean(start.ok && completionTurn),
-    watchField: options.watch ? { watched } : {},
+    watchField: options.watch
+      ? {
+          watched,
+          ...(!watched && start.ok
+            ? {
+                watchError:
+                  "The send was accepted, but no proactive state watch was registered. Watches require distinct, valid agent-qualified session keys and current session authority. Use owner-scoped session_status changesSince to reconcile state.",
+              }
+            : {}),
+        }
+      : {},
   };
 }

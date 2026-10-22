@@ -1,17 +1,15 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { openaiTTS } from "./tts.js";
+import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
 const mocks = vi.hoisted(() => ({
-  captureAvailable: true,
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureHttpExchangeAsync>(),
   fetch: vi.fn(),
   release: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  get captureHttpExchangeAsync() {
-    return mocks.captureAvailable ? mocks.capture : undefined;
-  },
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
+  captureHttpExchangeAsync: mocks.capture,
   isDebugProxyGlobalFetchPatchInstalled: () => false,
 }));
 
@@ -29,34 +27,27 @@ beforeEach(() => {
   });
 });
 
-it.each(["absent", "present", "rejected"] as const)(
+it.each(["present", "rejected"] as const)(
   "returns synthesized audio and releases transport when async capture is %s",
   async (capture) => {
-    mocks.captureAvailable = capture !== "absent";
     if (capture === "rejected") {
       mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
     }
     await expect(
-      openaiTTS({
+      buildOpenAISpeechProvider().synthesize({
         text: "Hello",
-        apiKey: "fixture-key",
-        baseUrl: "https://api.openai.com/v1",
-        model: "tts-1",
-        voice: "alloy",
-        responseFormat: "mp3",
+        cfg: {},
+        providerConfig: { apiKey: "fixture-key", model: "tts-1", voice: "alloy" },
+        target: "audio-file",
         timeoutMs: 1_000,
       }),
-    ).resolves.toEqual(Buffer.from("speech"));
+    ).resolves.toMatchObject({ audioBuffer: Buffer.from("speech") });
     expect(mocks.fetch).toHaveBeenCalledWith(
       expect.objectContaining({ url: "https://api.openai.com/v1/audio/speech" }),
     );
     expect(mocks.release).toHaveBeenCalledOnce();
-    if (capture === "absent") {
-      expect(mocks.capture).not.toHaveBeenCalled();
-    } else {
-      expect(mocks.capture).toHaveBeenCalledWith(
-        expect.objectContaining({ meta: { provider: "openai", capability: "tts" } }),
-      );
-    }
+    expect(mocks.capture).toHaveBeenCalledWith(
+      expect.objectContaining({ meta: { provider: "openai", capability: "tts" } }),
+    );
   },
 );

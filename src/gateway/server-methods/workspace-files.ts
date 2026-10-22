@@ -27,10 +27,11 @@ import {
   sortWorkspaceEntries,
   statWorkspacePath,
   toUpdatedAtMs,
-  type WorkspaceDirEntry,
+  toWorkspaceBrowserEntry,
   type WorkspaceRoot,
   updateWorkspaceFile,
   type WorkspaceFileUpdateResult,
+  workspaceRelativePath,
 } from "./workspace-fs.js";
 
 export type TouchedFile = { path: string; kind: "modified" | "read" };
@@ -50,9 +51,8 @@ const DETECTED_TEXT_MIME_TYPES = new Set([
   "application/x-ms-regedit",
   "model/stl",
 ]);
-const SEARCH_SKIP_DIRS = new Set([
-  ".git",
-  ".hg",
+const SEARCH_IGNORED_DIRS = new Set([".git", ".hg"]);
+const SEARCH_INCOMPLETE_DIRS = new Set([
   ".next",
   ".turbo",
   ".yarn",
@@ -60,10 +60,6 @@ const SEARCH_SKIP_DIRS = new Set([
   "dist",
   "node_modules",
 ]);
-
-function toDisplayPath(root: string, resolved: string): string {
-  return path.relative(root, resolved).split(path.sep).join("/");
-}
 
 function resolveTouchedFilePath(params: {
   root: string | undefined;
@@ -96,19 +92,6 @@ export function resolveFileRoot(params: {
   return isPathInside(resolvedRoot, resolvedCwd) ? params.spawnedCwd : params.root;
 }
 
-function mergeRelevance(
-  current: SessionFileRelevance | undefined,
-  next: SessionFileRelevance | undefined,
-): SessionFileRelevance | undefined {
-  if (!current) {
-    return next;
-  }
-  if (!next || current === next) {
-    return current;
-  }
-  return "mixed";
-}
-
 function buildSessionRelevanceMap(
   files: readonly TouchedFile[],
   root: string | undefined,
@@ -126,27 +109,9 @@ function buildSessionRelevanceMap(
     if (!resolved) {
       continue;
     }
-    relevance.set(toDisplayPath(root, resolved), file.kind);
+    relevance.set(workspaceRelativePath(root, resolved), file.kind);
   }
   return relevance;
-}
-
-function relevanceForBrowserPath(
-  browserPath: string,
-  kind: "file" | "directory",
-  relevance: ReadonlyMap<string, SessionFileRelevance>,
-): SessionFileRelevance | undefined {
-  if (kind === "file") {
-    return relevance.get(browserPath);
-  }
-  const prefix = browserPath ? `${browserPath}/` : "";
-  let aggregate: SessionFileRelevance | undefined;
-  for (const [filePath, sessionKind] of relevance) {
-    if (filePath.startsWith(prefix) && filePath !== browserPath) {
-      aggregate = mergeRelevance(aggregate, sessionKind);
-    }
-  }
-  return aggregate;
 }
 
 function displayNameForPath(filePath: string): string {
@@ -182,21 +147,6 @@ export async function populateSessionFilePreview(
     // The hash doubles as the sessions.files.set CAS token. Binary files
     // never receive one, so replacement characters cannot be saved back.
     entry.hash = sha256Hex(buffer);
-    return;
-  }
-  entry.previewKind = "unsupported";
-  if (mimeType) {
-    entry.mimeType = mimeType;
-  }
-}
-
-function applyOversizedFileMetadata(
-  entry: SessionFileEntry,
-  buffer: Buffer,
-  mimeType?: string,
-): void {
-  const prefixIsText = decodeUtf8Strict(buffer) !== undefined;
-  if ((!mimeType && prefixIsText) || (mimeType && isDetectedTextMime(mimeType) && prefixIsText)) {
     return;
   }
   entry.previewKind = "unsupported";
@@ -268,7 +218,14 @@ async function toSessionFileEntry(
       delete entry.hash;
     }
   } else {
-    applyOversizedFileMetadata(entry, read.buffer, await detectMime({ buffer: read.buffer }));
+    const mimeType = await detectMime({ buffer: read.buffer });
+    const prefixIsText = decodeUtf8Strict(read.buffer) !== undefined;
+    if (!prefixIsText || (mimeType && !isDetectedTextMime(mimeType))) {
+      entry.previewKind = "unsupported";
+      if (mimeType) {
+        entry.mimeType = mimeType;
+      }
+    }
   }
   return entry;
 }
@@ -284,136 +241,6 @@ function resolveSessionFileCandidates(params: {
   ].filter((candidate, index, all): candidate is string => {
     return candidate !== undefined && all.indexOf(candidate) === index;
   });
-}
-
-function toBrowserEntry(
-  browserPath: string,
-  dirent: WorkspaceDirEntry,
-  relevance: ReadonlyMap<string, SessionFileRelevance>,
-): SessionFileBrowserEntry | undefined {
-  const kind = dirent.isFile ? "file" : dirent.isDirectory ? "directory" : null;
-  if (!kind) {
-    return undefined;
-  }
-  const sessionKind = relevanceForBrowserPath(browserPath, kind, relevance);
-  return {
-    path: browserPath,
-    name: dirent.name,
-    kind,
-    ...(kind === "file" ? { size: dirent.size } : {}),
-    updatedAtMs: toUpdatedAtMs(dirent.mtimeMs),
-    ...(sessionKind ? { sessionKind } : {}),
-  };
-}
-
-async function searchBrowserEntries(params: {
-  assertCurrent?: () => void;
-  root: string | WorkspaceRoot;
-  query: string;
-  relevance: ReadonlyMap<string, SessionFileRelevance>;
-}): Promise<{ entries: SessionFileBrowserEntry[]; truncated?: true }> {
-  const entries: SessionFileBrowserEntry[] = [];
-  const query = params.query.toLowerCase();
-  let visitedEntries = 0;
-  let truncated = false;
-  const shouldStop = (): boolean => {
-    if (entries.length >= MAX_SEARCH_ENTRIES || visitedEntries >= MAX_SEARCH_VISITED_ENTRIES) {
-      truncated = true;
-      return true;
-    }
-    return false;
-  };
-  const visit = async (dir: string): Promise<void> => {
-    if (shouldStop()) {
-      return;
-    }
-    const dirents = await listWorkspacePath(params.root, dir, params.assertCurrent);
-    if (!dirents) {
-      return;
-    }
-    for (const dirent of sortDirents(dirents)) {
-      if (shouldStop()) {
-        return;
-      }
-      visitedEntries += 1;
-      const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-      if (browserPath.toLowerCase().includes(query)) {
-        const entry = toBrowserEntry(browserPath, dirent, params.relevance);
-        if (entry) {
-          entries.push(entry);
-        }
-      }
-      if (dirent.isDirectory && !SEARCH_SKIP_DIRS.has(dirent.name)) {
-        await visit(browserPath);
-      }
-    }
-  };
-  await visit("");
-  return { entries: sortWorkspaceEntries(entries), ...(truncated ? { truncated } : {}) };
-}
-
-async function buildBrowserResult(params: {
-  assertCurrent?: () => void;
-  root: string | undefined;
-  workspaceRoot?: WorkspaceRoot;
-  fileRoot: string | undefined;
-  path?: string;
-  search?: string;
-  files: readonly TouchedFile[];
-}): Promise<SessionFileBrowserResult | undefined> {
-  if (!params.root) {
-    return undefined;
-  }
-  const search = normalizeOptionalString(params.search);
-  const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
-  if (search) {
-    const result = await searchBrowserEntries({
-      root: params.workspaceRoot ?? params.root,
-      query: search,
-      relevance,
-      assertCurrent: params.assertCurrent,
-    });
-    return {
-      path: "",
-      search,
-      ...result,
-    };
-  }
-  const browserPath = normalizeRelativePath(params.path);
-  const resolved = resolveWorkspacePath(params.root, browserPath);
-  if (!resolved) {
-    return undefined;
-  }
-  const stat = await statWorkspacePath(
-    params.workspaceRoot ?? params.root,
-    browserPath,
-    params.assertCurrent,
-  );
-  if (!stat?.isDirectory) {
-    return undefined;
-  }
-  const dirents = await listWorkspacePath(
-    params.workspaceRoot ?? params.root,
-    browserPath,
-    params.assertCurrent,
-  );
-  if (!dirents) {
-    return undefined;
-  }
-  const entries = sortDirents(dirents)
-    .slice(0, MAX_BROWSER_ENTRIES + 1)
-    .map((dirent) => {
-      const entryPath = browserPath ? `${browserPath}/${dirent.name}` : dirent.name;
-      return toBrowserEntry(entryPath, dirent, relevance);
-    })
-    .filter((entry): entry is SessionFileBrowserEntry => Boolean(entry));
-  const parent = path.dirname(browserPath);
-  return {
-    path: browserPath,
-    ...(browserPath ? { parentPath: parent === "." ? "" : parent } : {}),
-    entries: sortWorkspaceEntries(entries.slice(0, MAX_BROWSER_ENTRIES)),
-    ...(entries.length > MAX_BROWSER_ENTRIES ? { truncated: true } : {}),
-  };
 }
 
 export async function listSessionWorkspaceFiles(
@@ -457,15 +284,94 @@ export async function listSessionWorkspaceFiles(
       }),
     ),
   );
-  const browser = await buildBrowserResult({
-    root,
-    workspaceRoot,
-    fileRoot: params.fileRoot,
-    path: params.path,
-    search: params.search,
-    files: workspaceFiles,
-    assertCurrent: params.assertCurrent,
-  });
+  const { assertCurrent, fileRoot, path: requestedPath, search: requestedSearch } = params;
+  const browser = await (async (): Promise<SessionFileBrowserResult | undefined> => {
+    if (!root) {
+      return undefined;
+    }
+    const search = normalizeOptionalString(requestedSearch);
+    const relevance = buildSessionRelevanceMap(workspaceFiles, root, fileRoot);
+    const readRoot = workspaceRoot ?? root;
+    if (search) {
+      const entries: SessionFileBrowserEntry[] = [];
+      const query = search.toLowerCase();
+      let visitedEntries = 0;
+      let truncated = false;
+      const shouldStop = (): boolean => {
+        if (entries.length >= MAX_SEARCH_ENTRIES || visitedEntries >= MAX_SEARCH_VISITED_ENTRIES) {
+          truncated = true;
+          return true;
+        }
+        return false;
+      };
+      const visit = async (dir: string): Promise<void> => {
+        if (shouldStop()) {
+          return;
+        }
+        const dirents = await listWorkspacePath(readRoot, dir, assertCurrent);
+        if (!dirents) {
+          return;
+        }
+        for (const dirent of sortDirents(dirents)) {
+          if (shouldStop()) {
+            return;
+          }
+          visitedEntries += 1;
+          const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
+          if (browserPath.toLowerCase().includes(query)) {
+            const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
+            if (entry) {
+              entries.push(entry);
+            }
+          }
+          if (dirent.isDirectory) {
+            if (SEARCH_INCOMPLETE_DIRS.has(dirent.name)) {
+              // The public result only has a boolean completeness signal. A skipped
+              // directory can contain another filename match, so searches that saw
+              // one must not be presented as workspace-wide unique.
+              truncated = true;
+            } else if (!SEARCH_IGNORED_DIRS.has(dirent.name)) {
+              await visit(browserPath);
+            }
+          }
+        }
+      };
+      await visit("");
+      return {
+        path: "",
+        search,
+        entries: sortWorkspaceEntries(entries),
+        ...(truncated ? { truncated } : {}),
+      };
+    }
+    const browserPath = normalizeRelativePath(requestedPath);
+    const resolved = resolveWorkspacePath(root, browserPath);
+    if (!resolved) {
+      return undefined;
+    }
+    const stat = await statWorkspacePath(readRoot, browserPath, assertCurrent);
+    if (!stat?.isDirectory) {
+      return undefined;
+    }
+    const dirents = await listWorkspacePath(readRoot, browserPath, assertCurrent);
+    if (!dirents) {
+      return undefined;
+    }
+    const entries = sortDirents(dirents)
+      .slice(0, MAX_BROWSER_ENTRIES + 1)
+      .map((dirent) => {
+        const entryPath = browserPath ? `${browserPath}/${dirent.name}` : dirent.name;
+        return toWorkspaceBrowserEntry(entryPath, dirent, relevance);
+      })
+      .filter((entry): entry is SessionFileBrowserEntry => Boolean(entry));
+    const parent = path.dirname(browserPath);
+    return {
+      path: browserPath,
+      ...(browserPath ? { parentPath: parent === "." ? "" : parent } : {}),
+      entries: sortWorkspaceEntries(entries.slice(0, MAX_BROWSER_ENTRIES)),
+      ...(entries.length > MAX_BROWSER_ENTRIES ? { truncated: true } : {}),
+    };
+  })();
   return {
     ...(root ? { root } : {}),
     ...(gitCheckout === undefined ? {} : { gitCheckout }),
@@ -475,66 +381,67 @@ export async function listSessionWorkspaceFiles(
 }
 
 export async function getSessionWorkspaceFile(
-  params: LoadedSessionFiles & { path: string; assertCurrent?: () => void },
+  params: LoadedSessionFiles & {
+    path: string;
+    assertCurrent?: () => void;
+    includeContent?: boolean;
+  },
 ): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
   let outsideBoundary = false;
   const options = {
-    includeContent: true,
+    includeContent: params.includeContent !== false,
     assertCurrent: params.assertCurrent,
     authorizeHostRead: params.authorizeHostRead,
     onOutsideBoundary: () => {
       outsideBoundary = true;
     },
   };
-  const exactTouched = params.files.find((file) => file.path === params.path);
-  if (exactTouched) {
-    const file = await toSessionFileEntry(exactTouched, params.root, params.fileRoot, options);
-    return {
-      ...(params.root ? { root: params.root } : {}),
-      file,
-      ...(outsideBoundary ? { reason: "outside_session_boundary" as const } : {}),
-    };
-  }
-  if (!params.root) {
-    return {};
-  }
-  // Any in-root file is previewable; fs-safe root enforces containment, symlink/hardlink
-  // rejection, and the 256 KB cap.
-  const candidates = resolveSessionFileCandidates({
-    root: params.root,
-    fileRoot: params.fileRoot,
-    filePath: params.path,
-  });
-  if (
-    candidates.length === 0 ||
-    !resolveTouchedFilePath({ root: params.root, fileRoot: params.fileRoot, filePath: params.path })
-  ) {
-    const file = await toSessionFileEntry(
-      { path: params.path, kind: "read" },
-      params.root,
-      params.fileRoot,
-      options,
-    );
-    return {
-      root: params.root,
-      file,
-      ...(outsideBoundary ? { reason: "outside_session_boundary" as const } : {}),
-    };
-  }
-  const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
-  for (const candidate of candidates) {
-    const browserPath = toDisplayPath(params.root, candidate);
-    const sessionKind = relevance.get(browserPath);
-    const touched: TouchedFile = {
-      path: browserPath,
-      kind: sessionKind === "modified" ? "modified" : "read",
-    };
-    const file = await toSessionFileEntry(touched, params.root, params.root, options);
-    if (!file.missing) {
-      return { root: params.root, file };
+  let touched = params.files.find((file) => file.path === params.path);
+  if (!touched) {
+    if (!params.root) {
+      return {};
     }
+    // Any in-root file is previewable; fs-safe enforces containment and read bounds.
+    const candidates = resolveSessionFileCandidates({
+      root: params.root,
+      fileRoot: params.fileRoot,
+      filePath: params.path,
+    });
+    if (
+      candidates.length > 0 &&
+      resolveTouchedFilePath({
+        root: params.root,
+        fileRoot: params.fileRoot,
+        filePath: params.path,
+      })
+    ) {
+      const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
+      for (const candidate of candidates) {
+        const browserPath = workspaceRelativePath(params.root, candidate);
+        const sessionKind = relevance.get(browserPath);
+        const file = await toSessionFileEntry(
+          {
+            path: browserPath,
+            kind: sessionKind === "modified" ? "modified" : "read",
+          },
+          params.root,
+          params.root,
+          options,
+        );
+        if (!file.missing) {
+          return { root: params.root, file };
+        }
+      }
+      return { root: params.root };
+    }
+    touched = { path: params.path, kind: "read" };
   }
-  return { root: params.root };
+  const file = await toSessionFileEntry(touched, params.root, params.fileRoot, options);
+  return {
+    ...(params.root ? { root: params.root } : {}),
+    file,
+    ...(outsideBoundary ? { reason: "outside_session_boundary" as const } : {}),
+  };
 }
 
 export type SessionWorkspaceWriteResult =
@@ -573,7 +480,7 @@ export async function setSessionWorkspaceFile(params: {
   });
   let browserPath: string | undefined;
   for (const candidate of candidates) {
-    const candidatePath = toDisplayPath(params.root, candidate);
+    const candidatePath = workspaceRelativePath(params.root, candidate);
     const stat = await statWorkspacePath(params.root, candidatePath);
     if (stat?.isFile) {
       browserPath = candidatePath;

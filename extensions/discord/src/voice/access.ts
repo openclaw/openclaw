@@ -71,14 +71,8 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
   });
   const channelConfig = params.channelId
     ? resolveDiscordChannelConfigWithFallback({
+        ...params,
         guildInfo,
-        channelId: params.channelId,
-        channelName: params.channelName,
-        channelSlug: params.channelSlug,
-        parentId: params.parentId,
-        parentName: params.parentName,
-        parentSlug: params.parentSlug,
-        scope: params.scope,
       })
     : null;
 
@@ -87,15 +81,9 @@ export async function authorizeDiscordVoiceIngress(initialParams: {
   }
 
   const channelAllowlistConfigured = hasConfiguredDiscordChannels(guildInfo?.channels);
-  if (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) {
-    return {
-      ok: false,
-      message: `${params.channelLabel ?? "This channel"} is not allowlisted for voice commands.`,
-    };
-  }
-
   const channelAllowed = channelConfig ? channelConfig.allowed : !channelAllowlistConfigured;
   if (
+    (!params.channelId && groupPolicy === "allowlist" && channelAllowlistConfigured) ||
     !isDiscordGroupAllowedByPolicy({
       groupPolicy,
       guildAllowlisted: Boolean(guildInfo),

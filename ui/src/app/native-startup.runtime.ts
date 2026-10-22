@@ -33,38 +33,34 @@ export async function startNativeCapabilities(
     deviceSettings: null,
     notifications: null,
   };
+  const startCapability = <K extends keyof NativeCapabilities>(
+    key: K,
+    create: () => NativeCapabilities[K],
+  ) => {
+    if (lifecycle.signal.aborted) {
+      return undefined;
+    }
+    capabilities[key] = create();
+    update(capabilities);
+    return () => capabilities[key]?.dispose();
+  };
   const steps: StartupStep[] = [];
   if (nativeEmbedHost()?.surface === "conversation") {
     steps.push(async () => {
       const { createNativeConversationBridge } = await import("./native-conversation-bridge.ts");
-      if (!lifecycle.signal.aborted) {
-        capabilities.conversation = createNativeConversationBridge(context);
-        update(capabilities);
-        return () => capabilities.conversation?.dispose();
-      }
-      return undefined;
+      return startCapability("conversation", () => createNativeConversationBridge(context));
     });
   }
   if (typeof handlers?.openclawDeviceSettings?.postMessage === "function") {
     steps.push(async () => {
       const { createNativeDeviceSettingsCapability } = await import("./native-device-settings.ts");
-      if (!lifecycle.signal.aborted) {
-        capabilities.deviceSettings = createNativeDeviceSettingsCapability();
-        update(capabilities);
-        return () => capabilities.deviceSettings?.dispose();
-      }
-      return undefined;
+      return startCapability("deviceSettings", createNativeDeviceSettingsCapability);
     });
   }
   if (typeof handlers?.openclawNotifications?.postMessage === "function") {
     steps.push(async () => {
       const { createNativeNotificationsCapability } = await import("./native-notifications.ts");
-      if (!lifecycle.signal.aborted) {
-        capabilities.notifications = createNativeNotificationsCapability();
-        update(capabilities);
-        return () => capabilities.notifications?.dispose();
-      }
-      return undefined;
+      return startCapability("notifications", createNativeNotificationsCapability);
     });
   }
   if (typeof handlers?.openclawGateways?.postMessage === "function") {

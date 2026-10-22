@@ -26,7 +26,7 @@ export type PluginInstallRuntimeCommit = {
 } & ({ operation: "install"; sourceDigests: Record<string, string> } | { operation: "uninstall" });
 
 export type PluginInstallRuntimeDeferral = {
-  record(commit: PluginInstallRuntimeCommit, assertSourceCurrent?: () => void): void;
+  record(commit: PluginInstallRuntimeCommit): void;
   deferCleanup(cleanup: PluginSourceCleanup, sourcePath: string): void;
 };
 
@@ -48,6 +48,7 @@ export type PluginInstallBatchTarget = {
 };
 export type PluginInstallBatchReload = (
   plugins: readonly PluginInstallBatchTarget[],
+  options?: { commitGuard?: () => void },
 ) => Promise<PluginRuntimeApplication>;
 
 function indexFromRow(value: string | undefined) {
@@ -69,9 +70,7 @@ export class PluginInstallRuntimeBatch {
   }> = [];
   private targets: PluginInstallBatchTarget[] = [];
   private readonly retained = new Set<string>();
-  private readonly sourceChecks = new Map<string, () => void>();
   private databasePath?: string;
-  private phase: "collecting" | "preparing" | "prepared" | "applying" | "closed" = "collecting";
 
   constructor(
     private readonly options: Pick<OpenClawStateDatabaseOptions, "env" | "path" | "database">,
@@ -83,47 +82,25 @@ export class PluginInstallRuntimeBatch {
   }
 
   close(): void {
-    this.phase = "closed";
     for (const entry of this.installs.splice(0)) {
       entry.commit = undefined;
       entry.cleanups.length = 0;
     }
     this.targets = [];
     this.retained.clear();
-    this.sourceChecks.clear();
-  }
-
-  private assertOpen() {
-    if (this.phase === "closed") {
-      throw new Error("Plugin installation batch is closed");
-    }
-  }
-
-  private assertCollecting() {
-    if (this.phase !== "collecting") {
-      throw new Error("Plugin installation batch no longer accepts mutations");
-    }
   }
 
   install(): PluginInstallRuntimeDeferral {
-    this.assertCollecting();
     const entry: (typeof this.installs)[number] = { cleanups: [] };
     this.installs.push(entry);
     return {
-      record: (commit, assertSourceCurrent) => {
-        this.assertCollecting();
+      record: (commit) => {
         if (entry.commit) {
           throw new Error("Plugin install already committed in this batch");
         }
         entry.commit = commit;
-        if (assertSourceCurrent) {
-          this.sourceChecks.set(commit.pluginId, assertSourceCurrent);
-        } else {
-          this.sourceChecks.delete(commit.pluginId);
-        }
       },
       deferCleanup: (cleanup, sourcePath) => {
-        this.assertCollecting();
         if (!entry.commit) {
           throw new Error("Cannot transfer cleanup before plugin installation commits");
         }
@@ -161,26 +138,20 @@ export class PluginInstallRuntimeBatch {
   }
 
   retain(pluginId: string): void {
-    this.assertCollecting();
     this.retained.add(pluginId);
   }
 
   /** Called before the original batch lease exits, after its compensation has settled. */
   async prepare(lease: PluginLifecycleLeaseContext): Promise<void> {
-    this.assertCollecting();
-    this.phase = "preparing";
     const databasePath = lease.databasePath;
     lease.assertOwned();
-    this.assertOpen();
     this.databasePath = databasePath;
     if (!this.hasCommitted && this.retained.size === 0) {
-      this.phase = "prepared";
       return;
     }
     // Settlement needs the final persisted row, even if this lease cached an earlier index.
     const row = await readPluginMetadataStateRow("installed-index", { path: databasePath });
     lease.assertOwned();
-    this.assertOpen();
     const index = indexFromRow(row?.value_json);
     const current = index?.installRecords ?? {};
     const targets = new Map<string, PluginInstallBatchTarget>();
@@ -202,7 +173,6 @@ export class PluginInstallRuntimeBatch {
             entryFile: entry.source === entry.manifestPath ? entry.source : undefined,
           })),
       );
-      this.sourceChecks.set(pluginId, source.assertSourceCurrent);
       targets.set(pluginId, {
         pluginId,
         installHash: hashStableJson(current[pluginId]),
@@ -239,17 +209,14 @@ export class PluginInstallRuntimeBatch {
       targets.set(pluginId, { pluginId, installHash, sourceDigests: commit.sourceDigests });
     }
     lease.assertOwned();
-    this.assertOpen();
     this.targets = [...targets.values()].toSorted((a, b) => a.pluginId.localeCompare(b.pluginId));
-    this.phase = "prepared";
   }
 
   /** The caller must leave every batch lease before invoking the captured runtime client. */
   async finish(warn: (message: string) => void): Promise<PluginRuntimeApplication | undefined> {
-    if (this.phase !== "prepared" || !this.databasePath || hasPluginLifecycleLease()) {
+    if (!this.databasePath || hasPluginLifecycleLease()) {
       throw new Error("Plugin batch was not prepared or its handoff already started");
     }
-    this.phase = "applying";
     const targets = this.targets;
     let application: PluginRuntimeApplication | undefined;
     try {
@@ -257,13 +224,11 @@ export class PluginInstallRuntimeBatch {
         return undefined;
       }
       application = await this.reload(targets);
-      this.assertOpen();
       for (const warning of application.warnings ?? []) {
         warn(warning);
       }
       await withPluginLifecycleLease(this.options, async (lease) => {
         const assertOwned = () => {
-          this.assertOpen();
           lease.assertOwned();
           if (lease.databasePath !== this.databasePath) {
             throw new Error("Plugin cleanup belongs to a different state database");
@@ -289,7 +254,6 @@ export class PluginInstallRuntimeBatch {
         const assertCurrent = () => {
           assertOwned();
           for (const target of targets) {
-            this.sourceChecks.get(target.pluginId)?.();
             if (
               !records[target.pluginId] ||
               hashStableJson(records[target.pluginId]) !== target.installHash

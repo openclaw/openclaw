@@ -1,4 +1,3 @@
-// Line helper module supports webhook utils behavior.
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 
 /** Route the gateway serves when an account configures no `webhookPath`. */

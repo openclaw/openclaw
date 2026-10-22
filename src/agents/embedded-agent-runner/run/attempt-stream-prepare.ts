@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
+import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { captureAgentRunLifecycleGeneration } from "../../../infra/agent-events.js";
 import { validateAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
@@ -14,6 +14,9 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { getModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
+import type { ReplyToolAuthorityPreparation } from "../../../sessions/session-controller.contracts.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import { cancelPendingAgentQuestionForSession } from "../../harness/gateway-question.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "../../harness/lifecycle-hook-helpers.js";
@@ -29,16 +32,15 @@ import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import { isRunnerAbortError } from "../abort.js";
 import { log } from "../logger.js";
 import {
-  ACTIVE_EMBEDDED_RUN_REGISTRATIONS,
-  ACTIVE_EMBEDDED_RUNS,
+  getEmbeddedRunAttachment,
+  isCurrentEmbeddedRunAttachment,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
-  setActiveEmbeddedRunLifecycleGeneration,
 } from "../run-state.js";
 import {
-  clearActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
-  setActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
 } from "../runs.js";
 import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import {
@@ -107,6 +109,7 @@ type PrepareEmbeddedAttemptStreamInput = {
   runAbortController: AbortController;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
   markExternalAbort: () => void;
+  recoverStalledModelCall?: () => boolean;
   getRunState: () => StreamRunState;
   onBlockReply: EmbeddedRunAttemptParams["onBlockReply"];
   onBlockReplyFlush: EmbeddedRunAttemptParams["onBlockReplyFlush"];
@@ -130,6 +133,8 @@ function prepareStream(
 ) {
   const { attempt, agentSession } = input;
   const { activeSession, hookRunner } = agentSession;
+  const recoverStalledModelCall = input.recoverStalledModelCall;
+  let stalledModelRecoveryAccepted = false;
   let beforeAgentFinalizeRevisionReason: string | undefined;
   let beforeAgentFinalizeRevisionEntryId: string | undefined;
   let activeQueueAdmissions = 0;
@@ -141,7 +146,7 @@ function prepareStream(
   const completionCheck =
     attempt.operation !== "settled-tool-finalization" &&
     !attempt.silentExpected &&
-    resolveReplyExpectation(attempt) === "required"
+    resolveReplyExpectation(attempt) !== "optional"
       ? attempt.completionCheck
       : undefined;
   const onBeforeTerminalDelivery: Parameters<
@@ -179,7 +184,9 @@ function prepareStream(
             state.timedOut ||
             hasCompletedClientToolCall ||
             state.yieldDetected ||
-            (attempt.silentExpected && isSilentReplyText(lastAssistantMessage, SILENT_REPLY_TOKEN))
+            (resolveReplyExpectation(attempt) !== "result-required" &&
+              prepareAgentRunTerminalReply({ rawText: lastAssistantMessage }).terminalReply
+                .disposition === "silent")
           ) {
             return;
           }
@@ -241,7 +248,7 @@ function prepareStream(
                       input.runAbortController.signal.aborted ||
                       input.getRunState().aborted ||
                       admission.closed ||
-                      ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) !== queueHandle
+                      !isCurrentRegistration()
                     ) {
                       throw new Error("Nested tool finalization is no longer current");
                     }
@@ -321,48 +328,37 @@ function prepareStream(
         }
       : undefined;
 
+  const clearActiveRun = () =>
+    detachActiveEmbeddedRun(
+      attempt.sessionId,
+      queueHandle,
+      attempt.sessionKey,
+      attempt.sessionFile,
+      undefined,
+      registration,
+    );
   let toolMetasForTerminal: readonly AsyncStartedToolMeta[] = [];
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
   let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
   const streamSubscription = subscribeEmbeddedAgentSession({
+    // Keep the transcript session key; the sandbox key is only authority context.
+    ...attempt,
+    ...agentSession,
     session: activeSession,
     onModelUsage: input.onModelUsage,
-    runId: attempt.runId,
-    lifecycleGeneration: attempt.lifecycleGeneration,
     messageChannel: input.runtimeChannel,
-    initialReplayState: attempt.initialReplayState,
-    assistantErrorTranscript: attempt.assistantErrorTranscript,
     hookRunner: getGlobalHookRunner() ?? undefined,
-    verboseLevel: attempt.verboseLevel,
     reasoningMode: attempt.reasoningLevel ?? "off",
     thinkingLevel: attempt.thinkLevel,
-    toolResultFormat: attempt.toolResultFormat,
-    toolProgressDetail: attempt.toolProgressDetail,
-    shouldEmitToolResult: attempt.shouldEmitToolResult,
-    shouldEmitToolOutput: attempt.shouldEmitToolOutput,
-    sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     hasDeliveredMessageToolOnlySourceReply: agentSession.hasDeliveredSourceReply,
     onDeliveredMessageToolOnlySourceReply: agentSession.markSourceReplyDelivered,
-    onAgentToolResult: attempt.onAgentToolResult,
-    observeToolTerminal: attempt.observeToolTerminal,
     trajectoryRecorder: input.trajectoryRecorder,
-    onToolResult: attempt.onToolResult,
-    onReasoningStream: attempt.onReasoningStream,
-    streamReasoningInNonStreamModes: attempt.streamReasoningInNonStreamModes,
-    onReasoningEnd: attempt.onReasoningEnd,
     onBlockReply: input.onBlockReply,
     onBlockReplyFlush: input.onBlockReplyFlush,
     onBeforeTerminalDelivery,
     deferTerminalDelivery: shouldRunBeforeAgentFinalize === true,
-    blockReplyBreak: attempt.blockReplyBreak,
-    blockReplyChunking: attempt.blockReplyChunking,
-    onPartialReply: attempt.onPartialReply,
-    onAssistantMessageStart: attempt.onAssistantMessageStart,
-    onExecutionPhase: attempt.onExecutionPhase,
-    onAgentEvent: attempt.onAgentEvent,
     terminalLifecyclePhase: attempt.deferTerminalLifecycle ? "finishing" : "end",
-    onToolStreamBoundary: attempt.onToolStreamBoundary,
     isTerminalAborted: () => input.getRunState().aborted,
     resolveTerminalStopReason: () =>
       isAgentRunRestartAbortReason(input.runAbortController.signal.reason)
@@ -389,41 +385,12 @@ function prepareStream(
         return;
       }
       // Clear active-run state before terminal events and post-completion cleanup.
-      clearActiveEmbeddedRun(
-        attempt.sessionId,
-        queueHandle,
-        attempt.sessionKey,
-        attempt.sessionFile,
-      );
+      clearActiveRun();
     },
-    enforceFinalTag: attempt.enforceFinalTag,
-    silentExpected: attempt.silentExpected,
-    suppressLiveStreamOutput: attempt.suppressLiveStreamOutput,
-    config: attempt.config,
     providerOwner: getModelProviderRuntimePluginHandle(attempt.model)?.plugin,
-    compactionCountOwner: attempt.compactionCountOwner,
-    onContextAccountingEvent: attempt.onContextAccountingEvent,
-    sessionPersistence: attempt.sessionPersistence,
-    // Live events belong to the transcript session. The sandbox key is only
-    // authority context and may intentionally point at a visible parent.
-    sessionKey: attempt.sessionKey,
-    currentChannelId: attempt.currentChannelId,
-    currentMessagingTarget: attempt.currentMessagingTarget,
     currentAccountId: attempt.agentAccountId,
     currentThreadId: attempt.currentThreadTs,
-    currentMessageId: attempt.currentMessageId,
-    replyToMode: attempt.replyToMode,
-    hasRepliedRef: attempt.hasRepliedRef,
-    sessionId: attempt.sessionId,
     agentId: input.hookAgentId,
-    builtinToolNames: agentSession.builtinToolNames,
-    coreBuiltinToolNames: agentSession.coreBuiltinToolNames,
-    replaySafeToolNames: agentSession.replaySafeToolNames,
-    codeModeExecToolNames: agentSession.codeModeExecToolNames,
-    sourceReplyCapableToolNames: agentSession.sourceReplyCapableToolNames,
-    sideEffectToolOwners: agentSession.sideEffectToolOwners,
-    trustedLocalMediaToolNames: agentSession.trustedLocalMediaToolNames,
-    internalEvents: attempt.internalEvents,
   });
   const unsubscribe = admission.bindStreamUnsubscribe(streamSubscription.unsubscribe);
   const subscription = { ...streamSubscription, unsubscribe };
@@ -434,8 +401,7 @@ function prepareStream(
     runSignal: input.runAbortController.signal,
     sessionManager: activeSession.sessionManager,
     subscription,
-    isCurrent: () =>
-      ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle && !input.getRunState().aborted,
+    isCurrent: () => isCurrentRegistration() && !input.getRunState().aborted,
     isReplaySafeTool: input.isReplaySafeTool,
     nestedToolActivityState: input.nestedToolActivityState,
   });
@@ -459,16 +425,15 @@ function prepareStream(
           : undefined;
     input.abortRun(false, abortReason);
   };
+  const isCurrentRegistration = () =>
+    registration !== undefined &&
+    isCurrentEmbeddedRunAttachment(registration) &&
+    ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === registration;
   const hasCurrentRegistration = () => {
     // The session awaits transcript/question preparation after the global queue
     // check. Revalidate this exact publication and its live scope at the effect.
     registration?.toolAuthority?.assertActive();
-    return (
-      registration !== undefined &&
-      ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
-      ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle &&
-      ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === queueHandle
-    );
+    return isCurrentRegistration();
   };
   const canInject = () => isSteeringAdmissionOpen() && hasCurrentRegistration();
   type InputAuthority = NonNullable<
@@ -481,8 +446,10 @@ function prepareStream(
   const questionAuthority = (
     assertCurrent: (() => void) | undefined,
     kind: InputAuthority["kind"],
+    toolAuthorityPreparation?: ReplyToolAuthorityPreparation,
   ): InputAuthority => ({
     kind,
+    toolAuthorityPreparation,
     assertCurrent: () => {
       if (!composeInjectionGuard(assertCurrent)()) {
         throw new Error("active session is finalizing");
@@ -495,6 +462,8 @@ function prepareStream(
     options?: EmbeddedAgentQueueMessageOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    prepareCurrent?: () => Promise<void>,
+    toolAuthorityPreparation?: ReplyToolAuthorityPreparation,
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
     if (!canInjectMessage()) {
@@ -511,7 +480,8 @@ function prepareStream(
         options,
         attempt.sessionKey,
         canInjectMessage,
-        questionAuthority(assertCurrent, authorityKind),
+        questionAuthority(assertCurrent, authorityKind, toolAuthorityPreparation),
+        prepareCurrent,
       );
     } finally {
       activeQueueAdmissions--;
@@ -522,23 +492,25 @@ function prepareStream(
     options?: EmbeddedAgentQueueMessageOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    preparation?: ReplyToolAuthorityPreparation,
   ) =>
     claimEmbeddedPendingUserInputAnswer(
       text,
       options,
       attempt.sessionKey,
       composeInjectionGuard(assertCurrent),
-      questionAuthority(assertCurrent, authorityKind),
+      questionAuthority(assertCurrent, authorityKind, preparation),
     );
   const cancelPendingUserInput = (
     resolvedBy: string,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    preparation?: ReplyToolAuthorityPreparation,
   ) =>
     cancelPendingAgentQuestionForSession({
       sessionKey: attempt.sessionKey,
       resolvedBy,
-      authority: questionAuthority(assertCurrent, authorityKind),
+      authority: questionAuthority(assertCurrent, authorityKind, preparation),
     });
   const messageInjection = {
     version: 2 as const,
@@ -546,9 +518,22 @@ function prepareStream(
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-  };
-  const heartbeatReplyOperation =
-    attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
+    queueMessageAsync: (text, options, preparation, kind) =>
+      queueMessage(
+        text,
+        options,
+        preparation.assertCurrent,
+        kind,
+        preparation.prepareCurrent,
+        preparation,
+      ),
+    claimPendingUserInputAnswerAsync: (text, options, preparation, kind) =>
+      claimPendingUserInputAnswer(text, options, preparation.assertCurrent, kind, preparation),
+    cancelPendingUserInputAsync: (resolvedBy, preparation, kind) =>
+      cancelPendingUserInput(resolvedBy, preparation.assertCurrent, kind, preparation),
+  } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
+  const canApplyPermissionMode = () =>
+    admission.accepting && !input.runAbortController.signal.aborted && isCurrentRegistration();
   const applyPermissionMode = input.applyPermissionMode;
   const queueHandle: AttemptStreamQueueHandle = {
     kind: "embedded",
@@ -562,11 +547,7 @@ function prepareStream(
     },
     applyPermissionMode: applyPermissionMode
       ? async (mode, revokeApprovals) => {
-          if (
-            !admission.accepting ||
-            input.runAbortController.signal.aborted ||
-            ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) !== queueHandle
-          ) {
+          if (!canApplyPermissionMode()) {
             return false;
           }
           if ((attempt.permissionMode ?? null) === mode) {
@@ -574,11 +555,7 @@ function prepareStream(
           }
           try {
             await applyPermissionMode(mode, revokeApprovals);
-            return (
-              admission.accepting &&
-              !input.runAbortController.signal.aborted &&
-              ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(attempt.runId) === queueHandle
-            );
+            return canApplyPermissionMode();
           } catch (error) {
             // A partially rebuilt surface must never resume its revoked tools.
             input.abortRun(false, error);
@@ -588,9 +565,6 @@ function prepareStream(
       : undefined,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-    preemptByVisibleTurn: heartbeatReplyOperation
-      ? () => heartbeatReplyOperation.supersede()
-      : undefined,
     queueMessage,
     messageInjection,
     messageInjectionV2: messageInjection,
@@ -603,22 +577,40 @@ function prepareStream(
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     terminalReplyExpectation: resolveReplyExpectation(attempt),
     taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
+    recoverStalledModelCall: recoverStalledModelCall
+      ? () => {
+          if (stalledModelRecoveryAccepted) {
+            // Keep recovery eligible during settlement, but stop shielding a
+            // parent cancelled by Stop or bounded lane reclamation.
+            return (
+              !externalAbortAccepted && !attempt.abortSignal?.aborted && isCurrentRegistration()
+            );
+          }
+          stalledModelRecoveryAccepted =
+            isSteeringAdmissionOpen() &&
+            !subscription.isCompacting() &&
+            countActiveToolExecutions(attempt.runId) === 0 &&
+            hasCurrentRegistration() &&
+            recoverStalledModelCall();
+          return stalledModelRecoveryAccepted;
+        }
+      : undefined,
     cancel: abortActiveRunExternally,
     abort: abortActiveRunExternally,
   };
-  attempt.replyOperation?.attachBackend(queueHandle);
-  setActiveEmbeddedRunLifecycleGeneration(
-    queueHandle,
-    attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
-  );
-  setActiveEmbeddedRun(
+  attachActiveEmbeddedRun(
     attempt.sessionId,
     queueHandle,
     attempt.sessionKey,
     attempt.sessionFile,
     input.hookAgentId,
+    attempt.replyOperation,
+    attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
   );
-  const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle);
+  const registration = getEmbeddedRunAttachment(queueHandle);
+  if (registration) {
+    registration.runCleanupSettlement = attempt.runCleanupSettlement;
+  }
   if (attempt.deferTerminalLifecycle && attempt.onDeferredLifecycleOwner) {
     deferredLifecycleOwner = createEmbeddedAttemptDeferredLifecycleOwner({
       runId: attempt.runId,
@@ -628,26 +620,21 @@ function prepareStream(
       isCurrent: () =>
         registration?.delegatedAuthority !== undefined &&
         validateAgentRunDelegatedAuthority(registration.delegatedAuthority) &&
-        ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(queueHandle) === registration &&
-        ACTIVE_EMBEDDED_RUNS.get(attempt.sessionId) === queueHandle,
+        isCurrentRegistration(),
       trajectoryRecorder: input.trajectoryRecorder ?? null,
       clearActiveRun: () => {
         try {
           unsubscribe();
         } finally {
-          clearActiveEmbeddedRun(
-            attempt.sessionId,
-            queueHandle,
-            attempt.sessionKey,
-            attempt.sessionFile,
-          );
+          clearActiveRun();
         }
       },
     });
     try {
       attempt.onDeferredLifecycleOwner(deferredLifecycleOwner);
     } catch (error) {
-      deferredLifecycleOwner.discard();
+      // Release ownership synchronously; the cleanup scope tracks the diagnostic flush.
+      void deferredLifecycleOwner.discard();
       throw error;
     }
   }
@@ -655,6 +642,7 @@ function prepareStream(
   return {
     subscription,
     queueHandle,
+    registration,
     deferredLifecycleOwner,
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,

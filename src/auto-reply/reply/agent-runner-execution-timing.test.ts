@@ -1,12 +1,18 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import * as transcriptWatermarks from "../../config/sessions/session-transcript-watermark.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../../gateway/session-lifecycle-state.js";
 import { emitAgentEvent, onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import {
   createMinimalRunAgentTurnParams,
+  getRawExecuteAgentTurnForTest,
   fallbackAttemptOptions,
   initialFallbackAttemptOptions,
   setupAgentRunnerExecutionTestState,
@@ -14,14 +20,51 @@ import {
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
 
-vi.mock("../../gateway/session-utils.js", () => ({ loadSessionEntry: vi.fn() }));
-
 const state = await setupAgentRunnerExecutionTestState();
 
+it("settles the turn's attribution before model-routing hooks run", async () => {
+  const executeAgentTurn = await getRawExecuteAgentTurnForTest();
+  const capture = createDeferred();
+  const entered = createDeferred();
+  const hook = vi.fn(async () => undefined);
+  const registry = createEmptyPluginRegistry();
+  registry.typedHooks.push({
+    pluginId: "model-routing-fixture",
+    hookName: "before_model_resolve",
+    source: "test",
+    handler: hook,
+  });
+  initializeGlobalHookRunner(registry);
+  const turn = createMinimalRunAgentTurnParams();
+  turn.opts = {
+    awaitSessionDiffBaseline: () => {
+      entered.resolve();
+      return capture.promise;
+    },
+  };
+  state.runEmbeddedAgentMock.mockResolvedValue({ payloads: [{ text: "answer" }], meta: {} });
+  const pending = executeAgentTurn(turn);
+  try {
+    await awaitGateBeforeSettlement(entered.promise, pending, "Model routing skipped attribution");
+    expect(hook).not.toHaveBeenCalled();
+    capture.resolve();
+    await pending;
+    expect(hook).toHaveBeenCalledOnce();
+  } finally {
+    capture.resolve();
+    await pending.catch(() => undefined);
+    resetGlobalHookRunner();
+  }
+});
+
 it("announces a remote native run before its worker starts writing replies", async () => {
-  const { executeAgentTurn } = await import("./agent-runner-execution.js");
+  const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const onAgentRunStart = vi.fn();
-  const turn = createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } });
+  const finishObservation = vi.fn(() => {
+    throw new Error("synthetic timing sink failure");
+  });
+  const turn = createMinimalRunAgentTurnParams();
+  turn.opts = { onAgentRunStart, onTranscriptStartPreparation: () => finishObservation };
   turn.followupRun.run.config = {
     agents: {
       defaults: { models: { "anthropic/claude": { agentRuntime: { id: "openclaw" } } } },
@@ -50,6 +93,7 @@ it("announces a remote native run before its worker starts writing replies", asy
     expect(result.outcome.kind).toBe("settled");
     expect(startsBeforeReply).toBe(1);
     expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
+    expect(finishObservation).toHaveBeenCalledOnce();
   } finally {
     prepare.mockRestore();
   }
@@ -58,10 +102,22 @@ it("announces a remote native run before its worker starts writing replies", asy
 it.each(["settled", "pending"] as const)(
   "uses the starting fallback candidate's facts after a prior %s preparation",
   async (preparationState) => {
-    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
     const onAgentRunStart = vi.fn();
     const fallbackModel = "claude-opus-4-6";
-    const turn = createMinimalRunAgentTurnParams({ opts: { onAgentRunStart } });
+    const pendingObservations = new Set<number>();
+    let nextObservation = 0;
+    const turn = createMinimalRunAgentTurnParams();
+    turn.opts = {
+      onAgentRunStart,
+      onTranscriptStartPreparation: () => {
+        const observation = ++nextObservation;
+        pendingObservations.add(observation);
+        return () => {
+          pendingObservations.delete(observation);
+        };
+      },
+    };
     turn.followupRun.run.thinkingCatalog = [
       ...(turn.followupRun.run.thinkingCatalog ?? []),
       { provider: "anthropic", id: fallbackModel, input: ["text"] },
@@ -106,6 +162,7 @@ it.each(["settled", "pending"] as const)(
     state.runEmbeddedAgentMock.mockImplementationOnce(
       async (params: RunEmbeddedAgentInternalParams) => {
         const currentPreparation = params.onExecutionStarted?.();
+        expect([...pendingObservations]).toEqual(preparationState === "pending" ? [1, 2] : [2]);
         retiredRead.resolve(priorStart);
         await retiredEvent;
         await currentPreparation;
@@ -135,6 +192,7 @@ it.each(["settled", "pending"] as const)(
       expect(startsBeforeCurrentPhase).toBe(0);
       expect(onAgentRunStart).toHaveBeenCalledTimes(1);
       expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(currentStart);
+      expect(pendingObservations.size).toBe(0);
     } finally {
       retiredRead.resolve(priorStart);
       await retiredEvent.finally(() => prepare.mockRestore());
@@ -143,7 +201,7 @@ it.each(["settled", "pending"] as const)(
 );
 
 it("keeps native start facts when an earlier event's preparation settles late", async () => {
-  const { executeAgentTurn } = await import("./agent-runner-execution.js");
+  const executeAgentTurn = await getRawExecuteAgentTurnForTest();
   const onAgentRunStart = vi.fn();
   const entered = createDeferred();
   const fallback =
@@ -192,7 +250,7 @@ it("keeps native start facts when an earlier event's preparation settles late", 
 it.each(["embedded preparation", "fallback preparation"])(
   "times %s failure between successful turns without borrowing the previous start",
   async (failureBoundary) => {
-    const { executeAgentTurn } = await import("./agent-runner-execution.js");
+    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
     let now = 1_000_000;
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     const session: InternalSessionEntry = { sessionId: "session", updatedAt: now };
@@ -226,7 +284,7 @@ it.each(["embedded preparation", "fallback preparation"])(
       emitAgentEvent({ runId: params.runId, sessionKey: "main", stream: "lifecycle", data });
       await params.onAgentEvent?.({ stream: "lifecycle", data, transcriptStart });
       expect(onAgentRunStart.mock.lastCall?.[3]).toEqual(transcriptStart);
-      expect(session).toMatchObject({ status: "running", startedAt: now });
+      expect(session).toMatchObject({ status: undefined, startedAt: now });
       expect(session.lastRunError).toBeUndefined();
       expect(session.runtimeMs).toBeUndefined();
       expect(session.endedAt).toBeUndefined();

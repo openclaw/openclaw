@@ -1,5 +1,5 @@
 import type { WorkerEnvironmentRecord } from "./environment-record.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
@@ -15,16 +15,16 @@ export type WorkerEnvironmentPlacementFacts = Pick<
   | "ownerEpoch"
   | "nodeDeviceId"
   | "attachedSessionIds"
->;
+> & { inference?: "worker" };
 
 export type WorkerSessionPlacementProjection = {
-  placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;
-  moves: ReadonlyMap<string, WorkerPlacementMoveIntent>;
-  pendingResults: ReadonlyMap<string, WorkerWorkspacePendingResult>;
-  workspaceJournalOwnerSessionIds: ReadonlySet<string>;
-  workspaceResultReconcilingSessionIds: ReadonlySet<string>;
-  workspaceRecoveryPendingSessionIds: ReadonlySet<string>;
-  environments: ReadonlyMap<string, WorkerEnvironmentPlacementFacts>;
+  readonly placements: ReadonlyMap<string, Readonly<WorkerSessionPlacementRecord>>;
+  readonly moves: ReadonlyMap<string, WorkerPlacementMoveIntent>;
+  readonly pendingResults: ReadonlyMap<string, WorkerWorkspacePendingResult>;
+  readonly workspaceJournalOwnerSessionIds: ReadonlySet<string>;
+  readonly workspaceResultReconcilingSessionIds: ReadonlySet<string>;
+  readonly workspaceRecoveryPendingSessionIds: ReadonlySet<string>;
+  readonly environments: ReadonlyMap<string, WorkerEnvironmentPlacementFacts>;
 };
 
 export type WorkerPlacementConflictBinding = {
@@ -36,8 +36,8 @@ export type WorkerPlacementConflictBinding = {
 };
 
 export type WorkerSessionPlacementReadResult = {
-  projection: WorkerSessionPlacementProjection;
-  conflictSessionIds: ReadonlySet<string>;
+  readonly projection: WorkerSessionPlacementProjection;
+  readonly conflictSessionIds: ReadonlySet<string>;
 };
 
 export type WorkerPlacementRecoveryCandidate = {

@@ -122,17 +122,14 @@ export function parseMentionOrPrefixedId(params: {
     return null;
   }
 
-  const mentionMatch = trimmed.match(params.mentionPattern);
-  if (mentionMatch?.[1]) {
-    return params.normalizeId ? params.normalizeId(mentionMatch[1]) : mentionMatch[1];
-  }
-
-  const stripped = params.prefixPattern ? trimmed.replace(params.prefixPattern, "") : trimmed;
-  if (!params.idPattern.test(stripped)) {
+  const mentionId = trimmed.match(params.mentionPattern)?.[1];
+  const id =
+    mentionId || (params.prefixPattern ? trimmed.replace(params.prefixPattern, "") : trimmed);
+  if (!mentionId && !params.idPattern.test(id)) {
     return null;
   }
 
-  return params.normalizeId ? params.normalizeId(stripped) : stripped;
+  return params.normalizeId ? params.normalizeId(id) : id;
 }
 
 export function normalizeAllowFromEntries(
@@ -150,22 +147,16 @@ export function normalizeAllowFromEntries(
   return uniqueStrings(normalized);
 }
 
-export function createStandardChannelSetupStatus(params: {
-  channelLabel: string;
-  configuredLabel: string;
-  unconfiguredLabel: string;
-  configuredHint?: string;
-  unconfiguredHint?: string;
-  configuredScore?: number;
-  unconfiguredScore?: number;
-  includeStatusLine?: boolean;
-  resolveConfigured: ChannelSetupWizardStatus["resolveConfigured"];
-  resolveExtraStatusLines?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-    configured: boolean;
-  }) => string[] | Promise<string[]>;
-}): ChannelSetupWizardStatus {
+export function createStandardChannelSetupStatus(
+  params: Omit<
+    ChannelSetupWizardStatus,
+    "resolveStatusLines" | "resolveSelectionHint" | "resolveQuickstartScore"
+  > & {
+    channelLabel: string;
+    includeStatusLine?: boolean;
+    resolveExtraStatusLines?: NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>;
+  },
+): ChannelSetupWizardStatus {
   const status: ChannelSetupWizardStatus = {
     configuredLabel: params.configuredLabel,
     unconfiguredLabel: params.unconfiguredLabel,
@@ -203,15 +194,12 @@ export function resolveSetupAccountId(params: {
   return params.accountId?.trim() ? normalizeAccountId(params.accountId) : params.defaultAccountId;
 }
 
-export async function resolveAccountIdForConfigure(params: {
-  cfg: OpenClawConfig;
-  prompter: WizardPrompter;
-  label: string;
-  accountOverride?: string;
-  shouldPromptAccountIds: boolean;
-  listAccountIds: (cfg: OpenClawConfig) => string[];
-  defaultAccountId: string;
-}): Promise<string> {
+export async function resolveAccountIdForConfigure(
+  params: Omit<PromptAccountIdParams, "currentId"> & {
+    accountOverride?: string;
+    shouldPromptAccountIds: boolean;
+  },
+): Promise<string> {
   const override = params.accountOverride?.trim();
   let accountId = override ? normalizeAccountId(override) : params.defaultAccountId;
   if (params.shouldPromptAccountIds && !override) {
@@ -531,27 +519,22 @@ export async function runSingleChannelSecretStep(
     ...promptState,
   });
 
-  if (result.action === "use-env") {
-    return {
-      cfg: params.applyUseEnv ? await params.applyUseEnv(params.cfg) : params.cfg,
-      action: result.action,
-      resolvedValue: normalizeOptionalString(params.envValue),
-    };
+  if (result.action === "keep") {
+    return { cfg: params.cfg, action: result.action };
   }
-
-  if (result.action === "set") {
-    return {
-      cfg: params.applySet
+  const cfg =
+    result.action === "use-env"
+      ? params.applyUseEnv
+        ? await params.applyUseEnv(params.cfg)
+        : params.cfg
+      : params.applySet
         ? await params.applySet(params.cfg, result.value, result.resolvedValue)
-        : params.cfg,
-      action: result.action,
-      resolvedValue: result.resolvedValue,
-    };
-  }
-
+        : params.cfg;
   return {
-    cfg: params.cfg,
+    cfg,
     action: result.action,
+    resolvedValue:
+      result.action === "use-env" ? normalizeOptionalString(params.envValue) : result.resolvedValue,
   };
 }
 
@@ -581,21 +564,19 @@ export async function promptSingleChannelSecretInput(params: {
     },
   });
 
-  if (selectedMode === "plaintext" && params.canUseEnv) {
-    const keepEnv = await params.prompter.confirm({
-      message: params.envPrompt,
-      initialValue: true,
-    });
-    if (keepEnv) {
-      return { action: "use-env" };
-    }
-  } else if (params.hasConfigToken && params.accountConfigured) {
+  const keepAction =
+    selectedMode === "plaintext" && params.canUseEnv
+      ? "use-env"
+      : params.hasConfigToken && params.accountConfigured
+        ? "keep"
+        : undefined;
+  if (keepAction) {
     const keep = await params.prompter.confirm({
-      message: params.keepPrompt,
+      message: keepAction === "use-env" ? params.envPrompt : params.keepPrompt,
       initialValue: true,
     });
     if (keep) {
-      return { action: "keep" };
+      return { action: keepAction };
     }
   }
 
@@ -709,18 +690,16 @@ export function createPromptParsedAllowFromForAccount<TConfig extends OpenClawCo
     });
 }
 
-export function createTopLevelChannelParsedAllowFromPrompt(params: {
-  channel: string;
-  defaultAccountId: string | ((cfg: OpenClawConfig) => string);
-  enabled?: boolean;
-  noteTitle?: string;
-  noteLines?: string[];
-  message: string;
-  placeholder: string;
-  parseEntries: (raw: string) => ParsedAllowFromResult;
-  getExistingAllowFrom?: (cfg: OpenClawConfig) => Array<string | number>;
-  mergeEntries?: (params: { existing: Array<string | number>; parsed: string[] }) => string[];
-}): NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]> {
+export function createTopLevelChannelParsedAllowFromPrompt(
+  params: Omit<
+    Parameters<typeof createPromptParsedAllowFromForAccount>[0],
+    "getExistingAllowFrom" | "applyAllowFrom"
+  > & {
+    channel: string;
+    enabled?: boolean;
+    getExistingAllowFrom?: (cfg: OpenClawConfig) => Array<string | number>;
+  },
+): NonNullable<ChannelSetupDmPolicy["promptAllowFrom"]> {
   const setAllowFrom = createTopLevelChannelAllowFromSetter({
     channel: params.channel,
     ...(params.enabled ? { enabled: true } : {}),

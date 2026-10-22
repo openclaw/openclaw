@@ -34,12 +34,7 @@ async function resolveNativeInstall(): Promise<{ buildId: string; capture: strin
     const buildIdFile = resolve(directory, "FaceTimeHelper.build-id");
     const protocolFile = resolve(directory, "native-protocol.env");
     try {
-      await Promise.all([
-        access(capture, constants.X_OK),
-        access(helper, constants.R_OK),
-        access(buildIdFile, constants.R_OK),
-        access(protocolFile, constants.R_OK),
-      ]);
+      await Promise.all([access(capture, constants.X_OK), access(helper, constants.R_OK)]);
       const [buildId, protocol] = await Promise.all([
         readFile(buildIdFile, "utf8").then((value) => value.trim()),
         readFile(protocolFile, "utf8").then((value) => value.trim()),
@@ -135,7 +130,7 @@ export async function ensureCaptureBinary(): Promise<string> {
 export async function ensureHelperArtifacts(params: {
   pluginRoot: string;
   runCommandWithTimeout: PluginRuntime["system"]["runCommandWithTimeout"];
-}): Promise<{ buildId: string; dylib: string; ipcKey: string }> {
+}): Promise<{ buildId: string; ipcKey: string }> {
   const installation = await resolveNativeInstall();
   const stageScript = resolve(params.pluginRoot, "scripts", "stage-helper.sh");
   const result = await params.runCommandWithTimeout(["/bin/bash", stageScript, "--if-needed"], {
@@ -146,8 +141,7 @@ export async function ensureHelperArtifacts(params: {
       `FaceTime native helper staging failed: ${result.stderr || result.stdout || `exit ${result.code}`}`,
     );
   }
-  const dylib = resolveHelperDylib();
-  await access(dylib, constants.R_OK);
+  await access(resolveHelperDylib(), constants.R_OK);
   const ipcKey = (await readFile(resolveHelperStateFile("helper-ipc-key"), "utf8")).trim();
   const stagedBuildId = (
     await readFile(resolveHelperStateFile("helper-build.sha256"), "utf8")
@@ -158,5 +152,5 @@ export async function ensureHelperArtifacts(params: {
   if (stagedBuildId !== installation.buildId) {
     throw new Error("Staged FaceTime helper does not match the installed native package");
   }
-  return { buildId: installation.buildId, dylib, ipcKey };
+  return { buildId: installation.buildId, ipcKey };
 }

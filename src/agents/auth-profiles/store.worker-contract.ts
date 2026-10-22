@@ -1,14 +1,25 @@
+import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import type {
   AuthProfileCredential,
-  AuthProfileRowRead,
   AuthProfileStore,
-  UserModelAuthProfile,
+  AuthProfileStoreOwner,
+  OAuthCredential,
+  ProfileUsageStats,
+  SharedAuthStoreOwnership,
 } from "./types.js";
-import type {
-  PersonalAuthProfileUsageReduction,
-  PersonalAuthProfileUsageResult,
-} from "./usage-reduction.js";
+import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
+
+export type AuthProfileReadSource =
+  | { kind: "shared-state"; databasePath: string }
+  | {
+      kind: "agent";
+      databasePath: string;
+      agentId: string;
+      identity: string | undefined;
+      schema: SqliteAuthSchema | undefined;
+    };
 
 export type AuthProfileUsageInput = {
   profileId: string;
@@ -22,7 +33,7 @@ export type AuthProfileUsageInput = {
 
 export type AuthProfileUsageReceipt = {
   store: AuthProfileStore;
-  result: PersonalAuthProfileUsageResult | undefined;
+  result: ProfileUsageStats | undefined;
   publication: {
     credentialsChanged: boolean;
     profileSetChanged: boolean;
@@ -50,22 +61,26 @@ export type AuthProfileUsageResult =
   | { ok: true; receipt: AuthProfileUsageReceipt }
   | { ok: false; error: OpenClawStateWorkerErrorPayload };
 
-export type AuthProfileWorkerOperations = {
-  "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
-  "authProfiles.personalUsage": {
-    input: { profileId: string; reduction: PersonalAuthProfileUsageReduction };
-    output: PersonalAuthProfileUsageResult | undefined;
-  };
-  "authProfiles.read": {
-    input: { artifactPreserving: boolean };
-    output: AuthProfileRowRead;
-  };
-  "authProfiles.sharedOwnership": {
-    input: { artifactPreserving: boolean };
-    output: unknown;
-  };
-  "authProfiles.personal": {
-    input: { profileId: string; artifactPreserving: boolean };
-    output: UserModelAuthProfile | undefined;
-  };
+export type AuthStoreUpdateInput = {
+  owner: AuthProfileStoreOwner;
+  agentDir?: string;
+  envOnly: boolean;
+  peerGeneration?: { profileId: string; generation: OAuthCredential };
+};
+
+export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"];
+
+export type AuthStoreUpdateOperations = {
+  "authProfiles.update": { input: AuthStoreUpdateInput; output: boolean };
+};
+
+export type AuthProfileBootstrapInput = {
+  sourcePath: string;
+  sourceIdentity?: DatabasePathIdentity;
+  legacySourcePaths: string[];
+};
+
+export type AuthProfileBootstrapResult = {
+  ownership: SharedAuthStoreOwnership;
+  relocated: boolean;
 };

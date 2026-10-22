@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errors.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { overwriteFileHandle } from "../infra/file-descriptor.js";
-import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "./agent-tool-source-execution-guard.js";
 import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
 
 async function openHostFileForUpdate(resolved: string) {
@@ -11,10 +14,7 @@ async function openHostFileForUpdate(resolved: string) {
     // Rollback requires the original bytes; unreadable files must fail before mutation.
     return existing.isFile() ? await fs.open(resolved, "r+") : undefined;
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
+    return ignoreMissingPath(error);
   }
 }
 
@@ -25,17 +25,23 @@ export async function writeHostFile(
 ) {
   const assertCurrent = captureAgentToolSourceExecutionGuard(abortSignal);
   const resolved = path.resolve(expandOsHomePrefix(absolutePath));
-  assertCurrent();
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+    assertCurrent();
+    await fs.mkdir(path.dirname(resolved), { recursive: true });
+  });
   const handle = await openHostFileForUpdate(resolved);
   if (!handle) {
-    assertCurrent();
-    await fs.writeFile(resolved, content, "utf-8");
+    await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+      assertCurrent();
+      await fs.writeFile(resolved, content, "utf-8");
+    });
     return;
   }
   try {
-    await overwriteFileHandle(handle, Buffer.from(content, "utf-8"), {
-      beforeWrite: assertCurrent,
+    await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
+      await overwriteFileHandle(handle, Buffer.from(content, "utf-8"), {
+        beforeWrite: assertCurrent,
+      });
     });
   } finally {
     await handle.close().catch(() => undefined);

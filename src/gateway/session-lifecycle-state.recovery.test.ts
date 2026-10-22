@@ -1,4 +1,8 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
@@ -20,8 +24,12 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
 
 // mock-isolation: Exercise recovery reducers without native persistence or transcript writes.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryTarget: persistenceMocks.updateSessionEntry,
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
+}));
+
+// mock-isolation: Exercise the recovery reducer without opening the session database.
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  applySessionEntryTargetOperation: persistenceMocks.updateSessionEntry,
 }));
 
 // mock-isolation: Controlled entries isolate recovery projection from database admission.
@@ -49,6 +57,9 @@ function persistLifecycle(
     event: { sessionId: "session-id", ts: 2_000, ...event },
   });
 }
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(clearRuntimeConfigSnapshot);
 
 const recovery = { cycleId: "cycle-1", revision: 2, chargedAttempts: 2 };
 const interrupted = { runId: "interrupted-run", lifecycleGeneration: "pre-restart" };
@@ -82,7 +93,7 @@ const cases: RecoveryCase[] = [
       },
     }),
     expected: {
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
       mainRestartRecovery: recovery,
@@ -123,7 +134,7 @@ const cases: RecoveryCase[] = [
       event: { data: { phase: "end", endedAt: 1_800 } },
     }),
     expected: {
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
       mainRestartRecovery: recovery,
@@ -195,7 +206,7 @@ const cases: RecoveryCase[] = [
       },
     }),
     expected: {
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       lifecycleRunId: "foreground-run",
       restartRecoveryRuns: [interrupted],
@@ -208,7 +219,7 @@ it.each(cases)("$name", async ({ input, expected, clearsRecovery, clearsOwner, w
   const { entry, event } = input(getAgentEventLifecycleGeneration());
   loggerMocks.warn.mockClear();
   const persisted = await persistLifecycle(
-    { status: "running", abortedLastRun: true, mainRestartRecovery: recovery, ...entry },
+    { status: "interrupted", abortedLastRun: true, mainRestartRecovery: recovery, ...entry },
     event,
   );
   expect(persisted).toMatchObject(expected);

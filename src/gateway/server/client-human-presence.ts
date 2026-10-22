@@ -57,11 +57,11 @@ export async function startWorkerHumanPresence(params: {
     }
     refresh();
   };
-  const unsubscribe = clients.subscribe(observeClients);
+  clients.onChange = observeClients;
   observeClients();
   params.registerSidecar({
     stop: () => {
-      unsubscribe();
+      clients.onChange = undefined;
       for (const stop of invalidationSubscriptions.values()) {
         stop();
       }

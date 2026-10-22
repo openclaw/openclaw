@@ -1,8 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-/**
- * Escape XML special characters for TwiML and other XML responses.
- */
 export function escapeXml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -23,13 +20,6 @@ const OPENAI_TO_POLLY_MAP = new Map<string, string>([
 
 const DEFAULT_POLLY_VOICE = "Polly.Joanna";
 
-/**
- * Map OpenAI voice names to Twilio Polly equivalents.
- * Falls through if already a valid Polly/Google voice.
- *
- * @param voice - OpenAI voice name (alloy, echo, etc.) or Polly voice name
- * @returns Polly voice name suitable for Twilio TwiML
- */
 export function mapVoiceToPolly(voice: string | undefined): string {
   if (!voice) {
     return DEFAULT_POLLY_VOICE;

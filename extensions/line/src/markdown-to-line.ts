@@ -8,6 +8,7 @@ import {
   type MarkdownTableCell,
   type MarkdownTableMeta,
 } from "openclaw/plugin-sdk/text-chunking";
+import { cardBox, cardText } from "./flex-templates/common.js";
 import { fitsLineFlexBubble, toFlexMessage } from "./flex-templates/message.js";
 import { createReceiptCard } from "./flex-templates/schedule-cards.js";
 import type { FlexBubble } from "./flex-templates/types.js";
@@ -284,7 +285,6 @@ function renderTableCell(cell: MarkdownTableCell): RenderedCell {
   };
 }
 
-/** Convert a table to a Flex bubble when its rows fit the layout. */
 function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefined {
   // Receipt cards keep 12 plain rows; generic and styled layouts keep only 10.
   const requiresPlainCells = table.rowCells.length > 10;
@@ -327,88 +327,63 @@ function convertTableToFlexBubble(table: MarkdownTableMeta): FlexBubble | undefi
     });
   }
 
-  const headerRow: FlexComponent = {
-    type: "box",
-    layout: "horizontal",
-    contents: headerCells.map((cell) => ({
-      type: "text",
-      text: cell.text,
-      contents: cell.contents,
-      weight: "bold",
-      size: "sm",
-      color: "#333333",
-      flex: 1,
-      wrap: true,
-    })),
-    paddingBottom: "sm",
-  };
-
-  const dataRows = rowCells.map<messagingApi.FlexBox>((row, rowIndex) => ({
-    type: "box",
-    layout: "horizontal",
-    contents: table.headers.map((_, colIndex) => {
-      const cell = row[colIndex] ?? { text: "-", hasMarkup: false };
-      return {
-        type: "text",
-        text: cell.text,
-        contents: cell.contents,
-        size: "sm",
-        color: "#666666",
-        flex: 1,
-        wrap: true,
-      };
-    }),
-    margin: rowIndex === 0 ? "md" : "sm",
-  }));
+  const renderRow = (
+    cells: RenderedCell[],
+    textStyle: Pick<messagingApi.FlexText, "color" | "weight">,
+    rowStyle: Pick<messagingApi.FlexBox, "paddingBottom" | "margin">,
+  ): FlexComponent =>
+    cardBox(
+      "horizontal",
+      cells.map((cell) =>
+        cardText(cell.text, {
+          contents: cell.contents,
+          ...textStyle,
+          size: "sm",
+          flex: 1,
+          wrap: true,
+        }),
+      ),
+      rowStyle,
+    );
+  const headerRow = renderRow(
+    headerCells,
+    { weight: "bold", color: "#333333" },
+    { paddingBottom: "sm" },
+  );
+  const dataRows = rowCells.map((row, rowIndex) =>
+    renderRow(
+      table.headers.map((_, colIndex) => row[colIndex] ?? { text: "-", hasMarkup: false }),
+      { color: "#666666" },
+      { margin: rowIndex === 0 ? "md" : "sm" },
+    ),
+  );
 
   return {
     type: "bubble",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: [headerRow, { type: "separator", margin: "sm" }, ...dataRows],
+    body: cardBox("vertical", [headerRow, { type: "separator", margin: "sm" }, ...dataRows], {
       paddingAll: "lg",
-    },
+    }),
   };
 }
 
-/** Convert a code block to a LINE Flex Message bubble. */
 function convertCodeBlockToFlexBubble(block: CodeBlock): FlexBubble {
   const titleText = block.language ? `Code (${block.language})` : "Code";
 
   return {
     type: "bubble",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: [
-        {
-          type: "text",
-          text: titleText,
-          weight: "bold",
-          size: "sm",
-          color: "#666666",
-        },
-        {
-          type: "box",
-          layout: "vertical",
-          contents: [
-            {
-              type: "text",
-              text: block.code,
-              size: "xs",
-              color: "#333333",
-              wrap: true,
-            },
-          ],
+    body: cardBox(
+      "vertical",
+      [
+        cardText(titleText, { weight: "bold", size: "sm", color: "#666666" }),
+        cardBox("vertical", [cardText(block.code, { size: "xs", color: "#333333", wrap: true })], {
           backgroundColor: "#F5F5F5",
           paddingAll: "md",
           cornerRadius: "md",
           margin: "sm",
-        },
+        }),
       ],
-      paddingAll: "lg",
-    },
+      { paddingAll: "lg" },
+    ),
   };
 }
 

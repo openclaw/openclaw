@@ -48,6 +48,14 @@ export function isUpdateGatewayReadinessPending(result: UpdateRunResult): boolea
   return step?.termination === "timeout" && step.advisory?.kind === "recoverable-maintenance";
 }
 
+export function isUpdatePostInstallVerificationDeferred(step: ResultStep): boolean {
+  return (
+    step.name === "post-install-verify" &&
+    step.exitCode === null &&
+    step.advisory?.kind === "recoverable-maintenance"
+  );
+}
+
 /** Preserve producer-classified diagnostics without turning successful inventory into warnings. */
 export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] {
   const text = (value: string) => truncateUtf16Safe(value, UPDATE_RUN_TEXT_LIMIT);
@@ -93,7 +101,9 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
       termination: step.termination,
       signal: step.signal,
       stderrTail:
-        failed && step.termination === "signal" && step.stderrTail
+        failed &&
+        (step.termination === "signal" || step.name === "candidate-state-snapshot") &&
+        step.stderrTail
           ? truncateUtf16Safe(step.stderrTail, 8192)
           : undefined,
       // A completed retry replaces diagnostics from the previous attempt with the same ID.
@@ -140,32 +150,18 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   ];
 }
 
-export function updateRunWarningMessages(
-  steps: readonly UpdateRunStep[],
-  maxMessages?: number,
-): string[] {
-  const messages = steps.flatMap((step) =>
-    (step.step === "reconcile:settle" ||
-      (step.status === "completed" && step.step.startsWith("warning:"))) &&
-    step.detail
-      ? [step.detail]
-      : [],
-  );
-  if (maxMessages === undefined) {
-    return messages;
-  }
-  // The operator's restart command must survive later advisory Doctor warnings.
-  const serviceWarning = steps.findLast(
-    (step) => step.step === "warning:managed-service-reconciliation" && step.status === "completed",
-  )?.detail;
-  return (
-    serviceWarning
-      ? [
-          serviceWarning,
-          ...messages.filter((message) => message !== serviceWarning).slice(1 - maxMessages),
-        ]
-      : messages.slice(-maxMessages)
-  ).slice(0, maxMessages);
+export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
+  return [
+    ...new Set(
+      steps.flatMap((step) =>
+        (step.step === "reconcile:settle" ||
+          (step.status === "completed" && step.step.startsWith("warning:"))) &&
+        step.detail
+          ? [step.detail]
+          : [],
+      ),
+    ),
+  ];
 }
 
 /** Shared bounded receipt for history and rollback-readable diagnostics. */

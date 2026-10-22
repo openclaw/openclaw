@@ -52,12 +52,11 @@ export async function finalizeAcpTurnOutput(params: {
     accountId: params.ttsAccountId,
   });
   const canAttemptFinalTts =
-    ttsStatus != null && !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
-  const shouldDeferVisibleTextForTts =
-    params.shouldDeferVisibleTextForTts &&
     ttsMode === "final" &&
     hasAccumulatedBlockText &&
-    canAttemptFinalTts;
+    ttsStatus != null &&
+    !(ttsStatus.autoMode === "inbound" && !params.inboundAudio);
+  const shouldDeferVisibleTextForTts = params.shouldDeferVisibleTextForTts && canAttemptFinalTts;
   const accumulatedVisibleBlockText = shouldDeferVisibleTextForTts
     ? cleanDeferredFinalText(accumulatedBlockTtsText)
     : params.delivery.getAccumulatedVisibleBlockText();
@@ -73,8 +72,6 @@ export async function finalizeAcpTurnOutput(params: {
     (params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery());
 
   if (
-    ttsMode === "final" &&
-    hasAccumulatedBlockText &&
     canAttemptFinalTts &&
     !params.delivery.hasPendingFinalTtsMedia() &&
     !params.delivery.hasDeliveredFinalTtsMedia()
@@ -145,10 +142,7 @@ export async function finalizeAcpTurnOutput(params: {
     const currentMeta = currentSession?.acp;
     const identityAfterTurn = resolveSessionIdentityFromMeta(currentMeta);
     if (!isSessionIdentityPending(identityAfterTurn)) {
-      const resolvedDetails = resolveAcpThreadSessionDetailLines({
-        sessionKey: params.sessionKey,
-        meta: currentMeta,
-      });
+      const resolvedDetails = resolveAcpThreadSessionDetailLines(currentMeta);
       if (resolvedDetails.length > 0) {
         const delivered = await params.delivery.deliver("final", {
           text: prefixSystemMessage(["Session ids resolved.", ...resolvedDetails].join("\n")),

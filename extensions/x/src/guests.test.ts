@@ -28,6 +28,7 @@ vi.mock("./client.js", async (importOriginal) => ({
 function guestConfig(enabled = true): OpenClawConfig {
   return {
     ...config,
+    messages: { queue: { byChannel: { x: "followup" } } },
     agents: {
       entries: {
         maintainer: {
@@ -61,7 +62,7 @@ describe("X guest turns", () => {
     const done = Promise.withResolvers<void>();
     const test = fixture({
       cfg,
-      replyText: "See https://docs.openclaw.ai/",
+      replyText: "[[x_success]] See https://docs.openclaw.ai/",
       posts: [mention],
       queue: createQueue<Payload>({ onCompleted: () => done.resolve() }),
     });
@@ -88,7 +89,15 @@ describe("X guest turns", () => {
       expect(turn.ctxPayload.BodyForAgent).toContain("\n> This is from a verified user:");
       expect(turn.ctxPayload.BodyForAgent?.match(/\[triggering mention\]/g)).toHaveLength(1);
       expect(turn.ctxPayload.BodyForAgent?.match(/context \d+/g)).toHaveLength(1);
-      expect(turn.ctxPayload.ConversationToolPolicy).toEqual({
+      expect(turn.ctxPayload.ConversationToolPolicy).toBeUndefined();
+      expect(
+        xPlugin.groups!.resolveToolPolicy!({
+          cfg,
+          senderId: turn.ctxPayload.SenderId,
+          groupId: turn.ctxPayload.ChatId,
+          accountId: turn.ctxPayload.AccountId,
+        }),
+      ).toEqual({
         allow: ["read", "ls", "sessions_spawn", "sessions_yield", "subagents"],
         deny: ["skills_read"],
       });
@@ -101,6 +110,7 @@ describe("X guest turns", () => {
 
   it.each([false, true])("preserves maintainer turns with guest mode %s", async (enabled) => {
     const cfg = guestConfig(enabled);
+    cfg.messages = { queue: { mode: "steer" } };
     const done = Promise.withResolvers<void>();
     const test = fixture({
       cfg,
@@ -117,48 +127,6 @@ describe("X guest turns", () => {
       expect(turn.ctxPayload.ConversationToolPolicy).toBeUndefined();
       expect(turn.route.sessionKey).toBe("agent:maintainer:x:group:500");
       expect(test.replies[0]?.text).toContain("https://example.test/work/42");
-    } finally {
-      await test.stop();
-    }
-  });
-
-  it.each([
-    { name: "absent capability", capabilities: null, helperOnly: false },
-    { name: "unrelated capability", capabilities: ["unrelated-feature-v1"], helperOnly: false },
-    { name: "explicit helpers on an older host", capabilities: null, helperOnly: true },
-  ])("keeps guest ingress restricted with $name", async ({ capabilities, helperOnly }) => {
-    const cfg = guestConfig();
-    if (helperOnly) {
-      cfg.channels!.x!.guests!.tools = { allow: ["sessions_spawn", "sessions_yield", "subagents"] };
-    }
-    const done = Promise.withResolvers<void>();
-    const test = fixture({
-      cfg,
-      capabilities,
-      posts: [post("501", "99")],
-      queue: createQueue<Payload>({ onCompleted: () => done.resolve() }),
-    });
-    const running = test.start();
-    try {
-      await done.promise;
-      expect(test.dispatch).toHaveBeenCalledOnce();
-      const turn = test.dispatch.mock.calls[0]![0];
-      expect(turn.ctxPayload.ConversationToolPolicy).toEqual(
-        helperOnly ? { deny: ["*"] } : { allow: ["read", "ls"], deny: ["skills_read"] },
-      );
-      expect(turn.ctxPayload.BodyForAgent).toContain("this host supports read-only guest answers");
-      expect(turn.ctxPayload.BodyForAgent).not.toContain("hidden helpers must use");
-      expect(running.status()).toMatchObject({
-        guests: { enabled: true, helpersAvailable: false },
-      });
-      expect(
-        xPlugin.groups!.resolveToolPolicy!({
-          cfg,
-          senderId: "10",
-          groupId: "500",
-          accountId: "default",
-        }),
-      ).toBeUndefined();
     } finally {
       await test.stop();
     }
@@ -227,6 +195,35 @@ describe("X guest turns", () => {
         expect(test.api.searchConversation).not.toHaveBeenCalled();
         expect(running.status()).toMatchObject({
           guestModeBlockedReason: expect.stringContaining("X guest mode requires"),
+        });
+      } finally {
+        await test.stop();
+      }
+    },
+  );
+
+  it.each(["steer", "interrupt", undefined] as const)(
+    "refuses guests before thread reads with queue mode %s",
+    async (mode) => {
+      const cfg = guestConfig();
+      cfg.messages = { queue: mode ? { byChannel: { x: mode } } : {} };
+      const done = Promise.withResolvers<void>();
+      const test = fixture({
+        cfg,
+        posts: [post("501", "99")],
+        queue: createQueue<Payload>({ onCompleted: () => done.resolve() }),
+      });
+      const running = test.start();
+      try {
+        await done.promise;
+        expect(test.dispatch).not.toHaveBeenCalled();
+        expect(test.api.searchConversation).not.toHaveBeenCalled();
+        expect(running.status()).toMatchObject({
+          guestModeBlockedReason: expect.stringContaining("messages.queue.byChannel.x"),
+          guests: {
+            admittedToday: 0,
+            blockedReason: expect.stringContaining("messages.queue.byChannel.x"),
+          },
         });
       } finally {
         await test.stop();

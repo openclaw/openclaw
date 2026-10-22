@@ -1,5 +1,6 @@
 // Process-local cancellation handles for live cron task runs.
 
+import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
 
 const activeCronTaskRunsByRunId = new Map<
@@ -74,14 +75,16 @@ export function registerActiveCronTaskRun(params: {
   };
 }
 
-export function abortActiveCronTaskRuns(reason = "Gateway restarting."): number {
+export function abortActiveCronTaskRuns(
+  reason: string | Error = createAgentRunRestartAbortError(),
+): number {
   let aborted = 0;
   for (const handle of activeCronTaskRunsByRunId.values()) {
     if (handle.controller.signal.aborted) {
       continue;
     }
     handle.controller.abort(reason);
-    handle.onCancel?.(reason);
+    handle.onCancel?.(typeof reason === "string" ? reason : reason.message);
     aborted += 1;
   }
   // Shutdown also retires main-session runs without cancellation handles.

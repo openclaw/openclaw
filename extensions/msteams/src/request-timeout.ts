@@ -12,24 +12,37 @@ export const MSTEAMS_REQUEST_TIMEOUT_MS = 30_000;
 const MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS = 5 * 60_000;
 const MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND = 256 * 1024;
 
-// Cap optional enrichment before agent dispatch. The Teams SDK still holds the
-// webhook open for the agent turn, so this budget alone cannot prevent retries.
-const MSTEAMS_INBOUND_PREPROCESS_TIMEOUT_MS = 10_000;
+// Cap optional enrichment (team identity, quotes, thread history) before agent
+// dispatch. The Teams SDK still holds the webhook open for the agent turn, so
+// this budget alone cannot prevent retries.
+const MSTEAMS_INBOUND_ENRICHMENT_TIMEOUT_MS = 10_000;
+// Inbound media is message content, not enrichment. Authenticated Bot Framework
+// attachment views (pasted images) were measured completing in 31-50s for a
+// 663 KB image (#169917), so give the transfer chain generous headroom.
+const MSTEAMS_INBOUND_MEDIA_TIMEOUT_MS = 120_000;
 
 export type MSTeamsRequestDeadline = ProviderOperationDeadline;
 
-export function createMSTeamsInboundDeadline(): MSTeamsRequestDeadline {
+export function createMSTeamsInboundEnrichmentDeadline(): MSTeamsRequestDeadline {
   return createProviderOperationDeadline({
     label: "MS Teams inbound preprocessing",
-    timeoutMs: MSTEAMS_INBOUND_PREPROCESS_TIMEOUT_MS,
+    timeoutMs: MSTEAMS_INBOUND_ENRICHMENT_TIMEOUT_MS,
   });
 }
 
+export function createMSTeamsInboundMediaDeadline(): MSTeamsRequestDeadline {
+  return createProviderOperationDeadline({
+    label: "MS Teams inbound media",
+    timeoutMs: MSTEAMS_INBOUND_MEDIA_TIMEOUT_MS,
+  });
+}
+
+/** Per-request timeout: the operation deadline's remaining budget, else the default request cap. */
 export function resolveMSTeamsRequestTimeoutMs(deadline?: MSTeamsRequestDeadline): number {
   return deadline
     ? resolveProviderOperationTimeoutMs({
         deadline,
-        defaultTimeoutMs: MSTEAMS_REQUEST_TIMEOUT_MS,
+        defaultTimeoutMs: deadline.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS,
       })
     : MSTEAMS_REQUEST_TIMEOUT_MS;
 }
@@ -45,9 +58,8 @@ export async function withMSTeamsRequestDeadline<T>(params: {
 }
 
 export function resolveMSTeamsSharePointUploadTimeoutMs(sizeInBytes: number): number {
-  const bytes = Number.isFinite(sizeInBytes) && sizeInBytes > 0 ? Math.ceil(sizeInBytes) : 0;
   const transferBudgetMs = Math.ceil(
-    (bytes / MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND) * 1000,
+    (sizeInBytes / MSTEAMS_SHAREPOINT_UPLOAD_MIN_BYTES_PER_SECOND) * 1000,
   );
   return resolveTimerTimeoutMs(
     MSTEAMS_SHAREPOINT_UPLOAD_BASE_TIMEOUT_MS + transferBudgetMs,

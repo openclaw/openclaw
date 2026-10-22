@@ -1,4 +1,3 @@
-// Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
@@ -99,7 +98,7 @@ export async function applyFileBackedSessionStoreMaintenance(
   const maintenance = params.maintenanceConfig
     ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
     : resolveMaintenanceConfig();
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+  const preserveSessionKeys = await collectSessionMaintenancePreserveKeysForStore({
     storePath: params.storePath,
     store: params.store,
   });

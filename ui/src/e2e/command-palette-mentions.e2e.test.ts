@@ -85,7 +85,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, mentionScenario());
       const heldModule = await holdModuleResponse(
         page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
       );
       try {
         await page.goto(`${suite.server.baseUrl}chat`);

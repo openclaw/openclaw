@@ -42,6 +42,7 @@ on:
       - "scripts/windows-cmd-helpers.mjs"
       - "scripts/preinstall-package-manager-warning.mjs"
       - "scripts/prepare-git-hooks.mjs"
+      - "!patches/README.md"
 
 permissions:
   contents: read
@@ -93,6 +94,8 @@ jobs:
     if: ${{ !cancelled() && ((github.event_name == 'pull_request' && !github.event.pull_request.draft) || needs.admission.result == 'success') }}
     concurrency:
       group: ${{ github.event_name == 'workflow_dispatch' && needs.admission.outputs.group || format('testbox-validation-{0}-{1}', github.workflow, github.run_id) }}
+      # Preserve earlier waiters when unrelated leases share a budget slot.
+      queue: max
       cancel-in-progress: false
     permissions:
       contents: read
@@ -142,7 +145,7 @@ jobs:
         uses: ./.github/actions/prepare-testbox-shell
         with:
           base-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || 'HEAD' }}
-          go-version: "1.27.1"
+          go-version: "1.27.2"
 
       - name: Hydrate Testbox provider env helper
         shell: bash

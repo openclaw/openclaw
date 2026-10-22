@@ -1,15 +1,22 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
-import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import {
+  runCliProcessChild,
+  type CliProcessChildResult,
+} from "./cli-process-child.test-helpers.js";
 import { closeActiveGatewayServers } from "./gateway-backed-exit.test-helpers.js";
 
 export const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -21,12 +28,42 @@ afterEach(async () => {
 export async function prepareGatewayCliFixture(
   root: string,
   gateway: Record<string, unknown>,
-): Promise<{ stateDir: string; configPath: string }> {
+  config: Record<string, unknown> = {},
+): Promise<{ root: string; stateDir: string; configPath: string }> {
   const stateDir = path.join(root, "state");
   const configPath = path.join(stateDir, "openclaw.json");
   await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(configPath, JSON.stringify({ gateway }));
-  return { stateDir, configPath };
+  await fs.writeFile(configPath, JSON.stringify({ ...config, gateway }));
+  return { root, stateDir, configPath };
+}
+
+// Establish SQLite coordination files before asserting persistent RPC non-mutation.
+function prepareSharedStateReadArtifacts(stateDir: string): void {
+  const database = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+    readOnly: true,
+  });
+  try {
+    database.prepare("PRAGMA schema_version").get();
+  } finally {
+    database.close();
+  }
+}
+
+export function seedDeviceAuth(root: string, stateDir: string, url: string, token: string) {
+  const env = { ...process.env, HOME: root, OPENCLAW_HOME: root, OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
+  const identity = loadOrCreateDeviceIdentity({ env });
+  seedOriginDeviceToken({
+    gatewayScope: gatewayOriginScope(url),
+    deviceId: identity.deviceId,
+    role: "operator",
+    token,
+    scopes: ["operator.admin"],
+    env,
+  });
+  closeOpenClawStateDatabaseForTest();
+  prepareSharedStateReadArtifacts(stateDir);
+  return { identity, env };
 }
 
 export async function snapshotDirectoryContents(root: string): Promise<Record<string, string>> {
@@ -41,6 +78,9 @@ export async function snapshotDirectoryContents(root: string): Promise<Record<st
         await visit(absolutePath);
       } else if (stat.isSymbolicLink()) {
         snapshot[relativePath] = `symlink:${await fs.readlink(absolutePath)}`;
+      } else if (name === "openclaw.sqlite-shm") {
+        // Read-only SQLite connections may update SHM read marks, but not its size or presence.
+        snapshot[relativePath] = `file:sqlite-shared-memory:${stat.size}`;
       } else {
         snapshot[relativePath] = `file:${createHash("sha256")
           .update(await fs.readFile(absolutePath))
@@ -77,22 +117,7 @@ export async function prepareUnreachableGatewayCliFixture(params: {
     remote: { url: UNREACHABLE_GATEWAY_URL },
   });
   if (params.seeded) {
-    const stateEnv = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    seedOriginDeviceToken({
-      gatewayScope: gatewayOriginScope(UNREACHABLE_GATEWAY_URL),
-      deviceId: identity.deviceId,
-      role: "operator",
-      token: "stored-device-token",
-      scopes: ["operator.admin"],
-      env: stateEnv,
-    });
-    closeOpenClawStateDatabaseForTest();
+    seedDeviceAuth(root, stateDir, UNREACHABLE_GATEWAY_URL, "stored-device-token");
   }
   return { root, stateDir, configPath };
 }
@@ -104,12 +129,7 @@ export async function runIsolatedGatewayCli(params: {
   configPath: string;
   env?: NodeJS.ProcessEnv;
   onStdout?: (stdout: string) => void;
-}): Promise<{
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
-}> {
+}): Promise<CliProcessChildResult> {
   return await runCliProcessChild({
     nodeArgs: [
       ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),

@@ -8,8 +8,10 @@ import { createContext } from "../pages/custodian/custodian-page.test-harness.ts
 import { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { QUICK_ACTIONS_QUESTION } from "../test-helpers/custodian-quick-actions.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import type { ApplicationContext } from "./context.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { projectUpdateRunFailure } from "./update-overlay-helpers.ts";
@@ -31,6 +33,27 @@ const FAILURE: UpdateFailureTriage = {
     afterSha: "2222222222222222222222222222222222222222",
     failure: { step: "build", detail: "Disk is full" },
   },
+};
+
+function stubStorage() {
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+}
+
+function mountSurface(context: ApplicationContext) {
+  const provider = createApplicationContextProvider(context);
+  const surface = document.createElement("openclaw-custodian-surface");
+  surface.store = new CustodianSessionStore();
+  provider.append(surface);
+  document.body.append(provider);
+  return surface;
+}
+
+const ACCESS_QUESTION = {
+  id: "access",
+  header: "Access",
+  question: "How should OpenClaw work?",
+  options: [{ label: "Full access" }, { label: "Ask first" }],
 };
 
 function typeComposerDraft(surface: HTMLElement, draft: string): HTMLTextAreaElement {
@@ -73,11 +96,7 @@ describe("update triage presentation", () => {
         },
       );
       const { context } = createContext(request);
-      const provider = createApplicationContextProvider(context);
-      const surface = document.createElement("openclaw-custodian-surface");
-      surface.store = new CustodianSessionStore();
-      provider.append(surface);
-      document.body.append(provider);
+      const surface = mountSurface(context);
       await surface.updateComplete;
       await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
       const draft = "Keep my unsent question";
@@ -108,10 +127,9 @@ describe("update triage presentation", () => {
         expect(recovery).not.toHaveProperty("message");
         expect(surface.textContent).toContain("started a fresh session");
       }
-      surface.requestUpdate();
-      await surface.updateComplete;
+      typeComposerDraft(surface, draft);
+      await waitForSolid(() => expect(composer.value).toBe(draft));
       expect(admission.admit).toHaveBeenCalledOnce();
-      expect(composer.value).toBe(draft);
 
       composer.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
       await vi.waitFor(() =>
@@ -129,24 +147,11 @@ describe("update triage presentation", () => {
       async (_method: string, params: { sessionId: string; message?: string }) => ({
         sessionId: params.sessionId,
         reply: "Review the current access policy.",
-        ...(!params.message
-          ? {
-              question: {
-                id: "access",
-                header: "Access",
-                question: "How should OpenClaw work?",
-                options: [{ label: "Full access" }, { label: "Ask first" }],
-              },
-            }
-          : {}),
+        ...(!params.message ? { question: ACCESS_QUESTION } : {}),
       }),
     );
     const { context } = createContext(request);
-    const provider = createApplicationContextProvider(context);
-    const surface = document.createElement("openclaw-custodian-surface");
-    surface.store = new CustodianSessionStore();
-    provider.append(surface);
-    document.body.append(provider);
+    const surface = mountSurface(context);
     await vi.waitFor(() =>
       expect(surface.querySelector('[data-option-value="Ask first"]')).not.toBeNull(),
     );
@@ -167,9 +172,8 @@ describe("update triage presentation", () => {
     expect(composer.value).toBe(draft);
   });
 
-  it("retires changed run facts and waits for a new explicit diagnosis before sending", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
+  it("requires new diagnosis after run facts change", async () => {
+    stubStorage();
     let run = createUpdateRunFixture();
     const request = vi.fn(
       async (method: string, params?: { sessionId?: string; message?: string }) => {
@@ -186,16 +190,7 @@ describe("update triage presentation", () => {
           ? {
               sessionId: params?.sessionId,
               reply: "Review the current access policy.",
-              ...(!params?.message
-                ? {
-                    question: {
-                      id: "access",
-                      header: "Access",
-                      question: "How should OpenClaw work?",
-                      options: [{ label: "Full access" }, { label: "Ask first" }],
-                    },
-                  }
-                : {}),
+              ...(!params?.message ? { question: ACCESS_QUESTION } : {}),
             }
           : {};
       },
@@ -206,11 +201,7 @@ describe("update triage presentation", () => {
         presentUpdateFailureTriage(context, failure, admission),
     );
     const overlays = createApplicationOverlays(context.gateway, { onUpdateFailure });
-    const provider = createApplicationContextProvider(context);
-    const surface = document.createElement("openclaw-custodian-surface");
-    surface.store = new CustodianSessionStore();
-    provider.append(surface);
-    document.body.append(provider);
+    const surface = mountSurface(context);
     const diagnosticMessages = () =>
       request.mock.calls.flatMap(([method, params]) =>
         method === "openclaw.chat" && params?.message ? [params.message] : [],
@@ -280,9 +271,8 @@ describe("update triage presentation", () => {
     }
   });
 
-  it("requires an explicit action after the run finishes even with stale campaign metadata", async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
+  it("requires explicit diagnosis despite stale campaign", async () => {
+    stubStorage();
     const schedule = {
       channel: "stable",
       autoEnabled: true,
@@ -323,11 +313,7 @@ describe("update triage presentation", () => {
       onUpdateFailure: (failure, admission) =>
         presentUpdateFailureTriage(context, failure, admission),
     });
-    const provider = createApplicationContextProvider(context);
-    const surface = document.createElement("openclaw-custodian-surface");
-    surface.store = new CustodianSessionStore();
-    provider.append(surface);
-    document.body.append(provider);
+    const surface = mountSurface(context);
     try {
       await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
       await overlays.refreshUpdateStatus();
@@ -404,16 +390,12 @@ describe("update triage presentation", () => {
     },
   );
 
-  it("keeps recorded facts visible without sending when no model is configured", async () => {
+  it("shows facts without a configured model", async () => {
     const request = vi.fn();
     const { context } = createContext(request, ["openclaw.chat"], {
       agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [{ id: "main" }] },
     });
-    const provider = createApplicationContextProvider(context);
-    const surface = document.createElement("openclaw-custodian-surface");
-    surface.store = new CustodianSessionStore();
-    provider.append(surface);
-    document.body.append(provider);
+    const surface = mountSurface(context);
     const admission = { isCurrent: () => true, admit: vi.fn(() => true) };
     presentUpdateFailureTriage(context, FAILURE, admission);
     await surface.updateComplete;
@@ -429,7 +411,7 @@ describe("update triage presentation", () => {
   });
 
   it.each(["administrator", "profile", "Gateway"])(
-    "retires the facts before transport when %s changes during turn preparation",
+    "retires prepared diagnostics when %s changes",
     async (boundary) => {
       const request = vi.fn(async (method: string, params?: { sessionId?: string }) => {
         if (method === "update.run") {
@@ -461,11 +443,7 @@ describe("update triage presentation", () => {
         onUpdateFailure: (failure, admission) =>
           presentUpdateFailureTriage(context, failure, admission),
       });
-      const provider = createApplicationContextProvider(context);
-      const surface = document.createElement("openclaw-custodian-surface");
-      surface.store = new CustodianSessionStore();
-      provider.append(surface);
-      document.body.append(provider);
+      const surface = mountSurface(context);
       await surface.updateComplete;
       await vi.waitFor(() => expect(surface.store.sending).toBe(false));
       let retire = true;
@@ -506,7 +484,9 @@ describe("update triage presentation", () => {
           ),
         ).toHaveLength(0);
         expect(custodianAlertStore.alert).toBeNull();
-        expect(surface.textContent).not.toContain("Private diagnostic cause");
+        await waitForSolid(() =>
+          expect(surface.textContent).not.toContain("Private diagnostic cause"),
+        );
         expect(
           surface.store.messages.every(
             (message) => !message.text.includes("Private diagnostic cause"),
@@ -539,11 +519,7 @@ describe("update triage presentation", () => {
         });
       });
       const { context } = createContext(request);
-      const provider = createApplicationContextProvider(context);
-      const surface = document.createElement("openclaw-custodian-surface");
-      surface.store = new CustodianSessionStore();
-      provider.append(surface);
-      document.body.append(provider);
+      const surface = mountSurface(context);
       await surface.updateComplete;
       await vi.waitFor(() => expect(surface.store.canSend).toBe(true));
       const draft = "Keep my question after rejected triage";
@@ -587,7 +563,7 @@ describe("update triage presentation", () => {
     },
   );
 
-  it("bounds and redacts the recorded run identity and failure before sending diagnostics", () => {
+  it("bounds and redacts diagnostic facts", async () => {
     const { context } = createContext(vi.fn());
     const run = createUpdateRunFixture({
       phase: "finished",
@@ -604,7 +580,7 @@ describe("update triage presentation", () => {
         },
       ],
     });
-    const failure = projectUpdateRunFailure(run);
+    const failure = await projectUpdateRunFailure(run);
     expect(failure).not.toBeNull();
     if (!failure) {
       throw new Error("Expected a failed run projection");

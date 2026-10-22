@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { canonicalPathFromExistingAncestor } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { parseBunCliLauncher, renderBunCliLauncher } from "../../scripts/lib/bun-cli-launcher.mjs";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
 import { isPathInside } from "./path-guards.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 
@@ -18,6 +19,33 @@ type PreparedRuntimeRelocations = {
   find: (value: string) => { root: string; relocation: RuntimeRelocation } | undefined;
 };
 type RuntimeRelocations = readonly RuntimeRelocation[] | PreparedRuntimeRelocations;
+
+const launcherRelativePath = /(\$(?:basedir_abs|basedir_win|basedir)[/\\]|%~dp0\\)([^"\r\n]+)/gu;
+
+/** Check executable references, not cmd-shim-target metadata that may already be correct. */
+export async function verifyRuntimeLauncher(file: string, entryName: string): Promise<void> {
+  if ((await fs.lstat(file)).isSymbolicLink()) {
+    await fs.stat(file);
+    return;
+  }
+  const content = await fs.readFile(file, "utf8");
+  const bunLauncher = parseBunCliLauncher(content);
+  const base = content.includes("$basedir_abs")
+    ? await fs.realpath(path.dirname(file))
+    : path.dirname(file);
+  const targets = bunLauncher
+    ? [bunLauncher.entryPath]
+    : [...content.matchAll(launcherRelativePath)]
+        .map((match) => match[2]!.replaceAll("\\", path.sep))
+        .filter((relative) => path.basename(relative) === entryName && !/[$%]/u.test(relative))
+        .map((relative) => path.resolve(base, relative));
+  if (targets.length === 0) {
+    throw new Error("Cannot resolve the launcher's executable target");
+  }
+  for (const target of new Set(targets)) {
+    await fs.access(target);
+  }
+}
 
 /** Prepare once for the whole tree; never cache mutable filesystem observations. */
 export function prepareRuntimeRelocations(
@@ -93,51 +121,46 @@ export async function relocateRuntimeLauncher(
   const prepared = prepareRuntimeRelocations(relocations);
   const original = await fs.readFile(file, "utf8");
   const bunLauncher = parseBunCliLauncher(original);
+  let content: string;
   if (bunLauncher) {
-    const content = renderBunCliLauncher({
+    content = renderBunCliLauncher({
       bunPath: relocateRuntimePath(bunLauncher.bunPath, prepared),
       entryPath: relocateRuntimePath(bunLauncher.entryPath, prepared),
     });
-    if (content !== original) {
-      assertBeforeMutation?.();
-      await fs.writeFile(file, content);
-    }
-    return;
-  }
-  // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
-  // Resolve them before changing the directory; absolute store/runtime paths stay external.
-  let content = original.replace(
-    /(\$(?:basedir|basedir_win)[/\\]|%~dp0\\)([^"\r\n]+)/gu,
-    (match, prefix: string, relative: string) => {
+  } else {
+    // pnpm cmd-shim uses these directory-relative references on sh, cmd and PowerShell.
+    // Resolve them before changing the directory; absolute store/runtime paths stay external.
+    const sourceDir = path.dirname(sourceFile);
+    const destinationDir = path.dirname(destinationFile);
+    // pnpm 12 resolves the bin directory physically, including for not-yet-published groups.
+    const shellBase = original.includes("$basedir_abs")
+      ? await canonicalPathFromExistingAncestor(destinationDir)
+      : destinationDir;
+    content = original.replace(launcherRelativePath, (match, prefix: string, relative: string) => {
       if (/[$%]/u.test(relative)) {
         return match;
       }
-      const sourceTarget = path.resolve(
-        path.dirname(sourceFile),
-        relative.replaceAll("\\", path.sep),
-      );
-      const target = isPathInside(path.dirname(sourceFile), sourceTarget)
-        ? path.resolve(
-            path.dirname(destinationFile),
-            path.relative(path.dirname(sourceFile), sourceTarget),
-          )
+      const destinationBase = prefix.startsWith("$basedir") ? shellBase : destinationDir;
+      const sourceTarget = path.resolve(sourceDir, relative.replaceAll("\\", path.sep));
+      const target = isPathInside(sourceDir, sourceTarget)
+        ? path.resolve(destinationBase, path.relative(sourceDir, sourceTarget))
         : relocateRuntimePath(sourceTarget, prepared);
-      const replacement = path.relative(path.dirname(destinationFile), target);
+      const replacement = path.relative(destinationBase, target);
       return `${prefix}${prefix.startsWith("%") ? replacement.replaceAll("/", "\\") : replacement.replaceAll("\\", "/")}`;
-    },
-  );
-  for (const relocation of prepared.rules) {
-    for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
-      // NODE_PATH and the shim's target comment can carry absolute project paths.
-      content = content.replaceAll(
-        `${sourceRoot}${path.sep}`,
-        `${relocation.destinationRoot}${path.sep}`,
-      );
-      if (path.sep === "\\") {
+    });
+    for (const relocation of prepared.rules) {
+      for (const sourceRoot of [relocation.sourceRoot, ...(relocation.sourceAliases ?? [])]) {
+        // NODE_PATH and the shim's target comment can carry absolute project paths.
         content = content.replaceAll(
-          `${sourceRoot.replaceAll("\\", "/")}/`,
-          `${relocation.destinationRoot.replaceAll("\\", "/")}/`,
+          `${sourceRoot}${path.sep}`,
+          `${relocation.destinationRoot}${path.sep}`,
         );
+        if (path.sep === "\\") {
+          content = content.replaceAll(
+            `${sourceRoot.replaceAll("\\", "/")}/`,
+            `${relocation.destinationRoot.replaceAll("\\", "/")}/`,
+          );
+        }
       }
     }
   }
@@ -148,12 +171,9 @@ export async function relocateRuntimeLauncher(
 }
 
 export async function readRuntimeModulesManifest(file: string) {
-  const original = await fs.readFile(file, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const original = await fs
+    .readFile(file, "utf8")
+    .catch((error: unknown) => ignoreMissingUpdateCandidateFile(error) ?? null);
   if (original === null) {
     return null;
   }

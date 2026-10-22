@@ -1,34 +1,13 @@
 import { SimplePool, type Event } from "nostr-tools";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { type NostrProfile, NostrProfileSchema } from "./config-schema.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile-core.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
-interface ProfileImportResult {
-  ok: boolean;
-  profile?: NostrProfile;
-  /** The raw event (for advanced users) */
-  event?: {
-    id: string;
-    pubkey: string;
-    created_at: number;
-  };
-  error?: string;
-  /** Which relays responded */
-  relaysQueried: string[];
-  /** Which relay provided the winning event */
-  sourceRelay?: string;
-}
-
 interface ProfileImportOptions {
   pubkey: string;
   relays: string[];
-  /** Timeout per relay in milliseconds (default: 5000) */
-  timeoutMs?: number;
 }
-
-const DEFAULT_TIMEOUT_MS = 5000;
 
 function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
   const result = { ...profile };
@@ -48,15 +27,12 @@ function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
 }
 
 /** Import the latest verified kind:0 profile across the configured relays. */
-export async function importProfileFromRelays(
-  opts: ProfileImportOptions,
-): Promise<ProfileImportResult> {
+export async function importProfileFromRelays(opts: ProfileImportOptions) {
   const { pubkey, relays } = opts;
-  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DEFAULT_TIMEOUT_MS);
 
   if (!pubkey || !/^[0-9a-fA-F]{64}$/.test(pubkey)) {
     return {
-      ok: false,
+      ok: false as const,
       error: "Invalid pubkey format (must be 64 hex characters)",
       relaysQueried: [],
     };
@@ -64,14 +40,14 @@ export async function importProfileFromRelays(
 
   if (relays.length === 0) {
     return {
-      ok: false,
+      ok: false as const,
       error: "No relays configured",
       relaysQueried: [],
     };
   }
 
   const pool = new SimplePool();
-  const relaysQueried = [...relays];
+  const relaysQueried = relays;
   const subscriptions: Array<ReturnType<typeof pool.subscribeMany>> = [];
 
   try {
@@ -102,14 +78,14 @@ export async function importProfileFromRelays(
               }),
           ),
         ),
-      timeoutMs,
+      10_000,
       () => undefined,
       { ref: false },
     );
 
     if (events.length === 0) {
       return {
-        ok: false,
+        ok: false as const,
         error: "No profile found on any relay",
         relaysQueried,
       };
@@ -130,7 +106,7 @@ export async function importProfileFromRelays(
       parsedContent = JSON.parse(bestEvent.event.content);
     } catch {
       return {
-        ok: false,
+        ok: false as const,
         error: "Profile event has invalid JSON content",
         relaysQueried,
         sourceRelay: bestEvent.relay,
@@ -142,7 +118,7 @@ export async function importProfileFromRelays(
       Array.isArray(parsedContent)
     ) {
       return {
-        ok: false,
+        ok: false as const,
         error: "Profile event content must be a JSON object",
         relaysQueried,
         sourceRelay: bestEvent.relay,
@@ -158,7 +134,7 @@ export async function importProfileFromRelays(
     const validatedProfile = NostrProfileSchema.safeParse(sanitizedProfile);
     if (!validatedProfile.success) {
       return {
-        ok: false,
+        ok: false as const,
         error: "Profile event content has invalid fields",
         relaysQueried,
         sourceRelay: bestEvent.relay,
@@ -166,7 +142,7 @@ export async function importProfileFromRelays(
     }
 
     return {
-      ok: true,
+      ok: true as const,
       profile: validatedProfile.data,
       event: {
         id: bestEvent.event.id,

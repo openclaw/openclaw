@@ -15,18 +15,6 @@ export function getPendingCronSessionCleanup(
   return pendingSessionCleanups.get(cronStoreKey(state.deps.storePath))?.get(jobId)?.done;
 }
 
-/** Deferred session cleanup remains a filesystem owner after its cron row disappears. */
-export function hasPendingCronSessionCleanupForAgent(agentId: string): boolean {
-  for (const jobs of pendingSessionCleanups.values()) {
-    for (const cleanup of jobs.values()) {
-      if (cleanup.agentId === agentId) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 /** Registers cleanup at the store-partition owner shared by sibling service instances. */
 export function registerPendingCronSessionCleanup(
   state: CronServiceState,

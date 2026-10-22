@@ -1,61 +1,26 @@
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { GatewayRetainedWorkScope } from "../../shared/async-work-scope.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
+import { withSandboxRegistryPublication } from "./registry-publication.js";
 import type { SandboxRegistryEntry } from "./registry.types.js";
 
 const lifetimes = new Map<string, ReturnType<typeof createLifetime>>();
 
 function createLifetime({ admission }: OpenClawStateWorkerContext) {
   const key = admission.identity.canonicalPath;
-  let work = new AsyncWorkScope();
-  const scopes = new Set([work]);
-  let gateways = 0;
-  let closing = false;
-  const drain = (scope: AsyncWorkScope) =>
-    AsyncWorkScope.runWhenAllIdle(
-      () => [scope],
-      async () => {
-        await scope.drain();
-        scopes.delete(scope);
-      },
-    );
+  const work = new GatewayRetainedWorkScope();
   const owner = {
-    retainGateway() {
-      if (closing) {
-        work = new AsyncWorkScope();
-        scopes.add(work);
-        closing = false;
-      }
-      gateways += 1;
-      let released = false;
-      let pending: Promise<void> | undefined;
-      const beginClose = () => {
-        if (!released) {
-          released = true;
-          if (--gateways === 0) {
-            closing = true;
-            pending = drain(work);
-          }
-        }
-      };
-      return {
-        beginClose,
-        drain: () => {
-          beginClose();
-          return pending ?? Promise.resolve();
-        },
-      };
-    },
+    retainGateway: () => work.retainGateway(),
     run<T>(run: () => Promise<T>): Promise<T> {
-      if (closing) {
+      if (work.isClosing) {
         return Promise.reject(new Error("Sandbox registry admission is closed"));
       }
       // Accepted removal owns its persistence signal across scheduler cancellation.
-      return work.track(run);
+      return work.scope.track(run);
     },
   };
   const unregister = registerOpenClawStateDatabaseAsyncResource({
@@ -65,13 +30,10 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
         identity.key === admission.identity.key ||
         identity.canonicalPath === admission.identity.canonicalPath
       ) {
-        closing = true;
-        await Promise.all([...scopes].map(drain));
-        if (gateways > 0) {
+        await work.beginDrainAll();
+        if (work.hasGateways) {
           // Read admission may retire while the Gateway still owns the close prelude.
-          work = new AsyncWorkScope();
-          scopes.add(work);
-          closing = false;
+          work.reopen();
         } else {
           lifetimes.delete(key);
           unregister();
@@ -133,6 +95,7 @@ export async function finishSandboxRegistryRemoval(
     cleanupContext,
     assertOwned,
     identity,
+    context.maintenanceScope,
   );
   if (!store) {
     throw new Error("Sandbox removal lost its original shared database");
@@ -144,7 +107,11 @@ export async function finishSandboxRegistryRemoval(
       (scope) => scope.execute({ type: "sandboxRegistry.finishRemoval", input: entry }),
       cleanupContext,
       assertOwned,
-      createSqliteWorkerWriteAdmission(assertOwned, [context.admission.databasePath]),
+      withSandboxRegistryPublication(
+        createSqliteWorkerWriteAdmission(assertOwned, [context.admission.databasePath]),
+        () => identity.key,
+        assertOwned,
+      ),
     );
   } catch (error) {
     errors.push(error);

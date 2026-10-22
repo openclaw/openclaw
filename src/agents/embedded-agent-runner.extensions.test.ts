@@ -16,7 +16,6 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentToolResultMiddleware,
-  AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
 } from "../plugins/agent-tool-result-middleware-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -31,10 +30,9 @@ import { cleanupTempPluginTestEnvironment } from "./test-helpers/temp-plugin-ext
 import { jsonResult } from "./tools/common.js";
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const tempDirs: string[] = [];
 
 afterEach(() => {
-  cleanupTempPluginTestEnvironment(tempDirs, originalBundledPluginsDir);
+  cleanupTempPluginTestEnvironment([], originalBundledPluginsDir);
 });
 
 function installMiddleware(handler: AgentToolResultMiddleware) {
@@ -54,9 +52,8 @@ type FactoryOverrides = Partial<Parameters<typeof buildEmbeddedExtensionFactorie
 function createFactory(overrides: FactoryOverrides = {}) {
   return buildEmbeddedExtensionFactories({
     cfg: undefined,
+    workspaceDir: "/workspace",
     sessionManager: overrides.sessionManager ?? SessionManager.inMemory(),
-    provider: "openai",
-    modelId: "gpt-5.4",
     model: undefined,
     ...overrides,
   })[0];
@@ -67,20 +64,9 @@ async function createToolResultRunner(overrides: FactoryOverrides = {}) {
   const factory = createFactory({ sessionManager, ...overrides });
   assert(factory, "Expected embedded tool-result extension factory");
   const runtime = createExtensionRuntime();
-  const extension = await loadExtensionFromFactory(
-    factory,
-    "/tmp",
-    createEventBus(),
-    runtime,
-    "<embedded-test>",
-  );
-  return new ExtensionRunner(
-    [extension],
-    runtime,
-    "/tmp",
-    sessionManager,
-    ModelRegistry.inMemory(AuthStorage.inMemory()),
-  );
+  const extension = await loadExtensionFromFactory(factory, "/tmp", createEventBus(), runtime);
+  const models = ModelRegistry.inMemory(AuthStorage.inMemory());
+  return new ExtensionRunner([extension], runtime, "/tmp", sessionManager, models);
 }
 
 async function createToolResultHandler(overrides: FactoryOverrides = {}) {
@@ -135,14 +121,12 @@ describe("buildEmbeddedExtensionFactories", () => {
       sessionKey: "agent:main:discord:channel:normal",
       runId: "run-normal",
     };
-    const middleware = vi.fn(
-      (event: AgentToolResultMiddlewareEvent, _context: AgentToolResultMiddlewareContext) => ({
-        result: {
-          ...textToolResult("middleware-observed", { observedTool: event.toolName }),
-          terminate: true,
-        },
-      }),
-    );
+    const middleware = vi.fn((event: AgentToolResultMiddlewareEvent) => ({
+      result: {
+        ...textToolResult("middleware-observed", { observedTool: event.toolName }),
+        terminate: true,
+      },
+    }));
     installMiddleware(middleware);
 
     const runner = await createToolResultRunner(identity);
@@ -179,20 +163,13 @@ describe("buildEmbeddedExtensionFactories", () => {
 
     const handler = await createToolResultHandler();
 
-    const first = await handler?.({
-      toolName: "exec",
-      ...textToolResult("raw 1", {}),
-    });
-    const second = await handler?.({
-      toolName: "exec",
-      ...textToolResult("raw 2", {}),
-    });
+    const first = await handler({ toolName: "exec", ...textToolResult("raw 1") });
+    const second = await handler({ toolName: "exec", ...textToolResult("raw 2") });
 
     expect(first).toEqual(textToolResult("compacted 1", {}));
     expect(second).toEqual(textToolResult("compacted 2", {}));
-    expect(seenToolCallIds).toHaveLength(2);
-    expect(seenToolCallIds[0]).toMatch(/^openclaw-/);
-    expect(seenToolCallIds[1]).toMatch(/^openclaw-/);
+    const generatedId = expect.stringMatching(/^openclaw-/);
+    expect(seenToolCallIds).toEqual([generatedId, generatedId]);
     expect(seenToolCallIds[0]).not.toBe(seenToolCallIds[1]);
   });
 
@@ -202,10 +179,7 @@ describe("buildEmbeddedExtensionFactories", () => {
       seenMiddlewareArgs.push(structuredClone(event.args));
       (event.args as { url?: string }).url = "https://mutated.example";
       return {
-        result: textToolResult("redacted output", {
-          origin: "redacted.example",
-          status: 200,
-        }),
+        result: textToolResult("redacted output", { origin: "redacted.example", status: 200 }),
       };
     });
     const terminal = await createTerminalRun("middleware", (params, result) => {
@@ -251,81 +225,54 @@ describe("buildEmbeddedExtensionFactories", () => {
     );
   });
 
-  it("stores private send receipts without overriding middleware details", async () => {
-    installMiddleware((event) => ({
-      result: {
-        content: event.result.content,
-        details: { redacted: true },
-      },
-    }));
+  it.each([false, true])(
+    "preserves private delivery receipts when middleware fails=%s",
+    async (fails) => {
+      installMiddleware((event) => {
+        if (fails) {
+          throw new Error("redaction failed");
+        }
+        return { result: { content: event.result.content, details: { redacted: true } } };
+      });
+      const receipt = {
+        toolSend: fails
+          ? { to: "channel:C123" }
+          : { to: "channel:resolved-id", threadId: "root-1" },
+        messageDelivery: {
+          status: "settled",
+          primaryPlatformMessageId: fails ? "1700000000.000100" : "message-1",
+          partialDelivery: false,
+          createdThreadIds: fails ? [] : ["root-1"],
+        },
+      };
+      const sessionManager = SessionManager.inMemory();
+      const handler = await createToolResultHandler({ sessionManager });
 
-    const receipt = {
-      toolSend: { to: "channel:resolved-id", threadId: "root-1" },
-      messageDelivery: {
-        status: "settled",
-        primaryPlatformMessageId: "message-1",
-        partialDelivery: false,
-        createdThreadIds: ["root-1"],
-      },
-    };
-    const sessionManager = SessionManager.inMemory();
-    const handler = await createToolResultHandler({ sessionManager });
+      const result = await handler({
+        toolName: "message",
+        toolCallId: "call-message",
+        input: { action: "send", target: "C123" },
+        ...textToolResult(
+          fails ? "raw result must stay private" : "Sent.",
+          structuredClone(receipt),
+        ),
+      });
 
-    const result = await handler?.({
-      toolName: "message",
-      toolCallId: "call-message",
-      content: [{ type: "text", text: "Sent." }],
-      details: structuredClone(receipt),
-    });
-
-    expect(result).toEqual(textToolResult("Sent.", { redacted: true }));
-    expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toEqual({
-      details: receipt,
-    });
-    expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toBeUndefined();
-  });
-
-  it("keeps a confirmed send successful when result middleware fails", async () => {
-    installMiddleware(() => {
-      throw new Error("redaction failed");
-    });
-
-    const receipt = {
-      toolSend: { to: "channel:C123" },
-      messageDelivery: {
-        status: "settled",
-        primaryPlatformMessageId: "1700000000.000100",
-        partialDelivery: false,
-        createdThreadIds: [],
-      },
-    };
-    const sessionManager = SessionManager.inMemory();
-    const handler = await createToolResultHandler({ sessionManager });
-
-    const result = await handler?.({
-      toolName: "message",
-      toolCallId: "call-message",
-      input: { action: "send", target: "C123" },
-      content: [{ type: "text", text: "raw result must stay private" }],
-      details: {
-        ok: true,
-        result: { messageId: "1700000000.000100", channelId: "C123" },
-        ...structuredClone(receipt),
-      },
-    });
-
-    expect(result).toEqual({
-      content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
-      details: {
-        ok: true,
-        deliveryStatus: "sent",
-        middlewareWarning: "post-processing failed",
-      },
-    });
-    expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toEqual({
-      details: receipt,
-    });
-  });
+      expect(result).toEqual(
+        fails
+          ? textToolResult("Message delivered, but result post-processing failed.", {
+              ok: true,
+              deliveryStatus: "sent",
+              middlewareWarning: "post-processing failed",
+            })
+          : textToolResult("Sent.", { redacted: true }),
+      );
+      expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toEqual({
+        details: receipt,
+      });
+      expect(consumeEmbeddedToolReceipt(sessionManager, "call-message")).toBeUndefined();
+    },
+  );
 
   it("keeps an accepted sessions_spawn launch successful even when the event is flagged as an error", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -343,8 +290,7 @@ describe("buildEmbeddedExtensionFactories", () => {
       toolName: "sessions_spawn",
       toolCallId: "call-spawn",
       input: {},
-      content: acceptedResult.content,
-      details: acceptedResult.details,
+      ...acceptedResult,
       isError: true,
     });
 

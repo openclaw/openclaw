@@ -33,7 +33,13 @@ function resolveNativeWorkerCount(env: NodeJS.ProcessEnv): number {
 
 /** Applies local Vitest scheduling and native worker budget env. */
 export function resolveVitestProcessEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const baseEnv = resolveLocalVitestEnv(env);
+  // Node and Chromium fix their default Intl locale at startup, so pin the
+  // locale CI uses; otherwise host locales change formatted test output.
+  const baseEnv: NodeJS.ProcessEnv = {
+    ...resolveLocalVitestEnv(env),
+    LANG: "C.UTF-8",
+    LC_ALL: "C.UTF-8",
+  };
   if (!shouldApplyNativeWorkerBudget(baseEnv)) {
     return baseEnv;
   }

@@ -19,7 +19,6 @@ export function createChannelDirectoryAdapter(
   };
 }
 
-/** Build the common empty directory surface for channels without directory support. */
 export function createEmptyChannelDirectoryAdapter(): ChannelDirectoryAdapter {
   return createChannelDirectoryAdapter({
     listPeers: emptyChannelDirectoryList,

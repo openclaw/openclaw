@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync, resolveRootPathSync } from "../infra/boundary-path.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -89,22 +90,22 @@ export function assertDoctorSqliteMaintenancePathsNotAliased(
   }
 }
 
+function readMaintenancePathStat(filePath: string): fs.Stats | undefined {
+  try {
+    return fs.lstatSync(filePath);
+  } catch (error) {
+    return ignoreMissingPath(error);
+  }
+}
+
 function inspectMaintenancePath(
   operation: string,
   protectedPath: string,
   ownershipRoots: readonly string[],
 ): fs.Stats | undefined {
   assertPathComponentsNotSymbolicLinks(operation, protectedPath, ownershipRoots);
-  let stat: fs.Stats;
-  try {
-    stat = fs.lstatSync(protectedPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-  if (stat.isSymbolicLink()) {
+  const stat = readMaintenancePathStat(protectedPath);
+  if (stat?.isSymbolicLink()) {
     throw new Error(
       `Cannot run ${operation} for a symbolic-link path: ${protectedPath}. Replace the symbolic link with an owned regular file and retry.`,
     );
@@ -125,14 +126,9 @@ function assertPathComponentsNotSymbolicLinks(
   let currentPath = rootPath;
   for (const segment of relativePath.split(path.sep).filter(Boolean)) {
     currentPath = path.join(currentPath, segment);
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(currentPath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return;
-      }
-      throw error;
+    const stat = readMaintenancePathStat(currentPath);
+    if (!stat) {
+      return;
     }
     if (stat.isSymbolicLink()) {
       throw new Error(

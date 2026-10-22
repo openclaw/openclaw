@@ -21,6 +21,12 @@ type IconGridFinding = {
 const geometry =
   /^(?:display|box-sizing|(?:min-|max-)?(?:width|height)|padding(?:-.+)?|border(?:-.+)?|(?:place|align|justify)-(?:items|content|self)|grid(?:-.+)?|gap|position|transform|margin(?:-.+)?)$/u;
 
+// Takes unknown: narrowing selectorParser.Node (which includes Selector) makes
+// TypeScript 7.1 report TS5115 on the library's self-referential Selector type.
+function isCompoundEdge(node: unknown): boolean {
+  return node === undefined || selectorParser.isCombinator(node);
+}
+
 function px(value: string): number | undefined {
   if (value === "0" || value === "0px") {
     return 0;
@@ -82,18 +88,23 @@ function geometryRules(root: Root): GeometryRule[] {
         if (parent.type === "rule") {
           contextSelectors = parent.selectors.flatMap((prefix) =>
             contextSelectors.map((child) => {
-              let nested = false;
-              const parsed = selectorParser((tree) =>
-                tree.walkNesting((node) => {
-                  nested = true;
-                  node.replaceWith(
-                    ...selectorParser()
-                      .astSync(prefix)
-                      .nodes[0]!.nodes.map((part) => part.clone()),
-                  );
-                }),
-              ).processSync(child);
-              return nested ? parsed : prefix + " " + child;
+              const positions: number[] = [];
+              selectorParser()
+                .astSync(child)
+                .walkNesting((node) => {
+                  positions.push(node.sourceIndex);
+                });
+              // Replace only parsed nesting tokens, from the end so source offsets stay valid.
+              // Ampersands inside strings, escapes, or comments are not nesting tokens.
+              return positions.length
+                ? positions
+                    .toReversed()
+                    .reduce(
+                      (selector, index) =>
+                        selector.slice(0, index) + prefix + selector.slice(index + 1),
+                      child,
+                    )
+                : prefix + " " + child;
             }),
           );
         }
@@ -171,13 +182,10 @@ function matchesRule(
           [...rule.attributes].some((name) => dynamicAttributes.has(name)))
       ) {
         const tree = selectorParser().astSync(selector);
-        const removeUnknown = (node: selectorParser.Node) => {
-          const previous = node.prev(),
-            next = node.next();
-          if (
-            (!previous || previous.type === "combinator") &&
-            (!next || next.type === "combinator")
-          ) {
+        const removeUnknown = (
+          node: selectorParser.Attribute | selectorParser.Identifier | selectorParser.Pseudo,
+        ) => {
+          if (isCompoundEdge(node.prev()) && isCompoundEdge(node.next())) {
             node.replaceWith(selectorParser.universal({ value: "*" }));
           } else {
             node.remove();

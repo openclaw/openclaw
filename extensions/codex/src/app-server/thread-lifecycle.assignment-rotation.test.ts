@@ -6,6 +6,7 @@ import {
   claimCodexAppServerLiveThread,
   ensureCodexAppServerClientRuntime,
   retainCodexAppServerLiveThread,
+  protectCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import type { RetainedLiveThread } from "./client-thread-owner.js";
 import { createCodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
@@ -36,10 +37,18 @@ setupRunAttemptTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(resetThreadLifecycleTestFixtures);
 
-async function fixture() {
+async function fixture(withProjection = false) {
   const cwd = tempDirs.make("codex-assignment-rotation-");
   const params = createParams(path.join(cwd, "session.jsonl"), cwd);
+  params.disableTools = false;
   params.agentId = "main";
+  if (withProjection) {
+    params.contextEngine = {
+      info: { id: "test", name: "Test", ownsCompaction: true },
+      assemble: vi.fn(),
+      compact: vi.fn(),
+    } as never;
+  }
   const identity = {
     kind: "session" as const,
     agentId: "main",
@@ -82,6 +91,15 @@ async function fixture() {
     appServer: createAppServerOptions(),
     nativeCodeModeEnabled: true,
     userMcpServersEnabled: false,
+    ...(withProjection
+      ? {
+          contextEngineProjection: {
+            mode: "thread_bootstrap" as const,
+            epoch: "before",
+            fingerprint: "before",
+          },
+        }
+      : {}),
     mcpServersFingerprint: "mcp-before",
     mcpServersFingerprintEvaluated: true,
     appServerRuntimeFingerprint: "connection-A",
@@ -150,7 +168,7 @@ async function fixture() {
     const { lease: _lease, ...durable } = current;
     return structuredClone(durable);
   };
-  expect(readAssignments(parent.threadId)).toEqual(assignments);
+  expect(await readAssignments(parent.threadId)).toEqual(assignments);
   return {
     ...wire,
     options,
@@ -193,7 +211,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
         }),
       ]);
       expect(f.readState()).toEqual(before);
-      expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+      expect(await f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
       expect(f.releasePredecessor).toHaveBeenCalledExactlyOnceWith(
         f.parent.threadId,
         undefined,
@@ -205,14 +223,14 @@ describe("native assignment custody across ordinary parent rotation", () => {
     }
     const replacement = await pending;
     expect(f.store.read(f.identity)?.threadId).toBe("parent-2");
-    expect(f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
+    expect(await f.readAssignments(replacement.threadId, replacement)).toEqual(f.assignments);
   });
 
   it("does not expose the old assignments through a different connection", async () => {
     const f = await fixture();
     const replacement = await f.rotate({ appServerRuntimeFingerprint: "connection-B" });
     expect(replacement.appServerRuntimeFingerprint).toBe("connection-B");
-    expect(f.readAssignments(replacement.threadId, replacement)).toEqual([]);
+    expect(await f.readAssignments(replacement.threadId, replacement)).toEqual([]);
   });
 
   it.each(["start", "revoked", "conflict"] as const)(
@@ -261,7 +279,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
       );
       expect(f.readState()).toEqual(expected);
       assert(expected?.state === "active");
-      expect(f.readAssignments(expected.binding.threadId)).toEqual(f.assignments);
+      expect(await f.readAssignments(expected.binding.threadId)).toEqual(f.assignments);
       expect(f.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(2);
       expect(
         f.request.mock.calls
@@ -305,7 +323,31 @@ describe("native assignment custody across ordinary parent rotation", () => {
     expect(methods.filter((method) => method === "thread/unsubscribe")).toEqual([]);
     expect(methods.filter((method) => method === "thread/start")).toHaveLength(1);
     expect(f.readState()).toEqual(before);
-    expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+    expect(await f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+  });
+
+  it("refreshes context while background cleanup retains the predecessor", async () => {
+    const f = await fixture(true);
+    const claim = await claimCodexAppServerLiveThread(f.client, f.parent.threadId);
+    assert(claim);
+    const releaseProtection = protectCodexAppServerLiveThread(f.client, f.parent.threadId);
+    await claim.release(f.parent.threadId);
+    try {
+      const next = await f.rotate({
+        mcpServersFingerprint: "mcp-before",
+        contextEngineProjection: { mode: "thread_bootstrap", epoch: "after", fingerprint: "after" },
+      });
+      expect(next.threadId).toBe("parent-2");
+      const stored = f.readState();
+      assert(stored?.state === "active");
+      expect(stored.binding.threadId).toBe(next.threadId);
+      expect(next.contextEngine?.projection?.epoch).toBe("after");
+      expect(f.releasePredecessor).not.toHaveBeenCalled();
+      expect(await f.readAssignments(next.threadId)).toEqual(f.assignments);
+    } finally {
+      releaseProtection();
+    }
+    await vi.waitFor(() => expect(f.releasePredecessor).toHaveBeenCalledTimes(1));
   });
 
   it("refuses a claimed predecessor before starting or committing a successor", async () => {
@@ -316,7 +358,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
     try {
       await expect(f.rotate()).rejects.toThrow("claimed by active work; stop it first");
       expect(f.readState()).toEqual(before);
-      expect(f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
+      expect(await f.readAssignments(f.parent.threadId)).toEqual(f.assignments);
       expect(f.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(1);
       expect(f.releasePredecessor).not.toHaveBeenCalled();
       expect(() => claim.assertCurrent()).not.toThrow();

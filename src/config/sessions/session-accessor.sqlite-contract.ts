@@ -21,13 +21,6 @@ export type {
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
 
-export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
-
-export type SessionEntryStatusSelection = {
-  statuses: readonly SessionEntryStatus[];
-  presenceOnly?: boolean;
-};
-
 export type TranscriptWriteSnapshot<T> = {
   result: T;
   lifecycleRevision?: string;
@@ -64,6 +57,8 @@ export type SessionTranscriptBoundedActiveContext = {
   totalEvents: number;
   transcriptMutationAt: number | null;
   truncated: boolean;
+  /** Every indexed active entry is present, without a read fence or byte/event omission. */
+  completeActivePath?: true;
 };
 
 export type CanonicalSessionValidationResult = {
@@ -78,12 +73,10 @@ export type SqliteSessionReclamationDiagnostics = {
   kind?:
     | "archive-publish-prepare"
     | "archive-publish-record"
-    | "deletion-plan"
     | "entry"
     | "lifecycle-artifacts"
     | "lifecycle-projection-plan"
     | "lifecycle-projection-commit"
-    | "lifecycle-projection-count"
     | "history-eviction"
     | "historical-generation"
     | "maintenance-plan"
@@ -100,7 +93,7 @@ export type SqliteSessionReclamationDiagnostics = {
 /** One validated request owns this record until its observed release event. */
 export type SqliteSessionReclamationAdmissionDiagnostics = {
   admissionId: number;
-  releaseCause?: "worker-release" | "worker-exit";
+  releaseCause?: "preliminary-release" | "worker-release" | "worker-exit";
 };
 
 export type SqliteSessionDatabaseAdmissionDiagnostics = {
@@ -127,6 +120,7 @@ export type SqliteSessionArtifactPreparationDiagnostics =
 
 /** One pruning attempt retains only aggregate stage observations. */
 export type SqliteSessionArchivePruningDiagnostics = {
+  highWaterBytes?: number;
   trigger: "initial" | "after-eviction" | "final";
   checkpointCalls?: number;
   checkpointIncomplete?: number;
@@ -181,6 +175,7 @@ export type SessionTranscriptInstanceListOptions = {
   /** Include empty and internal windows when inspecting recorded source metadata. */
   includeAllWindows?: boolean;
   sessionId?: string;
+  sessionIds?: readonly string[];
 };
 
 export type TranscriptEventAppendOptions = {
@@ -215,7 +210,6 @@ export type {
   ExactSessionEntry,
   LatestTranscriptAssistantText,
   SessionAccessScope,
-  SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,

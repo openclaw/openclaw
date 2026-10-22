@@ -1,6 +1,49 @@
+import type { JSX } from "@solidjs/web";
 import { isSensitiveConfigPath } from "../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../api/types.ts";
-import { hintForPath, isSensitiveLeafValue, pathKey } from "../lib/config-form-utils.ts";
+import {
+  hintForPath,
+  isSensitiveLeafValue,
+  pathKey,
+  type JsonSchema,
+} from "../lib/config-form-utils.ts";
+
+export type ConfigFormProps = {
+  schema: JsonSchema | null;
+  uiHints: ConfigUiHints;
+  value: Record<string, unknown> | null;
+  rawAvailable?: boolean;
+  disabled?: boolean;
+  unsupportedPaths?: string[];
+  searchQuery?: string;
+  activeSection?: string | null;
+  activeSubsection?: string | null;
+  showAdvanced?: boolean;
+  forceAdvancedSection?: string | null;
+  onShowAdvanced: () => void;
+  onHideAdvanced?: () => void;
+  sectionActions?: JSX.Element;
+  showSectionDocs?: boolean;
+  sectionPrelude?: JSX.Element;
+  embedded?: boolean;
+  revealSensitive?: boolean;
+  maskSensitive?: boolean;
+  isSensitivePathRevealed?: (path: Array<string | number>) => boolean;
+  onToggleSensitivePath?: (path: Array<string | number>) => void;
+  onPatch: (path: Array<string | number>, value: unknown) => void;
+  onRemove?: (path: Array<string | number>) => void;
+};
+
+export type ConfigTierGroupsProps = {
+  schema: JsonSchema;
+  path: Array<string | number>;
+  hints: ConfigUiHints;
+  revealAdvanced: boolean;
+  onShowAdvanced: () => void;
+  onHideAdvanced?: () => void;
+  renderTier: (node: () => JsonSchema) => JSX.Element;
+  commonPrelude?: JSX.Element;
+};
 
 export {
   hintForPath,
@@ -91,7 +134,7 @@ function countSensitiveConfigValuesInner(
   };
   if (Array.isArray(value)) {
     value.some(visit);
-  } else if (value && typeof value === "object") {
+  } else if (typeof value === "object") {
     Object.entries(value).some(([childKey, childValue]) => visit(childValue, childKey));
   }
   return count;

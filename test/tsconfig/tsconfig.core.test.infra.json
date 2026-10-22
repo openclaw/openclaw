@@ -10,6 +10,8 @@
     "../../src/media/**/*.test.tsx"
   ],
   "exclude": [
+    "../../src/infra/heartbeat-*.test.ts",
+    "../../src/infra/heartbeat-*.test.tsx",
     "../../node_modules",
     "../../dist",
     "../../**/dist/**",

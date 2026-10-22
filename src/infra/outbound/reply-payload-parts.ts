@@ -2,16 +2,7 @@ import { normalizeStringEntries } from "../../../packages/normalization-core/src
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 
 /** Derived sendability facts for text/media outbound payload delivery. */
-export type SendableOutboundReplyParts = {
-  text: string;
-  trimmedText: string;
-  /** Normalized non-empty media URLs. */
-  mediaUrls: string[];
-  mediaCount: number;
-  hasText: boolean;
-  hasMedia: boolean;
-  hasContent: boolean;
-};
+export type SendableOutboundReplyParts = ReturnType<typeof resolveSendableOutboundReplyParts>;
 
 /** Prepared payload entry that keeps source indexing plus reusable projections. */
 export type OutboundPayloadPlan = {
@@ -51,7 +42,7 @@ export function hasOutboundText(payload: { text?: string }, options?: { trim?: b
 export function resolveSendableOutboundReplyParts(
   payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string },
   options?: { text?: string },
-): SendableOutboundReplyParts {
+) {
   const text = options?.text ?? payload.text ?? "";
   const trimmedText = text.trim();
   const mediaUrls = normalizeStringEntries(resolveOutboundMediaUrls(payload));

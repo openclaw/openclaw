@@ -1,6 +1,4 @@
 /**
- * Sandbox skill runtime input selection.
- *
  * Sandboxed runs must build prompt-facing skill entries from readable in-sandbox
  * copies instead of reusing host-path snapshots.
  */
@@ -19,6 +17,7 @@ import type {
 } from "../../skills/types.js";
 import { resolveSkillReadPath } from "../../skills/workspace-skill-read-path.js";
 import type { SandboxContext } from "../sandbox/types.js";
+import { resolveSessionSkillResourceCatalog } from "../session-placement-skill-resources.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
 type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
@@ -30,6 +29,7 @@ type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
       | "containerWorkdir"
       | "workspaceAccess"
       | "skillUsagePaths"
+      | "readOnlyResourceMounts"
     >
   >;
 
@@ -123,6 +123,15 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
+    const delivered = resolveSessionSkillResourceCatalog(params.sandbox.readOnlyResourceMounts);
+    if (delivered) {
+      return {
+        skillsWorkspaceDir,
+        skillsPromptWorkspaceDir: params.sandbox.containerWorkdir ?? skillsWorkspaceDir,
+        skillsSnapshot: delivered.snapshot,
+        workspaceOnly: true,
+      };
+    }
     const snapshot = params.skillsSnapshot;
     const sourceReadPathBySkillName = indexFirstByKey(
       snapshot?.resolvedSkills ?? [],
@@ -224,12 +233,7 @@ export function remapSkillReferencePaths(
       );
     }
   }
-  const visited = new Set<string>();
-  for (const item of items) {
-    if (visited.has(item.skillFile)) {
-      continue;
-    }
-    visited.add(item.skillFile);
+  for (const item of indexFirstByKey(items, (entry) => entry.skillFile).values()) {
     const matches = items.filter((candidate) => candidate.skillFile === item.skillFile);
     const physicalTarget =
       matches.find((candidate) => candidate.sourceReadPath === undefined) ??

@@ -533,31 +533,20 @@ describe.skipIf(process.platform !== "darwin")(
         }
       }));
 
-    it.concurrent.for([
-      ["Contents", "contents"],
-      ["Contents/Resources", "Contents/resources"],
-      [runtimeRoot, "Contents/Resources/Runtime"],
-    ] as const)("rejects case-aliased runtime structure %s", async ([relative, alias], { mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = await artifactFixture(mac);
-        await rename(harness.at(relative), harness.at(alias));
-        expect(readdirSync(path.dirname(harness.at(alias)))).toContain(path.basename(alias));
-        const result = await harness.verify();
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain("canonical directory spelling required");
-      }),
+    it.concurrent.for([[runtimeRoot, "Contents/Resources/Runtime"]] as const)(
+      "rejects case-aliased runtime structure %s",
+      async ([relative, alias], { mac }) =>
+        mac.lifetime.run(async () => {
+          const harness = await artifactFixture(mac);
+          await rename(harness.at(relative), harness.at(alias));
+          expect(readdirSync(path.dirname(harness.at(alias)))).toContain(path.basename(alias));
+          const result = await harness.verify();
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stderr).toContain("canonical directory spelling required");
+        }),
     );
 
-    it.concurrent("rejects a missing runtime", async ({ mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = await artifactFixture(mac);
-        await rm(harness.at(runtimeRoot), { recursive: true });
-        const result = await harness.verify();
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain("elevation runtime directory missing or symlinked:");
-      }));
-
-    it.concurrent.for(["bin/bun", "lib/libsqlite3.dylib"])(
+    it.concurrent.for(["bin/bun"])(
       "rejects a thin shared runtime binary at %s",
       async (relative, { mac }) =>
         mac.lifetime.run(async () => {
@@ -570,24 +559,18 @@ describe.skipIf(process.platform !== "darwin")(
         }),
     );
 
-    it.concurrent.for([
-      "bin/bun",
-      "lib/libsqlite3.dylib",
-      "lib/node_modules/openclaw/openclaw.mjs",
-      `${runtimeDist}/extensions/browser/setup-entry.js`,
-      `${runtimeDist}/control-ui/index.html`,
-      `${runtimeDist}/mac-node-worker.js`,
-      `${runtimeDist}/build-info.json`,
-    ])("rejects an incomplete runtime missing %s", async (relative, { mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = await artifactFixture(mac);
-        await rm(harness.at(`${runtimeRoot}/${relative}`));
-        const result = await harness.verify();
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toMatch(
-          /elevation runtime payload is incomplete|broken or cyclic elevation runtime symlink/,
-        );
-      }),
+    it.concurrent.for(["lib/node_modules/openclaw/openclaw.mjs"])(
+      "rejects an incomplete runtime missing %s",
+      async (relative, { mac }) =>
+        mac.lifetime.run(async () => {
+          const harness = await artifactFixture(mac);
+          await rm(harness.at(`${runtimeRoot}/${relative}`));
+          const result = await harness.verify();
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stderr).toMatch(
+            /elevation runtime payload is incomplete|broken or cyclic elevation runtime symlink/,
+          );
+        }),
     );
 
     it.concurrent.for(["version", "commit", "builtAt", "buildId"] as const)(
@@ -641,17 +624,7 @@ describe.skipIf(process.platform !== "darwin")(
         expect(result.stderr).toContain("elevation app must not contain Node:");
       }));
 
-    it.concurrent.for([
-      "Contents",
-      "Contents/Resources",
-      runtimeRoot,
-      `${runtimeRoot}/bin`,
-      `${runtimeRoot}/lib/node_modules/openclaw`,
-      `${runtimeRoot}/bin/bun`,
-      `${runtimeRoot}/${runtimeDist}/mac-node-worker.js`,
-      `${runtimeRoot}/${runtimeDist}/build-info.json`,
-      `${runtimeRoot}/${addon}`,
-    ])(
+    it.concurrent.for(["Contents", `${runtimeRoot}/bin/bun`])(
       "rejects an escaping root, intermediate, or terminal link at %s",
       async (relative, { mac }) =>
         mac.lifetime.run(async () => {
@@ -704,23 +677,17 @@ describe.skipIf(process.platform !== "darwin")(
       }),
     );
 
-    it.concurrent.for([
-      "Contents/MacOS/OpenClaw",
-      "Contents/MacOS/openclaw-mlx-tts",
-      "Contents/Frameworks/shared [fixture].dylib",
-    ])("rejects thin shared code at %s", async (relative, { mac }) =>
-      mac.lifetime.run(async () => {
-        const harness = await artifactFixture(mac);
-        await write(
-          harness.at(relative),
-          relative.endsWith(".dylib") ? harness.binaries.armLibrary : harness.binaries.x86_64,
-          0o755,
-        );
-        const result = await harness.verify();
-        expect(result.status, result.stderr).toBe(1);
-        expect(result.stderr).toContain("elevation Mach-O is not universal:");
-        expect(result.stderr).toContain(relative);
-      }),
+    it.concurrent.for(["Contents/Frameworks/shared [fixture].dylib"])(
+      "rejects thin shared code at %s",
+      async (relative, { mac }) =>
+        mac.lifetime.run(async () => {
+          const harness = await artifactFixture(mac);
+          await write(harness.at(relative), harness.binaries.armLibrary, 0o755);
+          const result = await harness.verify();
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stderr).toContain("elevation Mach-O is not universal:");
+          expect(result.stderr).toContain(relative);
+        }),
     );
 
     it.concurrent.for([

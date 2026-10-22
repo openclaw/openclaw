@@ -1,9 +1,10 @@
-import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { getOpenIncognitoAgentDatabase } from "../state/openclaw-agent-db-lifecycle.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { isGatewayClientProfilePending } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -18,6 +19,27 @@ export function createPresenceRecipientProjection(params: {
   projection?: SessionRowProjection;
 }): (client: GatewayClient | null) => SystemPresence[] {
   const keys = [...new Set(params.presence.flatMap((row) => row.watchedSessions ?? []))];
+  const memory = getSessionActorStorageBinding({});
+  const memoryOwners = new Map<string, ReturnType<typeof captureSessionActorStorageOwner>>();
+  for (const key of keys) {
+    if (!isIncognitoSessionKey(key)) {
+      continue;
+    }
+    const agentId = resolveSessionEventAgentScope(
+      params.cfg,
+      key,
+      parseAgentSessionKey(key)?.agentId,
+    )?.[1];
+    if (agentId && !memoryOwners.has(agentId)) {
+      memoryOwners.set(
+        agentId,
+        captureSessionActorStorageOwner(
+          { agentId, sessionKey: key, sessionActor: memory },
+          { assertCurrent() {}, authorize() {} },
+        ),
+      );
+    }
+  }
   const views = new Map<string, SystemPresence[]>();
   let routingConfig: OpenClawConfig | undefined;
   let watches: Array<{ sessionKey: string; key: string; agentId?: string }> = [];
@@ -25,15 +47,14 @@ export function createPresenceRecipientProjection(params: {
   const targets = new Map<string, ReturnType<SessionRowProjection["sharingTarget"]>>();
   const resolveTarget = (sessionKey: string, key: string, agentId: string) => {
     if (isIncognitoSessionKey(key)) {
-      const database = getOpenIncognitoAgentDatabase(
-        agentId,
-        resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
-      );
-      const entry = database && readCommittedIncognitoSessionSharing(database.db, key)?.entry;
+      memory?.actor.assertReadable();
+      const captured = memoryOwners.get(agentId);
+      const entry = captured?.owner?.readSession(key, captured.authority)?.entry;
       return entry ? { canonicalKey: key, entry } : undefined;
     }
     if (!targets.has(sessionKey)) {
-      targets.set(sessionKey, params.projection?.sharingTarget({ key, agentId }) ?? null);
+      const state = params.projection?.sharingTargetState({ key, agentId });
+      targets.set(sessionKey, state?.status === "ready" ? state.target : null);
     }
     return targets.get(sessionKey);
   };

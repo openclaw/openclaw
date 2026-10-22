@@ -138,23 +138,12 @@ export class WorkerConnectionFrameDispatcher {
   private readonly gatewayToolUpdateListeners = new Set<
     (frame: WorkerGatewayToolUpdateFrame) => void
   >();
-  private readonly inferenceEventListeners = new Set<(frame: WorkerInferenceEventFrame) => void>();
-  private readonly inferenceTerminalListeners = new Set<
-    (frame: WorkerInferenceTerminalFrame) => void
-  >();
+  onInferenceFrame = (_frame: WorkerInferenceEventFrame | WorkerInferenceTerminalFrame) => {};
 
   constructor(private readonly options: WorkerConnectionFrameDispatcherOptions) {}
 
   onGatewayToolUpdate(listener: (frame: WorkerGatewayToolUpdateFrame) => void): () => void {
     return registerListener(this.gatewayToolUpdateListeners, listener);
-  }
-
-  onInferenceEvent(listener: (frame: WorkerInferenceEventFrame) => void): () => void {
-    return registerListener(this.inferenceEventListeners, listener);
-  }
-
-  onInferenceTerminal(listener: (frame: WorkerInferenceTerminalFrame) => void): () => void {
-    return registerListener(this.inferenceTerminalListeners, listener);
   }
 
   dispatchReadyFrame(frame: unknown, socket: WorkerFrameSocket): void {
@@ -180,7 +169,7 @@ export class WorkerConnectionFrameDispatcher {
               validateWorkerInferenceEventFrame(frame) &&
               this.matchesInferenceIdentity(frame.payload)
             ) {
-              notifyListeners(this.inferenceEventListeners, frame);
+              notifyListeners([this.onInferenceFrame], frame);
               return;
             }
             break;
@@ -189,7 +178,7 @@ export class WorkerConnectionFrameDispatcher {
               validateWorkerInferenceTerminalFrame(frame) &&
               this.matchesInferenceIdentity(frame.payload)
             ) {
-              notifyListeners(this.inferenceTerminalListeners, frame);
+              notifyListeners([this.onInferenceFrame], frame);
               return;
             }
             break;

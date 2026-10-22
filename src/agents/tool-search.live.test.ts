@@ -14,7 +14,11 @@ import {
   type ContextEngineLogicalTurnLease,
 } from "./harness/context-engine-logical-turn.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
-import { isLiveTestEnabled, logLiveProgress } from "./live-test-helpers.js";
+import {
+  isLiveTestEnabled,
+  logLiveProgress,
+  useLiveTestRuntimeConfig,
+} from "./live-test-helpers.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const liveOpenAiKey = collectProviderApiKeys("openai")[0];
@@ -23,7 +27,7 @@ const PLUGIN_ID = "live-tool-search-fixture";
 const TARGET = "warehouse_release_receipt";
 const DIRECT_ONLY = "warehouse_service_status";
 const DENIED = "warehouse_release_receipt_admin";
-const CONTROLS = ["tool_search", "tool_describe", "tool_call"];
+const CONTROLS = ["tool_search", "tool_describe", "dispatch_action"];
 const MAX_REQUESTS = 10;
 const LANES = ["direct", "default", "tools", "directory"] as const;
 const TARGET_ORDER_FIELD = "releaseOrderReference";
@@ -201,6 +205,7 @@ module.exports = {
         },
       } satisfies OpenClawConfig;
       await state.writeConfig(config);
+      using _ = useLiveTestRuntimeConfig(config);
       const cache = createPluginCache();
       try {
         return await withPluginCache(cache, async () => {

@@ -6,28 +6,10 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import {
-  getSessionRowProjection,
-  requireSessionRowProjection,
-} from "../session-row-projection-access.js";
-import {
-  resolveSessionVisibility,
-  type SessionSharingTarget,
-  type PreparedSessionMutationFacts,
-} from "../session-sharing-policy.js";
-import {
-  captureSessionMutationRouting,
-  prepareSessionMutationFacts,
-  SessionMutationFactsUnavailableError,
-  type SessionFactsRead,
-} from "../session-sharing-preparation.js";
-import { readProjectedSessionMutationTarget } from "../session-sharing-target-read.js";
-import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import {
-  isSameSessionSharingTarget,
-  prepareCurrentSessionSharing,
-} from "./sessions-sharing-authority.js";
+import { resolveSessionVisibility, type SessionSharingTarget } from "../session-sharing-policy.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
+import { isSameSessionSharingTarget } from "../session-sharing-target-read.js";
+import { prepareSessionSharingAccess } from "./sessions-sharing-authority.js";
 import { requireVisibleSuggestionRole } from "./sessions-suggestions-access.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -47,71 +29,16 @@ export async function withSessionReactionAccess(
   },
   consume: (access: { target: SessionSharingTarget; assertCurrent: () => void }) => Promise<void>,
 ): Promise<void> {
-  const { client, context, respond } = params;
-  const actorId = gatewayClientSessionCreator(client)?.id;
-  const runAuthority = client?.internal?.operatorRunAuthority;
-  let retained: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
+  const { client, respond } = params;
   try {
-    const projection = requireSessionRowProjection(context);
-    const cfg = context.getRuntimeConfig();
-    const assertRouting = captureSessionMutationRouting(cfg);
-    const requestedAgent = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
-    if (!requestedAgent.ok) {
-      deny(requestedAgent.error);
-    }
-    const targetRef = { sessionKey: params.sessionKey, agentId: requestedAgent.agentId };
-    const assertCaller = () => {
-      if (
-        params.hasCurrentClientAuthority?.() === false ||
-        client?.invalidated ||
-        client?.connectionSignal?.aborted ||
-        gatewayClientSessionCreator(client)?.id !== actorId ||
-        getSessionRowProjection(context) !== projection ||
-        client?.internal?.operatorRunAuthority !== runAuthority
-      ) {
-        deny(errorShape(ErrorCodes.FORBIDDEN, "reaction author or session authority changed"));
-      }
-    };
-    assertCaller();
-    while (projection.needsMembershipPreparation()) {
-      await projection.prepareMembership();
-      assertCaller();
-    }
-    assertRouting(context.getRuntimeConfig());
-    const projected = readProjectedSessionMutationTarget(targetRef, cfg, projection);
-    if (projected.status === "pending") {
-      throw new SessionMutationFactsUnavailableError();
-    }
-    if (projected.status === "unavailable") {
-      retained = await prepareSessionMutationFacts({ cfg, ...targetRef, allowMissing: true });
+    using access = await prepareSessionSharingAccess({ ...params, prepareMembership: true }, () =>
+      deny(errorShape(ErrorCodes.FORBIDDEN, "reaction author or session authority changed")),
+    );
+    if (!access) {
+      return;
     }
     const readCurrent = (selected?: SessionSharingTarget) => {
-      assertCaller();
-      let membership: ReadonlySet<string> | undefined;
-      const { currentCfg, policyConfig, sharing } = prepareCurrentSessionSharing({
-        client,
-        context,
-        projection,
-        actorId,
-        runAuthority,
-        isMember: (target, identityId) =>
-          retained
-            ? membership!.has(identityId)
-            : projection.hasMembership(target.storePath, target.storeKey, identityId),
-      });
-      assertRouting(currentCfg);
-      let target: SessionSharingTarget | null;
-      if (retained) {
-        const facts = retained.readCurrent(currentCfg);
-        target = facts.target;
-        membership = facts.membership;
-      } else {
-        const current = readProjectedSessionMutationTarget(targetRef, currentCfg, projection);
-        if (current.status !== "ready") {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        target = current.target;
-      }
+      const { target, policyConfig, sharing } = access.readCurrent();
       if (selected && !isSameSessionSharingTarget(target, selected)) {
         throw new SessionMutationFactsUnavailableError();
       }
@@ -172,7 +99,5 @@ export async function withSessionReactionAccess(
         ? error.error
         : errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)),
     );
-  } finally {
-    retained?.release();
   }
 }

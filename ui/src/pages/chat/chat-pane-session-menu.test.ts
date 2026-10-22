@@ -1,23 +1,36 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { render } from "lit";
+import { createComponent, flush, merge } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { showToast } from "../../lib/toast.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import {
+  answerConfirmDialog,
+  createModalDialogTestFixture,
+  submitInputDialog,
+  waitForConfirmDialogActions,
+  waitForInputDialog,
+} from "../../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { openSubmenu } from "../../test-helpers/session-menu.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
+  getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
+import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -33,7 +46,186 @@ afterEach(() => {
 });
 
 describe("chat pane session menu boundary", () => {
-  it("keeps unchanged menu children settled and reads current callbacks after a header refresh", async () => {
+  it("leaves session actions unbuilt after idle until the menu opens", async () => {
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "requestAnimationFrame", "cancelAnimationFrame"],
+    });
+    try {
+      const row: GatewaySessionRow = {
+        key: "agent:main:current",
+        sessionId: "current-session",
+        kind: "direct",
+        label: "Current conversation",
+        sharingRole: "owner",
+      };
+      const { pane, state } = createTestChatPane({
+        client: createGatewayBrowserClientFixture(),
+        sessions: createSessionCapabilityFixture({ state: { result: sessionsResult([row], 1) } }),
+      });
+      pane.presented = true;
+      state.chatLoading = false;
+      state.sessionsResult = sessionsResult([row], 1);
+      const mounted = mountSolid(() =>
+        createComponent(
+          PaneHeaderView,
+          pane.renderPaneHeader(
+            createPaneHeaderWorkspaceFixture(state),
+            row,
+            false,
+            undefined,
+            false,
+            null,
+          ),
+        ),
+      );
+      flush();
+      await vi.advanceTimersByTimeAsync(4_000);
+      flush();
+      const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
+      expect(menu.querySelectorAll('[role^="menuitem"]')).toHaveLength(0);
+      expect(menu.openMenu()).toBe(true);
+      flush();
+      expect(menu.querySelectorAll('[role^="menuitem"]').length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("updates the retained header through rename and loaded workspace branch changes", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:current",
+      sessionId: "current-session",
+      kind: "direct",
+      label: "Current conversation",
+      sharingRole: "owner",
+      spawnedCwd: "/workspace",
+    };
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({
+        request: async (method) =>
+          method === "worktrees.branches" ? { headBranch: "feature/header" } : {},
+      }),
+      sessions: createSessionCapabilityFixture({ state: { result: sessionsResult([row], 1) } }),
+    });
+    state.sessionsResult = sessionsResult([row], 1);
+    pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
+      "sessions.patch",
+      "system.info",
+      "worktrees.branches",
+    ]);
+    const mounted = mountSolid(() => {
+      projectChatFields(pane.headerPresentation);
+      return createComponent(
+        PaneHeaderView,
+        merge(() =>
+          pane.renderPaneHeader(
+            createPaneHeaderWorkspaceFixture(state),
+            row,
+            false,
+            undefined,
+            false,
+            null,
+          ),
+        ),
+      );
+    });
+    flush();
+    const header = mounted.container;
+    pane.beginHeaderRename(row);
+    flush();
+    const input = header.querySelector<HTMLInputElement>(".chat-pane__session-title-input")!;
+    expect(input.value).toBe("Current conversation");
+    input.value = "Renamed conversation";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(pane.headerPresentation.renameValue).toBe("Renamed conversation");
+    pane.cancelHeaderRename();
+    flush();
+    expect(header.querySelector(".chat-pane__session-title-input")).toBeNull();
+    await pane.loadHeaderMenuData(row, "/workspace", true);
+    flush();
+    expect(pane.headerPresentation.branches.get("/workspace")?.value).toBe("feature/header");
+    header.querySelector<HTMLButtonElement>(".chat-pane__workspace-chip")!.click();
+    flush();
+    await vi.waitFor(() =>
+      expect(document.querySelector('[data-value="copy-branch"]')).not.toBeNull(),
+    );
+  });
+
+  it("discovers nested sessions before the header archive choice", async () => {
+    const modal = createModalDialogTestFixture();
+    const row: GatewaySessionRow = {
+      key: "agent:main:current",
+      sessionId: "current-session",
+      kind: "direct",
+      label: "Parent task",
+      sharingRole: "owner",
+      childSessions: ["agent:main:child"],
+    };
+    const child: GatewaySessionRow = {
+      key: "agent:main:child",
+      sessionId: "child-session",
+      kind: "direct",
+      parentSessionKey: row.key,
+    };
+    let children: GatewaySessionRow[] = [];
+    const patch = vi.fn();
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture({
+        patch,
+        state: { result: sessionsResult([row, child], 1) },
+        describe: async () => ({ session: row }),
+        refreshList: async (query) => {
+          children = query?.spawnedBy === row.key ? [child] : [];
+        },
+        listSnapshot: () => ({
+          result: sessionsResult(children, 1),
+          agentId: "main",
+          loading: false,
+          error: null,
+        }),
+      }),
+    });
+    state.sessionKey = row.key;
+    state.sessionsResult = sessionsResult([row, child], 1);
+    try {
+      const pending = modal.track(pane.handleHeaderSessionAction({ kind: "toggle-archived" }, row));
+      const actions = await waitForConfirmDialogActions();
+      expect(actions.textContent).toContain("Archive all (2)");
+      answerConfirmDialog(actions, "cancel");
+      await pending;
+      expect(patch).not.toHaveBeenCalled();
+    } finally {
+      await modal.cleanup();
+    }
+  });
+
+  it("pins a readable conversation in personal navigation without a session mutation", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:current",
+      sessionId: "current-session",
+      kind: "direct",
+      sharingRole: "viewer",
+      pinned: true,
+    };
+    const patch = vi.fn(async () => ({}));
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture({
+        patch,
+        state: { result: sessionsResult([row], 1) },
+      }),
+    });
+    state.sessionKey = row.key;
+    state.sessionsResult = sessionsResult([row], 1);
+    await pane.handleHeaderSessionAction({ kind: "toggle-pin" }, row);
+    expect(pane.context.navigation.snapshot.sidebarEntries).toContain("session:" + row.key);
+    expect(patch).not.toHaveBeenCalled();
+    await pane.handleHeaderSessionAction({ kind: "toggle-pin" }, row);
+    expect(pane.context.navigation.snapshot.sidebarEntries).not.toContain("session:" + row.key);
+    expect(row.pinned).toBe(true);
+  });
+  it("retains menu children and reads current callbacks after a header refresh", async () => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture({ state: { groups: ["Projects"] } }),
@@ -50,58 +242,72 @@ describe("chat pane session menu boundary", () => {
     let workspace = createPaneHeaderWorkspaceFixture(state);
     const draw = () => {
       workspace = createPaneHeaderWorkspaceFixture(state);
-      render(pane.renderPaneHeader(workspace, session, false, undefined, false, null), container);
+      renderPaneHeaderInto(
+        pane.renderPaneHeader(workspace, session, false, undefined, false, null),
+        container,
+      );
     };
     draw();
     const menu = container.querySelector("openclaw-chat-header-session-menu")!;
     await menu.updateComplete;
-    const items = [...menu.querySelectorAll("wa-dropdown-item")];
-    await Promise.all(items.map((item) => item.updateComplete));
+    expect(menu.openMenu()).toBe(true);
+    flush();
     await menu.updateComplete;
-    const updates = vi.spyOn(menu, "render");
-    const itemUpdates = items.map((item) => vi.spyOn(item, "requestUpdate"));
+    const dropdown = menu.querySelector(".chat-header-session-menu__panel")!;
+    await openSubmenu(dropdown, "View");
+    const items = [...menu.querySelectorAll('[role^="menuitem"]')];
+    expect(items.length).toBeGreaterThan(0);
+    await menu.updateComplete;
+    const reasoning = menu.querySelector('[value="view:reasoning"]')!;
+    const expectRetainedMenu = () => {
+      expect(menu.querySelector(".chat-header-session-menu__panel")).toBe(dropdown);
+      const currentItems = [...menu.querySelectorAll('[role^="menuitem"]')];
+      expect(currentItems).toHaveLength(items.length);
+      for (const [index, item] of currentItems.entries()) {
+        expect(item).toBe(items[index]);
+      }
+    };
     draw();
     await menu.updateComplete;
-    expect(updates).not.toHaveBeenCalled();
-    expect(itemUpdates.every((spy) => spy.mock.calls.length === 0)).toBe(true);
-    menu.querySelector("wa-dropdown")!.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: { value: "quick:panels:session-files" } },
-      }),
-    );
-    expect(workspace.onToggleCollapsed).toHaveBeenCalledOnce();
-
+    expectRetainedMenu();
+    menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!.click();
+    await menu.updateComplete;
     state.settings = { ...state.settings };
     session = { ...session };
     draw();
     await menu.updateComplete;
-    expect(updates).not.toHaveBeenCalled();
+    expectRetainedMenu();
 
-    session = { ...session, label: "Updated conversation", pinned: true };
+    session = { ...session, label: "Updated conversation" };
+    pane.context.navigation.update({ sidebarEntries: [`session:${session.key}`] });
     draw();
     await menu.updateComplete;
-    expect(updates).toHaveBeenCalledOnce();
     expect(menu.session.label).toBe("Updated conversation");
     expect(menu.session.pinned).toBe(true);
+    expect(dropdown.getAttribute("aria-label")).toContain("Updated conversation");
+    expect(dropdown.matches(":popover-open")).toBe(false);
+    const previousChecked = reasoning.getAttribute("aria-checked");
     state.settings = { ...state.settings, chatShowThinking: !state.settings.chatShowThinking };
     draw();
     await menu.updateComplete;
-    expect(updates).toHaveBeenCalledTimes(2);
-    expect(menu.querySelector('[value="view:reasoning"]')?.hasAttribute("checked")).toBe(
-      state.settings.chatShowThinking,
+    expect(reasoning.getAttribute("aria-checked")).toBe(previousChecked);
+    expect(menu.openMenu()).toBe(true);
+    flush();
+    expect(menu.querySelector('[value="view:reasoning"]')).toBe(reasoning);
+    expect(menu.querySelector('[value="view:reasoning"]')?.getAttribute("aria-checked")).toBe(
+      String(state.settings.chatShowThinking),
     );
     const action = vi.spyOn(pane, "handleHeaderSessionAction").mockResolvedValue(undefined);
-    menu
-      .querySelector("wa-dropdown")!
-      .dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "toggle-pin" } } }));
+    menu.querySelector<HTMLButtonElement>('[value="toggle-pin"]')!.click();
+    await menu.updateComplete;
     expect(action).toHaveBeenCalledWith({ kind: "toggle-pin" }, session);
     expect(action.mock.calls[0]?.[1]).toBe(session);
     state.applySettings = vi.fn();
-    menu.querySelector("wa-dropdown")!.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: { value: "view:tool-calls" } },
-      }),
-    );
+    expect(menu.openMenu()).toBe(true);
+    flush();
+    await openSubmenu(dropdown, "View");
+    menu.querySelector<HTMLButtonElement>('[value="view:tool-calls"]')!.click();
+    await menu.updateComplete;
     expect(state.applySettings).toHaveBeenCalledWith({
       chatShowToolCalls: !state.settings.chatShowToolCalls,
     });
@@ -151,13 +357,7 @@ describe("chat pane session menu boundary", () => {
     await Promise.all([ledger, verifier].map(refreshPane));
     const container = document.body.appendChild(document.createElement("div"));
     const title = (pane: TestChatPane) => {
-      const presentation = sessions.presentation.result?.sessions.find(
-        (row) => row.key === pane.sessionKey,
-      );
-      pane.presentationTitle = presentation
-        ? resolveSessionDisplayName(pane.sessionKey, presentation)
-        : undefined;
-      render(
+      renderPaneHeaderInto(
         pane.renderPaneHeader(
           createPaneHeaderWorkspaceFixture(pane.state),
           selectedChatSessionRow(pane.state),
@@ -181,23 +381,21 @@ describe("chat pane session menu boundary", () => {
 
     context.agentSelection.set("main");
     await sessions.refresh({ agentId: "main", force: true });
-    const redraw = vi.spyOn(verifier, "requestUpdate");
     emitGatewayEvent("sessions.changed", {
       sessionKey: retained.key,
       agentId: "research",
       reason: "label",
       session: { ...retained, label: "Reviewed conversation", updatedAt: 2 },
     });
-    expect(redraw).toHaveBeenCalled();
     expect.soft(title(verifier)).toBe("Reviewed conversation");
     container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button")?.click();
-    expect(verifier.headerRenameValue).toBe("Reviewed conversation");
+    expect(verifier.headerPresentation.renameValue).toBe("Reviewed conversation");
     verifier.cancelHeaderRename();
     expect(title(ledger)).toBe("Ledger reconciliation");
 
     const patch = vi.spyOn(sessions, "patch");
     container.querySelector<HTMLButtonElement>(".chat-pane__session-title-button")?.click();
-    ledger.headerRenameValue = "Reviewed ledger";
+    ledger.headerPresentation.renameValue = "Reviewed ledger";
     ledger.commitHeaderRename();
     expect(patch).toHaveBeenCalledOnce();
     await patch.mock.results[0]?.value;
@@ -209,13 +407,97 @@ describe("chat pane session menu boundary", () => {
     expect(menu?.session.label).toBe("Reviewed ledger");
   });
 
-  it("keeps reconnect presentation and catalog names ahead of incomplete pane metadata", () => {
+  it("keeps the current observed title while the roster projection is absent", async () => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:observed-title",
+      agentId: "main",
+      sessionId: "observed-title-session",
+      kind: "direct",
+      label: "Observed conversation",
+    };
+    const { context, mount } = createMountedPanes([row]);
+    const pane = mount(row.key);
+    await refreshPane(pane);
+    // The current row observation can arrive before the retained roster catches up.
+    vi.spyOn(context.sessions, "presentation", "get").mockReturnValue({
+      result: sessionsResult([], 1),
+      agentId: "main",
+    });
+    const container = document.createElement("div");
+    renderPaneHeaderInto(
+      pane.renderPaneHeader(
+        createPaneHeaderWorkspaceFixture(pane.state),
+        undefined,
+        false,
+        undefined,
+        false,
+        null,
+      ),
+      container,
+    );
+    expect(container.querySelector(".chat-pane__session-title-text")?.textContent?.trim()).toBe(
+      row.label,
+    );
+  });
+
+  it("resolves cached titles for Home aliases using the current hello defaults", () => {
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
+      sessions: createSessionCapabilityFixture({
+        presentation: {
+          agentId: "dev",
+          result: sessionsResult([{ key: "agent:dev:main", kind: "direct", label: "Dev desk" }], 1),
+        },
+      }),
     });
-    state.connected = false;
-    pane.presentationTitle = "Retained conversation";
+    state.sessionKey = "main";
+    state.hello = {
+      ...state.hello!,
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "dev",
+          mainKey: "main",
+          mainSessionKey: "agent:dev:main",
+        },
+      },
+    };
+    const container = document.createElement("div");
+    renderPaneHeaderInto(
+      pane.renderPaneHeader(
+        createPaneHeaderWorkspaceFixture(state),
+        undefined,
+        false,
+        undefined,
+        false,
+        null,
+      ),
+      container,
+    );
+    expect(container.querySelector(".chat-pane__session-title-text")?.textContent?.trim()).toBe(
+      "Dev desk",
+    );
+  });
+
+  it("keeps reconnect presentation and catalog names ahead of incomplete pane metadata", () => {
+    const presentation = {
+      result: sessionsResult(
+        [{ key: "agent:main:current", kind: "direct", label: "Retained conversation" }],
+        1,
+      ),
+    };
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({
+        request: (method) =>
+          method === "agents.list"
+            ? { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] }
+            : method === "sessions.describe"
+              ? { session: null }
+              : {},
+      }),
+      sessions: createSessionCapabilityFixture({ state: presentation }),
+    });
+    const connected = { ...pane.context.gateway.snapshot };
+    pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
     const container = document.createElement("div");
     const row = {
       key: "agent:main:dashboard:retained",
@@ -223,7 +505,7 @@ describe("chat pane session menu boundary", () => {
       derivedTitle: "Partial reconnect metadata",
     } satisfies GatewaySessionRow;
     const draw = (session: GatewaySessionRow | undefined, catalog = false) => {
-      render(
+      renderPaneHeaderInto(
         pane.renderPaneHeader(
           createPaneHeaderWorkspaceFixture(state),
           session,
@@ -237,13 +519,34 @@ describe("chat pane session menu boundary", () => {
       return container.querySelector(".chat-pane__session-title-text")?.textContent?.trim();
     };
     expect(draw(undefined)).toBe("Retained conversation");
+    expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
+      "Connect to the Gateway to change sessions.",
+    );
+    expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
+    pane.applyGatewaySnapshot(connected);
+    expect(draw(undefined)).toBe("Retained conversation");
+    expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
+      "Retained conversation",
+    );
+    expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
+    expect(draw({ ...row, sessionId: "retained", sharingRole: "owner" })).toBe(
+      "Retained conversation",
+    );
+    expect(container.querySelector(".chat-pane__session-title-button")?.getAttribute("title")).toBe(
+      "Rename session",
+    );
+    pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
     expect(draw(row)).toBe("Retained conversation");
     expect(draw({ ...row, label: "Older scoped label" })).toBe("Retained conversation");
+    expect(container.querySelector("openclaw-chat-header-session-menu")).toBeNull();
+    pane.applyGatewaySnapshot(connected);
+    expect(draw(row)).toBe("Retained conversation");
     const menu = container.querySelector<HTMLElement & { session: { label: string } }>(
       "openclaw-chat-header-session-menu",
     );
     expect(menu?.session.label).toBe("Retained conversation");
-    pane.catalogSession = {
+    pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting" });
+    pane.history.catalogSession = {
       threadId: "catalog",
       name: "Imported conversation",
       status: "idle",
@@ -252,12 +555,11 @@ describe("chat pane session menu boundary", () => {
       canArchive: true,
     };
     expect(draw(row, true)).toBe("Imported conversation");
-    pane.presentationTitle = undefined;
+    presentation.result = sessionsResult([], 2);
     expect(draw(row)).toBe("Partial reconnect metadata");
   });
 
   it.each([
-    { key: "agent:main:current", archived: false },
     { key: "agent:main:current", archived: true },
     { key: "agent:main:fork", parentSessionKey: "agent:main:parent" },
     { key: "agent:main:subagent:child" },
@@ -274,7 +576,7 @@ describe("chat pane session menu boundary", () => {
       updatedAt: 0,
     } satisfies GatewaySessionRow;
     const container = document.body.appendChild(document.createElement("div"));
-    render(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,
@@ -287,6 +589,9 @@ describe("chat pane session menu boundary", () => {
     );
     const menu = container.querySelector("openclaw-chat-header-session-menu");
     expect(menu).not.toBeNull();
+    await menu?.updateComplete;
+    expect(menu?.openMenu()).toBe(true);
+    flush();
     await menu?.updateComplete;
     if (fields.archived === undefined) {
       expect(menu?.querySelector('[value="toggle-pin"]')).toBeNull();
@@ -301,6 +606,41 @@ describe("chat pane session menu boundary", () => {
       );
     }
   });
+
+  it.each([
+    ["agent:main:plugin:anthropic:catalog-adopt:claude:fixture", false],
+    ["agent:main:ordinary", true],
+  ])(
+    "offers header Delete only when the transcript belongs to OpenClaw: %s",
+    async (key, allowed) => {
+      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+      state.settings = loadSettings();
+      const row: GatewaySessionRow = { key, sessionId: "fixture", kind: "direct", updatedAt: 0 };
+      const container = document.body.appendChild(document.createElement("div"));
+      renderPaneHeaderInto(
+        pane.renderPaneHeader(
+          createPaneHeaderWorkspaceFixture(state),
+          row,
+          false,
+          undefined,
+          false,
+          null,
+        ),
+        container,
+      );
+      const menu = container.querySelector("openclaw-chat-header-session-menu");
+      await menu?.updateComplete;
+      expect(menu?.openMenu()).toBe(true);
+      flush();
+      await menu?.updateComplete;
+      await openSubmenu(menu!.querySelector(".chat-header-session-menu__panel")!, "Advanced");
+      const deleteItem = menu?.querySelector<HTMLElement & { disabled: boolean }>(
+        '[value="delete"]',
+      );
+      expect(deleteItem).not.toBeNull();
+      expect(deleteItem?.disabled).toBe(!allowed);
+    },
+  );
 
   it("forks through the shared session organizer flow and selects the new session", async () => {
     const create = vi.fn(async () => "agent:main:forked");
@@ -323,19 +663,31 @@ describe("chat pane session menu boundary", () => {
 
     await pane.handleHeaderSessionAction({ kind: "fork" }, session);
 
-    expect(create).toHaveBeenCalledWith({
-      parentSessionKey: session.key,
-      fork: true,
-      forkFrom: "last-completed",
-      agentId: "main",
-    });
+    expect(create).toHaveBeenCalledWith(
+      {
+        parentSessionKey: session.key,
+        fork: true,
+        forkFrom: "last-completed",
+        agentId: "main",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
   });
 
   it.each([
-    { action: { kind: "toggle-pin" }, patch: { pinned: true }, current: "removed" },
     { action: { kind: "toggle-pin" }, patch: { pinned: true }, current: "replacement" },
     { action: { kind: "toggle-unread" }, patch: { unread: true }, current: "replacement" },
+    {
+      action: { kind: "set-communication", communication: { send: "never" } },
+      patch: { communication: { send: "never" } },
+      current: "replacement",
+    },
+    {
+      action: { kind: "set-communication", communication: { send: "never" } },
+      patch: { communication: { send: "never" } },
+      current: "removed",
+    },
     { action: { kind: "set-icon", icon: "🦞" }, patch: { icon: "🦞" }, current: "replacement" },
     {
       action: { kind: "set-color", color: "red" },
@@ -373,10 +725,11 @@ describe("chat pane session menu boundary", () => {
         patch,
         state: { error: null, groups: ["Projects", "Other"], result },
       });
-      const { pane } = createTestChatPane({
+      const { pane, state } = createTestChatPane({
         client: createGatewayBrowserClientFixture(),
         sessions,
       });
+      state.sessionsResult = result;
       result.sessions =
         current === "removed"
           ? []
@@ -389,7 +742,10 @@ describe("chat pane session menu boundary", () => {
               },
             ];
       await pane.handleHeaderSessionAction(action, original);
-      if (current === "removed") {
+      if (action.kind === "toggle-pin") {
+        expect(patch).not.toHaveBeenCalled();
+        expect(pane.context.navigation.snapshot.sidebarEntries).toEqual([]);
+      } else if (current === "removed") {
         expect(patch).not.toHaveBeenCalled();
         expect(showToast).toHaveBeenCalledWith({ message: t("common.refresh") });
       } else {
@@ -400,6 +756,120 @@ describe("chat pane session menu boundary", () => {
       }
     },
   );
+
+  it("keeps the mobile rename draft through reconnect without retargeting session or client", async () => {
+    const modal = createModalDialogTestFixture();
+    const row: GatewaySessionRow = {
+      key: "global",
+      sessionId: "research-global",
+      kind: "global",
+      label: "Research notes",
+    };
+    const patch = vi.fn(async () => ({}));
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture({
+        request: async (method) => {
+          switch (method) {
+            case "agents.list":
+              return {
+                defaultId: "main",
+                mainKey: "main",
+                scope: "per-sender",
+                agents: [{ id: "main" }, { id: "research" }],
+              };
+            case "sessions.describe":
+              return { session: null };
+            default:
+              return {};
+          }
+        },
+      }),
+      sessions: createSessionCapabilityFixture({ patch }),
+    });
+    getPaneTestRuntime(pane).mergedChrome = true;
+    getPaneTestRuntime(pane).agentId = "research";
+    state.sessionKey = row.key;
+    state.assistantAgentId = "research";
+    try {
+      const cancelled = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
+      const first = await waitForInputDialog();
+      expect(first.value).toBe("Research notes");
+      first.value = "Discarded draft";
+      first.dispatchEvent(new Event("input", { bubbles: true }));
+      const cancel = [
+        ...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
+      ].find((button) => button.textContent === "Cancel");
+      expect(cancel).toBeDefined();
+      cancel!.click();
+      await cancelled;
+      expect(patch).not.toHaveBeenCalled();
+
+      const connected = { ...pane.context.gateway.snapshot };
+      pane.applyGatewaySnapshot({ ...connected, phase: "offline" });
+      patch.mockResolvedValueOnce({ queued: true });
+      const queued = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
+      const offlineInput = await waitForInputDialog();
+      expect(offlineInput.value).toBe("Research notes");
+      expect(pane.context.gateway.snapshot.phase).toBe("offline");
+      await submitInputDialog("  Queued offline notes  ");
+      await queued;
+      expect(patch).toHaveBeenCalledExactlyOnceWith(
+        "global",
+        { label: "Queued offline notes" },
+        { agentId: "research", expectedSessionId: "research-global" },
+      );
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      pane.applyGatewaySnapshot(connected);
+
+      const saved = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
+      const input = await waitForInputDialog();
+      expect(input.value).toBe("Research notes");
+      expect(pane.headerPresentation.renameSession).toBeNull();
+      input.value = "Unsent notes";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
+      flush();
+      expect(document.querySelector("openclaw-modal-dialog input")).toBe(input);
+      expect(input.value).toBe("Unsent notes");
+      expect(input.disabled).toBe(false);
+      expect(
+        input.closest("form")!.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled,
+      ).toBe(true);
+      input
+        .closest("form")!
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      expect(patch).toHaveBeenCalledTimes(1);
+      pane.applyGatewaySnapshot(connected);
+      // A roster refresh must not retarget the draft to a new session instance.
+      row.sessionId = "replacement-global";
+      row.label = "Replacement title";
+      await submitInputDialog("  Renamed notes  ");
+      await saved;
+      expect(patch).toHaveBeenCalledTimes(2);
+      expect(patch).toHaveBeenNthCalledWith(
+        2,
+        "global",
+        { label: "Renamed notes" },
+        { agentId: "research", expectedSessionId: "research-global" },
+      );
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+
+      const retired = modal.track(pane.handleHeaderSessionAction({ kind: "rename" }, row));
+      const retiredInput = await waitForInputDialog();
+      retiredInput.value = "Other client must not inherit this";
+      pane.applyGatewaySnapshot({
+        ...connected,
+        client: createGatewayBrowserClientFixture(),
+        phase: "reconnecting",
+        hello: null,
+      });
+      await retired;
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(patch).toHaveBeenCalledTimes(2);
+    } finally {
+      await modal.cleanup();
+    }
+  });
 
   it.each([
     {
@@ -419,6 +889,15 @@ describe("chat pane session menu boundary", () => {
       agentId: "research",
     },
     {
+      name: "offline retained session",
+      key: "agent:main:current",
+      sessionId: "rename-current",
+      value: "Offline notes",
+      label: "Offline notes",
+      agentId: "main",
+      offline: true,
+    },
+    {
       name: "unchanged generated title",
       key: "agent:main:dashboard:generated",
       displayName: "Generated title",
@@ -427,7 +906,7 @@ describe("chat pane session menu boundary", () => {
     },
   ])(
     "renames only an edited captured session: $name",
-    ({ key, sessionId, displayName, value, label, agentId }) => {
+    ({ key, sessionId, displayName, value, label, agentId, offline }) => {
       const patch = vi.fn(async () => ({}));
       const { pane, state } = createTestChatPane({
         client: createGatewayBrowserClientFixture(),
@@ -435,6 +914,10 @@ describe("chat pane session menu boundary", () => {
       });
       state.sessionKey = key;
       state.assistantAgentId = agentId;
+      if (offline) {
+        pane.context.gateway.snapshot.phase = "offline";
+        state.connected = false;
+      }
       const session: GatewaySessionRow = {
         key,
         sessionId,
@@ -444,9 +927,9 @@ describe("chat pane session menu boundary", () => {
       };
       pane.beginHeaderRename(session);
       if (displayName) {
-        expect(pane.headerRenameValue).toBe(displayName);
+        expect(pane.headerPresentation.renameValue).toBe(displayName);
       }
-      pane.headerRenameValue = value;
+      pane.headerPresentation.renameValue = value;
       pane.commitHeaderRename();
       if (!label) {
         pane.beginHeaderRename(session);
@@ -457,7 +940,7 @@ describe("chat pane session menu boundary", () => {
       expect(patch).toHaveBeenCalledWith(key, { label }, { agentId, expectedSessionId: sessionId });
       if (key !== "global") {
         pane.beginHeaderRename({ ...session, label });
-        pane.headerRenameValue = "   ";
+        pane.headerPresentation.renameValue = "   ";
         pane.commitHeaderRename();
         expect(patch).toHaveBeenLastCalledWith(
           key,

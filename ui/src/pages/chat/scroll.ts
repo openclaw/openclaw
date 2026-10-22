@@ -4,7 +4,6 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
-/** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
 /** Shared semantic boundary for treating the transcript as settled at its end. */
 export const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
@@ -19,10 +18,8 @@ export type ChatSessionScrollPosition = {
 const transcriptScrollTopByPane = new Map<string, Map<string, ChatSessionScrollPosition>>();
 
 function getPaneScrollTops(paneId: string): Map<string, ChatSessionScrollPosition> {
-  const existing = transcriptScrollTopByPane.get(paneId);
+  const existing = getSessionCacheValue(transcriptScrollTopByPane, paneId);
   if (existing) {
-    transcriptScrollTopByPane.delete(paneId);
-    transcriptScrollTopByPane.set(paneId, existing);
     return existing;
   }
   const created = new Map<string, ChatSessionScrollPosition>();
@@ -82,7 +79,7 @@ export function captureChatSessionScrollPosition(target: {
 }
 
 export type ChatScrollHost = {
-  renderLifecycle: RenderLifecycle;
+  renderLifecycle: Pick<RenderLifecycle, "afterCommit">;
   chatLastScrollTop: number;
   chatLastScrollHeight?: number;
   chatHasAutoScrolled: boolean;
@@ -91,7 +88,6 @@ export type ChatScrollHost = {
   chatReadingHistory: boolean;
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll?: () => boolean;
-  chatIsManualScroll?: () => boolean;
   chatIsMaintenanceScroll?: () => boolean;
   chatScrollElement?: () => HTMLElement | null;
   chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
@@ -118,16 +114,6 @@ export function canAutoFollowChat(host: ChatScrollHost): boolean {
 
 export function cancelChatScroll(host: ChatScrollHost): void {
   pendingChatScrolls.get(host)?.cancel();
-}
-
-function setNewMessagesBelow(host: ChatScrollHost, next: boolean): void {
-  if (host.chatNewMessagesBelow === next) {
-    return;
-  }
-  host.chatNewMessagesBelow = next;
-  // Scroll effects run after the render that caused them. Publish the semantic
-  // state transition so the indicator cannot wait for an unrelated update.
-  host.renderLifecycle.invalidate();
 }
 
 function applyChatScroll(
@@ -159,7 +145,7 @@ function applyChatScroll(
 
   if (!shouldStick) {
     if (contentChanged || (options.source === "resize" && contentGrew)) {
-      setNewMessagesBelow(host, true);
+      host.chatNewMessagesBelow = true;
     }
     return;
   }
@@ -179,7 +165,7 @@ function applyChatScroll(
   }
   host.chatFollowLocked = false;
   host.chatUserNearBottom = true;
-  setNewMessagesBelow(host, false);
+  host.chatNewMessagesBelow = false;
   // A return issued at an already-clamped end produces no native scroll event.
   // Settle it here; an actual smooth journey waits for its final position event.
   if (manualScroll && distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
@@ -282,27 +268,13 @@ export function handleChatScrollTakeover(host: ChatScrollHost, towardEnd = false
 }
 
 /** Reader-controlled UI can take over even when the transcript is at its end. */
-export function lockChatScroll(
-  host: ChatScrollHost,
-  source: "reader" | "remote-input" = "reader",
-): void {
-  // Remote activity cannot cancel a queued or already-issued reader command.
-  if (
-    source === "remote-input" &&
-    (pendingChatScrolls.get(host)?.manual || host.chatIsManualScroll?.())
-  ) {
-    return;
-  }
-  const changed = !host.chatFollowLocked || host.chatUserNearBottom;
+export function lockChatScroll(host: ChatScrollHost): void {
   cancelChatScroll(host);
   host.chatHasAutoScrolled = true;
   host.chatFollowLocked = true;
   host.chatUserNearBottom = false;
   // Cancelling queued page work does not retire an already issued native target.
   host.chatCancelScroll?.();
-  if (changed) {
-    host.renderLifecycle.invalidate();
-  }
 }
 
 function updateChatScrollPosition(
@@ -318,11 +290,15 @@ function updateChatScrollPosition(
   // smooth-scroll frames. A real user scroll-up must still pass through so
   // streaming stops pinning them back to the bottom.
   const isUserScrollUp = takeover !== false || (delta < 0 && !host.chatIsMaintenanceScroll?.());
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   if (host.chatIsProgrammaticScroll?.() && !isUserScrollUp) {
+    // A measured arrival clears the affordance even when maintenance must not
+    // change the reader's follow policy.
+    if (distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+      host.chatNewMessagesBelow = false;
+    }
     return;
   }
-  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  const wasReadingHistory = host.chatReadingHistory;
   if (isUserScrollUp && distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
     // Taking control before initial history settles must retire its queued
     // force-scroll. Otherwise that delayed commit can overwrite the viewport.
@@ -338,16 +314,11 @@ function updateChatScrollPosition(
     host.chatFollowLocked = false;
     host.chatReadingHistory = false;
   }
-  if (host.chatReadingHistory !== wasReadingHistory) {
-    host.renderLifecycle.invalidate();
-  }
   host.chatUserNearBottom = !host.chatFollowLocked && distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
 
-  setNewMessagesBelow(
-    host,
+  host.chatNewMessagesBelow =
     container.scrollHeight - container.clientHeight > CHAT_TRANSCRIPT_END_THRESHOLD_PX &&
-      distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX,
-  );
+    distanceFromBottom > CHAT_TRANSCRIPT_END_THRESHOLD_PX;
 }
 
 export function resetChatScroll(host: ChatScrollHost): void {

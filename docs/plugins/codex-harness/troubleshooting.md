@@ -24,8 +24,8 @@ and enabled. Affirmative reasoning support and native reasoning-effort metadata
 do not count as request overrides. Headers, request parameters, timeouts, and
 payload compatibility switches still do: Codex declares an OpenClaw fallback
 that preserves the exact request, including for explicit runtime selections.
-Other unsupported routes/authentication and missing explicit harnesses fail
-closed. The `openai/gpt-*` prefix and `agentRuntime.id: "codex"` alone are not
+Other unsupported routes/authentication and missing explicit harnesses
+stop execution with an error. The `openai/gpt-*` prefix and `agentRuntime.id: "codex"` alone are not
 execution proof; inspect the actual harness in the completed result. See
 [Runtime selection](/concepts/agent-runtimes#runtime-selection).
 
@@ -36,7 +36,7 @@ OpenClaw host:
 
 ```bash
 (
-  pattern='openai/gpt-5\.[45]|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|resolveSelectedOpenAIRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
+  pattern='openai/gpt-5\.[45]|openai[-]codex|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|legacy OpenAI Codex prefix|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
 
   if ls /tmp/openclaw/openclaw-*.log >/dev/null 2>&1; then
     grep -E -i -n "$pattern" /tmp/openclaw/openclaw-*.log 2>/dev/null || true

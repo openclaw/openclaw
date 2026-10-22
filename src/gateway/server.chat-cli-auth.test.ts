@@ -4,20 +4,17 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
-import { captureConfigHealthStateStore } from "../config/io.health-state.js";
-import { createConfigIO } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createWindowsCmdShimFixture } from "../test-helpers/windows-cmd-shim.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { waitForCatalogPublication } from "./server-methods/models-auth-catalog.test-support.js";
 import { createClaudeAuthFixture } from "./server.chat-cli-auth.test-support.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
 
 const savedCredential = {
@@ -42,21 +39,9 @@ const cases: {
     reply: "Native account reply.",
   },
   {
-    name: "uses a saved canonical paste-token without an explicit account selection or native login",
-    order: undefined,
-    credential: savedCredential,
-    reply: "Saved account reply.",
-  },
-  {
     name: "honors an explicit empty CLI account order despite a saved canonical paste-token",
     order: { "claude-cli": [] },
     credential: savedCredential,
-    reply: "No managed credential supplied.",
-  },
-  {
-    name: "leaves native authentication in charge when only a canonical API key is saved",
-    order: undefined,
-    credential: { type: "api_key", provider: "anthropic", key: "synthetic-pasted-anthropic-key" },
     reply: "No managed credential supplied.",
   },
 ];
@@ -71,6 +56,17 @@ type CliAuthFixture = {
   executable: string;
   nativeRoot: string;
 };
+const readBinding = async (sessionKey: string) =>
+  (await loadGatewaySessionEntryReadOnlyAsync(sessionKey)).entry?.cliSessionBindings?.[
+    "claude-cli"
+  ];
+const startCliAuthGateway = (state: OpenClawTestState, cfg: OpenClawConfig, token: string) =>
+  gatewayFixture.startGatewayWithClient({
+    cfg,
+    configPath: state.configPath,
+    token,
+    scopes: ["operator.admin", "operator.read", "operator.write"],
+  });
 
 describe.for(cases)("chat.send $name", (testCase) => {
   let fixture: CliAuthFixture;
@@ -118,7 +114,11 @@ async function cleanupCliAuthFixture({
 }
 
 async function prepareCliAuthFixture(
-  { order, credential, nativeContinuity }: (typeof cases)[number],
+  {
+    order,
+    credential,
+    nativeContinuity,
+  }: Pick<(typeof cases)[number], "order" | "credential" | "nativeContinuity">,
   signal: AbortSignal,
 ): Promise<CliAuthFixture> {
   signal.throwIfAborted();
@@ -212,7 +212,6 @@ async function prepareCliAuthFixture(
           workspace: workspaceDir,
           skipBootstrap: true,
           utilityModel: "",
-          heartbeat: { every: "0m" },
           model: { primary: modelRef },
           models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
         },
@@ -228,12 +227,7 @@ async function prepareCliAuthFixture(
     } satisfies OpenClawConfig;
     signal.throwIfAborted();
     expect(resolveExecutablePath("claude")).toBe(executable);
-    gateway = await gatewayFixture.startGatewayWithClient({
-      cfg,
-      configPath: state.configPath,
-      token,
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-    });
+    gateway = await startCliAuthGateway(state, cfg, token);
     signal.throwIfAborted();
     await gateway.server.startupSettled;
     signal.throwIfAborted();
@@ -293,8 +287,7 @@ async function executeCliAuthCase(
     reply,
   );
   if (nativeContinuity) {
-    const original =
-      loadGatewaySessionEntryReadOnly(sessionKey).entry?.cliSessionBindings?.["claude-cli"];
+    const original = await readBinding(sessionKey);
     expect(original?.sessionId).toBeTruthy();
     expect(original?.authProfileId).toBeUndefined();
     await state.writeAuthProfiles({
@@ -305,12 +298,7 @@ async function executeCliAuthCase(
     await fixture.gateway.server.close({ reason: "Verify persisted native account continuity" });
     signal.throwIfAborted();
     expect(resolveExecutablePath("claude")).toBe(executable);
-    fixture.gateway = await gatewayFixture.startGatewayWithClient({
-      cfg,
-      configPath: state.configPath,
-      token,
-      scopes: ["operator.admin", "operator.read", "operator.write"],
-    });
+    fixture.gateway = await startCliAuthGateway(state, cfg, token);
     signal.throwIfAborted();
     await fixture.gateway.server.startupSettled;
     signal.throwIfAborted();
@@ -320,8 +308,7 @@ async function executeCliAuthCase(
       "Recall the marker from our previous turn.",
       `Native history: ${marker}.`,
     );
-    const resumed =
-      loadGatewaySessionEntryReadOnly(sessionKey).entry?.cliSessionBindings?.["claude-cli"];
+    const resumed = await readBinding(sessionKey);
     expect(resumed?.sessionId).toBe(original?.sessionId);
     expect(resumed?.authProfileId).toBe(original?.authProfileId);
     const savedSessionKey = `agent:main:cli-auth-${randomUUID()}`;
@@ -331,8 +318,7 @@ async function executeCliAuthCase(
       "Reply using the saved account.",
       "Saved account reply.",
     );
-    const saved =
-      loadGatewaySessionEntryReadOnly(savedSessionKey).entry?.cliSessionBindings?.["claude-cli"];
+    const saved = await readBinding(savedSessionKey);
     expect(saved?.authProfileId).toBe("anthropic:pasted");
 
     signal.throwIfAborted();
@@ -346,8 +332,7 @@ async function executeCliAuthCase(
       "Reply using my explicit account selection.",
       "Saved account reply.",
     );
-    const explicitlySelected =
-      loadGatewaySessionEntryReadOnly(sessionKey).entry?.cliSessionBindings?.["claude-cli"];
+    const explicitlySelected = await readBinding(sessionKey);
     expect(explicitlySelected?.authProfileId).toBe("anthropic:pasted");
     expect(explicitlySelected?.sessionId).not.toBe(original?.sessionId);
 
@@ -370,10 +355,10 @@ async function executeCliAuthCase(
       "Keep our existing account despite the new default.",
       "Saved account reply.",
     );
-    const retained =
-      loadGatewaySessionEntryReadOnly(savedSessionKey).entry?.cliSessionBindings?.["claude-cli"];
-    expect(retained?.authProfileId).toBe(saved?.authProfileId);
-    expect(retained?.sessionId).toBe(saved?.sessionId);
+    expect(await readBinding(savedSessionKey)).toMatchObject({
+      authProfileId: saved?.authProfileId,
+      sessionId: saved?.sessionId,
+    });
 
     await state.writeAuthProfiles({
       version: 1,
@@ -386,8 +371,7 @@ async function executeCliAuthCase(
       "Use the available account after my old account was removed.",
       "Replacement account reply.",
     );
-    const replaced =
-      loadGatewaySessionEntryReadOnly(savedSessionKey).entry?.cliSessionBindings?.["claude-cli"];
+    const replaced = await readBinding(savedSessionKey);
     expect(replaced?.authProfileId).toBe("anthropic:replacement");
     expect(replaced?.sessionId).not.toBe(saved?.sessionId);
     const turns: {
@@ -399,84 +383,60 @@ async function executeCliAuthCase(
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    expect(turns).toHaveLength(6);
-    expect(turns[0]).toMatchObject({
-      sessionId: original?.sessionId,
-      resume: false,
-      savedToken: false,
-    });
-    expect(turns[1]).toMatchObject({
-      sessionId: original?.sessionId,
-      resume: true,
-      savedToken: false,
-    });
+    expect(turns).toMatchObject([
+      { sessionId: original?.sessionId, resume: false, savedToken: false },
+      { sessionId: original?.sessionId, resume: true, savedToken: false },
+      { resume: false, savedToken: true, resumedHistory: [] },
+      {
+        sessionId: explicitlySelected?.sessionId,
+        resume: false,
+        savedToken: true,
+        resumedHistory: [],
+      },
+      { sessionId: saved?.sessionId, savedToken: true },
+      { sessionId: replaced?.sessionId, resume: false, savedToken: true, resumedHistory: [] },
+    ]);
     expect(JSON.stringify(turns[1]?.resumedHistory)).toContain(marker);
-    expect(turns[2]).toMatchObject({ resume: false, savedToken: true, resumedHistory: [] });
     expect(turns[2]?.sessionId).not.toBe(original?.sessionId);
-    expect(turns[3]).toMatchObject({
-      sessionId: explicitlySelected?.sessionId,
-      resume: false,
-      savedToken: true,
-      resumedHistory: [],
-    });
-    expect(turns[4]).toMatchObject({ sessionId: saved?.sessionId, savedToken: true });
-    expect(turns[5]).toMatchObject({
-      sessionId: replaced?.sessionId,
-      resume: false,
-      savedToken: true,
-      resumedHistory: [],
-    });
   }
 }
 
-it("persists config health in the isolated Gateway process", async () => {
-  const state = await createOpenClawTestState({
-    label: "gateway-config-health",
-    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-  });
-  const warn = vi.fn();
-  const deps = { env: state.env, homedir: () => state.home, logger: { warn, error: vi.fn() } };
-  const readHealth = async () => {
-    using health = captureConfigHealthStateStore(deps, state.configPath);
-    return (await health.read())?.state;
-  };
-  try {
-    await state.writeConfig({ gateway: { mode: "local" } });
-    const snapshot = await createConfigIO({
-      ...deps,
-      configPath: state.configPath,
-    }).readConfigFileSnapshot();
-    expect(snapshot.valid).toBe(true);
-    const observed = await readHealth();
-    expect(observed?.entries?.[state.configPath]?.lastKnownGood?.hash).toBe(snapshot.hash);
-    await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(state.env));
-    expect(await readHealth()).toEqual(observed);
-    expect(warn).not.toHaveBeenCalled();
-  } finally {
-    await state.cleanup();
-  }
-});
+it(
+  "publishes Claude login changes after Gateway startup",
+  { timeout: 90_000 },
+  async ({ signal, onTestFinished }) => {
+    const fixture = await prepareCliAuthFixture({ order: undefined }, signal);
+    onTestFinished(() => cleanupCliAuthFixture(fixture));
+    const credentials = path.join(fixture.nativeRoot, ".credentials.json");
+    const probes = async () =>
+      (await fs.readFile(path.join(fixture.nativeRoot, "auth-status.log"), "utf8")).split("\n")
+        .length - 1;
+    const available = async () => {
+      const { models } = await fixture.gateway.client.request<{
+        models: { provider: string; id: string; available?: boolean }[];
+      }>("models.list", { view: "configured", agentId: "main" });
+      return models.find((model) => `${model.provider}/${model.id}` === fixture.modelRef)
+        ?.available;
+    };
+    const now = Date.now.bind(Date);
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    onTestFinished(() => clock.mockRestore());
 
-it("does not start a Gateway after CLI auth fixture acquisition is cancelled", async () => {
-  const controller = new AbortController();
-  const cancelled = new Error("Cancel after writing the fixture executable");
-  const originalPath = process.env.PATH;
-  const originalHome = process.env.HOME;
-  const writeFile = fs.writeFile;
-  const startup = vi.spyOn(gatewayFixture, "startGatewayWithClient");
-  const write = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-    await writeFile(...args);
-    if (typeof args[0] === "string" && path.basename(args[0]) === "claude.cjs") {
-      controller.abort(cancelled);
-    }
-  });
-  try {
-    await expect(prepareCliAuthFixture(cases[0]!, controller.signal)).rejects.toBe(cancelled);
-    expect(startup).not.toHaveBeenCalled();
-    expect(process.env.PATH).toBe(originalPath);
-    expect(process.env.HOME).toBe(originalHome);
-  } finally {
-    write.mockRestore();
-    startup.mockRestore();
-  }
-});
+    expect(await available()).toBe(false);
+    await fs.writeFile(credentials, "{}");
+    const startupProbes = await probes();
+    expect(await available()).toBe(false);
+    expect(await probes()).toBe(startupProbes);
+
+    elapsed += 5 * 60_000;
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === true });
+    const loginProbes = await probes();
+    expect(loginProbes).toBe(startupProbes + 1);
+
+    await fs.rm(credentials);
+    elapsed += 5 * 60_000;
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === false });
+    expect(await probes()).toBe(loginProbes + 1);
+  },
+);

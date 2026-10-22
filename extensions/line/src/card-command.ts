@@ -113,9 +113,6 @@ function parseActions(actionsStr: string | undefined): LineTemplateActionPayload
   return results;
 }
 
-/**
- * Parse list items format: "Item1|Subtitle1,Item2|Subtitle2"
- */
 function parseListItems(itemsStr: string): ListItem[] {
   return splitCardValue(itemsStr, ",")
     .map((part) => {
@@ -125,9 +122,6 @@ function parseListItems(itemsStr: string): ListItem[] {
     .filter((item) => item.title);
 }
 
-/**
- * Parse receipt items format: "Item1:$10,Item2:$20"
- */
 function parseReceiptItems(itemsStr: string): Array<{ name: string; value: string }> {
   return splitCardValue(itemsStr, ",")
     .map((part) => {
@@ -147,11 +141,7 @@ function parseReceiptItems(itemsStr: string): Array<{ name: string; value: strin
  * Parse quoted arguments from command string
  * Supports: /card type "arg1" "arg2" "arg3" --flag value
  */
-function parseCardArgs(argsStrInput: string): {
-  type: string;
-  args: Array<string | undefined>;
-  flags: Record<string, string>;
-} {
+function parseCardArgs(argsStrInput: string) {
   let argsStr = argsStrInput;
   const result: { type: string; args: Array<string | undefined>; flags: Record<string, string> } = {
     type: "",
@@ -174,7 +164,6 @@ function parseCardArgs(argsStrInput: string): {
     result.args.push(expectDefined(match[1], "quoted card argument capture") || undefined);
   }
 
-  // Extract flags (--key value or --key "value")
   const flagRegex = /--(\w+)\s+(?:"([^"]*?)"|(\S+))/g;
   while ((match = flagRegex.exec(argsStr)) !== null) {
     const key = expectDefined(match[1], "card flag name capture");

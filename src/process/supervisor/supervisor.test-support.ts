@@ -1,7 +1,5 @@
 import { vi } from "vitest";
-import type { ProcessSupervisor, SpawnInput, SpawnProcessAdapter } from "./types.js";
-
-type ChildSpawnOptions = Omit<Extract<SpawnInput, { mode: "child" }>, "mode">;
+import type { SpawnProcessAdapter } from "./types.js";
 
 type StubOutputSubscriber = {
   listener: (chunk: string) => void;
@@ -17,19 +15,7 @@ export type StubChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null> & {
   disposeMock: ReturnType<typeof vi.fn>;
 };
 
-export function createWriteStdoutArgv(output: string): string[] {
-  if (process.platform === "win32") {
-    return [process.execPath, "-e", `process.stdout.write(${JSON.stringify(output)})`];
-  }
-  return ["/usr/bin/printf", "%s", output];
-}
-
-export function createSilentIdleArgv(): string[] {
-  return [process.execPath, "-e", "setInterval(() => {}, 1_000)"];
-}
-
 export function createStubChildAdapter(options?: {
-  pid?: number;
   onKill?: (signal: NodeJS.Signals | undefined, adapter: StubChildAdapter) => void;
 }): StubChildAdapter {
   const stdoutSubscribers: StubOutputSubscriber[] = [];
@@ -53,7 +39,7 @@ export function createStubChildAdapter(options?: {
   const killMock = vi.fn();
   const disposeMock = vi.fn();
   const adapter: StubChildAdapter = {
-    pid: options?.pid ?? 1234,
+    pid: 1234,
     stdin: undefined,
     supportsRawOutput: true,
     onStdout: (listener, onRaw) => {
@@ -90,11 +76,4 @@ export function createStubChildAdapter(options?: {
   };
 
   return adapter;
-}
-
-export async function spawnChild(supervisor: ProcessSupervisor, options: ChildSpawnOptions) {
-  return supervisor.spawn({
-    ...options,
-    mode: "child",
-  });
 }

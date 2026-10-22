@@ -1,70 +1,108 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
+import {
+  agentCommandFromGatewayIngress,
+  compactionTestState as state,
+  makeCompactionResult,
+  registerAgentCommandCompactionTestHooks,
+  GATEWAY_INGRESS_ARGS,
+} from "./agent-command.compaction.test-support.js";
 import type { AgentCommandIngressOpts } from "./command/types.js";
 import type { EmbeddedAgentMeta } from "./embedded-agent-runner/types.js";
 
 const mocks = vi.hoisted(() => ({
   emitTrustedDiagnosticEvent: vi.fn(),
   isDiagnosticsEnabled: vi.fn(),
-  getRuntimeConfig: vi.fn(),
 }));
-vi.mock("../infra/diagnostic-events.js", () => ({
+vi.mock("../infra/diagnostic-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/diagnostic-events.js")>()),
   emitTrustedDiagnosticEvent: mocks.emitTrustedDiagnosticEvent,
   isDiagnosticsEnabled: mocks.isDiagnosticsEnabled,
 }));
-vi.mock("../config/io.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
+
+registerAgentCommandCompactionTestHooks();
 
 beforeEach(() => {
-  vi.clearAllMocks();
   mocks.isDiagnosticsEnabled.mockReturnValue(true);
-  mocks.getRuntimeConfig.mockReturnValue({
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://api.openai.com/v1",
-          models: [{ id: "gpt-5.5", cost: { input: 1, output: 2.5, cacheRead: 0, cacheWrite: 0 } }],
-        },
+  state.deliverAgentCommandResultMock.mockImplementation(
+    async (
+      params: Parameters<typeof import("./command/delivery.js").deliverAgentCommandResult>[0],
+    ) => {
+      const { deliverAgentCommandResult } = await import("./command/delivery.js");
+      return deliverAgentCommandResult(params);
+    },
+  );
+  if (!state.cfg) {
+    throw new Error("missing command fixture config");
+  }
+  state.cfg.models = {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [
+          {
+            id: "gpt-5.5",
+            name: "Test model",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 1, output: 2.5, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 128000,
+            maxTokens: 8192,
+            agentRuntime: { id: "openclaw" },
+          },
+        ],
       },
     },
-  });
+  };
 });
 
-function emit(
+async function runIngress(
   agentMeta: Partial<EmbeddedAgentMeta> = {},
   opts: Partial<AgentCommandIngressOpts> = {},
 ) {
-  emitIngressModelUsageDiagnostic(
-    {
-      meta: {
-        durationMs: 1234,
-        agentMeta: {
-          provider: "openai",
-          model: "gpt-5.5",
-          sessionId: "sess-abc",
-          usage: { input: 500, output: 200, cacheRead: 50, cacheWrite: 25, total: 775 },
-          contextTokens: 128000,
-          promptTokens: 1200,
-          lastCallUsage: { input: 500, output: 200 },
-          ...agentMeta,
-        },
+  const result = makeCompactionResult({
+    sessionId: "sess-abc",
+    text: "Test answer",
+    runner: "embedded",
+  });
+  state.runAgentAttemptMock.mockResolvedValueOnce({
+    ...result,
+    meta: {
+      ...result.meta,
+      durationMs: 1234,
+      agentMeta: {
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "sess-abc",
+        usage: { input: 500, output: 200, cacheRead: 50, cacheWrite: 25, total: 775 },
+        contextTokens: 128000,
+        promptTokens: 1200,
+        lastCallUsage: { input: 500, output: 200 },
+        ...agentMeta,
       },
     },
+  });
+  await agentCommandFromGatewayIngress(
     {
       message: "hello",
+      sessionId: "sess-abc",
       sessionKey: "agent:main:main",
       agentId: "main",
       allowModelOverride: false,
       messageChannel: "api",
       ...opts,
     },
-    "/state/agents/main/agent",
+    ...GATEWAY_INGRESS_ARGS,
   );
+  expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+  return mocks.emitTrustedDiagnosticEvent.mock.calls
+    .map(([event]) => event)
+    .filter((event) => event.type === "model.usage");
 }
 
-describe("emitIngressModelUsageDiagnostic", () => {
-  it("emits turn usage with the current run channel", () => {
-    emit({}, { runContext: { messageChannel: "discord" } });
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledExactlyOnceWith(
+describe("agent command ingress usage diagnostics", () => {
+  it("emits turn usage with the current run channel", async () => {
+    const events = await runIngress({}, { runContext: { messageChannel: "discord" } });
+    expect(events).toEqual([
       expect.objectContaining({
         type: "model.usage",
         sessionKey: "agent:main:main",
@@ -82,16 +120,17 @@ describe("emitIngressModelUsageDiagnostic", () => {
           total: 775,
         },
         durationMs: 1234,
+        costUsd: 0.001,
       }),
-    );
+    ]);
   });
 
-  it("uses cumulative billing usage while retaining last-call context", () => {
-    emit(
+  it("uses cumulative billing usage while retaining last-call context", async () => {
+    const events = await runIngress(
       { diagnosticUsage: { input: 900, output: 300, cacheRead: 70, cacheWrite: 30, total: 1300 } },
       { messageChannel: undefined, channel: "webchat" },
     );
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledExactlyOnceWith(
+    expect(events).toEqual([
       expect.objectContaining({
         channel: "webchat",
         usage: {
@@ -106,50 +145,30 @@ describe("emitIngressModelUsageDiagnostic", () => {
         context: { limit: 128000, used: 1200 },
         costUsd: 0.00165,
       }),
-    );
+    ]);
   });
 
-  it("does not emit when diagnostics are disabled", () => {
+  it("does not emit when diagnostics are disabled", async () => {
     mocks.isDiagnosticsEnabled.mockReturnValue(false);
-    emit();
-    expect(mocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
+    expect(await runIngress()).toEqual([]);
   });
 
-  it("does not emit token-only usage with zero counts", () => {
-    emit({ usage: { input: 0, output: 0 } });
-    expect(mocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
+  it("does not emit token-only usage with zero counts", async () => {
+    expect(await runIngress({ usage: { input: 0, output: 0 } })).toEqual([]);
   });
 
-  it.each([
-    {
-      name: "token buckets",
-      usage: { input: 500, output: 200 },
-      cost: 0.001,
-      total: 700,
-      channel: "api",
-    },
-    {
-      name: "cost-only zero total",
-      usage: { cost: { total: 0 } },
-      cost: 0,
-      total: 0,
-      channel: undefined,
-    },
-  ])(
-    "emits monetary diagnostics for $name without a prompt estimate",
-    ({ usage, cost, total, channel }) => {
-      emit(
-        { usage, promptTokens: undefined, lastCallUsage: undefined },
-        { messageChannel: channel },
-      );
-      expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          channel: channel ?? "http",
-          costUsd: cost,
-          context: { limit: 128000 },
-          usage: expect.objectContaining({ cacheRead: 0, cacheWrite: 0, total }),
-        }),
-      );
-    },
-  );
+  it("emits zero-cost diagnostics without token counts or a prompt estimate", async () => {
+    const events = await runIngress(
+      { usage: { cost: { total: 0 } }, promptTokens: undefined, lastCallUsage: undefined },
+      { messageChannel: undefined },
+    );
+    expect(events).toEqual([
+      expect.objectContaining({
+        channel: "http",
+        costUsd: 0,
+        context: { limit: 128000 },
+        usage: expect.objectContaining({ cacheRead: 0, cacheWrite: 0, total: 0 }),
+      }),
+    ]);
+  });
 });

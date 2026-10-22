@@ -75,11 +75,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
     }
 
     private final class Connection: @unchecked Sendable {
-        enum Lifecycle {
-            case running
-            case stopping
-        }
-
         let generation = UUID()
         let invocation: MacNodeCodexThreadCatalog.ResolvedInvocation
         let initializeRequestID: Int
@@ -91,7 +86,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         var readers: [PipeReadStream] = []
         var stdoutBuffer = Data()
         var sourceHomeId: String?
-        var lifecycle: Lifecycle = .running
 
         init(
             invocation: MacNodeCodexThreadCatalog.ResolvedInvocation,
@@ -229,7 +223,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
         }
         let request = self.pending[0]
         if let connection = self.connection {
-            guard case .running = connection.lifecycle else { return }
+            guard connection.cleanupTask == nil else { return }
             if connection.process?.isRunning != true ||
                 connection.invocation != request.invocation
             {
@@ -499,7 +493,7 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
 
     private func scheduleIdleShutdown() {
         guard let connection = self.connection,
-              case .running = connection.lifecycle,
+              connection.cleanupTask == nil,
               self.idleTimer == nil
         else { return }
         let timer = DispatchSource.makeTimerSource(queue: self.queue)
@@ -528,7 +522,6 @@ final class CodexAppServerThreadClient: @unchecked Sendable {
             return cleanupTask
         }
         guard let process = connection.process else { return nil }
-        connection.lifecycle = .stopping
         let generation = connection.generation
         let readers = connection.readers
         let cleanupTask = Task { [weak self] in

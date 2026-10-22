@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
+import { sendJsonWithoutCharset as sendInteractionResponse } from "openclaw/plugin-sdk/http-response-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
@@ -194,23 +195,6 @@ function generateInteractionToken(context: Record<string, unknown>, accountId?: 
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
-type MattermostButton = {
-  id: string;
-  type: "button" | "select";
-  name: string;
-  style?: "default" | "primary" | "danger";
-  integration: {
-    url: string;
-    context: Record<string, unknown>;
-  };
-};
-
-type MattermostAttachment = {
-  text?: string;
-  actions?: MattermostButton[];
-  [key: string]: unknown;
-};
-
 /**
  * Sanitize a button ID so Mattermost's action router can match it.
  * Mattermost uses the action ID in the URL path `/api/v4/posts/{id}/actions/{actionId}`
@@ -231,8 +215,8 @@ export function buildButtonAttachments(params: {
     context?: Record<string, unknown>;
   }>;
   text?: string;
-}): MattermostAttachment[] {
-  const actions: MattermostButton[] = params.buttons.map((btn) => {
+}) {
+  const actions = params.buttons.map((btn) => {
     const safeId = sanitizeActionId(btn.id);
     const context: Record<string, unknown> = {
       action_id: safeId,
@@ -302,16 +286,6 @@ export function buildButtonProps(params: {
   };
 }
 
-function sendInteractionResponse(
-  res: ServerResponse,
-  statusCode: number,
-  body: MattermostInteractionResponse | { error: string },
-): void {
-  res.statusCode = statusCode;
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(body));
-}
-
 export function createMattermostInteractionHandler(params: {
   client: MattermostClient;
   accountId: string;
@@ -360,10 +334,8 @@ export function createMattermostInteractionHandler(params: {
 
   return async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method !== "POST") {
-      res.statusCode = 405;
       res.setHeader("Allow", "POST");
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ error: "Method Not Allowed" }));
+      sendInteractionResponse(res, 405, { error: "Method Not Allowed" });
       return;
     }
 
@@ -546,7 +518,6 @@ export function createMattermostInteractionHandler(params: {
       }
     }
 
-    // Dispatch as system event so the agent can handle it.
     // Wrapped in try/catch — the post update below must still run even if
     // system event dispatch fails (e.g. missing sessionKey or channel lookup).
     try {
@@ -588,7 +559,6 @@ export function createMattermostInteractionHandler(params: {
 
     sendInteractionResponse(res, 200, {});
 
-    // Dispatch a synthetic inbound message so the agent responds to the button click.
     if (params.dispatchButtonClick) {
       try {
         await params.dispatchButtonClick({

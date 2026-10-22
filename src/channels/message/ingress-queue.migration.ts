@@ -53,7 +53,7 @@ export function importLegacyChannelIngressEntries(params: {
     !accountId ||
     accountId !== accountId.trim()
   ) {
-    throw new Error("Doctor ingress import requires canonical channel and account IDs");
+    throw new Error("Doctor ingress import requires normalized channel and account IDs");
   }
   const queueName = JSON.stringify([params.channelId, accountId]);
   const seen = new Set<string>();

@@ -3,10 +3,8 @@ import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  captureDeliveryQueueStateContext,
-  loadDeliveryQueueEntry,
-} from "../infra/delivery-queue-sqlite.js";
+import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-sqlite.js";
+import { loadDeliveryQueueEntry } from "../infra/delivery-queue-sqlite.test-support.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../infra/outbound/delivery-queue-namespaces.js";
@@ -36,9 +34,6 @@ import { activateGatewayScheduledServices } from "./server-runtime-services.js";
 import * as updateRunNotices from "./update-run-notice.runtime.js";
 import { startUpdateRunWatcher } from "./update-run-watcher.js";
 
-vi.mock("../infra/heartbeat-runner-scheduler.js", () => ({
-  startHeartbeatRunner: () => ({ stop() {}, updateConfig() {} }),
-}));
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
   startSessionUpstreamMonitor: () => ({ stop() {} }),
 }));
@@ -61,7 +56,7 @@ afterEach(async () => {
   await watcher?.stop();
   await lifecycle?.stop();
   await services?.stopDeliveryRecovery();
-  services?.heartbeatRunner.stop();
+  await services?.stopScheduledServices();
   await scheduler?.stop();
   watcher = undefined;
   services = undefined;
@@ -150,7 +145,6 @@ it("recovers a watcher-owned update notice on its runtime state after ambient ro
     cfgAtStart: cfg,
     deps: {},
     sessionDeliveryRecoveryMaxEnqueuedAt: Date.now(),
-    cronEnabled: false,
     log: { ...log, child: () => log },
   });
   await vi.dynamicImportSettled();

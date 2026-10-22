@@ -16,7 +16,7 @@ export function buildProgram(
   // Without this, unknown nested commands can print an error
   // but still report success when exits are intercepted.
   program.exitOverride((err) => {
-    process.exitCode = typeof err.exitCode === "number" ? err.exitCode : 1;
+    process.exitCode = err.exitCode;
     throw err;
   });
   const ctx = createProgramContext(prepared);

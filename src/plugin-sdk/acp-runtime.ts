@@ -1,5 +1,3 @@
-// Public ACP runtime helpers for plugins that integrate with ACP control/session state.
-
 import { testing as managerTesting, getAcpSessionManager } from "../acp/control-plane/manager.js";
 import { resolveAcpAgentPolicyError, resolveAcpDispatchPolicyError } from "../acp/policy.js";
 import { testing as registryTesting, requireAcpRuntimeBackend } from "../acp/runtime/registry.js";
@@ -19,6 +17,8 @@ export {
 } from "../state/incognito-session-error.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
 export { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { getAcpRuntimeBackend } from "../acp/runtime/registry.js";
 export type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -33,6 +33,7 @@ export type {
 /** @deprecated Shipped in v2026.9.4; use readAcpSessionEntryAsync for runtime reads. */
 export { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 export type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
+export { prepareAcpSessionEntryRead } from "../acp/runtime/session-meta-read.js";
 export type {
   AcpSessionEntryPreparer,
   PreparedAcpSessionEntryRead,

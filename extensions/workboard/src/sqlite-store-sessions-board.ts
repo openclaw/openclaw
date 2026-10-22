@@ -1,7 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   createDefaultWorkboardSessionsBoardSpec,
-  normalizeWorkboardSessionsBoardSpec,
   patchWorkboardSessionsBoardSpec,
   type WorkboardSessionPlacement,
   type WorkboardSessionsBoard,
@@ -18,6 +16,7 @@ import type {
   PersistedWorkboardBoard,
   WorkboardSessionPlacementWrite,
 } from "./persistence-types.js";
+import type { WorkboardSqlConnection } from "./sqlite-store-schema.js";
 
 type SessionsBoardDatabase = {
   workboard_boards: { id: string; kind: string; sessions_spec: string | null; updated_at: number };
@@ -46,7 +45,7 @@ const PREVIOUS_DEFAULT_RULES = new Map(
 
 export class WorkboardSqliteSessionsBoardStore {
   constructor(
-    private readonly db: DatabaseSync,
+    private readonly db: WorkboardSqlConnection,
     private readonly boards: { lookup(key: string): PersistedWorkboardBoard | undefined },
   ) {}
 
@@ -141,7 +140,7 @@ export class WorkboardSqliteSessionsBoardStore {
     placement: WorkboardSessionPlacementWrite,
     expectedSpec: WorkboardSessionsBoardSpec,
   ): boolean {
-    const expected = JSON.stringify(normalizeWorkboardSessionsBoardSpec(expectedSpec));
+    const expected = JSON.stringify(expectedSpec);
     return runSqliteImmediateTransactionSync(this.db, () => {
       const board = this.get(boardId);
       if (JSON.stringify(board.sessions) !== expected) {
@@ -149,15 +148,6 @@ export class WorkboardSqliteSessionsBoardStore {
       }
       if (!board.sessions.columns.some((column) => column.id === placement.columnId)) {
         throw new Error(`Unknown sessions board column: ${placement.columnId}`);
-      }
-      if (
-        !placement.sessionKey ||
-        placement.source !== "operator" ||
-        typeof placement.reason !== "string" ||
-        !Number.isSafeInteger(placement.updatedAt) ||
-        placement.updatedAt < 0
-      ) {
-        throw new Error("Invalid session pin.");
       }
       const query = getNodeSqliteKysely<SessionsBoardDatabase>(this.db);
       const current = executeSqliteQueryTakeFirstSync(

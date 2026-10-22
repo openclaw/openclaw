@@ -1,3 +1,4 @@
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   ErrorCodes,
@@ -6,6 +7,7 @@ import {
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { readUtilityModelSetting } from "../../agents/utility-model-setting.js";
 import {
   type AuthProbeResult,
   type AuthProbeReasonCode,
@@ -41,7 +43,7 @@ const PROBE_ERROR_MESSAGES: Record<Exclude<AuthProbeStatus, "ok">, string> = {
   billing: "The provider reported a billing problem.",
   timeout: "The connection timed out.",
   format: "The provider rejected the model or request format.",
-  unknown: "The connection probe failed.",
+  unknown: "The connection check failed.",
   no_model: "No model is available for this provider.",
 };
 
@@ -85,12 +87,13 @@ function safeProbeTargetError(result: AuthProbeResult): string | undefined {
   );
 }
 
-function modelCandidatesFromConfig(cfg: OpenClawConfig): string[] {
-  const configured = cfg.agents?.defaults?.model;
-  const primary = typeof configured === "string" ? configured : configured?.primary;
-  const fallbacks = typeof configured === "string" ? [] : (configured?.fallbacks ?? []);
-  return [primary, ...fallbacks, cfg.agents?.defaults?.utilityModel]
-    .filter((value): value is string => typeof value === "string")
+function modelCandidatesFromConfig(cfg: OpenClawConfig, agentId: string): string[] {
+  const utility = readUtilityModelSetting(cfg, agentId);
+  return [
+    ...listModelRefsFromConfigValue(cfg.agents?.defaults?.model),
+    ...(utility.kind === "explicit" ? [utility.modelRef] : []),
+    ...(utility.kind !== "disabled" ? utility.fallbacks : []),
+  ]
     .map((value) => value.trim())
     .filter(Boolean);
 }
@@ -168,7 +171,7 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
         agentDir: scope.agentDir,
         workspaceDir,
         providers: [provider],
-        modelCandidates: modelCandidatesFromConfig(cfg),
+        modelCandidates: modelCandidatesFromConfig(cfg, scope.agentId),
         options: {
           provider,
           ...(profileId ? { profileIds: [profileId] } : {}),
@@ -180,17 +183,17 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
       });
       const result = mapProbeResult(provider, summary.results);
       if (result.results.length === 0) {
-        result.error = "No probe targets are available for this provider.";
+        result.error = "No check targets are available for this provider.";
       }
       respond(true, result, undefined);
     } catch (error) {
-      context.logGateway.warn("Model connection probe failed.", {
+      context.logGateway.warn("Model connection check failed.", {
         event: "models_probe_failed",
         provider,
         timeoutMs,
         error: redactAuthProbeError(formatForLog(error)),
       });
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Connection probe failed."));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Connection check failed."));
     }
   },
 };

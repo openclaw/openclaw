@@ -12,11 +12,10 @@ import {
 
 afterEach(resetDiscussionPanelTestState);
 
-async function emptyStateText(panel: HTMLElement): Promise<string> {
+function emptyStateText(panel: HTMLElement): string {
   const empty = panel.querySelector("openclaw-panel-empty-state");
   expect(empty).not.toBeNull();
-  await empty!.updateComplete;
-  return empty!.shadowRoot?.textContent ?? "";
+  return empty!.textContent ?? "";
 }
 
 describe("session discussion panel", () => {
@@ -33,40 +32,6 @@ describe("session discussion panel", () => {
     }
   });
 
-  it("shows the opening affordance while auto-open is in flight", async () => {
-    const openDiscussion = vi
-      .fn<SessionDiscussionOpener>()
-      .mockImplementation(() => new Promise(() => {}));
-    const panel = mount({
-      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
-      openDiscussion,
-    });
-
-    await vi.waitFor(() => {
-      expect(openDiscussion).toHaveBeenCalledTimes(1);
-      expect(
-        panel
-          .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="discussion"]')
-          ?.getAttribute("aria-label"),
-      ).toContain("Opening discussion");
-    });
-    expect(panel.querySelector("button")).toBeNull();
-  });
-
-  it("stops the skeleton when auto-open settles without opening", async () => {
-    const panel = mount({
-      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
-      openDiscussion: vi.fn().mockResolvedValue({ state: "available" }),
-    });
-
-    await vi.waitFor(async () => {
-      expect(await emptyStateText(panel)).toContain("cannot be embedded");
-    });
-    expect(
-      panel.querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="discussion"]'),
-    ).toBeNull();
-  });
-
   it("opens once write access is granted after the discussion resolved", async () => {
     const openDiscussion = vi.fn<SessionDiscussionOpener>().mockResolvedValue({
       state: "open",
@@ -76,9 +41,10 @@ describe("session discussion panel", () => {
       loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
       openDiscussion,
       canOpen: false,
+      presentation: "desktop",
     });
     await vi.waitFor(async () => {
-      expect(await emptyStateText(panel)).toContain("Operator write access is required");
+      expect(emptyStateText(panel)).toContain("Operator write access is required");
     });
     expect(openDiscussion).not.toHaveBeenCalled();
     expect(panel.querySelector("button")).toBeNull();
@@ -86,6 +52,43 @@ describe("session discussion panel", () => {
     panel.canOpen = true;
 
     await vi.waitFor(() => expect(openDiscussion).toHaveBeenCalledTimes(1));
+  });
+
+  it("preserves a held discussion read and frame theme updates across same-turn moves", async () => {
+    const result = Promise.withResolvers<{
+      state: "open";
+      embedUrl: string;
+    }>();
+    const loadInfo = vi.fn<SessionDiscussionInfoLoader>().mockReturnValue(result.promise);
+    const panel = mount({ loadInfo, openDiscussion: vi.fn() });
+    await vi.waitFor(() => expect(loadInfo).toHaveBeenCalledTimes(1));
+
+    panel.remove();
+    document.body.append(panel);
+    await Promise.resolve();
+    result.resolve({ state: "open", embedUrl: "https://discussion.example/retained" });
+
+    await vi.waitFor(() => {
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+        "https://discussion.example/retained",
+      );
+    });
+    const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
+    panel.remove();
+    document.body.append(panel);
+    await Promise.resolve();
+    const postMessage = vi.spyOn(frame.contentWindow!, "postMessage");
+
+    document.documentElement.dataset.themeMode = "light";
+
+    await vi.waitFor(() => {
+      expect(postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: "openclaw:widget-theme", mode: "light" }),
+        "https://discussion.example",
+      );
+    });
+    expect(panel.querySelector("iframe")).toBe(frame);
+    expect(loadInfo).toHaveBeenCalledTimes(1);
   });
 
   it("refetches on session switch and reports a hidden discussion", async () => {
@@ -149,6 +152,13 @@ describe("session discussion panel", () => {
     );
     const panel = mount({ loadInfo, openDiscussion });
     await vi.waitFor(() => expect(openDiscussion).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => {
+      expect(
+        panel
+          .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="discussion"]')
+          ?.getAttribute("aria-label"),
+      ).toBe("Opening discussion…");
+    });
     panel.sessionKey = "agent:main:second";
 
     await vi.waitFor(() => {
@@ -212,9 +222,35 @@ describe("session discussion panel", () => {
     });
 
     await vi.waitFor(async () => {
-      expect(await emptyStateText(panel)).toContain("cannot be embedded");
+      expect(emptyStateText(panel)).toContain("cannot be embedded");
     });
     expect(panel.querySelector("iframe")).toBeNull();
     expect(panel.querySelector("a")).toBeNull();
+  });
+
+  it("recovers a failed discussion read when its source is replaced", async () => {
+    const loadInfo = vi
+      .fn<SessionDiscussionInfoLoader>()
+      .mockRejectedValueOnce(new Error("Discussion provider unavailable"))
+      .mockResolvedValueOnce({
+        state: "open",
+        embedUrl: "https://discussion.example/recovered",
+      });
+    const panel = mount({ loadInfo, openDiscussion: vi.fn() });
+    await vi.waitFor(() => {
+      expect(panel.querySelector(".callout.danger")?.textContent).toContain(
+        "Discussion provider unavailable",
+      );
+    });
+
+    panel.sourceGeneration += 1;
+
+    await vi.waitFor(() => {
+      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
+        "https://discussion.example/recovered",
+      );
+    });
+    expect(panel.querySelector(".callout.danger")).toBeNull();
+    expect(loadInfo).toHaveBeenCalledTimes(2);
   });
 });

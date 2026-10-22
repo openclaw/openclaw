@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import {
   emitSessionIdentityMutation,
@@ -178,7 +179,7 @@ export function prepareSessionIdentityPublication(
   const publish = () => publishCommittedSessionIdentity(agentId, identity, previous, current);
   // Savepoint success is not COMMIT; identity observers can cancel live work.
   return () => {
-    if (!deferSqlitePostCommitPublication(database.db, publish)) {
+    if (!deferSqlitePostCommitPublication(sqlPublicationAnchor(database.db), publish)) {
       publish();
     }
   };

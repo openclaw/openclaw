@@ -317,7 +317,7 @@ struct OnboardingWelcomeStep: View {
                             Text("Connect Manually")
                                 .font(OpenClawType.subheadSemiBold)
                         }
-                        .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54, shadowOpacity: 0.018))
+                        .buttonStyle(OpenClawSecondaryActionButtonStyle(height: 54))
                         .disabled(self.isConnecting)
                     }
                 }
@@ -408,7 +408,7 @@ struct OnboardingModeIcon: View {
 
     var body: some View {
         Image(systemName: self.symbol)
-            .font(OpenClawType.subheadSemiBold)
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(self.selected ? OpenClawBrand.activationPrimaryActionText : .secondary)
             .frame(width: 34, height: 34)
             .background {

@@ -1,6 +1,6 @@
-// Gateway Tailscale exposure helper.
-// Applies Serve/Funnel routes and returns optional shutdown cleanup.
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { TailscaleServeDisabledError } from "../infra/tailscale-serve-disabled-error.js";
 import {
   claimTailscaleRoute,
   getTailnetHostname,
@@ -18,6 +18,7 @@ export async function startGatewayTailscaleExposure(params: {
   preserveFunnel?: boolean;
   controlUiBasePath?: string;
   logTailscale: { info: (msg: string) => void; warn: (msg: string) => void };
+  signal?: AbortSignal;
 }): Promise<(() => Promise<void>) | null> {
   if (params.tailscaleMode === "off") {
     return null;
@@ -56,8 +57,9 @@ export async function startGatewayTailscaleExposure(params: {
       backendTarget,
       params.port,
       params.logTailscale.info,
+      params.signal,
     );
-    const host = await (
+    const hostname = (
       params.tailscaleMode === "serve" ? getTailnetHostnameAfterServe() : getTailnetHostname()
     ).catch((error: unknown) => {
       params.logTailscale.warn(
@@ -65,6 +67,12 @@ export async function startGatewayTailscaleExposure(params: {
       );
       return null;
     });
+    const host = await racePromiseWithAbortSignal(
+      hostname,
+      params.signal,
+      (signal) => signal.reason,
+    );
+    params.signal?.throwIfAborted();
     if (!claim.isActive()) {
       throw new Error(`Managed Tailscale ${params.tailscaleMode} claim exited during startup`);
     }
@@ -90,7 +98,22 @@ export async function startGatewayTailscaleExposure(params: {
     }
   } catch (err) {
     clearPublishedOrigin?.();
-    await claim?.stop();
+    try {
+      await claim?.stop();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [err, cleanupError],
+        "Tailscale exposure startup and cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    params.signal?.throwIfAborted();
+    if (params.tailscaleMode === "serve" && err instanceof TailscaleServeDisabledError) {
+      params.logTailscale.warn(
+        "Tailscale Serve is not enabled on this tailnet. The authenticated local Gateway remains available on loopback; remote access is unavailable. Restore the intended tailnet Serve policy and restart the Gateway.",
+      );
+      return null;
+    }
     params.logTailscale.warn(`${params.tailscaleMode} failed: ${formatErrorMessage(err)}`);
     throw err;
   }

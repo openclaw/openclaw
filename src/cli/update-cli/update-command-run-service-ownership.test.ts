@@ -1,39 +1,96 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as daemonExec from "../../daemon/exec-file.js";
+import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import * as gatewayService from "../../daemon/service.js";
-import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import {
+  buildSystemdManagerPropertyOutput,
+  buildSystemdUnitPropertyOutput,
+  createMockGatewayService,
+  mockSystemAccountHome,
+} from "../../daemon/service.test-helpers.js";
 import * as systemdExec from "../../daemon/systemd-exec.js";
 import {
   readSystemdServiceExecStart,
   resolveSystemdUnitPath,
 } from "../../daemon/systemd-service-files.js";
 import { systemdManagerVersionProbe } from "../../daemon/systemd-user-bus.test-support.js";
+import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
+import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
-import { admitUpdateCommandRun } from "./update-command-run.js";
-import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
+import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import * as shared from "./shared.js";
+import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
+import {
+  admitUpdateCommandRun,
+  prepareUpdateCommand,
+  resolveUpdateCommandAdmissionEnv,
+  resolveUpdateCommandAdmissionRoot,
+} from "./update-command-run.js";
+import {
+  getNodeRuntimeFixture,
+  stubNodeRuntime,
+} from "./update-command-runtime-recovery.test-support.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
+import { collectServiceInspectionFailureFacts } from "./update-command-service-plan.js";
 import * as servicePlan from "./update-command-service-plan.js";
+import { updateCommand } from "./update-command.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
+function createCommandResult(
+  overrides: Partial<Awaited<ReturnType<typeof systemdExec.execBusctlUser>>> = {},
+) {
+  return { code: 0, termination: "exit" as const, stdout: "", stderr: "", ...overrides };
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
+
+function admissionHome(prefix: string) {
+  const home = dirs.make(prefix);
+  const callerState = path.join(home, ".openclaw-caller");
+  const serviceState = path.join(home, ".openclaw-service");
+  const profileEnv = (profile: string, state: string) => ({
+    OPENCLAW_PROFILE: profile,
+    OPENCLAW_STATE_DIR: state,
+    OPENCLAW_CONFIG_PATH: path.join(state, "openclaw.json"),
+  });
+  const callerOverrides = profileEnv("caller", callerState);
+  const serviceOverrides = profileEnv("service", serviceState);
+  for (const key of [
+    "OPENCLAW_HOME",
+    "OPENCLAW_SYSTEMD_UNIT",
+    "OPENCLAW_LAUNCHD_LABEL",
+    "OPENCLAW_WINDOWS_TASK_NAME",
+    "OPENCLAW_SUPERVISOR_MODE",
+    UPDATE_RUN_ID_ENV,
+  ]) {
+    vi.stubEnv(key, undefined);
+  }
+  for (const [key, value] of Object.entries({ HOME: home, ...callerOverrides })) {
+    vi.stubEnv(key, value);
+  }
+  return { home, callerState, serviceState, callerOverrides, serviceOverrides };
+}
 
 it.each([
   "owned",
@@ -48,43 +105,21 @@ it.each([
 ] as const)(
   "preserves verified ownership and warns on unavailable inspection (%s)",
   async (scenario) => {
-    stubNodeRuntime();
-    const home = dirs.make("update-loaded-admission-");
-    const callerState = path.join(home, ".openclaw-caller");
-    const serviceState = path.join(home, ".openclaw-service");
+    const serviceNode = getNodeRuntimeFixture().execPath;
+    const { home, callerState, serviceState, callerOverrides, serviceOverrides } = admissionHome(
+      "update-loaded-admission-",
+    );
     const root = path.join(home, "package");
     const foreignRoot = path.join(home, "foreign");
     for (const packageRoot of [root, foreignRoot]) {
       fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
-      fs.writeFileSync(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw" }),
-      );
+      fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
       fs.writeFileSync(path.join(packageRoot, "dist", "entry.js"), "// fixture");
     }
     vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
-    for (const key of [
-      "OPENCLAW_HOME",
-      "OPENCLAW_SYSTEMD_UNIT",
-      "OPENCLAW_LAUNCHD_LABEL",
-      "OPENCLAW_WINDOWS_TASK_NAME",
-      "OPENCLAW_SUPERVISOR_MODE",
-      UPDATE_RUN_ID_ENV,
-    ]) {
-      vi.stubEnv(key, undefined);
-    }
-    vi.stubEnv("HOME", home);
     vi.stubEnv("DBUS_SESSION_BUS_ADDRESS", `unix:path=${path.join(home, "bus")}`);
     vi.spyOn(daemonExec, "execFileUtf8").mockImplementation(systemdManagerVersionProbe);
-    vi.stubEnv("OPENCLAW_PROFILE", "caller");
-    vi.stubEnv("OPENCLAW_STATE_DIR", callerState);
-    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(callerState, "openclaw.json"));
-    const serviceEnv = {
-      ...process.env,
-      OPENCLAW_PROFILE: "service",
-      OPENCLAW_STATE_DIR: serviceState,
-      OPENCLAW_CONFIG_PATH: path.join(serviceState, "openclaw.json"),
-    };
+    const serviceEnv = { ...process.env, ...serviceOverrides };
     let pending: ReturnType<typeof createRetainedUpdateRecovery> | undefined;
     if (scenario === "owned-pending") {
       const runId = createUpdateRun({ trigger: "cli" }, { env: serviceEnv }).runId;
@@ -100,27 +135,10 @@ it.each([
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(
         sourcePath,
-        `[Service]\nExecStart=${process.execPath} ${root}/dist/entry.js gateway\n`,
+        `[Service]\nExecStart=${serviceNode} ${root}/dist/entry.js gateway\n`,
       );
     }
-    const snapshot = () =>
-      fs
-        .readdirSync(home, { recursive: true })
-        .map(String)
-        .toSorted()
-        .map((name) => {
-          const filename = path.join(home, name);
-          const stat = fs.statSync(filename);
-          return [
-            name,
-            stat.ino,
-            stat.mtimeMs,
-            stat.mode,
-            stat.isFile()
-              ? createHash("sha256").update(fs.readFileSync(filename)).digest("hex")
-              : null,
-          ];
-        });
+    const snapshot = () => snapshotUpdateFixtureTree(home);
     const before = snapshot();
     const nativeFailure = new Error("inspection-secret-canary");
     const rootFailure = new Error("installation classification failed");
@@ -131,61 +149,40 @@ it.each([
       scenario === "unresolved-root"
         ? ["opaque-launcher"]
         : [
-            process.execPath,
+            serviceNode,
             path.join(scenario === "stale-install" ? foreignRoot : root, "dist", "entry.js"),
             "gateway",
           ];
-    const response = (values: { type: string; data: unknown }[]) => ({
-      code: 0,
-      termination: "exit" as const,
-      stderr: "",
-      stdout: values.map((value) => JSON.stringify(value)).join("\n"),
-    });
     const bus = vi.spyOn(systemdExec, "execBusctlUser").mockImplementation(async (_env, args) => {
       if (scenario === "timeout") {
-        return {
+        return createCommandResult({
           code: 1,
           termination: "timeout",
-          stdout: "",
           stderr: "inspection timed out",
-        };
+        });
       }
       if (scenario === "absent" || scenario === "unloaded-local") {
         const unit = "openclaw-gateway-caller.service";
-        return {
+        return createCommandResult({
           code: 1,
-          termination: "exit",
-          stdout: "",
           stderr: args.includes("GetUnitFileState")
             ? `Call failed: Unit file ${unit} does not exist.`
             : `Call failed: Unit ${unit} ${args.includes("GetUnit") ? "not loaded" : "not found"}.`,
-        };
+        });
       }
-      if (args.includes("GetUnit") || args.includes("LoadUnit")) {
-        return response([{ type: "o", data: ["/org/freedesktop/systemd1/unit/gateway"] }]);
-      }
-      if (args.includes("FragmentPath")) {
-        return response([
-          { type: "s", data: sourcePath },
-          { type: "as", data: [] },
-          { type: "b", data: false },
-          { type: "s", data: "loaded" },
-        ]);
-      }
-      return response([
-        { type: "a(sasbttttuii)", data: [[command[0], command, false, 0, 0, 0, 0, 0, 0, 0]] },
-        { type: "s", data: "" },
-        {
-          type: "as",
-          data: Object.entries(serviceEnv)
-            .filter(([key]) =>
-              ["OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"].includes(key),
-            )
-            .map(([key, value]) => `${key}=${value}`),
-        },
-        { type: "a(sb)", data: [] },
-        { type: "as", data: [] },
-      ]);
+      return createCommandResult({
+        stdout:
+          args.includes("GetUnit") || args.includes("LoadUnit")
+            ? JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/gateway"] })
+            : args.includes("FragmentPath")
+              ? buildSystemdUnitPropertyOutput({ fragmentPath: sourcePath })
+              : buildSystemdManagerPropertyOutput({
+                  programArguments: command,
+                  environment: Object.entries(serviceOverrides).map(
+                    ([key, value]) => `${key}=${value}`,
+                  ),
+                }),
+      });
     });
     if (scenario === "native-rejection") {
       bus.mockRejectedValue(nativeFailure);
@@ -199,40 +196,32 @@ it.each([
       ...service,
       readCommand: (...args) => readSystemdServiceExecStart(...args),
     });
-    if (scenario === "owned" || scenario === "stale-install" || scenario === "absent") {
+    const expectAdmitted = async (usesServiceState: boolean) => {
       const run = await admitUpdateCommandRun({ opts: {}, root });
-      const usesServiceState = scenario !== "absent";
-      const expectedState = usesServiceState ? serviceState : callerState;
-      expect(run.env.OPENCLAW_STATE_DIR).toBe(expectedState);
-      expect(run.env.OPENCLAW_PROFILE).toBe(usesServiceState ? "service" : "caller");
+      expect(run.env).toMatchObject(usesServiceState ? serviceOverrides : callerOverrides);
       expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
+    };
+    if (scenario === "owned" || scenario === "stale-install" || scenario === "absent") {
+      const usesServiceState = scenario !== "absent";
+      await expectAdmitted(usesServiceState);
       expect(fs.existsSync(path.join(usesServiceState ? callerState : serviceState, "state"))).toBe(
         false,
       );
     } else if (scenario === "owned-pending" || scenario === "root-probe-error") {
-      const failure: unknown = await admitUpdateCommandRun({ opts: {}, root }).then(
-        () => "admitted",
-        (error: unknown) => error,
-      );
-      if (scenario === "owned-pending") {
-        expect(failure).toBeInstanceOf(UpdateRecoveryRequiredError);
-      } else if (scenario === "root-probe-error") {
-        expect(failure).toBe(rootFailure);
+      const admission = admitUpdateCommandRun({ opts: {}, root });
+      if (pending) {
+        await expect(admission).rejects.toBeInstanceOf(UpdateRecoveryRequiredError);
+        expect(loadUpdateRecovery(pending.runId, { env: serviceEnv })).toEqual(pending);
+      } else {
+        await expect(admission).rejects.toBe(rootFailure);
       }
       expect(snapshot()).toEqual(before);
-      if (pending) {
-        expect(loadUpdateRecovery(pending.runId, { env: serviceEnv })).toEqual(pending);
-      }
     } else {
       expect(await servicePlan.resolveManagedServicePackageUpdatePlan({ root })).toEqual({
         rootRedirect: null,
         serviceUnitTarget: "no service entrypoint found",
       });
-      const run = await admitUpdateCommandRun({ opts: {}, root });
-      expect(run.env.OPENCLAW_STATE_DIR).toBe(callerState);
-      expect(run.env.OPENCLAW_CONFIG_PATH).toBe(path.join(callerState, "openclaw.json"));
-      expect(run.env.OPENCLAW_PROFILE).toBe("caller");
-      expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
+      await expectAdmitted(false);
       expect(fs.existsSync(serviceState)).toBe(false);
 
       const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
@@ -246,17 +235,20 @@ it.each([
         kind: "unavailable",
         message: expect.stringContaining("Gateway service inspection is unavailable"),
       });
+      expect([
+        inspected.blockMessage,
+        inspected.serviceMutationAllowed,
+        inspected.stopped,
+        inspected.serviceEnv,
+        inspected.serviceDefinitionEnv,
+        inspected.serviceNodeRunner,
+      ]).toEqual([undefined, false, false, undefined, undefined, undefined]);
       const advisory = inspected.serviceMutationSkipMessage;
       expect(advisory).toContain("automatic service restart was skipped");
-      expect(advisory).toContain("Restart the Gateway you launched manually after the update");
+      expect(advisory).toContain("openclaw --profile caller gateway stop");
+      expect(advisory).toContain("openclaw --profile caller update repair");
       expect(advisory).toContain("recorded service definition was left unchanged");
       expect(advisory).toContain("openclaw gateway status --deep");
-      expect(inspected.blockMessage).toBeUndefined();
-      expect(inspected.serviceMutationAllowed).toBe(false);
-      expect(inspected.stopped).toBe(false);
-      expect(inspected.serviceEnv === undefined).toBe(true);
-      expect(inspected.serviceDefinitionEnv === undefined).toBe(true);
-      expect(inspected.serviceNodeRunner).toBeUndefined();
       const facts = collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict);
       expect(facts).toEqual([
         expect.objectContaining({
@@ -268,7 +260,7 @@ it.each([
           message: expect.stringContaining(
             scenario === "timeout"
               ? "The systemd manager inspection deadline expired"
-              : "Restart the Gateway you launched manually",
+              : "Gateway service inspection is unavailable",
           ),
         }),
       ]);
@@ -279,15 +271,8 @@ it.each([
         ),
       ).toEqual(before);
     }
-    for (const mutation of [
-      service.stage,
-      service.install,
-      service.uninstall,
-      service.start,
-      service.stop,
-      service.restart,
-    ]) {
-      expect(mutation).not.toHaveBeenCalled();
+    for (const method of ["stage", "install", "uninstall", "start", "stop", "restart"] as const) {
+      expect(service[method]).not.toHaveBeenCalled();
     }
     if (scenario === "root-probe-error") {
       expect(bus).not.toHaveBeenCalled();
@@ -295,5 +280,135 @@ it.each([
       expect(bus).toHaveBeenCalled();
     }
     expect(bus.mock.calls.every(([, args]) => !args.includes("LoadUnit"))).toBe(true);
+  },
+);
+
+const unmask = "systemctl --user unmask openclaw-gateway.service";
+const maskedRefusal = {
+  reason: "masked" as const,
+  message: `Service masked; run \`${unmask}\`, then retry.`,
+};
+it.each([
+  { platform: "linux", outcome: "unavailable" },
+  { platform: "linux", outcome: "conflict" },
+  { platform: "linux", outcome: "masked" },
+  { platform: "darwin", outcome: "conflict" },
+  { platform: "darwin", outcome: "redirect" },
+] as const)(
+  "preserves service admission authority ($platform, $outcome)",
+  async ({ platform, outcome }) => {
+    stubNodeRuntime();
+    // Platform simulation cannot host native reconciliation workers.
+    vi.spyOn(updateRunLedger, "reconcileAbandonedUpdateRunsAsync").mockResolvedValue([]);
+    const { home, callerState, serviceState, serviceOverrides } = admissionHome(
+      "update-service-admission-",
+    );
+    const callerRoot = path.join(home, "caller-package");
+    const serviceRoot = path.join(home, "service-package");
+    await Promise.all([callerRoot, serviceRoot].map((root) => writePackageRoot(root, "1.0.0")));
+    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", undefined);
+    if (outcome === "redirect") {
+      openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: serviceState },
+      });
+      closeOpenClawStateDatabaseForTest();
+    }
+    mockProcessPlatform(platform);
+    mockSystemAccountHome();
+    vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(callerRoot);
+    const native = createMockGatewayService({
+      isLoaded: async () => {
+        if (outcome === "unavailable") {
+          throw new ServiceInspectionError("service-manager-unavailable");
+        }
+        return true;
+      },
+      readRuntime: async () =>
+        outcome === "unavailable"
+          ? { status: "unknown", inspectionReason: "service-manager-unavailable" }
+          : {
+              status: "running",
+              systemd: {
+                managerUid: 2001,
+                ...(outcome === "masked" ? { startRefusal: maskedRefusal } : {}),
+              },
+            },
+      readCommand: async () => ({
+        programArguments: [process.execPath, path.join(serviceRoot, "dist", "index.js"), "gateway"],
+        environment: {
+          ...serviceOverrides,
+          ...(outcome === "conflict"
+            ? platform === "linux"
+              ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-other.service" }
+              : { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.other" }
+            : {}),
+        },
+      }),
+    });
+    vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(native);
+    if (outcome === "conflict" || outcome === "masked") {
+      await expect(prepareUpdateCommand({ dryRun: true })).rejects.toBeInstanceOf(
+        servicePlan.GatewayServiceUpdateOwnershipError,
+      );
+      const temporaryRoot = path.join(home, "reports");
+      await fs.promises.mkdir(temporaryRoot);
+      vi.spyOn(os, "tmpdir").mockReturnValue(temporaryRoot);
+      const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const exit = await updateCommand({ dryRun: outcome !== "masked", json: true }).catch(
+        (error: unknown) => error,
+      );
+      expect(exit).toBeInstanceOf(ExitError);
+      expect(exit).toMatchObject({ code: 1 });
+      expect(output).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          status: "error",
+          reason: "managed-service-preflight",
+          reportPath: expect.any(String),
+        }),
+      );
+      const { reportPath } = output.mock.calls[0]![0] as { reportPath: string };
+      expect(path.dirname(path.dirname(reportPath))).toBe(temporaryRoot);
+      if (outcome === "masked") {
+        expect(JSON.stringify(output.mock.calls)).toContain(unmask);
+      }
+      expect(await fs.promises.readFile(reportPath, "utf8")).toContain("Bounded diagnostic JSON:");
+      await expect(fs.promises.stat(callerState)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.promises.stat(serviceState)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(native.stop).not.toHaveBeenCalled();
+      expect(native.install).not.toHaveBeenCalled();
+      return;
+    }
+    const prepared = await prepareUpdateCommand({ dryRun: true });
+    const root = resolveUpdateCommandAdmissionRoot(prepared);
+    expect(prepared.discoveredRoot).toBe(callerRoot);
+    expect(prepared.servicePlan?.rootRedirect).toBeNull();
+    expect(prepared.servicePlan?.serviceRoot).toBe(
+      outcome === "unavailable" ? undefined : serviceRoot,
+    );
+    const env = await resolveUpdateCommandAdmissionEnv({ root, opts: {} });
+    expect(root).toBe(outcome === "unavailable" ? callerRoot : serviceRoot);
+    expect(env.OPENCLAW_STATE_DIR).toBe(outcome === "unavailable" ? callerState : serviceState);
+    const run = await admitUpdateCommandRun({ opts: {}, root });
+    expect(run.env.OPENCLAW_STATE_DIR).toBe(env.OPENCLAW_STATE_DIR);
+    if (outcome === "unavailable") {
+      const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+        root,
+        updateInstallKind: "package",
+        shouldRestart: true,
+        phase: "inspect",
+        jsonMode: true,
+      });
+      expect(inspected.serviceUpdateVerdict).toMatchObject({
+        kind: "unavailable",
+        inspectionReason: "service-manager-unavailable",
+        message: expect.stringContaining("openclaw --profile caller gateway stop"),
+      });
+      expect(inspected.blockMessage).toBeUndefined();
+      expect(inspected.serviceEnv).toBeUndefined();
+      await expect(fs.promises.stat(serviceState)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(native.stop).not.toHaveBeenCalled();
+    expect(native.install).not.toHaveBeenCalled();
   },
 );

@@ -1,4 +1,6 @@
 import { cpus } from "node:os";
+import { performance } from "node:perf_hooks";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -33,6 +35,16 @@ function hostCpu(user: number, idle: number) {
 beforeEach(() => {
   vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: undefined } });
   now = 10_000;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  vi.spyOn(process, "cpuUsage").mockImplementation((previous) => ({
+    user: now * 2_000 - (previous?.user ?? 0),
+    system: 0,
+  }));
+  vi.spyOn(performance, "eventLoopUtilization").mockImplementation(() => ({
+    idle: now,
+    active: 0,
+    utilization: 0.05,
+  }));
   clock = createGatewaySchedulerClock(now);
   revision = 0;
   workers = [{ cpuUsage: workerUsage }];
@@ -55,24 +67,23 @@ afterEach(() => {
 async function createMonitor() {
   const monitor = createGatewayEventLoopHealthMonitor({
     scheduler: createTestGatewayScheduler(clock.clock),
-    now: () => now,
-    cpuUsage: (previous) => ({ user: now * 2_000 - (previous?.user ?? 0), system: 0 }),
-    eventLoopUtilization: () => ({ idle: now, active: 0, utilization: 0.05 }),
   });
   monitors.push(monitor);
-  await clock.wake();
+  await setImmediate();
   return monitor;
 }
 
 async function sample(elapsedMs = 1_000) {
   now += elapsedMs;
   await clock.advanceTo(now);
+  // Worker replies publish asynchronously; settle them before advancing the injected clock again.
+  await setImmediate();
 }
 
 describe("CPU breakdown sampling", () => {
   it.each(["Node", "Bun"])("measures independent CPU counters supported by %s", async (runtime) => {
     if (runtime === "Bun") {
-      vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.4.2" } });
+      vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.4.3" } });
     }
     const monitor = await createMonitor();
     expect(monitor.snapshot()).toBeUndefined();
@@ -101,7 +112,7 @@ describe("CPU breakdown sampling", () => {
       throw new Error("unsupported");
     });
     vi.mocked(cpus).mockReturnValue([]);
-    workerUsage.mockRejectedValue(new Error("worker exited"));
+    workerUsage.mockResolvedValue(undefined);
     const monitor = await createMonitor();
     await sample();
     expect(monitor.snapshot()).toMatchObject({ cpuCoreRatio: 2, cpuBreakdown: {} });
@@ -181,7 +192,7 @@ describe("CPU breakdown sampling", () => {
         monitor[action]();
       }
       slow.resolve({ user: now * 500, system: 0 });
-      await clock.wake();
+      await setImmediate();
       if (action === "timeout") {
         expect(monitor.snapshot()).toBe(health);
         await sample();

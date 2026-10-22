@@ -1,8 +1,6 @@
 // Control UI tests keep build identity readable at UTF-16 truncation boundaries.
-import path from "node:path";
 import type { Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -29,33 +27,9 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let uiProofArtifactDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    uiProofArtifactDir = createControlUiE2eArtifactDir("build-info-unicode");
-  }
-});
-
 const RAW_BRANCH = `${"a".repeat(12)}😀${"b".repeat(85)}😀suffix`;
 const NORMALIZED_BRANCH = `${"a".repeat(12)}😀${"b".repeat(85)}`;
 const COMPACT_BRANCH = `${"a".repeat(12)}😀…`;
-
-function containsBrokenSurrogate(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const unit = value.charCodeAt(index);
-    if (unit >= 0xd800 && unit <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next < 0xdc00 || next > 0xdfff) {
-        return true;
-      }
-      index += 1;
-    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
-      return true;
-    }
-  }
-  return false;
-}
 
 async function openBuildDetails(page: Page) {
   const sidebar = page.locator("openclaw-app-sidebar");
@@ -67,12 +41,16 @@ async function openBuildDetails(page: Page) {
   await buildLink.waitFor();
   const compactText = (await buildLink.textContent()) ?? "";
   expect(compactText).toContain(`${COMPACT_BRANCH}@0123456`);
-  expect(compactText).not.toContain("�");
-  expect(containsBrokenSurrogate(compactText)).toBe(false);
+  // Unicode mode consumes valid surrogate pairs as one code point.
+  expect(compactText).not.toMatch(/�|[\uD800-\uDFFF]/u);
 
   await buildLink.hover();
-  const tooltip = sidebar.locator("openclaw-sidebar-build-chip openclaw-tooltip wa-tooltip");
-  await expect.poll(() => tooltip.evaluate((element) => element.hasAttribute("open"))).toBe(true);
+  const tooltip = sidebar.locator(
+    "openclaw-sidebar-build-chip openclaw-tooltip .tooltip-surface[popover]",
+  );
+  await expect
+    .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+    .toBe(true);
   const buildLinkHandle = await buildLink.elementHandle();
   if (!buildLinkHandle) {
     throw new Error("Expected the identity-menu build link to be attached");
@@ -80,7 +58,7 @@ async function openBuildDetails(page: Page) {
   const afterHideMarker = "data-openclaw-test-after-hide";
   await tooltip.evaluate((element, marker) => {
     element.removeAttribute(marker);
-    element.addEventListener("wa-after-hide", () => element.setAttribute(marker, ""), {
+    element.addEventListener("overlay-after-hide", () => element.setAttribute(marker, ""), {
       once: true,
     });
   }, afterHideMarker);
@@ -101,15 +79,12 @@ async function assertFullBranchLabel(page: Page) {
     .locator(".settings-kv dt", { hasText: "Branch" })
     .locator("xpath=following-sibling::dd[1]/code");
   await branchValue.waitFor();
-  const fullText = (await branchValue.textContent()) ?? "";
-  expect(fullText).toBe(`${NORMALIZED_BRANCH}*`);
-  expect(fullText).not.toContain("�");
-  expect(containsBrokenSurrogate(fullText)).toBe(false);
+  expect(await branchValue.textContent()).toBe(`${NORMALIZED_BRANCH}*`);
 }
 
 suite.define(() => {
-  it("keeps slow build-link navigation intact across Unicode boundaries and reload", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+  it("keeps slow build-link navigation intact across Unicode boundaries and reload", async () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, { serverBuildId: BUILD_ID, serverVersion: "2026.7.10" });
 
       const response = await page.goto(`${suite.server.baseUrl}chat`);
@@ -117,8 +92,6 @@ suite.define(() => {
       const identityCard = page.locator(".sidebar-identity-card");
       await expect
         .poll(async () => {
-          // The compact build identity lives in the identity button's
-          // aria-label; the visible subtitle span was removed as dead markup.
           const ariaLabel = (await identityCard.getAttribute("aria-label")) ?? "";
           const detail = ariaLabel.split(": ").slice(1).join(": ");
           const [gitIdentity, relativeAge] = detail.trim().split(" · ", 2);
@@ -129,24 +102,9 @@ suite.define(() => {
           hasRelativeAge: true,
         });
 
-      if (captureUiProofEnabled) {
-        await identityCard.screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "00-footer-custom-build-identity.png"),
-        });
-      }
-
       await openBuildDetails(page);
       await assertFullBranchLabel(page);
       await page.reload();
       await assertFullBranchLabel(page);
-
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(uiProofArtifactDir, "01-about-build-identity.png"),
-        });
-      }
-    });
-  });
+    }));
 });

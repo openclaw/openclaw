@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
@@ -71,72 +71,54 @@ function walkSourceFiles(dir: string): string[] {
   return files;
 }
 
+function allow(surface: string, values: readonly string[], types?: readonly string[]) {
+  return { [`@openclaw/fs-safe/${surface}`]: { values, types } };
+}
+
 const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
   string,
   Record<string, { values: readonly string[]; types?: readonly string[] }>
 > = {
-  "extensions/acpx/src/codex-auth-bridge.ts": {
-    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
-  },
-  "extensions/codex/src/app-server/computer-use-service-path.ts": {
-    "@openclaw/fs-safe/advanced": {
-      values: ["assertDirectoryIdentitySync", "readDirectoryIdentity"],
-      types: ["DirectoryIdentity"],
-    },
-  },
-  "extensions/codex/src/migration/helpers.ts": {
-    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
-  },
-  "extensions/cua-computer/src/driver-artifact-verification.ts": {
-    "@openclaw/fs-safe/durability": { values: ["sha256FileSync"] },
-  },
-  "extensions/feishu/src/doctor.ts": {
-    "@openclaw/fs-safe/path": { values: ["safeStatSync"] },
-  },
-  "extensions/llama-cpp/src/llama-server-install.ts": {
-    "@openclaw/fs-safe/durability": { values: ["sha256File"] },
-  },
-  "extensions/qa-lab/src/lab-server-ui.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectorySync"] },
-  },
-  "extensions/qa-lab/src/mantis/run-cleanup.runtime.ts": {
-    "@openclaw/fs-safe/advanced": { values: ["sameFileIdentity", "withTimeout"] },
-  },
-  "extensions/qa-lab/src/scenario-catalog.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectorySync"] },
-  },
-  "extensions/migrate-claude/skills.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
-  },
-  "extensions/signal/src/install-signal-cli.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
-  },
+  "extensions/acpx/src/codex-auth-bridge.ts": allow("json", ["tryReadJson"]),
+  "extensions/codex/src/app-server/computer-use-service-path.ts": allow(
+    "advanced",
+    ["assertDirectoryIdentitySync", "readDirectoryIdentity"],
+    ["DirectoryIdentity"],
+  ),
+  "extensions/codex/src/migration/helpers.ts": allow("json", ["tryReadJson"]),
+  "extensions/cua-computer/src/driver-artifact-verification.ts": allow("durability", [
+    "sha256FileSync",
+  ]),
+  "extensions/feishu/src/doctor.ts": allow("path", ["safeStatSync"]),
+  "extensions/llama-cpp/src/llama-server-install.ts": allow("durability", ["sha256File"]),
+  "extensions/qa-lab/src/lab-server-ui.ts": allow("walk", ["walkDirectorySync"]),
+  "extensions/qa-lab/src/mantis/run-cleanup.runtime.ts": allow("advanced", [
+    "sameFileIdentity",
+    "withTimeout",
+  ]),
+  "extensions/qa-lab/src/scenario-catalog.ts": allow("walk", ["walkDirectorySync"]),
+  "extensions/migrate-claude/skills.ts": allow("walk", ["walkDirectory"]),
+  "extensions/signal/src/install-signal-cli.ts": allow("walk", ["walkDirectory"]),
   "extensions/openshell/src/backend.ts": {
-    "@openclaw/fs-safe/atomic": {
-      values: ["movePathWithCopyFallback"],
-      types: ["MovePathPublicationReceipt"],
-    },
-    "@openclaw/fs-safe/guest": { values: ["GUEST_FILESYSTEM_PYTHON"] },
+    ...allow("atomic", ["movePathWithCopyFallback"], ["MovePathPublicationReceipt"]),
+    ...allow("guest", ["GUEST_FILESYSTEM_PYTHON"]),
   },
   "extensions/matrix/src/matrix/state-layout-walk.ts": {
-    "@openclaw/fs-safe/path": { values: ["hasNodeErrorCode"] },
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+    ...allow("path", ["hasNodeErrorCode"]),
+    ...allow("walk", ["walkDirectory"]),
   },
-  "extensions/matrix/src/matrix/monitor/startup-verification.ts": {
-    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
-  },
-  "extensions/matrix/src/matrix/thread-bindings.ts": {
-    "@openclaw/fs-safe/json": { values: ["tryReadJson"] },
-  },
-  "extensions/memory-core/src/migration/doctor-memory-sidecar.ts": {
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
-  },
-  "extensions/file-transfer/src/node-host/file-write.ts": {
-    "@openclaw/fs-safe/advanced": { values: ["overwriteFileHandle"] },
-  },
+  "extensions/matrix/src/matrix/monitor/startup-verification.ts": allow("json", ["tryReadJson"]),
+  "extensions/matrix/src/matrix/sdk/crypto-store-ownership.ts": allow("durability", [
+    "syncDirectory",
+  ]),
+  "extensions/matrix/src/matrix/thread-bindings.ts": allow("json", ["tryReadJson"]),
+  "extensions/memory-core/src/migration/doctor-memory-sidecar.ts": allow("walk", ["walkDirectory"]),
+  "extensions/file-transfer/src/node-host/file-write.ts": allow("advanced", [
+    "overwriteFileHandle",
+  ]),
   "extensions/file-transfer/src/tools/dir-fetch-tool.ts": {
-    "@openclaw/fs-safe/durability": { values: ["sha256File"] },
-    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
+    ...allow("durability", ["sha256File"]),
+    ...allow("walk", ["walkDirectory"]),
   },
 };
 
@@ -193,73 +175,50 @@ function hasDisallowedFsSafeImport(filePath: string, source: string): boolean {
 const parser = createNativeTypeScriptParser();
 afterAll(() => parser.close());
 
-describe("fs-safe import boundary", () => {
-  it("limits File Transfer's archive inventory helpers", () => {
-    const owner = "extensions/file-transfer/src/tools/dir-fetch-tool.ts";
-    const source =
-      'import { sha256File as hash } from "@openclaw/fs-safe/durability";\n' +
-      'import { walkDirectory as walk } from "@openclaw/fs-safe/walk";';
-    expect(hasDisallowedFsSafeImport(owner, source)).toBe(false);
-    expect(hasDisallowedFsSafeImport(`${owner}.other.ts`, source)).toBe(true);
-    expect(
-      hasDisallowedFsSafeImport(
-        owner,
-        'import { sha256File, publishFileExclusive } from "@openclaw/fs-safe/durability";',
-      ),
-    ).toBe(true);
-    expect(
-      hasDisallowedFsSafeImport(owner, `${source}\nimport { root } from "@openclaw/fs-safe/root";`),
-    ).toBe(true);
-  });
+const importFsSafe = (bindings: string, surface = "atomic") =>
+  `import { ${bindings} } from "@openclaw/fs-safe/${surface}";`;
+const rootImport = importFsSafe("root", "root");
+const moveImport = importFsSafe("movePathWithCopyFallback");
 
-  it("limits File Transfer's descriptor overwrite helper", () => {
-    const owner = "extensions/file-transfer/src/node-host/file-write.ts";
-    const source = 'import { overwriteFileHandle as operation } from "@openclaw/fs-safe/advanced";';
+describe("fs-safe import boundary", () => {
+  it.each([
+    [
+      "tools/dir-fetch-tool",
+      [
+        importFsSafe("sha256File as hash", "durability"),
+        importFsSafe("walkDirectory as walk", "walk"),
+      ].join("\n"),
+      importFsSafe("sha256File, publishFileExclusive", "durability"),
+    ],
+    [
+      "node-host/file-write",
+      importFsSafe("overwriteFileHandle as operation", "advanced"),
+      importFsSafe("overwriteFileHandle, root", "advanced"),
+    ],
+  ])("limits File Transfer's %s helpers", (file, source, extra) => {
+    const owner = `extensions/file-transfer/src/${file}.ts`;
     expect(hasDisallowedFsSafeImport(owner, source)).toBe(false);
     expect(hasDisallowedFsSafeImport(`${owner}.other.ts`, source)).toBe(true);
-    expect(
-      hasDisallowedFsSafeImport(
-        owner,
-        'import { overwriteFileHandle, root } from "@openclaw/fs-safe/advanced";',
-      ),
-    ).toBe(true);
-    expect(
-      hasDisallowedFsSafeImport(owner, `${source}\nimport { root } from "@openclaw/fs-safe/root";`),
-    ).toBe(true);
+    expect(hasDisallowedFsSafeImport(owner, extra)).toBe(true);
+    expect(hasDisallowedFsSafeImport(owner, `${source}\n${rootImport}`)).toBe(true);
   });
 
   it.each([
     [
       "move and receipt",
-      'import { movePathWithCopyFallback, type MovePathPublicationReceipt } from "@openclaw/fs-safe/atomic";',
+      importFsSafe("movePathWithCopyFallback, type MovePathPublicationReceipt"),
       false,
     ],
-    [
-      "move alias",
-      'import { movePathWithCopyFallback as move } from "@openclaw/fs-safe/atomic";',
-      false,
-    ],
+    ["move alias", importFsSafe("movePathWithCopyFallback as move"), false],
     [
       "receipt alias",
       'import type { MovePathPublicationReceipt as Receipt } from "@openclaw/fs-safe/atomic";',
       false,
     ],
-    [
-      "receipt value",
-      'import { MovePathPublicationReceipt } from "@openclaw/fs-safe/atomic";',
-      true,
-    ],
-    ["other atomic helper", 'import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";', true],
-    [
-      "misleading alias",
-      'import { replaceFileAtomic as movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";',
-      true,
-    ],
-    [
-      "mixed imports",
-      'import { movePathWithCopyFallback, replaceFileAtomic } from "@openclaw/fs-safe/atomic";',
-      true,
-    ],
+    ["receipt value", importFsSafe("MovePathPublicationReceipt"), true],
+    ["other atomic helper", importFsSafe("replaceFileAtomic"), true],
+    ["misleading alias", importFsSafe("replaceFileAtomic as movePathWithCopyFallback"), true],
+    ["mixed imports", importFsSafe("movePathWithCopyFallback, replaceFileAtomic"), true],
     ["namespace", 'import * as atomic from "@openclaw/fs-safe/atomic";', true],
     ["default", 'import atomic from "@openclaw/fs-safe/atomic";', true],
     ["side effect", 'import "@openclaw/fs-safe/atomic";', true],
@@ -267,7 +226,7 @@ describe("fs-safe import boundary", () => {
     ["re-export", 'export { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";', true],
     ["quoted dynamic import", 'const atomic = await import("@openclaw/fs-safe/atomic");', true],
     ["require", 'const atomic = require("@openclaw/fs-safe/atomic");', true],
-    ["other subpath", 'import { root } from "@openclaw/fs-safe/root";', true],
+    ["other subpath", rootImport, true],
   ] as const)("limits the OpenShell exception: %s", (_label, source, expected) => {
     expect(hasDisallowedFsSafeImport("extensions/openshell/src/backend.ts", source)).toBe(expected);
   });
@@ -277,20 +236,14 @@ describe("fs-safe import boundary", () => {
     ["extensions/example/src/backend.ts", true],
     ["src/agents/workspace-bootstrap-publish.ts", false],
   ] as const)("preserves the file boundary for %s", (filePath, expected) => {
-    expect(
-      hasDisallowedFsSafeImport(
-        filePath,
-        'import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";',
-      ),
-    ).toBe(expected);
+    expect(hasDisallowedFsSafeImport(filePath, moveImport)).toBe(expected);
   });
 
   it("still rejects another direct import beside the allowed move", () => {
     expect(
       hasDisallowedFsSafeImport(
         "extensions/openshell/src/backend.ts",
-        'import { movePathWithCopyFallback } from "@openclaw/fs-safe/atomic";\n' +
-          'import { root } from "@openclaw/fs-safe/root";',
+        `${moveImport}\n${rootImport}`,
       ),
     ).toBe(true);
   });

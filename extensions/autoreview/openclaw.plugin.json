@@ -1,0 +1,11 @@
+{
+  "id": "autoreview",
+  "name": "Auto Review",
+  "description": "Review changes in the current sandbox with the installed Auto Review helper.",
+  "version": "2026.10.3",
+  "categories": ["developer-tools"],
+  "activation": { "onStartup": true },
+  "configSchema": { "type": "object", "properties": {}, "additionalProperties": false },
+  "contracts": { "tools": ["autoreview"] },
+  "toolMetadata": { "autoreview": { "optional": true } }
+}

@@ -6,7 +6,7 @@ import {
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -21,11 +21,9 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import type { SqliteSessionArtifactPreparationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { readSessionEntryStore } from "./session-accessor.sqlite-entry-store.js";
-import {
-  planSessionStateDeleteIfUnreferenced,
-  readReferencedSessionIds,
-} from "./session-accessor.sqlite-lifecycle-state.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   LifecycleArtifactCleanupInput,
   LifecycleArtifactCleanupPlan,
@@ -56,24 +54,6 @@ function sessionKeyBelongsToAgent(sessionKey: string, agentId: string | undefine
   return parsed !== null && normalizeAgentId(parsed.agentId) === normalizeAgentId(agentId);
 }
 
-function readSessionTranscriptUpdatedAt(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionId: string,
-): number | undefined {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number | bigint>("created_at").as("updated_at"))
-      .where("session_id", "=", sessionId),
-  );
-  if (row?.updated_at === null || row?.updated_at === undefined) {
-    return undefined;
-  }
-  return sqliteNumber(row.updated_at);
-}
-
 function sqliteTranscriptStateIsReclaimable(params: {
   database: Pick<OpenClawAgentDatabase, "db">;
   sessionUpdatedAt?: number;
@@ -87,7 +67,18 @@ function sqliteTranscriptStateIsReclaimable(params: {
   ) {
     return false;
   }
-  const transcriptUpdatedAt = readSessionTranscriptUpdatedAt(params.database, params.sessionId);
+  const db = getSessionKysely(params.database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    params.database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => eb.fn.max<number | bigint>("created_at").as("updated_at"))
+      .where("session_id", "=", params.sessionId),
+  );
+  const transcriptUpdatedAt =
+    row?.updated_at === null || row?.updated_at === undefined
+      ? undefined
+      : sqliteNumber(row.updated_at);
   const updatedAt =
     params.sessionUpdatedAt === undefined
       ? transcriptUpdatedAt
@@ -221,7 +212,7 @@ function* planSqliteOrphanLifecycleTranscriptStateDeletes(params: {
 }
 
 /** Called inside the lifecycle writer FIFO; only candidate stores need writable preparation. */
-export async function prepareSessionLifecycleArtifactCleanup(
+export async function prepareSessionLifecycleArtifactCleanupForMaintenance(
   databaseOptions: OpenClawAgentDatabaseOptions,
   params: Parameters<typeof planSessionLifecycleArtifactCleanup>[1],
 ): Promise<LifecycleArtifactCleanupPlan> {
@@ -250,9 +241,7 @@ export function readSessionLifecycleArtifactCleanup(
   expectedSource: DatabaseFileIdentity,
 ): LifecycleArtifactCleanupPlan {
   assertOpenClawAgentDatabaseIdentity(database, expectedSource);
-  const plan = planSessionLifecycleArtifactCleanup(database, params);
-  assertOpenClawAgentDatabaseIdentity(database, expectedSource);
-  return plan;
+  return planSessionLifecycleArtifactCleanup(database, params);
 }
 
 export function planSessionLifecycleArtifactCleanup(
@@ -262,7 +251,7 @@ export function planSessionLifecycleArtifactCleanup(
   const pages = planSessionLifecycleArtifactCleanupPages(database, params);
   for (;;) {
     const page = readWithCanonicalSessionReaderContinuation(database, params.continuation, () =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         assertCanonicalSqliteSessionKeysCurrent(database);
         return pages.next();
       }),
@@ -302,10 +291,7 @@ function* planSessionLifecycleArtifactCleanupPages(
     const db = getSessionKysely(database.db);
     const rows = executeSqliteQuerySync(
       database.db,
-      db
-        .selectFrom("session_nodes")
-        .select(["session_key", "current_session_id", "updated_at"])
-        .orderBy("session_key", "asc"),
+      db.selectFrom("session_nodes").select(["session_key", "current_session_id", "updated_at"]),
     ).rows;
 
     if (diagnostics) {
@@ -326,41 +312,43 @@ function* planSessionLifecycleArtifactCleanupPages(
     );
     const removedSessionIds = new Set<string>();
     const entries: LifecycleArtifactCleanupPlan["entries"] = [];
-    const candidateEntries = readSessionEntryStore(database, {
-      sessionKeys: candidates.map((row) => row.session_key),
-    });
-    const foreignOwnedSessionIds = params.pluginOwnerId
-      ? new Set(
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("session_windows")
-              .select("session_id")
-              .where("plugin_owner_id", "is not", null)
-              .where("plugin_owner_id", "!=", params.pluginOwnerId),
-          ).rows.map((row) => row.session_id),
-        )
-      : undefined;
-    for (const row of candidates) {
-      const entry = candidateEntries[row.session_key];
-      const sessionIds = uniqueStrings([
-        row.current_session_id,
-        ...(entry ? collectSessionStateIdsForEntry(entry) : []),
-      ]);
-      // Window ownership survives placeholder nodes and ownerless row projections; preserve
-      // the entire node when any referenced generation belongs to another plugin.
-      if (
-        (params.pluginOwnerId &&
-          entry?.pluginOwnerId &&
-          entry.pluginOwnerId !== params.pluginOwnerId) ||
-        sessionIds.some((sessionId) => foreignOwnedSessionIds?.has(sessionId))
-      ) {
-        continue;
+    if (candidates.length > 0) {
+      const candidateEntries = readSessionEntryStore(database, {
+        sessionKeys: candidates.map((row) => row.session_key),
+      });
+      const foreignOwnedSessionIds = params.pluginOwnerId
+        ? new Set(
+            executeSqliteQuerySync(
+              database.db,
+              db
+                .selectFrom("session_windows")
+                .select("session_id")
+                .where("plugin_owner_id", "is not", null)
+                .where("plugin_owner_id", "!=", params.pluginOwnerId),
+            ).rows.map((row) => row.session_id),
+          )
+        : undefined;
+      for (const row of candidates) {
+        const entry = candidateEntries[row.session_key];
+        const sessionIds = uniqueStrings([
+          row.current_session_id,
+          ...(entry ? collectSessionStateIdsForEntry(entry) : []),
+        ]);
+        // Window ownership survives placeholder nodes and ownerless row projections; preserve
+        // the entire node when any referenced generation belongs to another plugin.
+        if (
+          (params.pluginOwnerId &&
+            entry?.pluginOwnerId &&
+            entry.pluginOwnerId !== params.pluginOwnerId) ||
+          sessionIds.some((sessionId) => foreignOwnedSessionIds?.has(sessionId))
+        ) {
+          continue;
+        }
+        for (const sessionId of sessionIds) {
+          removedSessionIds.add(sessionId);
+        }
+        entries.push({ expectedEntry: entry, sessionKey: row.session_key });
       }
-      for (const sessionId of sessionIds) {
-        removedSessionIds.add(sessionId);
-      }
-      entries.push({ expectedEntry: entry, sessionKey: row.session_key });
     }
 
     if (diagnostics) {

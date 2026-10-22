@@ -8,6 +8,37 @@ struct ChatLiveRunState: Equatable, Sendable {
 }
 
 extension OpenClawChatViewModel {
+    /// Sequence and token telemetry do not change which runs are active.
+    var liveRunStateByRunID: [String: ChatLiveRunState] {
+        get {
+            self.access(keyPath: \.liveRunStateByRunID)
+            return self.liveRunStateStorage
+        }
+        set {
+            let lifecycle: (ChatLiveRunState) -> ChatLiveRunState = { state in
+                var state = state
+                state.sequence = 0
+                state.outputTokens = nil
+                return state
+            }
+            let lifecycleChanged = newValue.mapValues(lifecycle) != self.liveRunStateStorage.mapValues(lifecycle)
+            let tokensChanged = newValue.compactMapValues(\.outputTokens) !=
+                self.liveRunStateStorage.compactMapValues(\.outputTokens)
+            let update = {
+                if lifecycleChanged {
+                    self.withMutation(keyPath: \.liveRunStateByRunID) { self.liveRunStateStorage = newValue }
+                } else {
+                    self.liveRunStateStorage = newValue
+                }
+            }
+            if tokensChanged {
+                self.withMutation(keyPath: \.liveRunOutputTokens, update)
+            } else {
+                update()
+            }
+        }
+    }
+
     func usesMutableContractRouting(sessionKey: String, contract: String?) -> Bool {
         if OpenClawChatSessionKey.agentID(from: sessionKey) == nil {
             return true
@@ -62,6 +93,11 @@ extension OpenClawChatViewModel {
             })
     }
 
+    /// Session opt-in; hosts also apply their local trace preference.
+    public var currentSessionReasoningVisible: Bool {
+        (self.currentSessionEntry() ?? self.retainedActiveSession)?.reasoningLevel == "on"
+    }
+
     static func preferredLiveUsageRunID(
         localRunIDs: Set<String>,
         sessionActiveRunIDs: [String]) -> String?
@@ -86,7 +122,8 @@ extension OpenClawChatViewModel {
     }
 
     var liveRunOutputTokens: Int? {
-        self.liveUsageRunID.flatMap { self.liveRunStateByRunID[$0]?.outputTokens }
+        self.access(keyPath: \.liveRunOutputTokens)
+        return self.liveUsageRunID.flatMap { self.liveRunStateStorage[$0]?.outputTokens }
     }
 
     var hasAdvertisedLiveRun: Bool {
@@ -119,8 +156,12 @@ extension OpenClawChatViewModel {
         self.markTimelineChanged()
     }
 
-    func syncActiveSessionRunIDsFromCurrentSession() {
-        self.updateActiveSessionRunIDs(self.currentSessionEntry()?.activeRunIds ?? [])
+    func syncActiveSessionMetadata() {
+        let entry = self.currentSessionEntry()
+        if let entry {
+            self.retainedActiveSession = entry
+        }
+        self.updateActiveSessionRunIDs(entry?.activeRunIds ?? [])
     }
 
     func ownsLiveTelemetryRun(_ runID: String) -> Bool {
@@ -129,22 +170,15 @@ extension OpenClawChatViewModel {
     }
 
     @discardableResult
-    func applyLiveRunUsage(runID: String, sequence: Int, outputTokens: Int) -> Bool {
-        guard sequence > 0, outputTokens > 0, self.ownsLiveTelemetryRun(runID) else { return false }
+    func acceptLiveRunSequence(runID: String, sequence: Int, outputTokens: Int? = nil) -> Bool {
+        guard sequence > 0, outputTokens.map({ $0 > 0 }) != false,
+              self.ownsLiveTelemetryRun(runID) else { return false }
         var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
         guard sequence > state.sequence else { return false }
         state.sequence = sequence
-        state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
-        self.liveRunStateByRunID[runID] = state
-        return true
-    }
-
-    @discardableResult
-    func acceptLiveRunSequence(runID: String, sequence: Int) -> Bool {
-        guard sequence > 0, self.ownsLiveTelemetryRun(runID) else { return false }
-        var state = self.liveRunStateByRunID[runID] ?? ChatLiveRunState()
-        guard sequence > state.sequence else { return false }
-        state.sequence = sequence
+        if let outputTokens {
+            state.outputTokens = max(outputTokens, state.outputTokens ?? 0)
+        }
         self.liveRunStateByRunID[runID] = state
         return true
     }

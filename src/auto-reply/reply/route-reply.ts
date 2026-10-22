@@ -43,28 +43,6 @@ const BLOCK_REPLY_COMPLETION_RETENTION = {
   maxEntries: 2_000,
 } as const;
 
-function replyDeliverySourceMatchesRoute(params: {
-  source: NonNullable<
-    NonNullable<ReturnType<typeof getReplyPayloadMetadata>>["replyDeliverySource"]
-  >;
-  payloadDelivery: ReplyDeliveryContext;
-  routeDelivery: ReplyDeliveryContext;
-  channel: string;
-  accountId?: string;
-}): boolean {
-  const sourceChannel =
-    normalizeMessageChannel(params.source.channel) ??
-    normalizeOptionalLowercaseString(params.source.channel);
-  const routeChannel =
-    normalizeMessageChannel(params.channel) ?? normalizeOptionalLowercaseString(params.channel);
-  return (
-    sourceChannel === routeChannel &&
-    normalizeAccountId(params.source.accountId) === normalizeAccountId(params.accountId) &&
-    normalizeChatType(params.payloadDelivery.chatType ?? undefined) ===
-      normalizeChatType(params.routeDelivery.chatType ?? undefined)
-  );
-}
-
 type RouteReplyParams = {
   payload: ReplyPayload;
   channel: OriginatingChannelType;
@@ -106,6 +84,9 @@ type RouteReplyParams = {
   deliveryIntentId?: string;
   /** Model/session context for response-prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
+  /** Private producer authority revalidated at the final outbound adapter handoff. */
+  assertCurrent?: () => void;
+  beforeDeliver?: () => Promise<void>;
 };
 
 type RouteReplyResult = {
@@ -117,16 +98,7 @@ type RouteReplyResult = {
   queueCustody?: "held" | "released";
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
-  /** Delivery disposition reason when additional caller context is useful. */
-  reason?:
-    | "reasoning_payload_not_external"
-    | "channel_transform"
-    | "adapter_returned_no_identity"
-    | "adapter_returned_no_send"
-    | "cancelled_by_message_sending_hook"
-    | "cancelled_by_reply_payload_sending_hook"
-    | "empty_after_message_sending_hook"
-    | "empty_after_reply_payload_sending_hook";
+  reason?: "channel_transform";
   messageId?: string;
   error?: string;
   /** Original failure retains the delivery owner's no-send proof. */
@@ -139,8 +111,7 @@ function summarizeVisibleRouteReplyDelivery(
   // Durable results may prove delivery through a receipt or alternate identity
   // when messageId is empty. Provider success sentinels prove delivery but are
   // not editable IDs; explicit suppression sentinels prove neither.
-  let delivered = false;
-  let lastVisibleMessageId: string | undefined;
+  let delivery: Pick<RouteReplyResult, "delivered" | "messageId"> | undefined;
   for (let index = results.length - 1; index >= 0; index -= 1) {
     const result = results[index];
     if (!result) {
@@ -150,20 +121,12 @@ function summarizeVisibleRouteReplyDelivery(
     if (messageId === "skipped" || messageId === "suppressed") {
       continue;
     }
-    if (!delivered) {
-      delivered = true;
-      if (!messageId) {
-        lastVisibleMessageId = result.messageId;
-      }
-    }
+    delivery ??= { delivered: true, messageId: messageId ? undefined : result.messageId };
     if (messageId && messageId !== "unknown" && messageId !== "ok") {
       return { delivered: true, messageId: result.messageId };
     }
   }
-  return {
-    delivered,
-    messageId: delivered ? lastVisibleMessageId : undefined,
-  };
+  return delivery ?? { delivered: false, messageId: undefined };
 }
 
 /** Routes to the originating channel; shared sessions may have a different last channel. */
@@ -185,14 +148,15 @@ async function routeReplyOperation(
   operation: ReplyDispatchOperation,
 ): Promise<RouteReplyResult> {
   const { channel, to, accountId, threadId, cfg, abortSignal } = params;
+  const suppress = (reason?: "suppressed" | "channel_transform"): RouteReplyResult => ({
+    ok: true,
+    delivered: false,
+    ...(reason ? { suppressed: true } : {}),
+    ...(reason === "channel_transform" ? { reason } : {}),
+  });
   const payload = operation.kind === "raw" ? operation.payload : operation.plan.payload;
-  if (shouldSuppressReasoningPayload(payload)) {
-    return {
-      ok: true,
-      delivered: false,
-      suppressed: true,
-      reason: "reasoning_payload_not_external",
-    };
+  if (operation.kind === "raw" && shouldSuppressReasoningPayload(payload)) {
+    return suppress("suppressed");
   }
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
@@ -218,15 +182,9 @@ async function routeReplyOperation(
     transformReplyPayload,
   });
   if (normalization.kind === "suppress") {
-    if (normalization.reason === "channel_transform") {
-      return {
-        ok: true,
-        delivered: false,
-        suppressed: true,
-        reason: normalization.reason,
-      };
-    }
-    return { ok: true, delivered: false };
+    return suppress(
+      normalization.reason === "channel_transform" ? normalization.reason : undefined,
+    );
   }
   const normalized = normalization.payload;
   const externalPayload: ReplyPayload = {
@@ -256,7 +214,7 @@ async function routeReplyOperation(
       },
     )
   ) {
-    return { ok: true, delivered: false };
+    return suppress();
   }
 
   const rejectBeforeSend = (error: string): RouteReplyResult => ({
@@ -277,16 +235,17 @@ async function routeReplyOperation(
 
   const payloadMetadata = getReplyPayloadMetadata(normalized);
   const payloadReplyDelivery = payloadMetadata?.replyDelivery;
+  const replyDeliverySource = payloadMetadata?.replyDeliverySource;
   const payloadPolicyMatchesRoute =
-    payloadReplyDelivery && params.replyDelivery && payloadMetadata.replyDeliverySource
-      ? replyDeliverySourceMatchesRoute({
-          source: payloadMetadata.replyDeliverySource,
-          payloadDelivery: payloadReplyDelivery,
-          routeDelivery: params.replyDelivery,
-          channel: channelId,
-          accountId,
-        })
-      : false;
+    payloadReplyDelivery &&
+    params.replyDelivery &&
+    replyDeliverySource &&
+    (normalizeMessageChannel(replyDeliverySource.channel) ??
+      normalizeOptionalLowercaseString(replyDeliverySource.channel)) ===
+      (normalizeMessageChannel(channelId) ?? normalizeOptionalLowercaseString(channelId)) &&
+    normalizeAccountId(replyDeliverySource.accountId) === normalizeAccountId(accountId) &&
+    normalizeChatType(payloadReplyDelivery.chatType ?? undefined) ===
+      normalizeChatType(params.replyDelivery.chatType ?? undefined);
   const replyDelivery = payloadPolicyMatchesRoute
     ? payloadReplyDelivery
     : (params.replyDelivery ?? payloadReplyDelivery);
@@ -361,6 +320,9 @@ async function routeReplyOperation(
       threadId: resolvedThreadId,
       session: outboundSession,
       signal: abortSignal,
+      onPlatformSendDispatch: params.beforeDeliver,
+      assertDirectAdapterHandoff: params.assertCurrent,
+      ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
       ...(params.deliveryIntentId
         ? {
             deliveryIntentId: params.deliveryIntentId,
@@ -414,28 +376,18 @@ async function routeReplyOperation(
         send.reason === "empty_after_message_sending_hook" ||
         send.reason === "empty_after_reply_payload_sending_hook")
     ) {
-      return {
-        ok: true,
-        delivered: false,
-        suppressed: true,
-        reason: send.reason,
-      };
+      return suppress("suppressed");
     }
     if (send.status === "suppressed" && durableMessageBatchMayHaveReachedRecipient(send)) {
       return {
         ok: true,
         delivered: false,
         ambiguous: true,
-        reason: "adapter_returned_no_identity",
       };
     }
     const results = send.status === "sent" ? send.results : [];
     const delivery = summarizeVisibleRouteReplyDelivery(results);
-    return {
-      ok: true,
-      delivered: delivery.delivered,
-      messageId: delivery.messageId,
-    };
+    return { ok: true, ...delivery };
   } catch (err) {
     const message = formatErrorMessage(err);
     return {

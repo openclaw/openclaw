@@ -3,7 +3,7 @@ import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singl
 type SignalExitBarrier = () => Promise<void>;
 type CliExitSignal = "SIGINT" | "SIGTERM";
 
-type SignalExitOwner = (code: number | string) => void;
+type SignalExitOwner = (code: number | string, reason?: string) => void;
 // Process custody outlives the Gateway generations that reset ordinary barriers.
 const processExitOwner = resolveGlobalSingleton<{ current?: SignalExitOwner }>(
   Symbol.for("openclaw.signalExitOwner"),
@@ -16,16 +16,13 @@ export function registerSignalExitOwner(owner: SignalExitOwner): () => void {
     throw new Error("A process signal exit owner is already registered");
   }
   processExitOwner.current = owner;
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  const lifetime = new DisposableStack();
+  lifetime.defer(() => {
     if (processExitOwner.current === owner) {
       processExitOwner.current = undefined;
     }
-  };
+  });
+  return () => lifetime.dispose();
 }
 
 // Gates let bounded mutations finish before signal cleanup begins; barriers
@@ -64,19 +61,20 @@ export function registerSignalExitFinalizer(finalizer: SignalExitBarrier): () =>
 }
 
 let pendingSignalExitDrain: Promise<void> | undefined;
-let pendingProcessExit: Promise<void> | undefined;
+let pendingProcessExit: Promise<number | string> | undefined;
 
 /** Broken output must not bypass a maintenance owner's asynchronous recovery. */
-export function exitAfterSignalExitBarriers(code: number | string): void {
+export function exitAfterSignalExitBarriers(code: number | string, reason?: string): void {
   if (processExitOwner.current) {
-    processExitOwner.current(code);
+    processExitOwner.current(code, reason);
     return;
   }
   if (pendingProcessExit) {
     return;
   }
   if (activeGates.size === 0 && activeBarriers.size === 0 && activeFinalizers.size === 0) {
-    process.exit(code);
+    process.exitCode = code;
+    pendingProcessExit = Promise.resolve(code);
     return;
   }
   pendingProcessExit = waitForSignalExitBarriers()
@@ -84,15 +82,15 @@ export function exitAfterSignalExitBarriers(code: number | string): void {
     // The output stream may itself be broken; cleanup owners report their own failures.
     .catch(() => (code === 0 || code === "0" ? 1 : code))
     .then((exitCode) => {
-      pendingProcessExit = undefined;
       const outcome = process.exitCode;
       const finalCode =
         (exitCode === 0 || exitCode === "0") && outcome != null ? outcome : exitCode;
       if (processExitOwner.current) {
-        processExitOwner.current(finalCode);
+        processExitOwner.current(finalCode, reason);
       } else {
-        process.exit(finalCode);
+        process.exitCode = finalCode;
       }
+      return finalCode;
     });
 }
 
@@ -100,6 +98,15 @@ export function waitForSignalExitBarriers(signal?: CliExitSignal): Promise<void>
   pendingSignalExitDrain ??= drainSignalExitBarriers(signal).finally(() => {
     pendingSignalExitDrain = undefined;
   });
+  if (signal && !cliSignalExit) {
+    const code = signal === "SIGINT" ? 130 : 143;
+    // Specialized update owners share this accepted outcome with the outer
+    // finalizer, even when cancellation unwinds through a later command error.
+    cliSignalExit = pendingSignalExitDrain.then(
+      () => code,
+      () => code,
+    );
+  }
   return pendingSignalExitDrain;
 }
 
@@ -123,7 +130,7 @@ async function drainSignalExitBarriers(signal?: CliExitSignal): Promise<void> {
   }
 }
 
-let cliSignalExit: Promise<void> | undefined;
+let cliSignalExit: Promise<number> | undefined;
 let cliSignalOwners = 0;
 let cliDoctorSignalOwner = false;
 
@@ -147,13 +154,20 @@ function handleCliSignal(signal: CliExitSignal): void {
         "CLI signal cleanup did not complete. Retry the command to reclaim interrupted snapshots.\n",
       );
     })
-    .finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
+    .then(() => {
+      const code = signal === "SIGINT" ? 130 : 143;
+      process.exitCode = code;
+      return code;
+    });
 }
 
 const onCliSigint = () => handleCliSignal("SIGINT");
 const onCliSigterm = () => handleCliSignal("SIGTERM");
-const onCliSigpipe = () => {
-  if (cliSignalOwners > 0) {
+// Any EPIPE write raises SIGPIPE, including a child's closed stdin, so the
+// signal only keeps Node's ignore disposition; EPIPE on our output decides exit.
+const onCliSigpipe = () => {};
+const onCliOutputError = (error: NodeJS.ErrnoException) => {
+  if (error.code === "EPIPE" && cliSignalOwners > 0) {
     exitAfterSignalExitBarriers(141);
   }
 };
@@ -167,6 +181,9 @@ export function installCliDoctorSignalExitHandlers(): void {
   cliDoctorSignalOwner = true;
   if (!process.listeners("SIGPIPE").includes(onCliSigpipe)) {
     process.on("SIGPIPE", onCliSigpipe);
+    // Run before console capture's generic EPIPE exit so closed output reports 141.
+    process.stdout.prependListener("error", onCliOutputError);
+    process.stderr.prependListener("error", onCliOutputError);
   }
 }
 
@@ -182,20 +199,33 @@ export function installCliSignalExitHandlers(): () => void {
     process.prependListener("SIGINT", onCliSigint);
     process.prependListener("SIGTERM", onCliSigterm);
   }
-  let active = true;
-  return () => {
-    if (!active) {
-      return;
-    }
-    active = false;
+  const lifetime = new DisposableStack();
+  lifetime.defer(() => {
     if (--cliSignalOwners === 0) {
       cliDoctorSignalOwner = false;
       detachCliSignalExitHandlers();
     }
-  };
+  });
+  return () => lifetime.dispose();
 }
 
 /** Command error/output finalization cannot race an accepted signal's cleanup. */
-export async function waitForCliSignalExit(): Promise<void> {
-  await Promise.all([cliSignalExit, pendingProcessExit]);
+export async function waitForCliSignalExit(): Promise<number | string | undefined> {
+  const signalExit = cliSignalExit;
+  const requestedExit = pendingProcessExit;
+  const [signalCode, requestedCode] = await Promise.all([signalExit, requestedExit]);
+  // The outer finalizer consumes the recorded terminal decision, so a queued
+  // successful command cannot overwrite an accepted signal or output failure.
+  if (cliSignalExit === signalExit) {
+    cliSignalExit = undefined;
+  }
+  if (pendingProcessExit === requestedExit) {
+    pendingProcessExit = undefined;
+  }
+  // A queued success cannot erase an accepted signal. Explicit failure
+  // requests still keep their status when both shutdown paths share a drain.
+  if ((requestedCode === 0 || requestedCode === "0") && signalCode !== undefined) {
+    return signalCode;
+  }
+  return requestedCode ?? signalCode;
 }

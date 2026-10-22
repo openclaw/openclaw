@@ -3,7 +3,10 @@ import { randomUUID } from "node:crypto";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  floorPositiveFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import { isSignalQuoteMetadataRejection } from "./quote-rejection.js";
@@ -132,12 +135,7 @@ export async function signalUnixRpcRequest<T>(
   const effect = captureEffectAuthority();
   const connection = await openSocket(options);
   const id = randomUUID();
-  const maxBytes =
-    typeof options.maxResponseBytes === "number" &&
-    Number.isFinite(options.maxResponseBytes) &&
-    options.maxResponseBytes >= 1
-      ? Math.floor(options.maxResponseBytes)
-      : MAX_FRAME_BYTES;
+  const maxBytes = floorPositiveFiniteNumber(options.maxResponseBytes) || MAX_FRAME_BYTES;
   try {
     const frame = `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`;
     await effect.initiate(() => {
@@ -171,7 +169,6 @@ export async function streamSignalUnixEvents(params: {
     params.abortSignal,
   );
   const id = randomUUID();
-  let subscribed = false;
   let subscription: number | undefined;
   try {
     connection.socket.write(
@@ -192,7 +189,6 @@ export async function streamSignalUnixEvents(params: {
           throw new Error("Signal UNIX RPC returned invalid receive subscription");
         }
         subscription = value;
-        subscribed = true;
         connection.ready();
         params.onStreamOpen?.();
         continue;
@@ -215,7 +211,7 @@ export async function streamSignalUnixEvents(params: {
       }
       await params.onEvent({ event: "receive", data: JSON.stringify(payload) });
     }
-    if (!subscribed) {
+    if (subscription === undefined) {
       throw new Error("Signal UNIX RPC closed before receive subscription");
     }
   } finally {

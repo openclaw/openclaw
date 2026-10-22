@@ -1,4 +1,3 @@
-// Transcript artifact usage, previews, and response bounds.
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -47,10 +46,6 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   }
 
   try {
-    const stat = await fs.promises.stat(filePath);
-    if (stat.size === 0) {
-      return null;
-    }
     const usageAccumulator = createSessionTranscriptUsageAccumulator("artifact");
     for await (const line of streamSessionTranscriptLines(filePath)) {
       if (Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {

@@ -1,4 +1,17 @@
 import type { PairedDeviceNodeBinding } from "../infra/device-pairing-node-state.js";
+import type { NodeSession } from "./node-session.types.js";
+
+export type NodePairingLease = {
+  session: NodeSession & { pairingIdentity: string };
+  nodeId: string;
+  connId: string;
+  binding: PairedDeviceNodeBinding;
+};
+
+export type NodePairingLeaseResolution<TSession = NodePairingLease["session"]> =
+  | { status: "current"; session: TSession }
+  | { status: "stale"; presenceInvalidated: boolean }
+  | { status: "unavailable" };
 
 export function pairingBindingForSession(node: {
   pairingIdentity: string;

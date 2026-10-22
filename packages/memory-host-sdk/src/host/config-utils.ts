@@ -11,19 +11,14 @@ import {
 import type { MemoryExtraPath } from "./types.js";
 export { normalizeAgentId };
 
-// Shared OpenClaw config helpers used by memory host and agent context code.
-
 type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
-/** Citation injection behavior for memory search results. */
 export type MemoryCitationsMode = "auto" | "on" | "off";
 
-/** Top-level memory config shared by host and runtime callers. */
 type MemoryConfig = {
   citations?: MemoryCitationsMode;
   search?: MemorySearchConfig;
 };
 
-/** Per-agent memory search enablement and extra collection paths. */
 type MemorySearchConfig = {
   enabled?: boolean;
   rememberAcrossConversations?: boolean;
@@ -38,17 +33,23 @@ export function normalizeConfiguredMemoryExtraPaths(
   for (const entry of extraPaths ?? []) {
     const configuredPath = (typeof entry === "string" ? entry : entry.path).trim();
     const pattern = typeof entry === "string" ? "" : entry.pattern?.trim() || "";
+    const evergreen = typeof entry === "string" ? false : entry.evergreen === true;
     if (configuredPath) {
       normalized.set(
         `${configuredPath}\0${pattern}`,
-        pattern ? { path: configuredPath, pattern } : configuredPath,
+        pattern || evergreen
+          ? {
+              path: configuredPath,
+              ...(pattern ? { pattern } : {}),
+              ...(evergreen ? { evergreen: true } : {}),
+            }
+          : configuredPath,
       );
     }
   }
   return Array.from(normalized.values());
 }
 
-/** Agent context limits that bound memory file reads. */
 type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
 };
@@ -62,7 +63,6 @@ type SecretInput =
       id: string;
     };
 
-/** Agent-level config fields consumed by memory host helpers. */
 type AgentConfig = {
   workspace?: string;
   memory?: {
@@ -123,7 +123,6 @@ export function resolveRememberAcrossConversations(cfg: OpenClawConfig, agentId:
   );
 }
 
-/** Root memory filename used in agent workspaces. */
 export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
 
 const DEFAULT_AGENT_ID = "main";
@@ -135,7 +134,6 @@ function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   );
 }
 
-/** Find one agent config by canonical id. */
 function resolveAgentConfig(cfg: OpenClawConfig, agentId: string): AgentConfig | undefined {
   const id = normalizeAgentId(agentId);
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
@@ -146,7 +144,6 @@ function stripNullBytes(value: string): string {
   return value.replaceAll("\0", "");
 }
 
-/** Resolve the workspace directory for an agent id and config defaults. */
 export function resolveMemoryHostAgentWorkspaceDir(
   cfg: OpenClawConfig,
   agentId: string,

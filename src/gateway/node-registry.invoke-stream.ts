@@ -1,3 +1,4 @@
+import type { NodeInvokeProgressParams as ProtocolNodeInvokeProgressParams } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
@@ -8,6 +9,7 @@ import {
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { NodeInvokeResult } from "./node-invoke.types.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
 
@@ -17,6 +19,7 @@ export const NODE_INVOKE_NOT_READY = "NODE_NOT_READY";
 export type PendingSystemRunEvent = {
   runId: string;
   sessionKey?: string;
+  invocationDeliveryContext?: DeliveryContext;
   timeoutMs?: number | null;
 };
 
@@ -42,12 +45,8 @@ export type PendingInvoke = {
   isCompletionAuthorized?: () => boolean;
 };
 
-export type NodeInvokeProgressParams = {
-  invokeId: string;
-  nodeId: string;
+export type NodeInvokeProgressParams = ProtocolNodeInvokeProgressParams & {
   connId: string | undefined;
-  seq: number;
-  chunk: string;
 };
 
 export type NodeInvokeResultParams = NodeInvokeResult & {
@@ -58,6 +57,13 @@ export type NodeInvokeResultParams = NodeInvokeResult & {
 
 const MAX_PENDING_PROGRESS_CHUNKS = 128;
 const MAX_INVOKE_INPUT_BYTES = 16 * 1024;
+
+export class NodeInvokeNotPendingError extends Error {
+  constructor() {
+    super("node invoke is not pending");
+    this.name = "NodeInvokeNotPendingError";
+  }
+}
 
 export class NodeInvokeStreamController {
   constructor(
@@ -83,7 +89,7 @@ export class NodeInvokeStreamController {
   sendInput(invokeId: string, payload: unknown): void {
     const pending = this.options.pendingInvokes.get(invokeId);
     if (!pending) {
-      throw new Error("node invoke is not pending");
+      throw new NodeInvokeNotPendingError();
     }
     const payloadJSON = JSON.stringify(payload);
     if (payloadJSON === undefined) {
@@ -93,7 +99,9 @@ export class NodeInvokeStreamController {
       throw new Error("node invoke input exceeds 16 KiB");
     }
     if (!this.getPending(invokeId, pending.nodeId, pending.connId)) {
-      throw new Error("node invoke is not pending");
+      throw this.options.pendingInvokes.has(invokeId)
+        ? new Error("node invoke is not pending")
+        : new NodeInvokeNotPendingError();
     }
     if (!this.options.sendInput(invokeId, pending, pending.nextInputSeq, payloadJSON)) {
       throw new Error("failed to send node invoke input");

@@ -1,5 +1,4 @@
 /** Shared inbound message context types used by prompt templating and reply dispatch. */
-import type { SessionConversationLink } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
@@ -8,7 +7,7 @@ import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
-import type { MediaFact } from "../media/media-facts.js";
+import type { LegacyMediaContextKey, MediaFact } from "../media/media-facts.js";
 import type { PluginHookChannelContext } from "../plugins/hook-channel-context.types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
@@ -286,7 +285,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   Prompt?: string;
   MaxChars?: number;
   ChatType?: string;
-  /** Trusted channel-configured policy for this admitted conversation turn. */
+  /** @deprecated Channel-configured snapshot for the original external request. Use the channel policy resolver; retained until a later stable release after an announced deprecation window and explicit maintainer approval. No removal date is set. */
   ConversationToolPolicy?: GroupToolPolicyConfig;
   /** Human label for envelope headers (conversation label, not sender). */
   ConversationLabel?: string;
@@ -314,7 +313,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
-  InternalTurnSource?: "heartbeat" | "cron" | "exec" | "progress-card-refresh";
+  InternalTurnSource?: "heartbeat" | "cron" | "exec" | "event" | "progress-card-refresh";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -395,10 +394,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
-  /** Channel-owned local conversation image reference; never rendered into prompt text. */
+  /** Channel-owned local image reference; empty clears a prior avatar. Never rendered into prompts. */
   ConversationAvatar?: string;
-  /** Display-only launch destination; not delivery routing or prompt content. */
-  ConversationLink?: SessionConversationLink;
   /** Channel-owned metadata exposed to plugin hook context, not prompt text. */
   ChannelContext?: PluginHookChannelContext;
   /** Provider-native chat/conversation id used by channel plugins that expose `chat_id`. */
@@ -466,20 +463,8 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
   CommandTurn?: CommandTurnContext;
 };
 
-type RuntimeMediaContextKey =
-  | "MediaPath"
-  | "MediaUrl"
-  | "MediaType"
-  | "MediaDir"
-  | "MediaPaths"
-  | "MediaUrls"
-  | "MediaTypes"
-  | "MediaWorkspaceDir"
-  | "MediaTranscribedIndexes"
-  | "MediaStaged";
-
 /** Internal inbound context; legacy media fields exist only on the shipped SDK adapter. */
-export type RuntimeMsgContext = Omit<MsgContext, RuntimeMediaContextKey>;
+export type RuntimeMsgContext = Omit<MsgContext, LegacyMediaContextKey>;
 
 export type FinalizedRuntimeMsgContext = Omit<
   RuntimeMsgContext,
@@ -487,10 +472,10 @@ export type FinalizedRuntimeMsgContext = Omit<
 > &
   CanonicalInboundText & {
     CommandAuthorized: boolean;
-    CommandTurn?: CommandTurnContext;
+    CommandTurn: CommandTurnContext;
   };
 
-type NonTemplateContextKey = "ConversationAvatar" | "ConversationLink";
+type NonTemplateContextKey = "ConversationAvatar";
 
 export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
   BodyStripped?: string;
@@ -547,7 +532,7 @@ export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
     return "";
   }
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
-    if (key === "ConversationAvatar" || key === "ConversationLink") {
+    if (key === "ConversationAvatar") {
       return "";
     }
     const value = ctx[key as keyof TemplateContext];

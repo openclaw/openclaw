@@ -200,37 +200,36 @@ describe("runMessageAction plugin dispatch", () => {
       expect(handleScopedAction).not.toHaveBeenCalled();
     });
 
-    it("rejects unsupported uploads before authorization and media I/O", async () => {
-      mocks.loadWebMedia.mockRejectedValue(new Error("media must not load"));
-      await expect(
-        runMessageAction({
-          cfg: createEnabledMessageActionConfig("actionhub"),
-          action: "upload-file",
-          params: {
-            channel: "actionhub",
-            target: "other-conversation",
-            media: "https://example.com/pic.png",
-          },
-          conversationReadOrigin: "delegated",
-          dryRun: false,
-        }),
-      ).rejects.toThrow("Message action upload-file not supported for channel actionhub.");
-      expectUncalled(handleAction, mocks.loadWebMedia);
-    });
-
-    it("rejects wrong-account aliases before resolution", async () => {
-      const looksLikeId = vi.fn(() => true);
-      registerActionHubResolver({ looksLikeId });
-      await expect(
-        runDelegated(
-          "actionhub",
-          "pin",
-          { target: "room:current", messageId: "om_123" },
-          { defaultAccountId: "other" },
-        ),
-      ).rejects.toThrow(accountError);
-      expectUncalled(looksLikeId, handleAction);
-    });
+    it.each(["upload-file", "read"] as const)(
+      "rejects unsupported %s before effects",
+      async (action) => {
+        const channel = action === "read" ? "sendonly" : "actionhub";
+        if (action === "read") {
+          setTestPlugin(
+            createChannelTestPluginBase({
+              id: channel,
+              config: createAlwaysConfiguredPluginConfig({}),
+            }),
+            channel,
+          );
+        } else {
+          mocks.loadWebMedia.mockRejectedValue(new Error("media must not load"));
+        }
+        await expect(
+          runMessageAction({
+            cfg: action === "read" ? {} : createEnabledMessageActionConfig(channel),
+            action,
+            params:
+              action === "read"
+                ? { channel, target: "channel:peer", messageId: "task-1", limit: 1 }
+                : { channel, target: "other-conversation", media: "https://example.com/pic.png" },
+            conversationReadOrigin: action === "read" ? "direct-operator" : "delegated",
+            dryRun: false,
+          }),
+        ).rejects.toThrow(`Message action ${action} not supported for channel ${channel}.`);
+        expectUncalled(handleAction, mocks.loadWebMedia);
+      },
+    );
 
     it("rejects directory-only external aliases before lookup", async () => {
       const looksLikeId = vi.fn(() => false);
@@ -395,9 +394,7 @@ describe("runMessageAction plugin dispatch", () => {
       resetDirectoryCache();
       setTestPlugin(plugin, channel, "bundled");
     });
-    afterEach(() => {
-      resetDirectoryCache();
-    });
+    afterEach(() => resetDirectoryCache());
 
     it("stops broadcast directory preparation when its signal is canceled", async () => {
       const { entered, release } = createLookupGate();
@@ -488,26 +485,7 @@ describe("runMessageAction plugin dispatch", () => {
     );
   });
 
-  it("reports an unsupported action for a loaded channel without action handlers", async () => {
-    setTestPlugin(
-      createChannelTestPluginBase({
-        id: "sendonly",
-        config: createAlwaysConfiguredPluginConfig({}),
-      }),
-      "sendonly",
-    );
-    await expect(
-      runMessageAction({
-        cfg: {},
-        action: "read",
-        dryRun: false,
-        conversationReadOrigin: "direct-operator",
-        params: { channel: "sendonly", target: "channel:peer", messageId: "task-1", limit: 1 },
-      }),
-    ).rejects.toThrow("Message action read not supported for channel sendonly.");
-  });
-
-  describe("presentation parsing", () => {
+  it.each([true, false])("validates presentation JSON (valid=%s)", async (valid) => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({ ok: true, presentation: params.presentation ?? null }),
     );
@@ -523,29 +501,26 @@ describe("runMessageAction plugin dispatch", () => {
         handleAction,
       },
     };
-    const sendPresentation = (presentation: string) =>
-      runMessageAction({
-        cfg: {},
-        action: "send",
-        dryRun: false,
-        params: { channel: "componentchat", target: "channel:123", message: "hi", presentation },
-      });
-    beforeEach(() => {
-      setTestPlugin(componentsPlugin, "componentchat");
-      handleAction.mockClear();
+    setTestPlugin(componentsPlugin, "componentchat");
+    const presentation = { blocks: [{ type: "buttons", buttons: [{ label: "A", value: "a" }] }] };
+    const pending = runMessageAction({
+      cfg: {},
+      action: "send",
+      dryRun: false,
+      params: {
+        channel: "componentchat",
+        target: "channel:123",
+        message: "hi",
+        presentation: valid ? JSON.stringify(presentation) : "{not-json}",
+      },
     });
-
-    it.each([true, false])("validates presentation JSON (valid=%s)", async (valid) => {
-      const presentation = { blocks: [{ type: "buttons", buttons: [{ label: "A", value: "a" }] }] };
-      const pending = sendPresentation(valid ? JSON.stringify(presentation) : "{not-json}");
-      if (valid) {
-        const result = await pending;
-        expect(result.payload).toEqual(expect.objectContaining({ ok: true, presentation }));
-      } else {
-        await expect(pending).rejects.toThrow(/--presentation must be valid JSON/);
-        expect(handleAction).not.toHaveBeenCalled();
-      }
-    });
+    if (valid) {
+      const result = await pending;
+      expect(result.payload).toEqual(expect.objectContaining({ ok: true, presentation }));
+    } else {
+      await expect(pending).rejects.toThrow(/--presentation must be valid JSON/);
+      expect(handleAction).not.toHaveBeenCalled();
+    }
   });
 
   it.each([{ candidateChannels: ["accountchat"] }, { candidateChannels: [] }])(

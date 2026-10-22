@@ -38,6 +38,7 @@ export const AgentToolSurfacePresentationSchema = closedObject({
     searchDefaultLimit: Type.Integer({ minimum: 1 }),
     maxSearchLimit: Type.Integer({ minimum: 1 }),
   }),
+  toolSearchDirectoryLean: Type.Optional(Type.Boolean()),
   forceDirectMessageTool: Type.Boolean(),
   skills: Type.Optional(
     Type.Array(
@@ -101,6 +102,7 @@ export const WorkerToolSurfaceSchema = closedObject({
         resultContentSource: Type.Optional(Type.Literal("network")),
         executionMode: Type.Optional(Type.Enum(["sequential", "parallel"])),
         catalogMode: Type.Optional(Type.Literal("direct-only")),
+        async: Type.Optional(Type.Literal(false)),
       }),
     }),
     { maxItems: 256 },

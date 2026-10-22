@@ -73,10 +73,7 @@ export function admitExistingSessionAction(
       if (action.selector) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickSelector };
       }
-      if (
-        (action.button && action.button !== "left") ||
-        (Array.isArray(action.modifiers) && action.modifiers.length > 0)
-      ) {
+      if ((action.button && action.button !== "left") || action.modifiers?.length) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers };
       }
       break;
@@ -101,17 +98,14 @@ export function admitExistingSessionAction(
       error = action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : undefined;
       break;
     case "hover":
+    case "scrollIntoView": {
+      const messagePrefix = action.kind === "hover" ? "hover" : "scroll";
       if (action.selector) {
-        return { ok: false, error: EXISTING_SESSION_LIMITS.act.hoverSelector };
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act[`${messagePrefix}Selector`] };
       }
-      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.hoverTimeout : undefined;
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act[`${messagePrefix}Timeout`] : undefined;
       break;
-    case "scrollIntoView":
-      if (action.selector) {
-        return { ok: false, error: EXISTING_SESSION_LIMITS.act.scrollSelector };
-      }
-      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.scrollTimeout : undefined;
-      break;
+    }
     case "drag":
       if (action.startSelector || action.endSelector) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.dragSelector };

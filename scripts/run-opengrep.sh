@@ -50,14 +50,13 @@ if ! command -v opengrep >/dev/null 2>&1; then
 error: 'opengrep' not found on PATH.
 
 Install with:
-  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.30.0/install.sh | bash -s -- -v v1.30.0
+  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.30.2/install.sh | bash -s -- -v v1.30.2
 
 (See https://opengrep.dev for other options.)
 EOF
   exit 127
 fi
 
-# Pull off our own flags from the remaining args; pass everything else through to opengrep.
 EXTRA_ARGS=()
 PATHS_PASSED=0
 SAW_DOUBLE_DASH=0
@@ -91,7 +90,6 @@ while (( $# > 0 )); do
       ;;
     *)
       if (( SAW_DOUBLE_DASH )); then
-        # Treat anything after `--` as a path-positional override
         PATHS_PASSED=1
       fi
       EXTRA_ARGS+=( "$1" )
@@ -114,7 +112,7 @@ write_empty_sarif() {
         "driver": {
           "name": "Opengrep OSS",
           "informationUri": "https://opengrep.dev",
-          "semanticVersion": "1.30.0",
+          "semanticVersion": "1.30.2",
           "rules": []
         }
       },

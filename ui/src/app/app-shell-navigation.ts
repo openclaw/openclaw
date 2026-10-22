@@ -268,7 +268,6 @@ export class ShellNavigationOwner {
     }
   }
 
-  /** Agent targeted by the open new-session route, keyed off its ?agent param. */
   newSessionRouteAgentId(): string {
     if (this.host.routeState.routeId !== "new-session") {
       return "";
@@ -292,3 +291,5 @@ export class ShellNavigationOwner {
     this.navigate("chat");
   }
 }
+
+export type ShellNavigationCapability = Pick<ShellNavigationOwner, keyof ShellNavigationOwner>;

@@ -1,9 +1,9 @@
 import { expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
+import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 import type { PluginHookBeforeInstallEvent } from "./types.js";
 
-const event: PluginHookBeforeInstallEvent = {
+const installEvent: PluginHookBeforeInstallEvent = {
   targetName: "demo-skill",
   targetType: "skill",
   sourcePath: "/tmp/demo-skill",
@@ -41,7 +41,7 @@ it("preserves findings in priority order and stops at the first install blocker"
     ]),
   );
   await expect(
-    runner.runBeforeInstall(event, {
+    runner.runBeforeInstall(installEvent, {
       origin: "openclaw-workspace",
       targetType: "skill",
       requestKind: "skill-install",

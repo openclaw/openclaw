@@ -28,11 +28,9 @@ type CuaDriverArtifactDiagnosticCode =
   | "COMPUTER_DRIVER_VERSION_MISMATCH";
 
 export type CuaDriverArtifactVerification =
-  | { ok: true; applicable: false }
-  | { ok: true; applicable: true; version: string; platformPackage: string }
+  | { ok: true }
   | {
       ok: false;
-      code: CuaDriverArtifactDiagnosticCode;
       diagnostic: string;
       fixHint: string;
     };
@@ -50,7 +48,7 @@ function failure(
   message: string,
   fixHint: string,
 ): CuaDriverArtifactVerification {
-  return { ok: false, code, diagnostic: `${code}: ${message} Fix: ${fixHint}`, fixHint };
+  return { ok: false, diagnostic: `${code}: ${message} Fix: ${fixHint}`, fixHint };
 }
 
 function resolveArtifactPlatform(
@@ -76,12 +74,8 @@ function resolveArtifactPlatform(
   return { kind: "not-applicable" };
 }
 
-function readJson(pathname: string): unknown {
-  return JSON.parse(fs.readFileSync(pathname, "utf8"));
-}
-
 export function readPackageIdentity(pathname: string): { name?: string; version?: string } {
-  const record = asOptionalRecord(readJson(pathname));
+  const record = asOptionalRecord(JSON.parse(fs.readFileSync(pathname, "utf8")));
   if (!record) {
     return {};
   }
@@ -122,7 +116,7 @@ export function inspectCuaDriverArtifacts(
 ): CuaDriverArtifactVerification {
   const selected = resolveArtifactPlatform(options.platform, options.arch, options.linuxLibc);
   if (selected.kind === "not-applicable") {
-    return { ok: true, applicable: false };
+    return { ok: true };
   }
   if (selected.kind === "unsupported") {
     const fixHint = "Run this node host on Windows x64/ARM64 or glibc-based Linux x64/ARM64.";
@@ -206,7 +200,7 @@ export function inspectCuaDriverArtifacts(
         fixHint,
       );
     }
-    if (!stat.isFile() || stat.isSymbolicLink()) {
+    if (!stat.isFile()) {
       const fixHint = "Reinstall OpenClaw; the native driver files must be regular package files.";
       return failure(
         "COMPUTER_DRIVER_DIGEST_MISMATCH",
@@ -236,5 +230,5 @@ export function inspectCuaDriverArtifacts(
     }
   }
 
-  return { ok: true, applicable: true, version: accepted.version, platformPackage };
+  return { ok: true };
 }

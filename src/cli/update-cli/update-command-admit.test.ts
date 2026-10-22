@@ -5,6 +5,8 @@ import { DatabaseSync } from "node:sqlite";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readConfigFileSnapshot } from "../../config/io.runtime.js";
+import * as deferredPluginMigrations from "../../infra/deferred-plugin-migrations.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
 import {
@@ -145,6 +147,68 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it("attests family config through existing admission without mutation", async () => {
+    writeConfig({ database: { families: { workboard: { engine: "sqlite" } } } });
+    const before = snapshotFiles();
+    await updateAdmitCommand(contextPath);
+    expect(process.exitCode).toBe(0);
+    expect(readVerdict().facts.checks).toContainEqual({ name: "database-families", status: "ok" });
+    expect(snapshotFiles()).toEqual(before);
+  });
+
+  it("admits retained plugin config for Doctor without weakening normal validation", async () => {
+    const pluginId = "pending-settings";
+    const pluginDir = path.join(home, pluginId);
+    fs.mkdirSync(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: pluginId,
+        version: "1.0.0",
+        openclaw: { extensions: ["./index.js"] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        configSchema: {
+          type: "object",
+          properties: { root: { type: "string" } },
+          additionalProperties: false,
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "index.js"), "throw new Error('must not activate');\n");
+    writeConfig({
+      plugins: {
+        load: { paths: [pluginDir] },
+        allow: [pluginId],
+        entries: { [pluginId]: { enabled: true, config: { legacyRoot: "/retained/source" } } },
+      },
+    });
+    vi.spyOn(deferredPluginMigrations, "readDeferredPluginMigrationsAsync").mockResolvedValue([
+      {
+        pluginId,
+        reason: "The owning plugin repair has not completed.",
+        command: "openclaw doctor --fix",
+        requiresDoctorInspection: true,
+        configPaths: [["plugins", "entries", pluginId, "config"]],
+        validationExcludedPaths: [["plugins", "entries", pluginId, "config", "legacyRoot"]],
+      },
+    ]);
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    expect(process.exitCode).toBe(0);
+    expect(readVerdict()).toMatchObject({ verdict: "admit", reasons: [] });
+    expect(snapshotFiles()).toEqual(before);
+    // Candidate runtime still requires canonical settings; only update admission carries the debt.
+    expect((await readConfigFileSnapshot({ observe: false })).valid).toBe(false);
+    expect(fs.readFileSync(configPath, "utf8")).toContain('"legacyRoot":"/retained/source"');
+  });
+
   it.each(["retired call log", "Cannot inspect source: EACCES"])(
     "returns a published-driver refusal for plugin state failure: %s",
     async (message) => {
@@ -357,7 +421,7 @@ describe("candidate update admission", () => {
     "restart-sentinel.json",
     "restart-sentinel.json.doctor-importing",
   ])(
-    "refuses retired %s before a published updater can activate the candidate",
+    "preserves retired %s and requires importable sources to be repaired first",
     async (relative) => {
       const stateDir = path.dirname(configPath);
       const custom = relative.startsWith("custom-cron/");
@@ -371,21 +435,33 @@ describe("candidate update admission", () => {
 
       await updateAdmitCommand(contextPath);
 
-      expect(process.exitCode).toBe(3);
-      expect(readVerdict()).toMatchObject({
-        verdict: "refuse",
-        reasons: [
-          expect.objectContaining({
-            code: "retired-state-format",
-            message: expect.stringContaining("Upgrade through OpenClaw 2026.9.7"),
-          }),
-        ],
-        facts: {
-          checks: expect.arrayContaining([
-            { name: "state-format", status: "refuse", detail: expect.any(String) },
-          ]),
-        },
-      });
+      const importable =
+        relative.startsWith("settings/") ||
+        relative.startsWith("bindings/") ||
+        relative.endsWith("jobs.json") ||
+        relative.endsWith("jobs-state.json");
+      expect(process.exitCode).toBe(importable ? 3 : 0);
+      expect(readVerdict()).toMatchObject(
+        importable
+          ? {
+              verdict: "refuse",
+              reasons: [
+                expect.objectContaining({
+                  code: "retired-state-format",
+                  message: expect.stringContaining("doctor --fix"),
+                }),
+              ],
+            }
+          : {
+              verdict: "admit",
+              reasons: [],
+              facts: {
+                checks: expect.arrayContaining([
+                  { name: "state-format", status: "warn", detail: expect.any(String) },
+                ]),
+              },
+            },
+      );
       expect(stderr).toBe("");
       expect(snapshotFiles()).toEqual(before);
       expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
@@ -404,7 +480,7 @@ describe("candidate update admission", () => {
     { selector: "default", store: "other-id" },
     { selector: "config", store: "other-id" },
   ])(
-    "admits retired OAuth selected by $selector only when no legacy profile references it ($store store)",
+    "inspects retired OAuth selected by $selector without hiding config errors ($store store)",
     async ({ selector, store: storeKind }) => {
       const stateDir = path.dirname(configPath);
       const oauthDir =
@@ -461,28 +537,31 @@ describe("candidate update admission", () => {
 
       await updateAdmitCommand(contextPath);
 
-      expect(process.exitCode).toBe(storeKind === "other-id" ? 0 : 3);
+      const invalidConfig = selector.startsWith("prefixed-");
+      expect(process.exitCode).toBe(storeKind !== "other-id" || invalidConfig ? 3 : 0);
       expect(readVerdict()).toMatchObject(
-        storeKind === "other-id"
-          ? { verdict: "admit", reasons: [] }
-          : {
-              verdict: "refuse",
-              reasons: [
-                expect.objectContaining({
-                  code: "retired-state-format",
-                  message: expect.stringContaining(
-                    storeKind === "referenced"
-                      ? "Upgrade through OpenClaw 2026.9.7"
-                      : `Cannot inspect potentially retired state at ${store}`,
-                  ),
-                }),
-              ],
-              facts: {
-                checks: expect.arrayContaining([
-                  { name: "state-format", status: "refuse", detail: expect.any(String) },
-                ]),
+        invalidConfig
+          ? { verdict: "refuse", reasons: [expect.objectContaining({ code: "invalid-config" })] }
+          : storeKind === "other-id"
+            ? { verdict: "admit", reasons: [] }
+            : {
+                verdict: "refuse",
+                reasons: [
+                  expect.objectContaining({
+                    code: "retired-state-format",
+                    message: expect.stringContaining(
+                      storeKind === "unreadable"
+                        ? `Cannot inspect potentially retired state at ${store}`
+                        : "doctor --fix",
+                    ),
+                  }),
+                ],
+                facts: {
+                  checks: expect.arrayContaining([
+                    { name: "state-format", status: "refuse", detail: expect.any(String) },
+                  ]),
+                },
               },
-            },
       );
       expect(stderr).toBe("");
       expect(snapshotFiles()).toEqual(before);
@@ -504,6 +583,7 @@ describe("candidate update admission", () => {
   });
 
   it("uses the explicit installed root and emits one JSON verdict without creating live state", async () => {
+    vi.spyOn(runtimeGuard, "nodeVersionSatisfiesEngine").mockReturnValue(true);
     const before = snapshotFiles();
     const program = new Command().name("openclaw");
     registerUpdateCli(program);

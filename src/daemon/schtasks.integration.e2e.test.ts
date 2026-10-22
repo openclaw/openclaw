@@ -17,7 +17,11 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
 import { execSchtasks } from "./schtasks-exec.js";
-import { resolveStartupEntryPaths, resolveTaskLauncherScriptPath } from "./schtasks-layout.js";
+import {
+  resolveStartupEntryPaths,
+  resolveTaskLauncherScriptPath,
+  resolveTaskScriptPath,
+} from "./schtasks-layout.js";
 import { readWindowsProcessSnapshot } from "./schtasks-process-snapshot.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
 import {
@@ -38,7 +42,6 @@ import {
   type WindowsProcessDiagnostic,
 } from "./schtasks.integration-observation.test-support.js";
 import * as proof from "./schtasks.integration.test-helpers.js";
-import { resolveTaskScriptPath } from "./schtasks.js";
 import {
   buildGatewayTaskSupervisorProgramArguments,
   createGatewayTaskSupervisorProbe,
@@ -398,7 +401,7 @@ describe("schtasks Windows integration fixture isolation", () => {
       await expect(createIntegrationRoot(existingRoot, "existing")).rejects.toThrow(
         "CI_WINDOWS_SCHTASKS_ROOT must not already exist",
       );
-      await expect(fs.access(existingRoot)).resolves.toBeUndefined();
+      await fs.access(existingRoot);
     } finally {
       await fs.rm(existingRoot, { recursive: true, force: true });
     }

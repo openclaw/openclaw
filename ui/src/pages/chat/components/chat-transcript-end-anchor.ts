@@ -19,6 +19,9 @@ export class TranscriptEndAnchor {
   }
 
   recordLayoutCorrection(before: number, after: number): void {
+    if (before === after) {
+      return;
+    }
     if (this.offset !== null && Math.abs(this.offset - before) <= 1) {
       this.offset = after;
     } else {
@@ -70,10 +73,7 @@ export class TranscriptEndAnchor {
     canFollow: boolean,
     suspended: boolean,
   ) {
-    if (!this.composerResizePending) {
-      return null;
-    }
-    if (!changed || suspended) {
+    if (!this.composerResizePending || !changed || suspended) {
       // At the height cap, native caret scrolling can move the transcript
       // after overflow settles without producing a viewport ResizeObserver.
       return null;
@@ -112,9 +112,11 @@ export class TranscriptEndAnchor {
         ? previousOffset
         : before;
     const correction = { before: beforeResize, after: element.scrollTop, resumeFollow };
-    if (previousMax !== max || correction.before !== correction.after) {
+    // A native return can reach the old end before the viewport itself resizes.
+    if (resumeFollow || previousMax !== max || correction.before !== correction.after) {
       publishTranscriptScroll(element, {
         type: "resize",
+        resumeFollow,
         viewport: {
           clientHeight: element.clientHeight,
           scrollHeight: element.scrollHeight,
@@ -169,13 +171,7 @@ export class TranscriptEndAnchor {
       this.clear();
       return;
     }
-    if (suspended) {
-      return;
-    }
-    if (!element || this.maxOffset === null) {
-      return;
-    }
-    if (this.offset === null) {
+    if (suspended || !element || this.maxOffset === null || this.offset === null) {
       return;
     }
     if (atEnd) {

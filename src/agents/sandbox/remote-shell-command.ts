@@ -1,7 +1,6 @@
-/** Shared remote-shell quoting, workdir validation, and directory contracts. */
-export function shellEscape(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
+import { shellEscape } from "../../shared/shell-quote.js";
+
+export { shellEscape };
 
 /** Build a remote shell command from literal argv entries. */
 export function buildRemoteCommand(argv: string[]): string {
@@ -60,18 +59,21 @@ function assertValidExecRemoteCommand(command: string): void {
       continue;
     }
 
-    if (frame.quote === "plain" && frame.kind === "arithmetic") {
+    if (
+      frame.quote === "plain" &&
+      (frame.kind === "arithmetic" || frame.kind === "command-substitution")
+    ) {
       if (char === "(") {
         frame.parenDepth += 1;
-        continue;
-      }
-      if (char === ")") {
+      } else if (char === ")") {
         frame.parenDepth -= 1;
         if (frame.parenDepth === 0) {
           frames.pop();
         }
       }
-      continue;
+      if (frame.kind === "arithmetic" || char === "(" || char === ")") {
+        continue;
+      }
     }
 
     if (char === "`") {
@@ -137,18 +139,6 @@ function assertValidExecRemoteCommand(command: string): void {
         throw new Error(
           `Malformed SSH/OpenShell exec command: unresolved placeholder token ${placeholder}.`,
         );
-      }
-    }
-    if (frame.kind === "command-substitution") {
-      if (char === "(") {
-        frame.parenDepth += 1;
-        continue;
-      }
-      if (char === ")") {
-        frame.parenDepth -= 1;
-        if (frame.parenDepth === 0) {
-          frames.pop();
-        }
       }
     }
   }

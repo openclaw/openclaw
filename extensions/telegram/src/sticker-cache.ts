@@ -45,7 +45,6 @@ export async function describeStickerImage(params: DescribeStickerParams): Promi
   }
 
   const { provider, model } = resolved;
-  logVerbose(`telegram: describing sticker with ${provider}/${model}`);
 
   try {
     const result = await getTelegramRuntime().mediaUnderstanding.describeImageFileWithModel({

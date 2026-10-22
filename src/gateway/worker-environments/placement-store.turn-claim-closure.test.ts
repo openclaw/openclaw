@@ -1,5 +1,5 @@
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -15,7 +15,11 @@ import {
   releaseAgentRunDelegatedAuthority,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../../infra/agent-run-registry.js";
+import { enableNodeSqliteKyselyStatementCache } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
+import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   openOpenClawStateDatabase,
@@ -39,6 +43,7 @@ import {
   getWorkerTurnExecutionIdentityCapability,
   runWorkerTurnAdmissionContinuation,
 } from "./placement-turn-claim-events.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 
@@ -110,16 +115,43 @@ it("projects worker-turn workspace reconciliation at its owned boundary", async 
   expect(
     (await store.readProjection([active.sessionId])).placements.get(active.sessionId),
   ).not.toHaveProperty("workspaceResultConflict");
-  await store.acceptWorkspaceResult(claim);
-  await store.completeWorkspaceResultAndReleaseTurn(claim);
-  expect(
-    (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
-      active.sessionId,
-    ),
-  ).toBe(false);
+  const published: unknown[] = [];
+  const unsubscribe = onSessionLifecycleEvent((event) => {
+    if (event.sessionKey === active.sessionKey) {
+      published.push({
+        event,
+        placement: store.get(active.sessionId),
+        resultCurrent: store.validateWorkspaceResultClaim(claim),
+      });
+    }
+  });
+  try {
+    await store.acceptWorkspaceResult(claim);
+    expect(published).toEqual([]);
+    await store.completeWorkspaceResultAndReleaseTurn(claim);
+    expect(published).toEqual([
+      {
+        event: {
+          sessionKey: active.sessionKey,
+          agentId: active.agentId,
+          reason: "placement",
+          scope: "runtime",
+        },
+        placement: expect.objectContaining({ state: "active", turnClaim: null }),
+        resultCurrent: false,
+      },
+    ]);
+    expect(
+      (await store.readProjection([active.sessionId])).workspaceResultReconcilingSessionIds.has(
+        active.sessionId,
+      ),
+    ).toBe(false);
+  } finally {
+    unsubscribe();
+  }
 });
 
-it("keeps placement and result facts in one snapshot across a peer commit", async () => {
+it("batches placement facts in one statement per chunk and keeps the snapshot across a peer commit", async () => {
   const active = await advanceToActive();
   const claim = await store.claimTurn({
     ...SESSION,
@@ -131,45 +163,76 @@ it("keeps placement and result facts in one snapshot across a peer commit", asyn
 
   database.db.exec("PRAGMA journal_mode = WAL");
   const peer = new DatabaseSync(database.path);
-  const reader = new DatabaseSync(database.path, { readOnly: true });
+  const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
+  admitSqliteSchema(reader);
+  enableNodeSqliteKyselyStatementCache(reader);
   const prepare = reader.prepare.bind(reader);
+  const projectionStatements = new WeakMap<StatementSync, boolean>();
+  const prepared = vi.spyOn(reader, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    if (
+      /^select\b/i.test(sql) &&
+      /\bworker_(?:session_placements|workspace_pending_results|workspace_reconciliations|session_placement_moves|environments)\b/i.test(
+        sql,
+      )
+    ) {
+      projectionStatements.set(statement, /\bworker_workspace_pending_results\b/i.test(sql));
+    }
+    return statement;
+  });
+  // The cache admits on second use; the measured reads exercise retained statements.
+  for (let warmup = 0; warmup < 2; warmup++) {
+    readWorkerSessionPlacementProjectionInDatabase(reader, [active.sessionId], []);
+  }
   const recoveryError = "Peer placement failure";
   let peerCommits = 0;
+  let pendingExecutions = 0;
+  let projectionExecutions = 0;
   let changedRows: number | bigint = 0;
-  const statement = vi.spyOn(reader, "prepare").mockImplementation((sql) => {
-    // The fresh reader has consumed placements before preparing the result query on every Node version.
-    if (peerCommits === 0 && /\bfrom\s+"?worker_workspace_pending_results\b/i.test(sql)) {
-      peerCommits++;
-      const updatedAtMs = Date.now();
-      peer.exec("BEGIN IMMEDIATE");
-      changedRows = peer
-        .prepare(
-          `UPDATE worker_session_placements
-           SET state = 'failed', transition_generation = ?, recovery_error = ?,
-               terminal_reason = ?, terminal_at_ms = ?, turn_claim_owner = NULL,
-               turn_claim_id = NULL, turn_claim_run_id = NULL, turn_claim_generation = NULL,
-               turn_claim_owner_epoch = NULL, updated_at_ms = ?, state_changed_at_ms = ?
-           WHERE session_id = ? AND state = 'active' AND transition_generation = ?
-             AND turn_claim_owner = 'worker' AND turn_claim_id = ? AND turn_claim_run_id = ?`,
-        )
-        .run(
-          active.generation + 1,
-          recoveryError,
-          recoveryError,
-          updatedAtMs,
-          updatedAtMs,
-          updatedAtMs,
-          active.sessionId,
-          active.generation,
-          claim.claimId,
-          claim.runId,
-        ).changes;
-      peer
-        .prepare("DELETE FROM worker_workspace_pending_results WHERE session_id = ?")
-        .run(active.sessionId);
-      peer.exec("COMMIT");
-    }
-    return prepare(sql);
+  const executionSpies = (["all", "get", "iterate"] as const).map((method) => {
+    const original = StatementSync.prototype[method];
+    return vi.spyOn(StatementSync.prototype, method).mockImplementation(
+      new Proxy(original, {
+        apply(target, receiver: StatementSync, args) {
+          if (projectionStatements.has(receiver)) {
+            projectionExecutions++;
+            // Intercept execution, including cached reuse, after the first chunk fixes the snapshot.
+            if (projectionStatements.get(receiver) && ++pendingExecutions === 2) {
+              peerCommits++;
+              const updatedAtMs = Date.now();
+              peer.exec("BEGIN IMMEDIATE");
+              changedRows = peer
+                .prepare(
+                  `UPDATE worker_session_placements
+                   SET state = 'failed', transition_generation = ?, recovery_error = ?,
+                       terminal_reason = ?, terminal_at_ms = ?, turn_claim_owner = NULL,
+                       turn_claim_id = NULL, turn_claim_run_id = NULL, turn_claim_generation = NULL,
+                       turn_claim_owner_epoch = NULL, updated_at_ms = ?, state_changed_at_ms = ?
+                   WHERE session_id = ? AND state = 'active' AND transition_generation = ?
+                     AND turn_claim_owner = 'worker' AND turn_claim_id = ? AND turn_claim_run_id = ?`,
+                )
+                .run(
+                  active.generation + 1,
+                  recoveryError,
+                  recoveryError,
+                  updatedAtMs,
+                  updatedAtMs,
+                  updatedAtMs,
+                  active.sessionId,
+                  active.generation,
+                  claim.claimId,
+                  claim.runId,
+                ).changes;
+              peer
+                .prepare("DELETE FROM worker_workspace_pending_results WHERE session_id = ?")
+                .run(active.sessionId);
+              peer.exec("COMMIT");
+            }
+          }
+          return Reflect.apply(target, receiver, args);
+        },
+      }),
+    );
   });
   try {
     expect(
@@ -179,7 +242,11 @@ it("keeps placement and result facts in one snapshot across a peer commit", asyn
     ).toBe(true);
     const facts = readWorkerSessionPlacementProjectionInDatabase(
       reader,
-      [active.sessionId],
+      [
+        active.sessionId,
+        ...Array.from({ length: 249 }, (_, index) => `missing-${index}`),
+        active.sessionId,
+      ],
       [],
     ).projection;
     expect(peerCommits).toBe(1);
@@ -189,6 +256,7 @@ it("keeps placement and result facts in one snapshot across a peer commit", asyn
       generation: active.generation,
     });
     expect(facts.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(true);
+    expect(projectionExecutions).toBe(2);
     const current = await store.readProjection([active.sessionId]);
     expect(current.placements.get(active.sessionId)).toMatchObject({
       state: "failed",
@@ -198,7 +266,8 @@ it("keeps placement and result facts in one snapshot across a peer commit", asyn
     });
     expect(current.workspaceResultReconcilingSessionIds.has(active.sessionId)).toBe(false);
   } finally {
-    statement.mockRestore();
+    prepared.mockRestore();
+    executionSpies.forEach((spy) => spy.mockRestore());
     reader.close();
     peer.close();
   }
@@ -426,6 +495,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     () => {},
   );
   const placementCapability = getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim);
+  const placementGate = createWorkerSessionPlacementGate(store);
   if (!placementCapability) {
     throw new Error("expected placement-bound lineage capability");
   }
@@ -445,6 +515,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     expect(getWorkerTurnExecutionIdentityCapability(store, placementClosedClaim)).toBe(
       placementCapability,
     );
+    expect(placementGate.validateWorkerTurn(placementClosedClaim)).toBe(true);
     await placementCapability.run((identity) => {
       placementReceiptAuthority = identity.receiptAuthority;
       identity.receiptAuthority();
@@ -454,6 +525,7 @@ it("rejects retained worker lineage capabilities after either owner closes", asy
     sql.restore();
   }
   await store.releaseTurn(placementClosedClaim);
+  expect(placementGate.validateWorkerTurn(placementClosedClaim)).toBe(false);
   expect(() => placementReceiptAuthority?.()).toThrow("worker turn authority changed");
   await expect(placementCapability.run(async () => "stale")).rejects.toThrow(
     "worker turn authority changed",

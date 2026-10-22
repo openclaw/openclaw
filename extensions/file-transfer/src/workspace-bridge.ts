@@ -12,9 +12,9 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectStrictBase64 } from "./shared/base64.js";
 import { throwFromNodePayload } from "./shared/errors.js";
+import { FILE_FETCH_CHUNK_BYTES } from "./shared/file-fetch-protocol.js";
 import type { FileTransferNodeInvokeCommand } from "./shared/node-invoke-policy-commands.js";
 import { createWorkspaceFile } from "./workspace-file-create.js";
-import { fetchWorkspaceFile } from "./workspace-file-fetch.js";
 
 const MAX_BYTES = 16 * 1024 * 1024;
 const DIRECTORY_PAGE_SIZE = 4096;
@@ -88,7 +88,7 @@ export function createNodeWorkspaceBridge(options: {
       throwFromNodePayload(command, payload);
     }
     if (typeof payload.path !== "string" || !path.posix.isAbsolute(payload.path)) {
-      throw new Error(`Missing canonical path in ${command} response`);
+      throw new Error(`Missing resolved path in ${command} response`);
     }
     relativeWithin(remoteRoot, payload.path, path.posix);
     return payload;
@@ -124,19 +124,68 @@ export function createNodeWorkspaceBridge(options: {
       const signal = params.signal
         ? AbortSignal.any([options.signal, params.signal])
         : options.signal;
-      const result = await fetchWorkspaceFile({
-        openDuplex: options.openDuplex,
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        options.assertCurrent?.();
+      };
+      assertCurrent();
+      const channel = await options.openDuplex({
         nodeId: options.nodeId,
-        params: fetchParams,
-        maxBytes,
+        command: "file.fetch",
+        params: { ...fetchParams, transport: "binary", maxBytes },
+        maxMessageBytes: FILE_FETCH_CHUNK_BYTES,
         signal,
-        assertCurrent: () => {
-          signal.throwIfAborted();
-          options.assertCurrent?.();
-        },
+        assertCurrent,
+        timeoutMs: 60_000,
       });
+      void channel.closed.catch(() => {});
+      let unsubscribe: (() => void) | undefined;
+      let result: { data: Buffer; canonicalPath: string };
+      try {
+        assertCurrent();
+        const chunks: Buffer[] = [];
+        const hash = crypto.createHash("sha256");
+        let receivedSize = 0;
+        unsubscribe = channel.onMessage(async (message) => {
+          assertCurrent();
+          if (
+            !message.byteLength ||
+            message.byteLength > FILE_FETCH_CHUNK_BYTES ||
+            message.byteLength > maxBytes - receivedSize
+          ) {
+            throw new Error("Invalid or oversized binary file.fetch payload", { cause: error });
+          }
+          const chunk = Buffer.from(message);
+          receivedSize += chunk.byteLength;
+          hash.update(chunk);
+          chunks.push(chunk);
+          await channel.send(Buffer.from("ack"));
+          assertCurrent();
+        });
+        await channel.send(Buffer.from("start"));
+        const received = asOptionalRecord(await channel.closed);
+        assertCurrent();
+        const receipt = asOptionalRecord(received?.payload);
+        if (!receipt || receipt.ok !== true) {
+          throwFromNodePayload("file.fetch", receipt ?? {});
+        }
+        if (
+          receipt.transport !== "binary" ||
+          typeof receipt.path !== "string" ||
+          receipt.size !== receivedSize ||
+          receipt.sha256 !== hash.digest("hex")
+        ) {
+          throw new Error("Binary file.fetch receipt does not match the received bytes", {
+            cause: error,
+          });
+        }
+        result = { data: Buffer.concat(chunks, receivedSize), canonicalPath: receipt.path };
+      } finally {
+        unsubscribe?.();
+        channel.close();
+      }
       if (!path.posix.isAbsolute(result.canonicalPath)) {
-        throw new Error("Missing canonical path in file.fetch response", { cause: error });
+        throw new Error("Missing resolved path in file.fetch response", { cause: error });
       }
       return {
         ...result,
@@ -196,7 +245,7 @@ export function createNodeWorkspaceBridge(options: {
         throwFromNodePayload("file.create", payload ?? {});
       }
       if (typeof payload?.path !== "string" || !path.posix.isAbsolute(payload.path)) {
-        throw new Error("Missing canonical path in file.create response");
+        throw new Error("Missing resolved path in file.create response");
       }
       relativeWithin(remoteRoot, payload.path, path.posix);
       if (payload.status === "exists") {

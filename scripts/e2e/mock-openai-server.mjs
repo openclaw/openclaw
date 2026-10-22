@@ -377,14 +377,19 @@ function completedResponseEvent(id, output, inputTokens, outputTokens) {
   };
 }
 
-function responseEvents(text, deltas = [text]) {
-  const item = {
+function assistantMessage(text, phase, id = "msg_e2e_1") {
+  return {
     type: "message",
-    id: "msg_e2e_1",
+    id,
     role: "assistant",
     status: "completed",
+    ...(phase ? { phase } : {}),
     content: [{ type: "output_text", text, annotations: [] }],
   };
+}
+
+function responseEvents(text, deltas = [text]) {
+  const item = assistantMessage(text);
   return [...messageEvents(item, text, deltas), completedResponseEvent("resp_e2e", [item], 11, 7)];
 }
 
@@ -457,14 +462,7 @@ function functionCallEvents(call) {
 // transport reads it straight off the item, so an untagged item produces no
 // preamble at all and the scenario silently proves nothing.
 function preambleThenToolCallEvents(preamble, name, args) {
-  const item = {
-    type: "message",
-    id: "msg_e2e_preamble",
-    role: "assistant",
-    status: "completed",
-    phase: "commentary",
-    content: [{ type: "output_text", text: preamble, annotations: [] }],
-  };
+  const item = assistantMessage(preamble, "commentary", "msg_e2e_preamble");
   const call = buildMockFunctionCall(name, args);
   return [
     ...messageEvents(item, preamble, splitResponseText(preamble)),
@@ -476,7 +474,7 @@ function preambleThenToolCallEvents(preamble, name, args) {
 function hasCurrentTurnToolOutput(messages) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role === "user") {
+    if (readMockUserText(message) !== undefined) {
       return false;
     }
     if (message?.role === "tool" || message?.type === "function_call_output") {
@@ -900,15 +898,7 @@ const server = http.createServer((req, res) => {
           id: "resp_e2e",
           object: "response",
           status: "completed",
-          output: [
-            {
-              type: "message",
-              id: "msg_e2e_1",
-              role: "assistant",
-              status: "completed",
-              content: [{ type: "output_text", text: responseText, annotations: [] }],
-            },
-          ],
+          output: [assistantMessage(responseText)],
           usage: { input_tokens: 11, output_tokens: 7, total_tokens: 18 },
         });
         return;
@@ -918,9 +908,8 @@ const server = http.createServer((req, res) => {
     }
 
     if (route === "chatCompletions") {
-      // Progress-draft proof needs assistant content followed by a tool call in
-      // one streamed turn: the completions transport tags that leading text as
-      // commentary, which channels render as the draft status headline.
+      // This unphased completions fixture proves tool progress and finalization.
+      // Commentary proof uses the Responses fixture's explicit commentary phase.
       if (!selectedResponse && bodyText.includes("OPENCLAW_E2E_DRAFTPROOF")) {
         const messages = Array.isArray(body.messages) ? body.messages : [];
         const toolTurnDone = hasCurrentTurnToolOutput(messages);

@@ -16,8 +16,6 @@ type SetupCliBackendDescriptorEntry = {
 type SetupCliBackendDescriptorLookupParams = {
   backend: string;
   config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 };
 
@@ -27,11 +25,10 @@ function resolveSetupCliBackendSnapshot(
   if (params.metadataSnapshot) {
     return params.metadataSnapshot;
   }
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
   return resolvePluginMetadataSnapshot({
     ...(params.config ? { config: params.config } : {}),
-    env,
+    env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
     allowWorkspaceScopedCurrent: true,
   });
@@ -45,7 +42,7 @@ export function resolvePluginSetupCliBackendDescriptor(
   // The immutable owner map preserves declaration order; only activation uses live policy.
   const pluginId = snapshot.owners.cliBackends
     .get(normalized)
-    ?.find((id) => isInstalledPluginEnabled(snapshot.index, id, params.config, params.env));
+    ?.find((id) => isInstalledPluginEnabled(snapshot.index, id, params.config, process.env));
   const plugin = pluginId ? snapshot.byPluginId.get(pluginId) : undefined;
   if (!plugin) {
     return undefined;
@@ -64,7 +61,7 @@ export function resolvePluginSetupCliBackendIds(
   return snapshot.plugins.flatMap((plugin) => {
     const ids = plugin.cliBackends.concat(plugin.setup?.cliBackends ?? []);
     return ids.length > 0 &&
-      isInstalledPluginEnabled(snapshot.index, plugin.id, params.config, params.env)
+      isInstalledPluginEnabled(snapshot.index, plugin.id, params.config, process.env)
       ? ids
       : [];
   });

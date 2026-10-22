@@ -5,6 +5,8 @@ import type {
   PairedDeviceApprovalKind,
 } from "./device-pairing.types.js";
 
+export type PairedDeviceTokenIdentity = { deviceId: string; key: string };
+
 export type NodePairingGeneration = {
   nodeId: string;
   key: string;
@@ -18,7 +20,6 @@ export type NodePairingState = {
 /** Pending request summary returned when a replacement supersedes older requests. */
 type DevicePairingSupersededRequest = Pick<DevicePairingPendingRequest, "requestId" | "deviceId">;
 
-/** Result for creating or refreshing a pending device pairing request. */
 export type RequestDevicePairingResult = {
   status: "pending";
   request: DevicePairingPendingRequest;
@@ -40,21 +41,18 @@ export type PairedDeviceMetadataPatch = Pick<
   | "lastSeenReason"
 >;
 
-/** Deny reasons returned when rotating an existing paired-device token. */
 export type RotateDeviceTokenDenyReason =
   | "unknown-device-or-role"
   | "missing-approved-scope-baseline"
   | "scope-outside-approved-baseline"
   | "caller-missing-scope";
 
-/** Token rotation result with the replacement token entry on success. */
 export type RotateDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RotateDeviceTokenDenyReason; scope?: string };
 
 export type RevokeDeviceTokenDenyReason = "unknown-device-or-role" | "caller-missing-scope";
 
-/** Token revocation result with the revoked entry on success. */
 export type RevokeDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RevokeDeviceTokenDenyReason; scope?: string };
@@ -74,7 +72,6 @@ type DevicePairingForbiddenReason =
   | "bootstrap-role-not-allowed"
   | "bootstrap-scope-not-allowed";
 
-/** Structured forbidden result with the missing/disallowed role or scope when known. */
 export type DevicePairingForbiddenResult = {
   status: "forbidden";
   reason: DevicePairingForbiddenReason;
@@ -82,7 +79,6 @@ export type DevicePairingForbiddenResult = {
   role?: string;
 };
 
-/** Pairing approval outcome: approved, forbidden with reason, or request not found. */
 export type ApproveDevicePairingResult =
   | {
       status: "approved";
@@ -99,7 +95,7 @@ export type DevicePairingApprovalOptions = {
   accessMetadata?: DevicePairingAccessMetadata;
   approvedVia?: Extract<
     PairedDeviceApprovalKind,
-    "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
+    "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "remote-ingress" | "ssh-verified"
   >;
   /** Revalidate automatic approval against current policy after all pairing-lock awaits. */
   isApprovalCurrent?: (state: {
@@ -107,7 +103,7 @@ export type DevicePairingApprovalOptions = {
     existing: Readonly<PairedDevice> | undefined;
   }) => boolean;
   /**
-   * Replace pending scopes for a new operator device, or a trusted-proxy
+   * Replace pending scopes for a new operator device, or a trusted ingress
    * same-key upgrade. The live role set is rechecked under the pairing lock.
    */
   autoApproveNewDeviceScopes?: readonly string[];

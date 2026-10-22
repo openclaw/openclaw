@@ -50,10 +50,9 @@ function resolveChunkConfig(
   const channels = cfg?.channels as Record<string, ProviderChunkConfig> | undefined;
   const channel = channels?.[provider];
   const accounts = channel?.accounts;
-  const account =
-    accounts && typeof accounts === "object"
-      ? resolveChannelAccountEntry(accounts, normalizeAccountId(accountId), provider)
-      : undefined;
+  const account = accounts
+    ? resolveChannelAccountEntry(accounts, normalizeAccountId(accountId), provider)
+    : undefined;
   return { channel, account };
 }
 
@@ -64,13 +63,12 @@ export function resolveTextChunkLimit(
   opts?: { fallbackLimit?: number },
 ): number {
   const fallback =
-    typeof opts?.fallbackLimit === "number" && opts.fallbackLimit > 0
+    opts?.fallbackLimit !== undefined && opts.fallbackLimit > 0
       ? opts.fallbackLimit
       : DEFAULT_CHUNK_LIMIT;
   const { channel, account } = resolveChunkConfig(cfg, provider, accountId);
-  const providerOverride =
-    typeof account?.textChunkLimit === "number" ? account.textChunkLimit : channel?.textChunkLimit;
-  if (typeof providerOverride === "number" && providerOverride > 0) {
+  const providerOverride = account?.textChunkLimit ?? channel?.textChunkLimit;
+  if (providerOverride !== undefined && providerOverride > 0) {
     return providerOverride;
   }
   return fallback;
@@ -469,11 +467,5 @@ function pickSafeBreakIndex(
       : undefined,
   );
 
-  if (lastNewline > start) {
-    return lastNewline;
-  }
-  if (lastWhitespace > start) {
-    return lastWhitespace;
-  }
-  return -1;
+  return lastNewline > start ? lastNewline : lastWhitespace > start ? lastWhitespace : -1;
 }

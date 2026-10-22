@@ -1,4 +1,3 @@
-// Gateway question manager.
 // Tracks transient operator questions and short-lived terminal records in memory.
 import { randomUUID } from "node:crypto";
 import {
@@ -22,7 +21,10 @@ import {
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
-import type { QuestionSessionAccess } from "./question-session-access.types.js";
+import type {
+  QuestionClientAuthorization,
+  QuestionSessionAccess,
+} from "./question-session-access.types.js";
 
 /** Grace period for late question.waitAnswer and question.get calls. */
 const QUESTION_RESOLVED_ENTRY_GRACE_MS = 15_000;
@@ -58,6 +60,8 @@ type QuestionManagerRequest = {
   onResolved?:
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => void)
     | ((event: QuestionResolvedEvent, observation: QuestionObservation) => Promise<void>);
+  /** Host-owned human decision boundary; never accepted from wire data. */
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
   requesterRun?: OperationalRunInstanceRef;
@@ -74,6 +78,8 @@ type QuestionEntry = {
   job: GatewayScheduledJob;
   waiters: Set<Waiter>;
   onResolved?: QuestionManagerRequest["onResolved"];
+  /** Host-owned human decision boundary; never accepted from wire data. */
+  authorizeClient?: QuestionClientAuthorization;
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
   requesterRun?: OperationalRunInstanceRef;
@@ -89,6 +95,7 @@ export type QuestionObservation = {
   readonly record: QuestionRecord;
   readonly ordinary: boolean;
   readonly sessionAccess?: QuestionSessionAccess;
+  readonly authorizeClient?: QuestionClientAuthorization;
   isCurrent: () => boolean;
   refreshRequester: () => void;
 };
@@ -190,6 +197,7 @@ export class QuestionManager {
       waiters: new Set(),
       onResolved: params.onResolved,
       sessionAccess: params.sessionAccess,
+      authorizeClient: params.authorizeClient,
       isRequesterActive: params.isRequesterActive,
       requesterRun: params.requesterRun,
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
@@ -236,6 +244,7 @@ export class QuestionManager {
       },
       ordinary: entry.ordinary,
       sessionAccess: entry.sessionAccess,
+      authorizeClient: entry.authorizeClient,
       isCurrent: () => this.entries.get(entry.record.id) === entry,
       refreshRequester: () => this.refreshRequester(entry),
     };

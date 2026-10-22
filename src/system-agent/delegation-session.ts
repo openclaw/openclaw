@@ -1,4 +1,3 @@
-// Binds delegated chat state to its requesting agent session.
 export function resolveSystemAgentDelegationKey(
   delegation:
     | {

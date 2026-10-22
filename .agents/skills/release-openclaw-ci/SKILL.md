@@ -273,10 +273,15 @@ until their dependent enforcement changes land.
   group + release profile + effective soak coverage. Stable/full always include
   soak. Distinct coverage profiles can run independently; concurrency does not
   cancel an older exact child automatically.
-- Parent cancellation or timeout leaves adopted identity-checked children
-  running. The operator must cancel an exact child explicitly when it is no
-  longer useful. Do not infer a child identity from branch, title prefix, or
-  latest-run order.
+- Parent cancellation or timeout does not settle independent descendants.
+  Preview `pnpm frv cancel --run <parent> --dry-run`, then run it without
+  `--dry-run` only for explicitly requested cancellation. The canonical owner
+  authenticates the sealed plan, exact dispatch logs, current attempts, artifact
+  producers, and recorded Telegram descendants; borrowed/reused children remain
+  untouched. Repeat an incomplete result with its next command. Use `--force`
+  only when an earlier cancellation is not settling. Never infer ownership from
+  branch, title prefix, or latest-run order, or dispatch a replacement before the
+  owned tree is terminal.
 - Recover one failed surface with one diagnosis, one fix when needed, and one
   narrow retry. Then reassess the release decision. Do not automatically
   dispatch `rerun_group=all`.
@@ -286,12 +291,12 @@ until their dependent enforcement changes land.
   plus a fix-in-parallel issue or PR on `main`; never a re-cut, tooling change,
   or new FRV. New dispatches reject `known_flaky_jobs_json`.
 - For a supported parent, `pnpm frv rerun --run <parent-run-id> --job
-"<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
+  "<child-key>:<exact job name>"` reruns one executed terminal job using its accepted
   Actions job ID. Get the child key and exact name from `frv status --json`.
   GitHub also reruns dependent jobs. The controller waits only for that child
   before sending the request; it does not retry unrelated failures.
 - `pnpm frv rerun --run <parent-run-id> --child <child-key|run-id>
-[--max-attempts N]` records one of those bounded reruns. It waits for the
+  [--max-attempts N]` records one of those bounded reruns. It waits for the
   child to finish, sends exactly one rerun-failed-jobs request, and returns once
   the new attempt exists without duplicate jobs. Before the request it prints
   each failed job's runner labels and the current `OPENCLAW_CI_RUNNER_BACKEND`;
@@ -396,6 +401,14 @@ replace the selected attempt. Use the report's exact dispatch command for the
 chosen publication route only after resolving every `FAIL` and owner-action
 `WARN`. Extended-stable retains its separate owner workflows and is not
 admitted by this preflight. Alpha releases are retired.
+
+The checklist's `--workflow-ref`/`--workflow-sha` selects trusted P tooling, not
+the candidate harness. Reuse authenticated stable package Telegram proof from
+the exact FRV-qualified tarball; beta coverage remains deferred. Supplemental
+Telegram checks require the retained qualification ref verified at Q=C, with
+the harness pinned to C. Never dispatch candidate checks from moving main.
+Local Parallels uses C's checkout and dependency graph. Supplemental Telegram
+run IDs stay in candidate evidence, not the optional publisher diagnostic input.
 
 Check the report before retrying a failed publication: preserve the verified
 `openclaw_npm_resume_run_id` for already-published core bytes, inspect matching
@@ -706,6 +719,14 @@ pnpm ci:full-release \
   -f dispatch_release_evidence=false
 ```
 
+The helper captures qualification baselines from npm before admission. An
+extended-stable candidate's primary upgrade baseline, used by cross-OS upgrade
+and the upgrade survivor lanes, is the newest published extended-stable
+release below it (2026.8.35 for 2026.9.33); the survivor set also keeps the
+frozen month's newest stable predecessor (2026.9.9). Upgrades between
+extended-stable releases run the old updater's real `extended-stable` selector
+against the loopback candidate registry, never an explicit `--tag`.
+
 Only the helper creates the immutable `release-ci/<Q-prefix>-<timestamp>`
 transport after admission. Never raw-dispatch, manually create its ref, or mint
 a protected publication tag for Q. Reconcile an existing historical cross-revision
@@ -768,6 +789,14 @@ overrides), so a restart after a harness or Monitor timeout does not re-report.
 and `--json` prints NDJSON. It exits once the parent and every dispatched child
 are terminal; restart it after a later rerun. Do not hand-roll bash or `gh`
 watchers.
+
+Watch candidate events derive the frozen SHA and context ref from the sealed
+execution plan, not monitor scratch prose or the parent's tooling SHA. The tip
+is read freshly; a changed tip labels that candidate superseded without stopping
+observation or claiming qualification of the new tip. Missing evidence or a
+SHA-only context stays unknown. Resume a missing or exited watcher with the same
+command and state path: it performs reads only and suppresses already reported
+terminal and candidate events. Never redispatch merely to restore a watcher.
 
 For the parent's Release Decision, use the transition-only summary watcher:
 
@@ -878,13 +907,13 @@ run-ID-cached bytes first.
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
    First verify the PR head carries the current fallback schema:
    `gh api 'repos/openclaw/openclaw/contents/.github/workflows/ci.yml?ref=<pr-head-branch>'
---jq .content | base64 --decode | rg -q 'pull_request_number:'`. If absent,
+   --jq .content | base64 --decode | rg -q 'pull_request_number:'`. If absent,
    refresh the PR head from `main` and use the new head SHA; let normal CI run
    before considering another fallback.
    From the PR head branch, dispatch the explicit exact-SHA fallback:
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-target_ref=<full-pr-sha> -f pull_request_number=<pr-number> -f
-include_android=true -f release_gate=true`.
+   target_ref=<full-pr-sha> -f pull_request_number=<pr-number> -f
+   include_android=true -f release_gate=true`.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.

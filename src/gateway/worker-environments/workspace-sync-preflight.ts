@@ -51,7 +51,7 @@ export async function preflightWorkerWorkspace(params: {
     ]);
     if ((await fs.realpath(reportedRoot)) !== canonicalRoot) {
       throw workspaceInventoryError(
-        "Cloud worker dispatch requires the canonical managed Git worktree root",
+        "Cloud worker dispatch requires the actual managed Git worktree root",
       );
     }
     if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(baseCommit)) {

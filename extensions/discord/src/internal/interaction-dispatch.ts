@@ -4,7 +4,7 @@ import {
   deferCommandInteractionIfNeeded,
   resolveFocusedCommandOptionAutocompleteHandler,
 } from "./commands.js";
-import type { BaseMessageInteractiveComponent } from "./components.base.js";
+import { parseCustomId, type BaseMessageInteractiveComponent } from "./components.base.js";
 import type { Modal } from "./components.modal.js";
 import {
   AutocompleteInteraction,
@@ -84,7 +84,10 @@ async function dispatchAcknowledgeableInteraction(
     });
     if (component) {
       await deferComponentInteractionIfNeeded(component, componentInteraction);
-      await component.run(componentInteraction, component.customIdParser(customId).data);
+      await component.run(
+        componentInteraction,
+        (component.customIdParser ?? parseCustomId)(customId).data,
+      );
     }
     return;
   }
@@ -108,11 +111,8 @@ const INTERACTION_FAILURE_NOTICE = "Command failed. Check the Gateway logs for d
 async function reportInteractionFailure(
   interaction: ReturnType<typeof createInteraction>,
 ): Promise<void> {
-  if (interaction.responseState !== "deferred") {
-    return;
-  }
   // A follow-up can consume the placeholder; never overwrite its visible output.
-  if (interaction.hasSentFollowUp) {
+  if (interaction.responseState !== "deferred" || interaction.hasSentFollowUp) {
     return;
   }
   try {
@@ -128,10 +128,10 @@ async function reportInteractionFailure(
 }
 
 function resolveConditionalComponentOption(
-  value: boolean | ((interaction: BaseComponentInteraction) => boolean),
+  value: boolean | ((interaction: BaseComponentInteraction) => boolean) | undefined,
   interaction: BaseComponentInteraction,
 ): boolean {
-  return typeof value === "function" ? value(interaction) : value;
+  return typeof value === "function" ? value(interaction) : (value ?? false);
 }
 
 async function deferComponentInteractionIfNeeded(

@@ -1,6 +1,53 @@
-import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
+export function installLineCapToolingFixture(checkout: string) {
+  // Copy the actual entry/import closure: symlinking it would use the installed checkout's loader.
+  for (const name of [
+    "tsx.mjs",
+    "check-line-cap-ratchet.mts",
+    "windows-cmd-helpers.mjs",
+    "lib/check-limits.mts",
+    "lib/direct-run.mjs",
+    "lib/local-check-runtime.mts",
+    "lib/managed-child-process.mts",
+    "lib/managed-cleanup-handoff.mts",
+    "lib/shrink-ratchet.mts",
+    "lib/tooling-dependencies.mjs",
+    "lib/tsx-cli-shim.mjs",
+    "lib/vitest-resource-ownership.mts",
+    "lib/windows-taskkill.mjs",
+    ...(existsSync(resolve("scripts/check-line-cap-ratchet.mjs"))
+      ? ["check-line-cap-ratchet.mjs"]
+      : []),
+  ]) {
+    const target = join(checkout, "scripts", name);
+    mkdirSync(dirname(target), { recursive: true });
+    copyFileSync(resolve("scripts", name), target);
+  }
+  copyFileSync(resolve("package.json"), join(checkout, "package.json"));
+  const origin = execFileSync("git", ["remote", "get-url", "origin"], {
+    encoding: "utf8",
+  }).trim();
+  execFileSync("git", ["config", "remote.origin.url", origin], { cwd: checkout });
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    NODE_OPTIONS: "",
+    NODE_PATH: "",
+    GITHUB_ACTIONS: "",
+    OPENCLAW_PR_TOOLING_ROOT: process.cwd(),
+  };
+  for (const name of [
+    "PNPM_CONFIG_MODULES_DIR",
+    "pnpm_config_modules_dir",
+    "npm_config_modules_dir",
+    "OPENCLAW_PR_GIT",
+  ]) {
+    delete env[name];
+  }
+  return { env };
+}
 
 export function createToolingDependencyFixture(root: string, staleAncestor = false) {
   const checkout = join(root, "checkout");
@@ -18,7 +65,12 @@ export function createToolingDependencyFixture(root: string, staleAncestor = fal
       }
     }
   }
-  for (const name of ["tsx-cli-shim.mjs", "tooling-dependencies.mjs", "local-check-runtime.mts"]) {
+  for (const name of [
+    "tsx-cli-shim.mjs",
+    "tooling-dependencies.mjs",
+    "local-check-runtime.mts",
+    "managed-cleanup-handoff.mts",
+  ]) {
     copyFileSync(resolve("scripts/lib", name), join(lib, name));
   }
   for (const name of ["tsx.mjs", "crabbox-wrapper.mjs"]) {

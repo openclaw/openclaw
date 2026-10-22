@@ -87,9 +87,8 @@ class SeededGenerator {
   }
 }
 
-/** Mood loops plus randomized blink, gaze, claw-snap, and mood-beat schedules. */
 export class MascotAnimator {
-  private readonly rng: SeededGenerator;
+  private readonly rng = new SeededGenerator(BigInt(Date.now()));
   private currentMood: MascotMood = "idle";
   private startTime: number | null = null;
   private lastPoseTime = 0;
@@ -108,10 +107,6 @@ export class MascotAnimator {
   private nextMoodBeatAt = 0;
   private teaseActive = false;
   private teaseChangedAt = 0;
-
-  constructor(seed: bigint | number = BigInt(Date.now())) {
-    this.rng = new SeededGenerator(seed);
-  }
 
   setMood(mood: MascotMood, time: number): void {
     if (mood === this.currentMood) {

@@ -1,6 +1,4 @@
 /**
- * Tool binary manager for agent-side helper commands.
- *
  * Locates or downloads pinned helper binaries such as fd and ripgrep.
  */
 import { spawnSync } from "node:child_process";
@@ -177,30 +175,6 @@ async function downloadFile(url: string, destination: Root, assetName: string): 
   }
 }
 
-async function extractArchiveSafe(
-  archivePath: string,
-  extractDir: string,
-  assetName: string,
-): Promise<void> {
-  try {
-    await extractArchive({
-      archivePath,
-      destDir: extractDir,
-      timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
-      limits: {
-        maxArchiveBytes: MAX_ARCHIVE_BYTES,
-        maxExtractedBytes: MAX_EXTRACTED_BYTES,
-        maxEntries: MAX_ARCHIVE_ENTRIES,
-      },
-    });
-  } catch (err) {
-    throw new Error(
-      `Failed to extract ${assetName}: ${err instanceof Error ? err.message : String(err)}`,
-      { cause: err },
-    );
-  }
-}
-
 async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
   const config = TOOLS[tool];
 
@@ -243,7 +217,16 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
     const stagingRoot = await fsRoot(stagingDir);
     await downloadFile(downloadUrl, stagingRoot, assetName);
 
-    await extractArchiveSafe(archivePath, extractDir, assetName);
+    await extractArchive({
+      archivePath,
+      destDir: extractDir,
+      timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
+      limits: {
+        maxArchiveBytes: MAX_ARCHIVE_BYTES,
+        maxExtractedBytes: MAX_EXTRACTED_BYTES,
+        maxEntries: MAX_ARCHIVE_ENTRIES,
+      },
+    });
 
     // Find the binary in extracted files. Some archives contain files directly
     // at root, others nest under a versioned subdirectory.
@@ -275,7 +258,6 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
       );
     }
 
-    // Make executable (Unix only)
     if (plat !== "win32") {
       chmodSync(binaryPath, 0o755);
     }
@@ -311,17 +293,9 @@ export async function ensureTool(tool: "fd" | "rg"): Promise<string | undefined>
     return existingPath;
   }
 
-  if (!toolsDir) {
-    return undefined;
-  }
-
-  if (isTruthyEnvValue(process.env.OPENCLAW_OFFLINE)) {
-    return undefined;
-  }
-
   // On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
   // Users must install via pkg.
-  if (platform() === "android") {
+  if (!toolsDir || isTruthyEnvValue(process.env.OPENCLAW_OFFLINE) || platform() === "android") {
     return undefined;
   }
 

@@ -107,10 +107,12 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
     }
 
-    typealias SessionTarget = OpenClawChatSessionTarget
-
     let connection: GatewayConnection
     let outboxGatewayID: String?
+    #if DEBUG
+    /// Isolated native tests use the primary-runtime pin with their own real connection.
+    var _testUsesPrimaryAppRuntime = false
+    #endif
     private let routingIdentity: RoutingIdentity
     private let fixedAgentID: String?
     private let subscriptionOwner: UUID
@@ -151,7 +153,11 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
     }
 
     func currentOutboxGatewayMatchesConnection() async -> Bool {
-        guard self.connection === GatewayConnection.shared,
+        var usesPrimaryAppRuntime = self.connection === GatewayConnection.shared
+        #if DEBUG
+        usesPrimaryAppRuntime = usesPrimaryAppRuntime || self._testUsesPrimaryAppRuntime
+        #endif
+        guard usesPrimaryAppRuntime,
               let outboxGatewayID
         else { return true }
         let currentGatewayID = await MainActor.run { MacChatTranscriptCache.currentGatewayID() }
@@ -164,7 +170,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
     }
 
-    func sessionTarget(for sessionKey: String, overrideAgentID: String? = nil) -> SessionTarget {
+    func sessionTarget(for sessionKey: String, overrideAgentID: String? = nil) -> OpenClawChatSessionTarget {
         OpenClawChatSessionTarget.resolve(
             sessionKey,
             selectedAgentID: self.chatGatewayAgentID,
@@ -196,9 +202,39 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
 
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard? {
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
-        let request = OpenClawChatGatewayRequests.progressCardGet(
+        let data = try await self.progressCardRequest(OpenClawChatGatewayRequests.progressCardGet(
             sessionKey: target.sessionKey,
-            agentID: target.agentID)
+            agentID: target.agentID))
+        return try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
+            data,
+            agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
+    }
+
+    func clearProgressCard(sessionKey: String, agentID: String?, expectedRevision: Int) async throws {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+        _ = try await self.progressCardRequest(OpenClawChatGatewayRequests.progressCardClear(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            expectedRevision: expectedRevision))
+    }
+
+    func refreshProgressCard(
+        sessionKey: String,
+        agentID: String?,
+        idempotencyKey: String) async throws -> OpenClawChatProgressCardRefreshResult
+    {
+        let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+        let data = try await self.progressCardRequest(OpenClawChatGatewayRequests.progressCardRefresh(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            idempotencyKey: idempotencyKey))
+        return try OpenClawChatGatewayPayloadCodec.decodeProgressCardRefresh(data)
+    }
+
+    private func progressCardRequest(_ request: OpenClawChatGatewayRequest) async throws -> Data {
+        // Another Gateway can hold the same session key and card revision. The socket is used only while
+        // this window's pinned Gateway is the connected one: checked before the capture and before the send.
+        try await self.requireCurrentOutboxGateway()
         guard let route = await self.connection.captureServerLease() else { throw CancellationError() }
         if request.params["agentId"] != nil {
             guard let supported = await self.connection.supportsServerCapability(
@@ -208,11 +244,8 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                 throw OpenClawChatProgressCardError.ownerScopeUnavailable
             }
         }
-        let data = try await self.connection.request(
-            request, ifCurrentServerLease: route)
-        return try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
-            data,
-            agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
+        try await self.requireCurrentOutboxGateway()
+        return try await self.connection.request(request, ifCurrentServerLease: route)
     }
 
     func requestFullMessage(sessionKey: String, messageID: String) async throws -> OpenClawChatMessage? {
@@ -349,18 +382,10 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         let data = try await connection.request(request)
         var decoded = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(
             data, agentID: request.params["agentId"]?.value as? String)
-        let mainSessionKey = await connection.cachedMainSessionKey()
-        let defaults = OpenClawChatSessionsDefaults(
-            modelProvider: decoded.defaults?.modelProvider,
-            model: decoded.defaults?.model,
-            contextTokens: decoded.defaults?.contextTokens,
-            thinkingLevels: decoded.defaults?.thinkingLevels,
-            thinkingOptions: decoded.defaults?.thinkingOptions,
-            thinkingDefault: decoded.defaults?.thinkingDefault,
-            mainSessionKey: mainSessionKey,
-            modelSelectionTarget: decoded.defaults?.modelSelectionTarget,
-            agentRuntime: decoded.defaults?.agentRuntime)
-        decoded.defaults = defaults
+        if decoded.defaults == nil {
+            decoded.defaults = OpenClawChatSessionsDefaults(model: nil, contextTokens: nil)
+        }
+        decoded.defaults?.mainSessionKey = await self.connection.cachedMainSessionKey()
         return decoded
     }
 
@@ -520,7 +545,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
     }
 
     private func withNativeSendOwnership(
-        _ target: SessionTarget,
+        _ target: OpenClawChatSessionTarget,
         send: () async throws -> OpenClawChatSendResponse) async throws -> OpenClawChatSendResponse
     {
         let scope = await self.connection.conversationOwnershipScope(
@@ -723,10 +748,7 @@ private enum MacChatMessageSpeechError: LocalizedError {
     case unsupportedTransport
 
     var errorDescription: String? {
-        switch self {
-        case .unsupportedTransport:
-            "Gateway TTS is unavailable for this chat transport"
-        }
+        "Gateway TTS is unavailable for this chat transport"
     }
 }
 
@@ -914,7 +936,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
 
     private let conversationController: NativeConversationController?
     private let viewModel: OpenClawChatViewModel
-    private let contentController: NSViewController
+    private let contentController: NSHostingController<MacChatSurface>
     private var routingIdentityTask: Task<Void, Never>?
     private var window: ExperienceWindow?
     var onBecameKey: (() -> Void)?
@@ -1296,7 +1318,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     }
 
     private static func makeWindow(
-        contentViewController: NSViewController,
+        contentViewController: NSHostingController<MacChatSurface>,
         title: String,
         autosaveName: String,
         webConversation: OpenClawWebConversation?) -> ExperienceWindow
@@ -1317,8 +1339,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         window.contentViewController = contentViewController
         // Attaching an NSHostingController resets scene bridging to `.all`;
         // opt back into toolbar items only so SwiftUI cannot restore the title.
-        (contentViewController as? NSHostingController<MacChatSurface>)?
-            .sceneBridgingOptions = [.toolbars]
+        contentViewController.sceneBridgingOptions = [.toolbars]
         window.isReleasedWhenClosed = false
         window.isRestorable = false
         // Keep the SwiftUI toolbar controls, but merge their unified row
@@ -1351,7 +1372,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     }
 
     var _testSceneBridgingOptions: NSHostingSceneBridgingOptions? {
-        (self.contentController as? NSHostingController<MacChatSurface>)?.sceneBridgingOptions
+        self.contentController.sceneBridgingOptions
     }
 
     var _testDraft: String {

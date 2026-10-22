@@ -4,6 +4,7 @@ import {
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import type { InstallSecurityScanResult } from "./install-security-scan.js";
@@ -30,8 +31,10 @@ import {
   type PluginSecuritySourceFamily,
 } from "./security-events.js";
 
+const pluginInstallRuntimeLoader = createLazyImportLoader(() => import("./install.runtime.js"));
+
 export async function loadPluginInstallRuntime() {
-  return await import("./install.runtime.js");
+  return await pluginInstallRuntimeLoader.load();
 }
 
 export type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
@@ -253,7 +256,7 @@ export type PreparedInstallTarget = {
 };
 
 export async function ensureInstallTargetAvailableForMode(params: {
-  runtime: PluginInstallRuntime;
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   targetPath: string;
   mode: "install" | "update";
 }): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -265,20 +268,16 @@ export async function ensureInstallTargetAvailableForMode(params: {
 }
 
 export async function resolvePreparedDirectoryInstallTarget(params: {
-  runtime: PluginInstallRuntime;
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   pluginId: string;
   extensionsDir?: string;
   requestedMode: "install" | "update";
   nameEncoder?: (pluginId: string) => string;
 }): Promise<{ ok: true; target: PreparedInstallTarget } | { ok: false; error: string }> {
-  const extensionsDir = params.extensionsDir
-    ? resolveUserPath(params.extensionsDir)
-    : resolveDefaultPluginExtensionsDir();
-  const targetDirResult = await params.runtime.resolveCanonicalInstallTarget({
-    baseDir: extensionsDir,
-    id: params.pluginId,
-    invalidNameMessage: "invalid plugin name: path traversal detected",
-    boundaryLabel: "extensions directory",
+  const targetDirResult = await resolvePluginInstallTarget({
+    runtime: params.runtime,
+    pluginId: params.pluginId,
+    extensionsDir: params.extensionsDir,
     nameEncoder: params.nameEncoder,
   });
   if (!targetDirResult.ok) {
@@ -344,7 +343,8 @@ export async function installPluginDirectoryIntoExtensions(params: {
   version?: string;
   extensions: string[];
   setup?: import("./manifest.js").PluginManifestSetup;
-  targetDir: string;
+  targetDir?: string;
+  extensionsDir?: string;
   logger: PluginInstallLogger;
   timeoutMs: number;
   workTimeoutMs?: number | null;
@@ -354,14 +354,29 @@ export async function installPluginDirectoryIntoExtensions(params: {
   hasDeps: boolean;
   sourceHardlinks?: "package-manager" | "reject";
   depsLogMessage: string;
+  afterCopy?: (installedDir: string) => Promise<void>;
   afterInstall?: (
     installedDir: string,
   ) => Promise<Extract<InstallPluginResult, { ok: false }> | null>;
+  nameEncoder?: (pluginId: string) => string;
+  onPluginArtifactInspect?: PluginInstallArtifactConsentHandler;
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   beforePersistentApply?: () => void;
 }): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const targetDir = params.targetDir;
+  let targetDir = params.targetDir;
+  if (!targetDir) {
+    const targetDirResult = await resolvePluginInstallTarget({
+      runtime,
+      pluginId: params.pluginId,
+      extensionsDir: params.extensionsDir,
+      nameEncoder: params.nameEncoder,
+    });
+    if (!targetDirResult.ok) {
+      return targetDirResult;
+    }
+    targetDir = targetDirResult.targetDir;
+  }
   const availability = await ensureInstallTargetAvailableForMode({
     runtime,
     targetPath: targetDir,
@@ -372,7 +387,20 @@ export async function installPluginDirectoryIntoExtensions(params: {
   }
 
   if (params.dryRun) {
-    return buildDirectoryInstallResult({ ...params, targetDir });
+    await params.onPluginArtifactInspect?.({
+      pluginId: params.pluginId,
+      ...(params.mode === "update" ? { currentArtifactDir: targetDir } : {}),
+      stagedArtifactDir: params.sourceDir,
+      mode: params.mode,
+    });
+    return buildDirectoryInstallResult({
+      pluginId: params.pluginId,
+      targetDir,
+      manifestName: params.manifestName,
+      version: params.version,
+      extensions: params.extensions,
+      setup: params.setup,
+    });
   }
 
   let artifactConsentFailure: { error: unknown } | undefined;
@@ -388,6 +416,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     omitOpenClawHostDependency: true,
     sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
+    afterCopy: params.afterCopy,
     beforePersistentApply: params.beforePersistentApply,
     afterInstall: async (installedDir: string) => {
       const postInstallResult = await params.afterInstall?.(installedDir);
@@ -423,13 +452,38 @@ export async function installPluginDirectoryIntoExtensions(params: {
     return installRes;
   }
 
-  const result = buildDirectoryInstallResult({ ...params, targetDir });
+  const result = buildDirectoryInstallResult({
+    pluginId: params.pluginId,
+    targetDir,
+    manifestName: params.manifestName,
+    version: params.version,
+    extensions: params.extensions,
+    setup: params.setup,
+  });
   const transaction = resolvePackageDirInstallTransaction(installRes);
   return transaction ? attachPluginInstallTransaction(result, transaction) : result;
 }
 
+async function resolvePluginInstallTarget(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  pluginId: string;
+  extensionsDir?: string;
+  nameEncoder?: (pluginId: string) => string;
+}): Promise<{ ok: true; targetDir: string } | { ok: false; error: string }> {
+  const extensionsDir = params.extensionsDir
+    ? resolveUserPath(params.extensionsDir)
+    : resolveDefaultPluginExtensionsDir();
+  return await params.runtime.resolveCanonicalInstallTarget({
+    baseDir: extensionsDir,
+    id: params.pluginId,
+    invalidNameMessage: "invalid plugin name: path traversal detected",
+    boundaryLabel: "extensions directory",
+    nameEncoder: params.nameEncoder,
+  });
+}
+
 export async function resolveEffectiveInstallMode(params: {
-  runtime: PluginInstallRuntime;
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   requestedMode: "install" | "update";
   targetPath: string;
 }): Promise<"install" | "update"> {

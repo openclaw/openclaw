@@ -1,4 +1,3 @@
-// Check No Extension Test Core Imports script supports OpenClaw repository automation.
 import fs from "node:fs";
 import path from "node:path";
 import { collectFilesSync, isCodeFile, relativeToCwd } from "./check-file-utils.js";
@@ -237,9 +236,9 @@ function main() {
       isExtensionTestFile(filePath) || isExtensionTestSupportFile(filePath),
   });
   const pluginHelperFiles = collectFilesSync(pluginHelpersDir, { includeFile: isCodeFile });
-  const retiredChannelHelperFiles = fs.existsSync(retiredChannelHelpersDir)
-    ? collectFilesSync(retiredChannelHelpersDir, { includeFile: isCodeFile })
-    : [];
+  const retiredChannelHelperFiles = collectFilesSync(retiredChannelHelpersDir, {
+    includeFile: isCodeFile,
+  });
   const offenders: Offender[] = [];
 
   for (const file of retiredChannelHelperFiles) {

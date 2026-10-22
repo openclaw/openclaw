@@ -2,8 +2,12 @@ import { createHash } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it, vi } from "vitest";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import { expect, it, vi } from "vitest";
+import {
+  createManagerIndexFixture,
+  memoryIndexFixtureWriter,
+} from "./manager-index.test-support.js";
+import { observeDatabaseReads } from "./manager-read-observation.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 const benchmark = process.env.OPENCLAW_MEMORY_RETRIEVAL_BENCH === "1";
@@ -12,8 +16,7 @@ const now = Date.parse("2026-09-01T00:00:00Z");
 
 function seedCorpus(db: DatabaseSync, chunks: number): void {
   const curated = Math.min(1024, chunks / 2);
-  // The benchmark uses the published schema and its real FTS triggers. Ten
-  // chunks per source represents a large index without 50,000 filesystem writes.
+  // Ten chunks per source exercise the published schema and FTS without 50,000 file writes.
   db.exec(`CREATE TEMP TABLE retrieval_fixture (n INTEGER PRIMARY KEY, path TEXT, source TEXT);
     WITH RECURSIVE numbers(n) AS (
       SELECT 0 UNION ALL SELECT n + 1 FROM numbers WHERE n + 1 < ${chunks}
@@ -51,222 +54,150 @@ function seedCorpus(db: DatabaseSync, chunks: number): void {
     DROP TABLE retrieval_fixture;`);
 }
 
-function observeMainThreadSql(db: DatabaseSync) {
-  let milliseconds = 0;
-  let statements = 0;
-  const sql: string[] = [];
-  const timed = <T>(run: () => T): T => {
-    const started = performance.now();
-    try {
-      return run();
-    } finally {
-      milliseconds += performance.now() - started;
-    }
-  };
-  const prepare = db.prepare.bind(db);
-  const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((query) => {
-    sql.push(query);
-    const statement = timed(() => prepare(query));
-    return new Proxy(statement, {
-      get(target, key) {
-        const value: unknown = Reflect.get(target, key, target);
-        if (typeof value !== "function") {
-          return value;
-        }
-        return (...args: unknown[]) => {
-          if (key === "iterate") {
-            statements += 1;
-            const iterator: ReturnType<typeof statement.iterate> = timed(() =>
-              Reflect.apply(value, target, args),
-            );
-            return {
-              [Symbol.iterator]() {
-                return this;
-              },
-              next: () => timed(() => iterator.next()),
-              return: () => timed(() => iterator.return?.() ?? { done: true, value: undefined }),
-            };
-          }
-          if (key !== "all" && key !== "get" && key !== "run") {
-            return Reflect.apply(value, target, args);
-          }
-          statements += 1;
-          return timed(() => Reflect.apply(value, target, args));
-        };
-      },
-    });
-  });
-  const exec = db.exec.bind(db);
-  const execSpy = vi.spyOn(db, "exec").mockImplementation((query) => {
-    statements += 1;
-    sql.push(query);
-    return timed(() => exec(query));
-  });
+function sampleStats(samples: number[]) {
+  samples.sort((a, b) => a - b);
   return {
-    read: () => ({ milliseconds, statements, sql }),
-    reset: () => {
-      milliseconds = 0;
-      statements = 0;
-      sql.length = 0;
-    },
-    restore: () => {
-      prepareSpy.mockRestore();
-      execSpy.mockRestore();
-    },
+    mean: samples.reduce((total, sample) => total + sample, 0) / samples.length,
+    p50: samples[Math.ceil(samples.length * 0.5) - 1],
+    p95: samples[Math.ceil(samples.length * 0.95) - 1],
   };
 }
 
-describe("memory retrieval thread ownership", () => {
-  const fixture = createManagerIndexFixture({
-    getMemorySearchManager,
-    closeAllMemorySearchManagers,
-  });
+const fixture = createManagerIndexFixture({
+  getMemorySearchManager,
+  closeAllMemorySearchManagers,
+});
 
-  it("offloads ranked retrieval and session-only metadata together", async () => {
-    const cfg = fixture.createConfig({
-      vectorEnabled: false,
-      sources: ["memory", "sessions"],
-      sessionMemory: true,
-      minScore: 0,
+it("offloads ranked retrieval and session-only metadata together", async () => {
+  const cfg = fixture.createConfig({
+    vectorEnabled: false,
+    sources: ["memory", "sessions"],
+    sessionMemory: true,
+    minScore: 0,
+  });
+  // Reconcile before seeding synthetic rows, which have no source transcripts.
+  const manager = await fixture.getFreshManager(cfg, "cli");
+  await manager.sync({ reason: "test" });
+  expect(manager.status().fts?.available).toBe(true);
+  const db = (manager as unknown as { db: DatabaseSync }).db;
+  seedCorpus(memoryIndexFixtureWriter(manager), benchmark ? 50_000 : 64);
+  const date = vi.spyOn(Date, "now").mockReturnValue(now);
+  const lexical = (query: string, options: Parameters<typeof manager.search>[1] = {}) =>
+    manager.search(query, {
+      lexicalOnly: true,
+      maxResults: 12,
+      ...options,
     });
-    const manager = await fixture.getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    expect(manager.status().fts?.available).toBe(true);
-    const db = (manager as unknown as { db: DatabaseSync }).db;
-    seedCorpus(db, benchmark ? 50_000 : 64);
-    const date = vi.spyOn(Date, "now").mockReturnValue(now);
-    const operations = [
-      {
-        name: "lexical",
-        run: () => manager.search("violet", { lexicalOnly: true, maxResults: 12 }),
-      },
-      {
-        name: "fallback",
-        run: () => manager.search("violet absentphrase", { lexicalOnly: true, maxResults: 12 }),
-      },
-      { name: "hybrid-scan", run: () => manager.search("alpha", { maxResults: 12 }) },
-      {
-        name: "sessions",
-        run: () =>
-          manager.search("violet", { lexicalOnly: true, maxResults: 12, sources: ["sessions"] }),
-      },
-      {
-        name: "triggers",
-        run: () => manager.listTriggerCandidates({ limit: 12, activeProjectKeys: ["project-a"] }),
-      },
-      {
-        name: "projects",
-        run: () =>
-          manager.listCuratedProjectCandidates({ limit: 12, activeProjectKeys: ["project-a"] }),
-      },
-    ];
-    const observer = observeMainThreadSql(db);
-    const golden: Record<string, unknown> = {};
-    try {
-      for (const operation of operations) {
-        // Warm the existing worker and prepared statements before timing steady state.
-        observer.reset();
-        const results = await operation.run();
-        const warmupIterations = benchmark ? 10 : 1;
-        for (let index = 1; index < warmupIterations; index += 1) {
-          await operation.run();
-        }
-        const firstSql = [...observer.read().sql];
-        expect(results.length, operation.name).toBeGreaterThan(0);
-        expect(
-          results.some((result) => result.importance !== undefined),
-          operation.name,
-        ).toBe(true);
-        expect(
-          results.some((result) => result.provenance?.originClass === "owner"),
-          operation.name,
-        ).toBe(true);
-        golden[operation.name] = results;
-        observer.reset();
-        const iterations = benchmark ? 100 : 1;
-        const elapsedSamples: number[] = [];
-        const activeSamples: number[] = [];
-        const cpuSamples: number[] = [];
-        let repeated = results;
-        for (let index = 0; index < iterations; index += 1) {
-          const utilization = performance.eventLoopUtilization();
-          const cpuStart = benchmark ? process.threadCpuUsage() : undefined;
-          const started = performance.now();
-          repeated = await operation.run();
-          elapsedSamples.push(performance.now() - started);
-          activeSamples.push(performance.eventLoopUtilization(utilization).active);
-          if (cpuStart) {
-            const cpu = process.threadCpuUsage(cpuStart);
-            cpuSamples.push((cpu.user + cpu.system) / 1000);
-          }
-        }
-        const measured = observer.read();
-        expect(repeated).toEqual(results);
-        if (benchmark) {
-          elapsedSamples.sort((a, b) => a - b);
-          activeSamples.sort((a, b) => a - b);
-          cpuSamples.sort((a, b) => a - b);
-          const mean = (samples: number[]) =>
-            samples.reduce((total, sample) => total + sample, 0) / iterations;
-          const percentile = (samples: number[], fraction: number) =>
-            samples[Math.ceil(iterations * fraction) - 1];
-          console.log(
-            "MEMORY_RETRIEVAL_BENCH",
-            JSON.stringify({
-              phase: baseline ? "baseline" : "candidate",
-              operation: operation.name,
-              chunks: 50_000,
-              warmupIterations,
-              iterations,
-              mainThreadSqlMs: measured.milliseconds / iterations,
-              mainThreadStatements: measured.statements / iterations,
-              mainThreadCpuMs: mean(cpuSamples),
-              mainThreadCpuP50Ms: percentile(cpuSamples, 0.5),
-              mainThreadActiveMs: mean(activeSamples),
-              mainThreadActiveP50Ms: percentile(activeSamples, 0.5),
-              mainThreadActiveP95Ms: percentile(activeSamples, 0.95),
-              endToEndMs: mean(elapsedSamples),
-              endToEndP50Ms: percentile(elapsedSamples, 0.5),
-              endToEndP95Ms: percentile(elapsedSamples, 0.95),
-            }),
-          );
-        }
-        if (baseline) {
-          expect(
-            measured.statements,
-            `${operation.name} must observe its retained synchronous SQLite execution`,
-          ).toBeGreaterThan(0);
-          expect(measured.milliseconds, operation.name).toBeGreaterThan(0);
-        } else {
-          expect(
-            firstSql,
-            `${operation.name} first retrieval must not execute main-thread SQL`,
-          ).toEqual([]);
-          expect(measured.sql, `${operation.name} must not execute SQL on the main thread`).toEqual(
-            [],
-          );
+  const projectOptions = { limit: 12, activeProjectKeys: ["project-a"] };
+  const operations = [
+    { name: "lexical", run: () => lexical("violet") },
+    { name: "fallback", run: () => lexical("violet absentphrase") },
+    { name: "hybrid-scan", run: () => manager.search("alpha", { maxResults: 12 }) },
+    { name: "sessions", run: () => lexical("violet", { sources: ["sessions"] }) },
+    { name: "triggers", run: () => manager.listTriggerCandidates(projectOptions) },
+    { name: "projects", run: () => manager.listCuratedProjectCandidates(projectOptions) },
+  ];
+  const observer = observeDatabaseReads(db);
+  const golden: Record<string, unknown> = {};
+  try {
+    for (const operation of operations) {
+      // Warm the existing worker and prepared statements before timing steady state.
+      observer.reset();
+      const results = await operation.run();
+      const warmupIterations = benchmark ? 10 : 1;
+      for (let index = 1; index < warmupIterations; index += 1) {
+        await operation.run();
+      }
+      const firstSql = [...observer.read().sql];
+      expect(results.length, operation.name).toBeGreaterThan(0);
+      expect(
+        {
+          importance: results.some((result) => result.importance !== undefined),
+          owner: results.some((result) => result.provenance?.originClass === "owner"),
+        },
+        operation.name,
+      ).toEqual({ importance: true, owner: true });
+      golden[operation.name] = results;
+      observer.reset();
+      const iterations = benchmark ? 100 : 1;
+      const elapsedSamples: number[] = [];
+      const activeSamples: number[] = [];
+      const cpuSamples: number[] = [];
+      let repeated = results;
+      for (let index = 0; index < iterations; index += 1) {
+        const utilization = performance.eventLoopUtilization();
+        const cpuStart = benchmark ? process.threadCpuUsage() : undefined;
+        const started = performance.now();
+        repeated = await operation.run();
+        elapsedSamples.push(performance.now() - started);
+        activeSamples.push(performance.eventLoopUtilization(utilization).active);
+        if (cpuStart) {
+          const cpu = process.threadCpuUsage(cpuStart);
+          cpuSamples.push((cpu.user + cpu.system) / 1000);
         }
       }
+      const measured = observer.read();
+      expect(repeated).toEqual(results);
       if (benchmark) {
+        const elapsed = sampleStats(elapsedSamples);
+        const active = sampleStats(activeSamples);
+        const cpu = sampleStats(cpuSamples);
         console.log(
-          "MEMORY_RETRIEVAL_GOLDEN",
-          createHash("sha256")
-            .update(
-              JSON.stringify(golden, (_key, value: unknown) => {
-                if (value && typeof value === "object" && !Array.isArray(value)) {
-                  return Object.fromEntries(
-                    Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b)),
-                  );
-                }
-                return value;
-              }),
-            )
-            .digest("hex"),
+          "MEMORY_RETRIEVAL_BENCH",
+          JSON.stringify({
+            phase: baseline ? "baseline" : "candidate",
+            operation: operation.name,
+            chunks: 50_000,
+            warmupIterations,
+            iterations,
+            mainThreadSqlMs: measured.milliseconds / iterations,
+            mainThreadStatements: measured.statements / iterations,
+            mainThreadCpuMs: cpu.mean,
+            mainThreadCpuP50Ms: cpu.p50,
+            mainThreadActiveMs: active.mean,
+            mainThreadActiveP50Ms: active.p50,
+            mainThreadActiveP95Ms: active.p95,
+            endToEndMs: elapsed.mean,
+            endToEndP50Ms: elapsed.p50,
+            endToEndP95Ms: elapsed.p95,
+          }),
         );
       }
-    } finally {
-      observer.restore();
-      date.mockRestore();
+      if (baseline) {
+        expect(
+          measured.statements,
+          `${operation.name} must observe its retained synchronous SQLite execution`,
+        ).toBeGreaterThan(0);
+        expect(measured.milliseconds, operation.name).toBeGreaterThan(0);
+      } else {
+        expect(
+          firstSql,
+          `${operation.name} first retrieval must not execute main-thread SQL`,
+        ).toEqual([]);
+        expect(measured.sql, `${operation.name} must not execute SQL on the main thread`).toEqual(
+          [],
+        );
+      }
     }
-  });
+    if (benchmark) {
+      console.log(
+        "MEMORY_RETRIEVAL_GOLDEN",
+        createHash("sha256")
+          .update(
+            JSON.stringify(golden, (_key, value: unknown) => {
+              if (value && typeof value === "object" && !Array.isArray(value)) {
+                return Object.fromEntries(
+                  Object.entries(value).toSorted(([a], [b]) => a.localeCompare(b)),
+                );
+              }
+              return value;
+            }),
+          )
+          .digest("hex"),
+      );
+    }
+  } finally {
+    observer.restore();
+    date.mockRestore();
+  }
 });

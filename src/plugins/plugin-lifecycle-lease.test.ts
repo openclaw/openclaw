@@ -1,8 +1,11 @@
+import { AsyncResource } from "node:async_hooks";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createPluginLifecycleLeaseTestClock } from "../gateway/config-reload.test-support.js";
@@ -17,6 +20,7 @@ import {
   getProcessPluginCache,
   resetPluginCache,
   retirePluginCache,
+  runOutsidePluginCache,
   waitForPluginCacheRetirement,
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
@@ -24,8 +28,10 @@ import {
   hasPluginLifecycleLeaseDemand,
   runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
+  withPluginLifecycleLeaseAsync,
   withPluginArtifactCleanupLease,
   type PluginLifecycleLeaseContext,
+  type PluginMetadataLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
@@ -38,6 +44,25 @@ type LeaseChildRun = {
   waitForPhase: (phase: string) => Promise<void>;
   output: () => string;
 };
+
+const pluginModuleUrl = (name: string) => pathToFileURL(path.resolve("src/plugins", name)).href;
+
+function expectRejected(outcome: PromiseSettledResult<unknown>, reason: unknown) {
+  expect(outcome.status).toBe("rejected");
+  if (outcome.status === "rejected") {
+    expect(outcome.reason).toBe(reason);
+  }
+}
+
+function cacheCleanup(
+  cache: ReturnType<typeof getPluginCache>,
+  id: string,
+  cleanup: () => void | Promise<void>,
+) {
+  const instance = new PluginInstance(id);
+  instance.lifecycle.onDispose(cleanup);
+  cache.setupModules.set(id, instance);
+}
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -111,17 +136,15 @@ function runLeaseChild(
   });
 
   const completed = new Promise<void>((resolve, reject) => {
-    child.stdin.once("error", (error) => {
+    const fail = (phase: string, error: Error) =>
       reject(
-        new Error(`failed to signal lease child ${args[0]}: ${error.message}`, { cause: error }),
+        new Error(`failed to ${phase} lease child ${args[0]}: ${error.message}`, { cause: error }),
       );
+    child.stdin.once("error", (error) => {
+      fail("signal", error);
     });
     child.once("error", (error) => {
-      reject(
-        new Error(`failed to start lease child ${args[0]}: ${error.message}`, {
-          cause: error,
-        }),
-      );
+      fail("start", error);
     });
     child.once("close", (code, signal) => {
       if (code === 0) {
@@ -158,6 +181,52 @@ function runLeaseChild(
 }
 
 describe("plugin lifecycle lease", () => {
+  it.each(["native", "worker"] as const)(
+    "releases retired cache facts while %s resources retain the expired lease",
+    async (kind) => {
+      class CacheFacts {
+        readonly owner = "lifecycle-operation";
+      }
+      await withOpenClawTestState({ label: "plugin-lifecycle-cache-retention" }, async (state) => {
+        const withLease =
+          kind === "native" ? withPluginLifecycleLease : withPluginLifecycleLeaseAsync;
+        const retained: Array<{ resource: AsyncResource; lease: PluginMetadataLeaseContext }> = [];
+        try {
+          for (let index = 0; index < 4; index++) {
+            retained.push(
+              await withLease({ env: state.env }, async (lease) => {
+                Object.assign(getPluginCache(), { facts: new CacheFacts() });
+                // A service drops caller cache scope but still inherits the lifecycle lease.
+                const resource = runOutsidePluginCache(
+                  () => new AsyncResource("retained-plugin-lease", { requireManualDestroy: true }),
+                );
+                return { resource, lease };
+              }),
+            );
+          }
+          await nextTurn();
+          expect(queryObjects(CacheFacts)).toBe(0);
+          for (const { resource, lease } of retained) {
+            await expect(
+              writePersistedInstalledPluginIndexInstallRecordsWithLease(
+                { demo: { source: "npm", spec: "demo@1.0.0" } },
+                { env: state.env, candidates: [], lease },
+              ),
+            ).rejects.toBeInstanceOf(OpenClawStateLeaseError);
+            await expect(
+              resource.runInAsyncScope(() => withLease({}, async () => "stale")),
+            ).rejects.toBeInstanceOf(OpenClawStateLeaseError);
+          }
+          expect(await readPersistedInstalledPluginIndex({ env: state.env })).toBeNull();
+        } finally {
+          for (const { resource } of retained) {
+            resource.emitDestroy();
+          }
+        }
+      });
+    },
+  );
+
   it.for(["runtime", "cleanup"] as const)(
     "clears process demand after a %s waiter aborts or acquires and its holder releases",
     async (kind, { signal }) => {
@@ -232,13 +301,11 @@ describe("plugin lifecycle lease", () => {
         let cache: ReturnType<typeof getPluginCache> | undefined;
         const operation = withPluginLifecycleLease({ env: state.env }, async () => {
           cache = getPluginCache();
-          const instance = new PluginInstance("lease-cleanup");
-          instance.lifecycle.onDispose(() => {
+          cacheCleanup(cache, "lease-cleanup", () => {
             if (failCleanup) {
               throw cleanupError;
             }
           });
-          cache.setupModules.set(instance.pluginId, instance);
           if (failRun) {
             throw runError;
           }
@@ -251,10 +318,7 @@ describe("plugin lifecycle lease", () => {
           failCleanup ? [cleanupError] : [],
         );
         if (failRun) {
-          expect(outcome.status).toBe("rejected");
-          if (outcome.status === "rejected") {
-            expect(outcome.reason).toBe(runError);
-          }
+          expectRejected(outcome, runError);
         } else {
           expect(outcome.status).toBe("fulfilled");
           if (outcome.status === "fulfilled") {
@@ -279,21 +343,17 @@ describe("plugin lifecycle lease", () => {
       let processCache: ReturnType<typeof getPluginCache> | undefined;
       let operationCache: ReturnType<typeof getPluginCache> | undefined;
       const operation = withPluginLifecycleLease({ env: state.env }, async () => {
-        const processInstance = new PluginInstance("process-cleanup");
-        processInstance.lifecycle.onDispose(async () => {
+        processCache = getProcessPluginCache();
+        cacheCleanup(processCache, "process-cleanup", async () => {
           await releaseProcess.promise;
           throw processError;
         });
-        processCache = getProcessPluginCache();
-        processCache.setupModules.set(processInstance.pluginId, processInstance);
         resetPluginCache();
-        const operationInstance = new PluginInstance("operation-cleanup");
-        operationInstance.lifecycle.onDispose(() => {
+        operationCache = getPluginCache();
+        cacheCleanup(operationCache, "operation-cleanup", () => {
           operationCleanupEntered.resolve();
           throw operationError;
         });
-        operationCache = getPluginCache();
-        operationCache.setupModules.set(operationInstance.pluginId, operationInstance);
         throw runError;
       });
       const completion = Promise.allSettled([operation]).then(([outcome]) => {
@@ -302,9 +362,7 @@ describe("plugin lifecycle lease", () => {
       });
       try {
         await operationCleanupEntered.promise;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(settled).toBe(false);
       } finally {
         releaseProcess.resolve();
@@ -312,10 +370,7 @@ describe("plugin lifecycle lease", () => {
         await waitForPluginCacheRetirement().catch(() => {});
       }
       const outcome = await completion;
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status === "rejected") {
-        expect(outcome.reason).toBe(runError);
-      }
+      expectRejected(outcome, runError);
       expect(processCache).toBeDefined();
       expect(operationCache).toBeDefined();
       const cleanups = await Promise.all([
@@ -341,12 +396,10 @@ describe("plugin lifecycle lease", () => {
       const operation = withPluginLifecycleLease(
         { env: state.env, assertCurrent: () => controller.signal.throwIfAborted() },
         async (lease) => {
-          const instance = new PluginInstance("revoked-cleanup");
-          instance.lifecycle.onDispose(async () => {
+          cacheCleanup(getPluginCache(), "revoked-cleanup", async () => {
             cleanupEntered.resolve();
             await releaseCleanup.promise;
           });
-          getPluginCache().setupModules.set(instance.pluginId, instance);
           controller.abort(refusal);
           lease.assertOwned();
         },
@@ -362,10 +415,7 @@ describe("plugin lifecycle lease", () => {
         await completion;
       }
       const [outcome] = await completion;
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status === "rejected") {
-        expect(outcome.reason).toBe(refusal);
-      }
+      expectRejected(outcome, refusal);
       await expect(
         withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "acquired"),
       ).resolves.toBe("acquired");
@@ -413,9 +463,7 @@ describe("plugin lifecycle lease", () => {
   it("reclaims process-bound lifecycle work after its process is killed", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-killed-owner" }, async (state) => {
       await withLeaseChildren(async (children) => {
-        const leaseModuleUrl = pathToFileURL(
-          path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
-        ).href;
+        const leaseModuleUrl = pluginModuleUrl("plugin-lifecycle-lease.ts");
         const script = await state.writeText(
           "killed-lease.mts",
           `
@@ -444,9 +492,7 @@ describe("plugin lifecycle lease", () => {
       await withLeaseChildren(async (children) => {
         const secondMarker = state.path("second-entered");
         const secondResult = state.path("second-result");
-        const leaseModuleUrl = pathToFileURL(
-          path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
-        ).href;
+        const leaseModuleUrl = pluginModuleUrl("plugin-lifecycle-lease.ts");
         const childScript = await state.writeText(
           "lease-child.mts",
           `
@@ -523,18 +569,10 @@ describe("plugin lifecycle lease", () => {
   it("reloads install records after waiting for another process", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-record-cache" }, async (state) => {
       await withLeaseChildren(async (children) => {
-        const leaseModuleUrl = pathToFileURL(
-          path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
-        ).href;
-        const recordsModuleUrl = pathToFileURL(
-          path.resolve("src/plugins/installed-plugin-index-records.ts"),
-        ).href;
-        const indexModuleUrl = pathToFileURL(
-          path.resolve("src/plugins/installed-plugin-index-store.ts"),
-        ).href;
-        const writeModuleUrl = pathToFileURL(
-          path.resolve("src/plugins/installed-plugin-index-store-write.ts"),
-        ).href;
+        const leaseModuleUrl = pluginModuleUrl("plugin-lifecycle-lease.ts");
+        const recordsModuleUrl = pluginModuleUrl("installed-plugin-index-records.ts");
+        const indexModuleUrl = pluginModuleUrl("installed-plugin-index-store.ts");
+        const writeModuleUrl = pluginModuleUrl("installed-plugin-index-store-write.ts");
         const alphaGoMarker = state.path("alpha-go");
         const betaGoMarker = state.path("beta-go");
         const releaseAlphaMarker = state.path("release-alpha");
@@ -574,7 +612,7 @@ if (process.versions.bun) {
             loadInstalledPluginIndexInstallRecords,
           } from ${JSON.stringify(recordsModuleUrl)};
           import { readPersistedInstalledPluginIndex } from ${JSON.stringify(indexModuleUrl)};
-          import { writePersistedInstalledPluginIndexWithLeaseSync } from ${JSON.stringify(writeModuleUrl)};
+          import { writePersistedInstalledPluginIndex } from ${JSON.stringify(writeModuleUrl)};
           const [pluginId, stateDir, goMarker, releaseAlphaMarker] = process.argv.slice(2);
           process.env.OPENCLAW_STATE_DIR = stateDir;
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -602,7 +640,7 @@ if (process.versions.bun) {
             );
             process.stdout.write("held\\n");
           }
-          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async (lease) => {
+          const operation = withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
             process.stdout.write("acquired\\n");
             if (pluginId === "alpha") {
               await waitForMarker(releaseAlphaMarker);
@@ -610,7 +648,7 @@ if (process.versions.bun) {
             const records = await loadInstalledPluginIndexInstallRecords();
             process.stdout.write("records:" + Object.keys(records).sort().join(",") + "\\n");
             // Reuse prepared fixture metadata; discovery can block the heartbeat during this race.
-            writePersistedInstalledPluginIndexWithLeaseSync({
+            await writePersistedInstalledPluginIndex({
               ...index,
               installRecords: {
                 ...records,
@@ -621,7 +659,7 @@ if (process.versions.bun) {
                   installPath: "/tmp/" + pluginId,
                 },
               },
-            }, { env, lease });
+            }, { env });
             process.stdout.write("written\\n");
           });
           process.stdout.write("attempted\\n");

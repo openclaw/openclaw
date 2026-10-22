@@ -1,12 +1,10 @@
-// Feishu inbound media chunk-idle timeout helper.
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 class FeishuInboundMediaTimeoutError extends Error {
-  readonly chunkTimeoutMs: number;
   constructor(chunkTimeoutMs: number) {
     super(`Feishu media download stalled: no data received for ${chunkTimeoutMs}ms`);
     this.name = "FeishuInboundMediaTimeoutError";
-    this.chunkTimeoutMs = chunkTimeoutMs;
   }
 }
 
@@ -32,20 +30,15 @@ function withChunkIdleTimeout<T>(
       try {
         while (true) {
           const nextPromise = iterator.next();
-          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            timeoutHandle = setTimeout(() => {
-              reject(new FeishuInboundMediaTimeoutError(chunkTimeoutMs));
-              teardownSource();
-            }, chunkTimeoutMs);
-          });
           let result: IteratorResult<T>;
           try {
-            result = await Promise.race([nextPromise, timeoutPromise]);
-          } finally {
-            if (timeoutHandle !== undefined) {
-              clearTimeout(timeoutHandle);
-            }
+            result = await raceWithTimeout(nextPromise, chunkTimeoutMs, () => {
+              throw new FeishuInboundMediaTimeoutError(chunkTimeoutMs);
+            });
+          } catch (error) {
+            // Settle the timeout before teardown can synchronously finish next().
+            teardownSource();
+            throw error;
           }
           if (result.done) {
             exhausted = true;

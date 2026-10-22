@@ -5,8 +5,8 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { guardModelFixtureAuth } from "./model.fixture.test-support.js";
-import { expectResolvedForwardCompatFallbackWithRegistryResult } from "./model.forward-compat.test-support.js";
-import { createEmptyAgentDiscoveryStores, resolveModelWithRegistry } from "./model.js";
+import { expectResolvedForwardCompatFallbackResult } from "./model.forward-compat.test-support.js";
+import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
 let state: OpenClawTestState;
@@ -25,9 +25,11 @@ afterEach(async () => {
   }
 });
 
+// mock-isolation: Forward-compat fixtures supply model hooks and isolated auth; real provider discovery changes fallback inputs.
 vi.mock("../../plugins/provider-external-auth-core.js", () => ({
   createProviderExternalAuthResolver: () => ({
     resolveExternalAuthProfilesWithPlugins: () => [],
+    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
   }),
 }));
 
@@ -43,15 +45,17 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 
 describe("resolveModel forward-compat tail", () => {
   it("preserves the claude-cli provider for anthropic forward-compat fallback models", async () => {
-    const { modelRegistry } = createEmptyAgentDiscoveryStores();
-    const result = await resolveModelWithRegistry({
-      provider: "claude-cli",
-      modelId: "claude-sonnet-4-6",
-      agentDir: state.agentDir(),
-      modelRegistry,
-      runtimeHooks: createProviderRuntimeTestMock({ handledDynamicProviders: ["claude-cli"] }),
-    });
-    expectResolvedForwardCompatFallbackWithRegistryResult({
+    const result = await resolveModelAsync(
+      "claude-cli",
+      "claude-sonnet-4-6",
+      state.agentDir(),
+      undefined,
+      {
+        ...createEmptyAgentDiscoveryStores(),
+        runtimeHooks: createProviderRuntimeTestMock({ handledDynamicProviders: ["claude-cli"] }),
+      },
+    );
+    expectResolvedForwardCompatFallbackResult({
       result,
       expectedModel: {
         provider: "claude-cli",

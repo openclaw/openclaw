@@ -1,12 +1,19 @@
 import type { DatabaseSync } from "node:sqlite";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { extractSqliteTableSchema, normalizeSchemaSql } from "../infra/sqlite-schema-sql.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   tableExists,
   tableHasColumn,
   tablePrimaryKeyColumns,
 } from "./openclaw-state-db-schema-helpers.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const AUDIT_EVENT_STATE_SCHEMA_VERSION = 2;
+const CANONICAL_AUDIT_TABLES = ["audit_events", "audit_identity_keys"].map((name) => ({
+  name,
+  sql: normalizeSchemaSql(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, name)),
+}));
 
 const AUDIT_EVENT_LEGACY_COLUMNS = [
   "sequence",
@@ -122,6 +129,16 @@ function hasCanonicalAuditIdentityKeyTable(db: DatabaseSync): boolean {
 }
 
 export function hasCanonicalAuditEventsSchema(db: DatabaseSync): boolean {
+  const schema = getAdmittedSqliteSchemaFacts(db);
+  // Exact CREATE definitions include the required primary keys and UNIQUE constraints.
+  if (
+    schema &&
+    CANONICAL_AUDIT_TABLES.every(
+      ({ name, sql }) => normalizeSchemaSql(schema.tableSql.get(name) ?? null) === sql,
+    )
+  ) {
+    return true;
+  }
   if (!tableExists(db, "audit_events")) {
     return (
       readSqliteUserVersion(db) < AUDIT_EVENT_STATE_SCHEMA_VERSION &&

@@ -1,0 +1,317 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
+import {
+  takeControlUiScreenshotFrame,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway } from "./usage-overview-fixture.test-support.ts";
+
+const suite = createControlUiE2eSuite({
+  name: "Usage server overview",
+  startServerBeforeBrowser: true,
+});
+
+suite.define(() => {
+  it("loads sessions by cost and preserves a quoted label when selecting a provider", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        timezoneId: "UTC",
+        viewport: { width: 1440, height: 1100 },
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        const pageErrors: string[] = [];
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        await page.clock.setFixedTime(new Date("2026-08-07T12:00:00Z"));
+        const sessions = ["Team Planning", "Research Review", "Team Quarterly Planning"].map(
+          (label, index) => {
+            const tokens = [100, 300, 200][index]!;
+            return {
+              key: `agent:main:quote-${index}`,
+              label,
+              agentId: "main",
+              modelProvider: index === 1 ? "anthropic" : "openai",
+              updatedAt: Date.parse("2026-08-07T12:00:00Z") - index,
+              usage: {
+                ...createEmptyCostUsageTotals(),
+                firstActivity: Date.parse("2026-08-07T12:00:00Z"),
+                input: tokens,
+                totalTokens: tokens,
+                inputCost: tokens / 100,
+                totalCost: tokens / 100,
+                activityDates: ["2026-08-07"],
+                dailyBreakdown: [
+                  {
+                    ...createEmptyCostUsageTotals(),
+                    date: "2026-08-07",
+                    input: tokens,
+                    totalTokens: tokens,
+                    inputCost: tokens / 100,
+                    totalCost: tokens / 100,
+                    tokens,
+                    cost: tokens / 100,
+                  },
+                ],
+              },
+            };
+          },
+        );
+        const gateway = await installUsageOverviewGateway(page, {
+          methodResponses: {
+            "sessions.usage": {
+              updatedAt: Date.parse("2026-08-07T12:00:00Z"),
+              startDate: "2026-08-07",
+              endDate: "2026-08-07",
+              totals: {
+                ...createEmptyCostUsageTotals(),
+                input: 600,
+                totalTokens: 600,
+                inputCost: 6,
+                totalCost: 6,
+              },
+              sessions,
+              aggregates: buildAggregatesFromSessions(sessions),
+            },
+            "usage.status": { updatedAt: 1, providers: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+        await waitForControlUiRoute(page, { routeId: "model-providers" });
+        await page.locator(".model-providers__search input").waitFor();
+        await page.evaluate(() => window.openclawControlUi!.navigate("usage"));
+        await waitForControlUiRoute(page, { routeId: "usage" });
+        const query = page.locator(".usage-query-input");
+        const rows = page.locator(".sessions-card .session-bar-title");
+        await expect
+          .poll(() => rows.allTextContents())
+          .toEqual(["Research Review", "Team Quarterly Planning", "Team Planning"]);
+        const initialUsageRequests = await gateway.getRequests("sessions.usage");
+        expect(initialUsageRequests).toHaveLength(1);
+        expect(initialUsageRequests[0]?.params).toMatchObject({
+          sort: "cost",
+          sortDirection: "desc",
+        });
+        await gateway.deferNext("sessions.usage");
+        await page.locator(".sessions-sort select").selectOption("recent");
+        await gateway.waitForRequest("sessions.usage", { match: { sort: "recent" } });
+        await gateway.resolveDeferred("sessions.usage");
+        await expect.poll(() => rows.count()).toBe(3);
+        expect(pageErrors).toEqual([]);
+        await query.fill('"label:Team Planning"');
+        await query.press("Enter");
+        await expect.poll(() => rows.allTextContents()).toEqual(["Team Planning"]);
+        const previous = (await gateway.getRequests("sessions.usage")).length;
+        const trigger = page.locator('[id="usage-filter-provider:trigger"]');
+        await trigger.click();
+        await page
+          .locator('[id="usage-filter-provider:content"] [data-value="option:openai"]')
+          .click();
+        const request = await gateway.waitForRequest("sessions.usage", { after: previous });
+        // Wait for the returned projection before capturing the base or repaired UI.
+        const submitted = request.params as { query: string };
+        await expect.poll(() => rows.count()).toBe(submitted.query.startsWith('"') ? 1 : 2);
+        await trigger.click();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await query.scrollIntoViewIfNeeded();
+          await fs.writeFile(
+            path.join(suite.artifactDir, "quoted-filter.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [
+              query,
+              page.locator(".usage-metric-badge").first(),
+            ]),
+          );
+        }
+        expect(await query.inputValue()).toBe('"label:Team Planning" provider:openai ');
+        expect(await rows.allTextContents()).toEqual(["Team Planning"]);
+        expect(await page.locator(".usage-metric-badge").allTextContents()).toEqual([
+          "100 Tokens",
+          "$1.00 Cost",
+          "1 Sessions",
+        ]);
+      },
+    );
+  });
+
+  it("keeps all-session totals while paging and requests filters before rendering their results", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        timezoneId: "UTC",
+        viewport: { width: 1440, height: 1100 },
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        await page.clock.setFixedTime(new Date("2026-08-07T12:00:00Z"));
+        const artifacts = suite.artifactDir;
+        const capture = async (name: string) => {
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await fs.writeFile(
+              path.join(artifacts, `${name}.png`),
+              await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [
+                page.locator(".usage-metric-badge").first(),
+              ]),
+            );
+          }
+        };
+        const totals = {
+          ...createEmptyCostUsageTotals(),
+          input: 125000,
+          totalTokens: 125000,
+          inputCost: 125,
+          totalCost: 125,
+        };
+        const messages = {
+          total: 2500,
+          user: 1250,
+          assistant: 1250,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 0,
+        };
+        const session = (index: number, label = `Session ${index + 1}`) => ({
+          key: `agent:main:overview-${index}`,
+          label,
+          agentId: "main",
+          sessionId: `session-${index}`,
+          updatedAt: 2000 - index,
+          usage: {
+            ...createEmptyCostUsageTotals(),
+            durationMs: index === 0 ? 60000 : 0,
+            messageCounts: {
+              total: 2,
+              user: 1,
+              assistant: 1,
+              toolCalls: 0,
+              toolResults: 0,
+              errors: 0,
+            },
+            input: 100,
+            totalTokens: 100,
+            totalCost: 0.1,
+            inputCost: 0.1,
+          },
+        });
+        const response = (offset = 0, filtered = false) => ({
+          updatedAt: Date.parse("2026-08-07T12:00:00Z"),
+          startDate: "2026-07-09",
+          endDate: "2026-08-07",
+          totals: filtered ? session(1201).usage : totals,
+          sessions: filtered
+            ? [session(1201, "Needle outside the first thousand")]
+            : Array.from({ length: 50 }, (_, index) => session(offset + index)),
+          aggregates: {
+            messages: filtered ? session(1201).usage.messageCounts : messages,
+            tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
+            byModel: [],
+            byProvider: [],
+            byAgent: [{ agentId: "main", totals: filtered ? session(1201).usage : totals }],
+            byChannel: [],
+            daily: [],
+            costDaily: [{ date: "2026-08-07", ...(filtered ? session(1201).usage : totals) }],
+          },
+          overview: {
+            offset,
+            limit: 50,
+            total: filtered ? 1 : 1250,
+            unfilteredSessionCount: 1250,
+            selectedSessionCount: filtered ? 1 : 1250,
+            selectedRowCount: filtered ? 1 : 1250,
+            selectedRows: [],
+            tableSessionCount: filtered ? 1 : 1250,
+            tableTotals: { tokens: filtered ? 100 : 125000, cost: filtered ? 0.1 : 125, errors: 0 },
+            queryWarnings: [],
+            durationMs: filtered ? 0 : 60000,
+            durationCount: filtered ? 0 : 1,
+            hourTokens: Array.from({ length: 24 }, (_, hour) =>
+              hour === 12 ? (filtered ? 100 : 125000) : 0,
+            ),
+            weekdayTokens: [0, 0, 0, 0, 0, filtered ? 100 : 125000, 0],
+            hourlyMessages: Array(24).fill(0),
+            hourlyErrors: Array(24).fill(0),
+            hasTimelineData: true,
+            filterOptions: { agent: ["main"], channel: [], provider: [], model: [], tool: [] },
+          },
+        });
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "sessions.usage": {
+              cases: [
+                { match: { query: "label:Needle" }, response: response(0, true) },
+                { match: { offset: 50 }, response: response(50) },
+                { match: {}, response: response() },
+              ],
+            },
+            "usage.status": { updatedAt: 1, providers: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        const rows = page.locator(".sessions-card .session-bar-title");
+        // The card leads with the ten costliest sessions and expands to the full server page.
+        await expect.poll(() => rows.count()).toBe(10);
+        await page.getByRole("button", { name: "Show all 50", exact: true }).click();
+        await expect.poll(() => rows.count()).toBe(50);
+        await expect
+          .poll(() => page.locator(".session-bar-meta").first().textContent())
+          .toContain("2 msgs");
+        await expect
+          .poll(() => page.locator(".session-bar-meta").first().textContent())
+          .toContain("1m");
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const fullHeight = await page
+            .locator(".usage-page")
+            .evaluate((element) => Math.ceil(element.scrollHeight) + 400);
+          const fullFrame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".usage-page"),
+            [page.locator(".usage-header"), rows.first(), page.locator(".data-table-pagination")],
+            {
+              animations: "disabled",
+              viewport: { width: 1440, height: fullHeight },
+            },
+          );
+          await fs.writeFile(path.join(artifacts, "overview-and-sessions.png"), fullFrame.png);
+          await page.setViewportSize({ width: 1440, height: 1100 });
+        }
+        await expect
+          .poll(() => page.locator(".usage-metric-badge").allTextContents())
+          .toEqual(["125.0K Tokens", "$125.00 Cost", "1,250 Sessions"]);
+        expect((await gateway.getRequests("sessions.usage"))[0]?.params).toMatchObject({
+          projection: "overview",
+          limit: 50,
+        });
+        await page.getByRole("button", { name: "Next", exact: true }).click();
+        await expect.poll(() => rows.first().textContent()).toBe("Session 51");
+        expect((await gateway.getRequests("sessions.usage")).at(-1)?.params).toMatchObject({
+          projection: "overview",
+          offset: 50,
+        });
+        await expect
+          .poll(() => page.locator(".usage-metric-badge").allTextContents())
+          .toEqual(["125.0K Tokens", "$125.00 Cost", "1,250 Sessions"]);
+        await capture("second-page");
+        await page.locator(".usage-query-input").fill("label:Needle");
+        await page.locator(".usage-query-input").press("Enter");
+        await expect
+          .poll(() => rows.allTextContents())
+          .toEqual(["Needle outside the first thousand"]);
+        const filtered = (await gateway.getRequests("sessions.usage")).at(-1)?.params;
+        expect(filtered).toMatchObject({ projection: "overview", query: "label:Needle" });
+        expect(filtered).not.toHaveProperty("offset");
+        await expect
+          .poll(() => page.locator(".usage-metric-badge").allTextContents())
+          .toEqual(["100 Tokens", "$0.10 Cost", "1 Sessions"]);
+        await capture("filtered-beyond-thousand");
+        await fs.writeFile(
+          path.join(artifacts, "requests.json"),
+          JSON.stringify(await gateway.getRequests("sessions.usage"), null, 2),
+        );
+      },
+    );
+  });
+});

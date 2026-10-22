@@ -1,5 +1,5 @@
 // Built-in provider registration installs lazy protocol adapters.
-import type { ApiRegistry } from "../api-registry.js";
+import type { ApiProvider, ApiRegistry } from "../api-registry.js";
 import type {
   Api,
   AssistantMessage,
@@ -13,10 +13,10 @@ import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
 import { createZeroUsage } from "../utils/usage.js";
 
-type ProviderStreams<TApi extends Api, TOptions extends StreamOptions> = {
-  stream: StreamFunction<TApi, TOptions>;
-  streamSimple: StreamFunction<TApi, SimpleStreamOptions>;
-};
+type ProviderStreams<TApi extends Api, TOptions extends StreamOptions> = Omit<
+  ApiProvider<TApi, TOptions>,
+  "api"
+>;
 
 type RegisterBuiltIn = (registry: ApiRegistry) => void;
 

@@ -4,11 +4,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
+import { createFixture } from "../plugins/plugin-generation-artifact.admission.test-support.js";
+import { capturePluginGenerationArtifact } from "../plugins/plugin-generation-artifact.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import { preparePluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
+import * as sourceAdmissionStore from "../plugins/plugin-source-admission-store.js";
 import type { ProviderPolicySurface } from "../plugins/provider-policy-surface.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
@@ -16,6 +23,7 @@ import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -132,6 +140,7 @@ const runGatewaySessionStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
 );
 const listLegacyPairingStoreFiles = vi.hoisted(() => vi.fn(async () => [] as string[]));
+const refreshPluginRegistryAfterConfigMutation = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -174,6 +183,11 @@ vi.mock("../plugins/plugin-lookup-table.js", () => ({
 }));
 
 vi.mock("../plugins/registry.js", () => import("../plugins/registry-empty.js"));
+
+vi.mock("../plugins/registry-refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/registry-refresh.js")>()),
+  refreshPluginRegistryAfterConfigMutation,
+}));
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveProviderPolicySurfaceForOwner,
@@ -248,14 +262,57 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     runChannelPluginStartupMaintenance.mockClear();
     runGatewaySessionStartupMaintenance.mockReset().mockResolvedValue(undefined);
     listLegacyPairingStoreFiles.mockReset().mockResolvedValue([]);
+    refreshPluginRegistryAfterConfigMutation.mockReset().mockResolvedValue(undefined);
   });
 
-  it("reports failed session repair while completing the other maintenance owners", async () => {
+  it("joins admitted registry refresh when the Gateway closes during maintenance", async () => {
+    await withOpenClawTestState({ label: "startup-registry-maintenance" }, async () => {
+      const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+      const started = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      refreshPluginRegistryAfterConfigMutation.mockImplementationOnce(async () => {
+        started.resolve();
+        await release.promise;
+      });
+      const log = createLog();
+      let settled = false;
+      const maintenance = runGatewayPostReadyStartupMaintenance({
+        getConfig: () => ({}),
+        getPluginRegistry: createEmptyPluginRegistry,
+        pluginMetadataSnapshot: { registrySource: "derived" },
+        databases: [],
+        signal: controller.signal,
+        log,
+      }).finally(() => {
+        settled = true;
+      });
+      try {
+        expect(
+          await Promise.race([
+            started.promise.then(() => "started"),
+            maintenance.then(() => "completed"),
+          ]),
+        ).toBe("started");
+        controller.abort(new Error("Gateway closing"));
+        await Promise.resolve();
+        expect(settled).toBe(false);
+      } finally {
+        release.resolve();
+        await maintenance;
+      }
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports nested session repair failures while completing the other maintenance owners", async () => {
     const log = createLog();
     const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
     const cfg = slackConfig();
     runGatewaySessionStartupMaintenance.mockRejectedValueOnce(
-      new Error("synthetic repair failure"),
+      new Error("synthetic repair failure", {
+        cause: Object.assign(new Error("synthetic storage failure"), { code: "SQLITE_BUSY" }),
+      }),
     );
     listLegacyPairingStoreFiles.mockResolvedValueOnce(["synthetic-pairing.json"]);
     await runGatewayPostReadyStartupMaintenance({
@@ -266,7 +323,9 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       log,
     });
     expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({ cfg, env: process.env, log });
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic repair failure"));
+    expect(log.warn).toHaveBeenCalledWith(
+      "Gateway post-ready sessions maintenance failed: synthetic repair failure | synthetic storage failure | SQLITE_BUSY",
+    );
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("synthetic-pairing.json"));
   });
 
@@ -278,6 +337,7 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     await runGatewayPostReadyStartupMaintenance({
       getConfig: () => ({}),
       getPluginRegistry: createEmptyPluginRegistry,
+      pluginMetadataSnapshot: { registrySource: "derived" },
       databases: [],
       signal: controller.signal,
       log,
@@ -285,6 +345,7 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
     expect(runGatewaySessionStartupMaintenance).not.toHaveBeenCalled();
     expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
+    expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
   });
 });
@@ -527,6 +588,78 @@ describe("loadGatewayStartupPluginRuntime", () => {
       resolvedConfig: params.cfg,
       retireGatewayRuntimeBindings: vi.fn(),
     }));
+  });
+
+  it("returns admitted plugins while native receipt persistence remains owned by cache cleanup", async () => {
+    await withOpenClawTestState({ label: "startup-native-receipt" }, async (state) => {
+      const fixture = createFixture(state.path("installed"), true);
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const cache = createPluginCache();
+      const publication = createDeferred();
+      let publicationStarted = false;
+      let publicationFinished = false;
+      const createPublisher = sourceAdmissionStore.createPluginSourceAdmissionPublisher;
+      const publisher = vi
+        .spyOn(sourceAdmissionStore, "createPluginSourceAdmissionPublisher")
+        .mockImplementation((options) => {
+          const publish = createPublisher(options);
+          return publish
+            ? async (receipt) => {
+                publicationStarted = true;
+                await publication.promise;
+                const accepted = await publish(receipt);
+                publicationFinished = true;
+                return accepted;
+              }
+            : undefined;
+        });
+      preparePluginNativeAdmissions(fixture.index, cache);
+      const artifact = withPluginCache(cache, () => capturePluginGenerationArtifact(fixture.root));
+      const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+      let retirement: ReturnType<typeof retirePluginCache> | undefined;
+      try {
+        expect(publicationStarted).toBe(true);
+        vi.useFakeTimers();
+        let loaded: Awaited<ReturnType<typeof loadGatewayStartupPluginRuntime>> | undefined;
+        const startup = withPluginCache(cache, () =>
+          loadGatewayStartupPluginRuntime({
+            cfg: {},
+            log: createLog(),
+            baseMethods: ["ping"],
+            startupPluginIds: ["fixture"],
+          }),
+        ).then((result) => {
+          loaded = result;
+        });
+        await vi.runAllTimersAsync();
+        expect(loaded?.gatewayMethods).toEqual(["ping"]);
+        expect(publicationFinished).toBe(false);
+        await startup;
+
+        let retired = false;
+        retirement = retirePluginCache(cache).then((result) => {
+          retired = true;
+          return result;
+        });
+        await vi.runAllTimersAsync();
+        expect(retired).toBe(false);
+        vi.useRealTimers();
+        publication.resolve();
+        await retirement;
+        expect(publicationFinished).toBe(true);
+        await using reader = createPluginCache();
+        const persisted = await withPluginCache(reader, () =>
+          readPersistedInstalledPluginIndex({ stateDir: state.stateDir }),
+        );
+        expect(Object.keys(persisted?.plugins[0]?.sourceAdmissions ?? {})).toHaveLength(1);
+      } finally {
+        vi.useRealTimers();
+        publication.resolve();
+        publisher.mockRestore();
+        await artifact.disposeAsync();
+        await (retirement ?? retirePluginCache(cache));
+      }
+    });
   });
 
   it.each(["valid", "invalid", "invalid with failed cleanup"] as const)(

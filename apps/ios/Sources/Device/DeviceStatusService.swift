@@ -4,11 +4,7 @@ import UIKit
 
 @MainActor
 final class DeviceStatusService: DeviceStatusServicing {
-    private let networkStatus: NetworkStatusService
-
-    init(networkStatus: NetworkStatusService = NetworkStatusService()) {
-        self.networkStatus = networkStatus
-    }
+    private let networkStatus = NetworkStatusService()
 
     func status() async throws -> OpenClawDeviceStatusPayload {
         let battery = Self.batteryStatus(device: UIDevice.current)

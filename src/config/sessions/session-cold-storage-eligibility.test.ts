@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import { deriveSessionPredicateColumns } from "./session-predicate-columns.js";
 
 let database: DatabaseSync;
 const cutoff = 1_000;
@@ -27,11 +28,12 @@ afterEach(() => {
 function addNode(id: string, metadata: Record<string, unknown> = {}, raw?: string) {
   const key = `agent:main:${id}`;
   const entryJson = raw ?? JSON.stringify({ sessionId: id, updatedAt: 1, ...metadata });
+  const predicates = deriveSessionPredicateColumns(entryJson);
   database
     .prepare(
-      "INSERT INTO session_nodes (session_key,current_session_id,entry_json,updated_at) VALUES (?,?,?,1)",
+      "INSERT INTO session_nodes (session_key,current_session_id,entry_json,updated_at,session_started_at,has_optional_references) VALUES (?,?,?,1,?,?)",
     )
-    .run(key, id, entryJson);
+    .run(key, id, entryJson, predicates.session_started_at, predicates.has_optional_references);
   addWindow(key, id);
   return { key, entryJson };
 }
@@ -44,8 +46,16 @@ function addWindow(key: string, id: string, updatedAt = 1, transcriptAt: number 
     .run(id, key, updatedAt, transcriptAt);
 }
 
-function protect(beforeMs = cutoff) {
-  return readSessionColdStorageProtection({ db: database }, beforeMs);
+function protect(beforeMs = cutoff, liveSessionKeys: ReadonlySet<string> = new Set()) {
+  return readSessionColdStorageProtection({ db: database }, beforeMs, liveSessionKeys);
+}
+
+function expectProtection(ids: string[], beforeMs = cutoff, liveKeys: string[] = []) {
+  expect(protect(beforeMs, new Set(liveKeys))).toEqual(new Set(ids));
+}
+
+function checkpoint(sessionId: string, before = sessionId, after = sessionId) {
+  return { sessionId, preCompaction: { sessionId: before }, postCompaction: { sessionId: after } };
 }
 
 describe("cold-storage protection selection", () => {
@@ -56,15 +66,14 @@ describe("cold-storage protection selection", () => {
     }
     addWindow(idle.key, "recent-history", cutoff, null);
     addWindow(idle.key, "recent-transcript", cutoff - 1, cutoff);
-    addWindow(idle.key, "running-history", cutoff - 1, null);
-    database
-      .prepare("UPDATE session_windows SET status = 'running' WHERE session_id = ?")
-      .run("running-history");
+    const live = addNode("live-history");
+    addWindow(live.key, "running-history", cutoff - 1, null);
     const protectedNode = addNode("busy", { restartRecoveryBeforeAgentReplyState: "pending" });
     addWindow(protectedNode.key, "old-busy-history", cutoff - 1, null);
     const expected = new Set([
       "recent-history",
       "recent-transcript",
+      "live-history",
       "running-history",
       "busy",
       "old-busy-history",
@@ -92,14 +101,14 @@ describe("cold-storage protection selection", () => {
       return statement;
     });
     const parsed = vi.spyOn(JSON, "parse");
-    expect(protect()).toEqual(expected);
+    expect(protect(cutoff, new Set([live.key]))).toEqual(expected);
     expect(hydratedWindows).toBe(expected.size);
-    for (const { entryJson } of [idle, protectedNode]) {
+    for (const { entryJson } of [idle, live, protectedNode]) {
       expect(parsed.mock.calls.filter(([text]) => text === entryJson)).toHaveLength(1);
     }
   });
 
-  it("preserves each running and recent node/window protection source at the cutoff", () => {
+  it("preserves live keys and recent node/window protection sources at the cutoff", () => {
     for (const column of ["updated_at", "last_activity_at", "last_interaction_at"]) {
       addNode(column);
       database
@@ -111,20 +120,14 @@ describe("cold-storage protection selection", () => {
           .run(JSON.stringify({ sessionId: column, updatedAt: cutoff }), column);
       }
     }
-    addNode("running-node");
-    database
-      .prepare("UPDATE session_nodes SET status = 'running' WHERE current_session_id = ?")
-      .run("running-node");
+    const live = addNode("running-node");
     const { key } = addNode("old-node");
     addWindow(key, "recent-window", cutoff, null);
     addWindow(key, "recent-transcript", 1, cutoff);
-    addWindow(key, "running-window");
+    addWindow(live.key, "running-window");
     addWindow(key, "old-null-transcript", 1, null);
-    database
-      .prepare("UPDATE session_windows SET status = 'running' WHERE session_id = ?")
-      .run("running-window");
-    expect(protect()).toEqual(
-      new Set([
+    expectProtection(
+      [
         "updated_at",
         "last_activity_at",
         "last_interaction_at",
@@ -132,7 +135,9 @@ describe("cold-storage protection selection", () => {
         "recent-window",
         "recent-transcript",
         "running-window",
-      ]),
+      ],
+      cutoff,
+      [live.key],
     );
   });
 
@@ -142,37 +147,20 @@ describe("cold-storage protection selection", () => {
       pinnedAt: 3,
       previousSessionId: "previous",
       usageFamilySessionIds: ["idle", "usage"],
-      compactionCheckpoints: [
-        {
-          sessionId: "checkpoint",
-          preCompaction: { sessionId: "before" },
-          postCompaction: { sessionId: "after" },
-        },
-      ],
+      compactionCheckpoints: [checkpoint("checkpoint", "before", "after")],
     });
-    expect(protect()).toEqual(new Set(["previous", "usage", "checkpoint", "before", "after"]));
+    expectProtection(["previous", "usage", "checkpoint", "before", "after"]);
   });
 
   it("does not let legacy checkpoint self-references protect an idle current window", () => {
     addNode("idle", {
-      compactionCheckpoints: [
-        {
-          sessionId: "idle",
-          preCompaction: { sessionId: "idle" },
-          postCompaction: { sessionId: "idle" },
-        },
-        {
-          sessionId: "idle",
-          preCompaction: { sessionId: "older-generation" },
-          postCompaction: { sessionId: "idle" },
-        },
-      ],
+      compactionCheckpoints: [checkpoint("idle"), checkpoint("idle", "older-generation")],
     });
-    expect(protect()).toEqual(new Set(["older-generation"]));
+    expectProtection(["older-generation"]);
     database
       .prepare("UPDATE session_nodes SET last_activity_at = ? WHERE current_session_id = ?")
       .run(cutoff, "idle");
-    expect(protect()).toEqual(new Set(["idle", "older-generation"]));
+    expectProtection(["idle", "older-generation"]);
   });
 
   it.each([
@@ -185,7 +173,7 @@ describe("cold-storage protection selection", () => {
     const { key } = addNode("recovery", metadata);
     addWindow(key, "old-recovery-window");
     addNode("unrelated-idle");
-    expect(protect()).toEqual(new Set(["recovery", "old-recovery-window"]));
+    expectProtection(["recovery", "old-recovery-window"]);
   });
 
   it.each([
@@ -197,7 +185,7 @@ describe("cold-storage protection selection", () => {
     const { key } = addNode("corrupt", {}, raw);
     addWindow(key, "old-corrupt-window");
     addNode("unrelated-idle");
-    expect(protect()).toEqual(new Set(["corrupt", "old-corrupt-window"]));
+    expectProtection(["corrupt", "old-corrupt-window"]);
   });
 
   it("preserves the zero fallback for a null transcript timestamp", () => {
@@ -210,7 +198,7 @@ describe("cold-storage protection selection", () => {
       .run();
     addWindow(key, "old-nonnull", -1, -1);
     addWindow(key, "null-history", -1, null);
-    expect(protect(0)).toEqual(new Set(["negative-time", "null-history"]));
+    expectProtection(["negative-time", "null-history"], 0);
   });
 
   it.each([false, true])(
@@ -225,7 +213,7 @@ describe("cold-storage protection selection", () => {
       if (consumption) {
         database.exec("INSERT INTO session_pending_inputs VALUES ('consumed','queued','event')");
       }
-      expect(protect()).toEqual(new Set(["queued", "interrupted"]));
+      expectProtection(["queued", "interrupted"]);
     },
   );
 });

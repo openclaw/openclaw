@@ -4,7 +4,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveIsNixMode } from "../config/paths.js";
+import { resolveIsNixMode, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import {
@@ -24,11 +24,7 @@ function collectMacLaunchAgentOverrideWarning(): string | null {
   if (process.platform !== "darwin") {
     return null;
   }
-  const markerPath = path.join(
-    process.env.HOME ?? os.homedir(),
-    ".openclaw",
-    "disable-launchagent",
-  );
+  const markerPath = path.join(resolveStateDir(), "disable-launchagent");
   if (!fs.existsSync(markerPath)) {
     return null;
   }
@@ -41,8 +37,7 @@ function collectMacLaunchAgentOverrideWarning(): string | null {
   ].join("\n");
 }
 
-export async function noteMacLaunchAgentOverrides() {
-  const warning = collectMacLaunchAgentOverrideWarning();
+function noteMacGatewayWarning(warning: string | null) {
   if (warning) {
     note(warning, "Gateway (macOS)");
   }
@@ -75,7 +70,15 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
   if (process.platform !== "darwin") {
     return null;
   }
-  const scanEnv = await resolveGatewayServiceEnvForPlatformNotes();
+  const baseEnv = process.env;
+  const service = resolveGatewayService();
+  const command = await service.readCommand(baseEnv).catch(() => null);
+  const scanEnv = command?.environment
+    ? {
+        ...baseEnv,
+        ...command.environment,
+      }
+    : baseEnv;
   const jobs = await findStaleOpenClawUpdateLaunchdJobs(scanEnv).catch(() => []);
   if (jobs.length === 0) {
     return null;
@@ -93,13 +96,6 @@ async function collectMacStaleOpenClawUpdateLaunchdJobsWarning(): Promise<string
     "  launchctl remove <label>",
     `  ${formatCliCommand("openclaw gateway restart")}`,
   ].join("\n");
-}
-
-export async function noteMacStaleOpenClawUpdateLaunchdJobs() {
-  const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning();
-  if (warning) {
-    note(warning, "Gateway (macOS)");
-  }
 }
 
 async function launchctlGetenv(name: string): Promise<string | undefined> {
@@ -156,23 +152,10 @@ async function collectMacLaunchctlGatewayEnvOverrideWarning(
     .join("\n");
 }
 
-export async function noteMacLaunchctlGatewayEnvOverrides(cfg: OpenClawConfig) {
-  const warning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg);
-  if (warning) {
-    note(warning, "Gateway (macOS)");
-  }
-}
-
-async function resolveGatewayServiceEnvForPlatformNotes(): Promise<NodeJS.ProcessEnv> {
-  const baseEnv = process.env;
-  const service = resolveGatewayService();
-  const command = await service.readCommand(baseEnv).catch(() => null);
-  return command?.environment
-    ? {
-        ...baseEnv,
-        ...command.environment,
-      }
-    : baseEnv;
+export async function noteMacGatewayPlatformWarnings(cfg: OpenClawConfig): Promise<void> {
+  noteMacGatewayWarning(collectMacLaunchAgentOverrideWarning());
+  noteMacGatewayWarning(await collectMacStaleOpenClawUpdateLaunchdJobsWarning());
+  noteMacGatewayWarning(await collectMacLaunchctlGatewayEnvOverrideWarning(cfg));
 }
 
 export async function collectGatewayPlatformWarnings(
@@ -191,15 +174,18 @@ export async function collectGatewayPlatformWarnings(
       .filter(
         (issue) =>
           issue.code === SERVICE_AUDIT_CODES.systemdKillModeControlGroup ||
-          issue.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+          issue.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone ||
+          issue.repair === "host",
       )
       .map((issue) =>
-        [
-          issue.detail ? `${issue.message} (${issue.detail})` : issue.message,
-          // Structured Doctor keeps this second line in fixHint, so triage
-          // message truncation cannot discard the supported repair command.
-          `Run ${formatCliCommand("openclaw gateway install --force")} only after verification; inspect drop-ins separately.`,
-        ].join("\n"),
+        issue.repair === "host"
+          ? `${issue.message} (${issue.detail})`
+          : [
+              issue.detail ? `${issue.message} (${issue.detail})` : issue.message,
+              // Structured Doctor keeps this second line in fixHint, so triage
+              // message truncation cannot discard the supported repair command.
+              `Run ${formatCliCommand("openclaw gateway install --force")} only after verification; inspect drop-ins separately.`,
+            ].join("\n"),
       );
   }
   return [
@@ -207,16 +193,6 @@ export async function collectGatewayPlatformWarnings(
     await collectMacStaleOpenClawUpdateLaunchdJobsWarning(),
     await collectMacLaunchctlGatewayEnvOverrideWarning(cfg),
   ].filter((warning): warning is string => Boolean(warning));
-}
-
-function isTmpCompileCachePath(cachePath: string): boolean {
-  const normalized = cachePath.trim().replace(/\/+$/, "");
-  return (
-    normalized === "/tmp" ||
-    normalized.startsWith("/tmp/") ||
-    normalized === "/private/tmp" ||
-    normalized.startsWith("/private/tmp/")
-  );
 }
 
 export function noteStartupOptimizationHints(env: NodeJS.ProcessEnv = process.env) {
@@ -243,7 +219,7 @@ export function noteStartupOptimizationHints(env: NodeJS.ProcessEnv = process.en
     lines.push(
       "- NODE_COMPILE_CACHE is not set; repeated CLI runs can be slower on small hosts (Raspberry Pi/VM).",
     );
-  } else if (isTmpCompileCachePath(compileCache)) {
+  } else if (/^\/(?:private\/)?tmp(?:\/|$)/.test(compileCache)) {
     lines.push(
       "- NODE_COMPILE_CACHE points to /tmp; use /var/tmp so cache survives reboots and warms startup reliably.",
     );

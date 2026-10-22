@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureUiProofEnabled,
@@ -13,25 +14,39 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 
 const suite = createChatFlowE2eSuite();
 const controlUiBasePath = "/rosita";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    proofDir = createControlUiE2eArtifactDir("managed-image-actions");
-  }
-});
 
 suite.define(() => {
   it.each([0, 2])("reuses full image bytes after %i failed download attempts", async (failures) => {
+    const proofDir = captureUiProofEnabled
+      ? createControlUiE2eArtifactDir("managed-image-actions")
+      : undefined;
     const filenamePrefix = "a".repeat(119);
     const imageTitle = `${filenamePrefix}📊`;
-    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const context = await suite.newBrowserContext({
+      ...createControlUiE2eContextOptions(),
+      viewport: failures === 0 ? { width: 390, height: 844 } : { width: 1440, height: 900 },
+      hasTouch: failures === 0,
+      isMobile: failures === 0,
+    });
     const page = await context.newPage();
+    const screenshot = async (filename: string, fullPage = false) => {
+      if (proofDir) {
+        await page.screenshot({
+          path: path.join(proofDir, filename),
+          ...(fullPage ? {} : { animations: "disabled" }),
+          fullPage,
+        });
+      }
+    };
     await page.clock.install();
     await page.route(`**${controlUiBasePath}/chat`, async (route) => {
       const response = await route.fetch();
       await route.fulfill({
         response,
-        headers: { ...response.headers(), "content-security-policy": buildControlUiCspHeader() },
+        headers: {
+          ...response.headers(),
+          "content-security-policy": buildControlUiCspHeader(),
+        },
       });
     });
     const attachmentId = crypto.randomUUID();
@@ -105,64 +120,73 @@ suite.define(() => {
         )
         .toBe(1280);
       expect(requestedVariants).toEqual(["thumbnail"]);
-      if (captureUiProofEnabled) {
-        await page.screenshot({
-          fullPage: true,
-          path: path.join(proofDir, "ticketed-generated-image-subpath.png"),
-        });
-      }
+      await screenshot("ticketed-generated-image-subpath.png", true);
 
       const imageFrame = page.locator(".chat-image-frame--managed").filter({ has: image });
-      await imageFrame.hover();
       const imageActions = imageFrame.locator(".chat-image-actions");
-      await expect.poll(() => imageActions.getByRole("button").count()).toBe(2);
-      await expect
-        .poll(() => imageActions.getByRole("button", { name: `Open image ${imageTitle}` }).count())
-        .toBe(0);
+      if (failures > 0) {
+        await page.mouse.move(0, 0);
+        expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe(
+          "0",
+        );
+        await imageFrame.hover();
+      }
+      expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
       const downloadButton = imageActions.getByRole("button", { name: "Download image" });
-      await expect
-        .poll(() =>
-          downloadButton.evaluate((button) => {
-            const rect = button.getBoundingClientRect();
-            const hit = document.elementFromPoint(
-              rect.x + rect.width / 2,
-              rect.y + rect.height / 2,
-            );
-            return {
-              hit: hit instanceof Node && button.contains(hit),
-              target:
-                hit instanceof Element
-                  ? `${hit.tagName.toLowerCase()}.${Array.from(hit.classList).join(".")}`
-                  : null,
-              pointerEvents: getComputedStyle(button).pointerEvents,
-            };
-          }),
-        )
-        .toMatchObject({ hit: true, pointerEvents: "auto" });
+      const imageBox = await image.boundingBox();
+      const actionsBox = await imageActions.boundingBox();
+      expect(actionsBox!.x).toBeGreaterThanOrEqual(imageBox!.x);
+      expect(actionsBox!.x + actionsBox!.width).toBeLessThanOrEqual(imageBox!.x + imageBox!.width);
+      expect(actionsBox!.y + actionsBox!.height).toBeLessThanOrEqual(
+        imageBox!.y + imageBox!.height,
+      );
+      await screenshot("image-actions-overlay.png");
+      await page.mouse.move(0, 0);
+      await downloadButton.focus();
+      expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+      await page.keyboard.press("Tab");
+      expect(
+        await imageActions
+          .getByRole("button", { name: "Copy image" })
+          .evaluate((button) => button === document.activeElement),
+      ).toBe(true);
       for (let attempt = 0; attempt < failures; attempt += 1) {
         await downloadButton.click();
-        const error = page.getByText("Could not download this image. Try again.", { exact: true });
+        const error = page.getByText("Could not download this image. Try again.", {
+          exact: true,
+        });
         await error.waitFor({ state: "visible" });
         await page.clock.runFor(6_000);
         await error.waitFor({ state: "hidden" });
         expect(requestedVariants.filter((variant) => variant === "full")).toHaveLength(attempt + 1);
       }
-      const download = page.waitForEvent("download");
-      await downloadButton.click();
-      expect((await download).suggestedFilename()).toBe(`${filenamePrefix}.png`);
-
-      const repeatedDownload = page.waitForEvent("download");
-      await downloadButton.click();
+      const downloadImage = async () => {
+        const download = page.waitForEvent("download");
+        await downloadButton.click();
+        return download;
+      };
+      expect((await downloadImage()).suggestedFilename()).toBe(`${filenamePrefix}.png`);
       const downloadedPath = expectDefined(
-        await (await repeatedDownload).path(),
+        await (await downloadImage()).path(),
         "downloaded image path",
       );
       expect(await readFile(downloadedPath)).toEqual(imageBytes);
 
-      await page.getByRole("button", { name: `Open image ${imageTitle}` }).click();
+      const openImage = page.getByRole("button", { name: `Open image ${imageTitle}` });
+      if (failures === 0) {
+        await openImage.tap();
+      } else {
+        await openImage.click();
+      }
       await page
         .getByRole("dialog", { name: `Image preview: ${imageTitle}` })
         .waitFor({ state: "visible" });
+      await screenshot("image-fullscreen.png");
+      await page
+        .locator("openclaw-image-lightbox openclaw-modal-dialog > dialog")
+        .evaluate(finishElementAnimations);
+      const viewer = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
+      expect(viewer).toMatchObject({ x: 0, y: 0, ...page.viewportSize() });
       expect(requestedVariants).toEqual(["thumbnail", ...Array(failures + 1).fill("full")]);
       expect(await gateway.getRequests("artifacts.download")).toHaveLength(failures + 2);
     } finally {

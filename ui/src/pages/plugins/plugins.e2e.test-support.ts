@@ -565,6 +565,22 @@ function pluginMethodResponses() {
         { match: { pluginId: "workboard" }, response: workboardInspection },
         { match: { pluginId: "lobster" }, response: lobsterInspection },
         { match: { pluginId: "calendar-plus" }, response: calendarInspection },
+        {
+          match: { pluginId: "local-calendar" },
+          response: {
+            ...workboardInspection,
+            plugin: localCalendarDisabled,
+            source: { kind: "npm", packageName: localCalendarDisabled.packageName },
+          } satisfies PluginsInspectResult,
+        },
+        {
+          match: { pluginId: "matrix" },
+          response: {
+            ...workboardInspection,
+            plugin: matrixEnabled,
+            source: { kind: "npm", packageName: matrixEnabled.packageName },
+          } satisfies PluginsInspectResult,
+        },
       ],
     },
     "plugins.search": {

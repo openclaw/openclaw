@@ -354,6 +354,14 @@ export async function logoutWeb(params: {
   return true;
 }
 
+function parseWebSelfIdentity(raw: string, authDir: string): WhatsAppSelfIdentity {
+  const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
+  return resolveComparableIdentity(
+    { jid: parsed?.me?.id ?? null, lid: parsed?.me?.lid ?? null },
+    authDir,
+  );
+}
+
 export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
   try {
     const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
@@ -361,14 +369,7 @@ export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
     if (!raw) {
       return emptyWebSelfId();
     }
-    const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
-    const identity = resolveComparableIdentity(
-      {
-        jid: parsed?.me?.id ?? null,
-        lid: parsed?.me?.lid ?? null,
-      },
-      authDir,
-    );
+    const identity = parseWebSelfIdentity(raw, authDir);
     return {
       e164: identity.e164 ?? null,
       jid: identity.jid ?? null,
@@ -387,14 +388,7 @@ export async function readWebSelfIdentity(
   const raw = await readWebCredsJsonRaw(resolveWebCredsPath(resolvedAuthDir));
   if (raw) {
     try {
-      const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
-      return resolveComparableIdentity(
-        {
-          jid: parsed?.me?.id ?? null,
-          lid: parsed?.me?.lid ?? null,
-        },
-        resolvedAuthDir,
-      );
+      return parseWebSelfIdentity(raw, resolvedAuthDir);
     } catch {
       // Fall through to the live message identity below when cached creds are corrupt.
     }

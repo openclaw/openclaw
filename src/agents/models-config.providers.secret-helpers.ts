@@ -45,22 +45,7 @@ export type ProviderApiKeyResolver = (provider: string) => {
   profileId?: string;
 };
 
-/** Resolves full provider auth state for callers that need mode and profile provenance. */
-export type ProviderAuthResolver = (
-  provider: string,
-  options?: {
-    oauthMarker?: string;
-    excludeProfileIds?: readonly string[];
-  },
-) => {
-  apiKey: string | undefined;
-  discoveryApiKey?: string;
-  mode: "api_key" | "aws-sdk" | "oauth" | "token" | "none";
-  source: "env" | "profile" | "none";
-  profileId?: string;
-  preparationFailed?: boolean;
-  authFlow?: string;
-};
+export type { ProviderAuthResolver } from "./provider-auth-resolver.types.js";
 
 const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
 
@@ -221,37 +206,24 @@ export function normalizeConfiguredProviderApiKey(params: {
     ? resolveConfigSecretRef(params.sourceInput)
     : parseSecretRef(configuredApiKey, params.secretDefaults);
 
+  let apiKey: string;
   if (configuredApiKeyRef && configuredApiKeyRef.id.trim()) {
     // Non-env secret refs intentionally become markers; loaders can route without exposing values.
-    const marker =
+    apiKey =
       configuredApiKeyRef.source === "env"
         ? configuredApiKeyRef.id.trim()
         : resolveNonEnvSecretRefApiKeyMarker(configuredApiKeyRef.source);
     params.secretRefManagedProviders?.add(params.providerKey);
-    if (params.provider.apiKey === marker) {
+  } else {
+    if (typeof configuredApiKey !== "string") {
       return params.provider;
     }
-    return {
-      ...params.provider,
-      apiKey: marker,
-    };
+    apiKey = configuredApiKey.trim();
+    if (isNonSecretApiKeyMarker(apiKey)) {
+      params.secretRefManagedProviders?.add(params.providerKey);
+    }
   }
-
-  if (typeof configuredApiKey !== "string") {
-    return params.provider;
-  }
-
-  const normalizedConfiguredApiKey = configuredApiKey.trim();
-  if (isNonSecretApiKeyMarker(normalizedConfiguredApiKey)) {
-    params.secretRefManagedProviders?.add(params.providerKey);
-  }
-  if (normalizedConfiguredApiKey === params.provider.apiKey) {
-    return params.provider;
-  }
-  return {
-    ...params.provider,
-    apiKey: normalizedConfiguredApiKey,
-  };
+  return apiKey === params.provider.apiKey ? params.provider : { ...params.provider, apiKey };
 }
 
 /** Rewrites literal env-derived keys back to env variable names when provenance is clear. */
@@ -290,7 +262,7 @@ export function resolveMissingProviderApiKey(params: {
   secretRefManagedProviders?: Set<string>;
   providerApiKeyResolver?: (env: NodeJS.ProcessEnv) => string | undefined;
 }): ProviderConfig {
-  const hasModels = Array.isArray(params.provider.models) && params.provider.models.length > 0;
+  const hasModels = Boolean(params.provider.models?.length);
   if (!hasModels || params.provider.apiKey) {
     return params.provider;
   }

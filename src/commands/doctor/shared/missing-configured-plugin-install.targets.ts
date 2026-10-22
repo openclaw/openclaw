@@ -150,6 +150,9 @@ export function resolveRecordedInstallCandidate(params: {
   }
   const recordedSource =
     record?.source === "npm" || record?.source === "clawhub" ? record.source : undefined;
+  const parseSpec = recordedSource === "npm" ? parseRegistryNpmSpec : parseClawHubPluginSpec;
+  const candidateSpec =
+    recordedSource === "npm" ? params.candidate.npmSpec : params.candidate.clawhubSpec;
   const staleRuntimeRepair = params.repairReason === "stale-version-bound-runtime";
   const declaredSource = recordedSource
     ? resolvePluginInstallSources(params.candidate, recordedSource)[0]
@@ -171,12 +174,7 @@ export function resolveRecordedInstallCandidate(params: {
           : expectedIntegrityForUpdate(record.spec, record.integrity),
         trustedSourceLinkedOfficialInstall:
           params.candidate.trustedSourceLinkedOfficialInstall &&
-          (!record.spec ||
-            (recordedSource === "npm"
-              ? parseRegistryNpmSpec(record.spec)?.name ===
-                parseRegistryNpmSpec(params.candidate.npmSpec ?? "")?.name
-              : parseClawHubPluginSpec(record.spec)?.name ===
-                parseClawHubPluginSpec(params.candidate.clawhubSpec ?? "")?.name)),
+          (!record.spec || parseSpec(record.spec)?.name === parseSpec(candidateSpec ?? "")?.name),
       }
     : params.candidate;
 }

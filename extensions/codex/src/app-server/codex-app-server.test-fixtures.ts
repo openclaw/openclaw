@@ -8,6 +8,26 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 type ServerRequestHandler = (request: RpcRequest, signal: AbortSignal) => unknown;
 type NotificationHandler = (notification: CodexServerNotification) => Promise<void> | void;
 
+export function userMessage(text: string, timestamp: number) {
+  return {
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    timestamp,
+  };
+}
+
+export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
+  const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.at(index);
+  if (!call) {
+    throw new Error(`Expected ${label} call ${index + 1}`);
+  }
+  return call;
+}
+
+export function getMockRuntimeIdentity() {
+  return { serverVersion: CODEX_APP_SERVER_VERSION };
+}
+
 export function createCodexRequestRecorder() {
   const requests: Array<{ method: string; params: unknown }> = [];
   const waiters = new Map<string, ReturnType<typeof createDeferred<void>>>();
@@ -222,5 +242,36 @@ export function rateLimitsUpdated(resetsAt: number): CodexServerNotification {
         rateLimitReachedType: "rate_limit_reached",
       },
     },
+  };
+}
+
+export function nativeCommandItem(
+  id: string,
+  status: "inProgress" | "completed",
+  durationMs: number | null,
+) {
+  return {
+    type: "commandExecution",
+    id,
+    command: "git status --short",
+    cwd: "/tmp/workspace",
+    processId: null,
+    source: "agent",
+    status,
+    commandActions: [],
+    aggregatedOutput: status === "completed" ? "" : null,
+    exitCode: status === "completed" ? 0 : null,
+    durationMs,
+  };
+}
+
+export function disabledMcpServerStatus(name: string) {
+  return {
+    name,
+    serverInfo: null,
+    tools: {},
+    resources: [],
+    resourceTemplates: [],
+    authStatus: "unsupported",
   };
 }

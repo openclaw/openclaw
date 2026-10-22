@@ -12,6 +12,32 @@ const opus: ModelCatalogEntry = {
   api: "anthropic-messages",
   baseUrl: "https://api.anthropic.com",
 };
+const sonnet = { ...opus, id: "claude-sonnet-5" };
+const available = { availability: true, routeResolution: null, selectedAuthMode: "api_key" };
+function metadata(providers: string[]) {
+  return createPluginMetadataSnapshotFixture({
+    plugins: providers.map((id) => ({
+      id,
+      providers: [id],
+      rootDir: path.resolve(import.meta.dirname, "../../extensions", id),
+      ...(id === "anthropic"
+        ? {
+            providerEndpoints: [
+              { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
+            ],
+            providerRequest: { providers: { anthropic: { family: "anthropic" } } },
+          }
+        : {}),
+    })),
+  });
+}
+const openai: ModelCatalogEntry = {
+  id: "speed-fixture",
+  name: "Speed fixture",
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+};
 function fastResolver(params: Parameters<typeof createModelSpeedPolicyResolver>[0]) {
   const resolve = createModelSpeedPolicyResolver(params);
   return (...args: Parameters<typeof resolve>) => resolve(...args).supportsFastMode;
@@ -21,102 +47,53 @@ function resolver(cfg: OpenClawConfig = {}) {
     cfg,
     agentId: "main",
     catalog: [opus],
-    metadataSnapshot: createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "anthropic",
-          providers: ["anthropic"],
-          rootDir: path.resolve(import.meta.dirname, "../../extensions/anthropic"),
-          providerEndpoints: [{ endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] }],
-          providerRequest: { providers: { anthropic: { family: "anthropic" } } },
-        },
-      ],
-    }),
+    metadataSnapshot: metadata(["anthropic"]),
   });
 }
 describe("private selected Fast metadata", () => {
-  it("uses each selected model's policy and effective agent parameters", () => {
+  it("uses each selected model's policy", () => {
     const catalog: ModelCatalogEntry[] = [
-      {
-        id: "speed-fixture",
-        name: "Speed fixture",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
+      openai,
       { id: "grok-3", name: "Grok 3", provider: "xai", api: "openai-responses" },
       { id: "MiniMax-M2.7", name: "MiniMax M2.7", provider: "minimax", api: "anthropic-messages" },
     ];
     const resolve = fastResolver({
-      cfg: {
-        agents: {
-          entries: {
-            main: { models: { "openai/speed-fixture": { params: { serviceTier: "flex" } } } },
-          },
-        },
-      },
+      cfg: {},
       agentId: "main",
       catalog,
-      metadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: ["openai", "xai", "minimax"].map((id) => ({
-          id,
-          providers: [id],
-          rootDir: path.resolve(import.meta.dirname, "../../extensions", id),
-        })),
-      }),
+      metadataSnapshot: metadata(["openai", "xai", "minimax"]),
     });
-    const evaluation = { availability: true, routeResolution: null, selectedAuthMode: "api_key" };
-    expect(catalog.map((entry) => resolve(entry, evaluation, "openclaw"))).toEqual([
-      false,
-      true,
-      true,
-    ]);
-    expect(catalog.map((entry) => resolve(entry, evaluation, "codex"))).toEqual([
-      undefined,
-      undefined,
-      undefined,
-    ]);
+    const expected = [true, undefined];
+    expect(
+      catalog.map((entry) => [
+        resolve(entry, available, "openclaw"),
+        resolve(entry, available, "codex"),
+      ]),
+    ).toEqual([expected, expected, expected]);
   });
   it("loads the provider's light policy for the exact model and auth facts", () => {
     const resolve = resolver();
-    expect(
-      resolve(
-        { ...opus, id: "claude-sonnet-5" },
-        { availability: true, routeResolution: null, selectedAuthMode: "api_key" },
-      ),
-    ).toBe(false);
-    expect(
-      resolve(opus, { availability: true, routeResolution: null, selectedAuthMode: "api_key" }),
-    ).toBe(true);
+    expect(resolve(sonnet, available)).toBe(false);
+    expect(resolve(opus, available)).toBe(true);
     expect(resolve(opus, { availability: undefined, routeResolution: null })).toBeUndefined();
-    expect(
-      resolve(
-        { ...opus, id: "claude-sonnet-5" },
-        { availability: true, routeResolution: null },
-        "codex",
-      ),
-    ).toBeUndefined();
+    expect(resolve(sonnet, { availability: true, routeResolution: null }, "codex")).toBeUndefined();
   });
   it("uses the same model/agent parameter order as request construction", () => {
-    const resolve = resolver({
-      agents: {
-        defaults: { params: { serviceTier: "auto" } },
-        entries: { main: { params: { serviceTier: "invalid" } } },
-      },
-    });
-    expect(
-      resolve(opus, { availability: true, routeResolution: null, selectedAuthMode: "api_key" }),
-    ).toBe(true);
-    const explicit = resolver({
-      agents: {
-        defaults: {
-          models: { "anthropic/claude-opus-5": { params: { serviceTier: "standard_only" } } },
+    const models = { "anthropic/claude-opus-5": { params: { serviceTier: "standard_only" } } };
+    const cases: [OpenClawConfig["agents"], boolean][] = [
+      [
+        {
+          defaults: { params: { serviceTier: "auto" } },
+          entries: { main: { params: { serviceTier: "invalid" } } },
         },
-      },
-    });
-    expect(
-      explicit(opus, { availability: true, routeResolution: null, selectedAuthMode: "api_key" }),
-    ).toBe(false);
+        true,
+      ],
+      [{ defaults: { models } }, false],
+      [{ entries: { main: { models } } }, false],
+    ];
+    for (const [agents, expected] of cases) {
+      expect(resolver({ agents })(opus, available)).toBe(expected);
+    }
   });
   it("does not replace unresolved route ownership with catalog provenance", () => {
     expect(
@@ -126,26 +103,11 @@ describe("private selected Fast metadata", () => {
 });
 
 it("derives tier recovery from the selected transport rather than catalog provenance", () => {
-  const entry: ModelCatalogEntry = {
-    id: "speed-fixture",
-    name: "Speed fixture",
-    provider: "openai",
-    api: "openai-responses",
-    baseUrl: "https://api.openai.com/v1",
-  };
   const resolve = createModelSpeedPolicyResolver({
     cfg: {},
     agentId: "main",
-    catalog: [entry],
-    metadataSnapshot: createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "openai",
-          providers: ["openai"],
-          rootDir: path.resolve(import.meta.dirname, "../../extensions/openai"),
-        },
-      ],
-    }),
+    catalog: [openai],
+    metadataSnapshot: metadata(["openai"]),
   });
   for (const [baseUrl, expected] of [
     ["https://api.openai.com/v1", true],
@@ -153,9 +115,7 @@ it("derives tier recovery from the selected transport rather than catalog proven
     ["https://api.openai.com/proxy", false],
   ] as const) {
     const evaluation = {
-      availability: true,
-      routeResolution: null,
-      selectedAuthMode: "api_key",
+      ...available,
       selectedRoute: {
         api: "openai-responses" as const,
         baseUrl,
@@ -163,7 +123,7 @@ it("derives tier recovery from the selected transport rather than catalog proven
         requestTransportOverrides: "none" as const,
       },
     };
-    expect(resolve(entry, evaluation, "openclaw").supportsServiceTierRecovery).toBe(expected);
-    expect(resolve(entry, evaluation, "codex").supportsServiceTierRecovery).toBe(false);
+    expect(resolve(openai, evaluation, "openclaw").supportsServiceTierRecovery).toBe(expected);
+    expect(resolve(openai, evaluation, "codex").supportsServiceTierRecovery).toBe(false);
   }
 });

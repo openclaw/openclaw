@@ -57,48 +57,6 @@ type SlackSessionFreshnessRuntime = {
   };
 };
 
-async function resolveSlackThreadSessionFreshness(params: {
-  ctx: SlackMonitorContext;
-  agentId: string;
-  storePath: string;
-  sessionKey: string;
-}): Promise<SlackSessionResetFreshness | undefined> {
-  // Gateway startup supplies the full channel runtime, but the public surface
-  // intentionally keeps non-context helpers untyped for external plugins.
-  const runtime = params.ctx.channelRuntime as SlackSessionFreshnessRuntime | undefined;
-  return runtime?.session?.resolveEntryResetFreshnessAsync?.({
-    agentId: params.agentId,
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    sessionCfg: params.ctx.cfg.session,
-    resetType: "thread",
-    resetOverride: resolveChannelResetConfig({
-      sessionCfg: params.ctx.cfg.session,
-      channel: "slack",
-    }),
-  });
-}
-
-async function resolveSlackThreadUserMap(params: {
-  ctx: SlackMonitorContext;
-  messages: SlackThreadStarter[];
-  eventScope?: SlackEventScope;
-}): Promise<Map<string, { name?: string }>> {
-  const uniqueUserIds = [
-    ...new Set(
-      params.messages.map((item) => item.userId).filter((id): id is string => Boolean(id)),
-    ),
-  ];
-  const { results } = await runTasksWithConcurrency({
-    tasks: uniqueUserIds.map((id) => async () => {
-      const user = await params.ctx.resolveUserName(id, params.eventScope);
-      return user ? ([id, user] as const) : null;
-    }),
-    limit: SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY,
-  });
-  return new Map(results.flatMap((result) => (result ? [result] : [])));
-}
-
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
   agentId: string;
@@ -131,18 +89,40 @@ export async function resolveSlackThreadContextData(params: {
   };
   const isCurrentBotAuthor = (author: { userId?: string; botId?: string }): boolean =>
     isSlackThreadAuthorCurrentBot({ identity: botIdentity, author });
+  const resolveThreadUserMap = async (messages: SlackThreadStarter[]) => {
+    const uniqueUserIds = [
+      ...new Set(messages.map((item) => item.userId).filter((id): id is string => Boolean(id))),
+    ];
+    const { results } = await runTasksWithConcurrency({
+      tasks: uniqueUserIds.map((id) => async () => {
+        const user = await params.ctx.resolveUserName(id, params.eventScope);
+        return user ? ([id, user] as const) : null;
+      }),
+      limit: SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY,
+    });
+    return new Map(results.flatMap((result) => (result ? [result] : [])));
+  };
 
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
   let threadLabel: string | undefined;
   let threadStarterMedia: SlackMediaResult[] | null = null;
+  // Gateway startup supplies the full channel runtime, but the public surface
+  // intentionally keeps non-context helpers untyped for external plugins.
   const threadSessionFreshness =
     params.isThreadReply && params.threadTs
-      ? await resolveSlackThreadSessionFreshness({
-          ctx: params.ctx,
+      ? await (
+          params.ctx.channelRuntime as SlackSessionFreshnessRuntime | undefined
+        )?.session?.resolveEntryResetFreshnessAsync?.({
           agentId: params.agentId,
           storePath: params.storePath,
           sessionKey: params.sessionKey,
+          sessionCfg: params.ctx.cfg.session,
+          resetType: "thread",
+          resetOverride: resolveChannelResetConfig({
+            sessionCfg: params.ctx.cfg.session,
+            channel: "slack",
+          }),
         })
       : undefined;
   params.assertHistoryCurrent?.();
@@ -242,10 +222,6 @@ export async function resolveSlackThreadContextData(params: {
           prependUnavailable: true,
         });
       }
-      if (threadStarterMedia) {
-        const starterPlaceholders = threadStarterMedia.map((item) => item.placeholder).join(", ");
-        logVerbose(`slack: hydrated thread starter file ${starterPlaceholders} from root message`);
-      }
     }
   } else {
     threadLabel = `Slack thread ${params.roomLabel}`;
@@ -264,7 +240,6 @@ export async function resolveSlackThreadContextData(params: {
   } else if (includeBotStarterAsRootContext) {
     const snippet = formatSlackThreadLabelSnippet(starter?.text ?? "").trim();
     threadLabel = `Slack thread ${params.roomLabel}${snippet ? ` (assistant root): ${snippet}` : ""}`;
-    logVerbose("slack: retained current-bot thread starter as assistant root context");
   }
 
   const threadInitialHistoryLimit = Math.min(
@@ -311,46 +286,39 @@ export async function resolveSlackThreadContextData(params: {
       starter && threadStarterBody && threadStarterBody !== starter.text
         ? { ...starter, text: threadStarterBody, ts: currentBotRootTs }
         : null;
-    const threadHistoryWithEnrichedRoot =
-      enrichedStarter && !threadHistory.some((entry) => entry.ts === currentBotRootTs)
+    const rootContext =
+      enrichedStarter ??
+      (includeBotStarterAsRootContext && starter ? { ...starter, ts: currentBotRootTs } : null);
+    const threadHistoryWithRoot =
+      rootContext && !threadHistory.some((entry) => entry.ts === currentBotRootTs)
         ? [
-            enrichedStarter,
-            ...(threadHistory.length >= threadInitialHistoryLimit
+            rootContext,
+            ...(enrichedStarter && threadHistory.length >= threadInitialHistoryLimit
               ? threadHistory.slice(1)
               : threadHistory),
           ]
         : threadHistory;
-    const threadHistoryWithBotRoot =
-      includeBotStarterAsRootContext &&
-      starter &&
-      !threadHistoryWithEnrichedRoot.some((entry) => entry.ts === currentBotRootTs)
-        ? [{ ...starter, ts: currentBotRootTs }, ...threadHistoryWithEnrichedRoot]
-        : threadHistoryWithEnrichedRoot;
 
-    if (threadHistoryWithBotRoot.length > 0) {
+    if (threadHistoryWithRoot.length > 0) {
       // MPIM roots stay on the flat group session. Outbound delivery may create
       // the reply-thread session before its first inbound turn, so recover its replies.
       const retainCurrentBotHistory =
         params.isGroupDm && (isMissingThreadSession || isOutboundOnlyThreadSession);
-      const threadHistoryWithoutCurrentBot = threadHistoryWithBotRoot.filter(
+      const threadHistoryWithoutCurrentBot = threadHistoryWithRoot.filter(
         (entry) =>
           !isCurrentBotAuthor(entry) ||
           retainCurrentBotHistory ||
           (includeBotStarterAsRootContext && entry.ts === currentBotRootTs),
       );
       const omittedCurrentBotHistoryCount =
-        threadHistoryWithBotRoot.length - threadHistoryWithoutCurrentBot.length;
+        threadHistoryWithRoot.length - threadHistoryWithoutCurrentBot.length;
 
       const userMapForFilter =
         params.contextVisibilityMode !== "all" &&
         params.allowNameMatching &&
         params.allowFromLower.length > 0
-          ? await resolveSlackThreadUserMap({
-              ctx: params.ctx,
-              messages: threadHistoryWithoutCurrentBot,
-              eventScope: params.eventScope,
-            })
-          : new Map<string, { name?: string }>();
+          ? await resolveThreadUserMap(threadHistoryWithoutCurrentBot)
+          : undefined;
       params.assertHistoryCurrent?.();
       const { items: filteredThreadHistory, omitted: omittedHistoryCount } =
         params.contextVisibilityMode === "all"
@@ -363,7 +331,7 @@ export async function resolveSlackThreadContextData(params: {
                 if (isCurrentBotAuthor(historyMsg)) {
                   return true;
                 }
-                const msgUser = historyMsg.userId ? userMapForFilter.get(historyMsg.userId) : null;
+                const msgUser = historyMsg.userId ? userMapForFilter?.get(historyMsg.userId) : null;
                 return resolveSlackUserAllowed({
                   allowList: params.allowFromLower,
                   teamId: params.eventScope?.teamId ?? params.ctx.teamId,
@@ -373,11 +341,7 @@ export async function resolveSlackThreadContextData(params: {
                 });
               },
             });
-      const userMap = await resolveSlackThreadUserMap({
-        ctx: params.ctx,
-        messages: filteredThreadHistory,
-        eventScope: params.eventScope,
-      });
+      const userMap = userMapForFilter ?? (await resolveThreadUserMap(filteredThreadHistory));
       params.assertHistoryCurrent?.();
       if (omittedHistoryCount > 0 || omittedCurrentBotHistoryCount > 0) {
         logVerbose(
@@ -411,9 +375,6 @@ export async function resolveSlackThreadContextData(params: {
       }
       if (historyParts.length > 0) {
         threadHistoryBody = historyParts.join("\n\n");
-        logVerbose(
-          `slack: populated thread history with ${filteredThreadHistory.length} messages for new session`,
-        );
       }
     }
   }

@@ -6,7 +6,7 @@ import { collectEntrySpoolPaths } from "./delivery-queue-media-paths.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import type { FailPendingDeliveryResult } from "./delivery-queue-settlement.types.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { preparedOutboundPayloads } from "./prepared-batch.js";
 
 export function executePendingDeliveryFailure(
   input: {
@@ -33,10 +33,7 @@ export function executePendingDeliveryFailure(
   // Derive cleanup only after native settlement, including guarded stale-payload no-ops.
   const spoolPaths =
     result.status === "failed" && input.retainSpoolArtifacts !== true
-      ? collectEntrySpoolPaths(
-          acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => prepared.payload),
-          input.stateDir,
-        )
+      ? collectEntrySpoolPaths(preparedOutboundPayloads(entry.preparedBatch), input.stateDir)
       : [];
   return { result, spoolPaths };
 }

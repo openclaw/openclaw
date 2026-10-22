@@ -3,7 +3,9 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerXAllowlistMethods } from "./admin.js";
 import { openXSpend, XBudgetExceededError } from "./spend.js";
+import { createXTestApi as createXApiClient, type XFetch } from "./test-support/api-client.js";
 import { createKeyedState } from "./test-support/monitor.js";
+import { createXTestSpend } from "./test-support/spend.js";
 
 const getUserByUsername = vi.hoisted(() => vi.fn());
 const mutateConfigFile = vi.hoisted(() => vi.fn());
@@ -45,13 +47,14 @@ function gateway(beforeWrite?: () => Promise<void>, configOverride?: OpenClawCon
     },
   );
   const stateDir = `synthetic-x-admin-${gatewaySequence++}`;
+  const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
   const runtime = {
     state: {
       openKeyedStore: createKeyedState(undefined, beforeWrite),
       resolveStateDir: () => stateDir,
     },
+    logging: { getChildLogger: () => logger },
   };
-  const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() };
   registerXAllowlistMethods({
     runtime,
     logger,
@@ -226,6 +229,7 @@ describe("X allowlist Gateway methods", () => {
     async (route) => {
       const blockedAgent = route === "default route" ? "front" : "thread";
       const { invoke, getConfig } = gateway(undefined, {
+        messages: { queue: { byChannel: { x: "followup" } } },
         agents: {
           entries: {
             front: { skills: [], tools: { fs: { workspaceOnly: route !== "default route" } } },
@@ -271,6 +275,36 @@ describe("X allowlist Gateway methods", () => {
       getConfig().agents!.entries![blockedAgent]!.tools = { fs: { workspaceOnly: true } };
       const repaired = await invoke("x.allowlist.list");
       expect(repaired.mock.calls[0]?.[1].guests.blockedReason).toBeUndefined();
+    },
+  );
+
+  it.each([
+    { mode: "steer", byChannel: undefined, blocked: true },
+    { mode: "interrupt", byChannel: undefined, blocked: true },
+    { mode: "followup", byChannel: undefined, blocked: false },
+    { mode: "collect", byChannel: undefined, blocked: false },
+    { mode: "followup", byChannel: { x: "steer" }, blocked: true },
+    { mode: "steer", byChannel: { x: "followup" }, blocked: false },
+    { mode: "interrupt", byChannel: { x: "collect" }, blocked: false },
+  ] as const)(
+    "reports effective guest queue readiness for $mode / $byChannel",
+    async ({ mode, byChannel, blocked }) => {
+      const { invoke } = gateway(undefined, {
+        messages: { queue: { mode, byChannel } },
+        agents: {
+          entries: { front: { skills: [], tools: { fs: { workspaceOnly: true } } } },
+        },
+        bindings: [{ agentId: "front", match: { channel: "x" } }],
+        channels: { x: { userId: "100", username: "example_bot", guests: { enabled: true } } },
+      });
+      const listed = await invoke("x.allowlist.list");
+      expect(listed.mock.calls[0]?.[0]).toBe(true);
+      const reason = listed.mock.calls[0]?.[1].guests.blockedReason;
+      if (blocked) {
+        expect(reason).toContain('messages.queue.byChannel.x="followup" or "collect"');
+      } else {
+        expect(reason).toBeUndefined();
+      }
     },
   );
 
@@ -384,7 +418,7 @@ describe("X allowlist Gateway methods", () => {
       username: "@maintainer",
       addedBy: "untrusted-request-identity",
     });
-    expect(getUserByUsername).toHaveBeenCalledWith("maintainer", undefined);
+    expect(getUserByUsername).toHaveBeenCalledWith("maintainer", undefined, expect.any(Function));
     expect(added).toHaveBeenCalledWith(true, {
       accountId: "default",
       guests: expect.objectContaining({ enabled: false }),
@@ -463,6 +497,69 @@ describe("X allowlist Gateway methods", () => {
       });
       expect(getUserByUsername).not.toHaveBeenCalled();
       expect(mutateConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["administrator retirement", "access-policy cancellation"] as const)(
+    "does not buy a username lookup after %s during OAuth refresh",
+    async (retirement) => {
+      const entered = Promise.withResolvers<void>();
+      const resume = Promise.withResolvers<void>();
+      const fetcher = vi.fn<XFetch>(async (url) => {
+        if (url.endsWith("/oauth2/token")) {
+          entered.resolve();
+          await resume.promise;
+          return Response.json({ access_token: "synthetic-access" });
+        }
+        return Response.json({ data: { id: "30", username: "maintainer" } });
+      });
+      const api = createXApiClient({
+        spend: createXTestSpend(),
+        clientId: "synthetic-client",
+        clientSecret: "synthetic-secret",
+        refreshToken: "synthetic-refresh",
+        saveRefreshToken: async () => {},
+        fetch: fetcher,
+      });
+      getUserByUsername.mockImplementation((...args: Parameters<typeof api.getUserByUsername>) =>
+        api.getUserByUsername(...args),
+      );
+      const { invoke } = gateway();
+      let active = true;
+      const policy = new AbortController();
+      const response = invoke(
+        "x.allowlist.add",
+        { username: "maintainer" },
+        {
+          hasCurrentClientAuthority: () => active,
+          ...(retirement === "access-policy cancellation" ? { signal: policy.signal } : {}),
+        },
+      );
+      await entered.promise;
+      if (retirement === "administrator retirement") {
+        active = false;
+      } else {
+        policy.abort();
+      }
+      resume.resolve();
+      expect(await response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: retirement === "administrator retirement" ? "FORBIDDEN" : "UNAVAILABLE",
+        }),
+      );
+      expect(fetcher.mock.calls.map(([url]) => new URL(url).pathname)).toEqual(["/2/oauth2/token"]);
+      expect(await api.spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
+      expect(await invoke("x.allowlist.list")).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          entries: [
+            { userId: "10", configured: true, editable: false },
+            { userId: "20", configured: true, editable: false },
+          ],
+        }),
+      );
     },
   );
 

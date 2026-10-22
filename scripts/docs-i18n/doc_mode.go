@@ -104,10 +104,9 @@ func parseTaggedDocument(text string) (string, string, error) {
 		return "", "", fmt.Errorf("missing %s", bodyTagEnd)
 	}
 	body := trimTagNewlines(text[bodyStart:bodyEnd])
-	suffix := strings.TrimSpace(text[bodyEnd+len(bodyTagEnd):])
 
 	prefix := strings.TrimSpace(text[:frontStart-len(frontmatterTagStart)])
-	if prefix != "" || suffix != "" {
+	if prefix != "" {
 		return "", "", fmt.Errorf("unexpected text outside tagged sections")
 	}
 

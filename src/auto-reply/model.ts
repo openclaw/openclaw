@@ -11,7 +11,7 @@ const QUOTED_ATOM_PATTERN = String.raw`"(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|
 const QUOTED_ATOM_RE = new RegExp(`^${QUOTED_ATOM_PATTERN}$`);
 const QUOTED_MODEL_PREFIX_RE = new RegExp(`^${QUOTED_ATOM_PATTERN}`, "i");
 const UNQUOTED_MODEL_REF_PATTERN = String.raw`[A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*`;
-const MODEL_REF_PATTERN = String.raw`(?:(?:${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})@${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})`;
+const MODEL_REF_PATTERN = String.raw`(?:(?:${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})@${QUOTED_ATOM_PATTERN}|${QUOTED_ATOM_PATTERN}|${UNQUOTED_MODEL_REF_PATTERN})`;
 const MODEL_RUNTIME_VALUE_PATTERN = String.raw`[A-Za-z0-9_.:-]+`;
 const MODEL_SCOPE_OPTION_PATTERN = String.raw`(?:--session|-s|--agent|-a|--global|-g)(?=$|\s)`;
 const MODEL_OPTION_PATTERN = String.raw`(?:(?:${MODEL_SCOPE_OPTION_PATTERN}|--runtime)(?=$|\s)|runtime=|harness=)`;
@@ -27,29 +27,18 @@ const MODEL_DIRECTIVE_PATTERN = new RegExp(
   "i",
 );
 
-function parseModelScope(raw: string | undefined): ModelSelectionScope | undefined {
-  switch (raw?.trim().toLowerCase()) {
-    case "-s":
-    case "--session":
-      return "session";
-    case "-a":
-    case "--agent":
-      return "agent";
-    case "-g":
-    case "--global":
-      return "global";
-    default:
-      return undefined;
-  }
-}
-
-function hasAdditionalModelScope(body: string, match: RegExpMatchArray | null): boolean {
-  if (!match || match.index === undefined) {
-    return false;
-  }
-  const trailing = body.slice(match.index + match[0].length);
-  return new RegExp(String.raw`^\s+${MODEL_SCOPE_OPTION_PATTERN}`, "i").test(trailing);
-}
+const MODEL_SCOPE_OPTIONS = new Map<string, ModelSelectionScope>([
+  ["-s", "session"],
+  ["--session", "session"],
+  ["-a", "agent"],
+  ["--agent", "agent"],
+  ["-g", "global"],
+  ["--global", "global"],
+]);
+const ADDITIONAL_MODEL_SCOPE_PATTERN = new RegExp(
+  String.raw`^\s+${MODEL_SCOPE_OPTION_PATTERN}`,
+  "i",
+);
 
 /** Extract and remove a `/model` directive, including optional auth profile/runtime hints. */
 export function extractModelDirective(
@@ -74,7 +63,7 @@ export function extractModelDirective(
   const quotedModel = modelReference?.startsWith('"')
     ? QUOTED_MODEL_PREFIX_RE.exec(modelReference)?.[0]
     : undefined;
-  const quotedProfileOffset = quotedModel?.length ?? modelReference?.indexOf('@"') ?? -1;
+  const quotedProfileOffset = modelReference?.indexOf('@"') ?? -1;
   const quotedProfile =
     quotedProfileOffset >= 0 ? modelReference?.slice(quotedProfileOffset + 1) : undefined;
   // Commands ignore case, but JSON string escapes are case-sensitive.
@@ -110,10 +99,13 @@ export function extractModelDirective(
       ? (modelOptionsOnlyMatch[1] ?? modelOptionsOnlyMatch[4])
       : (match?.[2] ?? match?.[5])
   )?.trim();
-  const scope = parseModelScope(
-    modelOptionsOnlyMatch
+  const scope = MODEL_SCOPE_OPTIONS.get(
+    (modelOptionsOnlyMatch
       ? (modelOptionsOnlyMatch[2] ?? modelOptionsOnlyMatch[3])
-      : (match?.[3] ?? match?.[4]),
+      : (match?.[3] ?? match?.[4])
+    )
+      ?.trim()
+      .toLowerCase() ?? "",
   );
 
   let rawModel = raw;
@@ -124,6 +116,8 @@ export function extractModelDirective(
         ? raw.slice(0, quotedProfileOffset)
         : normalizeOptionalString(JSON.parse(quotedModel));
     rawProfile = normalizeOptionalString(JSON.parse(quotedProfile));
+  } else if (raw && quotedModel !== undefined) {
+    rawModel = normalizeOptionalString(JSON.parse(quotedModel));
   } else if (raw) {
     const split = splitTrailingAuthProfile(raw);
     rawModel = split.model;
@@ -140,7 +134,9 @@ export function extractModelDirective(
     rawProfile,
     rawRuntime,
     scope,
-    scopeConflict: hasAdditionalModelScope(body, match),
+    scopeConflict: match
+      ? ADDITIONAL_MODEL_SCOPE_PATTERN.test(body.slice(match.index + match[0].length))
+      : false,
     hasDirective: Boolean(match),
     ...(match ? { source: modelMatch ? ("model" as const) : ("alias" as const) } : {}),
   };

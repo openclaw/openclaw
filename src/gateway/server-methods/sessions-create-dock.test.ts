@@ -1,9 +1,11 @@
 import { expect, test } from "vitest";
 import { getRuntimeConfig } from "../../config/io.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { setupSessionCreateHandlerTestHarness } from "../server.sessions.create.test-support.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import type { GatewayClient } from "./types.js";
 
@@ -31,75 +33,66 @@ test("dock creation retains human access and sandboxing through discovery and ex
       },
     },
   };
-  const client: GatewayClient = {
-    connect: {
-      minProtocol: 4,
-      maxProtocol: 4,
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-      client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" },
-    },
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: profile.displayName,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-  };
+  setRuntimeConfigSnapshot(cfg);
+  const client = sharingPolicyClient({ user: profile.id });
+  delete client.authenticatedUserId;
+  Object.assign(client.connect, { minProtocol: 4, maxProtocol: 4 });
+  client.connect.client.platform = "web";
+  Object.assign(client.authenticatedUserProfile!, {
+    displayName: profile.displayName,
+    updatedAt: profile.updatedAt,
+  });
   const options = { client, context: { getRuntimeConfig: () => cfg } };
+  const request = async (
+    method: Parameters<typeof directSessionReq>[0],
+    params: Record<string, unknown>,
+  ) => {
+    const result = await directSessionReq(method, params, options);
+    expect(result).toMatchObject({ ok: true });
+    return result.payload;
+  };
+  const creation = {
+    createdVia: "operator",
+    createdActor: { type: "human", source: "profile", id: profile.id },
+    sandbox: "required",
+  };
   const normalKey = "agent:main:dashboard:legacy-board";
   const dockKey = "agent:main:dashboard:dock-board";
-  expect(
-    await directSessionReq("sessions.create", { key: normalKey, label: "Board agent" }, options),
-  ).toMatchObject({ ok: true });
-  expect(
-    await directSessionReq(
-      "sessions.create",
-      { key: dockKey, displayName: "Board agent", surface: "plugin-dock" },
-      options,
-    ),
-  ).toMatchObject({ ok: true });
+  await request("sessions.create", { key: normalKey, label: "Board agent" });
+  await request("sessions.create", {
+    key: dockKey,
+    displayName: "Board agent",
+    surface: "plugin-dock",
+  });
   const scope = { agentId: "main", sessionKey: dockKey, storePath };
   const dock = loadSessionEntry(scope);
   expect(dock).toMatchObject({
-    createdVia: "operator",
+    ...creation,
     createdSurface: "plugin-dock",
-    createdActor: { type: "human", source: "profile", id: profile.id },
-    sandbox: "required",
     displayName: "Board agent",
   });
-  expect(
-    await directSessionReq("sessions.list", { excludeDock: true, involvingMe: true }, options),
-  ).toMatchObject({ ok: true, payload: { sessions: [{ key: normalKey }], totalCount: 1 } });
-  expect(await directSessionReq("sessions.describe", { key: dockKey }, options)).toMatchObject({
-    ok: true,
-    payload: {
-      session: {
-        key: dockKey,
-        isDock: true,
-        createdVia: "operator",
-        createdSurface: "plugin-dock",
-        sharingRole: "owner",
-      },
+  expect(await request("sessions.list", { excludeDock: true, involvingMe: true })).toMatchObject({
+    sessions: [{ key: normalKey }],
+    totalCount: 1,
+  });
+  expect(await request("sessions.describe", { key: dockKey })).toMatchObject({
+    session: {
+      key: dockKey,
+      isDock: true,
+      createdVia: "operator",
+      createdSurface: "plugin-dock",
+      sharingRole: "owner",
     },
   });
-  expect(await directSessionReq("sessions.get", { key: dockKey }, options)).toMatchObject({
-    ok: true,
-  });
+  await request("sessions.get", { key: dockKey });
 
   // Adoption cannot rewrite either a legacy conversation or a dock's creation stamp.
   for (const [key, createdSurface] of [
     [normalKey, undefined],
     [dockKey, "plugin-dock"],
   ] as const) {
-    expect(
-      await directSessionReq("sessions.create", { key, surface: "plugin-dock" }, options),
-    ).toMatchObject({ ok: true });
-    expect(loadSessionEntry({ ...scope, sessionKey: key })).toMatchObject({
-      createdVia: "operator",
-      createdActor: { type: "human", source: "profile", id: profile.id },
-      sandbox: "required",
-    });
+    await request("sessions.create", { key, surface: "plugin-dock" });
+    expect(loadSessionEntry({ ...scope, sessionKey: key })).toMatchObject(creation);
     expect(loadSessionEntry({ ...scope, sessionKey: key })?.createdSurface).toBe(createdSurface);
   }
 });

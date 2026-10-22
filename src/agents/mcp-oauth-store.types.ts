@@ -1,8 +1,8 @@
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
+  OAuthDiscoveryState,
   OAuthClientInformationMixed,
   OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
+} from "@modelcontextprotocol/client";
 
 type McpOAuthAuthorizationChallenge = {
   resourceMetadataUrl?: string;
@@ -11,10 +11,14 @@ type McpOAuthAuthorizationChallenge = {
 };
 
 export type McpOAuthStore = {
+  /** Non-secret authorization incarnation; token refresh preserves it, reauthorization does not. */
+  authorizationId?: string;
   /** Provenance for token-less rows that Doctor must interpret during legacy import. */
   credentialState?: "uninitialized" | "cleared";
   clientInformation?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
+  /** A possibly consumed rotating grant cannot be replayed after owner exit. */
+  refreshClaim?: string;
   tokenExpiresAt?: number;
   tokensAuthorizationServerUrl?: string;
   codeVerifier?: string;
@@ -26,7 +30,16 @@ export type McpOAuthStore = {
 
 export type McpOAuthMutation =
   | { kind: "clientInformation"; clientInformation: OAuthClientInformationMixed }
-  | { kind: "tokens"; tokens: OAuthTokens; tokenExpiresAt: number | undefined }
+  | {
+      kind: "tokens";
+      tokens: OAuthTokens;
+      tokenExpiresAt: number | undefined;
+      replaceAuthorization?: boolean;
+      refreshClaim?: string;
+    }
+  | { kind: "beginRefresh"; claim: string; refreshToken: string }
+  | { kind: "restoreRefresh"; claim: string }
+  | { kind: "ensureAuthorization" }
   | {
       kind: "authorizationRedirect";
       authorizationUrl: string;

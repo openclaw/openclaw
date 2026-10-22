@@ -9,6 +9,7 @@ const DiagnosticsHeapProfileParamsSchema = closedObject({
   samplingIntervalBytes: Type.Optional(
     Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
   ),
+  includeCollected: Type.Optional(Type.Boolean()),
   includeObjectsCollectedByMajorGC: Type.Optional(Type.Boolean()),
   includeObjectsCollectedByMinorGC: Type.Optional(Type.Boolean()),
 });

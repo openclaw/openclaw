@@ -18,7 +18,6 @@ import {
   pluginSummary,
 } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { createCodexPluginThreadConfigStartupProvider } from "./plugin-thread-config-deadline.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildCodexPluginThreadConfig,
@@ -29,6 +28,7 @@ import {
   refreshCodexPluginAppApprovalPolicy,
   shouldBuildCodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
+import { preparePluginThreadConfigForTest } from "./plugin-thread-config.test-helpers.js";
 import type {
   CodexAppServerRequestParams,
   CodexConfigReadResponse,
@@ -1892,58 +1892,67 @@ describe("Codex plugin thread config", () => {
     expect(config.diagnostics).toStrictEqual([]);
   });
 
-  it("force-refreshes app inventory when proven plugin apps are not ready", async () => {
-    const appCache = await cacheApps([]);
-    const installedParams: CodexAppServerRequestParams<"app/installed">[] = [];
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "config/read") {
-        expect(params).toEqual({ includeLayers: true });
-        return { config: {}, layers: [] };
-      }
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-      }
-      if (method === "plugin/read") {
-        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
-      }
-      if (method === "app/installed" || method === "app/read") {
-        if (method === "app/installed") {
-          installedParams.push(params as CodexAppServerRequestParams<"app/installed">);
+  it.each([false, true])(
+    "repairs missing native plugin apps with a cold local cache: %s",
+    async (cold) => {
+      const appCache = cold ? new CodexAppInventoryCache() : await cacheApps([]);
+      const installedParams: CodexAppServerRequestParams<"app/installed">[] = [];
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "config/read") {
+          expect(params).toEqual({ includeLayers: true });
+          return { config: {}, layers: [] };
         }
-        return codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)]);
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+        if (method === "plugin/installed" || method === "plugin/list") {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+        }
+        if (method === "app/installed" || method === "app/read") {
+          if (method === "app/installed") {
+            installedParams.push(params as CodexAppServerRequestParams<"app/installed">);
+            if (!(params as CodexAppServerRequestParams<"app/installed">).forceRefresh) {
+              return { apps: [] };
+            }
+          }
+          return codexAppInventoryResponse(method, [appInfo("google-calendar-app", true)]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      });
 
-    const config = await buildCodexPluginThreadConfig({
-      pluginConfig: calendarPluginConfig(),
-      appCache,
-      appCacheKey: "runtime",
-      nowMs: 1,
-      request,
-    });
+      const config = await buildCodexPluginThreadConfig({
+        pluginConfig: calendarPluginConfig(),
+        appCache,
+        appCacheKey: "runtime",
+        nowMs: 1,
+        request,
+      });
 
-    expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
-    expect(config.configPatch?.apps).toEqual({
-      _default: disabledAppPolicy,
-      "google-calendar-app": {
-        enabled: true,
-        destructive_enabled: true,
-        open_world_enabled: true,
-      },
-    });
-    expect(config.policyContext.apps["google-calendar-app"]).toEqual({
-      configKey: "google-calendar",
-      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-      pluginName: "google-calendar",
-      allowDestructiveActions: true,
-      allowOpenWorld: true,
-      destructiveApprovalMode: "allow",
-      mcpServerNames: [],
-    });
-    expect(config.diagnostics).toStrictEqual([]);
-    expect(installedParams).toEqual([{ forceRefresh: true }]);
-  });
+      expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
+      expect(config.configPatch?.apps).toEqual({
+        _default: disabledAppPolicy,
+        "google-calendar-app": {
+          enabled: true,
+          destructive_enabled: true,
+          open_world_enabled: true,
+        },
+      });
+      expect(config.policyContext.apps["google-calendar-app"]).toEqual({
+        configKey: "google-calendar",
+        marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+        pluginName: "google-calendar",
+        allowDestructiveActions: true,
+        allowOpenWorld: true,
+        destructiveApprovalMode: "allow",
+        mcpServerNames: [],
+      });
+      expect(config.diagnostics).toStrictEqual([]);
+      expect(installedParams).toEqual([
+        ...(cold ? [{ forceRefresh: false }] : []),
+        { forceRefresh: true },
+      ]);
+    },
+  );
 
   it("refreshes app inventory once for the union of all activated plugin apps", async () => {
     const appCache = new CodexAppInventoryCache();
@@ -2286,7 +2295,7 @@ describe("Codex plugin thread config", () => {
   it("uses durable policy and app cache key in the cheap input fingerprint", async () => {
     const appCache = new CodexAppInventoryCache();
     const first = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: { codexPlugins: { enabled: true } },
+      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
       appCacheKey: "runtime-a",
     });
     await appCache.refreshNow({
@@ -2294,11 +2303,11 @@ describe("Codex plugin thread config", () => {
       request: async (method, params) => codexAppInventoryResponse(method, [], params),
     });
     const second = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: { codexPlugins: { enabled: true } },
+      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
       appCacheKey: "runtime-a",
     });
     const third = buildCodexPluginThreadConfigInputFingerprint({
-      pluginConfig: { codexPlugins: { enabled: true } },
+      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
       appCacheKey: "runtime-b",
     });
     expect(second).toBe(first);
@@ -2323,7 +2332,7 @@ describe("Codex plugin thread config", () => {
 
   it("builds a diagnostic deny-all fallback after plugin config timeout", () => {
     const fallback = buildCodexPluginThreadConfigTimeoutFallback({
-      pluginConfig: { codexPlugins: { enabled: true } },
+      policy: resolveCodexPluginsPolicy({ codexPlugins: { enabled: true } }),
       appCacheKey: "runtime",
       message: "Plugin discovery timed out.",
     });
@@ -2351,13 +2360,8 @@ describe("Codex plugin thread config", () => {
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     const request = vi.fn(async () => pluginList([]));
 
-    const config = await createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: undefined,
-      enabledPluginConfigKeys: undefined,
-      policy: undefined,
-      requestTimeoutMs: 100,
-      signal: new AbortController().signal,
-      pluginConfig: {
+    const config = await preparePluginThreadConfigForTest(
+      {
         codexPlugins: {
           enabled: true,
           plugins: {
@@ -2368,8 +2372,11 @@ describe("Codex plugin thread config", () => {
           },
         },
       },
+      "runtime",
+    )({
+      requestTimeoutMs: 100,
+      signal: new AbortController().signal,
       appCache: new CodexAppInventoryCache(),
-      appCacheKey: "runtime",
       metadataCache,
       client: { request },
     }).build();
@@ -2396,13 +2403,8 @@ describe("Codex plugin thread config", () => {
       },
     );
 
-    await createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: undefined,
-      enabledPluginConfigKeys: undefined,
-      policy: undefined,
-      requestTimeoutMs: 240_000,
-      signal: new AbortController().signal,
-      pluginConfig: {
+    await preparePluginThreadConfigForTest(
+      {
         codexPlugins: {
           enabled: true,
           plugins: {
@@ -2413,8 +2415,11 @@ describe("Codex plugin thread config", () => {
           },
         },
       },
+      "runtime-long-startup",
+    )({
+      requestTimeoutMs: 240_000,
+      signal: new AbortController().signal,
       appCache: new CodexAppInventoryCache(),
-      appCacheKey: "runtime-long-startup",
       metadataCache: new CodexPluginMetadataCache(),
       client: { request },
     }).build();
@@ -2466,16 +2471,14 @@ describe("Codex plugin thread config", () => {
     });
 
     const buildConfig = (threadId?: string) =>
-      createCodexPluginThreadConfigStartupProvider({
-        inputFingerprint: undefined,
-        enabledPluginConfigKeys: ["google-calendar"],
-        policy: undefined,
+      preparePluginThreadConfigForTest(
+        calendarPluginConfig(),
+        "runtime",
+      )({
         requestTimeoutMs: 1_000,
         signal: new AbortController().signal,
-        pluginConfig: calendarPluginConfig(),
         configCwd: "/workspace/project",
         appCache: new CodexAppInventoryCache(),
-        appCacheKey: "runtime",
         metadataCache: new CodexPluginMetadataCache(),
         client: { request },
       }).build(threadId ? { threadId } : {});
@@ -2490,7 +2493,7 @@ describe("Codex plugin thread config", () => {
       { enabled: false, callable: false },
     ]);
     expect(request.mock.calls.find(([method]) => method === "app/installed")?.[1]).toEqual({
-      forceRefresh: true,
+      forceRefresh: false,
       threadId: "thread-149",
     });
     expect(request.mock.calls.find(([method]) => method === "app/read")?.[1]).toEqual({
@@ -2585,13 +2588,8 @@ describe("Codex plugin thread config", () => {
     });
     await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     const controller = new AbortController();
-    const build = createCodexPluginThreadConfigStartupProvider({
-      inputFingerprint: undefined,
-      enabledPluginConfigKeys: undefined,
-      policy: undefined,
-      requestTimeoutMs: 1_000,
-      signal: controller.signal,
-      pluginConfig: {
+    const build = preparePluginThreadConfigForTest(
+      {
         codexPlugins: {
           enabled: true,
           plugins: {
@@ -2602,7 +2600,10 @@ describe("Codex plugin thread config", () => {
           },
         },
       },
-      appCacheKey: "runtime",
+      "runtime",
+    )({
+      requestTimeoutMs: 1_000,
+      signal: controller.signal,
       metadataCache,
       client: { request: vi.fn(async () => pluginList([])) },
     }).build();
@@ -2619,16 +2620,10 @@ describe("Codex plugin thread config", () => {
     const request = vi.fn(async () => pluginList([]));
 
     await expect(
-      createCodexPluginThreadConfigStartupProvider({
-        inputFingerprint: undefined,
-        enabledPluginConfigKeys: undefined,
-        policy: undefined,
-        requestTimeoutMs: 1_000,
-        signal: controller.signal,
-        pluginConfig: { codexPlugins: { enabled: true } },
-        appCacheKey: "runtime",
-        client: { request },
-      }).build(),
+      preparePluginThreadConfigForTest(
+        { codexPlugins: { enabled: true } },
+        "runtime",
+      )({ requestTimeoutMs: 1_000, signal: controller.signal, client: { request } }).build(),
     ).rejects.toThrow("outer abort");
     expect(request).not.toHaveBeenCalled();
   });
@@ -2781,7 +2776,7 @@ function pluginDetail(
 }
 
 async function buildReadyGoogleCalendarThreadConfig(
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig,
 ): Promise<Awaited<ReturnType<typeof buildCodexPluginThreadConfig>>> {
   const appCache = await cacheApps([appInfo("google-calendar-app", true)]);
 
@@ -2817,13 +2812,13 @@ describe("missing configured plugins", () => {
     {
       marketplaceName: "missing-marketplace",
       code: "marketplace_missing",
-      actions: "ask",
+      actions: "ask" as const,
       enabled: true,
     },
   ])(
     "keeps healthy runtime apps for $code with actions=$actions enabled=$enabled",
     async ({ marketplaceName, code, actions, enabled }) => {
-      const pluginConfig = {
+      const pluginConfig: CodexPluginConfig = {
         codexPlugins: {
           enabled: true,
           allow_all_plugins: true,

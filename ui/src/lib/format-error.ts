@@ -1,7 +1,13 @@
 import { formatErrorMessage } from "@openclaw/normalization-core";
 import { redactToolDetail } from "./browser-redact.ts";
 
+/** The message is complete UI text; the cause remains available to diagnostics. */
+export class UserFacingError extends Error {}
+
 export function formatUiError(error: unknown, fallback = ""): string {
+  if (error instanceof UserFacingError) {
+    return redactToolDetail(error.message) || fallback;
+  }
   return formatErrorMessage(error, { redact: redactToolDetail }) || fallback;
 }
 

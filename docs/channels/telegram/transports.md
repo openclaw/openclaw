@@ -15,7 +15,7 @@ Long polling is the default. Webhook mode is the alternative when an HTTPS ingre
   <Accordion title="Long polling vs webhook">
     Default is long polling. For webhook mode, set `channels.telegram.webhookUrl` and `channels.telegram.webhookSecret`; optional `webhookPath` (default `/telegram-webhook`) and `webhookCertPath` (self-signed cert PEM for direct-IP or no-domain setups).
 
-    The Gateway reserves `/health`, `/healthz`, `/ready`, `/readyz`, `/startup`, and `/startupz` for probes, including query variants. The `/api/channels` namespace also requires Gateway authentication, including encoded forms, and cannot receive direct Telegram callbacks. Choose `/telegram-webhook` or another route for Gateway ingress. The exact `/healthz` path remains reserved for the legacy listener's health check and cannot be a Telegram webhook path. Other Gateway-reserved paths can continue receiving callbacks through an explicit `legacyWebhook` endpoint while you update `webhookPath`, `webhookUrl`, and the reverse proxy mapping. Without an explicit endpoint, a reserved path produces an actionable startup error. Verify that [hot reload](/gateway/configuration/hot-reload) applied the route change with `openclaw channels status --probe`.
+    The Gateway reserves `/health`, `/healthz`, `/ready`, `/readyz`, `/startup`, and `/startupz` for checks, including query variants. The `/api/channels` namespace also requires Gateway authentication, including encoded forms, and cannot receive direct Telegram callbacks. Choose `/telegram-webhook` or another route for Gateway ingress. The exact `/healthz` path remains reserved for the legacy listener's health check and cannot be a Telegram webhook path. Other Gateway-reserved paths can continue receiving callbacks through an explicit `legacyWebhook` endpoint while you update `webhookPath`, `webhookUrl`, and the reverse proxy mapping. Without an explicit endpoint, a reserved path produces an actionable startup error. Verify that [hot reload](/gateway/configuration/hot-reload) applied the route change with `openclaw channels status --probe`.
 
     In long-polling mode, OpenClaw saves its restart position after an update is committed to the durable ingress queue. A failed handler remains retryable from that queue.
 
@@ -27,7 +27,7 @@ Long polling is the default. Webhook mode is the alternative when an HTTPS ingre
 
     Doctor saves the pin and its `meta.migrations.webhookListeners` completion record together. Keep that record when removing the pin so later Doctor runs and updates leave it removed. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners) for included and read-only config sources.
 
-    The legacy port preserves its unauthenticated `/healthz` response (`200`, plain `ok`) and account-local failed-secret rate limit. Health matching is exact: query strings, trailing slashes, case changes, and encoded variants are not health checks. HEAD returns the same status without a body. The canonical Gateway port keeps its own probe and response-header behavior.
+    The legacy port preserves its unauthenticated `/healthz` response (`200`, plain `ok`) and account-local failed-secret rate limit. Health matching is exact: query strings, trailing slashes, case changes, and encoded variants are not health checks. HEAD returns the same status without a body. The main Gateway port keeps its own check and response-header behavior.
 
     After upgrading, run `openclaw doctor --fix`. Doctor backs up the config and migrates old `webhookPort` and `webhookHost` settings to `legacyWebhook: { port, host }`, preserving a host-only setting with port `8787`. An explicit endpoint object overrides the default; an omitted object host uses `127.0.0.1`. Existing `legacyWebhook: false` settings remain disabled during migration.
 
@@ -50,13 +50,16 @@ Telegram acknowledgment is gated by durable queue admission, not by plugin
 hooks or completion of an agent turn. Webhook mode uses the boundary described
 above; long polling uses this sequence:
 
-1. The polling worker receives one Telegram update and waits.
-2. OpenClaw transactionally enqueues the raw update in the account-scoped
+1. The polling worker receives a batch of Telegram updates and waits.
+2. OpenClaw transactionally enqueues that response's raw updates in the account-scoped
    `channel_ingress_events` queue in `state/openclaw.sqlite`.
-3. After enqueue succeeds, OpenClaw schedules persistence of the restart offset
+3. After the batch is durable, OpenClaw schedules persistence of its highest update ID
    and acknowledges the worker, allowing polling to continue.
-4. The shared drain processes the queued update separately. If admission fails,
+4. The shared drain processes the queued updates separately. If admission fails,
    OpenClaw rejects the worker acknowledgment instead of silently advancing.
+
+Duplicate update IDs are admitted once. Batching preserves queue ordering and
+does not change the quiet windows used to combine albums and forwarded messages.
 
 `offset queued` means the restart-offset write was scheduled, not committed. A
 crash before that write finishes can make Telegram redeliver an update that is
@@ -66,6 +69,19 @@ deduplication, not exactly-once processing. See
 [durable ingress and replay dedupe](/plugins/sdk-channel-plugins/durable-ingress#durable-ingress-and-replay-dedupe).
 
 ### Replay limits
+
+Callback processing failures caused by changed requester authority or an expired
+Telegram callback query are recorded as terminal failures and release the chat
+lane immediately. Transient callback failures keep the normal retry policy.
+An expired acknowledgment alone does not discard the button action: authorization
+and ordered processing still run.
+
+During upgrades, legacy spool updates older than 24 hours become
+`stale-legacy-import` failure tombstones, using their original receipt or message/edit
+date. Fresh updates still dispatch; original source bytes and import receipts stay
+preserved. One warning reports the count and oldest/newest dates. This intentionally
+forgoes genuinely unprocessed old updates to avoid executing stale instructions.
+Previously imported queue rows are unchanged.
 
 Both transports record the account's bot identity before accepting updates, even
 without a polling offset. Replacing a known bot clears its old ingress rows before

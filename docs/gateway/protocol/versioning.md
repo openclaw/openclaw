@@ -21,7 +21,7 @@ Which protocol versions a client may negotiate, and the constants a reference cl
   include the current protocol in that range; current clients and servers run
   protocol v4.
 - Authenticated clients with both `role: "node"` and `client.mode: "node"`
-  may use the N-1 node protocol (v3). Lightweight restart probes use
+  may use the N-1 node protocol (v3). Lightweight restart checks use
   the same N-1 window. Device auth, pairing, scopes, command policy, and exec
   approvals are unchanged by this compatibility window. Plugin-owned node
   capabilities and commands are withheld until the node upgrades to the current
@@ -45,7 +45,7 @@ third-party clients.
 | `MIN_NODE_PROTOCOL_VERSION`               | `3`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
 | `MIN_PROBE_PROTOCOL_VERSION`              | `3`                                                   | `packages/gateway-protocol/src/version.ts`                                                                                |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`requestTimeoutMs`)                                                              |
-| Preauth / connect-challenge timeout       | `15_000` ms                                           | `packages/gateway-client/src/timeouts.ts` (`OPENCLAW_HANDSHAKE_TIMEOUT_MS` env can raise the paired server/client budget) |
+| Preauth / connect-challenge timeout       | `30_000` ms                                           | `packages/gateway-client/src/timeouts.ts` (`OPENCLAW_HANDSHAKE_TIMEOUT_MS` env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `packages/gateway-client/src/client.ts` (`GATEWAY_RECONNECT_POLICY`)                                                      |
 | Max reconnect backoff                     | `30_000` ms                                           | `packages/gateway-client/src/client.ts` (`GATEWAY_RECONNECT_POLICY`)                                                      |
 | Fast-retry clamp after device-token close | `250` ms                                              | `packages/gateway-client/src/client.ts`                                                                                   |
@@ -133,9 +133,13 @@ new `worktrees.recoverRemoval` and `worktrees.retireSnapshot` methods require
 
 Older CLI and SDK binaries keep their existing direct-write behavior. Routing
 does not intercept those writes, arbitrary trusted SQL, or another state root
-sharing an external database. Match CLI, Gateway, and SDK versions; callers must
-retain their existing foreign-commit freshness checks. Routing covers the named
-operations above; it does not guarantee that the Gateway is the only SQLite writer.
+sharing an external database. Match CLI, Gateway, and SDK versions. All writers
+must route through the Gateway or acquire exclusive ownership while it is
+stopped; direct writes from another process while it is running are unsupported.
+Runtime caches use in-process write receipts, not foreign-commit freshness
+checks. Routing covers the named operations above; it cannot make an older
+direct writer safe to run alongside the Gateway. See
+[Database schemas](/reference/database-schemas) for the ownership contract.
 
 The following boundaries retain their existing owners and contracts:
 

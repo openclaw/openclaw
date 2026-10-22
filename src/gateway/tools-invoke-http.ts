@@ -112,6 +112,7 @@ export async function handleToolsInvokeHttpRequest(
         signal,
         hasCurrentClientAuthority: () => !signal.aborted && requestAuth.hasCurrentClientAuthority(),
         isWebchatConnect: () => false,
+        pluginRegistry: context?.getGatewayMethodRegistry?.().pluginRegistry,
       },
       () =>
         invokeGatewayTool({

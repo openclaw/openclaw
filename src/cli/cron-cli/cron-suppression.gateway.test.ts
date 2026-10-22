@@ -5,6 +5,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import { resolveCronDeliveryPlan } from "../../cron/delivery-plan.js";
 import { dispatchCronDelivery } from "../../cron/isolated-agent/delivery-dispatch.js";
 import { readCronRunHistoryPageForTests } from "../../cron/run-history.test-support.js";
@@ -16,7 +18,11 @@ import { cronStoreKey } from "../../cron/store/key.js";
 import type { CronJob } from "../../cron/types.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import {
+  captureGatewayRootWorkReleaseObserver,
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../process/gateway-work-admission.js";
 import { ExitError } from "../../runtime.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -100,13 +106,16 @@ afterEach(() => {
 });
 
 describe("cron CLI delivery suppression readback", () => {
-  it("distinguishes intentional silence from failures across repeated runs of one stored job", async () => {
+  it("distinguishes intentional silence from failures across repeated runs of one stored job", async ({
+    signal,
+  }) => {
     await withOpenClawTestState(
       { layout: "home", prefix: "openclaw-cron-cli-suppression-" },
       async (state) => {
         await state.writeConfig({});
         const storePath = state.statePath("cron", "jobs.json");
         const events: CronEvent[] = [];
+        let runReleased: Promise<"settled" | "reset"> | undefined;
         let phase:
           | "silent"
           | "delivery-error"
@@ -118,10 +127,19 @@ describe("cron CLI delivery suppression readback", () => {
           abortSignal,
           deliveryAttemptFence,
         }) => {
+          const released = createDeferred<"settled" | "reset">();
+          expectDefined(
+            captureGatewayRootWorkReleaseObserver(),
+            "cron execution must own root work admission",
+          )(released.resolve);
+          runReleased = released.promise;
           if (phase === "execution-error") {
             throw new Error("fixture agent execution failed");
           }
-          const text = phase === "silent" ? "NO_REPLY" : "Actionable update";
+          const prepared = prepareAgentRunTerminalReply({
+            rawText: phase === "silent" ? "NO_REPLY" : "Actionable update",
+          });
+          const text = prepared.text;
           const sessionId = randomUUID();
           const sessionKey = `agent:main:cron:${job.id}:run:${sessionId}`;
           const now = Date.now();
@@ -145,10 +163,24 @@ describe("cron CLI delivery suppression readback", () => {
                     mode: "explicit",
                     error: new Error("fixture delivery route unavailable"),
                   }
-                : { ok: true, mode: "explicit", channel: "telegram", to: "123" },
+                : {
+                    ok: true,
+                    mode: "explicit",
+                    channel: "telegram",
+                    to: "123",
+                    sessionRoute: {
+                      sessionKey: "agent:main:telegram:direct:123",
+                      baseSessionKey: "agent:main:telegram:direct:123",
+                      peer: { kind: "direct", id: "123" },
+                      chatType: "direct",
+                      from: "telegram:123",
+                      to: "123",
+                    },
+                  },
             deliveryPlan: resolveCronDeliveryPlan(job),
             deliveryRequested: phase !== "not-requested",
             undeliveredRunStatus: "ok",
+            skipDelivery: prepared.terminalReply.disposition === "silent" ? "silent" : undefined,
             spawnOnlyHandoff: false,
             sourceDeliveryOutcome: {
               visibleDeliveries: [],
@@ -157,8 +189,7 @@ describe("cron CLI delivery suppression readback", () => {
               unverifiedMessageToolDelivery: false,
             },
             deliveryBestEffort: job.delivery?.bestEffort === true,
-            deliveryPayloadHasStructuredContent: false,
-            deliveryPayloads: [{ text }],
+            deliveryPayloads: text ? [{ text }] : [],
             synthesizedText: text,
             summary: text,
             outputText: text,
@@ -188,7 +219,6 @@ describe("cron CLI delivery suppression readback", () => {
           cronEnabled: true,
           log: createNoopLogger(),
           enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
           onEvent: (event) => {
             if (event.action === "finished") {
@@ -228,6 +258,7 @@ describe("cron CLI delivery suppression readback", () => {
                       bestEffort: phase === "delivery-error",
                     },
             });
+            runReleased = undefined;
             const run = await runCli([
               "run",
               job.id,
@@ -248,7 +279,17 @@ describe("cron CLI delivery suppression readback", () => {
                   : "not-delivered";
             const delivered = phase === "execution-error" ? undefined : false;
             expect(run.exitCode).toBe(failed ? 1 : 0);
-            await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+            // CLI completion can observe history before the queued run releases its root.
+            expect(
+              await withinTest(
+                expectDefined<Promise<"settled" | "reset">>(runReleased, "cron run did not start"),
+                signal,
+              ),
+            ).toBe("settled");
+            expect(
+              getActiveGatewayRootWorkCount(),
+              `${phase}: ${getActiveGatewayRootWorkHolders().join(", ")}`,
+            ).toBe(0);
 
             const reason = phase === "silent" ? "silent" : undefined;
             const persisted = expectDefined(

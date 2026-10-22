@@ -14,14 +14,12 @@ type UsageRefreshPolicyOptions = {
 /** Owns Usage's page-specific TTL, interruption, and refresh coalescing policy. */
 export class UsageRefreshPolicy {
   private lastLoadedAtMs: number | null = null;
-  private pendingAutomaticRefresh = false;
+  // A deferred refresh keeps its reason: a provider-only retry must not replay as a full reload.
+  private pendingAutomaticRefresh: UsageRefreshReason | null = null;
   private publicationPending = false;
   private reloadPending = false;
   private retryTimer: number | null = null;
-  private retryInFlight: Promise<void> | null = null;
-  private pendingIncomplete = false;
   private retryAttempts = 0;
-  private retryCycle = 0;
   private exhaustionReported = false;
   private connection: unknown;
 
@@ -69,8 +67,6 @@ export class UsageRefreshPolicy {
     }
     if (!incomplete) {
       this.resetRetryCycle();
-    } else if (this.retryInFlight !== null) {
-      this.pendingIncomplete = true;
     } else if (this.retryTimer === null) {
       this.armRetry();
     }
@@ -87,34 +83,18 @@ export class UsageRefreshPolicy {
       return;
     }
     this.retryAttempts += 1;
-    this.pendingIncomplete = false;
-    const cycle = this.retryCycle;
     // Let the Gateway's 30s aggregate cache expire without increasing request volume.
     this.retryTimer = window.setTimeout(
       () => {
         this.retryTimer = null;
-        const inFlight = this.requestAndWait("poll").catch(() => undefined);
-        this.retryInFlight = inFlight;
-        void inFlight.finally(() => {
-          if (this.retryCycle !== cycle || this.retryInFlight !== inFlight) {
-            return;
-          }
-          this.retryInFlight = null;
-          if (this.pendingIncomplete) {
-            this.pendingIncomplete = false;
-            this.armRetry();
-          }
-        });
+        void this.requestAndWait("poll").catch(() => undefined);
       },
       5_000 * 2 ** (this.retryAttempts - 1),
     );
   }
 
   private resetRetryCycle(): void {
-    this.retryCycle += 1;
     this.retryAttempts = 0;
-    this.pendingIncomplete = false;
-    this.retryInFlight = null;
     this.exhaustionReported = false;
     if (this.retryTimer !== null) {
       window.clearTimeout(this.retryTimer);
@@ -134,8 +114,8 @@ export class UsageRefreshPolicy {
     this.reloadPending = false;
   }
 
-  request(reason: UsageRefreshReason): void {
-    void this.requestAndWait(reason);
+  request(reason: UsageRefreshReason): Promise<void> {
+    return this.requestAndWait(reason);
   }
 
   private async requestAndWait(reason: UsageRefreshReason): Promise<void> {
@@ -144,10 +124,14 @@ export class UsageRefreshPolicy {
       this.reloadPending = true;
     }
     if (this.options.isLoading() && reason !== "manual") {
-      this.pendingAutomaticRefresh = true;
+      // Any broader reason outranks a deferred provider-only retry.
+      this.pendingAutomaticRefresh =
+        this.pendingAutomaticRefresh && this.pendingAutomaticRefresh !== "poll"
+          ? this.pendingAutomaticRefresh
+          : reason;
       return;
     }
-    this.pendingAutomaticRefresh = false;
+    this.pendingAutomaticRefresh = null;
     if (
       reason !== "manual" &&
       (document.visibilityState !== "visible" ||
@@ -166,10 +150,11 @@ export class UsageRefreshPolicy {
   }
 
   flushPending(): void {
-    if (!this.pendingAutomaticRefresh) {
+    const pending = this.pendingAutomaticRefresh;
+    if (!pending) {
       return;
     }
-    this.pendingAutomaticRefresh = false;
-    this.request("focus");
+    this.pendingAutomaticRefresh = null;
+    void this.request(pending === "poll" ? "poll" : "focus");
   }
 }

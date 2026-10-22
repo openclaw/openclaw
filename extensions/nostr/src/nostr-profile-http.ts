@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -44,13 +45,11 @@ const profileRateLimiter = createFixedWindowRateLimiter({
 
 const publishLocks = new KeyedAsyncQueue();
 
-// NIP-05 format: user@domain.com
 const nip05FormatSchema = z
   .string()
   .regex(/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i, "Invalid NIP-05 format (user@domain.com)")
   .optional();
 
-// LUD-16 Lightning address format: user@domain.com
 const lud16FormatSchema = z
   .string()
   .regex(/^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/i, "Invalid Lightning address format")
@@ -93,12 +92,6 @@ function restoreProfileUpdateUrlInputs(profile: NostrProfile, value: unknown): N
     ...(typeof value.banner === "string" ? { banner: value.banner } : {}),
     ...(typeof value.website === "string" ? { website: value.website } : {}),
   };
-}
-
-function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
@@ -360,7 +353,6 @@ async function handleUpdateProfile(
       return await publishNostrProfile(accountId, mergedProfile);
     });
 
-    // Only persist if at least one relay succeeded
     if (result.successes.length > 0) {
       await getPluginRuntimeGatewayRequestScope()?.revalidate?.();
       await ctx.updateConfigProfile(accountId, mergedProfile);
@@ -423,7 +415,6 @@ async function handleImportProfile(
   const result = await importProfileFromRelays({
     pubkey,
     relays,
-    timeoutMs: 10_000,
   });
 
   if (!result.ok) {

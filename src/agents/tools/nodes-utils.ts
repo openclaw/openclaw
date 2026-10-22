@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
@@ -7,6 +9,28 @@ import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 export type { NodeListNode };
+
+export function nodeToolIdempotencyKey(params: {
+  command: "computer.act" | "mobile.ui.act";
+  scope?: string;
+  toolCallId: string;
+  purpose?: "follow-up-observation";
+}): string {
+  const stableScope = params.scope?.trim();
+  const stableCallId = params.toolCallId.trim();
+  // Runner-normalized call ids are unique within an attempt, not across all runs.
+  if (!stableScope || !stableCallId) {
+    return crypto.randomUUID();
+  }
+  const parts = [stableScope, getAgentToolAssistantTurnId() ?? "", stableCallId, params.command];
+  if (params.purpose) {
+    parts.push(params.purpose);
+  }
+  // The automatic read shares a call id with input, but must never replay its result.
+  const prefix = params.purpose ? "computer.observation" : params.command;
+  // v2 versions scope + assistant turn + call id + command, not the wire contract.
+  return `${prefix}:v2:${sha256Hex(JSON.stringify(parts))}`;
+}
 
 type DefaultNodeFallback = "none" | "first";
 
@@ -28,16 +52,6 @@ function compareNewestTimestamp(a?: number, b?: number): number {
   const aValue = Number.isFinite(a) ? (a ?? 0) : -1;
   const bValue = Number.isFinite(b) ? (b ?? 0) : -1;
   return bValue - aValue;
-}
-
-function compareDefaultNodeOrder(
-  a: NodeListNode,
-  b: NodeListNode,
-  recencyField: "connectedAtMs" | "lastSeenAtMs",
-): number {
-  return (
-    compareNewestTimestamp(a[recencyField], b[recencyField]) || a.nodeId.localeCompare(b.nodeId)
-  );
 }
 
 export function selectDefaultNodeFromList(
@@ -74,11 +88,13 @@ export function selectDefaultNodeFromList(
   // Once the pool is known to be offline, stale connection timestamps must not
   // outrank the durable last-seen signal used to choose the wake target.
   const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
-  return candidates.reduce<NodeListNode | null>(
-    (best, node) =>
-      best === null || compareDefaultNodeOrder(node, best, recencyField) < 0 ? node : best,
-    null,
-  );
+  return candidates.reduce<NodeListNode | null>((best, node) => {
+    const order = best
+      ? compareNewestTimestamp(node[recencyField], best[recencyField]) ||
+        node.nodeId.localeCompare(best.nodeId)
+      : -1;
+    return order < 0 ? node : best;
+  }, null);
 }
 
 function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {

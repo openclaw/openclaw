@@ -1,6 +1,4 @@
 // Control UI config module wires vitest behavior.
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
@@ -23,17 +21,17 @@ import {
   loadVitestPerformanceConfig,
 } from "../test/vitest/vitest.performance-config.ts";
 import { createRedactingReporterPlugin } from "../test/vitest/vitest.reporters.ts";
-import {
-  jsdomOptimizedDeps,
-  nonIsolatedRunnerPath,
-  sharedVitestConfig,
-} from "../test/vitest/vitest.shared.config.ts";
+import { nonIsolatedRunnerPath, sharedVitestConfig } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
+  resolveUiTypeScriptPath,
   uiNodeDrivenBrowserTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
+import { resolvePlaywrightChromiumExecutablePath } from "./src/test-helpers/playwright-chromium.ts";
+import { overlayEmulateMedia } from "./test/overlay-browser-commands.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -74,46 +72,80 @@ const sharedUiTestConfig = {
   testTimeout: 60_000,
   hookTimeout: 60_000,
 } as const;
-const nodeSetupFiles = ["./src/test-helpers/lit-warnings.setup.ts"];
+const nodeSetupFiles = ["./src/test-helpers/dom.setup.ts"];
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
-const chromiumExecutableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
-const systemChromiumExecutableCandidates = [
-  "/snap/bin/chromium",
-  "/usr/bin/chromium-browser",
-  "/usr/bin/chromium",
-  "/usr/bin/google-chrome",
-  "/usr/bin/google-chrome-stable",
-] as const;
-
-function canRunChromiumExecutable(executablePath: string): boolean {
-  const result = spawnSync(executablePath, ["--version"], { stdio: "ignore" });
-  return result.status === 0;
-}
-
 function resolveChromiumLaunchOptions(): { executablePath: string } | undefined {
-  const override = process.env[chromiumExecutableOverrideEnvKey]?.trim();
-  if (override && existsSync(override) && canRunChromiumExecutable(override)) {
-    return { executablePath: override };
-  }
-
   const defaultExecutablePath = chromium.executablePath();
-  if (existsSync(defaultExecutablePath) && canRunChromiumExecutable(defaultExecutablePath)) {
-    return undefined;
-  }
-
-  const systemExecutablePath = systemChromiumExecutableCandidates.find(
-    (candidate) => existsSync(candidate) && canRunChromiumExecutable(candidate),
-  );
-  return systemExecutablePath ? { executablePath: systemExecutablePath } : undefined;
+  const executablePath = resolvePlaywrightChromiumExecutablePath(defaultExecutablePath);
+  // Playwright picks its own headless shell for the pinned default; pin only alternatives.
+  return executablePath === defaultExecutablePath ? undefined : { executablePath };
 }
 
 let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | null = null;
 
-export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
+// The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
+const webkitTestFiles = [
+  "src/components/select-picker.behavior.browser.test.ts",
+  "src/components/select-picker.browser.test.tsx",
+  "src/components/multi-select.browser.test.ts",
+  "src/components/model-picker.browser.test.ts",
+  "src/components/decision-model-picker.browser.test.tsx",
+  "src/components/agent-select-opening.browser.test.ts",
+  "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
+  "src/components/app-sidebar-rail-menus.browser.test.ts",
+  "src/components/agent-emoji-picker.browser.test.ts",
+  "src/components/appearance-picker.browser.test.ts",
+  "src/components/confirm-dialog.browser.test.ts",
+  "src/pages/channels/view.detail.browser.test.tsx",
+  "src/pages/plugins/settings-lifecycle.browser.test.tsx",
+  "src/pages/new-session/project-chip.registration.browser.test.tsx",
+  "src/pages/agents/agent-file-preview.browser.test.ts",
+  "src/pages/skills/reader-shell.browser.test.tsx",
+  "src/lib/toast.browser.test.ts",
+  "src/components/session-menu.browser.test.ts",
+  "src/components/control-theme.browser.test.tsx",
+  "src/components/menu-surface.browser.test.tsx",
+  "src/components/session-progress-hovercard.browser.test.ts",
+  "src/components/modal-dialog.test.ts",
+  "src/components/tooltip.test.ts",
+  "src/components/tooltip.browser.test.ts",
+  "src/components/panel-tab-strip.test.ts",
+  "src/components/panel-tab-strip.browser.test.ts",
+  "src/components/hub-tabs.browser.test.tsx",
+  "src/components/tooltip-title.browser.test.ts",
+  "src/pages/chat/chat-composer-mobile.browser.test.tsx",
+  "src/pages/chat/chat-composer-context.browser.test.ts",
+  "src/pages/chat/chat-composer-context.palette.browser.test.ts",
+  "src/pages/chat/chat-composer-overflow.browser.test.tsx",
+  "src/pages/chat/chat-composer-queue.browser.test.tsx",
+  "src/pages/chat/chat-queue-images.browser.test.ts",
+  "src/pages/chat/components/chat-effort-picker.browser.test.tsx",
+  "src/pages/chat/components/chat-details.browser.test.ts",
+  "src/pages/chat/components/chat-message-reactions.browser.test.tsx",
+  "src/pages/chat/components/chat-model-picker.browser.test.tsx",
+  "src/pages/chat/components/chat-pane-header.browser.test.tsx",
+  "src/pages/chat/components/chat-pane-versions-menu.browser.test.ts",
+  "src/components/overlay-anchor.browser.test.ts",
+  "src/components/overlay-lifecycle.browser.test.ts",
+  "src/components/overlay-shadow.browser.test.ts",
+  "src/components/solid/*.browser.test.tsx",
+  "src/components/image-lightbox.browser.test.ts",
+  "src/components/markdown-mermaid-expansion.browser.test.ts",
+  "src/components/modal-dialog.browser.test.ts",
+  "src/components/sessions-hub-header.browser.test.ts",
+  "src/components/transient-container.browser.test.ts",
+].map((file) => resolveUiTypeScriptPath(file, here));
+
+export function createUiBrowserVitestConfig(
+  env = process.env,
+  browser: "chromium" | "webkit" = "chromium",
+): ViteUserConfig {
   const include = includeUiTests(
-    ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
+    browser === "webkit"
+      ? webkitTestFiles
+      : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
     env,
   );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
@@ -125,15 +157,18 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       nodeDrivenBrowserLayoutTests,
       matchesVitestGlob,
     ).length === 0;
-  if (!excludesBrowserFiles && chromiumLaunchOptions === null) {
+  if (browser === "chromium" && !excludesBrowserFiles && chromiumLaunchOptions === null) {
     chromiumLaunchOptions = resolveChromiumLaunchOptions();
   }
   const provider = playwright({
-    launchOptions: {
-      ...chromiumLaunchOptions,
-      // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
-      args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
-    },
+    launchOptions:
+      browser === "chromium"
+        ? {
+            ...chromiumLaunchOptions,
+            // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
+            args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
+          }
+        : undefined,
   });
   if (excludesBrowserFiles) {
     // Keep browser discovery for native sharding; only skip its speculative launch.
@@ -142,6 +177,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
     plugins: [
+      controlUiSolidPlugin(),
       mermaidClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
@@ -149,26 +185,12 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
     ],
     optimizeDeps: {
       include: [
-        // These controls share wa-popup's eager registration. Optimize them together
-        // so later test imports cannot re-register a rebuilt common chunk.
-        // Sidebar fixtures also load lazy dialogs, tabs, and narration. Prepare their
-        // dependency graph before tests rather than reloading the active Lit registry.
-        "@awesome.me/webawesome/dist/components/dialog/dialog.js",
-        "@awesome.me/webawesome/dist/components/tab-group/tab-group.js",
-        "@awesome.me/webawesome/dist/components/tab-panel/tab-panel.js",
-        "@awesome.me/webawesome/dist/components/tab/tab.js",
-        "@awesome.me/webawesome/dist/components/dropdown/dropdown.js",
-        "@awesome.me/webawesome/dist/components/dropdown-item/dropdown-item.js",
-        "@awesome.me/webawesome/dist/components/option/option.js",
-        "@awesome.me/webawesome/dist/components/popover/popover.js",
-        "@awesome.me/webawesome/dist/components/popup/popup.js",
-        "@awesome.me/webawesome/dist/components/select/select.js",
-        "@awesome.me/webawesome/dist/components/tooltip/tooltip.js",
         "@codemirror/commands",
+        "@codemirror/language",
+        "@codemirror/language-data",
         "@codemirror/state",
         "@codemirror/view",
-        "@lit/context",
-        "@lit/task",
+        "@lezer/highlight",
         "@noble/ed25519",
         "@noble/hashes/sha2.js",
         "@noble/hashes/utils.js",
@@ -176,30 +198,27 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@openclaw/normalization-core > libphonenumber-js/min/metadata",
         "@openclaw/uirouter",
         "@panzoom/panzoom",
-        "@tanstack/lit-virtual",
+        "@solidjs/signals",
+        "@solidjs/testing-library",
         "@tanstack/virtual-core",
+        "@zag-js/menu",
+        "@zag-js/rect-utils",
+        "@zag-js/vanilla",
+        "croner",
         "dompurify",
         "file-type",
         "highlight.js/lib/core",
-        "highlight.js/lib/languages/{bash,cpp,css,diff,java,javascript,json,markdown,python,rust,typescript,xml,yaml}",
+        "highlight.js/lib/languages/{bash,cpp,css,diff,go,java,javascript,json,markdown,python,rust,typescript,xml,yaml}",
         "ipaddr.js",
         "json5",
-        "lit/async-directive.js",
-        "lit/directive.js",
-        "lit/directives/guard.js",
-        "lit/directives/if-defined.js",
-        "lit/directives/keyed.js",
-        "lit/directives/ref.js",
-        "lit/directives/repeat.js",
-        "lit/directives/style-map.js",
-        "lit/directives/unsafe-html.js",
-        "lit/directives/until.js",
-        "lit/static-html.js",
+        "jsonc-parser",
         "markdown-it",
-        "mdast-util-from-markdown",
-        "mdast-util-gfm-table",
-        "micromark-extension-gfm-table",
+        "markdown-it-cjk-friendly",
+        "markdown-it-emoji/lib/data/full.mjs",
         "remend",
+        "string-width",
+        "typebox",
+        "typebox/schema",
         "typebox/compile",
         "typebox/guard",
         "typebox/value",
@@ -215,16 +234,17 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       // File-project loading overrides Vite's root with the config directory.
       // Keep discovery and setup paths rooted in the UI in every entrypoint.
       root: here,
-      name: "browser",
+      name: browser === "webkit" ? "webkit" : "browser",
       // No cleanup runner: it imports node:fs and repo server modules, which
       // cannot load in browser mode. Browser files own their own teardown.
       include,
       exclude: [...nodeDrivenBrowserLayoutTests],
-      setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+      setupFiles: ["./src/test-helpers/dom.setup.ts"],
       browser: {
         enabled: true,
         provider,
-        instances: [{ browser: "chromium", name: "chromium" }],
+        commands: { overlayEmulateMedia },
+        instances: [{ browser, name: browser }],
         headless: true,
         ui: false,
       },
@@ -289,13 +309,16 @@ export default defineConfig({
     projects: [
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
         test: {
           ...sharedUiTestConfig,
-          deps: jsdomOptimizedDeps,
           name: "unit",
           // isolate:false shares one worker module graph and jsdom window across
           // files, so the first file to evaluate a component owns it for the rest
@@ -303,14 +326,17 @@ export default defineConfig({
           // The cleanup runner retires that state per file; without it the lane
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
-          include: includeUiTests(["src/**/*.test.ts", "../extensions/*/browser/**/*.test.ts"]),
+          include: includeUiTests([
+            "src/**/*.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.test.{ts,tsx}",
+          ]),
           exclude: [
-            "src/**/*.browser.test.ts",
-            "src/**/*.e2e.test.ts",
-            "src/**/*.node.test.ts",
-            "../extensions/*/browser/**/*.browser.test.ts",
-            "../extensions/*/browser/**/*.e2e.test.ts",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.browser.test.{ts,tsx}",
+            "src/**/*.e2e.test.{ts,tsx}",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.browser.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.e2e.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...mockRegistryUnitTests,
           ],
           environment: "jsdom",
@@ -319,7 +345,11 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -328,7 +358,6 @@ export default defineConfig({
           // Reuse the canonical singleton-sensitive list so the package and
           // root runners isolate the same tests without slowing the main suite.
           isolate: true,
-          deps: jsdomOptimizedDeps,
           name: "unit-mock-registry",
           include: includeUiTests([...mockRegistryUnitTests]),
           environment: "jsdom",
@@ -337,21 +366,24 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
         test: {
           ...sharedUiTestConfig,
-          deps: jsdomOptimizedDeps,
           name: "unit-node",
-          exclude: timingTests,
+          exclude: [...timingTests, ...mockRegistryUnitTests],
           // No cleanup runner: this project also carries the Playwright-driven
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
           include: includeUiTests([
-            "src/**/*.node.test.ts",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...nodeDrivenBrowserLayoutTests,
           ]),
           environment: "jsdom",
@@ -359,13 +391,19 @@ export default defineConfig({
         },
       },
       { ...createUiBrowserVitestConfig(), extends: false },
+      ...(process.env.OPENCLAW_UI_WEBKIT === "1"
+        ? [{ ...createUiBrowserVitestConfig(process.env, "webkit"), extends: false }]
+        : []),
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: { alias: workspaceSourceAliases },
         test: {
           ...sharedUiTestConfig,
-          deps: jsdomOptimizedDeps,
           name: "unit-timing",
           isolate: true,
           // Finish other UI tests before measuring full-render wall time.

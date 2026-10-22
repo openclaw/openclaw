@@ -1,6 +1,9 @@
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { buildLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import {
+  buildLiveModelProviderConfig,
+  type LiveModelCatalogFetchGuard,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -11,7 +14,6 @@ import {
 
 export const VERCEL_AI_GATEWAY_PROVIDER_ID = "vercel-ai-gateway";
 export const VERCEL_AI_GATEWAY_BASE_URL = "https://ai-gateway.vercel.sh";
-export const VERCEL_AI_GATEWAY_DEFAULT_MODEL_ID = "anthropic/claude-opus-4.6";
 export const VERCEL_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW = 200_000;
 export const VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS = 128_000;
 export const VERCEL_AI_GATEWAY_DEFAULT_COST = {
@@ -20,6 +22,9 @@ export const VERCEL_AI_GATEWAY_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 } as const;
+
+export const vercelAiGatewayFetchGuard: LiveModelCatalogFetchGuard = (params) =>
+  fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params));
 
 const VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS = 60_000;
 const VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS = 5000;
@@ -153,16 +158,14 @@ function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig |
     fallback?.maxTokens ??
     VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS;
   const normalizedCost = normalizeCost(model.pricing);
+  const tags = Array.isArray(model.tags) ? model.tags : undefined;
 
   return {
     id,
     name: (typeof model.name === "string" ? model.name.trim() : "") || fallback?.name || id,
-    reasoning:
-      Array.isArray(model.tags) && model.tags.includes("reasoning")
-        ? true
-        : (fallback?.reasoning ?? false),
-    input: Array.isArray(model.tags)
-      ? model.tags.includes("vision")
+    reasoning: tags?.includes("reasoning") ? true : (fallback?.reasoning ?? false),
+    input: tags
+      ? tags.includes("vision")
         ? ["text", "image"]
         : ["text"]
       : (fallback?.input ?? ["text"]),
@@ -179,7 +182,7 @@ function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig |
 }
 
 export async function discoverVercelAiGatewayModels(
-  options: { discoveryMode?: "strict" } = {},
+  options: { discoveryMode?: "strict"; discoveryApiKey?: string } = {},
 ): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
     ...options,
@@ -193,7 +196,7 @@ export async function discoverVercelAiGatewayModels(
     timeoutMs: VERCEL_AI_GATEWAY_DISCOVERY_TIMEOUT_MS,
     ttlMs: VERCEL_AI_GATEWAY_DISCOVERY_CACHE_TTL_MS,
     auditContext: "vercel-ai-gateway.models",
-    fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),
+    fetchGuard: vercelAiGatewayFetchGuard,
     projectRows: (rows) =>
       rows
         .map(buildDiscoveredModelDefinition)

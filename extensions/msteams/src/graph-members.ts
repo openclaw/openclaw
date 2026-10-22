@@ -4,6 +4,7 @@ import { fetchAllGraphPages, fetchGraphJson, resolveGraphToken } from "./graph.j
 
 type GetMemberInfoMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   userId: string;
   currentRequesterId?: string | null;
@@ -78,12 +79,15 @@ export async function getMemberInfoMSTeams(params: GetMemberInfoMSTeamsParams) {
       },
     };
   }
-  const conversationId = await resolveGraphConversationId(params.to);
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conversation = resolveConversationPath(conversationId);
   const member =
     conversation.kind === "channel"
       ? await findStandardChannelMember({
-          token: await resolveGraphToken(params.cfg),
+          token: await resolveGraphToken(params.cfg, { accountId: params.accountId }),
           conversation,
           userId: params.userId,
         })

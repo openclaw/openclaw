@@ -37,9 +37,6 @@ function isChromeExtensionVersion(value: unknown): value is string {
 export function buildBrowserDoctorReport(params: {
   status: BrowserStatus;
   extensionVersion?: string;
-  platform?: NodeJS.Platform;
-  env?: NodeJS.ProcessEnv;
-  uid?: number;
 }): BrowserDoctorReport {
   const status = params.status;
   const checks: BrowserDoctorCheck[] = [];
@@ -99,23 +96,19 @@ export function buildBrowserDoctorReport(params: {
     const runningVersion = isChromeExtensionVersion(params.extensionVersion)
       ? params.extensionVersion
       : undefined;
-    const bundledVersion = isChromeExtensionVersion(chromeExtensionManifest.version)
-      ? chromeExtensionManifest.version
-      : undefined;
+    const bundledVersion = chromeExtensionManifest.version;
     // Chrome treats absent version components as zero, so trailing zeroes do not indicate drift.
     const mismatch = Boolean(
       runningVersion &&
-      bundledVersion &&
       runningVersion.replace(/(?:\.0)+$/, "") !== bundledVersion.replace(/(?:\.0)+$/, ""),
     );
     checks.push({
       id: "extension-version",
       label: "Chrome extension version",
-      status: !runningVersion || !bundledVersion ? "info" : mismatch ? "warn" : "pass",
-      summary:
-        runningVersion && bundledVersion
-          ? `running ${runningVersion}; bundled ${bundledVersion} (${mismatch ? "mismatch" : "match"})`
-          : "version data unavailable",
+      status: !runningVersion ? "info" : mismatch ? "warn" : "pass",
+      summary: runningVersion
+        ? `running ${runningVersion}; bundled ${bundledVersion} (${mismatch ? "mismatch" : "match"})`
+        : "version data unavailable",
       ...(mismatch
         ? {
             fixHint:
@@ -138,17 +131,14 @@ export function buildBrowserDoctorReport(params: {
         : { fixHint: "Install Chrome/Chromium/Brave/Edge or set browser.executablePath." }),
     });
 
-    const platform = params.platform ?? process.platform;
-    const env = params.env ?? process.env;
-    const uid = params.uid ?? process.getuid?.();
-    const missingDisplay =
-      platform === "linux" && !status.headless && !env.DISPLAY && !env.WAYLAND_DISPLAY;
-    if (status.headlessSource === "linux-display-fallback") {
+    const hasDisplay = process.env.DISPLAY || process.env.WAYLAND_DISPLAY;
+    const missingDisplay = process.platform === "linux" && !status.headless && !hasDisplay;
+    if (status.headless && status.headlessSource === "default") {
       checks.push({
         id: "headless-mode",
         label: "Headless mode",
         status: "pass",
-        summary: "Linux no-display fallback selected headless mode",
+        summary: "Managed browsers use headless mode by default",
       });
     }
     if (missingDisplay) {
@@ -161,7 +151,7 @@ export function buildBrowserDoctorReport(params: {
           "Use a desktop session, Xvfb, set OPENCLAW_BROWSER_HEADLESS=1, or remove the headed override.",
       });
     }
-    if (platform === "linux" && uid === 0 && !status.noSandbox) {
+    if (process.platform === "linux" && process.getuid?.() === 0 && !status.noSandbox) {
       checks.push({
         id: "linux-sandbox",
         label: "Linux sandbox",

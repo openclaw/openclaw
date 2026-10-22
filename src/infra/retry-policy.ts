@@ -2,7 +2,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import { type RetryConfig, type RetryOptions, resolveRetryConfig, retryAsync } from "./retry.js";
 
-/** Runs an async operation with a policy-specific retry wrapper and optional log label. */
 export type RetryRunner = <T>(fn: () => Promise<T>, label?: string) => Promise<T>;
 
 /** Default retry envelope for channel API operations that hit transient network edges. */
@@ -57,7 +56,44 @@ function getChannelApiRetryAfterMs(err: unknown): number | undefined {
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate * 1000 : undefined;
 }
 
-/** Creates the channel API retry runner used by outbound messaging integrations. */
+/**
+ * Creates a generic rate-limit-aware retry runner from explicit retry policy pieces.
+ *
+ * @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier through
+ * `openclaw/plugin-sdk/retry-runtime`; compose resolveRetryConfig and retryAsync. Tracked by
+ * `plugin-sdk-private-runtime-shipped-exports`.
+ */
+export function createRateLimitRetryRunner(params: {
+  retry?: RetryConfig;
+  configRetry?: RetryConfig;
+  verbose?: boolean;
+  defaults: Required<RetryConfig>;
+  logLabel: string;
+  shouldRetry: (err: unknown) => boolean;
+  retryAfterMs?: (err: unknown) => number | undefined;
+}): RetryRunner {
+  const retryConfig = resolveRetryConfig(params.defaults, {
+    ...params.configRetry,
+    ...params.retry,
+  });
+  return <T>(fn: () => Promise<T>, label?: string) =>
+    retryAsync(fn, {
+      ...retryConfig,
+      label,
+      shouldRetry: params.shouldRetry,
+      retryAfterMs: params.retryAfterMs,
+      onRetry: params.verbose
+        ? (info) => {
+            const labelText = info.label ?? "request";
+            const maxRetries = Math.max(1, info.maxAttempts - 1);
+            log.warn(
+              `${params.logLabel} ${labelText} rate limited, retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms`,
+            );
+          }
+        : undefined,
+    });
+}
+
 export function createChannelApiRetryRunner(params: {
   retry?: RetryConfig;
   configRetry?: RetryConfig;

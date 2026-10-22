@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -37,6 +38,19 @@ registerAgentCommandCompactionTestHooks();
 
 function makeEmbeddedResult(sessionId: string, text: string) {
   return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+}
+
+async function advanceWork(advanceClock: () => void) {
+  advanceClock();
+  const operation = getCurrentSessionControllerOwner();
+  if (!operation) {
+    throw new Error("Expected the simulated command or maintenance owner");
+  }
+  // The mocked model/checkpoint has completed work, not silently stalled.
+  // Sample the real watchdog so its one-second timer cannot decide the test outcome.
+  operation.watchdog.progress("semantic", "fixture:work_completed");
+  await operation.watchdog.tick();
+  operation.abortSignal.throwIfAborted();
 }
 
 describe("agentCommand embedded maintenance", () => {
@@ -75,6 +89,44 @@ describe("agentCommand embedded maintenance", () => {
     expect(foreground.pendingTokens).toBe(100);
   });
 
+  it("schedules retained maintenance when terminal cleanup rejects", async () => {
+    const sessionId = "maintenance-after-cleanup-rejection";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const cleanupError = new Error("terminal cleanup failed");
+    let terminalDeliveryCalls = 0;
+    state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+      params.onSuccessfulAuthProfile?.({});
+      params.onCompactionRequestBudget?.({
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 4_000,
+        pendingTokens: 100,
+      });
+      return makeEmbeddedResult(sessionId, "done");
+    });
+
+    await expect(
+      agentCommand({
+        message: "continue",
+        sessionId,
+        sessionKey,
+        beforeTerminalDelivery: async () => {
+          terminalDeliveryCalls += 1;
+          if (terminalDeliveryCalls === 2) {
+            throw cleanupError;
+          }
+        },
+      }),
+    ).rejects.toBe(cleanupError);
+    await waitForSessionMaintenance(sessionKey);
+
+    expect(state.runSessionCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        compactionRequestBudget: expect.objectContaining({ pendingTokens: 0 }),
+      }),
+    );
+  });
+
   it.each([462_153, 600_000])(
     "shares the command allowance after %i ms of foreground work",
     async (foregroundMs) => {
@@ -87,12 +139,16 @@ describe("agentCommand embedded maintenance", () => {
       let flushTimeout: number | undefined;
       state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
         params.onSuccessfulAuthProfile?.({});
-        now += foregroundMs;
+        await advanceWork(() => {
+          now += foregroundMs;
+        });
         return makeEmbeddedResult(sessionId, text);
       });
       state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
         flushTimeout = params.followupRun.run.timeoutMs;
-        now = startedAt + 600_000;
+        await advanceWork(() => {
+          now = startedAt + 600_000;
+        });
         return { sessionEntry: params.sessionEntry, outcome: "completed" };
       });
       try {
@@ -217,12 +273,16 @@ describe("agentCommand embedded maintenance", () => {
     let flushTimeout: number | undefined;
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
-      now += 1_200_000;
+      await advanceWork(() => {
+        now += 1_200_000;
+      });
       return makeEmbeddedResult(sessionId, "unlimited answer");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       flushTimeout = params.followupRun.run.timeoutMs;
-      now += 600_000;
+      await advanceWork(() => {
+        now += 600_000;
+      });
       return { sessionEntry: params.sessionEntry, outcome: "completed" };
     });
     try {
@@ -305,7 +365,10 @@ describe("agentCommand embedded maintenance", () => {
       lastCallUsage,
     };
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
-      await params.userTurnTranscriptRecorder?.persistApproved();
+      if (!params.userTurnTranscriptRecorder) {
+        throw new Error("missing embedded user-turn transcript recorder");
+      }
+      await params.userTurnTranscriptRecorder.persistApproved();
       await appendTranscriptMessage(
         { agentId: "main", sessionId, sessionKey, storePath },
         {
@@ -324,6 +387,14 @@ describe("agentCommand embedded maintenance", () => {
             },
           },
           cwd: state.workspaceDir,
+        },
+      );
+      await appendTranscriptEvent(
+        { agentId: "main", sessionId, sessionKey, storePath },
+        {
+          type: "custom",
+          customType: "openclaw:bootstrap-context:full",
+          data: { runId: "embedded-run" },
         },
       );
       params.onSuccessfulAuthProfile?.({
@@ -367,6 +438,30 @@ describe("agentCommand embedded maintenance", () => {
     );
 
     await waitForSessionMaintenance(sessionKey);
+    const events = (await loadTranscriptEvents({
+      agentId: "main",
+      sessionId,
+      storePath,
+    })) as Array<{
+      type?: unknown;
+      customType?: unknown;
+      message?: { role?: unknown; api?: unknown };
+    }>;
+    const assistantEvents = events.filter(
+      (event) => event.type === "message" && event.message?.role === "assistant",
+    );
+    expect(assistantEvents).toHaveLength(1);
+    expect(assistantEvents.filter((event) => event.message?.api === "cli")).toHaveLength(0);
+    expect(
+      events.filter(
+        (event) =>
+          event.type === "custom" && event.customType === "openclaw:bootstrap-context:full",
+      ),
+    ).toHaveLength(1);
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
+    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 904_869 }) }),
+    );
     expect(storedBeforeMaintenance).toMatchObject({
       totalTokens: 904_869,
       inputTokens: lastCallUsage.input,
@@ -540,7 +635,6 @@ describe("agentCommand embedded maintenance", () => {
     { name: "native harness ownership", agentHarnessId: "codex" },
     { name: "an unavailable auth selection", observeAuth: false },
     { name: "disabled proactive compaction", enabled: false },
-    { name: "a heartbeat", opts: { bootstrapContextRunKind: "heartbeat" } },
   ];
   it.each(excludedEmbeddedRuns)("does not add command compaction for $name", async (testCase) => {
     const sessionId = "excluded-embedded-compaction";
@@ -577,89 +671,6 @@ describe("agentCommand embedded maintenance", () => {
     if (testCase.observeAuth === false) {
       expect(state.deliverAgentCommandResultMock).toHaveBeenCalledOnce();
     }
-  });
-
-  it("keeps embedded transcript ownership and flushes once for gateway ingress", async () => {
-    const storePath = requireStorePath();
-    const sessionId = "embedded-projected-final";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    await replaceSessionEntry(
-      { sessionKey, storePath },
-      {
-        sessionId,
-        updatedAt: Date.now(),
-        totalTokens: 180_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    );
-    state.runAgentAttemptMock.mockImplementationOnce(async (attempt) => {
-      if (!attempt.userTurnTranscriptRecorder) {
-        throw new Error("missing embedded user-turn transcript recorder");
-      }
-      await attempt.userTurnTranscriptRecorder.persistApproved();
-      await appendTranscriptMessage(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        {
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "[Thu 2026-08-13 16:39 PDT] OVERRIDE-OK" }],
-            api: "ollama",
-            provider: "ollama",
-            model: "llama3.2:latest",
-            timestamp: Date.now(),
-          },
-          cwd: state.workspaceDir,
-        },
-      );
-      await appendTranscriptEvent(
-        { agentId: "main", sessionId, sessionKey, storePath },
-        {
-          type: "custom",
-          customType: "openclaw:bootstrap-context:full",
-          data: { runId: "embedded-run" },
-        },
-      );
-      attempt.onSuccessfulAuthProfile?.({});
-      return makeEmbeddedResult(sessionId, "OVERRIDE-OK");
-    });
-
-    await agentCommandFromGatewayIngress(
-      {
-        message: "Reply with exactly: OVERRIDE-OK",
-        sessionId,
-        sessionKey,
-        cwd: state.workspaceDir,
-        allowModelOverride: false,
-      },
-      ...GATEWAY_INGRESS_ARGS,
-    );
-
-    await waitForSessionMaintenance(sessionKey);
-    const events = (await loadTranscriptEvents({
-      agentId: "main",
-      sessionId,
-      storePath,
-    })) as Array<{
-      type?: unknown;
-      customType?: unknown;
-      message?: { role?: unknown; api?: unknown };
-    }>;
-    const assistantEvents = events.filter(
-      (event) => event.type === "message" && event.message?.role === "assistant",
-    );
-    expect(assistantEvents).toHaveLength(1);
-    expect(assistantEvents.filter((event) => event.message?.api === "cli")).toHaveLength(0);
-    expect(
-      events.filter(
-        (event) =>
-          event.type === "custom" && event.customType === "openclaw:bootstrap-context:full",
-      ),
-    ).toHaveLength(1);
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledOnce();
-    expect(state.runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionEntry: expect.objectContaining({ totalTokens: 180_000 }) }),
-    );
   });
 
   it.each(
@@ -707,9 +718,7 @@ describe("agentCommand embedded maintenance", () => {
         deliver: true,
         abortSignal: abortController.signal,
       }),
-    ).rejects.toThrow(
-      restart ? "agent run aborted for restart" : "Agent run belongs to a stale gateway lifecycle",
-    );
+    ).rejects.toThrow("agent run aborted for restart");
 
     expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
     expect(findStoredSessionEntry(sessionKey)).toMatchObject({

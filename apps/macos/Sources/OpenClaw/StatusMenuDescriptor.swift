@@ -6,7 +6,6 @@ struct StatusMenuDescriptor {
         var isPaused = false
         var connection: Connection = .connected
         var quickChatEnabled = false
-        var voiceWakeSupported = true
         var debugEnabled = false
         var updateReady = false
         var hasUsage = false

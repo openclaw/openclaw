@@ -1,14 +1,13 @@
 import path from "node:path";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { listSessionPendingInputReceipts } from "./session-accessor.sqlite-pending-input-receipts.js";
 import { prepareSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { SessionAccessScope } from "./session-accessor.types.js";
 import {
-  readIncognitoSessionHistory,
-  type IncognitoSessionHistoryBinding,
-} from "./session-incognito-history-read.js";
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -16,17 +15,34 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 export async function readSessionPendingInputReceiptsInWorker(
   scope: SessionAccessScope & { agentId: string; sessionId: string },
   options: { runIds: readonly string[] },
-  incognito?: IncognitoSessionHistoryBinding,
 ): Promise<ReturnType<typeof listSessionPendingInputReceipts>> {
-  if (incognito) {
-    const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
-      type: "session.history.receipts",
-      input: { ...target, runIds: options.runIds },
-    }));
-    return result.receipts;
-  }
   if (options.runIds.length === 0) {
     return [];
+  }
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memory = captureSessionActorStorageOwner(scope, authority);
+  if (memory) {
+    return (
+      (await withSessionActorStorage(
+        scope,
+        {
+          lifetime: { assertCurrent() {}, assertReadable() {} },
+          authority: memory.authority,
+        },
+        (binding) =>
+          binding.actor.storage.read(
+            {
+              type: "session.pendingInput.receipts",
+              input: {
+                sessionKey: scope.sessionKey,
+                sessionId: scope.sessionId,
+                runIds: options.runIds,
+              },
+            },
+            binding.authority,
+          ),
+      )) ?? []
+    );
   }
   const captured = {
     ...scope,
@@ -34,12 +50,6 @@ export async function readSessionPendingInputReceiptsInWorker(
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const runIds = [...options.runIds];
-  if (isIncognitoSessionKey(captured.sessionKey)) {
-    // A process-owned in-memory store cannot be reopened in another worker.
-    const { listSessionPendingInputReceipts } =
-      await import("./session-accessor.sqlite-pending-input-receipts.js");
-    return listSessionPendingInputReceipts(captured, { runIds });
-  }
   const context = captureOpenClawStateReadWorkerContext({ env: captured.env });
   const assertStateCurrent = () => {
     context.maintenanceScope?.assertAdmission();

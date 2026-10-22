@@ -9,7 +9,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
-import androidx.core.net.toUri
 
 /** Full-height viewer for a gateway-observable desktop source. */
 @Composable
@@ -55,15 +54,7 @@ internal fun desktopUrl(
 ): String {
   val normalizedSource = source?.trim()?.takeIf(String::isNotEmpty)
   val normalizedSession = session?.trim()?.takeIf(String::isNotEmpty)
-  val builder =
-    baseUrl
-      .trimEnd('/')
-      .toUri()
-      .buildUpon()
-      .clearQuery()
-      .fragment(null)
-      .appendPath("focus")
-      .appendPath("desktop")
+  val builder = controlUiFocusUrlBuilder(baseUrl, "desktop")
   when {
     normalizedSource != null -> builder.appendPath("source").appendPath(normalizedSource)
     normalizedSession != null -> builder.appendPath("session").appendPath(normalizedSession)

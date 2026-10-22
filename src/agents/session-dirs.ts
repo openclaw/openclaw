@@ -1,11 +1,7 @@
-/**
- * Agent session directory discovery helpers.
- * Lists per-agent `sessions` directories under state roots in sorted order for
- * callers that scan persisted session stores.
- */
 import fsSync, { type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ignoreMissingPath } from "../infra/errno.js";
 
 function mapAgentSessionDirs(
   agentsDir: string,
@@ -18,7 +14,6 @@ function mapAgentSessionDirs(
     .toSorted((a, b) => a.localeCompare(b));
 }
 
-/** Synchronous variant of per-agent session directory discovery. */
 export function resolveAgentSessionDirsFromAgentsDirSync(
   agentsDir: string,
   includeDirName?: (dirName: string) => boolean,
@@ -27,29 +22,14 @@ export function resolveAgentSessionDirsFromAgentsDirSync(
   try {
     entries = fsSync.readdirSync(agentsDir, { withFileTypes: true });
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw err;
+    return ignoreMissingPath(err) ?? [];
   }
 
   return mapAgentSessionDirs(agentsDir, entries, includeDirName);
 }
 
-/** Lists per-agent session directories under a state directory. */
 export async function resolveAgentSessionDirs(stateDir: string): Promise<string[]> {
   const agentsDir = path.join(stateDir, "agents");
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(agentsDir, { withFileTypes: true });
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-
-  return mapAgentSessionDirs(agentsDir, entries);
+  const entries = await fs.readdir(agentsDir, { withFileTypes: true }).catch(ignoreMissingPath);
+  return mapAgentSessionDirs(agentsDir, entries ?? []);
 }

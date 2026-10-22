@@ -1,5 +1,3 @@
-// Watches dev source paths and restarts scripts/run-node.mjs when relevant
-// files change.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -184,9 +182,6 @@ const printFriendlyWatchStartupError = (err: unknown) => {
   console.error(err);
 };
 
-const loadWatcher = async (): Promise<WatcherFactory> =>
-  (await import("./watch-node-observation.mts")).createSourceObserver;
-
 const waitForWatcherRelease = async (lockPath: string, pid: number) => {
   const deadline = Date.now() + WATCH_LOCK_WAIT_MS;
   while (Date.now() < deadline) {
@@ -259,9 +254,6 @@ const releaseWatchLock = (lockHandle: { lockPath: string; pid: number } | null) 
   }
 };
 
-/**
- * Runs the watch loop and restarts the child process on relevant changes.
- */
 export async function runWatchMain(): Promise<WatchExit> {
   const cwd = process.cwd();
   const args = process.argv.slice(2);
@@ -331,12 +323,8 @@ export async function runWatchMain(): Promise<WatchExit> {
       if (shutdownKillTimer) {
         clearTimeout(shutdownKillTimer);
       }
-      if (onSigInt) {
-        process.off("SIGINT", onSigInt);
-      }
-      if (onSigTerm) {
-        process.off("SIGTERM", onSigTerm);
-      }
+      process.off("SIGINT", onSigInt);
+      process.off("SIGTERM", onSigTerm);
       // Keep ownership until physical observation retires. A replacement must
       // not acquire the lock while this owner still has live watcher resources.
       void (async () => {
@@ -506,7 +494,7 @@ export async function runWatchMain(): Promise<WatchExit> {
 
     const resolveCreateWatcher = async () => {
       try {
-        return await loadWatcher();
+        return (await import("./watch-node-observation.mts")).createSourceObserver;
       } catch (err) {
         if (isInvalidPackageConfigError(err)) {
           printFriendlyWatchStartupError(err);

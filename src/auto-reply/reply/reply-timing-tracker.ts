@@ -1,4 +1,3 @@
-/** Lightweight reply-stage profiler for slow-turn diagnostics. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import {
@@ -26,17 +25,9 @@ type ReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams> = {
   logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
 };
 
-/** Checks config/env diagnostic flags for reply profiling. */
-export function isReplyProfilerEnabled(params?: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
+export function isReplyProfilerEnabled(params?: { config?: OpenClawConfig }): boolean {
   const cfg = params?.config;
-  const env = params?.env ?? process.env;
-  return (
-    isDiagnosticFlagEnabled("profiler", cfg, env) ||
-    isDiagnosticFlagEnabled("reply.profiler", cfg, env)
-  );
+  return isDiagnosticFlagEnabled("profiler", cfg) || isDiagnosticFlagEnabled("reply.profiler", cfg);
 }
 
 /** Keeps slow replies diagnosable; profiling lowers the warning thresholds. */
@@ -73,36 +64,34 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
         didLog = true;
       }
       const formattedSpans = formatStageTimings(summary.spans);
+      let message: string;
+      let details: Record<string, unknown>;
       if (params.formatMessage) {
         const detailParams = logParams as Record<string, unknown>;
-        const details = Object.fromEntries(
+        details = Object.fromEntries(
           (params.detailKeys?.(logParams) ?? []).map((key) => [key, detailParams[key]]),
         );
-        params.log.warn(params.formatMessage(logParams, summary, formattedSpans), {
-          ...details,
-          totalMs: summary.totalMs,
-          spans: summary.spans,
-        });
-        return;
+        message = params.formatMessage(logParams, summary, formattedSpans);
+      } else {
+        const defaults = logParams as ReplyTimingLogParams;
+        const suffix = [
+          `totalMs=${summary.totalMs}`,
+          `stages=${formattedSpans}`,
+          defaults.outcome ? `outcome=${defaults.outcome}` : undefined,
+          defaults.reason ? `reason=${defaults.reason}` : undefined,
+          defaults.error ? `error="${defaults.error}"` : undefined,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        message = `${defaults.message} ${suffix}`;
+        details = {
+          ...defaults.details,
+          outcome: defaults.outcome,
+          reason: defaults.reason,
+          error: defaults.error,
+        };
       }
-      const defaults = logParams as ReplyTimingLogParams;
-      const suffix = [
-        `totalMs=${summary.totalMs}`,
-        `stages=${formattedSpans}`,
-        defaults.outcome ? `outcome=${defaults.outcome}` : undefined,
-        defaults.reason ? `reason=${defaults.reason}` : undefined,
-        defaults.error ? `error="${defaults.error}"` : undefined,
-      ]
-        .filter(Boolean)
-        .join(" ");
-      params.log.warn(`${defaults.message} ${suffix}`, {
-        ...defaults.details,
-        outcome: defaults.outcome,
-        reason: defaults.reason,
-        error: defaults.error,
-        totalMs: summary.totalMs,
-        spans: summary.spans,
-      });
+      params.log.warn(message, { ...details, ...summary });
     },
   };
 }

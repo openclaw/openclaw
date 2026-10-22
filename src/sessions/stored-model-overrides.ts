@@ -1,4 +1,3 @@
-// Resolves persisted per-session model choices across child and parent sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelFallbackRouteResolution } from "../agents/model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../agents/model-ref-shared.js";
@@ -12,6 +11,7 @@ import {
   resolveSessionModelOverrideRouteResolution,
 } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 /** Model override loaded from the current session or its parent session. */
 export type StoredModelOverride = {
@@ -87,7 +87,7 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
-/** Keep prepared host metadata outside the published command resolver contract. */
+/** @deprecated Use resolveStoredModelOverrideAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveStoredModelOverride(params: {
   loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
   sessionEntry?: SessionEntry;
@@ -97,6 +97,11 @@ export function resolveStoredModelOverride(params: {
   defaultProvider: string;
   allowPluginNormalization?: boolean;
 }): StoredModelOverride | null {
+  warnPluginSdkDeprecation({
+    family: "session-model-override",
+    method: "resolveStoredModelOverride",
+    replacement: "resolveStoredModelOverrideAsync",
+  });
   return resolveStoredModelOverrideCore({
     loadSessionEntry: params.loadSessionEntry,
     sessionEntry: params.sessionEntry,
@@ -106,6 +111,30 @@ export function resolveStoredModelOverride(params: {
     defaultProvider: params.defaultProvider,
     allowPluginNormalization: params.allowPluginNormalization,
   });
+}
+
+/** Resolve inherited model selection without synchronous session-store access. */
+export async function resolveStoredModelOverrideAsync(
+  params: Omit<Parameters<typeof resolveStoredModelOverride>[0], "loadSessionEntry"> & {
+    loadSessionEntry?: (
+      sessionKey: string,
+    ) => SessionEntry | undefined | Promise<SessionEntry | undefined>;
+  },
+): Promise<StoredModelOverride | null> {
+  if (params.sessionEntry?.modelOverrideSource === "default") {
+    return null;
+  }
+  const direct = resolveDirectStoredModelOverride(params);
+  if (direct) {
+    return direct;
+  }
+  const parentKey = resolveParentSessionKeyCandidate(params);
+  if (!parentKey) {
+    return null;
+  }
+  const parentEntry =
+    (await params.loadSessionEntry?.(parentKey)) ?? params.sessionStore?.[parentKey];
+  return resolveParentStoredModelOverride(params, parentEntry);
 }
 
 /** Resolves the persisted model override visible to the current session. */
@@ -124,6 +153,16 @@ export function resolveStoredModelOverrideCore(
     return null;
   }
   const parentEntry = params.loadSessionEntry?.(parentKey) ?? params.sessionStore?.[parentKey];
+  return resolveParentStoredModelOverride(params, parentEntry);
+}
+
+function resolveParentStoredModelOverride(
+  params: {
+    defaultProvider: string;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+  parentEntry: SessionEntry | undefined,
+): StoredModelOverride | null {
   if (hasSessionActiveAutoModelFallback(parentEntry)) {
     return null;
   }

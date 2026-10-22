@@ -1,4 +1,3 @@
-/** Routed delivery thread classification and id resolution helpers. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
@@ -31,11 +30,9 @@ export function resolveRoutedDeliveryThreadId(params: {
   ctx: MsgContext;
   sessionKey?: string;
 }): string | number | undefined {
-  if (params.ctx.MessageThreadId != null) {
-    return params.ctx.MessageThreadId;
-  }
-  if (params.ctx.TransportThreadId != null) {
-    return params.ctx.TransportThreadId;
-  }
-  return resolveLoadedSessionThreadInfo(params.sessionKey).threadId;
+  return (
+    params.ctx.MessageThreadId ??
+    params.ctx.TransportThreadId ??
+    resolveLoadedSessionThreadInfo(params.sessionKey).threadId
+  );
 }

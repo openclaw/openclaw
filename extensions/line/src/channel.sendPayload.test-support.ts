@@ -1,6 +1,6 @@
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, type MockInstance, vi } from "vitest";
 import type { PluginRuntime } from "../api.js";
-import { createLineSendReceipt } from "./send-receipt.js";
 import * as send from "./send.js";
 import * as templates from "./template-messages.js";
 
@@ -16,14 +16,22 @@ export function lineResult(messageId: string, chatId = "c1") {
   return {
     messageId,
     chatId,
-    receipt: createLineSendReceipt({ messageId, chatId, kind: "text" }),
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [
+        { channel: "line", messageId, chatId, conversationId: chatId, meta: { messageCount: 1 } },
+      ],
+      threadId: chatId,
+      kind: "text",
+    }),
   };
 }
 
 export function createRuntime() {
   const pushMessageLine = vi
     .spyOn(send, "pushMessageLine")
-    .mockImplementation(async () => lineResult("m-text"));
+    .mockImplementation(async (_to, _text, opts) =>
+      lineResult(opts.mediaUrl ? "m-media" : "m-text"),
+    );
   const pushMessagesLine = vi
     .spyOn(send, "pushMessagesLine")
     .mockImplementation(async () => lineResult("m-batch"));
@@ -54,9 +62,6 @@ export function createRuntime() {
         ],
       },
     }));
-  const sendMessageLine = vi
-    .spyOn(send, "sendMessageLine")
-    .mockImplementation(async () => lineResult("m-media"));
   moduleMocks.push(
     pushMessageLine,
     pushMessagesLine,
@@ -66,7 +71,6 @@ export function createRuntime() {
     pushTextMessageWithQuickReplies,
     createQuickReplyItems,
     buildTemplateMessageFromPayload,
-    sendMessageLine,
   );
   const chunkMarkdownText = vi.fn<PluginRuntime["channel"]["text"]["chunkMarkdownText"]>((text) => [
     text,
@@ -95,7 +99,6 @@ export function createRuntime() {
       pushTextMessageWithQuickReplies,
       createQuickReplyItems,
       buildTemplateMessageFromPayload,
-      sendMessageLine,
       chunkMarkdownText,
       resolveTextChunkLimit,
     },

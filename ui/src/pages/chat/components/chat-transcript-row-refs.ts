@@ -1,11 +1,10 @@
 import type { Virtualizer } from "@tanstack/virtual-core";
 
-/** Stable row refs own connection fences and deferred observer pruning. */
+/** Keyed Solid rows own their refs; batch observer changes after the DOM commit. */
 export class TranscriptRowRefs {
-  private readonly refs = new Map<string, (element?: Element) => void>();
+  private readonly pendingRows = new Map<HTMLElement, string>();
+  private updateQueued = false;
   private pruneQueued = false;
-  private pendingRows = new Map<HTMLElement, string>();
-  private measureQueued = false;
 
   constructor(
     private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
@@ -15,19 +14,21 @@ export class TranscriptRowRefs {
     },
   ) {}
 
-  private queueMountedRow(element: HTMLElement, key: string): void {
-    this.pendingRows.set(element, key);
-    if (this.measureQueued) {
+  get elements(): ReadonlySet<HTMLElement> {
+    // A commit can measure connected rows before their queued observer registration.
+    return new Set([...this.virtualizer.elementsCache.values(), ...this.pendingRows.keys()]);
+  }
+
+  private queueUpdate(): void {
+    if (this.updateQueued) {
       return;
     }
-    this.measureQueued = true;
-    // Lit refs run before connection. Register only the committed, current rows;
-    // TanStack's ResizeObserver owns their first post-layout measurement.
+    this.updateQueued = true;
+    // Both Lit and Solid refs can run before connection. Pruning in the same
+    // commit must wait too, or it can unobserve newly registered sibling rows.
     queueMicrotask(() => {
-      const pendingRows = this.pendingRows;
-      this.pendingRows = new Map();
-      this.measureQueued = false;
-      for (const [row, rowKey] of pendingRows) {
+      this.updateQueued = false;
+      for (const [row, rowKey] of this.pendingRows) {
         if (
           row.isConnected &&
           row.dataset.virtualRowKey === rowKey &&
@@ -36,48 +37,27 @@ export class TranscriptRowRefs {
           this.virtualizer.measureElement(row);
         }
       }
+      this.pendingRows.clear();
+      if (this.pruneQueued) {
+        this.pruneQueued = false;
+        this.virtualizer.measureElement(null);
+      }
     });
   }
 
   forKey(key: string): (element?: Element) => void {
-    let callback = this.refs.get(key);
-    if (!callback) {
-      callback = (element?: Element) => {
-        if (element instanceof HTMLElement) {
-          this.callbacks.onMount(key);
-          this.queueMountedRow(element, key);
-          return;
-        }
-        // Re-stamps (e.g. the chat<->dashboard face switch) re-invoke each
-        // stable row ref as an (undefined, element) pair while the new subtree
-        // is still detached. measureElement(null) prunes every disconnected
-        // row, so calling it synchronously unobserves just-registered sibling
-        // rows and freezes their heights at the old pane width (overlapping
-        // bubbles). Defer until the commit lands so only removed rows prune.
-        if (this.pruneQueued) {
-          return;
-        }
+    return (element?: Element) => {
+      if (element instanceof HTMLElement) {
+        this.callbacks.onMount(key);
+        this.pendingRows.set(element, key);
+      } else {
         this.pruneQueued = true;
-        queueMicrotask(() => {
-          this.pruneQueued = false;
-          this.virtualizer.measureElement(null);
-        });
-      };
-      this.refs.set(key, callback);
-    }
-    return callback;
-  }
-
-  retainKeys(keys: ReadonlyMap<string, number>): void {
-    for (const key of this.refs.keys()) {
-      if (!keys.has(key)) {
-        this.refs.delete(key);
       }
-    }
+      this.queueUpdate();
+    };
   }
 
   clear(): void {
-    this.refs.clear();
     this.pendingRows.clear();
   }
 }

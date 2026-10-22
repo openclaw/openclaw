@@ -1,6 +1,9 @@
 // Operator-approval kind migration: exact-legacy fail-closed repair.
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import {
   assertCanonicalOperatorApprovalKinds,
   repairOperatorApprovalSchema,
@@ -11,17 +14,119 @@ function canonicalOperatorApprovalCreateSql(): string {
   const marker = "CREATE TABLE IF NOT EXISTS operator_approvals (";
   const tableTerminator = "\n) STRICT;";
   const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(marker);
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    `${tableTerminator}\n\nCREATE INDEX IF NOT EXISTS idx_operator_approvals_status_expiry`,
-    start,
-  );
+  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(tableTerminator, start);
   return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + tableTerminator.length);
 }
 
+// Historical fixture deliberately independent of the evolving canonical DDL.
+const LEGACY_TWO_KIND_CREATE_SQL = `CREATE TABLE IF NOT EXISTS operator_approvals (
+  approval_id TEXT NOT NULL PRIMARY KEY CHECK (
+    length(approval_id) > 0 AND approval_id NOT IN ('.', '..')
+  ),
+  resolution_ref TEXT NOT NULL CHECK (
+    length(resolution_ref) = 43 AND resolution_ref NOT GLOB '*[^A-Za-z0-9_-]*'
+  ),
+  kind TEXT NOT NULL CHECK (kind IN ('exec', 'plugin')),
+  status TEXT NOT NULL CHECK (status IN ('pending', 'allowed', 'denied', 'expired', 'cancelled')),
+  presentation_json TEXT NOT NULL,
+  requested_by_device_id TEXT,
+  requested_by_client_id TEXT,
+  requested_by_device_token_auth INTEGER NOT NULL DEFAULT 0,
+  reviewer_device_ids_json TEXT NOT NULL,
+  source_agent_id TEXT,
+  source_session_key TEXT,
+  source_session_id TEXT,
+  source_run_id TEXT,
+  source_tool_call_id TEXT,
+  source_tool_name TEXT,
+  audience_session_keys_json TEXT NOT NULL,
+  runtime_epoch TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  decision TEXT CHECK (decision IN ('allow-once', 'allow-always', 'deny')),
+  terminal_reason TEXT CHECK (
+    terminal_reason IN (
+      'user',
+      'timeout',
+      'malformed-verdict',
+      'no-route',
+      'run-aborted',
+      'gateway-restart',
+      'storage-corrupt'
+    )
+  ),
+  resolved_at_ms INTEGER,
+  resolver_kind TEXT CHECK (resolver_kind IN ('device', 'channel', 'runtime', 'system')),
+  resolver_id TEXT,
+  consumed_at_ms INTEGER,
+  consumed_by TEXT,
+  CHECK (expires_at_ms >= created_at_ms),
+  CHECK (updated_at_ms >= created_at_ms),
+  CHECK (resolved_at_ms IS NULL OR resolved_at_ms >= created_at_ms),
+  CHECK (resolved_at_ms IS NULL OR resolved_at_ms <= updated_at_ms),
+  CHECK (consumed_at_ms IS NULL OR consumed_at_ms >= resolved_at_ms),
+  CHECK (consumed_at_ms IS NULL OR consumed_at_ms <= updated_at_ms),
+  CHECK (requested_by_device_token_auth IN (0, 1)),
+  CHECK (
+    (
+      status = 'pending'
+      AND decision IS NULL
+      AND terminal_reason IS NULL
+      AND resolved_at_ms IS NULL
+      AND resolver_kind IS NULL
+      AND resolver_id IS NULL
+      AND consumed_at_ms IS NULL
+      AND consumed_by IS NULL
+    )
+    OR (
+      status = 'allowed'
+      AND decision IN ('allow-once', 'allow-always')
+      AND terminal_reason = 'user'
+      AND resolved_at_ms IS NOT NULL
+      AND resolver_kind IS NOT NULL
+    )
+    OR (
+      status = 'denied'
+      AND decision = 'deny'
+      AND terminal_reason IN ('user', 'malformed-verdict', 'no-route', 'storage-corrupt')
+      AND resolved_at_ms IS NOT NULL
+      AND resolver_kind IS NOT NULL
+      AND consumed_at_ms IS NULL
+      AND consumed_by IS NULL
+    )
+    OR (
+      status = 'expired'
+      AND decision = 'deny'
+      AND terminal_reason = 'timeout'
+      AND resolved_at_ms IS NOT NULL
+      AND resolver_kind IS NOT NULL
+      AND consumed_at_ms IS NULL
+      AND consumed_by IS NULL
+    )
+    OR (
+      status = 'cancelled'
+      AND decision = 'deny'
+      AND terminal_reason IN ('run-aborted', 'gateway-restart')
+      AND resolved_at_ms IS NOT NULL
+      AND resolver_kind IS NOT NULL
+      AND consumed_at_ms IS NULL
+      AND consumed_by IS NULL
+    )
+  ),
+  CHECK (
+    (consumed_at_ms IS NULL AND consumed_by IS NULL)
+    OR (
+      status = 'allowed'
+      AND decision = 'allow-once'
+      AND consumed_at_ms IS NOT NULL
+      AND consumed_by IS NOT NULL
+    )
+  )
+) STRICT;`;
+
 function legacyTwoKindCreateSql(): string {
-  return canonicalOperatorApprovalCreateSql()
-    .replace(/\) STRICT;$/u, ");")
-    .replace(/'exec',\s*'plugin',\s*'system-agent'/, "'exec', 'plugin'");
+  return LEGACY_TWO_KIND_CREATE_SQL.replace(/\) STRICT;$/u, ");");
 }
 
 function withoutResolutionRefColumn(sql: string): string {
@@ -80,10 +185,15 @@ function expectAlterAppendedLegacyRepair(strict: boolean): void {
 }
 
 describe("repairOperatorApprovalKinds", () => {
-  it("migrates the exact legacy two-kind schema and preserves rows", () => {
-    const db = new DatabaseSync(":memory:");
+  it("migrates the pre-v22 legacy schema and preserves issued cursor identities", () => {
+    const db = openNodeSqliteDatabase(":memory:");
     db.exec(legacyTwoKindCreateSql());
-    seedRow(db, "exec");
+    seedRow(db, "exec", RESOLUTION_REF, "z-first");
+    seedRow(db, "exec", RESOLUTION_REF, "deleted-middle");
+    const lastResolutionRef = "last".padEnd(43, "0");
+    seedRow(db, "plugin", lastResolutionRef, "a-last");
+    db.exec("DELETE FROM operator_approvals WHERE approval_id = 'deleted-middle'");
+    admitSqliteSchema(db);
     expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).toThrow(
       "legacy operator approval schema",
     );
@@ -94,9 +204,17 @@ describe("repairOperatorApprovalKinds", () => {
 
     expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
     const rows = db
-      .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
+      .prepare(
+        "SELECT cursor_id, approval_id, kind, resolution_ref FROM operator_approvals ORDER BY cursor_id",
+      )
       .all();
-    expect(rows).toEqual([{ approval_id: "a1", kind: "exec", resolution_ref: RESOLUTION_REF }]);
+    expect(rows).toEqual([
+      { cursor_id: 1, approval_id: "z-first", kind: "exec", resolution_ref: RESOLUTION_REF },
+      { cursor_id: 3, approval_id: "a-last", kind: "plugin", resolution_ref: lastResolutionRef },
+    ]);
+    expect(() =>
+      db.exec("UPDATE operator_approvals SET cursor_id = 1 WHERE approval_id = 'a-last'"),
+    ).toThrow("UNIQUE constraint failed: operator_approvals.cursor_id");
     expect(
       db.prepare("SELECT strict FROM pragma_table_list WHERE name = 'operator_approvals'").get(),
     ).toEqual({ strict: 1 });
@@ -138,11 +256,24 @@ describe("repairOperatorApprovalKinds", () => {
     db.close();
   });
 
-  it("is a no-op when the schema is already canonical", () => {
-    const db = new DatabaseSync(":memory:");
+  it("reuses admitted canonical definitions without querying SQLite", () => {
+    using db = openNodeSqliteDatabase(":memory:");
     db.exec(canonicalOperatorApprovalCreateSql());
-    expect(repairOperatorApprovalSchema(db)).toEqual([]);
-    db.close();
+    admitSqliteSchema(db);
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(repairOperatorApprovalSchema(db)).toEqual([]);
+      expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
+      expect(observation.queries).toEqual([]);
+      db.exec(`BEGIN; DROP TABLE operator_approvals; ${legacyTwoKindCreateSql()}`);
+      expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).toThrow(
+        "legacy operator approval schema",
+      );
+      db.exec("ROLLBACK");
+      expect(() => assertCanonicalOperatorApprovalKinds(db, ":memory:")).not.toThrow();
+    } finally {
+      observation.restore();
+    }
   });
 
   it("refuses to replace an arbitrarily different table", () => {

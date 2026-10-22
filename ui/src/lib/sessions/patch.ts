@@ -26,8 +26,10 @@ export type SessionPatch = Pick<
   | "reasoningLevel"
   | "permissionMode"
   | "toolOverrides"
+  | "communication"
   | "archived"
   | "pinned"
+  | "sidebarRoot"
   | "snoozedUntil"
   | "unread"
 >;
@@ -62,9 +64,20 @@ export type SessionPatchOptions = {
 };
 
 export type SessionPatchResult = SessionsPatchResult & { listRefreshError?: string };
+export type SessionPatchOutcome = SessionPatchResult | { queued: true };
+
+export function isSessionDisplayMetadataPatch(patch: Record<string, unknown>): boolean {
+  const fields = Object.keys(patch);
+  return (
+    fields.length > 0 &&
+    fields.every(
+      (field) => field === "label" || field === "icon" || field === "color" || field === "category",
+    )
+  );
+}
 
 export type SessionPatchRoute = (
   key: string,
   patch: SessionPatch,
   options?: SessionPatchOptions,
-) => Promise<SessionPatchResult | null>;
+) => Promise<SessionPatchOutcome | null>;

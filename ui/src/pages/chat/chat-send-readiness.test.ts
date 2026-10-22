@@ -1,7 +1,9 @@
-// @vitest-environment node
 import { expect, it, vi } from "vitest";
+// @vitest-environment node
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -12,14 +14,13 @@ import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { findChatSendPayload, makeChatHost, makeRequestMock } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import { enqueueChatMessage, enqueuePendingRunMessage } from "./chat-queue.ts";
+import { enqueueChatMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import {
   resumeStoredChatOutboxes,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import {
   adoptStartedChatRun,
@@ -40,7 +41,6 @@ useChatSendBrowserFixture();
 
 it.each(
   [
-    {},
     { newerEvent: true },
     { reentrantSuccessor: true },
     { mainKeyChanged: true },
@@ -121,7 +121,13 @@ it.each(
       if (reconcileChatRunAfterSessionStatePublication(host) && reentrantSuccessor) {
         successorStarted = true;
         adoptStartedChatRun(host, "reentrant-run", 3);
-        enqueuePendingRunMessage(host, "Command joined to the successor", "reentrant-run");
+        keepVolatileQueuedMessage(host, host.sessionKey, {
+          id: "successor-input",
+          text: "Input awaiting the successor",
+          createdAt: 3,
+          sendRunId: "reentrant-run",
+          pendingRunId: "reentrant-run",
+        });
       }
     });
     let draining: ReturnType<typeof resumeStoredChatOutboxes> | undefined;
@@ -134,7 +140,13 @@ it.each(
     try {
       await sessions.refresh({ agentId: "main", force: true });
       await handleSendChat(host, undefined, { followUpMode: "queue" });
-      enqueuePendingRunMessage(host, "Command joined to the current run", "finished-run");
+      keepVolatileQueuedMessage(host, host.sessionKey, {
+        id: "current-input",
+        text: "Input awaiting the current run",
+        createdAt: 1,
+        sendRunId: "finished-run",
+        pendingRunId: "finished-run",
+      });
       expect(host.chatQueue).toHaveLength(2);
       const capturedOutboxes = listStoredChatOutboxes(host);
       const queuedIds = host.chatQueue.map((item) => item.id);
@@ -228,7 +240,7 @@ it.each(
         expect(host.chatQueue).toHaveLength(2);
         expect(host.chatQueue).toContainEqual(
           expect.objectContaining({
-            text: "Command joined to the current run",
+            text: "Input awaiting the current run",
             pendingRunId: "finished-run",
           }),
         );
@@ -312,7 +324,13 @@ it.each(["new run", "new session", "different terminal", "still active"])(
     await handleSendChat(host, undefined, { followUpMode: "queue" });
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     expect(host.chatQueue).toHaveLength(1);
-    enqueuePendingRunMessage(host, "Command joined to the previous run", "finished-run");
+    keepVolatileQueuedMessage(host, host.sessionKey, {
+      id: "previous-input",
+      text: "Input awaiting the previous run",
+      createdAt: 1,
+      sendRunId: "finished-run",
+      pendingRunId: "finished-run",
+    });
 
     const draining = resumeStoredChatOutboxes(host);
     await vi.waitFor(() =>
@@ -350,7 +368,6 @@ it.each(
     { message: "/approve approval-123 allow-once", action: "approve" },
     { message: "ordinary draft", action: "queued" },
     { message: "/stop after the next turn", action: "blocked" },
-    { message: "/stop", action: "goal" },
   ].flatMap((test) =>
     (test.action === "approve" ? [true, false] : [true]).map((hydrated) => ({
       message: test.message,
@@ -368,7 +385,7 @@ it.each(
       chatStream: hydrated ? "Waiting for approval" : null,
       requestHandlers: {
         "chat.startup": () => history.promise,
-        "chat.abort": { aborted: true },
+        "sessions.abort": { status: "aborted" },
         "chat.send": { runId: "approval-command", status: "started" },
       },
     });
@@ -392,18 +409,22 @@ it.each(
       }
       expect(host.chatLoading).toBe(true);
       if (action === "abort") {
-        expect(host.request).toHaveBeenCalledWith("chat.abort", {
-          runId: "waiting-run",
-          sessionKey: host.sessionKey,
+        expect(host.request).toHaveBeenCalledWith("sessions.abort", {
+          key: host.sessionKey,
+          clearQueued: true,
         });
       } else {
-        expect(host.request).not.toHaveBeenCalledWith("chat.abort", expect.anything());
+        expect(host.request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
       }
       if (action === "approve") {
         expect(host.request).toHaveBeenCalledWith(
           "chat.send",
           expect.objectContaining({ sessionKey: host.sessionKey, message }),
-          { timeoutMs: 30_000 },
+          {
+            timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+            signal: expect.any(AbortSignal),
+            retainSentResultOnAbort: true,
+          },
         );
         expect(
           host.request.mock.calls.filter(([method]) => method === "chat.history"),

@@ -5,7 +5,6 @@ import {
 } from "./exec-approval-policy-snapshot.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
-import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type {
   AllowAlwaysPersistenceDecision,
   AllowAlwaysPersistenceReason,
@@ -168,16 +167,9 @@ export function isExecApprovalPolicySnapshotCurrent(
   );
 }
 
-export function resolveAllowAlwaysPatternCoverage(params: {
-  segments: ExecCommandSegment[];
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: string | null;
-  strictInlineEval?: boolean;
-}): {
-  complete: boolean;
-  patterns: ReturnType<typeof resolveAllowAlwaysPatternEntries>;
-} {
+export function resolveAllowAlwaysPatternCoverage(
+  params: Parameters<typeof resolveAllowAlwaysPatternEntries>[0],
+) {
   const byKey = new Map<string, ReturnType<typeof resolveAllowAlwaysPatternEntries>[number]>();
   let representedSegmentCount = 0;
   for (const segment of params.segments) {
@@ -257,17 +249,14 @@ function resolvePlanPersistenceState(plan: ExecAuthorizationPlan | undefined): {
   };
 }
 
-export function resolveAllowAlwaysPersistenceDecision(params: {
-  segments: ExecCommandSegment[];
-  commandText?: string | null;
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-  platform?: string | null;
-  strictInlineEval?: boolean;
-  authorizationPlan?: ExecAuthorizationPlan;
-  runtimePayload?: boolean;
-  preparedCoverage?: ReturnType<typeof resolveAllowAlwaysPatternCoverage> | null;
-}): AllowAlwaysPersistenceDecision {
+export function resolveAllowAlwaysPersistenceDecision(
+  params: Parameters<typeof resolveAllowAlwaysPatternCoverage>[0] & {
+    commandText?: string | null;
+    authorizationPlan?: ExecAuthorizationPlan;
+    runtimePayload?: boolean;
+    preparedCoverage?: ReturnType<typeof resolveAllowAlwaysPatternCoverage> | null;
+  },
+): AllowAlwaysPersistenceDecision {
   const planPersistence = resolvePlanPersistenceState(params.authorizationPlan);
   const reasons = new Set<AllowAlwaysPersistenceReason>(planPersistence.reasons);
   if (params.runtimePayload === true) {

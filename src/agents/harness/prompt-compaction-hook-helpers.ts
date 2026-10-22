@@ -6,15 +6,23 @@ import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CurrentInboundPromptContext } from "../embedded-agent-runner/run/params.js";
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
+import { resolvePluginTurnContext } from "../plugin-turn-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
 const log = createSubsystemLogger("agents/harness");
 
-/** Prompt/developer-instruction pair after harness prompt-build hooks run. */
+const warnHookFailure = (hook: string) => (error: unknown) => {
+  log.warn(`${hook} hook failed: ${String(error)}`);
+  return undefined;
+};
+
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
+  /** Stable policy and per-turn context for harnesses with separate instruction carriers. */
+  threadDeveloperInstructions?: string;
+  turnDeveloperInstructions?: string;
   /** Optional per-turn tool restriction requested by before_prompt_build hooks. */
   toolsAllow?: string[];
   /** Span within prompt containing the original prompt input. */
@@ -25,7 +33,6 @@ type AgentHarnessDeveloperInstructionBuilder = {
   build: (params: { toolsAllow?: string[]; hasToolRestrictions: boolean }) => string | undefined;
 };
 
-/** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
   currentInboundContext?: CurrentInboundPromptContext;
@@ -46,22 +53,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     prompt: params.prompt,
   });
   const hookRunner = getGlobalHookRunner();
-  // heartbeat_prompt_contribution fires only on heartbeat turns. Harness runtimes
-  // (e.g. the Codex app-server) build the prompt through this helper rather than
-  // the embedded runner's resolvePromptBuildHookResult, so the hook must run from
-  // here too — otherwise it never fires on those runtimes.
-  const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
-  const hasHeartbeatContribution =
-    isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
   const hasPromptBuildHooks = Boolean(hookRunner?.hasHooks("before_prompt_build"));
-  if (!hasHeartbeatContribution && !hasPromptBuildHooks) {
-    const developerInstructions = resolveDeveloperInstructions(params.developerInstructions);
-    return {
-      prompt: inputPrompt,
-      developerInstructions,
-      promptInputRange: { start: 0, end: inputPrompt.length },
-    };
-  }
   const hookCtx = buildAgentHookContext(params.ctx);
   const currentUserMessage = params.currentUserMessage;
   const currentUserMessageText =
@@ -79,42 +71,28 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
     (typeof currentUserMessage === "object" ? currentUserMessage.idempotencyKey : undefined);
   const promptEvent = {
     prompt: inputPrompt,
-    ...(typeof currentUserMessageText === "string"
-      ? { currentUserMessage: currentUserMessageText }
-      : {}),
-    ...(typeof currentUserMessageId === "string" ? { currentUserMessageId } : {}),
-    messages: hasPromptBuildHooks
-      ? typeof params.messages === "function"
-        ? await params.messages()
-        : params.messages
-      : [],
+    ...(currentUserMessageText !== undefined ? { currentUserMessage: currentUserMessageText } : {}),
+    ...(currentUserMessageId !== undefined ? { currentUserMessageId } : {}),
+    messages:
+      hasPromptBuildHooks || hookRunner?.hasHooks("agent_turn_prepare")
+        ? typeof params.messages === "function"
+          ? await params.messages()
+          : params.messages
+        : [],
   };
 
-  // Match the embedded runner's lifecycle order: heartbeat contributions are
-  // collected before prompt-build hooks so hook side effects stay deterministic.
-  const heartbeatResult =
-    hasHeartbeatContribution && hookRunner
-      ? await hookRunner
-          .runHeartbeatPromptContribution(
-            {
-              sessionKey: params.ctx.sessionKey,
-              agentId: params.ctx.agentId,
-              heartbeatName: "heartbeat",
-            },
-            hookCtx,
-          )
-          .catch((error: unknown) => {
-            log.warn(`heartbeat_prompt_contribution hook failed: ${String(error)}`);
-            return undefined;
-          })
-      : undefined;
-
+  const turnContext = await resolvePluginTurnContext({
+    config: params.ctx.config ?? {},
+    prompt: inputPrompt,
+    messages: promptEvent.messages,
+    hookCtx,
+    hookRunner,
+  });
   const promptBuildResult =
     hookRunner && hasPromptBuildHooks
-      ? await hookRunner.runBeforePromptBuild(promptEvent, hookCtx).catch((error: unknown) => {
-          log.warn(`before_prompt_build hook failed: ${String(error)}`);
-          return undefined;
-        })
+      ? await hookRunner
+          .runBeforePromptBuild(promptEvent, hookCtx)
+          .catch(warnHookFailure("before_prompt_build"))
       : undefined;
   const developerInstructions = resolveDeveloperInstructions(
     params.developerInstructions,
@@ -130,22 +108,19 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
             activeToolNames: toolAuthority.activeToolNames(),
             assertHostActive: toolAuthority.assertActive,
           })
-          .catch((error: unknown) => {
-            log.warn(`authorized before_prompt_build hook failed: ${String(error)}`);
-            return undefined;
-          })
+          .catch(warnHookFailure("authorized before_prompt_build"))
       : undefined;
   const systemPrompt =
     typeof promptBuildResult?.systemPrompt === "string"
       ? promptBuildResult.systemPrompt
       : developerInstructions;
   const promptPrefix = joinPresentTextSegments([
-    heartbeatResult?.prependContext,
+    turnContext.prependContext,
     promptBuildResult?.prependContext,
     authorizedPromptBuildResult?.prependContext,
   ]);
   const promptSuffix = joinPresentTextSegments([
-    heartbeatResult?.appendContext,
+    turnContext.appendContext,
     promptBuildResult?.appendContext,
     authorizedPromptBuildResult?.appendContext,
   ]);
@@ -156,17 +131,27 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
       : promptPrefix
         ? promptPrefix.length + 2
         : 0;
+  const prependSystemContext = wrapPluginSystemContextSection(
+    promptBuildResult?.prependSystemContext,
+  );
+  const appendSystemContext = wrapPluginSystemContextSection(
+    promptBuildResult?.appendSystemContext,
+  );
+  const turnDeveloperInstructions = joinPresentTextSegments([
+    prependSystemContext,
+    appendSystemContext,
+  ]);
   return {
     prompt,
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }
       : {}),
     developerInstructions:
-      joinPresentTextSegments([
-        wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
-        systemPrompt,
-        wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
-      ]) ?? systemPrompt,
+      joinPresentTextSegments([prependSystemContext, systemPrompt, appendSystemContext]) ??
+      systemPrompt,
+    ...(turnDeveloperInstructions
+      ? { threadDeveloperInstructions: systemPrompt, turnDeveloperInstructions }
+      : {}),
     promptInputRange: {
       start: promptInputStart,
       end: promptInputStart + inputPrompt.length,

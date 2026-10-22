@@ -11,6 +11,7 @@ import type { UrbitSSEClient } from "../urbit/sse-client.js";
 import {
   findPendingApproval,
   formatApprovalConfirmation,
+  requiresResendAfterApproval,
   formatApprovalRequest,
   formatBlockedList,
   formatPendingList,
@@ -25,37 +26,24 @@ export function createTlonApprovalRuntime(params: {
   api: TlonApprovalApi;
   runtime: RuntimeEnv;
   botShipName: string;
-  getPendingApprovals: () => PendingApproval[];
-  setPendingApprovals: (approvals: PendingApproval[]) => void;
-  getCurrentSettings: () => TlonSettingsStore;
-  setCurrentSettings: (settings: TlonSettingsStore) => void;
-  getEffectiveDmAllowlist: () => string[];
-  setEffectiveDmAllowlist: (ships: string[]) => void;
-  getEffectiveOwnerShip: () => string | null;
+  state: {
+    pendingApprovals: PendingApproval[];
+    currentSettings: TlonSettingsStore;
+    effectiveDmAllowlist: string[];
+    effectiveOwnerShip: string | null;
+  };
   processApprovedMessage: (approval: PendingApproval) => Promise<void>;
   refreshWatchedChannels: () => Promise<number>;
 }) {
-  const {
-    api,
-    runtime,
-    botShipName,
-    getPendingApprovals,
-    setPendingApprovals,
-    getCurrentSettings,
-    setCurrentSettings,
-    getEffectiveDmAllowlist,
-    setEffectiveDmAllowlist,
-    getEffectiveOwnerShip,
-    processApprovedMessage,
-    refreshWatchedChannels,
-  } = params;
+  const { api, runtime, botShipName, state, processApprovedMessage, refreshWatchedChannels } =
+    params;
 
   let approvalOverflowNoticeSent = false;
   let approvalOverflowNoticeAttempts = 0;
 
   const savePendingApprovals = async (required = false): Promise<void> => {
     try {
-      await putTlonSetting(api, "pendingApprovals", JSON.stringify(getPendingApprovals()));
+      await putTlonSetting(api, "pendingApprovals", JSON.stringify(state.pendingApprovals));
     } catch (err) {
       runtime.error?.(`[tlon] Failed to save pending approvals: ${String(err)}`);
       if (required) {
@@ -66,10 +54,10 @@ export function createTlonApprovalRuntime(params: {
 
   const addToDmAllowlist = async (ship: string): Promise<void> => {
     const normalizedShip = normalizeShip(ship);
-    const nextAllowlist = getEffectiveDmAllowlist().includes(normalizedShip)
-      ? getEffectiveDmAllowlist()
-      : [...getEffectiveDmAllowlist(), normalizedShip];
-    setEffectiveDmAllowlist(nextAllowlist);
+    const nextAllowlist = state.effectiveDmAllowlist.includes(normalizedShip)
+      ? state.effectiveDmAllowlist
+      : [...state.effectiveDmAllowlist, normalizedShip];
+    state.effectiveDmAllowlist = nextAllowlist;
     try {
       await putTlonSetting(api, "dmAllowlist", nextAllowlist);
       runtime.log?.(`[tlon] Added ${normalizedShip} to dmAllowlist`);
@@ -80,7 +68,7 @@ export function createTlonApprovalRuntime(params: {
 
   const addToChannelAllowlist = async (ship: string, channelNest: string): Promise<void> => {
     const normalizedShip = normalizeShip(ship);
-    const currentSettings = getCurrentSettings();
+    const currentSettings = state.currentSettings;
     const channelRules = currentSettings.channelRules ?? {};
     const rule = channelRules[channelNest] ?? { mode: "restricted", allowedShips: [] };
     const allowedShips = [...(rule.allowedShips ?? [])];
@@ -93,7 +81,7 @@ export function createTlonApprovalRuntime(params: {
       ...channelRules,
       [channelNest]: { ...rule, allowedShips },
     };
-    setCurrentSettings({ ...currentSettings, channelRules: updatedRules });
+    state.currentSettings = { ...currentSettings, channelRules: updatedRules };
 
     try {
       await putTlonSetting(api, "channelRules", JSON.stringify(updatedRules));
@@ -103,17 +91,20 @@ export function createTlonApprovalRuntime(params: {
     }
   };
 
-  const blockShip = async (ship: string): Promise<void> => {
+  const setShipBlocked = async (ship: string, blocked: boolean): Promise<boolean> => {
     const normalizedShip = normalizeShip(ship);
+    const action = blocked ? "block" : "unblock";
     try {
       await api.poke({
         app: "chat",
-        mark: "chat-block-ship",
+        mark: `chat-${action}-ship`,
         json: { ship: normalizedShip },
       });
-      runtime.log?.(`[tlon] Blocked ship ${normalizedShip}`);
+      runtime.log?.(`[tlon] ${blocked ? "Blocked" : "Unblocked"} ship ${normalizedShip}`);
+      return true;
     } catch (err) {
-      runtime.error?.(`[tlon] Failed to block ship ${normalizedShip}: ${String(err)}`);
+      runtime.error?.(`[tlon] Failed to ${action} ship ${normalizedShip}: ${String(err)}`);
+      return false;
     }
   };
 
@@ -140,24 +131,8 @@ export function createTlonApprovalRuntime(params: {
     }
   };
 
-  const unblockShip = async (ship: string): Promise<boolean> => {
-    const normalizedShip = normalizeShip(ship);
-    try {
-      await api.poke({
-        app: "chat",
-        mark: "chat-unblock-ship",
-        json: { ship: normalizedShip },
-      });
-      runtime.log?.(`[tlon] Unblocked ship ${normalizedShip}`);
-      return true;
-    } catch (err) {
-      runtime.error?.(`[tlon] Failed to unblock ship ${normalizedShip}: ${String(err)}`);
-      return false;
-    }
-  };
-
   const sendOwnerNotification = async (message: string): Promise<boolean> => {
-    const ownerShip = getEffectiveOwnerShip();
+    const ownerShip = state.effectiveOwnerShip;
     if (!ownerShip) {
       runtime.log?.("[tlon] No ownerShip configured, cannot send notification");
       return false;
@@ -183,11 +158,13 @@ export function createTlonApprovalRuntime(params: {
       return false;
     }
 
-    const approvals = getPendingApprovals();
+    const approvals = state.pendingApprovals;
     const existing = approvals.find(
       (item) =>
         item.type === approval.type &&
         item.requestingShip === approval.requestingShip &&
+        // A group DM claim must never merge into (or overwrite) a verified 1:1 request.
+        item.clubId === approval.clubId &&
         (approval.type !== "channel" || item.channelNest === approval.channelNest) &&
         (approval.type !== "group" || item.groupFlag === approval.groupFlag),
     );
@@ -196,6 +173,12 @@ export function createTlonApprovalRuntime(params: {
       if (approval.originalMessage) {
         existing.originalMessage = approval.originalMessage;
         existing.messagePreview = approval.messagePreview;
+        // The stored message now comes from this request, so its provenance must follow it.
+        if (approval.verifiedDirect === true) {
+          existing.verifiedDirect = true;
+        } else {
+          delete existing.verifiedDirect;
+        }
       }
       runtime.log?.(
         `[tlon] Updated existing approval for ${approval.requestingShip} (${approval.type}) - re-sending notification`,
@@ -220,7 +203,7 @@ export function createTlonApprovalRuntime(params: {
 
     approvalOverflowNoticeSent = false;
     approvalOverflowNoticeAttempts = 0;
-    setPendingApprovals([...approvals, approval]);
+    state.pendingApprovals = [...approvals, approval];
     await savePendingApprovals(true);
     await sendOwnerNotification(formatApprovalRequest(approval));
     runtime.log?.(
@@ -235,7 +218,7 @@ export function createTlonApprovalRuntime(params: {
       return false;
     }
 
-    const approval = findPendingApproval(getPendingApprovals(), parsed.id);
+    const approval = findPendingApproval(state.pendingApprovals, parsed.id);
     if (!approval) {
       await sendOwnerNotification(
         `No pending approval found${parsed.id ? ` for ID: ${parsed.id}` : ""}`,
@@ -247,7 +230,11 @@ export function createTlonApprovalRuntime(params: {
       switch (approval.type) {
         case "dm":
           await addToDmAllowlist(approval.requestingShip);
-          if (approval.originalMessage) {
+          if (requiresResendAfterApproval(approval)) {
+            runtime.log?.(
+              `[tlon] Not replaying pre-upgrade DM request from ${approval.requestingShip}: sender provenance unknown; owner told to request a resend`,
+            );
+          } else if (approval.originalMessage) {
             runtime.log?.(
               `[tlon] Processing original message from ${approval.requestingShip} after approval`,
             );
@@ -299,16 +286,12 @@ export function createTlonApprovalRuntime(params: {
           }
           break;
       }
-
-      await sendOwnerNotification(formatApprovalConfirmation(approval, "approve"));
     } else if (parsed.action === "block") {
-      await blockShip(approval.requestingShip);
-      await sendOwnerNotification(formatApprovalConfirmation(approval, "block"));
-    } else {
-      await sendOwnerNotification(formatApprovalConfirmation(approval, "deny"));
+      await setShipBlocked(approval.requestingShip, true);
     }
+    await sendOwnerNotification(formatApprovalConfirmation(approval, parsed.action));
 
-    setPendingApprovals(removePendingApproval(getPendingApprovals(), approval.id));
+    state.pendingApprovals = removePendingApproval(state.pendingApprovals, approval.id);
     await savePendingApprovals();
     return true;
   };
@@ -327,9 +310,9 @@ export function createTlonApprovalRuntime(params: {
         return true;
       }
       case "pending":
-        await sendOwnerNotification(formatPendingList(getPendingApprovals()));
+        await sendOwnerNotification(formatPendingList(state.pendingApprovals));
         runtime.log?.(
-          `[tlon] Owner requested pending approvals list (${getPendingApprovals().length} pending)`,
+          `[tlon] Owner requested pending approvals list (${state.pendingApprovals.length} pending)`,
         );
         return true;
       case "unblock": {
@@ -338,7 +321,7 @@ export function createTlonApprovalRuntime(params: {
           await sendOwnerNotification(`${shipToUnblock} is not blocked.`);
           return true;
         }
-        const success = await unblockShip(shipToUnblock);
+        const success = await setShipBlocked(shipToUnblock, false);
         await sendOwnerNotification(
           success ? `Unblocked ${shipToUnblock}.` : `Failed to unblock ${shipToUnblock}.`,
         );

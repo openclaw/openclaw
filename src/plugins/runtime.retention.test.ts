@@ -1,7 +1,15 @@
 import { execFile } from "node:child_process";
 import { setImmediate } from "node:timers/promises";
 import { promisify } from "node:util";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import {
+  emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
+  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
+  onTrustedToolExecutionEvent,
+} from "../infra/diagnostic-events.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
@@ -11,26 +19,62 @@ import { pluginRuntimeRetentionEntrypoint } from "./runtime-retention-entrypoint
 import { disposePluginRegistryInstances, waitForPluginRegistryRetirement } from "./runtime.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
+const queuedEvent = { type: "message.queued", source: "fixture" } as const;
 it.each([
-  { mode: "loader", name: "releases the predecessor of a live replacement registry" },
-  { mode: "registry", name: "releases successors while a retired registry remains reachable" },
-  {
-    mode: "registry-instances",
-    name: "releases successors while disposed instances remain reachable",
+  [onDiagnosticEvent, emitDiagnosticEvent, queuedEvent],
+  [onInternalDiagnosticEvent, emitDiagnosticEvent, queuedEvent],
+  [onTrustedInternalDiagnosticEvent, emitTrustedDiagnosticEvent, queuedEvent],
+  [
+    onTrustedToolExecutionEvent,
+    emitTrustedDiagnosticEvent,
+    {
+      type: "tool.execution.started",
+      runId: "fixture",
+      toolName: "fixture",
+      toolCallId: "fixture",
+    },
+  ],
+] as const)(
+  "owns %s subscriptions through early unsubscribe and disposal",
+  async (subscribe, emit, event) => {
+    const instance = new PluginInstance("diagnostic-owner");
+    let early = 0;
+    let active = 0;
+    const unsubscribe = instance.run(() => subscribe(() => early++));
+    instance.run(() => subscribe(() => active++));
+    const resume = createDeferredCore();
+    let late: Promise<() => void> | undefined;
+    instance.run(() => {
+      late = resume.promise.then(() => subscribe(() => active++));
+    });
+    emit(event);
+    expect([early, active]).toEqual([1, 1]);
+    unsubscribe();
+    unsubscribe();
+    emit(event);
+    expect([early, active]).toEqual([1, 2]);
+    await instance.dispose();
+    resume.resolve();
+    await expect(late).rejects.toThrow("retiring");
+    emit(event);
+    expect([early, active]).toEqual([1, 2]);
   },
-  { mode: "cache", name: "releases callback captures while a retired cache remains reachable" },
-  { mode: "formatter", name: "finishes cache retirement when a custom stack formatter throws" },
-  {
-    mode: "instance",
-    name: "releases captured source lookups while a retired instance remains reachable",
-  },
-  ...["source", "bundled-cjs", "bundled-mjs"].map((kind) => ({
-    mode: `recovery-${kind}`,
-    name: `releases the retired owner and registry while ${kind} recovery remains live`,
-  })),
+);
+
+it.each([
+  "diagnostics",
+  "loader",
+  "registry",
+  "registry-instances",
+  "cache",
+  "formatter",
+  "instance",
+  "recovery-source",
+  "recovery-bundled-cjs",
+  "recovery-bundled-mjs",
 ])(
-  "$name",
-  async ({ mode }) => {
+  "releases retired objects across %s lifetimes",
+  async (mode) => {
     await promisify(execFile)(
       process.execPath,
       [
@@ -65,7 +109,7 @@ it("keeps retirement pending after self acknowledgement and preserves its final 
     acknowledged.resolve(await disposePluginRegistryInstances(registry, undefined, { cfg: {} }));
   });
   void call.catch(acknowledged.reject);
-  let settled = false;
+  const settled = vi.fn();
   let retirement: ReturnType<typeof waitForPluginRegistryRetirement> | undefined;
   try {
     expect(await acknowledged.promise).toEqual({ cleanupCount: 0, failures: [] });
@@ -74,14 +118,11 @@ it("keeps retirement pending after self acknowledgement and preserves its final 
       failures: [],
       deferredPluginIds: [record.id],
     });
-    retirement = waitForPluginRegistryRetirement(registry).then((result) => {
-      settled = true;
-      return result;
-    });
+    retirement = waitForPluginRegistryRetirement(registry).finally(settled);
     consumer.release();
     await cleanupEntered.promise;
     await setImmediate();
-    expect(settled).toBe(false);
+    expect(settled).not.toHaveBeenCalled();
     releaseCleanup.resolve();
     const result = await retirement;
     await call;

@@ -56,11 +56,9 @@ internal class TalkAudioPlayer(
       fileExtension: String?,
     ): TalkPlaybackMode {
       val normalizedOutputFormat = outputFormat?.trim()?.lowercase()
-      if (normalizedOutputFormat != null) {
-        val pcmSampleRate = parsePcmSampleRate(normalizedOutputFormat)
-        if (pcmSampleRate != null) {
-          return TalkPlaybackMode.Pcm(sampleRate = pcmSampleRate)
-        }
+      val pcmSampleRate = normalizedOutputFormat?.let(::parsePcmSampleRate)
+      if (pcmSampleRate != null) {
+        return TalkPlaybackMode.Pcm(sampleRate = pcmSampleRate)
       }
       val normalizedMimeType = mimeType?.trim()?.lowercase()
       val extension =

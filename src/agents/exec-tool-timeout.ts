@@ -1,6 +1,6 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeExecTarget } from "../infra/exec-approvals-core.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
+import { resolveRequestedExecTarget } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 
 export function resolveExecDefaultTimeoutSec(timeoutSec?: number): number {
@@ -38,9 +38,7 @@ export function createExecToolExecutionTimeoutResolver(
   const defaultHost = defaults?.host;
   return (args) => {
     const params = asNonArrayRecord(args);
-    const requestedHost = normalizeExecTarget(
-      typeof params.host === "string" ? params.host : undefined,
-    );
+    const requestedHost = resolveRequestedExecTarget(params);
     const host = requestedHost && requestedHost !== "auto" ? requestedHost : defaultHost;
     if (host !== "node") {
       return undefined;

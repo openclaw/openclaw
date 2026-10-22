@@ -32,6 +32,7 @@ export type ContextEngineLogicalTurnLease = {
   readonly effectiveEnginePluginId?: string;
   readonly degraded: boolean;
   readonly degradedReason?: string;
+  readonly disposed: boolean;
   selectForHost: (params: {
     host: ContextEngineHostSupport;
     operation: ContextEngineOperation;
@@ -39,6 +40,7 @@ export type ContextEngineLogicalTurnLease = {
   }) => EffectiveContextEngineRef;
   degradeBeforeStart: (reason: string) => EffectiveContextEngineRef;
   begin: () => EffectiveContextEngineRef;
+  onDispose: (key: string, settle: () => Promise<void>) => void;
   deferDisposalUntil: (promise: Promise<unknown>) => void;
   dispose: () => Promise<void>;
 };
@@ -48,13 +50,14 @@ export async function createContextEngineLogicalTurnLease(params: {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
-  warn?: (message: string) => void;
+  awaitSessionDiffBaseline?: () => Promise<void>;
 }): Promise<ContextEngineLogicalTurnLease> {
   const { runId, sessionId } = params.identity;
   const resolution = await resolveLogicalTurnContextEngines(params.config, {
     initialize: ensureContextEnginesInitialized,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
+    beforeCustomEngine: params.awaitSessionDiffBaseline,
     onCleanupFailure: recordAgentCleanupFailure,
   });
   let state: LogicalTurnSelectionState = "unselected";
@@ -62,23 +65,23 @@ export async function createContextEngineLogicalTurnLease(params: {
   let degradedReason = resolution.configuredFailure;
   let warned = false;
   const disposalHolds = new Set<Promise<unknown>>();
+  const settlements = new Map<string, () => Promise<void>>();
   const isBaselineEngineSelection =
     resolution.configuredFailure === undefined &&
     resolution.configured.registeredId === resolution.fallback.registeredId;
 
-  const asEffective = (): EffectiveContextEngineRef =>
-    Object.freeze({
-      ...effective,
-      mode: degradedReason ? "legacy-degraded" : "configured",
-      ...(degradedReason ? { reason: degradedReason } : {}),
-    });
+  const asEffective = (): EffectiveContextEngineRef => ({
+    ...effective,
+    mode: degradedReason ? "legacy-degraded" : "configured",
+    ...(degradedReason ? { reason: degradedReason } : {}),
+  });
 
   const warnOnce = (reason: string) => {
     if (warned) {
       return;
     }
     warned = true;
-    (params.warn ?? console.warn)(
+    console.warn(
       `[context-engine] Context engine "${sanitizeForLog(resolution.configuredId)}" degraded to "${sanitizeForLog(resolution.fallback.registeredId)}" for this logical turn: ${sanitizeForLog(reason)}. ` +
         `The "${sanitizeForLog(resolution.fallback.registeredId)}" engine will handle only this turn; configuration is unchanged, and "${sanitizeForLog(resolution.configuredId)}" will be retried next turn.`,
     );
@@ -164,6 +167,9 @@ export async function createContextEngineLogicalTurnLease(params: {
     get degradedReason() {
       return degradedReason;
     },
+    get disposed() {
+      return state === "disposed";
+    },
     selectForHost(selection) {
       if (state === "disposed") {
         throw new Error("context-engine logical turn lease is already disposed");
@@ -193,6 +199,12 @@ export async function createContextEngineLogicalTurnLease(params: {
       state = "started";
       return asEffective();
     },
+    onDispose(key, settle) {
+      if (state === "disposed") {
+        throw new Error("context-engine logical turn lease is already disposed");
+      }
+      settlements.set(key, settle);
+    },
     deferDisposalUntil(promise) {
       if (state === "disposed") {
         throw new Error("context-engine logical turn lease is already disposed");
@@ -205,6 +217,18 @@ export async function createContextEngineLogicalTurnLease(params: {
         return;
       }
       state = "disposed";
+      await Promise.all(
+        [...settlements.values()].map((cleanup) =>
+          runAgentCleanupStep({
+            runId,
+            sessionId,
+            step: "context-engine-turn-settlement",
+            log: { warn: console.warn },
+            cleanup,
+          }),
+        ),
+      );
+      settlements.clear();
       const engines = [resolution.configured.engine, resolution.fallback.engine];
       const distinctEngines = engines.filter((engine, index) =>
         engines.slice(0, index).every((other) => !hasSameContextEngineInstance(engine, other)),
@@ -218,7 +242,7 @@ export async function createContextEngineLogicalTurnLease(params: {
               runId,
               sessionId,
               step: "context-engine-dispose",
-              log: { warn: params.warn ?? console.warn },
+              log: { warn: console.warn },
               cleanup: async () => {
                 const sources = new Set(
                   engines

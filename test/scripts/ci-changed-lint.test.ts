@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,8 +18,28 @@ import {
   parseShardRunnerArgs,
 } from "../../scripts/run-oxlint-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createNestedGitEnv } from "../helpers/temp-repo.js";
+import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const scriptsConfig = "config/tsconfig/oxlint.scripts.json";
+const coreConfig = "config/tsconfig/oxlint.core.json";
+const rootTestConfig = "test/tsconfig/tsconfig.test.root.json";
+const centralLintSelection = {
+  files: [],
+  coreStripes: [],
+  extensionStripes: [],
+  groups: [],
+  fullGroups: ["scripts"],
+  central: true,
+} satisfies NonNullable<Parameters<typeof createChangedCheckPlan>[1]>["lintSelection"];
+const controllerCommand = (file: string, base: string, staged = false) =>
+  createChangedCheckPlan(detectChangedLanes([file]), {
+    lintOnly: true,
+    staged,
+    env: { ...process.env, CHECKOUT_BASE_SHA: base },
+    lintSelection: centralLintSelection,
+  }).commands.find(({ args }) => args[0] === "check:control-ui-controllers");
 
 function fixture(prefix: string) {
   const cwd = tempDirs.make(prefix);
@@ -178,11 +198,8 @@ describe("CI changed lint", () => {
       }),
     );
     mkdirSync(path.join(cwd, "config/tsconfig"), { recursive: true });
-    copyFileSync(".oxlintrc.json", path.join(cwd, ".oxlintrc.json"));
-    copyFileSync(
-      "config/tsconfig/oxlint.core.json",
-      path.join(cwd, "config/tsconfig/oxlint.core.json"),
-    );
+    copyOxlintConfigFixture(cwd);
+    copyFileSync(coreConfig, path.join(cwd, coreConfig));
     symlinkSync(path.resolve("node_modules"), path.join(cwd, "node_modules"), "junction");
     mkdirSync(path.join(cwd, "scripts"));
     symlinkSync(path.resolve("scripts/lib"), path.join(cwd, "scripts/lib"), "junction");
@@ -311,20 +328,12 @@ describe("CI changed lint", () => {
         ...paths.toSorted(),
       ]);
       expect(central.some(({ args }) => args[0] === "lint:ui:i18n")).toBe(true);
-      expect(
-        central.some(
-          ({ args }) =>
-            args[0] === "scripts/run-oxlint.mjs" &&
-            args.includes("test/tsconfig/tsconfig.test.root.json"),
-        ),
-      ).toBe(true);
-      expect(
-        central.find(
-          ({ args }) =>
-            args[0] === "scripts/run-oxlint.mjs" &&
-            args.includes("test/tsconfig/tsconfig.test.root.json"),
-        )?.args,
-      ).toContain(`--threads=${runnerProfile === "blacksmith" ? 8 : 1}`);
+      expect(central.some(({ args }) => args[0] === "check:control-ui-controllers")).toBe(true);
+      const rootLint = central.find(
+        ({ args }) => args[0] === "scripts/run-oxlint.mjs" && args.includes(rootTestConfig),
+      );
+      expect(rootLint).toBeDefined();
+      expect(rootLint?.args).toContain(`--threads=${runnerProfile === "blacksmith" ? 8 : 1}`);
       const selections = [
         plan.central,
         ...[...plan.core, ...plan.extensions].map(
@@ -333,16 +342,12 @@ describe("CI changed lint", () => {
       ];
       const selectedFiles = selections.flatMap(({ files }) => files).toSorted();
       expect(selectedFiles).toEqual(paths.filter((file) => !file.startsWith("test/")).toSorted());
-      const full = createOxlintShards({
-        splitCore: true,
-        splitExtensions: true,
-        platform: "linux",
-      });
-      const fileScope = createOxlintFileScope(selectedFiles);
-      const expected = fileScope
-        .selectShards(full)
-        .flatMap(({ args }) => args.slice(2).map((target) => `${args[1]}:${target}`))
-        .toSorted();
+      const expected = [
+        `${coreConfig}:src/utils.ts`,
+        `${coreConfig}:ui/src/app-navigation.ts`,
+        "extensions/tsconfig.json:extensions/telegram/src/send.ts",
+        `${scriptsConfig}:scripts/lib/arg-utils.mts`,
+      ].toSorted();
       const actual = selections.flatMap((selection) => {
         const commands = createChangedCheckPlan(result, {
           lintOnly: true,
@@ -383,11 +388,11 @@ describe("CI changed lint", () => {
           expect(plan.central.extensionStripes).toEqual([]);
         }
       } else {
-        expect(plan.core).toEqual([]);
-        expect(plan.extensions).toEqual([]);
-        expect(actual).toContain("config/tsconfig/oxlint.core.json:src/utils.ts");
-        expect(actual).toContain("config/tsconfig/oxlint.scripts.json:scripts/lib/arg-utils.mts");
-        expect(plan.central.groups).toEqual(["core", "extensions", "scripts"]);
+        expect(plan).toMatchObject({
+          core: [],
+          extensions: [],
+          central: { groups: ["core", "extensions", "scripts"] },
+        });
       }
       for (const row of [...plan.core, ...plan.extensions]) {
         const selection = JSON.parse(row.lint_selection_json) as typeof plan.central;
@@ -420,6 +425,98 @@ describe("CI changed lint", () => {
     ).toBeNull(),
   );
 
+  it.each(["ui/src/app.ts", ".oxlintrc.json"])(
+    "retains the controller guard and staged scope when CI splits lint for %s",
+    (file) => {
+      for (const staged of [false, true]) {
+        expect(controllerCommand(file, "unavailable-base", staged)?.args).toEqual([
+          "check:control-ui-controllers",
+          ...(staged ? ["--staged"] : ["--base", "unavailable-base", "--no-merge-base"]),
+        ]);
+      }
+    },
+  );
+
+  it.each(["ui/src/app.ts", ".oxlintrc.json"])(
+    "executes the generated controller guard against a depth-one merge checkout for %s",
+    (file) => {
+      const { cwd: source, write } = fixture("ci-controller-merge-source-");
+      const env = createNestedGitEnv();
+      const git = (cwd: string, args: string[]) =>
+        execFileSync(
+          "git",
+          ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args],
+          {
+            cwd,
+            env,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          },
+        ).trim();
+      write("ui/src/view.ts", "export {};\n");
+      for (const pattern of [
+        "createEffect",
+        "untrack",
+        "addEventListener",
+        "querySelector",
+        "flush",
+        "getOwner",
+        "runWithOwner",
+        "onCleanup",
+        "manualImport",
+      ]) {
+        write(`config/control-ui-${pattern}-baseline.txt`, "");
+      }
+      git(source, ["init"]);
+      git(source, ["add", "."]);
+      git(source, ["commit", "-m", "base"]);
+      const base = git(source, ["rev-parse", "HEAD"]);
+      git(source, ["checkout", "-b", "candidate"]);
+      write("candidate.txt", "candidate\n");
+      git(source, ["add", "."]);
+      git(source, ["commit", "-m", "candidate"]);
+      git(source, ["checkout", "-b", "merge", base]);
+      write("main.txt", "main\n");
+      git(source, ["add", "."]);
+      git(source, ["commit", "-m", "main"]);
+      const checkoutBase = git(source, ["rev-parse", "HEAD"]);
+      git(source, ["merge", "--no-ff", "candidate", "-m", "PR merge"]);
+      const cwd = tempDirs.make("ci-controller-merge-shallow-");
+      git(cwd, ["clone", "--depth=1", "--branch=merge", pathToFileURL(source).href, "."]);
+      git(cwd, ["fetch", "--depth=1", "origin", checkoutBase]);
+      const ancestry = spawnSync("git", ["merge-base", "HEAD", checkoutBase], { cwd, env });
+      expect(ancestry.error).toBeUndefined();
+      expect(ancestry.status).toBe(1);
+      const run = (preparedBase: string) => {
+        const command = controllerCommand(file, preparedBase);
+        expect(command).toBeDefined();
+        return spawnSync(
+          process.execPath,
+          [
+            "--import",
+            path.resolve("scripts/tsx.mjs"),
+            path.resolve("scripts/check-control-ui-controllers.mts"),
+            ...command!.args.slice(1),
+          ],
+          { cwd, env, encoding: "utf8" },
+        );
+      };
+      const retained = run(checkoutBase);
+      expect(retained.error).toBeUndefined();
+      expect(retained.status, retained.stderr).toBe(0);
+      expect(retained.stdout).toContain("Control UI controller guard OK");
+      writeFileSync(path.join(cwd, "ui/src/new.ts"), "class NewController {}\n");
+      const added = run(checkoutBase);
+      expect(added.error).toBeUndefined();
+      expect(added.status, added.stderr).toBe(1);
+      expect(added.stderr).toContain("ui/src/new.ts");
+      const missing = run("missing-comparison-base");
+      expect(missing.error).toBeUndefined();
+      expect(missing.status, missing.stderr).toBe(1);
+      expect(missing.stderr).toContain("ui/src/new.ts");
+    },
+  );
+
   it("uses the owning compiler configs for changed files without unrelated lint or type checks", () => {
     const paths = [
       "src/utils.ts",
@@ -436,21 +533,14 @@ describe("CI changed lint", () => {
     const semantic = commands.filter(
       ({ bin, args }) => bin === "node" && args[0] === "scripts/run-oxlint.mjs",
     );
-    expect(semantic.map(({ args }) => args)).toEqual([
-      ["scripts/run-oxlint.mjs", "--tsconfig", "config/tsconfig/oxlint.core.json", "src/utils.ts"],
-      [
+    expect(semantic.map(({ args }) => args)).toEqual(
+      [coreConfig, "extensions/tsconfig.json", scriptsConfig].map((config, i) => [
         "scripts/run-oxlint.mjs",
         "--tsconfig",
-        "extensions/tsconfig.json",
-        "extensions/telegram/src/send.ts",
-      ],
-      [
-        "scripts/run-oxlint.mjs",
-        "--tsconfig",
-        "config/tsconfig/oxlint.scripts.json",
-        "scripts/lib/ci-check-family-scope.mts",
-      ],
-    ]);
+        config,
+        paths[i],
+      ]),
+    );
     expect(commands.some(({ args }) => args.some((arg) => arg.startsWith("tsgo:")))).toBe(false);
     expect(
       commands.some(({ args }) =>

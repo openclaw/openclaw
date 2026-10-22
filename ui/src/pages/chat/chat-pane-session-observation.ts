@@ -1,4 +1,6 @@
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
@@ -6,33 +8,99 @@ import {
   readSessionChangedEvent,
   reconcileSessionHistory,
 } from "../../lib/sessions/reconcile.ts";
-import type { SessionRowObservation } from "../../lib/sessions/session-capability.ts";
+import type {
+  SessionCapability,
+  SessionRowObservation,
+} from "../../lib/sessions/session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
+  buildAgentMainSessionKey,
+  isUiSelectedGlobalSessionKey,
+  resolveUiConfiguredMainKey,
   parseAgentSessionKey,
   resolveUiSessionNavigationParentKey,
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
+import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
+import { applySelectedSessionProjection } from "./chat-pane-state.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
-import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
+import { flushChatQueueForEvent, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { resolveChatAgentId } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
-import { replayPendingChatAbort } from "./run-lifecycle.ts";
+import {
+  reconcileChatRunAfterSessionStatePublication,
+  replayPendingChatAbort,
+} from "./run-lifecycle.ts";
+import { clearChatMessagesFromCache, readChatSessionSnapshot } from "./session-message-cache.ts";
+
+function createSessionObservationRefresh(
+  sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
+  target: { key: string; agentId: string },
+  client: GatewayBrowserClient,
+  current: () => boolean,
+  observation: () => SessionRowObservation | null,
+  retryAfterList = false,
+) {
+  let reading: Promise<void> | null = null;
+  let pending = false;
+  let failedListRevision: number | undefined;
+  const refresh = () => {
+    if (!current()) {
+      return;
+    }
+    pending = true;
+    const selected = observation();
+    if (reading || !selected?.isCurrent()) {
+      return;
+    }
+    pending = false;
+    failedListRevision = undefined;
+    const reconcile = selected.captureReconcile();
+    reading = sessions
+      .describe(target, { client })
+      .then(({ session }) => {
+        if (current()) {
+          reconcile(session ?? undefined);
+        }
+      })
+      .catch(() => {
+        failedListRevision = sessions.canonicalListRevision;
+      })
+      .finally(() => {
+        reading = null;
+        if (pending) {
+          refresh();
+        }
+      });
+  };
+  return {
+    refresh,
+    retryFailedRead: () => {
+      if (
+        failedListRevision !== undefined &&
+        (!retryAfterList || sessions.canonicalListRevision > failedListRevision)
+      ) {
+        refresh();
+      }
+    },
+  };
+}
 
 function applyObservedChatSessionRow(
   state: ChatPageHost,
   row: GatewaySessionRow | null,
-  observedSessionId: string | null = null,
-) {
+  observedSessionId: string | null,
+  retireSessionMutations: () => void,
+): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
     const result = state.sessionsResult;
     if (!result || state.sessionsResultAgentId !== selectedAgentId) {
-      return false;
+      return;
     }
     const sessions = result.sessions.filter(
       (candidate) =>
@@ -40,13 +108,14 @@ function applyObservedChatSessionRow(
         (observedSessionId !== null && candidate.sessionId !== observedSessionId),
     );
     if (sessions.length === result.sessions.length) {
-      return false;
+      return;
     }
+    retireSessionMutations();
     state.sessionsResult = { ...result, sessions, count: sessions.length };
-    return true;
+    return;
   }
   if (!visibleSessionMatches(state, row.key, row.agentId ?? selectedAgentId)) {
-    return false;
+    return;
   }
   const current = state.sessionsResultAgentId === selectedAgentId ? state.sessionsResult : null;
   const existing = row.sessionId
@@ -82,23 +151,179 @@ function applyObservedChatSessionRow(
   if (row.providerReview) {
     holdProviderReviewQueuedInputs(state, row.key, row.agentId ?? selectedAgentId);
     if (
-      state.realtimeTalkSession ||
-      state.realtimeTalkActive ||
-      state.realtimeTalkUseSystemDefault
+      state.realtimeTalk.snapshot.realtimeTalkSession ||
+      state.realtimeTalk.snapshot.realtimeTalkActive ||
+      state.realtimeTalk.snapshot.realtimeTalkUseSystemDefault
     ) {
       stopChatRealtimeTalk(state, { preserveConversation: true });
     }
   }
-  if (result === state.sessionsResult && state.sessionsResultAgentId === selectedAgentId) {
-    return false;
+  const previous = current?.sessions.find((candidate) =>
+    visibleSessionMatches(state, candidate.key, candidate.agentId),
+  );
+  if (previous && previous.sessionId !== row.sessionId) {
+    // Release pending header presentation before publishing a replacement incarnation.
+    retireSessionMutations();
   }
   state.sessionsResult = result;
   state.sessionsResultAgentId = selectedAgentId;
-  return true;
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
+  // Capability identity matters because a replacement restarts its canonical revision at zero.
+  private canonicalSessionList?: {
+    sessions: SessionCapability;
+    revision: number;
+    outboxState?: string;
+  };
+
+  protected transcriptSessionProps(selectedSession: GatewaySessionRow | undefined) {
+    const state = this.state;
+    if (!state || parseCatalogSessionKey(state.sessionKey)) {
+      return { selectedSession: undefined };
+    }
+    const observation = this.resourceSessionObservation();
+    const session = selectedSession ?? observation?.row ?? undefined;
+    if (
+      !this.ownsChatSnapshot({ sessionKey: state.sessionKey }) ||
+      observation?.hasObserved ||
+      (session && !state.sessions.state.resultCached)
+    ) {
+      return { selectedSession: session };
+    }
+    const snapshot = readChatSessionSnapshot(state.chatMessagesBySession, state, {
+      sessionKey: state.sessionKey,
+    });
+    return {
+      selectedSession: session,
+      transcriptMetadata:
+        snapshot?.sessionId === state.currentSessionId ? snapshot?.transcriptMetadata : undefined,
+    };
+  }
+
+  protected applySessionsState(stateValue: SessionCapability["state"]) {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const canonicalListRevision = this.context.sessions.canonicalListRevision;
+    const previousCanonical = this.canonicalSessionList;
+    const canonicalListPublished =
+      previousCanonical?.sessions === this.context.sessions &&
+      canonicalListRevision > previousCanonical.revision;
+    const selectedSessionDeleted = this.context.sessions.deletionState(
+      state.sessionKey,
+      resolveChatAgentId(state),
+    );
+    for (const { key, agentId } of stateValue.deletedSessions) {
+      clearChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey: key, agentId });
+    }
+    // Live rows retire on disconnect; the session owner retains same-identity
+    // presentation (including deferred metadata) until the next canonical list.
+    const presentation = this.context.sessions.presentation;
+    // A list for another agent must not overwrite this pane's global history.
+    if (
+      !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+      presentation.agentId === resolveChatAgentId(state)
+    ) {
+      state.sessionsResult = presentation.result;
+      state.sessionsResultAgentId = presentation.agentId;
+    }
+    this.projectObservedSessionRow();
+    state.sessionsLoading = stateValue.loading;
+    state.sessionsError = stateValue.error;
+    if (state.connected && state.pendingAbort) {
+      void replayPendingChatAbort(state);
+    }
+    this.refreshSwarmRoster();
+    const selectedSession = selectedChatSessionRow(state);
+    if (
+      (!stateValue.resultCached || this.resourceSessionObservation()?.hasObserved) &&
+      selectedSession?.sessionId &&
+      selectedSession.sessionId === state.currentSessionId &&
+      this.ownsChatSnapshot({ sessionKey: state.sessionKey })
+    ) {
+      commitCurrentChatHistorySnapshot(state, undefined, selectedSession);
+    }
+    const outboxState = selectedSession
+      ? JSON.stringify([
+          state.sessionKey,
+          resolveChatAgentId(state),
+          selectedSession.sessionId,
+          selectedSession.status,
+          isSessionRunStateActive(selectedSession),
+          selectedSession.lastRunId,
+          selectedSession.activeLeafEntryId,
+        ])
+      : undefined;
+    this.canonicalSessionList = {
+      sessions: this.context.sessions,
+      revision: canonicalListRevision,
+      outboxState: canonicalListPublished
+        ? outboxState
+        : previousCanonical?.sessions === this.context.sessions
+          ? previousCanonical.outboxState
+          : undefined,
+    };
+    if (applySelectedSessionProjection(state, selectedSession)) {
+      // Hidden retained panes keep this subscription alive; only the pane the
+      // user is actually looking at may clear unread/attention state.
+      if (this.presented) {
+        this.markSessionRead(selectedSession);
+      }
+    }
+    this.syncSessionSuggestionTarget(
+      resolveChatAgentId(state) ?? stateValue.agentId ?? "main",
+      selectedSession,
+    );
+    if (selectedSessionDeleted) {
+      const agentId = resolveChatAgentId(state);
+      this.onSessionDeleted?.(
+        this.paneId,
+        state.sessionKey,
+        buildAgentMainSessionKey({
+          agentId,
+          mainKey: resolveUiConfiguredMainKey({
+            agentsList: this.context.agents.state.agentsList,
+            hello: this.context.gateway.snapshot.hello,
+          }),
+        }),
+        selectedSessionDeleted === "pending",
+      );
+      return;
+    }
+    const reconciledLocalCompletion = reconcileChatRunAfterSessionStatePublication(state);
+    this.reconcileWaitingApprovalSnapshot();
+    if (reconciledLocalCompletion) {
+      void resumeStoredChatOutboxes(state);
+      return;
+    }
+    // First canonical idle and changed run/branch identity can release a queue.
+    // Re-decoding an unchanged row after foreign activity is not new delivery intent.
+    if (
+      canonicalListPublished &&
+      previousCanonical?.outboxState !== outboxState &&
+      selectedSession &&
+      !isSessionRunStateActive(selectedSession) &&
+      state.chatQueue.length > 0
+    ) {
+      void flushChatQueueForEvent(state);
+    }
+  }
+
+  private publishParentRow?: () => void;
+  readonly parentSession = {
+    read: () => this.observedParentSessionRow(),
+    subscribe: (listener: () => void) => {
+      this.publishParentRow = listener;
+      return () => {
+        this.publishParentRow = undefined;
+      };
+    },
+  };
+
   private sessionObservation: {
+    retryFailedRead: () => void;
     matchesPane: () => boolean;
     observation: SessionRowObservation | null;
   } | null = null;
@@ -108,6 +333,14 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     matchesPane: () => boolean;
     observation: SessionRowObservation | null;
   } | null = null;
+
+  protected resumeConfirmedRouteWork(routeResolutionChanged?: boolean): void {
+    const state = this.state;
+    if (!routeResolutionChanged || this.routeResolutionPending || !state) {
+      return;
+    }
+    void resumeStoredChatOutboxes(state);
+  }
 
   protected observedParentSessionRow(): GatewaySessionRow | null {
     const binding = this.parentSessionObservation;
@@ -120,6 +353,9 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     const previous = this.parentSessionObservation;
     this.parentSessionObservation = null;
     previous?.observation?.dispose();
+    if (previous) {
+      this.publishParentRow?.();
+    }
   }
 
   private synchronizeParentSessionObservation() {
@@ -147,13 +383,8 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       return;
     }
     const agentId = parseAgentSessionKey(key)?.agentId ?? resolveChatAgentId(state);
-    let refreshFailed = false;
     const binding: NonNullable<ChatPaneSessionObservation["parentSessionObservation"]> = {
-      retryFailedRead: () => {
-        if (refreshFailed) {
-          refresh();
-        }
-      },
+      retryFailedRead: () => refresh.retryFailedRead(),
       matchesPane: () =>
         this.state === state &&
         state.connected &&
@@ -163,33 +394,14 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       observation: null,
     };
     const current = () => this.parentSessionObservation === binding && binding.matchesPane();
-    let reading: Promise<void> | null = null;
-    const refresh = () => {
-      if (reading || !current()) {
-        return;
-      }
-      refreshFailed = false;
-      reading = (async () => {
-        const observation = binding.observation;
-        while (current() && observation?.isCurrent()) {
-          const reconcile = observation.captureReconcile();
-          const { session } = await sessions.describe({ key, agentId }, { client });
-          if (!current()) {
-            return;
-          }
-          if (reconcile(session ?? undefined).status !== "invalidated") {
-            return;
-          }
-        }
-      })()
-        .catch(() => {
-          // A later history/connection publication can recover without a retry loop.
-          refreshFailed = true;
-        })
-        .finally(() => {
-          reading = null;
-        });
-    };
+    const refresh = createSessionObservationRefresh(
+      sessions,
+      { key, agentId },
+      client,
+      current,
+      () => binding.observation,
+      true,
+    );
     this.parentSessionObservation = binding;
     binding.observation = sessions.observeRow(
       { key, agentId },
@@ -197,7 +409,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         if (!current()) {
           return;
         }
-        this.requestUpdate();
+        this.publishParentRow?.();
         if (
           !notification?.eventPending &&
           binding.observation &&
@@ -207,7 +419,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         }
       },
       {
-        onInvalidate: refresh,
+        onInvalidate: refresh.refresh,
         onEvent: () => {
           if (current() && !binding.observation?.isCurrent()) {
             this.synchronizeParentSessionObservation();
@@ -218,7 +430,8 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     if (!current()) {
       binding.observation.dispose();
     } else {
-      refresh();
+      this.publishParentRow?.();
+      refresh.refresh();
     }
   }
 
@@ -250,6 +463,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     const agentId = resolveChatAgentId(state);
     const previous = this.sessionObservation;
     if (previous?.matchesPane() && previous.observation?.isCurrent()) {
+      previous.retryFailedRead();
       this.synchronizeParentSessionObservation();
       return;
     }
@@ -265,6 +479,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         : null;
     this.retireSessionObservation();
     const binding: NonNullable<ChatPaneSessionObservation["sessionObservation"]> = {
+      retryFailedRead: () => refreshRunner.retryFailedRead(),
       matchesPane: () =>
         this.state === state &&
         state.sessionKey === key &&
@@ -275,6 +490,13 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     };
     const ownsPaneScope = () => state.connected && binding.matchesPane();
     const ownsPane = () => this.sessionObservation === binding && ownsPaneScope();
+    const refreshRunner = createSessionObservationRefresh(
+      sessions,
+      { key, agentId },
+      scope.client,
+      ownsPane,
+      () => binding.observation,
+    );
     this.sessionObservation = binding;
     binding.observation = sessions.observeRow(
       { key, agentId },
@@ -289,12 +511,12 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
           ) {
             state.pendingAbort = null;
           }
-          if (applyObservedChatSessionRow(state, row, binding.observation?.sessionId)) {
-            this.requestUpdate();
-          }
+          applyObservedChatSessionRow(state, row, binding.observation?.sessionId ?? null, () =>
+            this.retireHeaderSessionMutations(),
+          );
           this.synchronizeParentSessionObservation();
           if (state.pendingAbort) {
-            void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
+            void replayPendingChatAbort(state);
           }
         }
         // Apply the retired row first so deletion cannot survive the replacement binding.
@@ -312,13 +534,10 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
           if (ownsPane()) {
             if (reason === "runner-availability") {
               this.activeSessionResources.invalidate();
-              this.requestUpdate();
+              refreshRunner.refresh();
               return;
             }
-            this.activeSessionResources.reconcileObservation({
-              requestUpdate: () => this.requestUpdate(),
-              updated: () => this.updateComplete,
-            });
+            this.activeSessionResources.reconcileObservation();
           }
         },
         onEvent: (event, result) => {
@@ -410,7 +629,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
     }
   }
 
-  protected projectObservedSessionRow() {
+  private projectObservedSessionRow() {
     const state = this.state;
     const binding = this.sessionObservation;
     if (!state || !binding) {
@@ -421,7 +640,12 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       binding.observation?.hasObserved &&
       binding.observation?.isCurrent()
     ) {
-      applyObservedChatSessionRow(state, binding.observation.row, binding.observation.sessionId);
+      applyObservedChatSessionRow(
+        state,
+        binding.observation.row,
+        binding.observation.sessionId,
+        () => this.retireHeaderSessionMutations(),
+      );
       this.synchronizeParentSessionObservation();
     }
   }

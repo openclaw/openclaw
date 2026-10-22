@@ -12,17 +12,19 @@ type GatewayServicesContext = {
   readonly deep?: boolean;
 };
 
+async function inspectGatewayServices(ctx: GatewayServicesContext) {
+  const { detectExtraGatewayServiceIssues } =
+    await import("../commands/doctor-gateway-services.js");
+  return detectExtraGatewayServiceIssues({ deep: ctx.deep === true });
+}
+
 export const gatewayServicesExtraCheck: HealthCheck = {
   id: CHECK_ID,
   kind: "core",
   description: "Extra gateway-like services and incomplete inspection are reported as findings.",
   source: "doctor",
   async detect(ctx: HealthCheckContext & GatewayServicesContext) {
-    const { detectExtraGatewayServiceIssues } =
-      await import("../commands/doctor-gateway-services.js");
-    const { services, errors } = await detectExtraGatewayServiceIssues({
-      deep: ctx.deep === true,
-    });
+    const { services, errors } = await inspectGatewayServices(ctx);
     const findings: HealthFinding[] = services.map((service) => ({
       checkId: CHECK_ID,
       severity: service.legacy === true ? "warning" : "info",
@@ -47,11 +49,7 @@ export const gatewayServicesExtraCheck: HealthCheck = {
     );
   },
   async repair(ctx: HealthRepairContext & GatewayServicesContext) {
-    const { detectExtraGatewayServiceIssues } =
-      await import("../commands/doctor-gateway-services.js");
-    const { services } = await detectExtraGatewayServiceIssues({
-      deep: ctx.deep === true,
-    });
+    const { services } = await inspectGatewayServices(ctx);
     const { darwinUserServices, linuxUserServices } = classifyLegacyServices(
       services.filter((service) => service.legacy === true),
     );

@@ -1,4 +1,3 @@
-// Telegram Mini App init-data validation.
 import crypto from "node:crypto";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 
@@ -13,7 +12,6 @@ type TelegramMiniAppInitData = {
 export function validateTelegramMiniAppInitData(params: {
   initData: string;
   botToken: string;
-  nowMs?: number;
 }): TelegramMiniAppInitData | null {
   const initData = params.initData.trim();
   const botToken = params.botToken.trim();
@@ -34,7 +32,7 @@ export function validateTelegramMiniAppInitData(params: {
     return null;
   }
   const authDateMs = authDateSeconds * 1000;
-  const ageMs = (params.nowMs ?? Date.now()) - authDateMs;
+  const ageMs = Date.now() - authDateMs;
   if (ageMs < 0 || ageMs > INIT_DATA_MAX_AGE_MS) {
     return null;
   }
@@ -49,20 +47,15 @@ export function validateTelegramMiniAppInitData(params: {
     return null;
   }
 
-  const userId = parseTelegramMiniAppUserId(userRaw);
-  if (userId === null) {
-    return null;
-  }
-  return { hash: receivedHash, authDateMs, userId };
-}
-
-function parseTelegramMiniAppUserId(raw: string): string | null {
   try {
-    const parsed = JSON.parse(raw) as { id?: unknown };
-    if (typeof parsed.id === "number" && Number.isSafeInteger(parsed.id) && parsed.id > 0) {
-      return String(parsed.id);
-    }
-    return typeof parsed.id === "string" && /^\d+$/.test(parsed.id) ? parsed.id : null;
+    const user = JSON.parse(userRaw) as { id?: unknown };
+    const userId =
+      typeof user.id === "number" && Number.isSafeInteger(user.id) && user.id > 0
+        ? String(user.id)
+        : typeof user.id === "string" && /^\d+$/.test(user.id)
+          ? user.id
+          : null;
+    return userId === null ? null : { hash: receivedHash, authDateMs, userId };
   } catch {
     return null;
   }

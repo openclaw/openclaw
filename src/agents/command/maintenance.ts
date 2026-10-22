@@ -73,7 +73,6 @@ export async function prepareCommandForegroundRun(
   params: CommandPreflight & {
     ingress: AgentCommandAdmissionIngress;
     suppressVisibleSessionEffects: boolean;
-    preserveUserFacingSessionModelState: boolean;
   },
 ) {
   const budget = createCommandBudget(
@@ -87,8 +86,7 @@ export async function prepareCommandForegroundRun(
     entry =
       params.opts.modelRun === true ||
       params.opts.promptMode === "none" ||
-      params.suppressVisibleSessionEffects ||
-      params.preserveUserFacingSessionModelState
+      params.suppressVisibleSessionEffects
         ? params.sessionEntry
         : await runCommandPreflightMaintenance({
             ...params,
@@ -134,6 +132,7 @@ async function runCommandPreflightMaintenance(
   const assertSourceCurrent = opts.assertSourceCurrent;
   if (
     prepared.isNewSession ||
+    prepared.commandRuntimeContext?.freshChild ||
     !sessionEntry ||
     !prepared.sessionKey ||
     prepared.cfg.agents?.defaults?.compaction?.enabled === false
@@ -178,7 +177,6 @@ async function runCommandPreflightMaintenance(
     sessionKey: prepared.sessionKey,
     runtimePolicySessionKey: prepared.sessionKey,
     storePath: prepared.storePath,
-    isHeartbeat: opts.bootstrapContextRunKind === "heartbeat",
     abortSignal: opts.abortSignal,
   };
   return memory.runSessionCompactionIfNeeded({

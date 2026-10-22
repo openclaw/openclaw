@@ -1,22 +1,19 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import type { PreparedCompactionSession } from "../../agents/embedded-agent-runner/run/compaction-accounting-bridge.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { preflightManualSessionCompaction } from "../../agents/sessions/manual-compaction-preflight.js";
-import { isIndexedSessionEntry } from "../../agents/sessions/session-manager-codec.js";
+import { sessionManagerOpenCompaction } from "../../agents/sessions/session-manager-core.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveCurrentSessionPrimaryConversation } from "../../config/sessions/conversation-registry.js";
-import {
-  loadTranscriptEvents,
-  resolveSessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
-import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "../../config/sessions/transcript-tree.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { readTranscriptStatsAsync } from "../../config/sessions/session-transcript-stats.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionModelRef } from "../session-utils.js";
 
@@ -32,47 +29,64 @@ type GatewaySessionCompactionParams = {
   storePath: string;
 };
 
-function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): boolean {
-  const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
-  const persistedRuntime = resolveManualCompactionCliTarget({
-    provider: resolvedModel.provider,
-    entry: params.entry,
-    cfg: params.cfg,
-  }).agentHarnessId;
-  const contextEngine = params.cfg.plugins?.slots?.contextEngine?.trim();
-  return (
-    (!persistedRuntime || persistedRuntime === "openclaw") &&
-    (!contextEngine || contextEngine === "legacy")
-  );
-}
-
-/** Returns only definitive legacy-runtime no-op verdicts; other runtimes decide for themselves. */
-export async function preflightGatewaySessionCompaction(
+/** Prepare the legacy transcript once while the manual lifecycle owner is held. */
+export async function prepareGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
-): Promise<{ reason: "Already compacted" | "Nothing to compact (session too small)" } | undefined> {
-  if (!usesLegacyOpenClawCompaction(params)) {
-    return undefined;
+): Promise<{
+  entry?: InternalSessionEntry;
+  preparedSession?: PreparedCompactionSession;
+  reason?: "no transcript" | "Already compacted" | "Nothing to compact (session too small)";
+}> {
+  const transcriptTarget = {
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionStoreKey,
+    storePath: params.storePath,
+  };
+  const usesLegacyRuntime = (entry: SessionEntry) => {
+    const resolvedModel = resolveSessionModelRef(params.cfg, entry, params.agentId);
+    const persistedRuntime = resolveManualCompactionCliTarget({
+      provider: resolvedModel.provider,
+      entry,
+      cfg: params.cfg,
+    }).agentHarnessId;
+    const contextEngine = params.cfg.plugins?.slots?.contextEngine?.trim();
+    return (
+      (!persistedRuntime || persistedRuntime === "openclaw") &&
+      (!contextEngine || contextEngine === "legacy")
+    );
+  };
+  if (!usesLegacyRuntime(params.entry)) {
+    const entry = await readSessionEntryReadOnlyInWorker(transcriptTarget);
+    const stats = await readTranscriptStatsAsync(transcriptTarget);
+    return { entry, reason: stats.eventCount === 0 ? "no transcript" : undefined };
+  }
+  const prepared = await SessionManager[sessionManagerOpenCompaction](transcriptTarget, {
+    signal: params.abortSignal,
+  });
+  const { entry, runtimeEntry, sessionManager } = prepared;
+  if (!entry || !runtimeEntry) {
+    return { entry };
+  }
+  const preparedSession = usesLegacyRuntime(entry)
+    ? { ...prepared, entry: runtimeEntry }
+    : undefined;
+  if (prepared.eventCount === 0) {
+    return { entry, preparedSession, reason: "no transcript" };
+  }
+  if (!preparedSession) {
+    return { entry };
   }
   try {
-    const transcriptEvents = await loadTranscriptEvents({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionStoreKey,
-      storePath: params.storePath,
-    });
-    const tree = scanSessionTranscriptTree(transcriptEvents);
-    const branch = selectSessionTranscriptTreePathNodes(tree, tree.leafId)
-      .map((node) => node.entry)
-      .filter(isIndexedSessionEntry);
-    const preflight = preflightManualSessionCompaction(branch, {
+    const preflight = preflightManualSessionCompaction(sessionManager.getBranch(), {
       enabled: true,
       reserveTokens: 0,
       keepRecentTokens: 0,
     });
-    return preflight.compactable ? undefined : { reason: preflight.reason };
+    return { entry, preparedSession, reason: preflight.compactable ? undefined : preflight.reason };
   } catch {
-    // Preserve the existing compaction error path for malformed or unavailable transcripts.
-    return undefined;
+    // Preserve the existing compaction error path for malformed transcripts.
+    return { entry, preparedSession };
   }
 }
 
@@ -80,12 +94,13 @@ export async function runGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
   host: Parameters<typeof compactEmbeddedAgentSession>[1],
 ): Promise<Awaited<ReturnType<typeof compactEmbeddedAgentSession>>> {
-  const transcriptTarget = await resolveSessionTranscriptRuntimeTarget({
+  // The lifecycle owner already selected and revalidated this exact current window.
+  const transcriptTarget = {
     agentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
-  });
+  };
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const workspaceDir =
     resolveIngressWorkspaceOverrideForSessionRun({
@@ -98,7 +113,9 @@ export async function runGatewaySessionCompaction(
     entry: params.entry,
     cfg: params.cfg,
   });
-  const primaryConversation = await resolveCurrentSessionPrimaryConversation(transcriptTarget);
+  const primaryConversation = host?.preparedSession
+    ? host.preparedSession.primaryConversation
+    : await resolveCurrentSessionPrimaryConversation(transcriptTarget);
   params.abortSignal?.throwIfAborted();
   return await compactEmbeddedAgentSession(
     {
@@ -108,12 +125,7 @@ export async function runGatewaySessionCompaction(
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
-      sessionTarget: {
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
+      sessionTarget: transcriptTarget,
       allowGatewaySubagentBinding: true,
       sessionFile: transcriptTarget.sessionKey,
       workspaceDir,

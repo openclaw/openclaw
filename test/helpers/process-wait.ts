@@ -1,4 +1,3 @@
-import type { spawn } from "node:child_process";
 import fs, { existsSync, readFileSync } from "node:fs";
 import { isPidAlive } from "../../src/shared/pid-alive.js";
 
@@ -86,35 +85,6 @@ export async function waitForDead(pid: number, signal: AbortSignal): Promise<voi
     signal,
     `process still alive: ${pid}`,
   );
-}
-
-// Register immediately after spawn, before awaiting or triggering an action: exitCode and
-// signalCode describe exit, not stdio closure, and cannot recover a missed close event.
-export function waitForChildClose(
-  child: ReturnType<typeof spawn>,
-  signal: AbortSignal,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      child.removeListener("close", onClose);
-      signal.removeEventListener("abort", onAbort);
-    };
-    const onClose = (code: number | null, exitSignal: NodeJS.Signals | null) => {
-      cleanup();
-      resolve({ code, signal: exitSignal });
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(
-        new Error(`aborted waiting for child ${child.pid} to close`, { cause: signal.reason }),
-      );
-    };
-    child.once("close", onClose);
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
-  });
 }
 
 export function waitForFixtureFile(

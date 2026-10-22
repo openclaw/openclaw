@@ -12,16 +12,8 @@ export function extractQaContentText(
   }
   const parts: string[] = [];
   for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text = readBlockText(block);
+    const text =
+      typeof block === "string" ? block.trim() : isRecord(block) ? readBlockText(block) : undefined;
     if (text) {
       parts.push(text);
     }
@@ -62,7 +54,39 @@ export function* readQaTranscriptMessages(transcriptBytes: string) {
   }
 }
 
-export function* readQaMessageFunctionCalls(message: Record<string, unknown>) {
+export function* readQaMessageToolCalls(
+  message: Record<string, unknown>,
+  options: { preferArguments?: boolean; includeFunctionCalls?: boolean } = {},
+) {
+  for (const block of Array.isArray(message.content) ? message.content : []) {
+    if (!isRecord(block)) {
+      continue;
+    }
+    const type = normalizeOptionalString(block.type)?.toLowerCase();
+    if (
+      type !== "tool_use" &&
+      type !== "toolcall" &&
+      type !== "tool_call" &&
+      !(options.includeFunctionCalls && type === "function_call")
+    ) {
+      continue;
+    }
+    yield {
+      block,
+      id:
+        normalizeOptionalString(block.id) ??
+        normalizeOptionalString(block.toolCallId) ??
+        normalizeOptionalString(block.toolUseId),
+      tool: normalizeOptionalString(block.name),
+      args:
+        (options.preferArguments
+          ? (block.arguments ?? block.input)
+          : (block.input ?? block.arguments)) ??
+        block.args ??
+        block.payload ??
+        null,
+    };
+  }
   const raw =
     message.tool_calls ?? message.toolCalls ?? message.function_call ?? message.functionCall;
   for (const call of Array.isArray(raw) ? raw : raw ? [raw] : []) {
@@ -71,6 +95,7 @@ export function* readQaMessageFunctionCalls(message: Record<string, unknown>) {
     }
     const fn = isRecord(call.function) ? call.function : undefined;
     yield {
+      block: undefined,
       id:
         normalizeOptionalString(call.id) ??
         normalizeOptionalString(call.toolCallId) ??
@@ -78,5 +103,29 @@ export function* readQaMessageFunctionCalls(message: Record<string, unknown>) {
       tool: normalizeOptionalString(call.name) ?? normalizeOptionalString(fn?.name),
       args: call.arguments ?? fn?.arguments ?? call.input ?? fn?.input ?? null,
     };
+  }
+}
+
+export function* readQaAssistantToolCalls(
+  message: Record<string, unknown>,
+  readType: (value: unknown) => string | undefined = String,
+) {
+  for (const block of Array.isArray(message.content) ? message.content : []) {
+    if (!isRecord(block)) {
+      continue;
+    }
+    const type = readType(block.type);
+    if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
+      continue;
+    }
+    const name = normalizeOptionalString(block.name);
+    if (name) {
+      yield {
+        block,
+        arguments: block.arguments ?? block.input,
+        id: normalizeOptionalString(block.id),
+        name,
+      };
+    }
   }
 }

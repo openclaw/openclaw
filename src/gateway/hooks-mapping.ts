@@ -169,10 +169,7 @@ type HookTransformFn = (
 ) => HookTransformResult | Promise<HookTransformResult>;
 
 /** Resolve configured hook mappings plus preset mappings into normalized matcher entries. */
-export function resolveHookMappings(
-  hooks?: HooksConfig,
-  opts?: { configDir?: string },
-): HookMappingResolved[] {
+export function resolveHookMappings(hooks?: HooksConfig): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const gmailAllowUnsafe = hooks?.gmail?.allowUnsafeExternalContent;
   const mappings: HookMappingConfig[] = [];
@@ -199,7 +196,7 @@ export function resolveHookMappings(
     return [];
   }
 
-  const configDir = path.resolve(opts?.configDir ?? path.dirname(resolveConfigPathCandidate()));
+  const configDir = path.resolve(path.dirname(resolveConfigPathCandidate()));
   const transformsRootDir = path.join(configDir, "hooks", "transforms");
   const transformsDir = resolveOptionalContainedPath(
     transformsRootDir,
@@ -410,7 +407,10 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
-    const mode = override.mode === "next-heartbeat" ? "next-heartbeat" : (baseWake?.mode ?? "now");
+    const mode =
+      override.mode === "now" || override.mode === "next-heartbeat"
+        ? override.mode
+        : (baseWake?.mode ?? "now");
     return validateAction({
       kind: "wake",
       mappingId: base.mappingId,
@@ -425,7 +425,9 @@ function mergeAction(base: HookAction, override: HookTransformResult): HookMappi
   const message =
     typeof override.message === "string" ? override.message : (baseAgent?.message ?? "");
   const wakeMode =
-    override.wakeMode === "next-heartbeat" ? "next-heartbeat" : (baseAgent?.wakeMode ?? "now");
+    override.wakeMode === "now" || override.wakeMode === "next-heartbeat"
+      ? override.wakeMode
+      : (baseAgent?.wakeMode ?? "now");
   return validateAction({
     kind: "agent",
     mappingId: base.mappingId,

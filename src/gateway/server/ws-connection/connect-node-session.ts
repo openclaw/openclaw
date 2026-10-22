@@ -1,4 +1,3 @@
-// Gateway WebSocket node connects reconcile the approved command/capability surface.
 import { getRuntimeConfig } from "../../../config/io.js";
 import {
   approveNodePairing,
@@ -23,43 +22,6 @@ class NodePairingRateLimitError extends Error {
   constructor(readonly retryAfterMs: number) {
     super("node pairing rate limited");
   }
-}
-
-async function requestNodePairingFromConnect(params: {
-  input: Parameters<typeof requestNodePairing>[0];
-  rateLimiter?: import("../../auth-rate-limit.js").AuthRateLimiter;
-  clientIp?: string;
-  pairedReconnect?: boolean;
-  cleanupClaim?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
-  reapprovalCoordinator?: import("../../node-reapproval-coordinator.js").NodeReapprovalCoordinator;
-}): Promise<Awaited<ReturnType<typeof requestNodePairing>> | null> {
-  if (params.pairedReconnect) {
-    return params.reapprovalCoordinator
-      ? await params.reapprovalCoordinator.request({
-          input: params.input,
-          cleanupClaim: params.cleanupClaim,
-        })
-      : await requestNodePairing(params.input);
-  }
-  if (!params.rateLimiter) {
-    return await requestNodePairing(params.input);
-  }
-  return await withSerializedRateLimitAttempt({
-    ip: params.clientIp,
-    scope: AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
-    run: async () => {
-      const rateCheck = params.rateLimiter?.check(
-        params.clientIp,
-        AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
-      );
-      if (rateCheck && !rateCheck.allowed) {
-        throw new NodePairingRateLimitError(rateCheck.retryAfterMs);
-      }
-      const result = await requestNodePairing(params.input);
-      params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING);
-      return result;
-    },
-  });
 }
 
 export async function prepareGatewayNodeConnect(
@@ -116,13 +78,35 @@ export async function prepareGatewayNodeConnect(
       reportedClientIp,
       initialSurfaceSilent: deviceApprovedNonInteractively,
       requestPairing: async (input) => {
-        return await requestNodePairingFromConnect({
-          input,
-          rateLimiter: authRateLimiter,
-          clientIp: browserRateLimitClientIp,
-          pairedReconnect: pairedNode !== null,
-          cleanupClaim: pendingNodePairingCleanup.value,
-          reapprovalCoordinator: nodeReapprovalCoordinator,
+        if (pairedNode !== null) {
+          return nodeReapprovalCoordinator
+            ? await nodeReapprovalCoordinator.request({
+                input,
+                cleanupClaim: pendingNodePairingCleanup.value,
+              })
+            : await requestNodePairing(input);
+        }
+        if (!authRateLimiter) {
+          return await requestNodePairing(input);
+        }
+        return await withSerializedRateLimitAttempt({
+          ip: browserRateLimitClientIp,
+          scope: AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+          run: async () => {
+            const rateCheck = authRateLimiter.check(
+              browserRateLimitClientIp,
+              AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+            );
+            if (!rateCheck.allowed) {
+              throw new NodePairingRateLimitError(rateCheck.retryAfterMs);
+            }
+            const result = await requestNodePairing(input);
+            authRateLimiter.recordFailure(
+              browserRateLimitClientIp,
+              AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING,
+            );
+            return result;
+          },
         });
       },
     });

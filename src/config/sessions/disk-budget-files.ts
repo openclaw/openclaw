@@ -2,15 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../../infra/boundary-path.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { isMigrationArchiveArtifactName } from "./artifacts.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
 import { listDurableSqliteTargetPathsForSessionStorePath } from "./session-sqlite-target.js";
 
 export type SessionPhysicalDiskUsage = {
-  databaseMainBytes: number;
   databaseWalBytes: number;
-  sessionFilesBytes: number;
   totalBytes: number;
 };
 
@@ -32,6 +31,7 @@ export async function removeFileIfExists(filePath: string): Promise<FileRemovalR
   if (!stat?.isFile()) {
     return err("not-removed");
   }
+  getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   // Forced removal would count paths another cleanup already removed after stat.
   return fs.promises.rm(filePath).then(
     () => ok(stat.size),
@@ -92,11 +92,10 @@ export async function readSessionPhysicalDiskUsage(
   const promptBlobFiles = await readSessionPromptBlobFiles(sessionsDir);
   const databasePaths = listDurableSqliteTargetPathsForSessionStorePath(storePath);
   const databaseFiles = await readSqliteDatabaseFiles(databasePaths);
-  const databaseSharedMemoryPaths = new Set(
-    databasePaths.map((databasePath) => canonicalizePathForComparison(`${databasePath}-shm`)),
-  );
-  const databaseMainPaths = new Set(
-    databaseFiles.filter((file) => !file.path.endsWith("-wal")).map((file) => file.canonicalPath),
+  const databaseMetadataPaths = new Set(
+    databasePaths.flatMap((databasePath) =>
+      ["-shm", ".seal"].map((suffix) => canonicalizePathForComparison(`${databasePath}${suffix}`)),
+    ),
   );
   const databaseWalPaths = new Set(
     databaseFiles.filter((file) => file.path.endsWith("-wal")).map((file) => file.canonicalPath),
@@ -108,23 +107,17 @@ export async function readSessionPhysicalDiskUsage(
     ...promptBlobFiles,
     ...databaseFiles,
   ]) {
-    if (!databaseSharedMemoryPaths.has(file.canonicalPath)) {
+    if (!databaseMetadataPaths.has(file.canonicalPath)) {
       uniqueFiles.set(file.canonicalPath, file);
     }
   }
-  const databaseMainBytes = [...databaseMainPaths].reduce(
-    (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
-    0,
-  );
   const databaseWalBytes = [...databaseWalPaths].reduce(
     (sum, databasePath) => sum + (uniqueFiles.get(databasePath)?.size ?? 0),
     0,
   );
   const totalBytes = [...uniqueFiles.values()].reduce((sum, file) => sum + file.size, 0);
   return {
-    databaseMainBytes,
     databaseWalBytes,
-    sessionFilesBytes: totalBytes - databaseMainBytes - databaseWalBytes,
     totalBytes,
   };
 }

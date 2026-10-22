@@ -13,6 +13,40 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("managed handoff Node selection", () => {
+  it.each([
+    ["node", "openclaw"],
+    ["bun", "openclaw"],
+    ["openclaw-wrapper", path.resolve("fixture", "openclaw-wrapper")],
+  ])("keeps the no-entry recovery command for %s", (name, command) => {
+    expect(
+      resolveManagedServiceCliArgv({ execPath: path.resolve("fixture", name) }, [
+        "gateway",
+        "restart",
+      ]),
+    ).toEqual([command, "gateway", "restart"]);
+  });
+
+  it("keeps a manifest-qualified standalone executable without an entry", async () => {
+    const root = tempDirs.make("openclaw-handoff-standalone-");
+    const execPath = path.join(root, "node");
+    await fs.writeFile(
+      path.join(root, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        mode: "jit",
+        executable: { path: "node" },
+        runtime: { path: "runtime" },
+        openclaw: { version: "2026.10.3" },
+        bun: { version: "1.4.3" },
+      }),
+    );
+    expect(resolveManagedServiceCliArgv({ execPath }, ["gateway", "restart"])).toEqual([
+      execPath,
+      "gateway",
+      "restart",
+    ]);
+  });
+
   it.each(["node", "bun"])(
     "keeps %s runtime flags outside foreground CLI respawn policy",
     (runtime) => {

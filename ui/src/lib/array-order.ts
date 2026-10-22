@@ -13,11 +13,8 @@ export function moveArrayEntry<T>(
   if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) {
     return ordered;
   }
-  const [moved] = ordered.splice(sourceIndex, 1);
-  if (moved === undefined) {
-    return ordered;
-  }
+  ordered.splice(sourceIndex, 1);
   const insertionIndex = ordered.indexOf(target) + (position === "after" ? 1 : 0);
-  ordered.splice(insertionIndex, 0, moved);
+  ordered.splice(insertionIndex, 0, source);
   return ordered;
 }

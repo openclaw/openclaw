@@ -2,6 +2,7 @@ import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CdpProtocolSend } from "./cdp-ax.js";
 import type { CdpRoleRef, CursorInteractiveInfo, RoleTreeNode } from "./cdp-role-snapshot-tree.js";
+import { INTERACTIVE_ROLES } from "./snapshot-roles.js";
 
 export async function findCursorInteractiveElements(
   send: CdpProtocolSend,
@@ -11,7 +12,7 @@ export async function findCursorInteractiveElements(
     const evaluated = (await send("Runtime.evaluate", {
       expression: `(() => {
           const out = [];
-          const roles = new Set(["button","link","textbox","checkbox","radio","combobox","listbox","menuitem","menuitemcheckbox","menuitemradio","option","searchbox","slider","spinbutton","switch","tab","treeitem"]);
+          const roles = new Set(${JSON.stringify([...INTERACTIVE_ROLES])});
           const tags = new Set(["a","button","input","select","textarea","details","summary"]);
           document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"));
           for (const el of document.body ? document.body.querySelectorAll("*") : []) {
@@ -45,7 +46,6 @@ export async function findCursorInteractiveElements(
             el.setAttribute("${attr}", String(out.length));
             out.push({
               text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
-              tagName,
               hasCursorPointer,
               hasOnClick,
               hasTabIndex,
@@ -61,12 +61,11 @@ export async function findCursorInteractiveElements(
     const values: unknown[] = Array.isArray(evaluated?.result?.value) ? evaluated.result.value : [];
     const entries: (CursorInteractiveInfo | undefined)[] = values.map((value) => {
       const entry = asOptionalRecord(value);
-      if (typeof entry?.text !== "string" || typeof entry.tagName !== "string") {
+      if (typeof entry?.text !== "string") {
         return undefined;
       }
       return {
         text: truncateUtf16Safe(entry.text, 100),
-        tagName: entry.tagName,
         hasOnClick: entry.hasOnClick === true,
         hasCursorPointer: entry.hasCursorPointer === true,
         hasTabIndex: entry.hasTabIndex === true,

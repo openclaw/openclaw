@@ -7,7 +7,7 @@ import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.
 import { formatGatewayDrainCounts } from "../../infra/gateway-drain.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { beginGatewayShutdownCleanup } from "../../process/gateway-work-admission.js";
-import type { GatewayRunSignalAction, GatewayRunSignalRequest } from "./run-loop-request.js";
+import type { GatewayRunSignalRequest } from "./run-loop-request.js";
 import { formatShutdownReason } from "./run-loop-shutdown-format.js";
 
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
@@ -31,105 +31,16 @@ export async function drainGatewayActiveWork({
 }) {
   const { restartIntent } = request;
   let drainTimedOut = false;
-  const reportDrainSnapshot = createGatewayDrainReporter(
-    request.action,
-    drainTimeoutMs,
-    runtime,
-    logger,
-    recordCounts,
-  );
-  // On restart, wait for the canonical process activity inventory before
-  // tearing down the server so active work can settle.
-  if (request.action !== "stop") {
-    let activeWorkAtDrainStart = 0;
-    let activeRunsAtDrainStart = 0;
-    await measureGatewayRestartTrace(
-      "restart.drain",
-      async () => {
-        const { abortEmbeddedAgentRun, createGatewayActiveWorkSnapshot, waitForGatewayActiveWork } =
-          runtime;
-        // Reject new enqueues immediately during the drain window so
-        // sessions get an explicit restart error instead of silent task loss.
-        const drainReason = formatShutdownReason(request);
-        runtime.markGatewayDraining(drainReason);
-        const initialSnapshot = createGatewayActiveWorkSnapshot();
-        activeWorkAtDrainStart = initialSnapshot.counts.totalActive;
-        activeRunsAtDrainStart = initialSnapshot.counts.embeddedRuns;
-        if (activeRunsAtDrainStart > 0) {
-          abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" });
-        }
-
-        reportDrainSnapshot(initialSnapshot);
-        const remainingDrainTimeoutMs =
-          restartDrainDeadlineAt === undefined
-            ? undefined
-            : Math.max(0, restartDrainDeadlineAt - Date.now());
-        const drain = await waitForGatewayActiveWork(remainingDrainTimeoutMs, {
-          onSnapshot: reportDrainSnapshot,
-        });
-        if (drain.drained) {
-          if (!initialSnapshot.idle) {
-            logger.info("all active work drained");
-          }
-          return;
-        }
-        drainTimedOut = true;
-        const warning = `restart drain budget ${drainTimeoutMs}ms exhausted; cutting short ${formatGatewayDrainCounts(drain.snapshot)}`;
-        recordWarning(warning);
-        logger.warn(warning);
-        // Connection work can retain cron cleanup; cancel before close joins it.
-        runtime.abortActiveCronTaskRuns("Gateway restarting.");
-      },
-      () => [
-        ["activeWork", activeWorkAtDrainStart],
-        ["activeRuns", activeRunsAtDrainStart],
-        ["timedOut", drainTimedOut],
-        ["force", restartIntent?.force === true],
-      ],
-    );
-  } else {
-    // Keep all process-owned work alive without spending the shutdown reserve
-    // that server teardown and the supervisor watchdog need.
-    try {
-      markGatewayRestartTrace("stop.drain.begin");
-      const activeWorkDrain = await measureGatewayRestartTrace("stop.drain", () =>
-        runtime.waitForGatewayActiveWork(drainTimeoutMs, {
-          onSnapshot: reportDrainSnapshot,
-        }),
-      );
-      if (!activeWorkDrain.drained) {
-        logger.warn(
-          `gateway active-work drain timeout reached; proceeding with shutdown: ${formatGatewayDrainCounts(activeWorkDrain.snapshot)}`,
-        );
-        runtime.abortEmbeddedAgentRun(undefined, { mode: "all" });
-        runtime.abortActiveCronTaskRuns("Gateway stopping.");
-      }
-    } catch (err) {
-      logger.warn(
-        `gateway active-work drain failed; proceeding with shutdown: ${formatErrorMessage(err)}`,
-      );
-    }
-    logger.info("active-work drain settled; beginning server close");
-  }
-  beginGatewayShutdownCleanup();
-  return drainTimedOut;
-}
-
-function createGatewayDrainReporter(
-  action: GatewayRunSignalAction,
-  drainTimeoutMs: number | undefined,
-  runtime: Pick<
-    typeof import("./lifecycle.runtime.js"),
-    "listActiveEmbeddedRunSessionIds" | "getDiagnosticSessionActivitySnapshot"
-  >,
-  logger: Pick<SubsystemLogger, "info" | "warn">,
-  recordCounts: (counts: string) => void,
-) {
+  const action = request.action;
   const drainBudget =
     drainTimeoutMs === undefined ? "without a timeout" : `with timeout ${drainTimeoutMs}ms`;
   let lastPendingWarningAt: number | undefined;
-  return (snapshot: GatewayActiveWorkSnapshot) => {
-    recordCounts(formatGatewayDrainCounts(snapshot) || "no active work");
+  const reportDrainSnapshot = (snapshot: GatewayActiveWorkSnapshot) => {
+    recordCounts(
+      `${formatGatewayDrainCounts(snapshot) || "no active work"}; pending owners: ${
+        snapshot.blockers.map(({ message }) => message).join("; ") || "none"
+      }`,
+    );
     const now = Date.now();
     if (lastPendingWarningAt === undefined) {
       lastPendingWarningAt = now;
@@ -140,7 +51,7 @@ function createGatewayDrainReporter(
         const requestTimeoutMs = Math.max(
           0,
           ...runtime
-            .listActiveEmbeddedRunSessionIds()
+            .listActiveSessionRunIds()
             .map(
               (sessionId) =>
                 runtime.getDiagnosticSessionActivitySnapshot({ sessionId })
@@ -163,4 +74,85 @@ function createGatewayDrainReporter(
       );
     }
   };
+  // On restart, wait for the canonical process activity inventory before
+  // tearing down the server so active work can settle.
+  if (request.action !== "stop") {
+    let activeWorkAtDrainStart = 0;
+    let activeRunsAtDrainStart = 0;
+    await measureGatewayRestartTrace(
+      "restart.drain",
+      async () => {
+        const { abortEmbeddedAgentRun, createGatewayActiveWorkSnapshot, waitForGatewayActiveWork } =
+          runtime;
+        // Reject new enqueues immediately during the drain window so
+        // sessions get an explicit restart error instead of silent task loss.
+        const drainReason = formatShutdownReason(request);
+        runtime.markGatewayDraining(drainReason);
+        const initialSnapshot = createGatewayActiveWorkSnapshot();
+        activeWorkAtDrainStart = initialSnapshot.counts.totalActive;
+        activeRunsAtDrainStart = initialSnapshot.counts.embeddedRuns;
+        if (activeRunsAtDrainStart > 0) {
+          abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" });
+        }
+
+        reportDrainSnapshot(initialSnapshot);
+        if (request.interruptAfterDrain) {
+          logger.info("external restart owner already drained; interrupting remaining work");
+          runtime.abortActiveCronTaskRuns();
+          return;
+        }
+        const remainingDrainTimeoutMs =
+          restartDrainDeadlineAt === undefined
+            ? undefined
+            : Math.max(0, restartDrainDeadlineAt - Date.now());
+        const drain = await waitForGatewayActiveWork(remainingDrainTimeoutMs, {
+          onSnapshot: reportDrainSnapshot,
+        });
+        if (drain.drained) {
+          if (!initialSnapshot.idle) {
+            logger.info("all active work drained");
+          }
+          return;
+        }
+        drainTimedOut = true;
+        const warning = `restart drain budget ${drainTimeoutMs}ms exhausted; cutting short ${formatGatewayDrainCounts(drain.snapshot)}`;
+        recordWarning(warning);
+        logger.warn(warning);
+        // Connection work can retain cron cleanup; cancel before close joins it.
+        runtime.abortActiveCronTaskRuns();
+      },
+      () => [
+        ["activeWork", activeWorkAtDrainStart],
+        ["activeRuns", activeRunsAtDrainStart],
+        ["timedOut", drainTimedOut],
+        ["force", restartIntent?.force === true],
+      ],
+    );
+  } else {
+    // Keep all process-owned work alive without spending the shutdown reserve
+    // that server teardown and the supervisor watchdog need.
+    try {
+      markGatewayRestartTrace("stop.drain.begin");
+      const activeWorkDrain = await measureGatewayRestartTrace("stop.drain", () =>
+        runtime.waitForGatewayActiveWork(drainTimeoutMs, {
+          onSnapshot: reportDrainSnapshot,
+        }),
+      );
+      if (!activeWorkDrain.drained) {
+        drainTimedOut = true;
+        logger.warn(
+          `gateway active-work drain timeout reached; proceeding with shutdown: ${formatGatewayDrainCounts(activeWorkDrain.snapshot)}`,
+        );
+        // The server shutdown owner records task custody before canceling runs.
+        runtime.abortActiveCronTaskRuns();
+      }
+    } catch (err) {
+      logger.warn(
+        `gateway active-work drain failed; proceeding with shutdown: ${formatErrorMessage(err)}`,
+      );
+    }
+    logger.info("active-work drain settled; beginning server close");
+  }
+  beginGatewayShutdownCleanup();
+  return drainTimedOut;
 }

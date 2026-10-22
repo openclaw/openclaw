@@ -1,18 +1,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
 } from "./transcript-stream.js";
 
-// Regression coverage for #54296: the transcript readers must stay correct and
-// memory-bounded as session files grow into the multi-MB / 100s of MB range.
-// The previous implementations called `fs.readFile` and split on newlines,
-// which made memory usage scale with file size. These tests exercise the
-// shared streaming helpers that replace those whole-file reads.
-
+// #54296: stream large transcripts rather than reading and splitting the entire file.
 let tempDir = "";
 let transcriptPath = "";
 
@@ -33,151 +28,70 @@ async function collect(iter: AsyncGenerator<string>): Promise<string[]> {
   }
   return out;
 }
+const forward = (file = transcriptPath) => collect(streamSessionTranscriptLines(file));
+const reverse = (file = transcriptPath) => collect(streamSessionTranscriptLinesReverse(file));
 
-describe("transcript stream empty files", () => {
-  it("returns empty iterators for empty files in both directions", async () => {
-    fs.writeFileSync(transcriptPath, "", "utf-8");
-
-    await expect(collect(streamSessionTranscriptLines(transcriptPath))).resolves.toEqual([]);
-    await expect(collect(streamSessionTranscriptLinesReverse(transcriptPath))).resolves.toEqual([]);
-  });
+it("returns empty iterators for empty files in both directions", async () => {
+  fs.writeFileSync(transcriptPath, "", "utf-8");
+  await expect(forward()).resolves.toEqual([]);
+  await expect(reverse()).resolves.toEqual([]);
 });
 
-describe("streamSessionTranscriptLines", () => {
-  it("yields trimmed non-empty lines in file order", async () => {
-    fs.writeFileSync(transcriptPath, "  alpha  \n\nbeta\n  \r\ngamma\n", "utf-8");
-
-    const lines = await collect(streamSessionTranscriptLines(transcriptPath));
-
-    expect(lines).toEqual(["alpha", "beta", "gamma"]);
-  });
-
-  it("returns an empty iterator when the file does not exist", async () => {
-    const lines = await collect(streamSessionTranscriptLines(path.join(tempDir, "missing.jsonl")));
-
-    expect(lines).toEqual([]);
-  });
-
-  it("propagates stat failures other than ENOENT", async () => {
-    const error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-    vi.spyOn(fs.promises, "stat").mockRejectedValueOnce(error);
-
-    await expect(
-      collect(streamSessionTranscriptLines("/some/protected/transcript.jsonl")),
-    ).rejects.toBe(error);
-  });
-
-  it("honours an abort signal between lines", async () => {
-    fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
-    const controller = new AbortController();
-
-    const out: string[] = [];
-    for await (const line of streamSessionTranscriptLines(transcriptPath, {
-      signal: controller.signal,
-    })) {
-      out.push(line);
-      if (line === "one") {
-        controller.abort();
-      }
-    }
-
-    expect(out).toEqual(["one"]);
-  });
-
-  it("preserves long lines without truncation", async () => {
-    const longLine = "x".repeat(64 * 1024 + 7);
-    fs.writeFileSync(transcriptPath, `${longLine}\nshort\n`, "utf-8");
-
-    const lines = await collect(streamSessionTranscriptLines(transcriptPath));
-
-    expect(lines).toEqual([longLine, "short"]);
-  });
+it.each([forward, reverse])("returns no lines for a missing file (%#)", async (read) => {
+  await expect(read(path.join(tempDir, "missing.jsonl"))).resolves.toEqual([]);
 });
 
-describe("streamSessionTranscriptLinesReverse", () => {
-  it("returns an empty iterator when the file does not exist", async () => {
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(path.join(tempDir, "missing.jsonl")),
-    );
+it("yields trimmed non-empty lines in file order", async () => {
+  const longLine = "alpha".repeat(14 * 1024);
+  fs.writeFileSync(transcriptPath, `  ${longLine}  \n\nbeta\n  \r\ngamma\n`, "utf-8");
 
-    expect(lines).toEqual([]);
-  });
+  await expect(forward()).resolves.toEqual([longLine, "beta", "gamma"]);
+});
 
-  it("propagates open failures other than ENOENT", async () => {
-    const error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-    vi.spyOn(fs.promises, "open").mockRejectedValueOnce(error);
+it("propagates stat failures other than ENOENT", async () => {
+  const error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+  vi.spyOn(fs.promises, "stat").mockRejectedValueOnce(error);
 
-    await expect(
-      collect(streamSessionTranscriptLinesReverse("/some/protected/transcript.jsonl")),
-    ).rejects.toBe(error);
-  });
+  await expect(forward("/some/protected/transcript.jsonl")).rejects.toBe(error);
+});
 
-  it("preserves complete lines across chunk boundaries", async () => {
-    const longLine = "x".repeat(2048);
-    fs.writeFileSync(transcriptPath, `${longLine}\nbeta\ngamma\n`, "utf-8");
+it("closes the stream when a consumer stops between lines", async () => {
+  fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
+  const createReadStream = vi.spyOn(fs, "createReadStream");
+  const out: string[] = [];
+  for await (const line of streamSessionTranscriptLines(transcriptPath)) {
+    out.push(line);
+    break;
+  }
 
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
+  expect(out).toEqual(["one"]);
+  expect(createReadStream.mock.results[0]?.value.destroyed).toBe(true);
+});
+it("propagates open failures other than ENOENT", async () => {
+  const error = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+  vi.spyOn(fs.promises, "open").mockRejectedValueOnce(error);
 
-    expect(lines).toEqual(["gamma", "beta", longLine]);
-  });
+  await expect(reverse("/some/protected/transcript.jsonl")).rejects.toBe(error);
+});
 
-  it("preserves multibyte UTF-8 across chunk boundaries", async () => {
-    const firstLine = `${"a".repeat(1100)}🌊`;
-    const secondLine = `${"b".repeat(1100)}✅`;
-    fs.writeFileSync(transcriptPath, `${firstLine}\n${secondLine}\n`, "utf-8");
+it("preserves multibyte UTF-8 across chunk boundaries", async () => {
+  const firstLine = `${"a".repeat(1100)}🌊`;
+  // The first reverse read splits the wave's four UTF-8 bytes at the 64 KiB boundary.
+  const secondLine = `${"b".repeat(65529)}✅`;
+  fs.writeFileSync(transcriptPath, `${firstLine}\n${secondLine}\n`, "utf-8");
 
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
+  await expect(reverse()).resolves.toEqual([secondLine, firstLine]);
+});
 
-    expect(lines).toEqual([secondLine, firstLine]);
-  });
+it("closes the file when a consumer stops between reverse lines", async () => {
+  fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
+  const open = vi.spyOn(fs.promises, "open");
+  const out: string[] = [];
+  for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
+    out.push(line);
+    break;
+  }
 
-  it("honours an abort signal between reverse lines", async () => {
-    fs.writeFileSync(transcriptPath, "one\ntwo\nthree\n", "utf-8");
-    const controller = new AbortController();
-
-    const out: string[] = [];
-    for await (const line of streamSessionTranscriptLinesReverse(transcriptPath, {
-      signal: controller.signal,
-    })) {
-      out.push(line);
-      if (line === "three") {
-        controller.abort();
-      }
-    }
-
-    expect(out).toEqual(["three"]);
-  });
-
-  it("clamps a sub-minimum chunk size without dropping older lines", async () => {
-    fs.writeFileSync(transcriptPath, "alpha\nbeta\ngamma\n", "utf-8");
-
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 16,
-      }),
-    );
-
-    expect(lines).toEqual(["gamma", "beta", "alpha"]);
-  });
-
-  it("does not emit a partial prefix until the full first line is available", async () => {
-    const firstLine = "prefix".repeat(400);
-    fs.writeFileSync(transcriptPath, `${firstLine}\nbeta\ngamma`, "utf-8");
-
-    const lines = await collect(
-      streamSessionTranscriptLinesReverse(transcriptPath, {
-        chunkBytes: 1024,
-      }),
-    );
-
-    expect(lines).toEqual(["gamma", "beta", firstLine]);
-  });
+  expect(out).toEqual(["three"]);
+  expect((await open.mock.results[0]?.value)?.fd).toBe(-1);
 });

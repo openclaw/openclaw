@@ -4,8 +4,8 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { AgentHarnessModelCatalogParams } from "./harness/types.js";
+import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import { prepareModelCatalogView } from "./model-catalog-view.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import {
@@ -16,6 +16,7 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import {
   advancePreparedModelRuntimeConfig,
+  cancelPreparedModelRuntimeRefresh,
   loadPublishedGatewayReplyDispatchRuntime,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
@@ -23,6 +24,44 @@ import {
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
+const prepare = (config: OpenClawConfig) =>
+  prepareModelRuntimeSnapshot(fixture.agentInput("default", config));
+const dispatch = () => loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+const hotConfig = (): OpenClawConfig => ({ gateway: { reload: { mode: "hot" } } });
+const publish = (
+  config: Parameters<typeof refreshPreparedModelRuntimeSnapshots>[0],
+  options: Parameters<typeof refreshPreparedModelRuntimeSnapshots>[1] = {},
+) => refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true, ...options });
+async function expectPublished(config: OpenClawConfig) {
+  await expect(prepare(config)).resolves.toMatchObject({ config });
+  await expect(dispatch()).resolves.toMatchObject({ agentId: "default", config });
+}
+function expectOwner(reader: Awaited<ReturnType<typeof prepare>>, config: OpenClawConfig) {
+  expect(resolvePublishedModelCatalogOwner(reader)).toMatchObject({
+    agentId: "default",
+    workspaceDir: "/tmp/unused-workspace",
+    config,
+  });
+}
+
+function holdPublication(
+  resources: AsyncDisposableStack,
+  config: OpenClawConfig,
+  options: Parameters<typeof publish>[1] = {},
+) {
+  const started = createDeferred();
+  const ready = createDeferred();
+  const pending = publish(async () => {
+    started.resolve();
+    await ready.promise;
+    return config;
+  }, options);
+  resources.defer(async () => {
+    ready.resolve();
+    await Promise.allSettled([pending]);
+  });
+  return { started: started.promise, release: () => ready.resolve(), pending };
+}
 
 describe("prepared model runtime config stamps", () => {
   beforeEach(() => {
@@ -31,8 +70,8 @@ describe("prepared model runtime config stamps", () => {
 
   it("advances without rebuilding or mutating existing readers", async () => {
     const initialConfig = {};
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
+    const nextConfig = hotConfig();
+    await publish(initialConfig);
     const input = fixture.agentInput("default", initialConfig);
     const existingReader = await prepareModelRuntimeSnapshot(input);
     const materializations = [
@@ -57,20 +96,14 @@ describe("prepared model runtime config stamps", () => {
     expect(advanced).not.toBe(existingReader);
     expect(advanced.config).toBe(nextConfig);
     expect(existingReader.config).toBe(initialConfig);
-    expect(resolvePublishedModelCatalogOwner(advanced)).toMatchObject({
-      agentId: "default",
-      workspaceDir: "/tmp/unused-workspace",
-      config: nextConfig,
-    });
+    expectOwner(advanced, nextConfig);
     expect(getPreparedModelRuntimeAuthStore(advanced)).toBe(authStore);
     expect(getPreparedModelRuntimeAuthMaterializations(advanced)).toBe(materializations);
     await expect(loadPreparedModelRuntimeAuth(advanced, { providerIds: [] })).resolves.toEqual(
       loadedAuth,
     );
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-    await expect(
-      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-    ).resolves.toMatchObject({ config: nextConfig });
+    await expect(dispatch()).resolves.toMatchObject({ config: nextConfig });
   });
 
   it("keeps native observation and selection facts on their discovery config after a stamp advances", async () => {
@@ -97,37 +130,23 @@ describe("prepared model runtime config stamps", () => {
       });
       return [row];
     });
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: runtime,
-      source: "fixture",
-      harness: {
-        id: runtime,
-        label: "Native observation fixture",
-        authBootstrap: "harness",
-        supports: () => ({ supported: true }),
-        async runAttempt() {
-          throw new Error("Catalog fixture must not run a model");
-        },
-        loadModelCatalog,
-        readModelCatalogReadiness: (params) => {
-          const observed = observations.get(params.config);
-          return observed !== undefined &&
-            observed.agentDir === params.agentDir &&
-            observed.workspaceDir === params.workspaceDir &&
-            observed.pluginConfig === params.config.plugins?.entries?.[runtime]?.config
-            ? { accountType: "chatgpt", authMode: "oauth" }
-            : undefined;
-        },
+    const registry = harnessRegistry(runtime, {
+      authBootstrap: "harness",
+      loadModelCatalog,
+      readModelCatalogReadiness: (params) => {
+        const observed = observations.get(params.config);
+        return observed !== undefined &&
+          observed.agentDir === params.agentDir &&
+          observed.workspaceDir === params.workspaceDir &&
+          observed.pluginConfig === params.config.plugins?.entries?.[runtime]?.config
+          ? { accountType: "chatgpt", authMode: "oauth" }
+          : undefined;
       },
     });
     mocks.resolveNativeModelPrimary.mockReturnValue("custom/model");
     mocks.configuredWorkspaces.set("default", fixture.state.workspaceDir);
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
+    await publish(config, { catalogMode: "static" });
     const input = { config, agentId: "default", agentDir: fixture.state.agentDir("default") };
     const snapshot = await prepareModelRuntimeSnapshot(input);
     const catalog = await snapshot.loadFullModelCatalog!({ refresh: true });
@@ -168,132 +187,122 @@ describe("prepared model runtime config stamps", () => {
 
   it("resolves startup config inside the serialized publication", async () => {
     const initialConfig = {};
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
+    const nextConfig = hotConfig();
     let currentConfig = initialConfig;
 
-    const publication = refreshPreparedModelRuntimeSnapshots(() => currentConfig, {
-      gatewayLifecycle: true,
-    });
+    const publication = publish(() => currentConfig);
     currentConfig = nextConfig;
     advancePreparedModelRuntimeConfig(nextConfig);
     await publication;
 
-    await expect(
-      prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig)),
-    ).resolves.toMatchObject({ config: nextConfig });
-    await expect(
-      loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-    ).resolves.toMatchObject({ config: nextConfig });
+    await expectPublished(nextConfig);
   });
 
-  it("drops an async startup config supplier superseded before it resolves", async () => {
-    const staleConfig = {};
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
-    const supplierReady = createDeferred();
-    let stalePublication: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    let nextPublication: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    try {
-      stalePublication = refreshPreparedModelRuntimeSnapshots(async () => {
-        await supplierReady.promise;
-        return staleConfig;
+  it.each(["before hydration", "during hydration"])(
+    "keeps reply admission active when startup is superseded %s",
+    async (timing) => {
+      const staleConfig = {};
+      const nextConfig = hotConfig();
+      await using resources = new AsyncDisposableStack();
+      const stale = holdPublication(resources, staleConfig, {
+        startup: true,
+        catalogMode: "static",
       });
-      nextPublication = refreshPreparedModelRuntimeSnapshots(nextConfig, {
-        gatewayLifecycle: true,
+      if (timing === "during hydration") {
+        await stale.started;
+      }
+      const next = refreshPreparedModelRuntimeSnapshots(nextConfig, {
+        agentIds: new Set(["default"]),
+        catalogMode: "static",
       });
+      resources.defer(async () => {
+        stale.release();
+        await Promise.allSettled([next]);
+      });
+      stale.release();
+      await Promise.all([stale.pending, next]);
+      await expectPublished(nextConfig);
+    },
+  );
 
-      supplierReady.resolve();
-      await Promise.all([stalePublication, nextPublication]);
-
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-      await expect(
-        prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig)),
-      ).resolves.toMatchObject({ config: nextConfig });
-    } finally {
-      supplierReady.resolve();
-      await Promise.allSettled([stalePublication, nextPublication]);
-    }
-  });
+  it.each(["standalone", "rejected", "shutdown-fenced"])(
+    "does not activate Gateway reply admission for a %s refresh",
+    async (kind) => {
+      const refresh = () =>
+        refreshPreparedModelRuntimeSnapshots(
+          {},
+          {
+            gatewayLifecycle: kind !== "standalone",
+            isPublicationCurrent: () => kind !== "rejected",
+            catalogMode: "static",
+          },
+        );
+      if (kind === "shutdown-fenced") {
+        cancelPreparedModelRuntimeRefresh();
+        expect(refresh).toThrow("shutdown");
+      } else {
+        await refresh();
+      }
+      await expect(dispatch()).resolves.toBeUndefined();
+    },
+  );
 
   it("drops a publication whose lifecycle claim is lost during async config resolution", async () => {
     const initialConfig = {};
     const staleConfig = { gateway: { reload: { mode: "off" as const } } };
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-    const supplierStarted = createDeferred();
-    const releaseSupplier = createDeferred();
+    const nextConfig = hotConfig();
+    await publish(initialConfig);
+    await using resources = new AsyncDisposableStack();
     let claimCurrent = true;
-    let stalePublication: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;
-    try {
-      stalePublication = refreshPreparedModelRuntimeSnapshots(
-        async () => {
-          supplierStarted.resolve();
-          await releaseSupplier.promise;
-          return staleConfig;
-        },
-        {
-          gatewayLifecycle: true,
-          isPublicationCurrent: () => claimCurrent,
-        },
-      );
-
-      await supplierStarted.promise;
-      const readerSettled = vi.fn();
-      const reader = prepareModelRuntimeSnapshot({
-        agentId: "default",
-        agentDir: fixture.state.agentDir("default"),
-        config: staleConfig,
-      }).then(readerSettled, readerSettled);
+    const stale = holdPublication(resources, staleConfig, {
+      isPublicationCurrent: () => claimCurrent,
+    });
+    resources.defer(() => {
       claimCurrent = false;
-      releaseSupplier.resolve();
-      await stalePublication;
-      // Losing the external claim must settle readers even if no replacement is scheduled.
-      await vi.waitFor(() => expect(readerSettled).toHaveBeenCalledWith(expect.any(Error)));
-      await reader;
-      await refreshPreparedModelRuntimeSnapshots(nextConfig, { gatewayLifecycle: true });
-
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-      await expect(
-        prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig)),
-      ).resolves.toMatchObject({ config: nextConfig });
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).resolves.toMatchObject({ config: nextConfig });
-    } finally {
-      claimCurrent = false;
-      releaseSupplier.resolve();
-      await Promise.allSettled([stalePublication]);
-    }
+    });
+    await stale.started;
+    const readerSettled = vi.fn();
+    const reader = prepareModelRuntimeSnapshot({
+      agentId: "default",
+      agentDir: fixture.state.agentDir("default"),
+      config: staleConfig,
+    }).then(readerSettled, readerSettled);
+    claimCurrent = false;
+    stale.release();
+    await stale.pending;
+    // A lost external claim must settle readers without requiring a replacement.
+    await vi.waitFor(() => expect(readerSettled).toHaveBeenCalledWith(expect.any(Error)));
+    await reader;
+    await publish(nextConfig);
+    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+    await expectPublished(nextConfig);
   });
 
   it("keeps an in-flight auth publication on the advanced stamp", async () => {
     const initialConfig = {};
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
-    await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
+    const nextConfig = hotConfig();
+    await publish(initialConfig);
     const finishAuthRefreshGate = createDeferred();
-    let finishAuthRefresh: (() => void) | undefined;
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-      finishAuthRefresh = () => finishAuthRefreshGate.resolve();
+    const authRefreshStarted = createDeferred();
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, _agentDir) => {
+      authRefreshStarted.resolve();
       await finishAuthRefreshGate.promise;
-      return { agentDir: String(agentDir), wrote: false };
+      return {};
     });
 
     try {
       mocks.mutationListener?.({ affectsInheritedStores: true });
-      await vi.waitFor(() => expect(finishAuthRefresh).toBeDefined());
+      await authRefreshStarted.promise;
       mocks.configuredAgentDirs.set("default", "/tmp/later-agent");
       advancePreparedModelRuntimeConfig(nextConfig);
       finishAuthRefreshGate.resolve();
 
-      const snapshot = await prepareModelRuntimeSnapshot(fixture.agentInput("default", nextConfig));
-      expect(resolvePublishedModelCatalogOwner(snapshot)).toMatchObject({
-        agentId: "default",
-        workspaceDir: "/tmp/unused-workspace",
-        config: nextConfig,
-      });
+      const snapshot = await prepare(nextConfig);
+      expectOwner(snapshot, nextConfig);
       expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
     } finally {
       finishAuthRefreshGate.resolve();
-      await Promise.allSettled([loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })]);
+      await Promise.allSettled([dispatch()]);
     }
   });
 });

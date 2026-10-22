@@ -925,6 +925,43 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
+  fun failedTalkDetachReconnectsOnlyItsOwningSocket() =
+    runBlocking {
+      val ready = Channel<GatewaySession.RequestLease>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json) { webSocket, id, method ->
+          webSocket.send(
+            if (method == "connect") {
+              connectResponseFrame(id, capabilities = setOf("talk-session-close-disposition"))
+            } else {
+              """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"close unavailable"}}"""
+            },
+          )
+        }
+      val harness = createReconnectHarness()
+      try {
+        connectSession(harness.session, server.port, onReady = {
+          ready.trySend(requireNotNull(harness.session.captureRequestLease()))
+        })
+        val original = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        val abort = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Abort) }
+        assertTrue(abort.exceptionOrNull() is GatewayRequestRejected)
+        assertTrue(original.isCurrent())
+
+        val detach = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(detach.exceptionOrNull() is GatewayRequestRejected)
+        val replacement = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { ready.receive() }
+        assertFalse(original.isCurrent())
+
+        val stale = runCatching { original.closeTalkSession("relay-1", TalkSessionCloseDisposition.Detach) }
+        assertTrue(stale.exceptionOrNull() is GatewayRequestNotEnqueued)
+        assertTrue(replacement.isCurrent())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun capturedRequestLeaseRejectsReplacementSocketBeforeEnqueue() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
@@ -1835,7 +1872,7 @@ class GatewaySessionReconnectTest {
         socketField.set(connection, RejectFirstSendWebSocket(socket) { rejectedNodeEvent.complete(Unit) })
         val outbox =
           NotificationNodeEventOutbox {
-            harness.session.sendNodeEventWithOutcome(it.event, it.payloadJson)
+            harness.session.sendNodeEventWithOutcomeForEndpoint(null, it.event, it.payloadJson)
           }
         val deliveryJob = launch { outbox.deliver() }
 
@@ -1941,6 +1978,51 @@ class GatewaySessionReconnectTest {
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { readyPublished.await() }
         assertEquals(2, callbackCount.get())
         assertEquals("The throwing hello callback must not publish readiness", 1, readyCount.get())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun audioSendWaitsForAdmissionWithoutChangingExplicitRequestDeadlines() =
+    runBlocking {
+      val connected = CompletableDeferred<Unit>()
+      val issued = Channel<Pair<WebSocket, String>>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json) { socket, id, method ->
+          when (method) {
+            "connect" -> socket.send(connectResponseFrame(id))
+            "chat.send" -> issued.trySend(socket to id).getOrThrow()
+          }
+        }
+      val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+      val scheduler = TestCoroutineScheduler()
+      val dispatcher = StandardTestDispatcher(scheduler)
+      val params = """{"attachments":[{"type":"file","mimeType":"audio/wav","fileName":"voice.wav","content":"abc"}]}"""
+      try {
+        connectSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val send = async(dispatcher) { harness.session.requestDetailed("chat.send", params) }
+        scheduler.runCurrent()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { issued.receive() }
+        scheduler.advanceTimeBy(60_000)
+        scheduler.runCurrent()
+        assertFalse("Slow transcription must retain the original request", send.isCompleted)
+        send.cancel()
+        scheduler.runCurrent()
+        send.join()
+        assertTrue(send.isCancelled)
+
+        val bounded =
+          async(dispatcher) {
+            runCatching { harness.session.requestDetailed("chat.send", params, timeoutMs = 1200) }
+          }
+        scheduler.runCurrent()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { issued.receive() }
+        scheduler.advanceTimeBy(1200)
+        scheduler.runCurrent()
+        assertTrue(bounded.await().exceptionOrNull() is GatewayRequestOutcomeUnknown)
       } finally {
         shutdownReconnectHarness(harness, server)
       }
@@ -2442,7 +2524,7 @@ class GatewaySessionReconnectTest {
     onDisconnected: (String) -> Unit = {},
     deviceAuthStore: DeviceAuthTokenStore = ReconnectDeviceAuthStore(),
     onEvent: (String, String?) -> Unit = { _, _ -> },
-    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult = {
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult = {
       GatewaySession.InvokeResult.ok("""{"handled":true}""")
     },
     connectTimeoutMs: Long = 20_000,

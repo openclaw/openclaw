@@ -29,9 +29,7 @@ export function loadPluginMetadataSnapshotInput(
   const registryStartedAt = performance.now();
   const registryResult = readRegistry();
   const registrySnapshotMs = performance.now() - registryStartedAt;
-  const index = registryResult.snapshot.diagnostics
-    ? registryResult.snapshot
-    : { ...registryResult.snapshot, diagnostics: [] };
+  const index = registryResult.snapshot;
   const manifestStartedAt = performance.now();
   // Empty installed indexes are authoritative; bootstrap first derives a real
   // index so every manifest and scope follows the same immutable graph.

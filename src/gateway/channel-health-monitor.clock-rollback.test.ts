@@ -9,7 +9,8 @@ import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelManager } from "./server-channels.js";
 
 const STARTED_AT = 1_000_000;
-const CHECK_INTERVAL_MS = 1_000;
+const CHECK_INTERVAL_MS = 5 * 60_000;
+const STARTUP_GRACE_MS = 60_000;
 
 function createChannelManager(running: boolean) {
   const account: ChannelAccountSnapshot = {
@@ -32,7 +33,7 @@ function createChannelManager(running: boolean) {
     releaseChannelRouteHandoffs: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
-    recoverAutostartSuppression: vi.fn(async () => false),
+    recoverAutostartSuppression: vi.fn(() => undefined),
     setAmbientAutostartSuppressedChannelIds: vi.fn(),
     isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
@@ -62,38 +63,31 @@ describe("channel-health-monitor clock rollback", () => {
     const monitor = startChannelHealthMonitor({
       scheduler,
       channelManager: manager,
-      checkIntervalMs: CHECK_INTERVAL_MS,
-      timing: { monitorStartupGraceMs: CHECK_INTERVAL_MS },
     });
 
-    clock.setTime(STARTED_AT - 60_000 + CHECK_INTERVAL_MS);
+    clock.setTime(STARTED_AT - 60_000);
     await clock.wake();
 
-    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default", {
+      reason: "health-monitor",
+    });
     monitor.stop();
   });
 
-  it.each([
-    { name: "restart cooldown", maxRestartsPerHour: 10 },
-    { name: "hourly restart budget", maxRestartsPerHour: 1 },
-  ])("discards future $name from an existing monitor", async ({ maxRestartsPerHour }) => {
+  it("discards a future restart cooldown from an existing monitor", async () => {
     const { account, manager } = createChannelManager(true);
     const monitor = startChannelHealthMonitor({
       scheduler,
       channelManager: manager,
-      checkIntervalMs: CHECK_INTERVAL_MS,
-      cooldownCycles: 0,
-      maxRestartsPerHour,
-      timing: { monitorStartupGraceMs: 0 },
     });
 
-    await clock.advanceBy(5 * CHECK_INTERVAL_MS);
+    await clock.advanceBy(STARTUP_GRACE_MS);
     account.running = false;
     account.connected = false;
     await clock.advanceBy(CHECK_INTERVAL_MS);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
 
-    clock.setTime(STARTED_AT + 4 * CHECK_INTERVAL_MS);
+    clock.setTime(STARTED_AT + STARTUP_GRACE_MS);
     await clock.wake();
 
     expect(manager.startChannel).toHaveBeenCalledTimes(2);

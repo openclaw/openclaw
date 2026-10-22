@@ -16,6 +16,7 @@ export type AcpResumeSessionRow = {
   sessionKey: string;
   session_id: string | null;
   updated_at: number;
+  agent: string;
 };
 
 export type AcpSessionReadCommand =

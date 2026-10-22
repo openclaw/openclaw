@@ -764,38 +764,133 @@ struct TestSessionListQuery: Equatable, Sendable {
 }
 
 private actor TestChatTransportState {
-    var historyCallCount: Int = 0 { didSet { self.wake() } }
-    var sessionsCallCount: Int = 0 { didSet { self.wake() } }
-    var modelsCallCount: Int = 0 { didSet { self.wake() } }
-    var modelAgentIDs: [String?] = [] { didSet { self.wake() } }
-    var commandsCallCount: Int = 0 { didSet { self.wake() } }
-    var healthCallCount: Int = 0 { didSet { self.wake() } }
-    var activeSessionKeys: [String] = [] { didSet { self.wake() } }
-    var createdSessionKeys: [String] = [] { didSet { self.wake() } }
-    var createdParentSessionKeys: [String?] = [] { didSet { self.wake() } }
-    var resetSessionKeys: [String] = [] { didSet { self.wake() } }
-    var compactSessionKeys: [String] = [] { didSet { self.wake() } }
-    var sentSessionKeys: [String] = [] { didSet { self.wake() } }
-    var sentAgentIDs: [String?] = [] { didSet { self.wake() } }
-    var sentRoutingContracts: [String?] = [] { didSet { self.wake() } }
-    var sentSettingsExpectations: [OpenClawChatSessionSettingsExpectation?] = [] { didSet { self.wake() } }
-    var sentMessages: [String] = [] { didSet { self.wake() } }
-    var sentRunIds: [String] = [] { didSet { self.wake() } }
-    var commandSessionKeys: [String] = [] { didSet { self.wake() } }
-    var sentThinkingLevels: [String] = [] { didSet { self.wake() } }
-    var abortedRunIds: [String] = [] { didSet { self.wake() } }
-    var waitCompletionRunIds: [String] = [] { didSet { self.wake() } }
-    var patchedModels: [String?] = [] { didSet { self.wake() } }
-    var patchedModelTargets: [(sessionKey: String, agentID: String?)] = [] { didSet { self.wake() } }
-    var patchedThinkingLevels: [String] = [] { didSet { self.wake() } }
-    var sessionSettingsPatches: [OpenClawChatSessionSettingsPatch] = [] { didSet { self.wake() } }
-    var sessionSettingsTargets: [(sessionKey: String, agentID: String?)] = [] { didSet { self.wake() } }
-    var listSessionsQueries: [TestSessionListQuery] = [] { didSet { self.wake() } }
-    var renamedLabelsByKey: [(key: String, label: String)] = [] { didSet { self.wake() } }
-    var pinnedChanges: [(key: String, pinned: Bool)] = [] { didSet { self.wake() } }
-    var archivedChanges: [(key: String, expectedSessionID: String?, archived: Bool)] = [] { didSet { self.wake() } }
-    var sessionSettingsRouteGeneration: UInt64 = 0 { didSet { self.wake() } }
-    var capturedSessionSettingsRouteGenerations: [UInt64] = [] { didSet { self.wake() } }
+    var historyCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var sessionsCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var modelsCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var modelAgentIDs: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var commandsCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var healthCallCount: Int = 0 {
+        didSet { self.wake() }
+    }
+
+    var activeSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var createdSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var createdParentSessionKeys: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var resetSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var compactSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentAgentIDs: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentRoutingContracts: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentSettingsExpectations: [OpenClawChatSessionSettingsExpectation?] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentMessages: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentRunIds: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var commandSessionKeys: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sentThinkingLevels: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var abortedRunIds: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var waitCompletionRunIds: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var patchedModels: [String?] = [] {
+        didSet { self.wake() }
+    }
+
+    var patchedModelTargets: [(sessionKey: String, agentID: String?)] = [] {
+        didSet { self.wake() }
+    }
+
+    var patchedThinkingLevels: [String] = [] {
+        didSet { self.wake() }
+    }
+
+    var sessionSettingsPatches: [OpenClawChatSessionSettingsPatch] = [] {
+        didSet { self.wake() }
+    }
+
+    var sessionSettingsTargets: [(sessionKey: String, agentID: String?)] = [] {
+        didSet { self.wake() }
+    }
+
+    var listSessionsQueries: [TestSessionListQuery] = [] {
+        didSet { self.wake() }
+    }
+
+    var renamedLabelsByKey: [(key: String, label: String)] = [] {
+        didSet { self.wake() }
+    }
+
+    var pinnedChanges: [(key: String, pinned: Bool)] = [] {
+        didSet { self.wake() }
+    }
+
+    var archivedChanges: [(key: String, expectedSessionID: String?, archived: Bool)] = [] {
+        didSet { self.wake() }
+    }
+
+    var sessionSettingsRouteGeneration: UInt64 = 0 {
+        didSet { self.wake() }
+    }
+
+    var capturedSessionSettingsRouteGenerations: [UInt64] = [] {
+        didSet { self.wake() }
+    }
 
     private var waiters = StateWaiters()
 
@@ -812,7 +907,7 @@ private actor TestChatTransportState {
     }
 }
 
-private final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
+final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
     private let state = TestChatTransportState()
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
@@ -1340,7 +1435,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.continuation.yield(evt)
     }
 
-    func waitForState(_ isSatisfied: @escaping @Sendable (isolated TestChatTransportState) -> Bool) async {
+    fileprivate func waitForState(_ isSatisfied: @escaping @Sendable (isolated TestChatTransportState) -> Bool) async {
         await self.state.wait(until: isSatisfied)
     }
 
@@ -2332,7 +2427,7 @@ struct ChatViewModelTests {
         #expect(vm.progressCard?.revision == 3)
     }
 
-    @Test @MainActor func `global progress card capability cannot cross a gateway route change`() async throws {
+    @Test @MainActor func `global progress card capability cannot cross a gateway route change`() async {
         let oldCapability = SessionSubscribeGate()
         let calls = AsyncCounter()
         let oldReplyReady = AsyncCounter()
@@ -2420,7 +2515,7 @@ struct ChatViewModelTests {
             removed: 4))
     }
 
-    @Test @MainActor func `transient Swarm capability failure preserves state and retries until explicit false`() async throws {
+    @Test @MainActor func `transient Swarm capability failure preserves state and retries until explicit false`() async {
         let script = SwarmCapabilityScript([.value(true), .failure, .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
         child.parentSessionKey = "main"
@@ -2445,7 +2540,7 @@ struct ChatViewModelTests {
         #expect(!viewModel.swarmEnabled && viewModel.swarmSessions.isEmpty)
     }
 
-    @Test @MainActor func `metadata changes enable and disable Swarm progress without reconnecting`() async throws {
+    @Test @MainActor func `metadata changes enable and disable Swarm progress without reconnecting`() async {
         let script = SwarmCapabilityScript([.value(false), .value(true), .value(false)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
         child.parentSessionKey = "main"
@@ -2461,10 +2556,10 @@ struct ChatViewModelTests {
         await viewModel.refreshSwarmCapability()
         #expect(viewModel.activeSwarmGroups.isEmpty)
 
-        await viewModel.handleTransportEvent(.chatMetadataChanged)?.value
+        await viewModel.handleTransportEvent(.chatMetadataChanged())?.value
         #expect(!viewModel.activeSwarmGroups.isEmpty)
 
-        await viewModel.handleTransportEvent(.chatMetadataChanged)?.value
+        await viewModel.handleTransportEvent(.chatMetadataChanged())?.value
         #expect(viewModel.activeSwarmGroups.isEmpty)
     }
 
@@ -2514,7 +2609,7 @@ struct ChatViewModelTests {
         #expect(viewModel.swarmSessions.isEmpty)
     }
 
-    @Test @MainActor func `route change clears and revalidates Swarm state`() async throws {
+    @Test @MainActor func `route change clears and revalidates Swarm state`() async {
         let script = SwarmCapabilityScript([.value(true), .value(true)])
         var child = sessionEntry(key: "agent:main:child", updatedAt: 1)
         child.parentSessionKey = "main"
@@ -2557,6 +2652,57 @@ struct ChatViewModelTests {
             break
         }
         #expect(await transport.listSessionsQueries().count == 1)
+    }
+
+    @Test(arguments: ["lifecycle", "subagent-status"]) @MainActor
+    func `finished helper clears parent wait without reopening the sidebar`(reason: String) async {
+        var parent = sessionEntry(key: "main", updatedAt: 1, hasActiveRun: true, activeRunIds: ["parent-run"])
+        parent.status = "running"
+        parent.hasActiveSubagentRun = true
+        var helper = sessionEntry(
+            key: "agent:main:subagent:helper",
+            updatedAt: 1,
+            hasActiveRun: true,
+            activeRunIds: ["helper-run"])
+        helper.status = "running"
+        helper.parentSessionKey = parent.key
+        var waiting = parent
+        waiting.updatedAt = 2
+        waiting.hasActiveRun = false
+        waiting.activeRunIds = []
+        waiting.status = "done"
+        var idle = waiting
+        idle.updatedAt = 3
+        // Ordinary parents omit this field once their last descendant finishes.
+        idle.hasActiveSubagentRun = nil
+        var finished = helper
+        finished.updatedAt = 3
+        finished.status = "done"
+        finished.hasActiveRun = false
+        finished.activeRunIds = []
+        let transport = TestChatTransport(
+            historyResponses: [],
+            sessionsResponses: [sessionsResponse([waiting, helper]), sessionsResponse([idle, finished])])
+        let viewModel = OpenClawChatViewModel(sessionKey: parent.key, transport: transport)
+        viewModel.sessions = [parent, helper]
+        #expect(viewModel.subagentWait == nil)
+
+        await viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: parent.key,
+            reason: "lifecycle",
+            phase: "end",
+            runId: "parent-run",
+            session: waiting)))?.value
+        #expect(viewModel.subagentWait?.child?.key == helper.key)
+
+        await viewModel.handleTransportEvent(.sessionsChanged(.init(
+            sessionKey: helper.key,
+            parentSessionKey: parent.key,
+            reason: reason,
+            phase: reason == "lifecycle" ? "end" : nil,
+            runId: "helper-run",
+            session: finished)))?.value
+        #expect(viewModel.subagentWait == nil)
     }
 
     @Test @MainActor func `global Swarm activity follows the selected agent owner`() async {
@@ -2893,7 +3039,7 @@ struct ChatViewModelTests {
         #expect(await getCalls.current() == 1)
     }
 
-    @Test @MainActor func `question refresh retries transport failure`() async throws {
+    @Test @MainActor func `question refresh retries transport failure`() async {
         let listCalls = AsyncCounter()
         let getCalls = AsyncCounter()
         let transport = TestChatTransport(
@@ -2973,7 +3119,7 @@ struct ChatViewModelTests {
         #expect(await listCalls.current() == 3)
     }
 
-    @Test @MainActor func `question refresh resets exhausted retry budget after partial progress`() async throws {
+    @Test @MainActor func `question refresh resets exhausted retry budget after partial progress`() async {
         let listCalls = AsyncCounter()
         let recoveringCalls = AsyncCounter()
         let progressed = chatQuestionRecord(id: "ask_progressed")
@@ -3021,7 +3167,7 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards.first { $0.id == progressed.id }?.status() == .answeredElsewhere)
     }
 
-    @Test @MainActor func `question refresh resets retry budget after state change during backoff`() async throws {
+    @Test @MainActor func `question refresh resets retry budget after state change during backoff`() async {
         let listCalls = AsyncCounter()
         let transport = TestChatTransport(
             historyResponses: [],
@@ -3051,7 +3197,7 @@ struct ChatViewModelTests {
         #expect(viewModel.questionCards[0].status() == .cancelled)
     }
 
-    @Test @MainActor func `question refresh stops after bounded retries`() async throws {
+    @Test @MainActor func `question refresh stops after bounded retries`() async {
         let listCalls = AsyncCounter()
         let transport = TestChatTransport(
             historyResponses: [],
@@ -4309,7 +4455,7 @@ struct ChatViewModelTests {
         #expect(vm.messages.first?.content.first?.text == "new scope")
     }
 
-    @Test @MainActor func `unscoped agent update replaces an active bootstrap`() async throws {
+    @Test @MainActor func `unscoped agent update replaces an active bootstrap`() async {
         let firstHistoryGate = SessionSubscribeGate()
         let historyCalls = AsyncCounter()
         let firstHistory = historyPayload(
@@ -4341,7 +4487,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.messages.first?.content.first?.text } == "new agent")
     }
 
-    @Test @MainActor func `intermediate session message preserves pending recovery snapshot`() async throws {
+    @Test @MainActor func `intermediate session message preserves pending recovery snapshot`() async {
         let historyGate = AsyncGate()
         let historyCalls = AsyncCounter()
         let activeHistory = historyPayload(
@@ -5259,6 +5405,61 @@ struct ChatViewModelTests {
                     $0.role == "user" && $0.content.first?.text == "current request"
                 })
         })
+    }
+
+    @Test(arguments: [false, true])
+    func `lagging history keeps a held question before its provisional final reply`(
+        snapshotHasOlderHistory: Bool) async throws
+    {
+        let refreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(), historyPayload(), historyPayload()],
+            requestHistoryHook: { _ in
+                // Refreshes the send and the final event start must not apply before the lagging snapshot does.
+                if await historyCount.increment() > 1 { await refreshGate.wait() }
+            },
+            sendMessageStatus: "pending")
+        try await loadAndWaitBootstrap(vm: vm)
+
+        // A snapshot requested now will contain neither the question nor the answer that follow.
+        let laggingRequest = await MainActor.run { vm.beginHistoryRequest() }
+        let send = try #require(await sendUserMessage(vm, text: "held question"))
+        let runId = try await waitForLastSentRunId(transport)
+        let refresh = await vm.handleTransportEvent(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "held answer",
+                        timestamp: Date().timeIntervalSince1970 * 1000 + 1,
+                        contentId: "held-final-content"),
+                    errorMessage: nil)))
+        #expect(await MainActor.run { vm.messages.compactMap { $0.content.first?.text } } == [
+            "held question", "held answer",
+        ])
+
+        // The snapshot predates the question and the answer; it may still hold older turns, which come first.
+        let older = snapshotHasOlderHistory
+            ? [chatTextMessage(role: "user", text: "older question", timestamp: 1)]
+            : []
+        let applied = await MainActor.run {
+            vm.applyHistoryPayload(
+                historyPayload(messages: older),
+                for: laggingRequest,
+                preservingOptimisticLocalMessages: false)
+        }
+        #expect(applied)
+        #expect(await MainActor.run { vm.messages.compactMap { $0.content.first?.text } } == (
+            snapshotHasOlderHistory ? ["older question"] : []) + ["held question", "held answer"])
+
+        await refreshGate.waitUntilBlocked()
+        await refreshGate.release()
+        await send.value
+        await refresh?.value
     }
 
     @Test func `session message adopts provisional final event reply`() async throws {
@@ -7065,7 +7266,7 @@ struct ChatViewModelTests {
         })
     }
 
-    @Test func `accepts canonical session key events for external runs`() async throws {
+    @Test func `accepts canonical session key events for external runs`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let history1 = historyPayload(messages: [chatTextMessage(role: "user", text: "first", timestamp: now)])
         let history2 = historyPayload(
@@ -7488,7 +7689,7 @@ struct ChatViewModelTests {
         })
     }
 
-    @Test func `appends same content user transcript when it is not local echo`() async throws {
+    @Test func `appends same content user transcript when it is not local echo`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let (transport, vm) = await makeViewModel(
             historyResponses: [
@@ -7624,7 +7825,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.errorText == nil })
     }
 
-    @Test func `session choices prefer main and recent`() async throws {
+    @Test func `session choices prefer main and recent`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (2 * 60 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 60 * 1000)
@@ -7648,7 +7849,7 @@ struct ChatViewModelTests {
         #expect(keys == ["main", "recent-1", "recent-2"])
     }
 
-    @Test func `context usage follows active session switches`() async throws {
+    @Test func `context usage follows active session switches`() async {
         let sessions = sessionsResponse([
             sessionEntry(
                 key: "main",
@@ -7679,7 +7880,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.contextUsageFraction == 0.8 })
     }
 
-    @Test func `session choices include current when missing`() async throws {
+    @Test func `session choices include current when missing`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
         let history = historyPayload(sessionKey: "custom", sessionId: "sess-custom")
@@ -7699,7 +7900,7 @@ struct ChatViewModelTests {
         #expect(keys == ["main", "custom"])
     }
 
-    @Test func `session choices use resolved main session key instead of literal main`() async throws {
+    @Test func `session choices use resolved main session key instead of literal main`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (30 * 60 * 1000)
         let recentOlder = now - (90 * 60 * 1000)
@@ -7730,7 +7931,7 @@ struct ChatViewModelTests {
         #expect(keys == ["Luke’s MacBook Pro", "recent-1"])
     }
 
-    @Test func `session choices hide internal onboarding session`() async throws {
+    @Test func `session choices hide internal onboarding session`() async {
         let now = Date().timeIntervalSince1970 * 1000
         let recent = now - (2 * 60 * 1000)
         let recentOlder = now - (5 * 60 * 1000)
@@ -7894,7 +8095,7 @@ struct ChatViewModelTests {
         #expect(await transport.createdParentSessionKeys() == ["agent:alice:main"])
     }
 
-    @Test func `send attempts request when cached health is stale false`() async throws {
+    @Test func `send attempts request when cached health is stale false`() async {
         let (transport, vm) = await makeViewModel(
             historyResponses: [historyPayload()],
             healthResponses: [false])
@@ -8902,7 +9103,7 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.errorText } == nil)
     }
 
-    @Test func `slash command catalog filters commands and skills`() async throws {
+    @Test func `slash command catalog filters commands and skills`() async {
         let commands = [
             commandChoice(
                 name: "compact",
@@ -8964,7 +9165,7 @@ struct ChatViewModelTests {
         #expect(await transport.sentMessages() == ["/model gpt-5"])
     }
 
-    @Test func `slash command catalog loads for current session`() async throws {
+    @Test func `slash command catalog loads for current session`() async {
         let commands = [
             commandChoice(name: "model", aliases: ["/model"], source: .command, acceptsArgs: true),
         ]
@@ -9118,7 +9319,7 @@ struct ChatViewModelTests {
 
     @Test(arguments: [false, true])
     @MainActor func `old model catalog cannot overwrite a changed session or reconnected catalog`(
-        reconnect: Bool) async throws
+        reconnect: Bool) async
     {
         let gate = SessionSubscribeGate()
         defer { Task { await gate.release() } }
@@ -9255,6 +9456,43 @@ struct ChatViewModelTests {
         #expect(vm.canSend)
     }
 
+    @Test(arguments: [
+        (#"{"modelCatalogChanged":false,"authChanged":false}"#, false),
+        (#"{"agentId":"other","modelCatalogChanged":true}"#, false),
+        (#"{"agentId":"main","modelCatalogChanged":true}"#, true),
+        (#"{"modelCatalogChanged":false,"authChanged":true}"#, true),
+        (#"{"agentId":"other","modelCatalogChanged":false,"modelSelectionChanged":true}"#, true),
+        ("{}", true),
+    ])
+    @MainActor func `metadata publications reload only the affected model catalog`(
+        payload: String,
+        reloads: Bool) async throws
+    {
+        let unavailable = modelChoice(
+            id: "fixture",
+            name: "Fixture",
+            available: false,
+            unavailableReason: "missing-auth")
+        let available = modelChoice(id: "fixture", name: "Fixture", available: true)
+        let (transport, vm) = await makeViewModel(
+            sessionKey: "agent:main:main",
+            historyResponses: [historyPayload()],
+            modelResponses: [[unavailable], [available]],
+            modelAvailabilityIsSessionScoped: true)
+        await vm.fetchModels()
+
+        let frame = try JSONDecoder().decode(
+            EventFrame.self,
+            from: Data("""
+            {"type":"event","event":"chat.metadata.changed","payload":\(payload)}
+            """.utf8))
+        let event = try #require(OpenClawChatGatewayPayloadCodec.event(from: frame))
+        await vm.handleTransportEvent(event)?.value
+
+        #expect(await transport.modelAgentIDs().count == (reloads ? 2 : 1))
+        #expect(vm.modelChoices == (reloads ? [available] : [unavailable]))
+    }
+
     @Test @MainActor func `metadata refresh and sequence recovery replace the selected model gate`() async throws {
         let unavailable = modelChoice(
             id: "claude-opus-4-6",
@@ -9283,7 +9521,7 @@ struct ChatViewModelTests {
         vm.input = "hello"
         #expect(!vm.canSend)
 
-        await vm.handleTransportEvent(.chatMetadataChanged)?.value
+        await vm.handleTransportEvent(.chatMetadataChanged())?.value
         #expect(await MainActor.run { vm.modelChoices.first?.available == true })
         #expect(vm.canSend)
 
@@ -9292,7 +9530,7 @@ struct ChatViewModelTests {
         #expect(vm.canSend)
     }
 
-    @Test @MainActor func `metadata refresh supersedes an in flight sequence recovery catalog`() async throws {
+    @Test @MainActor func `metadata refresh supersedes an in flight sequence recovery catalog`() async {
         let sequenceRecoveryGate = AsyncGate()
         let unavailable = modelChoice(
             id: "claude-opus-4-6",
@@ -9320,7 +9558,7 @@ struct ChatViewModelTests {
         vm.handleTransportEvent(.seqGap)
         await transport.waitForState { $0.modelAgentIDs.count >= 2 }
         #expect(await transport.modelAgentIDs().count >= 2)
-        let metadata = vm.handleTransportEvent(.chatMetadataChanged)
+        let metadata = vm.handleTransportEvent(.chatMetadataChanged())
         await sequenceRecoveryGate.open()
         await metadata?.value
         #expect(await MainActor.run { vm.modelChoices.first?.available == true })
@@ -13881,7 +14119,7 @@ struct ChatViewModelSessionManagementTests {
         #expect(OpenClawChatSessionListOrganizer.filter(sessions, search: "  ") == sessions)
     }
 
-    @Test func `pin patches transport and reorders optimistically`() async throws {
+    @Test func `pin patches transport and reorders optimistically`() async {
         let initial = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200),
             sessionEntry(key: "agent:main:topic-b", updatedAt: 100),
@@ -13910,7 +14148,7 @@ struct ChatViewModelSessionManagementTests {
         #expect(await MainActor.run { vm.sessions.first?.isPinned == true })
     }
 
-    @Test func `rename patches label optimistically and reverts on failure`() async throws {
+    @Test func `rename patches label optimistically and reverts on failure`() async {
         let initial = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 200, displayName: "Old name"),
         ])
@@ -13951,7 +14189,7 @@ struct ChatViewModelSessionManagementTests {
         #expect(await MainActor.run { vm.errorText } == "rename failed")
     }
 
-    @Test func `archive removes the session from the active list`() async throws {
+    @Test func `archive removes the session from the active list`() async {
         let archivedSession = sessionEntry(
             key: "agent:main:topic-b",
             updatedAt: 100,
@@ -14026,7 +14264,7 @@ struct ChatViewModelSessionManagementTests {
         #expect(changes.allSatisfy { !$0.archived })
     }
 
-    @Test func `fetchSessionList falls back to local filtering when the server is unreachable`() async throws {
+    @Test func `fetchSessionList falls back to local filtering when the server is unreachable`() async {
         let cached = sessionsResponse([
             sessionEntry(key: "agent:main:topic-a", updatedAt: 2, displayName: "Trip planning"),
             sessionEntry(key: "agent:main:topic-b", updatedAt: 1, displayName: "Groceries"),
@@ -14050,5 +14288,145 @@ struct ChatViewModelSessionManagementTests {
         // Archived rows only exist server-side; offline archived mode is empty.
         let archivedRows = await vm.fetchSessionList(search: nil, archived: true)
         #expect(archivedRows.isEmpty)
+    }
+}
+
+struct ChatRunTelemetryObservationTests {
+    @Test @MainActor func `token updates do not invalidate run lifecycle`() {
+        final class Fired: @unchecked Sendable { var count = 0 }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        vm.updateActiveSessionRunIDs(["telemetry-run"])
+        #expect(vm.acceptLiveRunSequence(runID: "telemetry-run", sequence: 1, outputTokens: 1))
+        let lifecycle = Fired()
+        let tokens = Fired()
+        withObservationTracking {
+            _ = vm.hasBlockingRunActivity
+            _ = vm.workingIndicatorIdentity
+            _ = vm.liveUsageRunID
+        } onChange: { lifecycle.count += 1 }
+        withObservationTracking { _ = vm.liveRunOutputTokens } onChange: { tokens.count += 1 }
+        #expect(vm.acceptLiveRunSequence(runID: "telemetry-run", sequence: 2, outputTokens: 20))
+        #expect(lifecycle.count == 0)
+        #expect(tokens.count == 1)
+        #expect(vm.liveRunOutputTokens == 20)
+        #expect(vm.acceptLiveRunSequence(runID: "telemetry-run", sequence: 3))
+        #expect(lifecycle.count == 0)
+        vm.retireTerminalRun("telemetry-run")
+        #expect(lifecycle.count == 1)
+        #expect(!vm.hasBlockingRunActivity)
+        #expect(vm.liveUsageRunID == nil)
+    }
+}
+
+struct ChatHistoryObservationTests {
+    @Test(arguments: [false, true]) @MainActor
+    func `unchanged history does not invalidate transcript`(hasNarration: Bool) {
+        final class Fired: @unchecked Sendable { var count = 0 }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        let message = OpenClawChatMessage(
+            id: UUID(), role: "user",
+            content: [.init(type: "text", text: "Question", mimeType: nil, fileName: nil, content: nil)],
+            timestamp: 1)
+        vm.replaceMessages([message])
+        if hasNarration {
+            vm.pendingRuns.insert("narration-run")
+            vm.handleAgentNarration(OpenClawAgentEventPayload(
+                runId: "narration-run", seq: 1, stream: "item", ts: 2,
+                data: [
+                    "kind": AnyCodable("preamble"),
+                    "itemId": AnyCodable("item"),
+                    "phase": AnyCodable("end"),
+                    "progressText": AnyCodable("Checking"),
+                ]))
+        }
+        let before = vm.transcriptMessages
+        let observed = Fired()
+        withObservationTracking {
+            _ = vm.transcriptMessages
+        } onChange: { observed.count += 1 }
+        vm.replaceMessages([message])
+        #expect(observed.count == 0)
+        #expect(vm.transcriptMessages == before)
+        // Actual settlement still retires narration and invalidates its visible projection.
+        if hasNarration {
+            vm.replaceMessages([message], narrationSettled: true)
+            #expect(observed.count == 1)
+            #expect(vm.transcriptMessages == [message])
+        } else {
+            vm.replaceMessages([])
+            #expect(observed.count == 1)
+            #expect(vm.transcriptMessages.isEmpty)
+        }
+    }
+}
+
+struct ChatStreamPresentationTests {
+    @Test @MainActor func `paced words do not invalidate transcript shape or timeline`() throws {
+        final class Fired: @unchecked Sendable { var count = 0 }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        vm.updateStreamingAssistantText("First")
+        let before = vm.timelineRevision
+        let transcript = Fired()
+        let bubble = Fired()
+        withObservationTracking {
+            _ = vm.liveAssistantTextShape
+            _ = vm.hasStreamingAssistantText
+            _ = vm.timelineRevision
+        } onChange: { transcript.count += 1 }
+        withObservationTracking { _ = vm.liveAssistantDisplayText } onChange: { bubble.count += 1 }
+        vm.updateStreamingAssistantText("First second")
+        vm.updateStreamingAssistantText("First second third")
+        #expect(vm.streamingAssistantText == "First second third")
+        #expect(vm.liveAssistantDisplayText == "First")
+        #expect(bubble.count == 0)
+        try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
+        #expect(vm.liveAssistantDisplayText == "First second third")
+        #expect(bubble.count == 1)
+        #expect(transcript.count == 0)
+        #expect(vm.timelineRevision == before)
+        vm.updateStreamingAssistantText(nil)
+        #expect(transcript.count == 1)
+        #expect(vm.liveAssistantDisplayText == nil)
+    }
+
+    @Test @MainActor func `retired callback cannot publish old or new session text`() throws {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        vm.updateStreamingAssistantText("Old first")
+        vm.updateStreamingAssistantText("Old queued")
+        let retired = try #require(vm.streamPacing.scheduledID)
+        vm.clearStreamingActivity()
+        vm.updateStreamingAssistantText("New first")
+        vm.updateStreamingAssistantText("New queued")
+        let current = try #require(vm.streamPacing.scheduledID)
+        vm.flushStreamingAssistantDisplay(scheduledID: retired)
+        #expect(vm.liveAssistantDisplayText == "New first")
+        #expect(vm.streamPacing.scheduledID == current)
+        vm.flushStreamingAssistantDisplay(scheduledID: current)
+        #expect(vm.liveAssistantDisplayText == "New queued")
+    }
+
+    @Test @MainActor func `visibility changes invalidate shape and durable history suppresses live duplicates`() throws {
+        final class Fired: @unchecked Sendable { var count = 0 }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: TestChatTransport(historyResponses: []))
+        defer { vm.detachTransport() }
+        vm.updateStreamingAssistantText(" ")
+        let transcript = Fired()
+        withObservationTracking { _ = vm.liveAssistantTextShape } onChange: { transcript.count += 1 }
+        vm.updateStreamingAssistantText("Ready")
+        try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
+        #expect(transcript.count == 1)
+        vm.replaceMessages([OpenClawChatMessage(
+            role: "assistant", content: [.init(type: "text", text: "Ready")], timestamp: 1)])
+        #expect(vm.liveAssistantDisplayText == nil)
+        #expect(vm.liveAssistantTextShape == nil)
+        let restored = Fired()
+        withObservationTracking { _ = vm.liveAssistantTextShape } onChange: { restored.count += 1 }
+        vm.updateStreamingAssistantText("Ready now")
+        try vm.flushStreamingAssistantDisplay(scheduledID: #require(vm.streamPacing.scheduledID))
+        #expect(vm.liveAssistantDisplayText == "Ready now")
+        #expect(restored.count == 1)
     }
 }

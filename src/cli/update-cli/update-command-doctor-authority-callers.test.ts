@@ -3,8 +3,10 @@ import os from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
+import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as packageRoot from "../../infra/openclaw-root.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
@@ -177,19 +179,6 @@ function createResumingRun(params: Omit<Parameters<typeof createUpdateRun>[0], "
   return run;
 }
 
-function createMaintenance(finish: () => Promise<void> = async () => {}) {
-  return {
-    signal: new AbortController().signal,
-    run: <T>(operation: () => T) => operation(),
-    repairSqliteNoCow: async () => {},
-    enableSqliteReclamation: async () => {},
-    cleanupRetainedRuntimes: async () => {},
-    releaseState: vi.fn(async () => {}),
-    finish: vi.fn(finish),
-    release: vi.fn(async () => {}),
-  };
-}
-
 function firstRefusal() {
   const error = new Error("original authority refusal");
   let armed = false;
@@ -319,6 +308,7 @@ describe("unproved Doctor authority callers", () => {
       databasePath,
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: state.configPath,
         role: "gateway",
@@ -370,7 +360,7 @@ describe("unproved Doctor authority callers", () => {
           ? { kind: "data-at-risk", reason: "incomplete-migration" }
           : { kind: "deferred", reason: "coordinator-contention" },
       );
-      const maintenance = createMaintenance();
+      const maintenance = createDoctorMaintenanceFixture();
       vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockImplementation(async () => {
         if (boundary === "parent-admission" || unsafe) {
           throw refusal;
@@ -446,7 +436,14 @@ describe("unproved Doctor authority callers", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         runId: run.runId,
-        steps: [expect.objectContaining({ doctorLintFindings: [] })],
+        steps: [
+          expect.objectContaining({
+            name: "post-plugin doctor",
+            exitCode: 0,
+            deferredInspectionCheckIds: null,
+          }),
+          expect.objectContaining({ doctorLintFindings: [] }),
+        ],
       }),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(0);
@@ -472,9 +469,11 @@ describe("unproved Doctor authority callers", () => {
       vi.spyOn(os, "tmpdir").mockReturnValue(state.path("phase-artifacts"));
       let restored = false;
       const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue(
-        createMaintenance(async () => {
-          await Promise.resolve();
-          restored = true;
+        createDoctorMaintenanceFixture({
+          finish: vi.fn(async () => {
+            await Promise.resolve();
+            restored = true;
+          }),
         }),
       );
       let phasePath: string | undefined;

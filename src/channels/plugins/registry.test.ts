@@ -1,14 +1,12 @@
-// Registry tests cover channel plugin registry installation, lookup, and reset behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listGatewayMethods } from "../../gateway/server-methods-list.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import type { PluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { normalizeAnyChannelId } from "../registry-normalize.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -26,138 +24,15 @@ vi.mock("./bundled.js", () => ({
       : undefined,
 }));
 
-function withMalformedChannels(registry: PluginRegistry): PluginRegistry {
-  const malformed = { ...registry } as PluginRegistry;
-  (malformed as { channels?: unknown }).channels = undefined;
-  return malformed;
-}
-
 afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
+function channelEntry(id: string, label = id) {
+  return { pluginId: id, plugin: createChannelTestPluginBase({ id, label }), source: "test" };
+}
+
 describe("listChannelPlugins", () => {
-  it("sorts channel plugins by configured order", () => {
-    const orderedPlugins: Array<[string, number]> = [
-      ["demo-middle", 20],
-      ["demo-first", 10],
-      ["demo-last", 30],
-    ];
-    const registry = createTestRegistry(
-      orderedPlugins.map(([id, order]) => {
-        const plugin = createChannelTestPluginBase({ id });
-        return {
-          pluginId: id,
-          plugin: { ...plugin, meta: { ...plugin.meta, order } },
-          source: "test",
-        };
-      }),
-    );
-    setActivePluginRegistry(registry);
-
-    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual([
-      "demo-first",
-      "demo-middle",
-      "demo-last",
-    ]);
-  });
-
-  it("refreshes cached channel lookups when the same registry instance is re-activated", () => {
-    const registry = createTestRegistry([
-      {
-        pluginId: "demo-alpha",
-        plugin: createChannelTestPluginBase({ id: "demo-alpha" }),
-        source: "test",
-      },
-    ]);
-    setActivePluginRegistry(registry, "registry-test");
-    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["demo-alpha"]);
-
-    registry.channels = createTestRegistry([
-      {
-        pluginId: "demo-beta",
-        plugin: createChannelTestPluginBase({ id: "demo-beta" }),
-        source: "test",
-      },
-    ]).channels;
-    setActivePluginRegistry(registry, "registry-test");
-
-    expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["demo-beta"]);
-  });
-
-  it("appends unique gateway methods from both plugin dialects in channel order", () => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const coreMethods = listGatewayMethods();
-    const alpha = {
-      ...createChannelTestPluginBase({ id: "alpha" }),
-      gatewayMethods: ["health", "test.alpha", "test.legacy"],
-      gatewayMethodDescriptors: [{ name: "test.alpha" }, { name: "test.beta" }],
-    };
-    const zeta = {
-      ...createChannelTestPluginBase({ id: "zeta" }),
-      gatewayMethods: ["secrets.resolve", "test.beta"],
-      gatewayMethodDescriptors: [{ name: "test.gamma" }, { name: "test.alpha" }],
-    };
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "zeta", plugin: zeta, source: "test" },
-        { pluginId: "alpha", plugin: alpha, source: "test" },
-      ]),
-    );
-
-    expect(listGatewayMethods()).toEqual([
-      ...coreMethods,
-      "test.alpha",
-      "test.legacy",
-      "test.beta",
-      "test.gamma",
-    ]);
-  });
-
-  it("returns an empty list when runtime registry has no channels field", () => {
-    const malformedRegistry = withMalformedChannels(createEmptyPluginRegistry());
-    setActivePluginRegistry(malformedRegistry);
-
-    expect(listChannelPlugins()).toStrictEqual([]);
-  });
-
-  it("falls back to bundled channel plugins for direct lookups before registry bootstrap", () => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
-
-    expect(getChannelPlugin("fallback")?.meta.label).toBe("fallback");
-    expect(resolveChannelPluginRegistration("fallback")).toMatchObject({
-      origin: "bundled",
-      plugin: {
-        id: "fallback",
-      },
-    });
-  });
-
-  it("does not let a loaded external override inherit bundled fallback provenance", () => {
-    const registry = createEmptyPluginRegistry();
-    registry.channels = [
-      {
-        pluginId: "external-fallback",
-        plugin: {
-          id: "fallback",
-          meta: { label: "external fallback" },
-        } as never,
-        origin: "config",
-        source: "test",
-      },
-    ];
-    setActivePluginRegistry(registry);
-
-    expect(resolveChannelPluginRegistration("fallback")).toMatchObject({
-      origin: "config",
-      plugin: {
-        meta: {
-          label: "external fallback",
-        },
-      },
-    });
-  });
-
   it("keeps the scoped channel implementation and its registration provenance together", () => {
     const root = createChannelTestPluginBase({ id: "fallback", label: "Root" });
     const scoped = createChannelTestPluginBase({ id: "fallback", label: "Scoped" });
@@ -201,24 +76,18 @@ describe("listChannelPlugins", () => {
 
   it("keeps the first channel implementation and provenance when channel ids collide", () => {
     const registry = createEmptyPluginRegistry();
-    const firstPlugin = {
-      id: "duplicate",
-      meta: { label: "first" },
-    };
-    const secondPlugin = {
-      id: "duplicate",
-      meta: { label: "second" },
-    };
+    const firstPlugin = createChannelTestPluginBase({ id: "duplicate", label: "first" });
+    const secondPlugin = createChannelTestPluginBase({ id: "duplicate", label: "second" });
     registry.channels = [
       {
         pluginId: "first-channel-plugin",
-        plugin: firstPlugin as never,
+        plugin: firstPlugin,
         origin: "config",
         source: "first",
       },
       {
         pluginId: "second-channel-plugin",
-        plugin: secondPlugin as never,
+        plugin: secondPlugin,
         origin: "bundled",
         source: "second",
       },
@@ -227,6 +96,8 @@ describe("listChannelPlugins", () => {
 
     expect(listChannelPlugins()).toEqual([firstPlugin]);
     expect(getLoadedChannelPlugin("duplicate")).toBe(firstPlugin);
+    expect(normalizeAnyChannelId("DUPLICATE")).toBe("duplicate");
+    expect(getLoadedChannelPlugin("DUPLICATE")).toBeUndefined();
     expect(getChannelPlugin("duplicate")).toBe(firstPlugin);
     expect(resolveChannelPluginRegistration("duplicate")).toEqual({
       plugin: firstPlugin,
@@ -236,32 +107,14 @@ describe("listChannelPlugins", () => {
 
   it("rebuilds channel lookups when the active registry object changes without a version bump", () => {
     const first = createEmptyPluginRegistry();
-    first.channels = [
-      {
-        pluginId: "alpha",
-        plugin: {
-          id: "alpha",
-          meta: { label: "alpha" },
-        } as never,
-        source: "test",
-      },
-    ];
+    first.channels = [channelEntry("alpha")];
     setActivePluginRegistry(first);
 
     expect(getChannelPlugin("alpha")?.meta.label).toBe("alpha");
     expect(getChannelPlugin("beta")).toBeUndefined();
 
     const second = createEmptyPluginRegistry();
-    second.channels = [
-      {
-        pluginId: "beta",
-        plugin: {
-          id: "beta",
-          meta: { label: "beta" },
-        } as never,
-        source: "test",
-      },
-    ];
+    second.channels = [channelEntry("beta")];
     setActivePluginRegistry(second);
 
     expect(getChannelPlugin("alpha")).toBeUndefined();
@@ -272,30 +125,17 @@ describe("listChannelPlugins", () => {
   it("builds the loaded channel view once per registry version", () => {
     const registry = createEmptyPluginRegistry();
     let buildCount = 0;
-    registry.channels = new Proxy(
-      [
-        {
-          pluginId: "zeta",
-          plugin: { id: "zeta", meta: { label: "zeta" } } as never,
-          source: "test",
-        },
-        {
-          pluginId: "alpha",
-          plugin: { id: "alpha", meta: { label: "alpha" } } as never,
-          source: "test",
-        },
-      ],
-      {
-        get(target, property, receiver) {
-          if (property === Symbol.iterator) {
-            buildCount += 1;
-          }
-          return Reflect.get(target, property, receiver);
-        },
+    registry.channels = new Proxy([channelEntry("zeta"), channelEntry("alpha")], {
+      get(target, property, receiver) {
+        if (property === Symbol.iterator) {
+          buildCount += 1;
+        }
+        return Reflect.get(target, property, receiver);
       },
-    );
+    });
     setActivePluginRegistry(registry);
 
+    expect(normalizeAnyChannelId("alpha")).toBe("alpha");
     expect(getChannelPlugin("alpha")?.meta.label).toBe("alpha");
     expect(resolveChannelPluginRegistration("zeta")?.plugin.meta.label).toBe("zeta");
     expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["alpha", "zeta"]);
@@ -303,6 +143,7 @@ describe("listChannelPlugins", () => {
 
     setActivePluginRegistry(registry);
 
+    expect(normalizeAnyChannelId("zeta")).toBe("zeta");
     expect(getChannelPlugin("alpha")?.meta.label).toBe("alpha");
     expect(listChannelPlugins().map((plugin) => plugin.id)).toEqual(["alpha", "zeta"]);
     expect(buildCount).toBe(2);

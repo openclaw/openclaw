@@ -1,3 +1,4 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
@@ -7,9 +8,6 @@ import type { SlackCapabilitiesConfig } from "./types.slack.js";
 import type { TelegramCapabilitiesConfig } from "./types.telegram.js";
 
 type CapabilitiesConfig = TelegramCapabilitiesConfig | SlackCapabilitiesConfig;
-
-const isStringArray = (value: unknown): value is string[] =>
-  Array.isArray(value) && value.every((entry) => typeof entry === "string");
 
 function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): string[] | undefined {
   // Handle object-format capabilities (e.g., { inlineButtons: "dm" }) gracefully.
@@ -21,7 +19,6 @@ function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): st
   return normalized.length > 0 ? normalized : undefined;
 }
 
-/** Resolves normalized string capabilities for a channel/account config pair. */
 export function resolveChannelCapabilities(params: {
   cfg?: Partial<OpenClawConfig>;
   channel?: string | null;

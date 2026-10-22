@@ -23,20 +23,16 @@ export function buildCodexAppApprovalOverrides(
     if (!isJsonObject(entries)) {
       continue;
     }
-    const projected: Array<[string, JsonObject]> = [];
-    for (const [name, value] of Object.entries(entries).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
-      if (!isJsonObject(value) || (section === "tools" && keys && !keys.includes(name))) {
-        continue;
-      }
-      if (
-        Object.keys(fields).some((field) => value[field] !== undefined && value[field] !== null)
-      ) {
-        // Merge only approval fields, preserving native disabled tools and other settings.
-        projected.push([name, fields]);
-      }
-    }
+    // Merge only approval fields, preserving native disabled tools and other settings.
+    const projected = Object.entries(entries)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .filter(
+        ([name, value]) =>
+          isJsonObject(value) &&
+          (section !== "tools" || !keys || keys.includes(name)) &&
+          Object.keys(fields).some((field) => value[field] !== undefined && value[field] !== null),
+      )
+      .map(([name]): [string, JsonObject] => [name, fields]);
     if (projected.length > 0) {
       overrides[section] = Object.fromEntries(projected);
     }

@@ -1,5 +1,5 @@
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
@@ -8,44 +8,23 @@ import {
   resolvePersistedSelectedModelRef,
   type CliProviderClassifier,
 } from "../agents/model-selection.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-type SessionDisplayModelRow = {
+type SessionDisplayModelRow = Pick<
+  SessionEntry,
+  "model" | "modelProvider" | "modelOverride" | "providerOverride"
+> & {
   key: string;
-  model?: string;
-  modelProvider?: string;
-  modelOverride?: string;
-  providerOverride?: string;
 };
-
-type SessionDisplayModelRef = { provider: string; model: string };
-
-export function resolveSessionDisplayDefaults(
-  cfg: OpenClawConfig,
-  agentId?: string,
-): SessionDisplayModelRef {
-  const primary =
-    (agentId
-      ? resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model)
-      : undefined) ??
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
-    DEFAULT_MODEL;
-  return (
-    parseModelRef(primary, DEFAULT_PROVIDER, {
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    }) ?? { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }
-  );
-}
 
 function normalizeCliRuntimeDisplayRef(
   cfg: OpenClawConfig,
   agentId: string | undefined,
-  ref: SessionDisplayModelRef,
-  defaultRef: SessionDisplayModelRef,
+  ref: ModelRef,
+  defaultRef: ModelRef,
   classifyCliProvider: CliProviderClassifier,
-): SessionDisplayModelRef {
+): ModelRef {
   if (!classifyCliProvider(ref.provider)) {
     return ref;
   }
@@ -85,10 +64,15 @@ export function resolveSessionDisplayModelRef(
   row: SessionDisplayModelRow,
   classifyCliProvider: CliProviderClassifier = (provider) => isCliProvider(provider, cfg),
   ownerAgentId?: string,
-): SessionDisplayModelRef {
+): ModelRef {
   const agentId =
     ownerAgentId ?? (row.key.startsWith("agent:") ? row.key.split(":")[1] : undefined);
-  const defaultRef = resolveSessionDisplayDefaults(cfg, agentId);
+  const defaultRef = resolveDefaultModelForAgent({
+    cfg,
+    agentId,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  });
   const normalizedOverride = normalizeStoredOverrideModel({
     providerOverride: row.providerOverride,
     modelOverride: row.modelOverride,

@@ -82,7 +82,7 @@ const signalApprovalReactionTargets =
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
-    openStore: (storeParams) => getOptionalSignalRuntime()?.state.openKeyedStore(storeParams),
+    openStore: (storeParams) => getOptionalSignalRuntime()?.state.openKeyedStoreV2(storeParams),
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget,
   });
@@ -519,9 +519,4 @@ export async function maybeResolveSignalApprovalReaction(params: {
     logVerboseMessage: params.logVerboseMessage,
   });
   return true;
-}
-
-export function clearSignalApprovalReactionTargetsForTest(): void {
-  signalApprovalReactionTargets.clearForTest();
-  loadResolveApprovalOverGateway.clear();
 }

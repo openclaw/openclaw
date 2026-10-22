@@ -80,6 +80,7 @@ openclaw tui --local
 - Messages always go to the Gateway (or embedded runtime in local mode). Delivering the assistant's reply back out to a chat provider is a separate, off-by-default step.
 - The TUI is an internal source surface like WebChat, not a generic outbound channel. Harnesses that require `tools.message` for visible replies can satisfy the active TUI turn with a targetless `message.send`. Explicit provider delivery still uses normal configured channels and never falls back to `lastChannel`.
 - Delivery is fixed for the whole TUI session when it starts. Start with `openclaw tui --deliver` to turn it on. There is no `/deliver` slash command or Settings toggle to flip it mid-session. Restart the TUI to change it.
+- Delivered turns return to idle when their persisted completion arrives, even without a chat reply event. Escape clears stale local busy state after confirming that the session is idle; a run that is still finishing keeps its completion tracking.
 
 ## Pickers + overlays
 
@@ -94,6 +95,9 @@ The model picker opens immediately, showing a checking state if no models are kn
 In Gateway mode, it reuses the selected agent's last known list while refreshing in the
 background. Catalog changes update an open picker without clearing its search or
 moving its highlighted choice when that model is still present.
+It lists the current model and each provider's
+[recommended models](/concepts/recommended-models) first. Choose **All models (N)**
+to show the rest; typing a search always matches every model.
 
 ## Questions
 
@@ -175,11 +179,17 @@ Session controls:
 Session lifecycle:
 
 - `/new` (spawn a fresh, isolated session under a new key). It does not affect other TUI clients on the old session.
-- `/reset` (reset the current session key in place)
+- `/reset` (reset the current session key in place). `/reset soft [message]` is forwarded to the Gateway, which keeps the transcript and reruns startup; it is not available in local mode.
 - `/abort` (abort the active run)
 - `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
+
+During Gateway startup, messages and `/new` wait up to five minutes. Stop cancels
+requests that are still waiting for startup admission. Once a request is sent, the
+TUI keeps its response and original deadline; repeated input cannot submit a
+second copy while that response is pending. Stop still asks the Gateway to abort
+active runs.
 
 When the current session is reset, the TUI reports it after refreshing the transcript. This includes resets started by another client.
 
@@ -210,7 +220,7 @@ No pairing code is requested for supported local native bootstrap. Chrome still
 requires its own extension installation and permission approval, and existing
 pairings and automatic-setup opt-outs are preserved.
 
-These commands are deterministic local CLI operations, not messages to the agent.
+These commands are local CLI operations, not messages to the agent.
 Do not paste credentials into them. `/stop`, `/abort`, Escape, or exiting the TUI
 cancels a pending setup command. After interruption, inspect again to reconcile
 any preparation that already completed. When the TUI runs through SSH, setup runs
@@ -354,7 +364,7 @@ No output after sending a message:
 
 ## Connection troubleshooting
 
-- `disconnected`: ensure the Gateway is running and your `--url/--token/--password` are correct.
+- `disconnected`: check that the Gateway is running and your `--url/--token/--password` are correct.
 - No agents in picker: check `openclaw agents list` and your routing config.
 - Empty session picker: you might be in global scope or have no sessions yet.
 

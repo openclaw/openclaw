@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { asNullableRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
+import { publishConfigHealthChanged } from "../config/io.health-state.kernel.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import { migrationFileExists } from "./state-migrations.fs.js";
+import { safeStatSync } from "./path-guards.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { LegacyStateDetection } from "./state-migrations.types.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 type LegacyConfigHealthImportDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
@@ -81,7 +83,7 @@ function retireLegacyConfigHealthSource(params: {
   warnings: string[];
 }): void {
   const archivedPath = `${params.sourcePath}.migrated`;
-  if (!migrationFileExists(archivedPath)) {
+  if (!safeStatSync(archivedPath)?.isFile()) {
     archiveLegacyImportSource({
       sourcePath: params.sourcePath,
       label: "config health state",
@@ -107,17 +109,18 @@ export function migrateLegacyConfigHealth(params: {
 }): { changes: string[]; warnings: string[] } {
   const { sourcePath } = params.detected;
   const warnings: string[] = [];
-  if (!migrationFileExists(sourcePath)) {
+  if (!safeStatSync(sourcePath)?.isFile()) {
     return { changes: [], warnings };
   }
   let entries: LegacyConfigHealthEntry[];
   try {
-    entries = normalizeLegacyConfigHealthFile(JSON.parse(fs.readFileSync(sourcePath, "utf8")));
+    const source = decodeUtf8Input(fs.readFileSync(sourcePath), "Legacy config health state");
+    entries = normalizeLegacyConfigHealthFile(JSON.parse(source));
   } catch (error) {
-    return {
-      changes: [],
-      warnings: [`Failed reading legacy config health state ${sourcePath}: ${String(error)}`],
-    };
+    warnings.push(
+      `Failed reading legacy config health state ${sourcePath}: ${String(error)} Source left unchanged; restore valid UTF-8 JSON from a verified backup and rerun openclaw doctor --fix.`,
+    );
+    return { changes: [], warnings };
   }
   let changes: string[];
   try {
@@ -175,18 +178,19 @@ export function migrateLegacyConfigHealth(params: {
               .values(entriesToInsert.map(configHealthRow)),
           );
         }
-        const migrationChanges: string[] = [];
-        if (entriesToInsert.length > 0) {
-          migrationChanges.push(
-            `Migrated ${entriesToInsert.length} config health ${entriesToInsert.length === 1 ? "entry" : "entries"} → shared SQLite state`,
-          );
+        if (entriesToInsert.length > 0 || reconciledCount > 0) {
+          publishConfigHealthChanged(db);
         }
-        if (reconciledCount > 0) {
-          migrationChanges.push(
-            `Reconciled ${reconciledCount} config health ${reconciledCount === 1 ? "entry" : "entries"} → shared SQLite state`,
-          );
-        }
-        return migrationChanges;
+        return [
+          { action: "Migrated", count: entriesToInsert.length },
+          { action: "Reconciled", count: reconciledCount },
+        ].flatMap(({ action, count }) =>
+          count > 0
+            ? [
+                `${action} ${count} config health ${count === 1 ? "entry" : "entries"} → shared SQLite state`,
+              ]
+            : [],
+        );
       },
       { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
     );

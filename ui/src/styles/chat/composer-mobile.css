@@ -1,0 +1,208 @@
+/* The wrapper leaves the desktop context in its existing flex layout. */
+.agent-chat__composer-float {
+  display: contents;
+}
+
+/* Native mobile presentation is supplied by the pane, independently of width. */
+.agent-chat__composer-shell[data-mobile-composer="true"] {
+  --chat-composer-bottom-gap: 10px;
+  --chat-composer-top-margin: 0px;
+
+  gap: 6px;
+  /* The app already consumes safe area, including keyboard dismissal. */
+  margin-block: 0 var(--chat-composer-bottom-gap);
+  font-family: var(--font-body);
+}
+
+/* One floating stack retains native notices/questions/recovery above the mobile
+   presenters. The transcript owner consumes its bounds for end clearance. */
+.agent-chat__composer-shell[data-mobile-composer="true"] > .agent-chat__composer-float {
+  position: absolute;
+  inset-inline: 0;
+  bottom: calc(100% + 6px);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  max-height: max(0px, calc(100cqh - 100% - 8px));
+  pointer-events: none;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"] > .agent-chat__composer-float > * {
+  pointer-events: auto;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"]
+  > .agent-chat__composer-float:has(> .agent-chat__mobile-approval) {
+  bottom: calc(100% + 8px);
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"] .chat-activity-pills {
+  flex: 0 0 auto;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__mobile-approval {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Only the unfocused one-line presentation overrides the native surface.
+   Editing inherits composer-surface.css, including its textarea autogrow. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__input {
+  --chat-composer-radius: calc(22px * var(--openclaw-corner-radius-scale));
+  --chat-composer-min-height: 52px;
+  --chat-composer-editor-line: 22px;
+  --chat-composer-editor-inset-block: 0px;
+  --chat-composer-control-size: 32px;
+  --chat-composer-chip-height: 32px;
+  --chat-composer-send-size: 36px;
+
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-rows: max-content 36px;
+  align-content: start;
+  align-items: center;
+  gap: 0 2px;
+  padding: 7px 8px;
+  border-radius: calc(28px * var(--openclaw-corner-radius-scale));
+}
+
+/* Replies, attachments, pending reads, Goal mode and Talk keep their real height. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-lede {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  align-self: stretch;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-input-row {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: center;
+  padding: 0;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-combobox
+  > :is(textarea, .agent-chat__composer-placeholder, .agent-chat__composer-prediction) {
+  box-sizing: border-box;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
+  padding: 0;
+  font-family: var(--font-body);
+  font-weight: 500;
+  line-height: 22px;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-combobox
+  > textarea {
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  :is(.agent-chat__composer-footer, .agent-chat__composer-lead, .agent-chat__composer-trail) {
+  display: contents;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-lead
+  > :first-child {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-actions {
+  grid-column: 3;
+  grid-row: 2;
+  justify-self: end;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__composer-context,
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  :is(.agent-chat__composer-lead > :not(:first-child), .agent-chat__composer-controls) {
+  display: none;
+}
+
+/* Keep the hint and typed text in the same type style across both layouts. */
+.agent-chat__composer-shell[data-mobile-composer="true"]
+  .agent-chat__composer-combobox
+  > :is(textarea, .agent-chat__composer-placeholder) {
+  font-family: var(--font-body);
+  font-weight: 500;
+}
+
+/* The editable row uses its final geometry during the surface reveal. */
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__composer-input-row {
+  flex-shrink: 0;
+}
+
+/* Prediction actions are native main content in addition to the compact text.
+   Reserve their intrinsic height here; editing uses the native content flow. */
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__input:has(.agent-chat__composer-combobox[data-prediction]) {
+  grid-template-rows: max-content max-content 36px;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__input:has(.agent-chat__composer-combobox[data-prediction])
+  :is(.agent-chat__composer-lead > :first-child, .agent-chat__composer-actions) {
+  grid-row: 3;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__input
+  .agent-chat__composer-input-row:has(.agent-chat__composer-combobox[data-prediction]) {
+  grid-column: 1 / -1;
+  padding: 0 6px 6px;
+  transform: none;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"] .agent-chat__input[data-incognito="true"] {
+  border-style: dashed;
+  border-color: var(--chat-composer-hairline);
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"] .chat-queue {
+  --chat-queue-row-height: 36px;
+
+  min-height: 36px;
+  font-family: var(--font-body);
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"]
+  .chat-queue__scroll[data-scrollable="true"] {
+  height: auto;
+  max-height: min(28dvh, 149px);
+  overscroll-behavior: contain;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"] .chat-queue__text {
+  font-weight: 500;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__input-btn--attach {
+  width: 32px;
+  min-width: 32px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.agent-chat__composer-shell[data-mobile-composer="true"][data-composer-editing="false"]
+  .agent-chat__input-btn--attach
+  svg {
+  width: 20px;
+  height: 20px;
+}

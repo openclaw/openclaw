@@ -1,3 +1,4 @@
+import { normalizeModelCostConfig } from "@openclaw/llm-core";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildAnthropicReplayPolicyForModel,
@@ -42,6 +43,8 @@ export function defineSelfHostedOpenAICompatibleProvider(
 ): ReturnType<typeof definePluginEntry> {
   // Provider entries load during plugin discovery; setup/wizard code stays lazy until used.
   const loadProviderSetup = async () => await import("./provider-setup.js");
+  // Catalog discovery runs under a deadline; keep setup and auth-write code out of its import.
+  const loadDiscovery = async () => await import("../plugins/provider-self-hosted-discovery.js");
   return definePluginEntry({
     id: options.id,
     name: `${options.label} Provider`,
@@ -87,8 +90,8 @@ export function defineSelfHostedOpenAICompatibleProvider(
         catalog: {
           order: "late",
           run: async (ctx) => {
-            const setup = await loadProviderSetup();
-            return await setup.discoverOpenAICompatibleSelfHostedProvider({
+            const discovery = await loadDiscovery();
+            return await discovery.discoverOpenAICompatibleSelfHostedProvider({
               ctx,
               providerId: options.id,
               buildProvider: async (params) => {
@@ -96,7 +99,7 @@ export function defineSelfHostedOpenAICompatibleProvider(
                   /\/+$/,
                   "",
                 );
-                const models = await setup.discoverOpenAICompatibleLocalModels({
+                const models = await discovery.discoverOpenAICompatibleLocalModels({
                   baseUrl,
                   apiKey: params?.apiKey,
                   label: options.label,
@@ -135,6 +138,7 @@ export type {
 export {
   bindsClaudeThinkingPrefix,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
@@ -175,8 +179,6 @@ export { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 export {
   GPT5_BEHAVIOR_CONTRACT,
   GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
-  GPT5_FRIENDLY_PROMPT_OVERLAY,
-  GPT5_HEARTBEAT_PROMPT_OVERLAY,
   isGpt5ModelId,
   normalizeGpt5PromptOverlayMode,
   resolveGpt5PromptOverlayMode,
@@ -204,16 +206,15 @@ export {
   buildStrictAnthropicReplayPolicy,
 };
 
-/** Compare canonical flat rates without assuming display-only models include cost metadata. */
+/** Compare canonical rates and tiers; display-only models may omit cost metadata. */
 export function modelCostsEqual(
   current: ProviderRuntimeModel["cost"] | undefined,
   expected: ProviderRuntimeModel["cost"],
 ): boolean {
   return (
-    current?.input === expected.input &&
-    current?.output === expected.output &&
-    current?.cacheRead === expected.cacheRead &&
-    current?.cacheWrite === expected.cacheWrite
+    current !== undefined &&
+    JSON.stringify(normalizeModelCostConfig(current)) ===
+      JSON.stringify(normalizeModelCostConfig(expected))
   );
 }
 

@@ -1,6 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Connection-failure hint classification shared by the login gate.
 import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,
@@ -69,11 +68,10 @@ type PairingHint = {
 };
 
 export function resolvePairingHint(
-  connected: boolean,
   lastError: string | null,
   lastErrorCode?: string | null,
 ): PairingHint | null {
-  if (connected || !lastError) {
+  if (!lastError) {
     return null;
   }
   const pairing = readConnectPairingRequiredMessage(lastError);
@@ -97,8 +95,6 @@ export function resolvePairingHint(
 }
 
 /**
- * Return the connection auth hint to show, if any.
- *
  * Keep fallback string matching narrow so generic "connect failed" close reasons
  * do not get misclassified as token/password problems.
  */
@@ -145,11 +141,10 @@ export function resolveAuthHintKind(params: {
 }
 
 export function shouldShowInsecureContextHint(
-  connected: boolean,
   lastError: string | null,
   lastErrorCode?: string | null,
 ): boolean {
-  if (connected || !lastError) {
+  if (!lastError) {
     return false;
   }
   if (lastErrorCode) {

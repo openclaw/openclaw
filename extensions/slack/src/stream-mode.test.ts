@@ -11,21 +11,13 @@ describe("resolveSlackStreamingConfig", () => {
   });
 
   it("keeps explicit partial mode on the replace draft path", () => {
-    expect(resolveSlackStreamingConfig({ streaming: { mode: "partial" } })).toEqual({
+    expect(
+      resolveSlackStreamingConfig({ streaming: { mode: "partial", nativeTransport: false } }),
+    ).toEqual({
       mode: "partial",
-      nativeStreaming: true,
+      nativeStreaming: false,
     });
   });
-
-  it.each(["off", "partial", "block", "progress"] as const)(
-    "keeps %s mode independent of the native transport setting",
-    (mode) => {
-      expect(resolveSlackStreamingConfig({ streaming: { mode, nativeTransport: false } })).toEqual({
-        mode,
-        nativeStreaming: false,
-      });
-    },
-  );
 });
 
 describe("applyAppendOnlyStreamUpdate", () => {

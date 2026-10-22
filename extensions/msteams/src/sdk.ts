@@ -9,7 +9,7 @@ import {
   msteamsConnectorEffectMiddleware,
   msteamsConnectorHandoffInterceptor,
 } from "./send-handoff.js";
-import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
+import type { MSTeamsCredentials } from "./token-config.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
 type MSTeamsHttpServerAdapter =
@@ -45,34 +45,24 @@ export type MSTeamsApp = {
   };
   api: {
     serviceUrl?: string;
+    fromServiceUrl(options: { serviceUrl: string }): MSTeamsApp["api"];
     teams: {
       getById(teamId: string): Promise<{ aadGroupId?: string }>;
     };
     conversations: {
       activities(conversationId: string): {
         create(activity: unknown): Promise<{ id?: string }>;
+        createTargeted(activity: unknown): Promise<{ id?: string }>;
         update(activityId: string, activity: unknown): Promise<unknown>;
+        updateTargeted(activityId: string, activity: unknown): Promise<unknown>;
         delete(activityId: string): Promise<unknown>;
       };
     };
   };
 };
 
-type AzureAccessToken = {
-  token?: string;
-} | null;
-
-type AzureTokenCredential = {
-  getToken: (scope: string | string[]) => Promise<AzureAccessToken>;
-};
-
-type AzureIdentityModule = {
-  ClientCertificateCredential: new (
-    tenantId: string,
-    clientId: string,
-    options: { certificate: string },
-  ) => AzureTokenCredential;
-};
+type AzureTokenCredential = Pick<import("@azure/identity").ClientCertificateCredential, "getToken">;
+type AzureIdentityModule = Pick<typeof import("@azure/identity"), "ClientCertificateCredential">;
 
 const AZURE_IDENTITY_MODULE = "@azure/identity";
 
@@ -115,10 +105,10 @@ type CreateMSTeamsAppOptions = {
   httpClient?: unknown;
 };
 
-async function createMSTeamsApp(
+export async function loadMSTeamsSdkWithAuth(
   creds: MSTeamsCredentials,
   options?: CreateMSTeamsAppOptions,
-): Promise<MSTeamsApp> {
+): Promise<{ app: MSTeamsApp }> {
   const { App, cloudFromName } = await loadSdkModules();
   const privateQaRuntime = resolveMSTeamsPrivateQaRuntime();
   // SDK 2.0.11+ merges plain client headers with its own User-Agent identity.
@@ -152,32 +142,28 @@ async function createMSTeamsApp(
       : {}),
   };
 
-  if (creds.type === "federated") {
-    // Teams SDK otherwise lets ambient CLIENT_SECRET override both federated modes.
-    return await createFederatedApp(creds, App, { clientSecret: "", ...appOptions });
-  }
-  return new App({
-    clientId: creds.appId,
-    clientSecret: creds.appPassword,
-    tenantId: creds.tenantId,
-    ...appOptions,
-  } as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp;
-}
-
-async function createFederatedApp(
-  creds: MSTeamsFederatedCredentials,
-  App: typeof import("@microsoft/teams.apps").App,
-  appOptions: Record<string, unknown>,
-): Promise<MSTeamsApp> {
-  if (creds.useManagedIdentity) {
-    // The SDK handles managed identity natively — pass managedIdentityClientId
-    // and it selects the right credential flow (system MI, user MI, or FIC).
-    return new App({
+  const createApp = (
+    auth: Pick<
+      NonNullable<ConstructorParameters<typeof App>[0]>,
+      "clientSecret" | "managedIdentityClientId" | "token"
+    >,
+  ) => ({
+    app: new App({
       clientId: creds.appId,
       tenantId: creds.tenantId,
-      managedIdentityClientId: creds.managedIdentityClientId ?? "system",
+      ...auth,
       ...appOptions,
-    } as unknown as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp;
+    } as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp,
+  });
+
+  if (creds.type !== "federated") {
+    return createApp({ clientSecret: creds.appPassword });
+  }
+  // Teams SDK otherwise lets ambient CLIENT_SECRET override both federated modes.
+  appOptions.clientSecret = "";
+  if (creds.useManagedIdentity) {
+    // The SDK handles system MI, user MI, and FIC through this option.
+    return createApp({ managedIdentityClientId: creds.managedIdentityClientId ?? "system" });
   }
 
   // Certificate-based auth — the SDK doesn't have built-in cert support,
@@ -193,15 +179,6 @@ async function createFederatedApp(
     throw new Error("Failed to read certificate file: the configured credential is unavailable.");
   }
 
-  return createCertificateApp(creds, privateKey, App, appOptions);
-}
-
-function createCertificateApp(
-  creds: MSTeamsFederatedCredentials,
-  privateKey: string,
-  App: typeof import("@microsoft/teams.apps").App,
-  appOptions: Record<string, unknown>,
-): MSTeamsApp {
   let credentialPromise: Promise<AzureTokenCredential> | null = null;
 
   const tokenProvider = async (scope: string | string[]): Promise<string> => {
@@ -220,12 +197,7 @@ function createCertificateApp(
     return token.token;
   };
 
-  return new App({
-    clientId: creds.appId,
-    tenantId: creds.tenantId,
-    token: tokenProvider,
-    ...appOptions,
-  } as unknown as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp;
+  return createApp({ token: tokenProvider });
 }
 
 export function createMSTeamsTokenProvider(
@@ -255,12 +227,4 @@ export function createMSTeamsTokenProvider(
       return token?.toString() ?? "";
     },
   };
-}
-
-export async function loadMSTeamsSdkWithAuth(
-  creds: MSTeamsCredentials,
-  options?: CreateMSTeamsAppOptions,
-) {
-  const app = await createMSTeamsApp(creds, options);
-  return { app };
 }

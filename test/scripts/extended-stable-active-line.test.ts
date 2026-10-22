@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -9,6 +9,12 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const nodeExecutable = resolveTestNodeExecPath();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const mainQuery = [
+  "api",
+  "repos/openclaw/openclaw/contents/package.json?ref=refs/heads/main",
+  "--jq",
+  ".content",
+];
 
 describe("extended-stable live publication eligibility", () => {
   it("keeps only the trailing completed month eligible across the year boundary", () => {
@@ -19,20 +25,12 @@ describe("extended-stable live publication eligibility", () => {
   });
 
   it.skipIf(process.platform === "win32").each([
-    { mainVersion: "2026.8.1", expectedStatus: 42, expectedError: "" },
-    {
-      mainVersion: "2026.9.1",
-      expectedStatus: 1,
-      expectedError: "only the trailing completed month",
-    },
-    {
-      mainVersion: "unavailable",
-      expectedStatus: 1,
-      expectedError: "fixture main API unavailable",
-    },
-  ])(
-    "checks live main $mainVersion before entering the parent's mutation-capable publication phase",
-    ({ mainVersion, expectedStatus, expectedError }) => {
+    ["2026.8.1", 42, ""],
+    ["2026.9.1", 1, "only the trailing completed month"],
+    ["unavailable", 1, "fixture main API unavailable"],
+  ] as const)(
+    "checks live main %s before entering the parent's mutation-capable publication phase",
+    (mainVersion, expectedStatus, expectedError) => {
       const root = tempDirs.make("extended-stable-dispatch-");
       const bin = join(root, "bin");
       const harness = join(root, ".release-harness/scripts");
@@ -40,38 +38,33 @@ describe("extended-stable live publication eligibility", () => {
       mkdirSync(join(harness, "lib"), { recursive: true });
       for (const script of [
         "openclaw-npm-extended-stable-release.mjs",
+        "plugin-sdk-api-release-evidence.mjs",
         "lib/release-version.mjs",
       ]) {
-        writeFileSync(join(harness, script), readFileSync(join("scripts", script)));
+        copyFileSync(join("scripts", script), join(harness, script));
       }
-      // Keep the real sourced helper and stop at the next phase boundary. This
-      // prevents all publishing while proving the active case crosses admission.
+      // Stop at the next phase boundary: prove admission without publishing.
       writeFileSync(
         join(harness, "lib/release-publish-children.sh"),
         `${readFileSync("scripts/lib/release-publish-children.sh", "utf8")}\nverify_release_tag_target() { echo admitted >> "$EVENTS"; exit 42; }\n`,
       );
       const events = join(root, "events");
+      const executable = (name: string, source: string) =>
+        writeFileSync(join(bin, name), source, { mode: 0o755 });
       writeFileSync(events, "");
-      writeFileSync(join(bin, "node"), `#!/bin/sh\nexec "${nodeExecutable}" "$@"\n`, {
-        mode: 0o755,
-      });
-      writeFileSync(
-        join(bin, "gh"),
+      executable("node", `#!/bin/sh\nexec "${nodeExecutable}" "$@"\n`);
+      executable(
+        "gh",
         `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
+require("node:assert/strict").deepEqual(args, ${JSON.stringify(mainQuery)});
 fs.appendFileSync(process.env.EVENTS, JSON.stringify(args) + "\\n");
-if (JSON.stringify(args) !== JSON.stringify(["api", "repos/openclaw/openclaw/contents/package.json?ref=refs/heads/main", "--jq", ".content"])) {
-  process.stderr.write("Unexpected GitHub operation");
-  process.exit(90);
-}
 if (${JSON.stringify(mainVersion)} === "unavailable") {
-  process.stderr.write("fixture main API unavailable");
-  process.exit(1);
+  throw new Error("fixture main API unavailable");
 }
 process.stdout.write(${JSON.stringify(Buffer.from(JSON.stringify({ version: mainVersion })).toString("base64"))});
 `,
-        { mode: 0o755 },
       );
       const workflow = parse(
         readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),
@@ -110,12 +103,7 @@ process.stdout.write(${JSON.stringify(Buffer.from(JSON.stringify({ version: main
       }
       const calls = readFileSync(events, "utf8").trim().split("\n");
       expect(calls).toEqual([
-        JSON.stringify([
-          "api",
-          "repos/openclaw/openclaw/contents/package.json?ref=refs/heads/main",
-          "--jq",
-          ".content",
-        ]),
+        JSON.stringify(mainQuery),
         ...(expectedStatus === 42 ? ["admitted"] : []),
       ]);
     },

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { encodeRun, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import { inspectUpdateRunDriver } from "./update-run-driver.js";
@@ -12,10 +12,10 @@ import type {
   InterruptedUpdateSettlementResult,
 } from "./update-run-interruption-contract.js";
 import {
+  decodeRun,
   hasStoredUpdateRecovery,
   readActiveUpdateRun,
   readLatestUpdateRun,
-  readUpdateRunRecord,
 } from "./update-run-read.kernel.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
@@ -75,9 +75,9 @@ export function persistInterruptedUpdateObservation(
   options: UpdateRunLedgerOptions,
   assertCurrent: (stage: "transaction" | "commit") => void,
 ): InterruptedUpdateSettlementResult {
+  assertCurrent("transaction");
   return runExistingOpenClawStateWriteTransaction(
     ({ db }) => {
-      assertCurrent("transaction");
       const accept = (run: UpdateRunRecord | undefined): InterruptedUpdateSettlementResult => {
         assertCurrent("commit");
         return { accepted: true, run };
@@ -106,7 +106,7 @@ export function persistInterruptedUpdateObservation(
       const uncertain = input.cleanup === "pending" || input.cleanup === "unknown";
       const verification = uncertain ? undefined : input.verification;
       if (!verification && previous && input.cleanup === undefined) {
-        return { accepted: true, run: current };
+        return accept(current);
       }
       upsertStep(current, {
         step: "reconcile:settle",
@@ -117,14 +117,15 @@ export function persistInterruptedUpdateObservation(
       if (!verification && previous) {
         // Cleanup publication is diagnostic, not updater activity or a new abandonment window.
         const row = encodeRun(current, options);
-        executeSqliteQuerySync(
+        const persisted = executeSqliteQueryTakeFirstSync(
           db,
           getNodeSqliteKysely<Pick<DB, "update_runs">>(db)
             .updateTable("update_runs")
             .set({ steps_json: row.steps_json })
-            .where("run_id", "=", current.runId),
+            .where("run_id", "=", current.runId)
+            .returningAll(),
         );
-        return accept(readUpdateRunRecord(db, current.runId));
+        return accept(persisted ? decodeRun(persisted) : undefined);
       }
       if (!verification) {
         return accept(persistRun(db, current, options));

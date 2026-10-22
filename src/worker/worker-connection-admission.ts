@@ -29,11 +29,6 @@ import { closeInvalidWorkerFrame } from "./worker-connection-frames.js";
 const validateAdmissionResponse = lazyCompile(WorkerAdmissionResponseFrameSchema);
 const validateCloseReason = lazyCompile(WorkerProtocolCloseReasonSchema);
 
-const RETRYABLE_CLOSE_REASONS = new Set<WorkerProtocolCloseReason>([
-  "gateway-shutdown",
-  "gateway-unavailable",
-]);
-
 type WorkerConnectionAttemptOptions = {
   attemptTimeoutMs: number;
   connectionOptions: WorkerConnectionOptions;
@@ -73,7 +68,7 @@ function matchesAdmission(connectParams: WorkerConnectParams, hello: WorkerHello
 }
 
 export function isRetryableWorkerCloseReason(reason: WorkerProtocolCloseReason): boolean {
-  return RETRYABLE_CLOSE_REASONS.has(reason);
+  return reason === "gateway-shutdown" || reason === "gateway-unavailable";
 }
 
 export function connectWorkerConnectionAttempt(

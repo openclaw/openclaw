@@ -1,5 +1,9 @@
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import { acquireWithWait } from "../../infra/acquire-with-wait.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import type { UpdateRunPhasePatch } from "../../infra/update-run-mutation.types.js";
 import type { UpdateRunPhase, UpdateRunStep } from "../../infra/update-run-record.js";
@@ -9,11 +13,16 @@ import {
   recordUpdateRunStepAsync,
   type UpdateRunWriteOptions,
 } from "../../infra/update-run-write.async.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { sleep } from "../../utils/sleep.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import type { UpdateCommandExecutionGuards } from "./update-command-execution.types.js";
 import { captureUpdateCommandExecutorAuthority } from "./update-command-executor.js";
-import { retainMutableUpdateSignalWrite } from "./update-command-mutable-signals.js";
+import {
+  recordMutableUpdateSignalPhase,
+  retainMutableUpdateSignalWrite,
+} from "./update-command-mutable-signals.js";
 import { assertUpdateCommandRecoveryState } from "./update-command-recovery.js";
 
 type PhaseOwner = Readonly<{
@@ -38,78 +47,101 @@ export function createUpdateCommandExecutionGuards(
   owner?: PhaseOwner,
 ) {
   const run = opts.run;
-  const runId = run?.runId;
-  const phaseOwner = owner ? { ...owner } : undefined;
   let executor = run?.executorFence;
   const requester = run?.requesterAuthority;
   let stateHandedOff = false;
-  const assertInvocation = (phase?: "restore", readRecovery = true) => {
+  const assertInvocation = (phase?: "restore") => {
     const readStatePolicy = !stateHandedOff && phase !== "restore";
-    if (opts.recovery || (readRecovery && readStatePolicy)) {
+    if (readStatePolicy && requester?.isCurrent() === false) {
+      throw new UpdateRequesterRevokedError();
+    }
+    if (opts.recovery || readStatePolicy) {
       assertUpdateCommandRecoveryState(opts);
     }
-    if (
-      opts.run !== run ||
-      run?.runId !== runId ||
-      run?.executorFence !== executor ||
-      run?.requesterAuthority !== requester ||
-      (readStatePolicy && requester?.isCurrent() === false)
-    ) {
+  };
+  const assertCurrent = (phase?: "restore") => {
+    if (phase !== "restore" && run?.interrupted) {
       throw new UpdateRequesterRevokedError();
+    }
+    executor?.assertCurrent();
+    assertInvocation(phase);
+  };
+  const waitForCurrent = async () => {
+    // Only retry the read, never the mutation it protects. Keep cancellation and
+    // retained executor authority live while another process owns maintenance.
+    const deadline = run?.deadline;
+    const deadlineMs = Math.min(performance.now() + 30_000, deadline?.deadlineMs ?? Infinity);
+    const signal = resolveCommandProcessSignal(deadline?.signal);
+    let contention: unknown;
+    try {
+      await acquireWithWait({
+        acquire: () => {
+          signal?.throwIfAborted();
+          assertCurrent();
+        },
+        shouldRetry: (error) => {
+          if (!isStateDatabaseMaintenanceContention(error)) {
+            return false;
+          }
+          contention = error;
+          return true;
+        },
+        deadlineMs,
+        pollIntervalMs: 50,
+        maxPollIntervalMs: 250,
+        sleep: (ms) => sleep(ms, signal),
+      });
+    } catch (cause) {
+      const deadlineExpired =
+        deadline?.timeout &&
+        (cause === deadline.signal.reason ||
+          (cause instanceof Error && cause.cause === deadline.signal.reason));
+      const maintenance = isStateDatabaseMaintenanceContention(cause)
+        ? cause
+        : deadlineExpired
+          ? contention
+          : undefined;
+      if (!maintenance) {
+        throw cause;
+      }
+      throw new UpdatePreMutationError(
+        "state-maintenance-busy",
+        `Update deferred while waiting for state maintenance. ${formatErrorMessage(maintenance)} Let the maintenance owner finish, then retry openclaw update.`,
+        { cause },
+      );
     }
   };
   const captureWriteOptions = (): ReturnType<
     UpdateCommandExecutionGuards["captureWriteOptions"]
   > => {
     const assertAccepting = () => {
-      if (phaseOwner?.kind !== "package-compensation" && run?.interrupted) {
+      if (owner?.kind !== "package-compensation" && run?.interrupted) {
         throw new UpdateRequesterRevokedError();
       }
     };
     assertAccepting();
-    const capturedExecutor = executor;
-    const capturedHandoff = stateHandedOff;
-    const env = run?.env;
-    const assertCurrent = () => {
-      if (executor !== capturedExecutor || stateHandedOff !== capturedHandoff || run?.env !== env) {
-        throw new UpdateRequesterRevokedError();
-      }
-      if (phaseOwner) {
-        if (opts.recovery) {
-          assertUpdateCommandRecoveryState(opts);
-        }
-        if (opts.run !== run || run?.runId !== runId || run?.executorFence !== capturedExecutor) {
-          throw new UpdateRequesterRevokedError();
-        }
-        phaseOwner.assertCurrent();
-      } else {
-        assertInvocation(undefined, false);
-        capturedExecutor?.assertCurrent();
-      }
-    };
-    assertCurrent();
-    const capturedEnv = cloneEnvWithPlatformSemantics(env ?? process.env);
+    const capturedEnv = cloneEnvWithPlatformSemantics(run?.env ?? process.env);
     const context = captureOpenClawStateWorkerContext({ env: capturedEnv });
     return {
       env: capturedEnv,
       context,
-      assertCurrent,
+      // Driver-only wait; these writes run in the worker, never on the Gateway event loop.
+      busyTimeoutMs: run?.busyTimeoutMs ?? 120_000,
       assertAccepting,
       retainSettlement: (completion: Promise<void>) =>
         retainMutableUpdateSignalWrite(run, completion),
-      ...(phaseOwner || !capturedHandoff ? { requireNoRecovery: true as const } : {}),
+      ...(owner || !stateHandedOff ? { requireNoRecovery: true as const } : {}),
     } satisfies UpdateRunWriteOptions;
   };
   const recordPhase = async (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => {
     if (run) {
+      owner?.assertCurrent();
       const captured = captureWriteOptions();
       await recordUpdateRunPhaseAsync(run.runId, phase, patch, captured);
-      if (phaseOwner?.kind === "current-core-finalization") {
-        captured.assertAccepting();
-      }
+      recordMutableUpdateSignalPhase(run, phase);
     }
   };
-  if (phaseOwner) {
+  if (owner) {
     return { recordPhase };
   }
   return {
@@ -120,11 +152,7 @@ export function createUpdateCommandExecutionGuards(
         throw new Error("Update step receipt requires an admitted run.");
       }
       const captured = captureWriteOptions();
-      const record = await recordUpdateRunStepAsync(run.runId, step, captured);
-      captured.context.admission.assertCurrent();
-      captured.assertCurrent();
-      captured.assertAccepting();
-      return record;
+      return await recordUpdateRunStepAsync(run.runId, step, captured);
     },
     onStateHandoff: () => {
       stateHandedOff = true;
@@ -140,19 +168,13 @@ export function createUpdateCommandExecutionGuards(
       if (authority.installKey !== resolveUpdateInstallRoot(root)) {
         throw new UpdateRequesterRevokedError();
       }
-      assertUpdateCommandRecoveryState(opts);
       run.executorFence = acquired;
       executor = acquired;
     },
     // Forward admission already checked policy. Compensation retains native
     // custody in a separate lease database while the source family is excluded.
-    assertCurrent: (phase?: "restore") => {
-      if (phase !== "restore" && run?.interrupted) {
-        throw new UpdateRequesterRevokedError();
-      }
-      assertInvocation(phase);
-      executor?.assertCurrent();
-    },
+    assertCurrent,
+    waitForCurrent,
     // This is not native authority. The Doctor caller must first bind its child
     // through the real executor, which checks both retained and candidate owners.
     assertBoundChildCurrent: () => assertInvocation(),

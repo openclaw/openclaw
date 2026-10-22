@@ -1,4 +1,4 @@
-import { ChannelType, Routes } from "discord-api-types/v10";
+import { ChannelType } from "discord-api-types/v10";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
@@ -7,19 +7,17 @@ import { hasNonEmptyString, uniqueStrings } from "openclaw/plugin-sdk/string-coe
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
   buildDiscordComponentMessage,
-  buildDiscordComponentMessageFlags,
   resolveDiscordComponentAttachmentName,
   type DiscordComponentBuildResult,
   type DiscordComponentMessageSpec,
 } from "./components.js";
+import { createChannelMessage, editChannelMessage } from "./internal/api.messages.js";
 import {
-  editChannelMessage,
   serializePayload,
   type MessagePayloadFile,
   type MessagePayloadObject,
-} from "./internal/discord.js";
+} from "./internal/payload.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
-import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import {
@@ -31,6 +29,7 @@ import {
   SUPPRESS_NOTIFICATIONS_FLAG,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
+import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 
 const DISCORD_FORUM_LIKE_TYPES = new Set<number>([ChannelType.GuildForum, ChannelType.GuildMedia]);
 
@@ -42,31 +41,6 @@ function extractComponentAttachmentNames(spec: DiscordComponentMessageSpec): str
     }
   }
   return names;
-}
-
-function hasComponentAttachmentBlock(spec: DiscordComponentMessageSpec): boolean {
-  return (spec.blocks ?? []).some((block) => block.type === "file");
-}
-
-function withImplicitComponentAttachmentBlock(
-  spec: DiscordComponentMessageSpec,
-  attachmentName: string | undefined,
-): DiscordComponentMessageSpec {
-  if (!attachmentName || hasComponentAttachmentBlock(spec)) {
-    return spec;
-  }
-  // Discord File components must point at the uploaded attachment name. Add the
-  // matching file block automatically so callers do not have to duplicate it.
-  return {
-    ...spec,
-    blocks: [
-      ...(spec.blocks ?? []),
-      {
-        type: "file",
-        file: `attachment://${attachmentName}`,
-      },
-    ],
-  };
 }
 
 function resolveClassicDiscordMessage(
@@ -119,15 +93,6 @@ export function registerBuiltDiscordComponentMessage(params: {
   });
 }
 
-function resolveDiscordComponentRegistryTtlMs(
-  accountConfig: { agentComponents?: { ttlMs?: number } } | undefined,
-): number | undefined {
-  const ttlMs = accountConfig?.agentComponents?.ttlMs;
-  return typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0
-    ? Math.floor(ttlMs)
-    : undefined;
-}
-
 async function buildDiscordComponentPayload(params: {
   spec: DiscordComponentMessageSpec;
   opts: DiscordComponentSendOpts;
@@ -140,6 +105,7 @@ async function buildDiscordComponentPayload(params: {
   let spec = params.spec;
   let resolvedFileName: string | undefined;
   let files: MessagePayloadFile[] | undefined;
+  let attachmentNames: string[] | undefined;
   if (params.opts.mediaUrl) {
     const media = await loadOutboundMediaFromUrl(params.opts.mediaUrl, {
       mediaAccess: params.opts.mediaAccess,
@@ -147,18 +113,25 @@ async function buildDiscordComponentPayload(params: {
       mediaReadFile: params.opts.mediaReadFile,
     });
     const filenameOverride = params.opts.filename?.trim();
-    const explicitAttachmentName = extractComponentAttachmentNames(spec)[0];
+    attachmentNames = extractComponentAttachmentNames(spec);
+    const explicitAttachmentName = attachmentNames[0];
     resolvedFileName =
       filenameOverride ||
       explicitAttachmentName ||
       media.fileName ||
       `upload${extensionForMime(media.contentType) ?? ""}`;
-    spec = withImplicitComponentAttachmentBlock(spec, resolvedFileName);
+    if (attachmentNames.length === 0) {
+      // An implicit File component must reference the uploaded filename.
+      const file: `attachment://${string}` = `attachment://${resolvedFileName}`;
+      spec = { ...spec, blocks: [...(spec.blocks ?? []), { type: "file", file }] };
+      attachmentNames = [resolveDiscordComponentAttachmentName(file)];
+    }
     files = [{ data: media.buffer, name: resolvedFileName, contentType: media.contentType }];
   }
 
-  const attachmentNames = extractComponentAttachmentNames(spec);
-  const uniqueAttachmentNames = uniqueStrings(attachmentNames);
+  const uniqueAttachmentNames = uniqueStrings(
+    attachmentNames ?? extractComponentAttachmentNames(spec),
+  );
   if (uniqueAttachmentNames.length > 1) {
     throw new Error(
       "Discord component attachments currently support a single file. Use media-gallery for multiple files.",
@@ -182,15 +155,10 @@ async function buildDiscordComponentPayload(params: {
     agentId: params.opts.agentId,
     accountId: params.accountId,
   });
-  const flags = buildDiscordComponentMessageFlags(buildResult.components);
-  const finalFlags = params.opts.silent
-    ? (flags ?? 0) | SUPPRESS_NOTIFICATIONS_FLAG
-    : (flags ?? undefined);
-
   const payload: MessagePayloadObject = {
     components: buildResult.components,
     allowed_mentions: params.opts.allowedMentions,
-    ...(finalFlags ? { flags: finalFlags } : {}),
+    ...(params.opts.silent ? { flags: SUPPRESS_NOTIFICATIONS_FLAG } : {}),
     ...(files ? { files } : {}),
   };
   const body = {
@@ -239,7 +207,11 @@ async function writeDiscordComponentMessage(
     creating ? "Discord component send" : "Discord component edit",
   );
   const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
+  const recipient = await parseAndResolveDiscordTarget(
+    to,
+    { cfg, accountId: accountInfo.accountId },
+    { defaultKind: "channel" },
+  );
   const { channelId } = await resolveChannelId(rest, recipient, request);
   if (creating) {
     const channel = await resolveDiscordChannel(rest, channelId);
@@ -265,11 +237,7 @@ async function writeDiscordComponentMessage(
         }
         await opts.onPlatformSendDispatch?.();
         opts.assertPlatformSendAuthorized?.();
-        // SAFETY: Discord's Create Message response includes its message and channel IDs.
-        return (await rest.post(Routes.channelMessages(channelId), { body })) as {
-          id: string;
-          channel_id: string;
-        };
+        return createChannelMessage(rest, channelId, { body });
       },
       "components",
       creating ? { safety: "nonce-protected-create" } : undefined,
@@ -298,7 +266,7 @@ async function writeDiscordComponentMessage(
   await registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
-    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
+    ttlMs: accountInfo.config.agentComponents?.ttlMs,
   });
   recordChannelActivity({
     channel: "discord",

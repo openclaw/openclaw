@@ -13,6 +13,6 @@ export function isRephrasedReefResend(text: string, originalTextHash: string | u
   return (
     normalized.length > 0 &&
     originalTextHash !== undefined &&
-    reefMessageTextHash(normalized) !== originalTextHash
+    hashMessageBody({ text: normalized }) !== originalTextHash
   );
 }

@@ -1,33 +1,62 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { persistCompactionBoundaryWithSessionEntryAsync } from "../../config/sessions/session-accessor.sqlite-compaction-runtime.js";
 import * as hostTranscriptWriter from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
-import { readGlobalSingleton } from "../../shared/global-singleton.js";
 import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
+import { SessionManager } from "../../plugin-sdk/agent-sessions.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withSessionCompactionPersistenceAsync } from "./session-compaction-persistence.js";
+import { sessionManagerOpenCompaction } from "./session-manager-core.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import type { SessionEntry } from "./session-manager-types.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-async function openFixture(state: OpenClawTestState, name: string) {
-  const target = {
-    agentId: "main",
-    sessionId: name,
-    sessionKey: `agent:main:${name}`,
-    storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-  };
-  await replaceSessionEntry(target, { sessionId: name, updatedAt: 1 });
-  return { target, manager: await SessionManager.openAsync(target, state.workspaceDir) };
+async function withFixture(
+  name: string,
+  run: (fixture: {
+    target: Parameters<typeof SessionManager.openAsync>[0];
+    manager: SessionManager;
+    seed: string;
+    reopen: () => Promise<SessionManager>;
+  }) => Promise<void>,
+  guardHostWrites = true,
+) {
+  await withOpenClawTestState({ label: `async-entry-${name}` }, async (state) => {
+    const target = sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), name);
+    await replaceSessionEntry(target, { sessionId: name, updatedAt: 1 });
+    const reopen = () => SessionManager.openAsync(target, state.workspaceDir);
+    const manager = await reopen();
+    if (guardHostWrites) {
+      refuseHostWrites();
+    }
+    const seed = expectDefined(
+      await manager.appendMessageAsync(makeUserMessage("Seed", 1)),
+      "committed seed entry id",
+    );
+    await run({ target, manager, seed, reopen });
+  });
 }
 
+const rawEntry = (id: string, parentId: string): Extract<SessionEntry, { type: "custom" }> => ({
+  type: "custom",
+  customType: id,
+  id,
+  parentId,
+  timestamp: new Date(0).toISOString(),
+});
 function refuseHostWrites() {
   const refuse = () => {
     throw new Error("Transcript persistence ran on the host");
@@ -37,42 +66,21 @@ function refuseHostWrites() {
 }
 
 function entryCases(manager: SessionManager, seed: string) {
-  return [
-    { type: "custom", append: () => manager.appendCustomEntryAsync("plugin-state", { count: 1 }) },
-    { type: "session_info", append: () => manager.appendSessionInfoAsync("  Name\ncontinued  ") },
-    {
-      type: "custom_message",
-      append: () =>
-        manager.appendCustomMessageEntryAsync("notice", "Visible custom entry", true, {
-          source: "fixture",
-        }),
-    },
-    { type: "reset", append: () => manager.appendResetBoundaryAsync("reset", seed) },
-    {
-      type: "compaction",
-      append: () =>
-        manager.appendCompactionAsync(
-          "Summary",
-          seed,
-          120,
-          { source: "fixture" },
-          true,
-          undefined,
-          20,
-        ),
-    },
-    { type: "label", append: () => manager.appendLabelChangeAsync(seed, "bookmark") },
-  ];
+  const data = () => ({ source: "fixture" });
+  return Object.entries({
+    custom: () => manager.appendCustomEntryAsync("plugin-state", { count: 1 }),
+    session_info: () => manager.appendSessionInfoAsync("  Name\ncontinued  "),
+    custom_message: () =>
+      manager.appendCustomMessageEntryAsync("notice", "Visible custom entry", true, data()),
+    reset: () => manager.appendResetBoundaryAsync("reset", seed),
+    compaction: () =>
+      manager.appendCompactionAsync("Summary", seed, 120, data(), true, undefined, 20),
+    label: () => manager.appendLabelChangeAsync(seed, "bookmark"),
+  }).map(([type, append]) => ({ type, append }));
 }
 
 it("commits every awaited entry family in call order with stable ids, ancestry, and reopened state", async () => {
-  await withOpenClawTestState({ label: "async-entry-family" }, async (state) => {
-    const { target, manager } = await openFixture(state, "family");
-    refuseHostWrites();
-    const seed = expectDefined(
-      await manager.appendMessageAsync({ role: "user", content: "Seed", timestamp: 1 }),
-      "committed seed entry id",
-    );
+  await withFixture("family", async ({ manager, seed, reopen }) => {
     const cases = entryCases(manager, seed);
     const settled: string[] = [];
     const ids = await Promise.all(
@@ -99,7 +107,7 @@ it("commits every awaited entry family in call order with stable ids, ancestry, 
     expect(manager.getSessionName()).toBe("Name continued");
     expect(manager.getLabel(seed)).toBe("bookmark");
     expect(manager.getBoundaryCount()).toBe(2);
-    const reopened = await SessionManager.openAsync(target, state.workspaceDir);
+    const reopened = await reopen();
     expect(reopened.getEntries()).toEqual(manager.getEntries());
     expect(reopened.getLeafId()).toBe(manager.getLeafId());
     expect(reopened.getLabel(seed)).toBe("bookmark");
@@ -107,38 +115,30 @@ it("commits every awaited entry family in call order with stable ids, ancestry, 
 });
 
 it("awaits leaf, branch, raw persistence, and static transcript operations without host writes", async () => {
-  await withOpenClawTestState({ label: "async-entry-navigation" }, async (state) => {
-    const { target, manager } = await openFixture(state, "navigation");
-    refuseHostWrites();
-    const seed = expectDefined(
-      await manager.appendMessageAsync({ role: "user", content: "Seed", timestamp: 1 }),
-      "committed seed entry id",
-    );
+  await withFixture("navigation", async ({ target, manager, seed, reopen }) => {
     const tail = await manager.appendCustomEntryAsync("tail", { retained: true });
-    const leaf = await manager.appendLeafControlAsync({
+    const selectedLeaf = {
       targetId: seed,
       appendParentId: tail,
-      appendMode: "side",
-    });
-    expect(leaf).toMatchObject({
+      appendMode: "side" as const,
+    };
+    expect(await manager.appendLeafControlAsync(selectedLeaf)).toMatchObject({
+      ...selectedLeaf,
       type: "leaf",
-      targetId: seed,
-      appendParentId: tail,
-      appendMode: "side",
     });
-    const leafReopened = await SessionManager.openAsync(target, state.workspaceDir);
+    const leafReopened = await reopen();
     expect(leafReopened.getLeafId()).toBe(seed);
     expect(leafReopened.getAppendParentId()).toBe(tail);
     expect(leafReopened.getAppendMode()).toBe("side");
 
     const newerUser = expectDefined(
-      await leafReopened.appendMessageAsync({ role: "user", content: "Newer turn", timestamp: 2 }),
+      await leafReopened.appendMessageAsync(makeUserMessage("Newer turn", 2)),
       "committed newer user id",
     );
     const beforeStaleLeaf = await loadTranscriptEvents(target);
-    await expect(
-      manager.appendLeafControlAsync({ targetId: seed, appendParentId: tail, appendMode: "side" }),
-    ).rejects.toThrow("SQLite transcript changed");
+    await expect(manager.appendLeafControlAsync(selectedLeaf)).rejects.toThrow(
+      "SQLite transcript changed",
+    );
     expect(manager.getLeafId()).toBe(seed);
     expect(manager.getAppendParentId()).toBe(tail);
     expect(await loadTranscriptEvents(target)).toEqual(beforeStaleLeaf);
@@ -155,7 +155,7 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
       expect(manager.getBranch().map((entry) => entry.id)).toEqual(
         branchTarget === null ? [directSummary] : [seed, directSummary],
       );
-      const directReopened = await SessionManager.openAsync(target, state.workspaceDir);
+      const directReopened = await reopen();
       expect(directReopened.getBranch()).toEqual(manager.getBranch());
     }
 
@@ -176,14 +176,7 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
     const root = await manager.appendCustomEntryAsync("new-root");
     expect(manager.getEntry(root)?.parentId).toBeNull();
 
-    const raw: SessionEntry = {
-      type: "custom",
-      customType: "raw-entry",
-      data: 7,
-      id: "raw-entry-id",
-      parentId: root,
-      timestamp: new Date(0).toISOString(),
-    };
+    const raw = { ...rawEntry("raw-entry-id", root), customType: "raw-entry", data: 7 };
     expect(await manager.persistAsync(raw)).toBeUndefined();
     // Low-level persist retains its legacy contract: reload installs the recorded entry.
     await manager.reloadPersistedTranscriptAsync();
@@ -195,7 +188,7 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
       display: true,
       timestamp: 2,
     });
-    const reopened = await SessionManager.openAsync(target, state.workspaceDir);
+    const reopened = await reopen();
     expect(reopened.getEntry(staticId)).toMatchObject({
       id: staticId,
       parentId: raw.id,
@@ -207,27 +200,14 @@ it("awaits leaf, branch, raw persistence, and static transcript operations witho
 });
 
 it("propagates queued write revocation and user/custom commit failures without publishing or falling back", async () => {
-  await withOpenClawTestState({ label: "async-entry-failure" }, async (state) => {
-    const { target, manager } = await openFixture(state, "failure");
-    refuseHostWrites();
-    const seed = expectDefined(
-      await manager.appendMessageAsync({ role: "user", content: "Seed", timestamp: 1 }),
-      "committed seed entry id",
-    );
+  await withFixture("failure", async ({ target, manager, seed }) => {
     const before = await loadTranscriptEvents(target);
     const entries = manager.getEntries();
     const appenders: Array<() => Promise<unknown>> = [
       ...entryCases(manager, seed).map(({ append }) => append),
       () => manager.appendLeafControlAsync({ targetId: seed, appendParentId: seed }),
       () => manager.branchWithSummaryAsync(seed, "Refused branch"),
-      () =>
-        manager.persistAsync({
-          type: "custom",
-          customType: "refused-raw",
-          id: "refused-raw",
-          parentId: seed,
-          timestamp: new Date(0).toISOString(),
-        }),
+      () => manager.persistAsync(rawEntry("refused-raw", seed)),
     ];
     for (const append of appenders) {
       let active = true;
@@ -244,7 +224,7 @@ it("propagates queued write revocation and user/custom commit failures without p
       await expect(pending).rejects.toThrow("write owner revoked");
     }
     for (const message of [
-      { role: "user" as const, content: "Refused user", timestamp: 2 },
+      makeUserMessage("Refused user", 2),
       {
         role: "custom" as const,
         customType: "refused-note",
@@ -262,16 +242,7 @@ it("propagates queued write revocation and user/custom commit failures without p
       expect(commit).toHaveBeenCalledOnce();
     }
     await expect(
-      manager.persistAsync(
-        {
-          type: "custom",
-          customType: "stale-write",
-          id: "stale-write",
-          parentId: seed,
-          timestamp: new Date(0).toISOString(),
-        },
-        { expectedMutationAt: null },
-      ),
+      manager.persistAsync(rawEntry("stale-write", seed), { expectedMutationAt: null }),
     ).rejects.toThrow();
     expect(manager.getEntries()).toEqual(entries);
     expect(await loadTranscriptEvents(target)).toEqual(before);
@@ -280,22 +251,125 @@ it("propagates queued write revocation and user/custom commit failures without p
   });
 });
 
-it("warns once per synchronous method across manager instances while preserving compatibility results", () => {
-  const methods = [
-    ["appendCustomEntry", "appendCustomEntryAsync"],
-    ["appendSessionInfo", "appendSessionInfoAsync"],
-  ] as const;
-  const warned = readGlobalSingleton(Symbol.for("openclaw.sessionPersistenceDeprecations"));
-  if (!(warned instanceof Set)) {
-    throw new Error("Expected the process-wide session persistence warning registry");
-  }
-  // Shared Vitest workers retain earlier files' process-wide warning budgets.
-  const priorWarnings = methods.map(([method]) => {
-    const key = `SessionManager.${method}`;
-    return { key, existed: warned.delete(key) };
+it("prepares current compaction metadata and retained history in one worker read", async () => {
+  await withFixture("compaction-preparation", async ({ target, manager, seed: retained }) => {
+    const opaque = await manager.appendCustomEntryAsync("retained-plugin-data", { value: 42 });
+    await replaceSessionEntry(target, {
+      sessionId: target.sessionId,
+      updatedAt: 2,
+      label: "Updated after opening",
+      compactionCount: 3,
+    });
+    await waitForDiagnosticEventsDrained();
+    const requests: string[] = [];
+    const unsubscribe = onInternalDiagnosticEvent(
+      (event) => {
+        if (
+          event.type === "worker.request" &&
+          event.phase === "queued" &&
+          event.kind === "sessionTranscript"
+        ) {
+          requests.push(event.requestClass);
+        }
+      },
+      { include: ["worker.request"] },
+    );
+    const sql = observeHostDataSql();
+    try {
+      const prepared = await SessionManager[sessionManagerOpenCompaction](target);
+      await waitForDiagnosticEventsDrained();
+      expect(requests).toEqual(["task"]);
+      expect(sql.queries).toEqual([]);
+      expect(prepared.sessionTarget).toEqual(target);
+      expect(prepared.entry).toMatchObject({
+        sessionId: target.sessionId,
+        label: "Updated after opening",
+        compactionCount: 3,
+      });
+      expect(prepared.runtimeEntry).toEqual(prepared.entry);
+      expect(prepared.sessionManager.getEntries()).toMatchObject([
+        { id: retained, type: "message", message: { content: "Seed" } },
+        { id: opaque, type: "custom", data: { value: 42 } },
+      ]);
+    } finally {
+      sql.restore();
+      unsubscribe();
+    }
   });
+});
+
+it("keeps the requested entry separate from the persisted compaction window owner", async () => {
+  await withOpenClawTestState({ label: "compaction-window-owner" }, async (state) => {
+    const requested = {
+      agentId: "main",
+      sessionId: "window-owner",
+      sessionKey: "agent:main:window-alias",
+      storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+    };
+    await replaceSessionEntry(requested, {
+      sessionId: requested.sessionId,
+      updatedAt: 2,
+      label: "Alias metadata",
+    });
+    // A newly created entry claims the shared window, so create its intended owner last.
+    const target = sessionScope(requested.storePath, requested.sessionId);
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target, state.workspaceDir);
+    const retained = await manager.appendMessageAsync(makeUserMessage("Window-owned content", 1));
+    const prepared = await SessionManager[sessionManagerOpenCompaction](requested);
+    expect(prepared.sessionTarget).toEqual(target);
+    expect(prepared.entry).toMatchObject({ label: "Alias metadata" });
+    expect(prepared.runtimeEntry?.label).toBeUndefined();
+    expect(prepared.sessionManager.getEntry(retained!)).toMatchObject({
+      type: "message",
+      message: { content: "Window-owned content" },
+    });
+  });
+});
+
+it("adopts a compaction owner's canonical parent without a host reload", async () => {
+  await withFixture(
+    "compaction-parent",
+    async ({ target, manager, seed: first, reopen }) => {
+      const tail = await manager.appendCustomEntryAsync("side-history");
+      const sql = observeHostDataSql();
+      let boundary: string;
+      try {
+        boundary = await withSessionCompactionPersistenceAsync(
+          manager,
+          (prepared) =>
+            persistCompactionBoundaryWithSessionEntryAsync(target, {
+              prepared: {
+                ...prepared,
+                event: { ...prepared.event, parentId: first },
+                appendIntent: undefined,
+              },
+              transcriptByteCompactionLatch: {
+                activeBytes: 2048,
+                sessionId: target.sessionId,
+                maxBytes: 1024,
+              },
+            }),
+          () => manager.appendCompactionAsync("Summary", first, 100),
+        );
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(manager.getBranch().map(({ id }) => id)).toEqual([first, boundary]);
+      expect(manager.getEntry(tail)).toMatchObject({ id: tail });
+      expect(manager.getEntry(boundary)).toMatchObject({ parentId: first, type: "compaction" });
+      const reopened = await reopen();
+      expect(reopened.getEntries()).toEqual(manager.getEntries());
+      expect(reopened.getBranch()).toEqual(manager.getBranch());
+    },
+    false,
+  );
+});
+
+it("deduplicates legacy session methods across managers while preserving immediate results", () => {
   const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
-  try {
+  withPluginRuntimePluginScope({ pluginId: "session-compat-family" }, () => {
     for (let index = 0; index < 2; index++) {
       const manager = SessionManager.inMemory();
       const id = manager.appendCustomEntry("legacy", { index });
@@ -303,25 +377,14 @@ it("warns once per synchronous method across manager instances while preserving 
       const info = manager.appendSessionInfo("Legacy name");
       expect(manager.getEntry(info)).toMatchObject({ id: info, type: "session_info" });
     }
-    for (const [method, replacement] of methods) {
-      const calls = warning.mock.calls.filter(([message]) =>
-        String(message).startsWith(`SessionManager.${method} is deprecated;`),
-      );
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.[0]).toContain(replacement);
-      expect(calls[0]?.[1]).toMatchObject({
-        code: "DEP_SESSION_PERSISTENCE",
-        type: "DeprecationWarning",
-      });
-    }
-  } finally {
-    warning.mockRestore();
-    for (const { key, existed } of priorWarnings) {
-      if (existed) {
-        warned.add(key);
-      } else {
-        warned.delete(key);
-      }
-    }
+  });
+  expect(warning).toHaveBeenCalledTimes(2);
+  for (const method of ["appendCustomEntry", "appendSessionInfo"]) {
+    expect(warning).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Plugin session-compat-family: SessionManager.${method} is deprecated; use ${method}Async`,
+      ),
+      { code: "DEP_SESSION_PERSISTENCE", type: "DeprecationWarning" },
+    );
   }
 });

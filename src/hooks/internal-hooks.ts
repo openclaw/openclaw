@@ -7,7 +7,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   clearLegacyPluginInternalHooks,
-  listLegacyPluginInternalHookEventKeys,
   listLegacyPluginInternalHooks,
 } from "../plugins/legacy-internal-hook-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -52,7 +51,6 @@ export type MessageReceivedHookContext = {
   content: string;
   /** Unix timestamp when the message was received */
   timestamp?: number;
-  /** Channel identifier (for example "chat" or "support-chat") */
   channelId: string;
   /** Provider account ID for multi-account setups */
   accountId?: string;
@@ -75,11 +73,8 @@ export type MessageSentHookContext = Pick<
 > & {
   to: string;
   success: boolean;
-  /** Error message if sending failed */
   error?: string;
-  /** Whether this message was sent in a group/channel context */
   isGroup?: boolean;
-  /** Group or channel identifier, if applicable */
   groupId?: string;
 };
 
@@ -112,16 +107,12 @@ type MessageEnrichedBodyHookContext = Pick<
 };
 
 export type MessageTranscribedHookContext = MessageEnrichedBodyHookContext & {
-  /** The transcribed text from audio */
   transcript: string;
 };
 
 export type MessagePreprocessedHookContext = MessageEnrichedBodyHookContext & {
-  /** Transcribed audio text, if the message contained audio */
   transcript?: string;
-  /** Whether this message was sent in a group/channel context */
   isGroup?: boolean;
-  /** Group or channel identifier, if applicable */
   groupId?: string;
 };
 
@@ -181,10 +172,6 @@ export function clearInternalHooks(): void {
 
 export function setInternalHooksEnabled(enabled: boolean): void {
   internalHooksEnabledState.enabled = enabled;
-}
-
-export function getRegisteredEventKeys(): string[] {
-  return [...new Set([...handlers.keys(), ...listLegacyPluginInternalHookEventKeys()])];
 }
 
 export function hasInternalHookListeners(type: InternalHookEventType, action: string): boolean {
@@ -259,19 +246,4 @@ export function isAgentBootstrapEvent(event: InternalHookEvent): event is AgentB
 
 export function isGatewayStartupEvent(event: InternalHookEvent): event is GatewayStartupHookEvent {
   return hasHookEventContext(event, "gateway", "startup");
-}
-
-export function isSessionPatchEvent(event: InternalHookEvent): event is SessionPatchHookEvent {
-  if (!hasHookEventContext(event, "session", "patch")) {
-    return false;
-  }
-  const context = event.context;
-  return (
-    typeof context.patch === "object" &&
-    context.patch !== null &&
-    typeof context.cfg === "object" &&
-    context.cfg !== null &&
-    typeof context.sessionEntry === "object" &&
-    context.sessionEntry !== null
-  );
 }

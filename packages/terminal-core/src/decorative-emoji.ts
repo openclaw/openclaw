@@ -44,16 +44,11 @@ export function supportsDecorativeEmoji(options: DecorativeEmojiOptions = {}): b
   const platform = options.platform ?? process.platform;
   const isTty = options.isTty ?? process.stdout.isTTY;
 
-  if (!isTty) {
-    return false;
-  }
-  if ((env.TERM ?? "").toLowerCase() === "dumb") {
-    return false;
-  }
-  if (!hasUtf8Locale(env)) {
-    return false;
-  }
-  return isKnownEmojiTerminal(env) || platform === "darwin";
+  return isTty
+    ? (env.TERM ?? "").toLowerCase() !== "dumb" &&
+        hasUtf8Locale(env) &&
+        (isKnownEmojiTerminal(env) || platform === "darwin")
+    : false;
 }
 
 /** Return the emoji only when decorative emoji output is supported. */

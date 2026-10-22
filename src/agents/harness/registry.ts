@@ -1,6 +1,3 @@
-/**
- * Registry for native agent harness implementations and lifecycle cleanup.
- */
 import { retainCliRegistryHarnesses } from "../../cli/runtime-cleanup-scope.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runPluginCleanup } from "../../plugins/plugin-instance-scope.js";
@@ -18,6 +15,7 @@ import {
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { AgentHarnessSessionCleanupError } from "./errors.js";
+import type { ReplyQueueInputAdapter } from "./host-private-capabilities.js";
 import type {
   AgentHarness,
   AgentHarnessNativeCompaction,
@@ -48,7 +46,6 @@ function getAgentHarnesses() {
   return registry.agentHarnesses;
 }
 
-/** Registers or replaces an agent harness under its trimmed id. */
 export function registerAgentHarness(
   harness: AgentHarness,
   options?: AgentHarnessRegistrationOptions & { ownerPluginId?: string },
@@ -76,15 +73,13 @@ export function registerAgentHarness(
     },
   };
   const existingIndex = harnesses.findIndex((registration) => registration.harness.id === id);
-  if (existingIndex !== -1) {
+  if (existingIndex === -1) {
+    harnesses.push(entry);
+  } else {
     assertDirectPluginRegistrationReplacement(
       harnesses[existingIndex]?.pluginId,
       `agent harness ${id}`,
     );
-  }
-  if (existingIndex === -1) {
-    harnesses.push(entry);
-  } else {
     harnesses.splice(existingIndex, 1, entry);
   }
 }
@@ -109,6 +104,28 @@ export function resolveAgentHarnessOwnerPluginId(harness: AgentHarness): string 
   return registration.ownerPluginId ?? "core";
 }
 
+/** Bundled sinks migrate with this host; external sinks retain the shipped question projection. */
+export function resolveAgentHarnessQueueInputAdapter(
+  harness: AgentHarness,
+): ReplyQueueInputAdapter {
+  const registry = getPluginRegistryForContext();
+  const registration = getAgentHarnesses().find((entry) => entry.harness.id === harness.id);
+  if (registration?.harness !== harness) {
+    throw new Error(`Agent harness ${harness.id} changed during input adapter resolution.`);
+  }
+  // Direct facade registrations have no loader-owned bundle provenance.
+  const owner =
+    registration.source !== "runtime"
+      ? registry?.plugins.find(
+          (plugin) =>
+            plugin.id === registration.pluginId &&
+            plugin.source === registration.source &&
+            plugin.rootDir === registration.rootDir,
+        )
+      : undefined;
+  return owner?.origin === "bundled" ? "human-and-question-permission" : "legacy-question-category";
+}
+
 /** Resolves the private Codex compaction bridge from exact registry-owned capability state. */
 export function resolveCodexAgentHarnessNativeCompaction(
   harness: AgentHarness,
@@ -127,7 +144,6 @@ export function resolveCodexAgentHarnessNativeCompaction(
     : undefined;
 }
 
-/** Lists registered harness records for selection and lifecycle fan-out. */
 export function listRegisteredAgentHarnesses(): RegisteredAgentHarness[] {
   return getAgentHarnesses().map((entry) => ({
     harness: entry.harness,
@@ -190,7 +206,6 @@ async function disposeAgentHarness(harness: AgentHarness): Promise<void> {
   }
 }
 
-/** Calls each registered harness dispose hook during registry shutdown or reload. */
 export async function disposeRegisteredAgentHarnesses(): Promise<void> {
   await Promise.all(
     listRegisteredAgentHarnesses().map(({ harness }) => disposeAgentHarness(harness)),
