@@ -1,4 +1,15 @@
-import { action, createMemo, createOptimistic, createStore, For, onSettled, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  createStore,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { shellEscapeBackslash } from "../../../src/shared/shell-quote.js";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
@@ -73,11 +84,11 @@ export function McpServersCard(props: McpServersCardProps) {
     requestFailedMessage: () => t("mcpServers.signInFailed"),
     sessionExpiredMessage: () => t("mcpServers.signInExpired"),
   });
-  void context.runtimeConfig.ensureLoaded().catch((error: unknown) => {
-    setView((draft) => {
-      draft.message = { kind: "error", text: formatUiError(error) };
-    });
-  });
+  const initialLoad = context.runtimeConfig.ensureLoaded();
+  const [completion, setCompletion] = createSignal<Promise<void> | undefined>(initialLoad);
+  const completed = createMemo(() => completion()?.then(() => null) ?? null);
+  // The selected outcome owns feedback; a retired read cannot replace a later command.
+  void initialLoad.catch(() => {});
   onSettled(() => {
     let hello = context.gateway.snapshot.hello;
     // Retire sign-in with its transport or agent selection before the next interaction can reuse it.
@@ -116,6 +127,7 @@ export function McpServersCard(props: McpServersCardProps) {
     ) {
       return;
     }
+    setCompletion(undefined);
     setView((draft) => {
       draft.message = null;
     });
@@ -138,16 +150,15 @@ export function McpServersCard(props: McpServersCardProps) {
     setView((draft) => {
       draft.message = null;
     });
+    const result = performMutation(() => patchMcpServers(context.runtimeConfig, options));
+    setCompletion(result);
     try {
-      await performMutation(() => patchMcpServers(context.runtimeConfig, options));
+      await result;
       setView((draft) => {
         draft.message = { kind: "success", text: options.successText };
       });
       return true;
-    } catch (error) {
-      setView((draft) => {
-        draft.message = { kind: "error", text: formatUiError(error) };
-      });
+    } catch {
       return false;
     } finally {
       mutationPending = false;
@@ -155,6 +166,7 @@ export function McpServersCard(props: McpServersCardProps) {
   };
   const addServer = async (form: McpServerForm) => {
     if (!MCP_SERVER_NAME_PATTERN.test(form.name)) {
+      setCompletion(undefined);
       setView((draft) => {
         draft.message = { kind: "error", text: t("mcpServers.nameInvalid") };
       });
@@ -162,6 +174,7 @@ export function McpServersCard(props: McpServersCardProps) {
     }
     const target = parseMcpTarget(form.target, form.transport);
     if (!target) {
+      setCompletion(undefined);
       setView((draft) => {
         draft.message = { kind: "error", text: t("mcpServers.targetInvalid") };
       });
@@ -225,6 +238,9 @@ export function McpServersCard(props: McpServersCardProps) {
               title={mutationBlockedReason() ?? ""}
               disabled={disabled()}
               onClick={() => {
+                if (!view.formOpen) {
+                  setCompletion(undefined);
+                }
                 setView((draft) => {
                   if (!draft.formOpen) {
                     draft.message = null;
@@ -252,6 +268,19 @@ export function McpServersCard(props: McpServersCardProps) {
                 });
               }}
             />
+          </Show>
+          <Show when={!busy()}>
+            <Loading on={completion()}>
+              <Errored
+                fallback={(error) => (
+                  <div class="mcp-server-message mcp-server-message--error" role="alert">
+                    {formatUiError(error())}
+                  </div>
+                )}
+              >
+                {completed()}
+              </Errored>
+            </Loading>
           </Show>
           <Show when={!busy() && view.message} keyed>
             {(message) => (

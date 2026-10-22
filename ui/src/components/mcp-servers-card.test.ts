@@ -102,9 +102,13 @@ async function mountCard(
     connected?: boolean;
     admin?: boolean;
     gateway?: ApplicationGateway;
+    initialLoad?: Promise<void>;
   } = {},
 ) {
   const harness = createRuntimeConfig(options.config ?? { mcp: { servers: {} } });
+  if (options.initialLoad) {
+    harness.ensureLoaded.mockReturnValueOnce(options.initialLoad);
+  }
   const gateway =
     options.gateway ?? createGateway({ connected: options.connected, admin: options.admin });
   const context = {
@@ -637,6 +641,25 @@ describe("openclaw-mcp-servers-card", () => {
       );
     },
   );
+
+  it("keeps a successful mutation visible when an older initial read fails", async () => {
+    const initialLoad = deferred();
+    const { card, harness } = await mountCard({
+      config: configWith({ local: { command: "node" } }),
+      initialLoad: initialLoad.promise,
+    });
+    actionButton(card, "Disable").click();
+    await waitForFast(() =>
+      expect(card.querySelector('[role="status"]')?.textContent).toBe("Disabled MCP server local."),
+    );
+    initialLoad.reject(new Error("Earlier configuration read failed"));
+    await initialLoad.promise.catch(() => {});
+    await waitForFast(() => {
+      expect(card.querySelector('[role="alert"]')).toBeNull();
+      expect(card.querySelector('[role="status"]')?.textContent).toBe("Disabled MCP server local.");
+      expect(harness.patch).toHaveBeenCalledOnce();
+    });
+  });
 
   it("builds removal intent from the snapshot after queued writes settle", async () => {
     const retained = { command: "node", args: ["retained.mjs"], opaque: null };
