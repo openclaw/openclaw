@@ -581,14 +581,11 @@ it.each(realtimeStarts)(
 it.each(
   realtimeStarts.flatMap((start) =>
     (["restart tombstone", "worker placement", "automation"] as const).map((reason) => ({
-      method: start.method,
-      transport: start.transport,
-      capabilities: start.capabilities,
+      start,
       reason,
     })),
   ),
-)("$method refuses archived $reason before provider creation", async (start) => {
-  const { reason } = start;
+)("$start.method refuses archived $reason before provider creation", async ({ start, reason }) => {
   const sessionId = "refused-talk-session";
   await writeSession(sessionId, {
     archivedAt: 2,
