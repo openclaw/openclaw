@@ -10,10 +10,7 @@ import { projectOwner } from "../lib/reactive/projection.ts";
 import { sessionSelfOwner, type SessionOwnerOption } from "../lib/session-owner.ts";
 
 /** Assignment uses the Gateway directory, independently of session filters and presence. */
-export function createSessionOwnerMenu(
-  presented: () => boolean = () => true,
-  prepare?: () => unknown,
-) {
+export function createSessionOwnerMenu(presented: () => boolean = () => true) {
   const context = useOptionalApplication();
   const agents = context ? projectAgents(context.agents) : undefined;
   const identities = context ? projectOwner(context.agentIdentity, (owner) => owner) : undefined;
@@ -77,7 +74,7 @@ export function createSessionOwnerMenu(
       error: directory?.error,
     };
   };
-  const snapshot = createParkedProjection(readSnapshot, presented, prepare);
+  const snapshot = createParkedProjection(readSnapshot, presented);
   const rows = createProjection(snapshot, null, {
     key: (row: { type?: string; id?: string }) => `${row.type}:${row.id}`,
   });

@@ -195,11 +195,12 @@ describe("AgentsPage gateway lifecycle", () => {
   });
 
   it("invalidates a queued agent skills clear across a same-client reconnect", async () => {
+    const result = deferred<boolean>();
     const client = createTestGatewayClient(vi.fn(async () => ({ skills: [] })));
     const currentGateway = gateway(snapshot(client));
     const agents = agentsCapability(async () => files("main", "unused"));
     const patch = vi.fn(
-      async (_options: Parameters<ApplicationContext["runtimeConfig"]["patch"]>[0]) => false,
+      (_options: Parameters<ApplicationContext["runtimeConfig"]["patch"]>[0]) => result.promise,
     );
     const runtimeConfig = {
       state: {},
@@ -215,7 +216,11 @@ describe("AgentsPage gateway lifecycle", () => {
       runtimeConfig,
     });
 
-    page.read().agentSkills.onClear("main");
+    const completion = page.read().agentSkills.onClear("main");
+    let presentationSettled = false;
+    void completion?.then(() => {
+      presentationSettled = true;
+    });
     await waitForFast(() => expect(patch).toHaveBeenCalledOnce());
     const canDispatch = vi.mocked(patch).mock.calls[0]?.[0]?.canDispatch;
     expect(canDispatch?.()).toBe(true);
@@ -224,9 +229,13 @@ describe("AgentsPage gateway lifecycle", () => {
     emitGatewaySnapshot(currentGateway, snapshot(client));
 
     expect(canDispatch?.()).toBe(false);
+    await waitForFast(() => expect(presentationSettled).toBe(true));
+    result.reject(new Error("Retired reset failed."));
+    await result.promise.catch(() => undefined);
+    await expect(completion).resolves.toBeUndefined();
   });
 
-  it("clears a prior reset error after success while a skill read is pending", async () => {
+  it("returns reset outcomes while retaining an admitted pending skill read", async () => {
     const pending = deferred<SkillStatusReport>();
     const client = createTestGatewayClient(vi.fn(() => pending.promise));
     const currentGateway = gateway(snapshot(client));
@@ -245,14 +254,11 @@ describe("AgentsPage gateway lifecycle", () => {
       runtimeConfig,
     });
 
-    page.read().agentSkills.onClear("main");
-
-    await waitForFast(() =>
-      expect(page.read().readData().agentSkillsUpdateError).toBe("Gateway rejected the patch."),
+    await expect(page.read().agentSkills.onClear("main")).rejects.toThrow(
+      "Gateway rejected the patch.",
     );
     const issued = page.read().readData().agentSkillsRead;
-    page.read().agentSkills.onClear("main");
-    await waitForFast(() => expect(page.read().readData().agentSkillsUpdateError).toBeNull());
+    await expect(page.read().agentSkills.onClear("main")).resolves.toBeUndefined();
     expect(page.read().readData().agentSkillsRead).toBe(issued);
     pending.resolve({
       workspaceDir: "/workspace/synthetic",

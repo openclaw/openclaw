@@ -14,30 +14,17 @@ const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const helperPath = path.join(repoRoot, "ui/src/e2e/control-ui-e2e-suite.test-support.ts");
 
 type FixtureMode =
-  | "page-concurrent"
-  | "page-concurrent-timeout"
-  | "diagnostic-page-timeout"
-  | "diagnostic-tracked-timeout"
-  | "diagnostic-scenario-timeout"
-  | "tracked-close-success"
-  | "tracked-close-failure"
+  | `page-concurrent${"" | "-timeout"}`
+  | `diagnostic-${"page" | "tracked" | "scenario"}-timeout`
+  | `tracked-close-${"success" | "failure"}`
   | "concurrent-close"
   | "held-route-drain"
   | "held-route-failure"
   | "close-failure"
   | "late-context"
   | "late-setup"
-  | "scenario-timeout"
-  | "scenario-noncooperative"
-  | "scenario-late-close"
-  | "scenario-close-failure"
-  | "scenario-root-drain"
-  | "scenario-root-leak"
-  | "resources-success"
-  | "resources-root-drain"
-  | "resources-close-failure"
-  | "resources-late-setup"
-  | "resources-browser-failure";
+  | `scenario-${"timeout" | "noncooperative" | "late-close" | "close-failure" | "root-drain" | "root-leak"}`
+  | `resources-${"success" | "root-drain" | "close-failure" | "late-setup" | "browser-failure"}`;
 
 type FixtureJournal = {
   closeCalls: number;
@@ -777,6 +764,23 @@ function runJoinedFixture(
   return run;
 }
 
+type FixtureResult = Awaited<ReturnType<typeof runFixture>>;
+
+function expectTestCounts(result: FixtureResult, passed: number, failed: number) {
+  expect(result.report, result.output).toMatchObject({
+    numPassedTests: passed,
+    numFailedTests: failed,
+  });
+}
+
+function expectClosed(result: FixtureResult, closeCalls: number, closed = true) {
+  expect(result.journal).toMatchObject({
+    closeCalls,
+    browserClosed: closed,
+    serverClosed: closed,
+  });
+}
+
 it.for(["page-concurrent", "page-concurrent-timeout"] as const)(
   "owns every concurrent page callback: %s",
   (mode, context) =>
@@ -789,8 +793,7 @@ it.for(["page-concurrent", "page-concurrent-timeout"] as const)(
         expect(result.output).toContain("retiring owned fork");
         expect(result.successorStarted).toBe(false);
       } else {
-        expect(result.report.numPassedTests, result.output).toBe(1);
-        expect(result.report.numFailedTests, result.output).toBe(0);
+        expectTestCounts(result, 1, 0);
       }
     }),
 );
@@ -802,7 +805,7 @@ it.for([
 ] as const)("captures a native timeout before its context closes: %s", (mode, context) =>
   runJoinedFixture(mode, context, (result) => {
     expect(result.code, result.output).toBe(1);
-    expect(result.report, result.output).toMatchObject({ numFailedTests: 1, numPassedTests: 1 });
+    expectTestCounts(result, 1, 1);
     expect(result.output).toContain("Test timed out in 50ms");
     expect(result.successorStarted).toBe(true);
     expect(result.journal.events).toEqual(["capture live page", "drain", "close", "successor"]);
@@ -830,18 +833,14 @@ it.for([
     );
     expect(JSON.stringify(result.captures[0]?.public)).not.toContain("private-");
     expect(result.captures[0]?.private.failure.message).toContain("Test timed out in 50ms");
-    expect(result.journal).toMatchObject({
-      closeCalls: 1,
-      browserClosed: true,
-      serverClosed: true,
-    });
+    expectClosed(result, 1);
   }),
 );
 
 it("drains held modules and cancels unrequested observations during cleanup", (context) =>
   runJoinedFixture("held-route-drain", context, (result) => {
     expect(result.code, result.output).toBe(0);
-    expect(result.report, result.output).toMatchObject({ numPassedTests: 2, numFailedTests: 0 });
+    expectTestCounts(result, 2, 0);
     expect(result.journal.callbackOutcomes).toEqual(
       ["first", "other", "later", "context", "late"].map((label) => ({
         label,
@@ -852,12 +851,11 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
     expect(result.journal.events).toContain("fulfilled later");
     expect(result.journal.events).toContain("fell through late");
     expect(result.journal.events).not.toContain("fetched late");
-    expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
-      result.journal.events.indexOf("drain"),
-    );
-    expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
-      result.journal.events.indexOf("close"),
-    );
+    for (const event of ["drain", "close"]) {
+      expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
+        result.journal.events.indexOf(event),
+      );
+    }
     expect(result.journal.events).toContain("held request settled");
     expect(result.journal.events.at(-1)).toBe("held callback joined");
     expect(result.journal).toMatchObject({
@@ -865,11 +863,9 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       contextCleanupEvent: "drain",
       pendingCloseCalls: 0,
       fulfilledBeforeFetchRelease: ["fulfilled first", "fulfilled other"],
-      closeCalls: 2,
       heldBodyErrorRetained: true,
-      browserClosed: true,
-      serverClosed: true,
     });
+    expectClosed(result, 2);
   }));
 
 it("reports settled held route failures through context cleanup", (context) =>
@@ -892,14 +888,9 @@ it.for([
     runJoinedFixture(mode, context, (result) => {
       const tracked = mode.startsWith("tracked-");
       expect(result.code, result.output).toBe(success ? 0 : 1);
-      expect(result.journal).toMatchObject({
-        closeCalls,
-        browserClosed: success,
-        serverClosed: success,
-      });
+      expectClosed(result, closeCalls, success);
       if (!tracked) {
-        expect(result.report.numPassedTests, result.output).toBe(success ? 1 : 0);
-        expect(result.report.numFailedTests, result.output).toBe(success ? 0 : 2);
+        expectTestCounts(result, success ? 1 : 0, success ? 0 : 2);
         expect(result.journal).toMatchObject({ arrived: true, published: false });
       }
       if (tracked || !success) {
@@ -959,8 +950,7 @@ it.for([
         expect(result.output).toContain(failure);
         expect(result.journal.events).not.toContain("released");
       } else {
-        expect(result.report.numPassedTests, result.output).toBe(2);
-        expect(result.report.numFailedTests, result.output).toBe(0);
+        expectTestCounts(result, 2, 0);
         expect(result.journal.events).toEqual(["acquired", "gateway closed", "released"]);
       }
       if (mode === "scenario-late-close") {

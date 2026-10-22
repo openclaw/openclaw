@@ -84,6 +84,11 @@ const repositoryScriptEntries = [
   "scripts/build-decision-transport-bench.mts!",
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
+  // The performance guide invokes these measurement commands by path.
+  "scripts/perf/codex-process-inspection-measure.ts!",
+  "scripts/perf/diagnostic-profile-measure.ts!",
+  "scripts/perf/session-pr-subscriptions-measure.ts!",
+  "scripts/perf/tool-schema-preparation-measure.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
   "scripts/perf/async-store-measure.mjs!",
@@ -1193,7 +1198,11 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/clawrouter`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/cohere`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/comfy`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot`]: bundledPluginWorkspace([
+      // The plugin README invokes this benchmark and its NODE_OPTIONS preload by path.
+      "test/bench-attempt-transcript-journal.ts!",
+      "test/journal-allocation-probe.mjs!",
+    ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/copilot-proxy`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/codex`]: bundledPluginWorkspace([
       // Provider runtime and harness surfaces are reached through plugin

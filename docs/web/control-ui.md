@@ -157,6 +157,10 @@ frame and its local state.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
+Deleting a session refreshes the roster and invalidates that session's model choices without reloading metadata for unrelated chats. Session action menus build their contents when opened.
+
+Provider speed observations are tracked separately for each requested tier. Repeated identical responses retain the matching Fast or Ultrafast hint without refreshing every open chat's model choices. Recovery or expiry clears only the affected hint.
+
 Metadata refreshes wait for an in-progress model-runtime replacement to publish. An agent whose model runtime is unavailable does not interrupt commands or model choices for healthy agents; its metadata becomes available when its owner publishes.
 
 New Session keeps previously fetched model choices selectable while their catalog

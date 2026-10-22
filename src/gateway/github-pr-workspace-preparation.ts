@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SessionGitHubActionParams } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { canPrepareGitHubPullRequest } from "../agents/sandbox/github-publication.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
@@ -22,6 +23,7 @@ import { assertExistingPullRequestWriteAccess } from "./github-publication-pr-pr
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { isSessionOwnRequester } from "./session-sharing-policy.js";
 import { resolveLocalWorkspaceOwner } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
 
@@ -98,6 +100,19 @@ export async function performSessionGitHubPreparation(
   const session = { agentId: loaded.agentId, sessionKey: loaded.canonicalKey };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   using _ = { [Symbol.dispose]: admitted.release };
+  // Publication admits other writers; replacing this conversation's source is its own requester's.
+  const { actor } = admitted.requester.snapshot;
+  if (
+    !isSessionOwnRequester(
+      { cfg: context.getRuntimeConfig(), client: options.client },
+      { canonicalKey: loaded.canonicalKey, entry: loaded.entry },
+      actor.kind === "operator" && actor.profileId !== GATEWAY_OWNER_PROFILE_ID
+        ? actor.profileId
+        : undefined,
+    )
+  ) {
+    throw new Error("Only this conversation's owner can prepare a PR in it.");
+  }
   const assertSession = () => {
     options.signal?.throwIfAborted();
     selected.readCurrent();

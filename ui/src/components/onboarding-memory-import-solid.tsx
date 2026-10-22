@@ -388,7 +388,7 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
     );
   const busy = () => applying() !== null;
   const hasSelected = () => providers().some((provider) => selection()[provider.providerId]);
-  const actions = (): ImportAction[] => (isDone() ? ["continue"] : ["import", "skip", "review"]);
+  const actions = (): ImportAction[] => (isDone() ? ["continue"] : ["review", "skip", "import"]);
   const actionLabels = () => ({
     continue: t("common.continue"),
     import: t(busy() ? "common.importing" : "onboarding.memoryImport.import"),

@@ -51,7 +51,6 @@ import {
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowSelection } from "./session-row-selection.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
-import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
@@ -93,10 +92,7 @@ export function* selectSessionEntries(
       if (!part) {
         part = yield* filterSessionEntries({
           ...params,
-          entries: (archived) =>
-            Array.from(partition.entries.values()).filter(([, entry]) =>
-              matchesSessionArchiveFilter(entry, archived),
-            ),
+          entries: () => partition.entries.values(),
         });
         part.entries = yield* sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
         part.ownerEntries = yield* sortAndLimitSessionEntries(
@@ -395,7 +391,7 @@ export async function prepareSessionSearchIdentityNames(
   });
   const scope = projection.state.scope(opts);
   const agentIds = new Set(scope.agentId ? [scope.agentId] : listAgentIds(prepared.cfg));
-  for (const [key] of prepared.entries("all")) {
+  for (const [key] of prepared.entries()) {
     const agentId = prepared.getTarget(key)?.agentId;
     if (agentId) {
       agentIds.add(agentId);

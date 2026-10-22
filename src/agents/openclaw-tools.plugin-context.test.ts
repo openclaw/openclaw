@@ -94,3 +94,15 @@ it.each([
 ])("carries host-selected approval reviewers into plugin tools: %j", (options) => {
   expect(resolve(options).approvalReviewerDeviceIds).toEqual(["device-reviewer"]);
 });
+
+it("forwards the run id and host-stamped input provenance to plugin tools", () => {
+  const inputProvenance = {
+    kind: "internal_system" as const,
+    sourceTool: "exec",
+    runId: "owner-run",
+  };
+  expect(resolve({ runId: "wake-run", inputProvenance })).toMatchObject({
+    runId: "wake-run",
+    inputProvenance,
+  });
+});

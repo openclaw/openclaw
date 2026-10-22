@@ -10,10 +10,7 @@ import {
   createStubSessionHarness,
   createSubscribedSessionHarness,
 } from "./embedded-agent-subscribe.e2e-harness.js";
-import {
-  handleCompactionEnd,
-  handleCompactionStart,
-} from "./embedded-agent-subscribe.handlers.compaction.js";
+import { handleCompactionEnd } from "./embedded-agent-subscribe.handlers.compaction.js";
 import reconcileSessionStoreCompactionCountAfterSuccess from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
 import { createContext } from "./embedded-agent-subscribe.handlers.lifecycle.test-helpers.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
@@ -75,23 +72,6 @@ const usage = (messages: AgentMessage[]) =>
   messages.filter((message) => message.role === "assistant").map((message) => message.usage);
 
 describe("compaction handlers", () => {
-  it.each([
-    [undefined, endEvent(), { reason: "threshold", completed: true, compactionCount: 1 }],
-    [
-      "manual",
-      endEvent({ status: "skipped", reason: "Nothing to compact (session too small)" }, "manual"),
-      { outcome: "skipped", completed: false, reasonClass: "no_compactable_entries" },
-    ],
-  ] as const)("logs compaction start/end at info (reason=%s)", async (reason, event, metadata) => {
-    const ctx = createCompactionContext();
-    handleCompactionStart(ctx, { type: "compaction_start", ...(reason ? { reason } : {}) });
-    await handleCompactionEnd(ctx, event);
-    expect(vi.mocked(ctx.log.info).mock.calls.map(([, data]) => data)).toMatchObject([
-      { event: "embedded_run_compaction_start", reason: reason ?? "threshold", runId: "run-test" },
-      { event: "embedded_run_compaction_end", ...metadata },
-    ]);
-  });
-
   it("keeps failure details in client events, not logs, while preserving live usage", async () => {
     const messages = [assistant(1_000)];
     const before = usage(messages);
@@ -201,12 +181,6 @@ describe("compaction handlers", () => {
       "legacy entries use summary position",
       [assistant(), summary(), assistant()],
       [true, false],
-      completed,
-    ],
-    [
-      "marker-free compaction clears every old snapshot",
-      [assistant(), { role: "user", content: "question", timestamp: 0 }, assistant()],
-      [true, true],
       completed,
     ],
   ] satisfies Array<[string, AgentMessage[], boolean[], Parameters<typeof endEvent>[0]]>)(

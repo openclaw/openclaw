@@ -78,7 +78,6 @@ type HeaderMenuProps = {
   mobile?: boolean;
   mobileHost?: HeaderSessionMenuMobileHost;
   mobilePageOpen?: boolean;
-  prewarm?: boolean;
   bubbleModeEnabled: boolean;
   mainKey: string;
   copyMarkdownAllowed: boolean;
@@ -136,9 +135,8 @@ function ChatHeaderSessionMenuContent(
   const menuId = `chat-header-session-${++nextMenuId}`;
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
   const [open, setOpen] = createSignal(false);
-  const preparation = () => liveProps.prewarm;
   const presented = () => open() || (liveProps.mobilePageOpen ?? false);
-  const presentation = createParkedProjection(() => ({ ...liveProps }), presented, preparation);
+  const presentation = createParkedProjection(() => ({ ...liveProps }), presented);
   const props = createProjection(presentation, presentation(), { key: "id" });
   const controls = createMenuControls();
   let menu: MenuHandle | undefined;
@@ -173,7 +171,7 @@ function ChatHeaderSessionMenuContent(
     readState,
     onAction,
     close,
-    createSessionOwnerMenu(presented, preparation),
+    createSessionOwnerMenu(presented),
   );
   const view = useSessionMenuEntries(actions, readState, {
     controls,
@@ -553,7 +551,6 @@ function ChatHeaderSessionMenuContent(
         controls={controls}
         id={menuId}
         lazy
-        prewarm={liveProps.prewarm && !liveProps.compact}
         class={[
           "session-menu chat-header-session-menu",
           {
@@ -619,7 +616,6 @@ export const ChatHeaderSessionMenu = defineSolidBridge<HeaderMenuProps, HeaderMe
       mobile: { default: undefined, attribute: false },
       mobileHost: { default: undefined, attribute: false },
       mobilePageOpen: { default: false, attribute: false },
-      prewarm: { default: false, attribute: false },
       bubbleModeEnabled: { default: false, attribute: false },
       mainKey: { default: "main", attribute: false },
       copyMarkdownAllowed: { default: false, attribute: false },

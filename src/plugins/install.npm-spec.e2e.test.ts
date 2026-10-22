@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import type http from "node:http";
@@ -24,7 +25,6 @@ import {
   createInstalledPackageTreePolicyExec,
   installNpmPlugin,
   installProjectDependencies,
-  registerNpmPayloadIdentityTests,
 } from "./install.npm-spec.test-support.js";
 import { runPluginPayloadSmokeCheck } from "./payload-verification.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
@@ -143,7 +143,60 @@ function useRegistry(registry: string): void {
 }
 
 describe("installPluginFromNpmSpec e2e", () => {
-  registerNpmPayloadIdentityTests({ makeInstallFixture, uniquePackageName, useStaticRegistry });
+  it.each(["version", "name", "normalized-version"] as const)(
+    "checks real npm payload %s against the selected registry identity",
+    { timeout: 120_000 },
+    async (identity) => {
+      const { rootDir, npmRoot, installOk } = await makeInstallFixture("npm-payload-identity-e2e");
+      const packageName = uniquePackageName("payload-identity");
+      const pluginId = "payload-identity";
+      const payloadName = identity === "name" ? uniquePackageName("other-payload") : packageName;
+      const payloadVersion = { version: "1.9.0", name: "2.0.0", "normalized-version": "v2.0.0" }[
+        identity
+      ];
+      const versions = await packPlugins(rootDir, [
+        { packageName, version: "1.0.0", pluginId },
+        { packageName: payloadName, version: payloadVersion, pluginId },
+      ]);
+      const selected = versions[1];
+      assert(selected, "packed update payload");
+      selected.version = "2.0.0";
+      await useStaticRegistry([{ packageName, latest: "2.0.0", versions }]);
+      const original = await installOk(`${packageName}@1.0.0`);
+      const manifestPath = path.join(original.targetDir, "package.json");
+      const originalManifest = await fs.readFile(manifestPath, "utf8");
+      const projectsRoot = path.join(npmRoot, "projects");
+      const originalProjects = (await fs.readdir(projectsRoot)).toSorted();
+      const beforeCommit = vi.fn(async () => {});
+      const result = await installPluginFromNpmSpec({
+        spec: `${packageName}@2.0.0`,
+        expectedPluginId: pluginId,
+        npmDir: npmRoot,
+        mode: "update",
+        onBeforePluginArtifactCommit: beforeCommit,
+        logger: { info: () => {}, warn: () => {} },
+        timeoutMs: 120_000,
+      });
+      expect(await fs.readFile(manifestPath, "utf8")).toBe(originalManifest);
+      if (identity === "normalized-version") {
+        expect(result).toMatchObject({
+          ok: true,
+          pluginId,
+          manifestName: packageName,
+          version: payloadVersion,
+          npmResolution: { name: packageName, version: "2.0.0" },
+        });
+        expect(beforeCommit).toHaveBeenCalledOnce();
+      } else {
+        assert(!result.ok, JSON.stringify(result));
+        expect(result.error).toMatch(/expected/i);
+        expect(result.error).toContain(identity === "version" ? "1.9.0" : payloadName);
+        expect(result.error).toContain(identity === "version" ? "2.0.0" : packageName);
+        expect(beforeCommit).not.toHaveBeenCalled();
+        expect((await fs.readdir(projectsRoot)).toSorted()).toEqual(originalProjects);
+      }
+    },
+  );
 
   it.each(["npm", "npm-pack"] as const)(
     "preserves a real %s successor when an earlier lifecycle lease has closed",
@@ -523,45 +576,26 @@ describe("installPluginFromNpmSpec e2e", () => {
   );
 
   it("keeps third-party peer dependencies in the owning npm project across later installs", async () => {
-    const { rootDir, npmRoot } = await makeInstallFixture("npm-plugin-third-party-peer-e2e");
+    const { npmRoot, register, installOk } = await makeInstallFixture(
+      "npm-plugin-third-party-peer-e2e",
+    );
     const pluginWithRuntimePeer = uniquePackageName("runtime-peer-plugin");
     const laterPlugin = uniquePackageName("later-plugin");
     const runtimePeer = uniquePackageName("runtime-peer");
-    await useStaticRegistry(
-      await registryPackages(rootDir, [
-        {
-          packageName: pluginWithRuntimePeer,
-          peerDependencies: { [runtimePeer]: "^1.0.0" },
-          peerDependenciesMeta: {},
-        },
-        { packageName: laterPlugin },
-        { packageName: runtimePeer },
-      ]),
-    );
-
-    const first = await installNpmPlugin({
-      spec: `${pluginWithRuntimePeer}@1.0.0`,
-      npmRoot,
-    });
-    if (!first.ok) {
-      throw new Error(first.error);
-    }
+    await register([
+      {
+        packageName: pluginWithRuntimePeer,
+        peerDependencies: { [runtimePeer]: "^1.0.0" },
+        peerDependenciesMeta: {},
+      },
+      { packageName: laterPlugin },
+      { packageName: runtimePeer },
+    ]);
+    await installOk(`${pluginWithRuntimePeer}@1.0.0`);
     const firstProjectRoot = pluginNpmProjectRoot(npmRoot, pluginWithRuntimePeer);
-    await expect(
-      fs.lstat(path.join(firstProjectRoot, "node_modules", runtimePeer, "package.json")),
-    ).resolves.toBeTruthy();
-
-    const second = await installNpmPlugin({
-      spec: `${laterPlugin}@1.0.0`,
-      npmRoot,
-    });
-    if (!second.ok) {
-      throw new Error(second.error);
-    }
-
-    await expect(
-      fs.lstat(path.join(firstProjectRoot, "node_modules", runtimePeer, "package.json")),
-    ).resolves.toBeTruthy();
+    await expectPackagePresent(firstProjectRoot, runtimePeer);
+    await installOk(`${laterPlugin}@1.0.0`);
+    await expectPackagePresent(firstProjectRoot, runtimePeer);
   });
 
   it("plans peers from installed optional dependencies", async () => {

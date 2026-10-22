@@ -56,7 +56,6 @@ export function createAgentViewTestProps(
     identitySaving: false,
     identityError: null,
     agentSkillsRead: null,
-    agentSkillsUpdateError: null,
     agentSkillsReport: null,
     agentSkillsAgentId: null,
     cron: createInitialCronState(),

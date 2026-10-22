@@ -39,6 +39,11 @@ type ReplyBackend = Parameters<
   Parameters<Parameters<typeof withAdmittedSessionTurnForTest>[1]>[0]["attachBackend"]
 >[0];
 
+const complete = (harness: ReturnType<typeof createStartedThreadHarness>) =>
+  harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+const agentMessage = (id: string, text: string, extra: Record<string, string>) =>
+  itemNotification("item/completed", { id, type: "agentMessage", text, ...extra });
+
 function readTurnStartText(harness: ReturnType<typeof createStartedThreadHarness>): string {
   const request = harness.requests.find((entry) => entry.method === "turn/start");
   const params = request?.params as { input?: Array<{ text?: string }> } | undefined;
@@ -160,7 +165,6 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     let result: Awaited<typeof run>;
     try {
       expect(attachBackend).toHaveBeenCalledTimes(1);
-      const matchingExpectation = "result-required";
       const options = {
         debounceMs: 0,
         isInboundUserMessage: true,
@@ -172,7 +176,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       expect(
         queueActiveRunMessageForTest(params.sessionId, "MATCHED_EXPECTATION", {
           ...options,
-          terminalReplyExpectation: matchingExpectation,
+          terminalReplyExpectation: "result-required",
           waitForTranscriptCommit: true,
           onQueueAccepted: accepted,
           onQueueSettled: consumed,
@@ -195,26 +199,18 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       if (!clientId) {
         throw new Error("Native steering frame must carry its consumption identity");
       }
-      await harness.notify({
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: { id: "matched-user", type: "userMessage", clientId },
-        },
-      });
+      await harness.notify(
+        itemNotification("item/completed", { id: "matched-user", type: "userMessage", clientId }),
+      );
       await vi.waitFor(() => expect(consumed).toHaveBeenCalledExactlyOnceWith(), fastWait);
       expect(harness.requests.filter(({ method }) => method === "turn/steer")).toHaveLength(1);
     } finally {
       await harness.notify(
-        itemNotification("item/completed", {
-          id: "expectation-final",
-          type: "agentMessage",
+        agentMessage("expectation-final", "SYNTHETIC_EXPECTATION_COMPLETE", {
           phase: "final_answer",
-          text: "SYNTHETIC_EXPECTATION_COMPLETE",
         }),
       );
-      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await complete(harness);
       result = await run;
     }
     await turnSettled;
@@ -252,7 +248,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const { cacheWriteInputTokens: _cacheWrite, ...withoutCacheWrite } = usage;
     await harness.notify(response(3, withoutCacheWrite));
     await harness.notify(response(4, null));
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await complete(harness);
     expect((await run).attemptUsage).toMatchObject({
       input: 20,
       cacheRead: 9,
@@ -375,15 +371,8 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     });
 
     await harness.waitForMethod("turn/start");
-    await harness.notify(
-      itemNotification("item/completed", {
-        id: "msg-final-1",
-        type: "agentMessage",
-        text: "Done.",
-        status: "completed",
-      }),
-    );
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await harness.notify(agentMessage("msg-final-1", "Done.", { status: "completed" }));
+    await complete(harness);
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
     expect(settled).toBe(false);
 
@@ -401,16 +390,14 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(settled).toBe(true);
     expect(mockCall(agentEnd, "agent_end")[0]).toMatchObject({ success: true });
     expect(backend.freezeAbort).not.toHaveBeenCalled();
-    const terminalLifecycleEvents = onAgentEvent.mock.calls
-      .map(([event]) => event)
-      .filter(
-        (event) =>
-          event.stream === "lifecycle" &&
-          (event.data.phase === "end" || event.data.phase === "error"),
-      );
+    const terminalLifecycleEvents = onAgentEvent.mock.calls.flatMap(([event]) =>
+      event.stream === "lifecycle" && (event.data.phase === "end" || event.data.phase === "error")
+        ? [event.data]
+        : [],
+    );
     expect(terminalLifecycleEvents).toHaveLength(1);
-    expect(terminalLifecycleEvents[0]?.data).toMatchObject({ phase: "end" });
-    expect(terminalLifecycleEvents[0]?.data.aborted).toBeUndefined();
+    expect(terminalLifecycleEvents[0]).toMatchObject({ phase: "end" });
+    expect(terminalLifecycleEvents[0]?.aborted).toBeUndefined();
     expect(backend.detachBackend).toHaveBeenCalledWith(replyBackend);
     await turnSettled;
     expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBeUndefined();
@@ -434,12 +421,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
         harness.close();
       } else {
         await harness.notify(
-          turnCompleted({
-            id: "turn-1",
-            status: "failed",
-            items: [],
-            error: { message: "codex exploded" },
-          }),
+          turnCompleted({ id: "turn-1", status: "failed", error: { message: "codex exploded" } }),
         );
       }
       await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
@@ -491,9 +473,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const { agentEnd, releaseAgentEnd, harness, run, turnSettled, backend, onAttemptAbort } =
       await heldAttempt();
     await run.waitForTurnAccepted();
-    await harness.notify(
-      turnCompleted({ id: "turn-1", status: "completed", items: [], error: null }),
-    );
+    await harness.notify(turnCompleted({ id: "turn-1", status: "completed", error: null }));
     await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
 
     expect(backend.read()?.isAbortable?.()).toBe(true);
@@ -517,7 +497,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     const run = runCodexAppServerAttempt(params);
 
     await harness.waitForMethod("turn/start");
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await complete(harness);
     const result = await run;
 
     expect(readAttemptTerminal(result).promptError).toBeNull();
