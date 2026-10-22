@@ -138,10 +138,7 @@ function jsonRpcInternalError(parsed: unknown) {
 }
 
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
-async function startMcpLoopbackServer(
-  port: number,
-  work: GatewayConnectionWork,
-): Promise<() => Promise<void>> {
+async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() => Promise<void>> {
   // Shutdown preloads this module even when no MCP listener is needed.
   const [
     { handleMcpJsonRpc },
@@ -548,7 +545,7 @@ async function startMcpLoopbackServer(
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);
-    httpServer.listen(port, "127.0.0.1", () => {
+    httpServer.listen(0, "127.0.0.1", () => {
       httpServer.removeListener("error", reject);
       resolve();
     });
@@ -587,7 +584,7 @@ async function startMcpLoopbackServer(
 }
 
 /** Waits for the process-owned MCP loopback server, starting one if needed. */
-export async function ensureMcpLoopbackServer(port = 0): Promise<void> {
+export async function ensureMcpLoopbackServer(): Promise<void> {
   if (closeActiveMcpLoopbackServer) {
     return;
   }
@@ -598,7 +595,7 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<void> {
     activeMcpLoopbackServerPromise = runInDetachedAsyncContext(() =>
       withPluginRuntimeGatewayContextResolver(
         resolveGatewayContext,
-        () => work.run(() => startMcpLoopbackServer(port, work)),
+        () => work.run(() => startMcpLoopbackServer(work)),
         { inheritRequestScope: false },
       ),
     )
