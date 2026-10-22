@@ -38,7 +38,7 @@ it("reports failed edit-dialog preparation and permits a fresh attempt", async (
       connected
       canAct
       onGoalAction={() => {}}
-      onGoalSubmit={async () => true}
+      onGoalSubmit={() => Promise.resolve(true)}
     />
   ));
   try {
@@ -190,7 +190,7 @@ it.each(["session", "goal", "presentation"] as const)(
   },
 );
 
-it("keeps the goal draft and field identity through a rejected save and retry", async () => {
+it("keeps callback failures outside objective validation and retains the form through retry", async () => {
   const restore = installDialogPolyfill();
   const retry = createDeferred<boolean>();
   const onSubmit = vi
@@ -220,7 +220,7 @@ it("keeps the goal draft and field identity through a rejected save and retry", 
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await waitForSolid(() => {
       expect(modal.querySelector('[role="alert"]')?.textContent).toBe("Goal save failed");
-      expect(input.getAttribute("aria-invalid")).toBe("true");
+      expect(input.hasAttribute("aria-invalid")).toBe(false);
     });
     expect(input.disabled).toBe(false);
     expect(document.activeElement).toBe(input);

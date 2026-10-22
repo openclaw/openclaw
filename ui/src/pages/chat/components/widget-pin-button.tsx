@@ -24,7 +24,11 @@ export function WidgetPinButton(props: { target: WidgetPinTarget; title?: string
   );
   const [pinned, setPinned] = createOptimistic(() => ownerPinned().read());
   const [saving, setSaving] = createOptimistic(false);
-  const [attempt, setAttempt] = createSignal<Promise<void>>();
+  const [attempt, setAttempt] = createSignal<Promise<void> | undefined>(() => {
+    // Authoritative pin changes retire feedback from an earlier attempt.
+    ownerPinned().read();
+    return undefined;
+  });
   let admitted = false;
   let button!: HTMLButtonElement;
   const present = action(function* (completion: Promise<void>) {

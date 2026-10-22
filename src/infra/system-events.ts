@@ -739,13 +739,3 @@ export function peekDeliverableSystemEventEntries(sessionKey: string): SystemEve
     (event) => !event.deliveryHeld && !isSystemEventTurnOwned(sessionKey, event),
   );
 }
-export function holdSystemEventDelivery(
-  sessionKey: string,
-  attempted: readonly SystemEvent[],
-): void {
-  for (const event of getSessionQueue(sessionKey)?.queue ?? []) {
-    if (attempted.some((candidate) => matchesConsumedSystemEvent(event, candidate))) {
-      event.deliveryHeld = true;
-    }
-  }
-}

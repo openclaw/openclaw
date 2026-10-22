@@ -52,7 +52,6 @@ import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-ident
 
 export {
   normalizeCatalogOpenTarget,
-  normalizeChatFollowUpMode,
   normalizeChatFollowUpModeOverride,
   normalizeChatSendShortcut,
   normalizeTextScale,

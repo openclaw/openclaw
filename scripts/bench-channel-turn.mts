@@ -22,6 +22,14 @@ import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-confi
 import { stopChild } from "./lib/gateway-bench-child.ts";
 import { getFreePort } from "./lib/gateway-bench-probes.ts";
 import {
+  controlGatewayProfile,
+  measureGatewayCpuUsage,
+  readGatewayCpuUsage,
+  readGatewayResources,
+  type GatewayCpuUsage,
+  type GatewayResourceSnapshot,
+} from "./lib/gateway-bench-profile.ts";
+import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
   createGatewayBenchEnv,
@@ -32,6 +40,8 @@ const { values } = parseArgs({
   options: {
     entry: { type: "string", default: "dist/entry.js" },
     help: { type: "boolean", short: "h" },
+    resources: { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
     "tool-invocations": { type: "boolean", default: false },
     "tool-argument-bytes": { type: "string", default: "65536" },
     "tool-progress-events": { type: "string", default: "500" },
@@ -60,6 +70,10 @@ type TurnEvidence = TurnIdentity & {
   key: string;
   messageId: string;
   firstOutboundMs: number;
+  finalOutboundMs: number;
+  settledMs: number;
+  outboundMessages: number;
+  cpu?: GatewayCpuUsage;
   result: { status: "ok" };
   outboundId: string;
 };
@@ -73,6 +87,7 @@ const evidence: {
   ready?: unknown;
   shutdown?: [number | null, NodeJS.Signals | null];
   bus?: unknown;
+  resources?: { before: GatewayResourceSnapshot; after: GatewayResourceSnapshot };
   ok?: boolean;
   error?: string;
 } = {
@@ -129,7 +144,7 @@ function setPhase(next: string) {
   console.log("PHASE", phase);
   save();
 }
-function launch(args: string[], env: NodeJS.ProcessEnv, name: string) {
+function launch(args: string[], env: NodeJS.ProcessEnv, name: string, ipc = false) {
   if (interrupted) {
     throw new Error("Benchmark interrupted");
   }
@@ -137,7 +152,7 @@ function launch(args: string[], env: NodeJS.ProcessEnv, name: string) {
   const child = spawn(process.execPath, args, {
     cwd: process.cwd(),
     env,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ipc ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
     detached: true,
   });
   child.stdout?.pipe(out);
@@ -207,15 +222,29 @@ try {
   if (mockReady.status !== 200) {
     throw new Error("Mock provider not ready");
   }
+  const observe = values.resources || values["cpu-profile"];
+  const profilePath = path.join(output, "warm.cpuprofile");
   gateway = launch(
-    buildGatewayBenchChildArgs(values.entry, port),
+    buildGatewayBenchChildArgs(values.entry, port, [
+      ...(observe
+        ? [
+            "--import",
+            "./scripts/tsx.mjs",
+            "--import",
+            "./scripts/lib/gateway-bench-profile-preload.ts",
+          ]
+        : []),
+      ...(values["cpu-profile"] ? ["--cpu-prof", `--cpu-prof-dir=${output}`] : []),
+    ]),
     {
       ...createGatewayBenchEnv(fixture, configPath, { caseEnv: {} }),
       OPENAI_API_KEY: "synthetic-sqlmeasure-fixture",
       SQLMEASURE_OUT: output,
       NODE_OPTIONS: process.env.OPENCLAW_CHANNEL_BENCH_NODE_OPTIONS ?? "--enable-source-maps",
+      NODE_DISABLE_COMPILE_CACHE: process.env.NODE_DISABLE_COMPILE_CACHE,
     },
     "gateway",
+    observe,
   );
   const ready = await waitForInitialProbe({
     port,
@@ -229,7 +258,19 @@ try {
     throw new Error("Gateway not ready");
   }
   await delay(1000);
+  let warmResources: GatewayResourceSnapshot | undefined;
   for (let i = 0; i <= 10; i++) {
+    if (i === 1) {
+      if (values.resources) {
+        warmResources = await readGatewayResources(gateway);
+      }
+      if (values["cpu-profile"]) {
+        await controlGatewayProfile(gateway, "cpu", "start", profilePath, { includeWorkers: true });
+      }
+    }
+    const cpuBefore = observe
+      ? await readGatewayCpuUsage(gateway, { includeWorkers: values.resources })
+      : undefined;
     setPhase(i === 0 ? "02.first-turn" : `03.turn-${String(i).padStart(2, "0")}`);
     const turnId = createHash("sha256").update(phase).digest("hex").slice(0, 32);
     const messageId = `sqlmeasure-${i}`;
@@ -267,6 +308,7 @@ try {
       textIncludes: reply,
       timeoutMs: 180000,
     });
+    const finalOutboundMs = Date.now() - start;
     const firstOutboundMs = await firstOutbound;
     // The poll acknowledgement follows dispatch, preview cleanup and receipt settlement.
     const deadline = Date.now() + 180000;
@@ -279,6 +321,13 @@ try {
       }
       await delay(50);
     }
+    const settledMs = Date.now() - start;
+    const cpu = cpuBefore
+      ? measureGatewayCpuUsage(
+          cpuBefore,
+          await readGatewayCpuUsage(gateway, { includeWorkers: values.resources }),
+        )
+      : undefined;
     const result = state
       .getSnapshot()
       .messages.find(
@@ -298,10 +347,26 @@ try {
       turnId,
       messageId,
       firstOutboundMs,
+      finalOutboundMs,
+      settledMs,
+      outboundMessages: state
+        .getSnapshot()
+        .messages.filter(
+          (message) => message.direction === "outbound" && message.replyToId === messageId,
+        ).length,
+      ...(cpu ? { cpu } : {}),
       result: { status: "ok" },
       outboundId: result.id,
     });
     save();
+    if (i === 10) {
+      if (values["cpu-profile"]) {
+        await controlGatewayProfile(gateway, "cpu", "stop", profilePath);
+      }
+      if (warmResources) {
+        evidence.resources = { before: warmResources, after: await readGatewayResources(gateway) };
+      }
+    }
     await delay(1000);
   }
   setPhase("08.shutdown");

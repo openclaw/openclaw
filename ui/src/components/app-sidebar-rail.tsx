@@ -56,9 +56,9 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
-    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).map(
-      (entry) => parseSidebarEntry(entry)!,
-    ),
+    (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? [])
+      .map((entry) => parseSidebarEntry(entry)!)
+      .filter((entry) => entry.type !== "session" || entry.rail),
   );
   const views = ["pages", "sessions", "online"] as const;
   const viewLabel = (view: (typeof views)[number]) =>

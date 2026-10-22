@@ -60,7 +60,7 @@ import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "./scheduled-run-gateway-context.js";
-import { createGatewayCronAgentJobRunner } from "./server-cron-agent-run.js";
+import { createGatewayCronAgentDeps } from "./server-cron-agent-run.js";
 import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import {
@@ -433,7 +433,7 @@ export function buildGatewayCronService(params: {
     runSchedulerOwned,
     enqueueSessionEvent,
     deferSessionEvent,
-    runIsolatedAgentJob: createGatewayCronAgentJobRunner({
+    ...createGatewayCronAgentDeps({
       deps: params.deps,
       storePath,
       resolveCronAgent,
