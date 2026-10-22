@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildMatrixQaMessageContent,
@@ -5,6 +6,7 @@ import {
 } from "./client-message-content.js";
 import { createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
 import { mockMatrixQaHttp } from "./http.test-support.js";
+import { requestMatrixJson } from "./request.js";
 
 function resolveRequestUrl(input: RequestInfo | URL) {
   return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
@@ -16,14 +18,19 @@ function parseJsonRequestBody(init?: RequestInit) {
 
 function makeClient(fetchImpl: typeof fetch) {
   mockMatrixQaHttp(fetchImpl);
-  return createMatrixQaClient({
-    accessToken: "token",
-    baseUrl: "http://127.0.0.1:28008/",
-  });
+  return createMatrixQaClient(clientParams);
 }
 
 const roomId = "!room:matrix-qa.test";
 const roomEndpoint = "http://127.0.0.1:28008/_matrix/client/v3/rooms/!room%3Amatrix-qa.test";
+const clientParams = { accessToken: "token", baseUrl: "http://127.0.0.1:28008/" };
+const request = (timeoutMs?: number) =>
+  requestMatrixJson({
+    baseUrl: "https://matrix.example.test",
+    endpoint: "/_matrix/client/v3/account/whoami",
+    method: "GET",
+    timeoutMs,
+  });
 function captureRequests(respond: (count: number) => object = () => ({})) {
   const requests: Array<{ body: Record<string, unknown>; url: string }> = [];
   const client = makeClient(async (input, init) => {
@@ -174,15 +181,13 @@ describe("matrix driver client", () => {
   });
 
   it("sends Matrix reactions through the protocol send endpoint", async () => {
-    const fetchImpl: typeof fetch = async (input, init) => {
+    const client = makeClient(async (input, init) => {
       expect(resolveRequestUrl(input)).toContain(`${roomEndpoint}/send/m.reaction/`);
       expect(parseJsonRequestBody(init)).toEqual({
         "m.relates_to": { rel_type: "m.annotation", event_id: "$msg-1", key: "👍" },
       });
       return Response.json({ event_id: "$reaction-1" });
-    };
-
-    const client = makeClient(fetchImpl);
+    });
 
     await expect(
       client.sendReaction({ emoji: " 👍 ", messageId: " $msg-1 ", roomId }),
@@ -232,15 +237,13 @@ describe("matrix driver client", () => {
 
   it("uploads Matrix media before sending the room event", async () => {
     const requests: Array<{ body: RequestInit["body"]; url: string }> = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
+    const client = makeClient(async (input, init) => {
       requests.push({ body: init?.body, url: resolveRequestUrl(input) });
       if (requests.length === 1) {
         return Response.json({ content_uri: "mxc://matrix-qa.test/image" });
       }
       return Response.json({ event_id: "$media-1" });
-    };
-
-    const client = makeClient(fetchImpl);
+    });
 
     await expect(client.sendMediaMessage(image)).resolves.toBe("$media-1");
 
@@ -263,62 +266,93 @@ describe("matrix driver client", () => {
     });
   });
 
-  it("fails closed when the media upload response streams an over-cap body", async () => {
+  it.each([
+    ["media upload", 200],
+    ["JSON request", 200],
+    ["JSON request", 500],
+  ] as const)("cancels an over-cap %s response before handling HTTP %s", async (entry, status) => {
     const chunkSize = 1024 * 1024;
     const chunkCount = 32; // 32 MiB total, past the 16 MiB cap
     let reads = 0;
     let canceled = false;
     const encoder = new TextEncoder();
-    const fetchImpl: typeof fetch = async () =>
-      new Response(
-        new ReadableStream<Uint8Array>({
-          pull(controller) {
-            reads += 1;
-            controller.enqueue(encoder.encode("a".repeat(chunkSize)));
-            if (reads >= chunkCount) {
-              controller.close();
-            }
-          },
-          cancel() {
-            canceled = true;
-          },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-
-    const client = makeClient(fetchImpl);
-
-    await expect(client.sendMediaMessage({ ...image, fileName: "huge.png" })).rejects.toThrow(
-      /Matrix homeserver response exceeds 16777216 bytes/,
+    const http = mockMatrixQaHttp(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              reads += 1;
+              controller.enqueue(encoder.encode("a".repeat(chunkSize)));
+              if (reads >= chunkCount) {
+                controller.close();
+              }
+            },
+            cancel() {
+              canceled = true;
+            },
+          }),
+          { status, headers: { "content-type": "application/json" } },
+        ),
     );
+
+    const operation =
+      entry === "media upload"
+        ? createMatrixQaClient(clientParams).sendMediaMessage({ ...image, fileName: "huge.png" })
+        : request();
+    await expect(operation).rejects.toThrow(/Matrix homeserver response exceeds 16777216 bytes/);
 
     expect(canceled).toBe(true);
     expect(reads).toBeLessThan(chunkCount);
+    expect(http.release).toHaveBeenCalledOnce();
   });
 
-  it("still tolerates malformed in-bounds media upload JSON", async () => {
-    const fetchImpl: typeof fetch = async () =>
-      new Response("{ not json", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
+  it.each(["media upload", "JSON request"])(
+    "handles malformed in-bounds %s JSON",
+    async (entry) => {
+      const client = makeClient(
+        async () =>
+          new Response("{ not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      if (entry === "media upload") {
+        await expect(client.sendMediaMessage({ ...image, fileName: "bad.png" })).rejects.toThrow(
+          "Matrix media upload did not return content_uri.",
+        );
+      } else {
+        await expect(request()).resolves.toEqual({ status: 200, body: {} });
+      }
+    },
+  );
 
-    const client = makeClient(fetchImpl);
-
-    await expect(client.sendMediaMessage({ ...image, fileName: "bad.png" })).rejects.toThrow(
-      "Matrix media upload did not return content_uri.",
+  it("caps oversized request timeouts before creating the abort signal", async () => {
+    const signal = AbortSignal.abort();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
+    const http = mockMatrixQaHttp(fetchImpl);
+    await request(MAX_TIMER_TIMEOUT_MS + 1_000_000);
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://matrix.example.test/_matrix/client/v3/account/whoami",
+      expect.objectContaining({ signal }),
     );
+    expect(http.release).toHaveBeenCalledOnce();
+  });
+
+  it("reads a large in-bounds JSON body unchanged", async () => {
+    const body = { data: "x".repeat(8 * 1024 * 1024) };
+    mockMatrixQaHttp(async () => Response.json(body));
+    await expect(request()).resolves.toEqual({ status: 200, body });
   });
 
   it("adds Matrix room encryption state when provisioning encrypted QA rooms", async () => {
     const createRoomBodies: Array<Record<string, unknown>> = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
+    const client = makeClient(async (input, init) => {
       createRoomBodies.push(parseJsonRequestBody(init));
       expect(resolveRequestUrl(input)).toBe("http://127.0.0.1:28008/_matrix/client/v3/createRoom");
       return Response.json({ room_id: "!encrypted:matrix-qa.test" });
-    };
-
-    const client = makeClient(fetchImpl);
+    });
 
     await expect(
       client.createPrivateRoom({
@@ -346,68 +380,43 @@ describe("matrix driver client", () => {
     ]);
   });
 
-  it("provisions a three-member room so Matrix QA runs in a group context", async () => {
+  it("provisions group and direct rooms through token and dummy authentication", async () => {
     const tokenAuthedUsers = new Set<string>();
-    const { fetchImpl, createRoomBodies } = provisioningFetch((body) => {
-      const username = typeof body.username === "string" ? body.username : "";
-      const auth = typeof body.auth === "object" && body.auth ? body.auth : undefined;
-      const challenge = {
-        session: `session-${username}`,
-        flows: [{ stages: ["m.login.registration_token", "m.login.dummy"] }],
-      };
-      if (!auth) {
-        return Response.json(challenge, { status: 401 });
-      }
-      if ((auth as { type?: string }).type === "m.login.registration_token") {
-        expect(auth).toEqual({
-          session: challenge.session,
-          type: "m.login.registration_token",
-          token: "reg-token",
-        });
-        tokenAuthedUsers.add(username);
-        return Response.json(
-          { ...challenge, completed: ["m.login.registration_token"] },
-          { status: 401 },
-        );
-      }
-      expect(tokenAuthedUsers.has(username)).toBe(true);
-      expect(auth).toEqual({ session: challenge.session, type: "m.login.dummy" });
-      return Response.json({
-        access_token: `token-${username}`,
-        device_id: `device-${username}`,
-        user_id: `@${username}:matrix-qa.test`,
-      });
-    });
-
-    mockMatrixQaHttp(fetchImpl);
-
-    const result = await provisionMatrixQaRoom({
-      ...provisionParams,
-      roomName: groupSpec.name,
-      topology: {
-        defaultRoomKey: "main",
-        rooms: [{ ...groupSpec, members: [...groupSpec.members], encrypted: false }],
-      },
-    });
-
-    expect(result).toMatchObject({ roomId, observer: { userId: "@qa-observer:matrix-qa.test" } });
-    expect(result.topology).toEqual({
-      defaultRoomId: roomId,
-      defaultRoomKey: "main",
-      rooms: [expectedGroup()],
-    });
-    expect(createRoomBodies).toEqual([expectedCreation(groupSpec.name)]);
-  });
-
-  it("provisions direct-message topology rooms with Matrix direct-room flags", async () => {
-    let registerCount = 0;
     const { fetchImpl, createRoomBodies } = provisioningFetch(
-      () => {
-        registerCount += 1;
-        const role = ["driver", "sut", "observer"][registerCount - 1];
+      (body) => {
+        const username = typeof body.username === "string" ? body.username : "";
+        if (username === "qa-observer") {
+          return Response.json({
+            access_token: `token-${username}`,
+            user_id: `@${username}:matrix-qa.test`,
+          });
+        }
+        const auth = typeof body.auth === "object" && body.auth ? body.auth : undefined;
+        const challenge = {
+          session: `session-${username}`,
+          flows: [{ stages: ["m.login.registration_token", "m.login.dummy"] }],
+        };
+        if (!auth) {
+          return Response.json(challenge, { status: 401 });
+        }
+        if ((auth as { type?: string }).type === "m.login.registration_token") {
+          expect(auth).toEqual({
+            session: challenge.session,
+            type: "m.login.registration_token",
+            token: "reg-token",
+          });
+          tokenAuthedUsers.add(username);
+          return Response.json(
+            { ...challenge, completed: ["m.login.registration_token"] },
+            { status: 401 },
+          );
+        }
+        expect(tokenAuthedUsers.has(username)).toBe(true);
+        expect(auth).toEqual({ session: challenge.session, type: "m.login.dummy" });
         return Response.json({
-          access_token: `token-${role}`,
-          user_id: `@qa-${role}:matrix-qa.test`,
+          access_token: `token-${username}`,
+          device_id: `device-${username}`,
+          user_id: `@${username}:matrix-qa.test`,
         });
       },
       ["!group:matrix-qa.test", "!dm:matrix-qa.test"],
@@ -438,19 +447,27 @@ describe("matrix driver client", () => {
       },
     });
 
-    expect(result.topology.rooms).toEqual([
-      expectedGroup({ key: "group", name: "Matrix Group", roomId: "!group:matrix-qa.test" }),
-      {
-        encrypted: false,
-        key: "sut-dm",
-        kind: "dm",
-        memberRoles: ["driver", "sut"],
-        memberUserIds: ["@qa-driver:matrix-qa.test", "@qa-sut:matrix-qa.test"],
-        name: "Matrix Driver/SUT DM",
-        requireMention: false,
-        roomId: "!dm:matrix-qa.test",
-      },
-    ]);
+    expect(result).toMatchObject({
+      roomId: "!group:matrix-qa.test",
+      observer: { userId: "@qa-observer:matrix-qa.test" },
+    });
+    expect(result.topology).toEqual({
+      defaultRoomId: "!group:matrix-qa.test",
+      defaultRoomKey: "group",
+      rooms: [
+        expectedGroup({ key: "group", name: "Matrix Group", roomId: "!group:matrix-qa.test" }),
+        {
+          encrypted: false,
+          key: "sut-dm",
+          kind: "dm",
+          memberRoles: ["driver", "sut"],
+          memberUserIds: ["@qa-driver:matrix-qa.test", "@qa-sut:matrix-qa.test"],
+          name: "Matrix Driver/SUT DM",
+          requireMention: false,
+          roomId: "!dm:matrix-qa.test",
+        },
+      ],
+    });
     expect(createRoomBodies).toEqual([
       expectedCreation("Matrix Group"),
       expectedCreation("Matrix Driver/SUT DM", true),

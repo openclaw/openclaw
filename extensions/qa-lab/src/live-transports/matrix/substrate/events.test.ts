@@ -18,11 +18,11 @@ function expectEvent(
   envelope: Partial<MatrixQaRoomEvent> = {},
 ) {
   expect(normalizeMatrixQaObservedEvent(roomId, message(content, envelope))).toEqual({
-    eventId: "$event",
+    eventId: envelope.event_id ?? "$event",
     kind: "message",
     roomId,
-    sender,
-    type: "m.room.message",
+    sender: envelope.sender ?? sender,
+    type: envelope.type ?? "m.room.message",
     ...expected,
   });
 }
@@ -85,25 +85,41 @@ describe("matrix observed event normalization", () => {
     expect(event?.live).toBe(live);
   });
 
-  it("normalizes Matrix reaction events with target metadata", () => {
-    expectEvent(
-      {
-        "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
-      },
-      {
-        eventId: "$reaction",
-        kind: "reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
+  it.each([
+    {
+      kind: "reaction",
+      type: "m.reaction",
+      content: { "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" } },
+      envelope: { origin_server_ts: 1_700_000_000_000 },
+      expected: {
         originServerTs: 1_700_000_000_000,
         relatesTo: { eventId: "$msg", relType: "m.annotation" },
         reaction: { eventId: "$msg", key: "👍" },
       },
+    },
+    {
+      kind: "membership",
+      type: "m.room.member",
+      content: { membership: "leave" },
+      envelope: { state_key: sender },
+      expected: { stateKey: sender, membership: "leave" },
+    },
+    {
+      kind: "redaction",
+      type: "m.room.redaction",
+      content: {},
+      envelope: { redacts: "$reaction" },
+      expected: { redactsEventId: "$reaction" },
+    },
+  ] as const)("normalizes $kind metadata", ({ kind, type, content, envelope, expected }) => {
+    expectEvent(
+      content,
+      { kind, ...expected },
       {
-        event_id: "$reaction",
+        event_id: `$${kind}`,
         sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
-        origin_server_ts: 1_700_000_000_000,
+        type,
+        ...envelope,
       },
     );
   });
@@ -150,7 +166,7 @@ describe("matrix observed event normalization", () => {
         msgtype: "m.text",
         "com.openclaw.approval": { ...structuredClone(approval), ...metadata },
       },
-      { eventId, body, msgtype: "m.text", approval: { ...approval, ...summary } },
+      { body, msgtype: "m.text", approval: { ...approval, ...summary } },
       { event_id: eventId },
     );
   });
@@ -159,12 +175,12 @@ describe("matrix observed event normalization", () => {
     {
       name: "explicit filename and caption",
       content: {
-        body: "Protocol note: generated the QA lighthouse image successfully.",
+        body: "Image caption",
         filename: "qa-lighthouse.png",
       },
       attachment: {
         kind: "image",
-        caption: "Protocol note: generated the QA lighthouse image successfully.",
+        caption: "Image caption",
         filename: "qa-lighthouse.png",
       },
     },
@@ -176,47 +192,8 @@ describe("matrix observed event normalization", () => {
   ] as const)("normalizes image messages with $name", ({ content, attachment }) => {
     expectEvent(
       { ...content, msgtype: "m.image" },
-      { eventId: "$image", body: content.body, msgtype: "m.image", attachment },
+      { body: content.body, msgtype: "m.image", attachment },
       { event_id: "$image" },
-    );
-  });
-
-  it("normalizes membership events with explicit membership kind", () => {
-    expectEvent(
-      { membership: "leave" },
-      {
-        eventId: "$membership",
-        kind: "membership",
-        sender: "@driver:matrix-qa.test",
-        stateKey: sender,
-        type: "m.room.member",
-        membership: "leave",
-      },
-      {
-        event_id: "$membership",
-        sender: "@driver:matrix-qa.test",
-        state_key: sender,
-        type: "m.room.member",
-      },
-    );
-  });
-
-  it("classifies Matrix redactions without needing raw event inspection", () => {
-    expectEvent(
-      {},
-      {
-        eventId: "$redaction",
-        kind: "redaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.room.redaction",
-        redactsEventId: "$reaction",
-      },
-      {
-        event_id: "$redaction",
-        redacts: "$reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.room.redaction",
-      },
     );
   });
 });
