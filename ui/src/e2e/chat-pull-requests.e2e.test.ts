@@ -662,7 +662,12 @@ suite.define(() => {
     });
     expect(requestB.params).toMatchObject({ sessionKey: sessionB });
     const publishingB = page.getByRole("button", { name: "Publishing…" });
-    await expect.poll(() => publishingB.isDisabled()).toBe(true);
+    const publishingBState = () =>
+      publishingB.evaluateAll((buttons) => ({
+        count: buttons.length,
+        disabled: buttons.map((button) => button.matches(":disabled")),
+      }));
+    await expect.poll(publishingBState).toEqual({ count: 1, disabled: [true] });
 
     await gateway.resolveDeferred("sessions.github.publish", {
       requestId: "publication-a",
@@ -672,7 +677,7 @@ suite.define(() => {
       branch: "openclaw/publication-a",
       headCommit: "a".repeat(40),
     });
-    await expect.poll(() => publishingB.isDisabled()).toBe(true);
+    await expect.poll(publishingBState).toEqual({ count: 1, disabled: [true] });
     expect(
       await page.locator('a[href="https://github.com/openclaw/openclaw/pull/125301"]').count(),
     ).toBe(0);
