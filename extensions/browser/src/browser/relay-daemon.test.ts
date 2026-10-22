@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
@@ -51,15 +52,9 @@ it("serves the relay until the idle grace elapses with no peers", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const run = await runExtensionRelayDaemon({ port: 0 });
   expect(run.port).toBeGreaterThan(0);
-  const served = await new Promise<boolean>((resolve) => {
-    const socket = net.connect({ host: "127.0.0.1", port: run.port ?? 0 });
-    socket.once("connect", () => {
-      socket.destroy();
-      resolve(true);
-    });
-    socket.once("error", () => resolve(false));
-  });
-  expect(served).toBe(true);
+  const socket = net.connect({ host: "127.0.0.1", port: run.port ?? 0 });
+  await once(socket, "connect");
+  socket.destroy();
   await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
   await expect(run.done).resolves.toBe("idle");
 });

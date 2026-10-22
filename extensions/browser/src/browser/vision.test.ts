@@ -1,6 +1,5 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./vision.js";
@@ -63,10 +62,10 @@ describe("describeBrowserScreenshot", () => {
   });
 
   it.each([
-    { name: "session-owned default", agentId: undefined, owner: "main" },
-    { name: "explicit matching worker", agentId: "worker", owner: "worker" },
-    { name: "conflicting worker", agentId: "worker", owner: "main" },
-  ])("checks the $name identity without an agent directory", async ({ agentId, owner }) => {
+    [undefined, "main"],
+    ["worker", "worker"],
+    ["worker", "main"],
+  ] as const)("checks agent %s against session owner %s", async (agentId, owner) => {
     const result = screenshot({
       agentId,
       mediaScope: { sessionKey: `agent:${owner}:webchat:direct:123` },
@@ -96,9 +95,7 @@ describe("describeBrowserScreenshot", () => {
     });
     expect(normalize).toHaveBeenCalledWith(Buffer.from("image"), { maxSide: 800 });
     expect(save).toHaveBeenCalledWith(Buffer.from("small"), "image/jpeg", "browser");
-    expect(expectDefined(describeImage.mock.calls[0]?.[0], "browser vision request").filePath).toBe(
-      "/tmp/resized.jpg",
-    );
+    expect(describeImage.mock.calls[0]?.[0]).toMatchObject({ filePath: "/tmp/resized.jpg" });
   });
 });
 

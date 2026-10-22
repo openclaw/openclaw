@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 
 const browserUtilsMock = vi.hoisted(() => ({ configDir: "/tmp/openclaw-state" }));
 
@@ -26,6 +27,7 @@ afterAll(() => {
 let testRoot = "";
 let configDir = "";
 let trashDir = "";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function write(target: string, contents: string) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -36,10 +38,6 @@ function profile(dir: string, contents = "outside profile") {
   write(path.join(dir, "Preferences"), contents);
   return dir;
 }
-function expectOutsideProfile(dir: string) {
-  expect(fs.lstatSync(dir).isDirectory()).toBe(true);
-  expect(fs.readFileSync(path.join(dir, "Preferences"), "utf8")).toBe("outside profile");
-}
 function expectForbidden(target: string) {
   return expect(movePathToTrash(target)).rejects.toThrow(
     "Refusing to trash path outside allowed roots",
@@ -48,7 +46,7 @@ function expectForbidden(target: string) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  testRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-")));
+  testRoot = tempDirs.make("openclaw-browser-");
   configDir = path.join(testRoot, "state");
   const homeDir = path.join(testRoot, "home", "test");
   trashDir = path.join(homeDir, ".Trash");
@@ -58,12 +56,7 @@ beforeEach(() => {
   vi.spyOn(os, "homedir").mockReturnValue(homeDir);
 });
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  if (testRoot) {
-    fs.rmSync(testRoot, { recursive: true, force: true });
-  }
-});
+afterEach(() => vi.restoreAllMocks());
 
 it("allows managed browser data under a configured state directory outside home", async () => {
   const target = profile(path.join(configDir, "browser", "constructor"), "profile data");
@@ -108,5 +101,6 @@ it.each([false, true])("confines symlink moves (parent=%s)", async (parent) => {
     expect(fs.readdirSync(reservation)).toEqual([path.basename(target)]);
   }
   expect(fs.readlinkSync(link)).toBe(outsideDir);
-  expectOutsideProfile(outsideTarget);
+  expect(fs.lstatSync(outsideTarget).isDirectory()).toBe(true);
+  expect(fs.readFileSync(path.join(outsideTarget, "Preferences"), "utf8")).toBe("outside profile");
 });
