@@ -18,7 +18,7 @@ import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
@@ -288,13 +288,9 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                       ref={(element) => (sessionLink = element)}
                       href={chatUrl()}
                       class="session-link"
-                      onClick={(e: MouseEvent) => {
-                        if (!shouldHandleNavigationClick(e)) {
-                          return;
-                        }
-                        e.preventDefault();
-                        props.onNavigateToChat(row().key);
-                      }}
+                      onClick={(e: MouseEvent) =>
+                        handleNavigationClick(e, () => props.onNavigateToChat(row().key))
+                      }
                     >
                       {friendlyKeyLabel() ?? row().key}
                     </a>

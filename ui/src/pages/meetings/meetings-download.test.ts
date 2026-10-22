@@ -109,3 +109,55 @@ it("keeps same-meeting tab navigation responsive while exporting", async () => {
     pending.resolve({ data: "", filename: "meeting.md", mimeType: "text/markdown" });
   }
 });
+
+it("clears an export error during retry without replacing notes or download controls", async () => {
+  const failed = deferred<unknown>();
+  const retry = deferred<unknown>();
+  let exports = 0;
+  const request = vi.fn((method: string) =>
+    method === "transcripts.export"
+      ? ++exports === 1
+        ? failed.promise
+        : retry.promise
+      : Promise.resolve(
+          method === "transcripts.list" ? { sessions: [], nextCursor: null } : meetingPage,
+        ),
+  );
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:notes");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  const downloads: string[] = [];
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+    this: HTMLAnchorElement,
+  ) {
+    downloads.push(this.download);
+  });
+  const { page, unmount } = mount(request, "?selector=meeting");
+  try {
+    await waitForSolid(() => expect(page.textContent).toContain("Reader layout discussed."));
+    const control = button(page, "Download Markdown");
+    const notes = page.querySelector(".meetings-notes");
+    control.click();
+    failed.reject(new Error("Export unavailable"));
+    await waitForSolid(() => expect(page.textContent).toContain("Export unavailable"));
+    expect(button(page, "Download Markdown")).toBe(control);
+    expect(control.disabled).toBe(false);
+    control.click();
+    await waitForSolid(() => expect(page.textContent).toContain("Preparing download"));
+    expect(page.textContent).not.toContain("Export unavailable");
+    expect(page.querySelector(".meetings-notes")).toBe(notes);
+    expect(button(page, "Download Markdown")).toBe(control);
+    await waitForSolid(() => expect(control.disabled).toBe(true));
+    retry.resolve({ data: btoa("Saved notes"), filename: "retry.md", mimeType: "text/markdown" });
+    await waitForSolid(() => expect(page.textContent).toContain("Download started"));
+    expect(control.disabled).toBe(false);
+    expect(downloads).toEqual(["retry.md"]);
+  } finally {
+    unmount();
+    retry.resolve({ data: "", filename: "retry.md", mimeType: "text/markdown" });
+  }
+});

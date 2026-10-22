@@ -152,7 +152,7 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
     Object.assign(context.theme, { branding: resolveThemeBranding(undefined) });
   }
   if (!context.theme.settings) {
-    Object.assign(context.theme, { settings: loadSettings() });
+    Object.defineProperty(context.theme, "settings", { configurable: true, get: loadSettings });
   }
   Object.assign(context.gateway, {
     connection: context.gateway.connection ?? { gatewayUrl: "ws://config.test" },

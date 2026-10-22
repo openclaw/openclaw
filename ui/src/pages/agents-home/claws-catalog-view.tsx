@@ -6,7 +6,7 @@ import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import "../../styles/plugins.css";
 import "../../styles/claws-catalog.css";
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
@@ -131,12 +131,7 @@ export function ClawsCatalogView(props: ClawsCatalogViewProps) {
               <a
                 class="plugin-catalog-detail__back"
                 href={pathForRoute("claws", props.basePath)}
-                onClick={(event) => {
-                  if (shouldHandleNavigationClick(event)) {
-                    event.preventDefault();
-                    props.onBack();
-                  }
-                }}
+                onClick={(event) => handleNavigationClick(event, () => props.onBack())}
               >
                 {t("clawsCatalog.back")}
               </a>

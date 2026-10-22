@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { message as chatMessage } from "./chat-thread-fixtures.test-support.ts";
-import { coalesceActivityRuns, groupMessages } from "./chat-thread-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
+import { coalesceActivityRuns } from "./chat-turn-presentation.ts";
 
 function preparedGroup(message: unknown, key: string): MessageGroup {
   const [group] = groupMessages([{ kind: "message", key, message }], {}, undefined, true);

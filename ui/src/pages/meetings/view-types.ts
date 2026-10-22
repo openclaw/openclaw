@@ -31,9 +31,13 @@ export type TranscriptsViewProps = {
   listError: unknown;
   reader: TranscriptReadState;
   readerTab: "text" | "summary";
-  summaryGeneration?: { kind: "idle" | "loading" | "done" | "error"; message?: string };
+  summaryGenerating?: boolean;
+  summaryCompletion?: Promise<void> | null;
+  summaryRead?: () => boolean;
   onSummaryRetry?: () => void;
-  exportState: { kind: "idle" | "loading" | "done" | "error"; message?: string };
+  exporting: boolean;
+  exportCompletion: Promise<void> | null;
+  exportRead: () => boolean;
   onNavigate: (patch: Record<string, string | null>) => void;
   onOpenCaptureSettings: () => void;
   onRefresh: () => void;

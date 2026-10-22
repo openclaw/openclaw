@@ -8,7 +8,7 @@ import type {
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { Type } from "typebox";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
 
@@ -115,9 +115,64 @@ it("serializes mixed tool output and supplies the empty-output fallback", async 
   });
 });
 
+describe("a delivered send to a configured delivery target", () => {
+  // Shape of a cron send: the delivery target is the current source and the
+  // message tool confirms the source reply.
+  const tool: AnyAgentTool = {
+    name: "message",
+    label: "Fixture message",
+    description: "Fixture message tool",
+    parameters: Type.Object({}, { additionalProperties: true }),
+    execute: async () => ({
+      content: [{ type: "text", text: '{"ok":true}' }],
+      details: {
+        ok: true,
+        messageDelivery: {
+          status: "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+          sourceReplyDelivered: true,
+        },
+      },
+    }),
+  };
+  it.each([
+    { finalByDefault: false, final: undefined, ends: false },
+    { finalByDefault: false, final: true, ends: true },
+    // Chat turns keep the default: an omitted final ends the turn.
+    { finalByDefault: undefined, final: undefined, ends: true },
+  ])(
+    "ends the native turn only when final resolves true (default $finalByDefault, final $final)",
+    async ({ finalByDefault, final, ends }) => {
+      await withFixtureTool(
+        tool,
+        async (surface) => {
+          const result = await surface.execute({
+            type: "function_call",
+            turn_id: "send-turn",
+            call_id: "send-call",
+            name: "message",
+            arguments: {
+              action: "send",
+              message: "daily drop",
+              ...(final === undefined ? {} : { final }),
+            },
+          });
+
+          expect(result.terminate).toBe(ends ? true : undefined);
+          // Delivery facts do not depend on whether the turn ends.
+          expect(surface.delivery.sourceReplyDelivered).toBe(true);
+        },
+        finalByDefault,
+      );
+    },
+  );
+});
+
 async function withFixtureTool(
   tool: AnyAgentTool,
   run: (surface: Awaited<ReturnType<typeof buildAgentsApiToolSurface>>) => Promise<void>,
+  messageToolFinalByDefault?: boolean,
 ) {
   await withOpenClawTestState({ label: "agentsapi-tool-results" }, async (state) => {
     const attempt = createAttemptParams({
@@ -125,6 +180,7 @@ async function withFixtureTool(
       agentDir: state.agentDir(),
       sessionFile: state.statePath("fixture-session.jsonl"),
       config: { plugins: { allow: [] } },
+      ...(messageToolFinalByDefault === undefined ? {} : { messageToolFinalByDefault }),
     });
     const host = await createAgentHarnessHostCapabilitiesForTest({
       attempt,

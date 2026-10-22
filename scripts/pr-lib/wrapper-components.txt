@@ -943,7 +943,6 @@ src/infra/directory-durability.ts
 src/infra/directory-watch-host.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
-src/infra/device-identity-process-cache.ts
 src/infra/device-identity-store.ts
 src/infra/device-identity.ts
 src/infra/dotenv-global-core.ts
@@ -1688,7 +1687,6 @@ src/process/spawn-broker/child-diagnostics.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
-src/process/spawn-broker/execa-client.ts
 src/process/spawn-broker/execa-protocol.ts
 src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
