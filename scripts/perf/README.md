@@ -675,7 +675,9 @@ patch, delete, mixed-interaction, catalog-refresh and cron workloads.
 
 For steady model selection with multiple active conversations, use
 `--activity-run-mix --activity-session agent:main:main --activity-models openai/gpt-5`.
-Start the reload fixture with `--subagent-seed` to expose its native spawn tool.
+Start the reload fixture with
+`--subagent-seed --service-tier-port <unused-loopback-port>` to expose its native
+spawn tool and synthetic provider.
 The probe asks its synthetic provider to invoke `sessions_spawn` once,
 finds that exact native child by parent and unique label, then warms three
 conversations and completes concurrent real turns in each. `--activity-cron` replaces every fourth cohort

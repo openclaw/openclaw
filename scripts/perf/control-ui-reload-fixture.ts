@@ -41,6 +41,9 @@ const { values } = parseArgs({
 if (!values["state-dir"] || !values["ui-root"]) {
   throw new Error("Expected --state-dir <synthetic-fixture> --ui-root <built-ui> [--prepare]");
 }
+if (values["subagent-seed"] && !values["service-tier-port"]) {
+  throw new Error("--subagent-seed requires --service-tier-port <unused-loopback-port>");
+}
 const root = path.resolve(values["state-dir"]);
 const port = parseStrictIntegerOption({
   raw: values.port,
