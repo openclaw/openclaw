@@ -84,6 +84,7 @@ it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
         const first = await deliver(snapshot, () => {});
         expect(first?.skills).toHaveLength(1);
         const skill = first!.skills[0]!;
+        expect(skill.modelVisible).toBe(false);
         const bytes = (name: string) => decodeFile(skill.files.find((file) => file.path === name)!);
         expect(skill.revision).toBe(pin.revision);
         expect(bytes("SKILL.md").toString("utf8")).toBe(content);
@@ -99,10 +100,12 @@ it.each(["ordinary", "artifact-preserving", "disposable"] as const)(
           };
           const remoteWorkspace = path.join(root, "remote-workspace");
           declareAgentWorkspaceAccess(remoteWorkspace);
-          await expect(deliver(selectedSnapshot, () => {}, [], remoteWorkspace)).resolves.toEqual(
-            first,
-          );
-          const materialized = await materializeSkillResources(first!, () => {});
+          const selectedDelivery = await deliver(selectedSnapshot, () => {}, [], remoteWorkspace);
+          expect(selectedDelivery).toEqual({
+            ...first,
+            skills: [{ ...skill, modelVisible: true }],
+          });
+          const materialized = await materializeSkillResources(selectedDelivery!, () => {});
           try {
             const local = materialized.snapshot.resolvedSkills![0]!;
             expect(await fs.promises.readFile(local.filePath, "utf8")).toBe(content);

@@ -16,7 +16,7 @@ import type { AgentRuntimeAuthPlan } from "./types.js";
 const plan = createSubscriptionPlan();
 const routeModel = (
   id: string,
-  api: ModelProviderConfig["api"],
+  api: NonNullable<ModelProviderConfig["api"]>,
   baseUrl: string,
   provider = "openai",
 ) => ({
