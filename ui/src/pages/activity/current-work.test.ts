@@ -27,8 +27,13 @@ function settled<T extends { key: string }>(row: T, updatedAt: number) {
   return { ...row, updatedAt, hasActiveRun: false, activeRunIds: [], status: "done" as const };
 }
 
-function ancestorRef(key: string, sessionId: string | undefined, revision: string) {
-  return { key, sessionId, revision, snapshotAt: 300 };
+function completion(runId: string, fields: Partial<GatewaySessionRow> = {}) {
+  const { key, agentId, sessionId } = active;
+  return { key, agentId, sessionId, runId, status: "done", ...fields };
+}
+
+function ancestorRef(row: GatewaySessionRow, revision: string) {
+  return { key: row.key, sessionId: row.sessionId, revision, snapshotAt: 300 };
 }
 
 function pendingRefresh(query: Parameters<typeof fixture.controller.load>[1] = "current") {
@@ -163,17 +168,10 @@ it.each([
       controller.invalidate({ ...overlap, updatedAt: 150, snapshotAt: undefined });
     }
     controller.invalidate(snapshot(overlap));
-    const terminal = {
-      key: active.key,
-      agentId: active.agentId,
-      sessionId: active.sessionId,
-      updatedAt: 250,
-      status: "done",
-    };
-    controller.invalidate({ ...terminal, runId: "release-run" });
+    controller.invalidate(completion("release-run", { updatedAt: 250 }));
     expect(controller.result?.sessions[0]?.activeRunIds).toEqual(["overlap-run"]);
     if (bothFinish) {
-      controller.invalidate({ ...terminal, runId: "overlap-run" });
+      controller.invalidate(completion("overlap-run", { updatedAt: 250 }));
       expect(controller.result?.sessions).toEqual([]);
     }
     controller.invalidate(
@@ -208,20 +206,19 @@ it("uses canonical replacement liveness before a delayed old completion", async 
   };
   const latest = sample(replacement, 230);
   await controller.load(client, "current");
+  controller.invalidate(completion("retired-run", { hasActiveRun: false }));
+  expectRows([active]);
   const stale = pendingRefresh();
   request.mockResolvedValue(listing([latest]));
   controller.invalidate({ ...replacement, runId: "next-run", activeRunIds: null });
   expectRows([replacement]);
-  controller.invalidate({
-    key: active.key,
-    agentId: active.agentId,
-    sessionId: active.sessionId,
-    updatedAt: 250,
-    runId: "release-run",
-    hasActiveRun: false,
-    activeRunIds: [],
-    status: "done",
-  });
+  controller.invalidate(
+    completion("release-run", {
+      updatedAt: 250,
+      hasActiveRun: false,
+      activeRunIds: [],
+    }),
+  );
   expectRows([replacement]);
   controller.invalidate(snapshot(latest));
   stale.resolve(listing([active]));
@@ -229,20 +226,6 @@ it("uses canonical replacement liveness before a delayed old completion", async 
   expectRows([latest], { incomplete: true });
   await advance(5_000, 3);
   expectRows([latest]);
-});
-
-it("keeps a replacement run after an older terminal event", async () => {
-  const { client, controller } = fixture;
-  await controller.load(client, "current");
-  controller.invalidate({
-    key: active.key,
-    agentId: active.agentId,
-    sessionId: active.sessionId,
-    runId: "retired-run",
-    status: "done",
-    hasActiveRun: false,
-  });
-  expectRows([active]);
 });
 
 it("refreshes a conflicting delete generation without confusing global owners during a read", async () => {
@@ -376,30 +359,27 @@ it("applies certified ancestor rows and references without refetching current wo
     status: "queued" as const,
     hasActiveSubagentRun: false,
   };
+  const inactive = {
+    ...updatedParent,
+    key: "agent:work:inactive-ancestor",
+    sessionId: "inactive-ancestor",
+    ancestorRevision: "inactive-ancestor-revision",
+    hasActiveRun: false,
+    status: "done" as const,
+  };
   changeAncestors(200, [
     { ...updatedParent, ancestorRevision: "parent-revision" },
     { ...grandparent, snapshotAt: 200, ancestorRevision: "grandparent-revision" },
-    {
-      ...updatedParent,
-      key: "agent:work:inactive-ancestor",
-      sessionId: "inactive-ancestor",
-      ancestorRevision: "inactive-ancestor-revision",
-      hasActiveRun: false,
-      status: "done",
-    },
+    inactive,
   ]);
   expect(heldParent()).toEqual(updatedParent);
-  const reference = ancestorRef(parent.key, parent.sessionId, "parent-revision");
+  const reference = ancestorRef(parent, "parent-revision");
   controller.invalidate({
     ...snapshot(sample(child, 300), [], "subagent-status"),
     ancestorSessionRefs: [
       reference,
-      ancestorRef(grandparent.key, grandparent.sessionId, "grandparent-revision"),
-      ancestorRef(
-        "agent:work:inactive-ancestor",
-        "inactive-ancestor",
-        "inactive-ancestor-revision",
-      ),
+      ancestorRef(grandparent, "grandparent-revision"),
+      ancestorRef(inactive, inactive.ancestorRevision),
     ],
   });
   changeAncestors(250, [

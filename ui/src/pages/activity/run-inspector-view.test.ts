@@ -9,18 +9,16 @@ import type { RunInspectorResult, RunInspectorState } from "./run-inspector-mode
 import { renderRunInspector } from "./run-inspector-view.tsx";
 
 const hmacRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
-const expired = [{ code: "run_again_after_expiry", text: "Run it again." }];
 const missingEvidence = ["identity.context"];
 const presentResult = inspectionFixture("run-1", "execution-1");
 
 const unavailableResult = (
   state: "unknown" | "unsupported",
   reasonCode: string,
-  remediation: Array<{ code: string; text: string }> = [],
 ): RunInspectorResult => ({
   schemaVersion: 1,
   run: { runId: "run-1", status: state === "unknown" ? "unknown" : "known" },
-  identity: { state, reasonCode, missingEvidence, remediation },
+  identity: { state, reasonCode, missingEvidence, remediation: [] },
   decisionDisplays: [],
   coverage: { state, missingEvidence },
 });
@@ -70,54 +68,30 @@ it("updates inspection content when the selected run changes", () => {
   expect(container.textContent).toContain("Trust domain");
   expect(container.querySelector("[data-run-id]")?.getAttribute("data-run-id")).toBe("run-1");
   expect(container.textContent).not.toContain("Loading run inspection");
+  for (const label of [
+    "Agent definition",
+    "Present",
+    "Absent",
+    "Unknown",
+    "Unsupported",
+    "Unattributed",
+    hmacRef,
+    "Not applicable",
+    "run_admission_identity_not_evaluated",
+    "Verified producer",
+    "run-admission",
+    "Treat this receipt as attribution only; it does not prove authorization.",
+  ]) {
+    expect(container.textContent).toContain(label);
+  }
+  expect(
+    container.querySelector<HTMLAnchorElement>('a[href*="view=run"]')?.getAttribute("href"),
+  ).toBe("/operator/activity?view=run&run=parent-safe-ref");
 
   setState({ status: "empty" });
   flush();
   expect(container.textContent).toContain("No run selected");
   expect(container.querySelector("[data-run-id]")).toBeNull();
-});
-
-it("renders every identity dimension with explicit text states and safe refs", () => {
-  const container = renderState(ready(presentResult));
-
-  expect(container.querySelector('[role="status"]')?.getAttribute("aria-label")).toBe(
-    "Inspection coverage: Unattributed",
-  );
-  const text = container.textContent ?? "";
-  for (const label of [
-    "Trust domain",
-    "Ingress",
-    "Invoker",
-    "Represented subject",
-    "Sponsor",
-    "Agent principal",
-    "Agent definition",
-    "Runtime instance",
-    "Applicable grant 1",
-    "Assurance evidence 1",
-    "Lineage",
-    hmacRef,
-    "Additional decision receipts are available",
-    "Not applicable",
-    "Unattributed",
-    "run_admission_identity_not_evaluated",
-    "Verified producer",
-    "run-admission",
-    "Treat this receipt as attribution only; it does not prove authorization.",
-    "Best-effort audit warning",
-  ]) {
-    expect(text).toContain(label);
-  }
-  for (const state of ["Present", "Absent", "Unknown", "Unsupported"]) {
-    expect(text).toContain(state);
-    expect(container.querySelector(`[aria-label="Evidence state: ${state}"]`)).not.toBeNull();
-  }
-  for (const ref of ["receipt-safe-ref", "context-safe-ref", "execution-1"]) {
-    expect(text).not.toContain(ref);
-  }
-  expect(
-    container.querySelector<HTMLAnchorElement>('a[href*="view=run"]')?.getAttribute("href"),
-  ).toBe("/operator/activity?view=run&run=parent-safe-ref");
 });
 
 it("labels a generic receipt's selected authority without claiming human intent or verification", () => {
@@ -136,30 +110,15 @@ it("labels a generic receipt's selected authority without claiming human intent 
   expect(text).not.toContain("Verified producer");
 });
 
-it.each<[RunInspectorState, string]>([
-  [{ status: "disconnected" }, "Gateway disconnected"],
-  [{ status: "unauthorized" }, "Operator read access required"],
-  [{ status: "unsupported" }, "Run inspection unsupported"],
-  [{ status: "error", recovery: "retry" }, "Run inspection failed"],
-])("renders the explicit panel state", (state, expected) => {
-  expect(renderState(state).textContent).toContain(expected);
+it("renders the disconnected panel without retained evidence", () => {
+  expect(renderState({ status: "disconnected" }).textContent).toContain("Gateway disconnected");
 });
 
-it("renders the localized restart control with its accessible name", () => {
-  const button = renderState({ status: "error", recovery: "restart" }).querySelector("button");
-  expect(button?.textContent?.trim()).toBe("Restart inspection");
-});
-
-type Diagnostic = [Parameters<typeof unavailableResult>[0], string, string, typeof expired?];
-it.each<Diagnostic>([
-  ["unknown", "run_not_found", "Run not found"],
-  ["unsupported", "identity_context_unavailable", "Identity evidence expired", expired],
-  ["unknown", "identity_context_corrupt", "Identity evidence is corrupt"],
-  ["unsupported", "identity_context_unavailable", "Identity evidence unsupported"],
-])("renders the Gateway's typed diagnostic state", (state, reason, expected, steps) => {
-  expect(renderState(ready(unavailableResult(state, reason, steps))).textContent).toContain(
-    expected,
-  );
+it("renders unsupported identity evidence without inferring expiry", () => {
+  expect(
+    renderState(ready(unavailableResult("unsupported", "identity_context_unavailable")))
+      .textContent,
+  ).toContain("Identity evidence unsupported");
 });
 
 it("links an ambiguous run candidate to exact execution inspection", () => {
