@@ -17,6 +17,7 @@ export type WizardViewProps = {
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   busy?: boolean;
+  admissionPending?: boolean;
   refreshWarning: string | null;
   doneMessage?: string;
   doneDescription?: string;
@@ -40,12 +41,14 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
       .toSorted((left, right) =>
         left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
       )[0] ?? null;
+  const displayPhase = () =>
+    props.admissionPending && props.state.phase === "idle" ? "starting" : props.state.phase;
   // Focus the committed wizard step after its identity or completion actions change.
   createPendingFocus(
     () =>
       props.state.phase === "step"
         ? props.state.step.id
-        : `${props.state.phase}:${Boolean(props.doneAction)}`,
+        : `${displayPhase()}:${Boolean(props.doneAction)}`,
     {
       requested: () => true,
       focus: () => {
@@ -55,12 +58,12 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
     },
   );
   const copy = () => WIZARD_COPY[props.mode];
-  const canCancel = () => props.state.phase === "starting" || props.state.phase === "step";
+  const canCancel = () => displayPhase() === "starting" || displayPhase() === "step";
   const stepState = () => (props.state.phase === "step" ? props.state : undefined);
   const errorState = () =>
     props.state.phase === "error" || props.state.phase === "cancelled" ? props.state : undefined;
   return (
-    <Show when={props.state.phase !== "idle"}>
+    <Show when={displayPhase() !== "idle"}>
       <openclaw-modal-dialog
         prop:initialFocus={initialFocus}
         ref={(element) => props.onDialogRef?.(element)}
@@ -72,11 +75,11 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
             "model-setup-wizard",
             {
               "model-setup-wizard--auth": props.mode === "auth",
-              "model-setup-wizard--done": props.state.phase === "done",
+              "model-setup-wizard--done": displayPhase() === "done",
             },
           ]}
         >
-          <Show when={props.state.phase !== "done"}>
+          <Show when={displayPhase() !== "done"}>
             <div class="model-setup-wizard__header">
               <h2>{props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}</h2>
             </div>
@@ -99,13 +102,13 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
               )}
             </For>
             <Switch>
-              <Match when={props.state.phase === "starting"}>
+              <Match when={displayPhase() === "starting"}>
                 <div class="wizard-step__progress" role="status" aria-busy="true">
                   <span class="wizard-step__spinner" aria-hidden="true" />
                   {t(copy().starting)}
                 </div>
               </Match>
-              <Match when={props.state.phase === "done"}>
+              <Match when={displayPhase() === "done"}>
                 <div class="model-setup-wizard__success" role="status">
                   <span class="model-setup-wizard__success-icon" aria-hidden="true">
                     <Icon name="check" />
@@ -199,18 +202,18 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
               </Match>
             </Switch>
           </div>
-          <Show when={props.state.phase !== "step"}>
+          <Show when={displayPhase() !== "step"}>
             <openclaw-modal-actions class="model-setup-wizard__footer">
               <button
                 ref={autofocusRef}
                 type="button"
                 class="btn"
-                autofocus={props.state.phase !== "done" || !props.doneAction}
+                autofocus={displayPhase() !== "done" || !props.doneAction}
                 onClick={() => (canCancel() ? props.onCancel() : props.onClose())}
               >
                 {t(canCancel() ? "common.cancel" : "common.close")}
               </button>
-              <Show when={props.state.phase === "done" && props.doneAction}>
+              <Show when={displayPhase() === "done" && props.doneAction}>
                 {(action) => (
                   <button
                     ref={autofocusRef}
