@@ -200,21 +200,30 @@ export function McpServersCard(props: McpServersCardProps) {
         name,
       }),
     });
-  const removeServer = async (name: string) => {
-    const confirmed = await showConfirmDialog({
+  const removeServer = (name: string) => {
+    if (!active || !canMutate() || mutationPending) {
+      return;
+    }
+    setView((draft) => {
+      draft.message = null;
+    });
+    const result = showConfirmDialog({
       title: t("mcpServers.removeConfirmTitle", { name }),
       message: t("mcpServers.removeConfirmMessage"),
       confirmLabel: t("common.remove"),
       danger: true,
+    }).then(async (confirmed) => {
+      if (!confirmed) {
+        return;
+      }
+      await mutate({
+        buildPatch: (servers) => buildRemoveMcpServerPatch(servers, name),
+        note: `mcp settings: remove server ${name}`,
+        successText: t("mcpServers.removedSuccess", { name }),
+      });
     });
-    if (!confirmed) {
-      return;
-    }
-    await mutate({
-      buildPatch: (servers) => buildRemoveMcpServerPatch(servers, name),
-      note: `mcp settings: remove server ${name}`,
-      successText: t("mcpServers.removedSuccess", { name }),
-    });
+    void setCompletion(result);
+    void result.catch(() => {});
   };
   const rows = createMemo(() =>
     summarizeMcpServers(resolveEditableSnapshotConfig(config.read().configSnapshot)),
@@ -392,7 +401,7 @@ export function McpServersCard(props: McpServersCardProps) {
                               t("mcpServers.removeNamed", { name: server().name })
                             }
                             disabled={disabled()}
-                            onClick={() => void removeServer(server().name)}
+                            onClick={() => removeServer(server().name)}
                           >
                             <Icon name="trash" />
                           </button>

@@ -610,6 +610,33 @@ describe("openclaw-mcp-servers-card", () => {
       danger: true,
     });
   });
+  it("shows failed removal confirmation and clears it while retrying", async () => {
+    const { card, harness } = await mountCard({
+      config: configWith({ docs: { command: "node", args: ["synthetic-server.mjs"] } }),
+    });
+    vi.mocked(showConfirmDialog).mockRejectedValueOnce(
+      new Error("Unable to open removal confirmation."),
+    );
+    actionButton(card, "Remove docs").click();
+    await waitForFast(() =>
+      expect(card.querySelector('[role="alert"]')?.textContent).toBe(
+        "Unable to open removal confirmation.",
+      ),
+    );
+    expect(harness.patch).not.toHaveBeenCalled();
+    expectRow(card, "docs", ["docs"]);
+
+    const confirmation = deferred<boolean>();
+    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+    actionButton(card, "Remove docs").click();
+    await waitForFast(() => expect(card.querySelector('[role="alert"]')).toBeNull());
+    expect(harness.patch).not.toHaveBeenCalled();
+    confirmation.resolve(true);
+    await waitForFast(() => {
+      expect(harness.patch).toHaveBeenCalledOnce();
+      expect(card.querySelector('[role="status"]')?.textContent).toBe("Removed MCP server docs.");
+    });
+  });
   it.each(["load", "patch rejection", "patch refusal"] as const)(
     "shows a %s mutation failure and releases the controls for retry",
     async (stage) => {
