@@ -131,6 +131,7 @@ export async function add(
         : undefined,
       options: {
         pluginCommand: opts?.pluginCommand,
+        pluginCommandSourceDigest: opts?.pluginCommandSourceDigest,
         streamSandbox: opts?.streamSandbox,
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,

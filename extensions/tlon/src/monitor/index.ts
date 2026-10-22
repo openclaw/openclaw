@@ -318,7 +318,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     }
 
     if (isThreadReply && parentId && channelNest) {
-      const threadHistory = await fetchThreadHistory(api, channelNest, parentId, 20, runtime);
+      const threadHistory = await fetchThreadHistory(api, channelNest, parentId, runtime);
       if (threadHistory.length > 0) {
         const threadContext = threadHistory
           .slice(-10)
@@ -336,7 +336,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
 
     if (isGroup && channelNest && isSummarizationRequest(messageText)) {
       try {
-        const history = await channelHistory.getChannelHistory(api, channelNest, 50, runtime);
+        const history = await channelHistory.getChannelHistory(api, channelNest, runtime);
         if (history.length === 0) {
           const noHistoryMsg =
             "I couldn't fetch any messages for this channel. It might be empty or there might be a permissions issue.";

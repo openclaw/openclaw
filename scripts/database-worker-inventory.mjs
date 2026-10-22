@@ -3542,7 +3542,6 @@ const workerModules = new Set([
   "src/infra/push-apns-store-transaction.ts", // APNs worker cleanup and pairing worker clearApnsNodeIds only.
   "src/infra/push-apns-store.ts", // SQL read kernels are called only by the APNs worker dispatcher.
   "src/infra/session-cost-usage-worker.ts",
-  "src/infra/telemetry-store.kernel.ts", // Telemetry SQL executes through the shared-state worker runtime.
   "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
   "src/infra/update-candidate-plugins.ts", // Plugin inventory and copying run in the update-candidate-state worker.
   "src/infra/update-run-interruption-store.ts", // Interruption writes use the shared-state worker; host imports are pure.

@@ -1,10 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
 const postTrustedWebToolsJson = vi.fn();
 const writeCache = vi.fn();
 const assertPluginCapabilitySecretAvailable = vi.fn();
-const resolveTavilyBaseUrl = vi.fn(() => "https://api.tavily.com");
 
 function respondWith(payload: unknown) {
   const response = payload instanceof Response ? payload : Response.json(payload);
@@ -37,14 +37,6 @@ vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => ({
   writeCachedSearchPayload: writeCache,
 }));
 
-vi.mock("./config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./config.js")>()),
-  resolveTavilyApiKey: () => "test-key",
-  resolveTavilyBaseUrl,
-  resolveTavilySearchTimeoutSeconds: () => 30,
-  resolveTavilyExtractTimeoutSeconds: () => 60,
-}));
-
 describe("tavily client", () => {
   let runTavilySearch: typeof import("./tavily-client.js").runTavilySearch;
   let runTavilyExtract: typeof import("./tavily-client.js").runTavilyExtract;
@@ -59,13 +51,114 @@ describe("tavily client", () => {
   beforeEach(() => {
     assertPluginCapabilitySecretAvailable.mockReset();
     writeCache.mockReset();
-    resolveTavilyBaseUrl.mockReset().mockReturnValue("https://api.tavily.com");
+    vi.stubEnv("TAVILY_API_KEY", "test-key");
+    vi.stubEnv("TAVILY_BASE_URL", "");
     postTrustedWebToolsJson
       .mockReset()
       .mockImplementation(async (_params: unknown, parse: (r: Response) => Promise<unknown>) =>
         parse(Response.json({ results: [] })),
       );
   });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    { allowlist: ["TAVILY_API_KEY"], allowed: true },
+    { allowlist: [], allowed: false },
+  ])("honors the configured env provider allowlist $allowlist", async ({ allowlist, allowed }) => {
+    const cfg: OpenClawConfig = {
+      secrets: { providers: { "managed-env": { source: "env", allowlist } } },
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "managed-env", id: "TAVILY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const request = runTavilySearch({ cfg, query: "managed credentials" });
+    if (allowed) {
+      await request;
+      expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
+      expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.apiKey).toBe("test-key");
+    } else {
+      await expect(request).rejects.toThrow("needs a Tavily API key");
+      expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+      expect(writeCache).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not borrow ambient credentials for a different env SecretRef", async () => {
+    vi.stubEnv("OTHER_API_KEY", "other-test-key");
+    const cfg: OpenClawConfig = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: { apiKey: { source: "env", provider: "default", id: "OTHER_API_KEY" } },
+            },
+          },
+        },
+      },
+    };
+    await expect(runTavilySearch({ cfg, query: "unrelated credentials" })).rejects.toThrow(
+      "needs a Tavily API key",
+    );
+    expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
+    expect(writeCache).not.toHaveBeenCalled();
+  });
+
+  it.each([undefined, "", "   "])("defaults an omitted or blank base URL %j", async (baseUrl) => {
+    await runTavilySearch({
+      cfg: { plugins: { entries: { tavily: { config: { webSearch: { baseUrl } } } } } },
+      query: "default endpoint",
+    });
+    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]?.url).toBe("https://api.tavily.com/search");
+  });
+
+  it("prefers plugin credentials and endpoint over env defaults", async () => {
+    vi.stubEnv("TAVILY_API_KEY", "env-key");
+    vi.stubEnv("TAVILY_BASE_URL", "https://env.tavily.test");
+    await runTavilySearch({
+      cfg: {
+        plugins: {
+          entries: {
+            tavily: {
+              config: { webSearch: { apiKey: "plugin-key", baseUrl: "https://plugin.test" } },
+            },
+          },
+        },
+      },
+      query: "configured endpoint",
+    });
+    expect(postTrustedWebToolsJson.mock.calls[0]?.[0]).toMatchObject({
+      apiKey: "plugin-key",
+      url: "https://plugin.test/search",
+    });
+  });
+
+  it.each([
+    { kind: "search", timeoutSeconds: 30 },
+    { kind: "extract", timeoutSeconds: 60 },
+  ] as const)(
+    "uses environment defaults and the $kind timeout",
+    async ({ kind, timeoutSeconds }) => {
+      vi.stubEnv("TAVILY_API_KEY", "env-key");
+      vi.stubEnv("TAVILY_BASE_URL", "https://env.tavily.test");
+      await run(kind);
+      expect(postTrustedWebToolsJson.mock.calls[0]?.[0]).toMatchObject({
+        apiKey: "env-key",
+        url: `https://env.tavily.test/${kind}`,
+        timeoutSeconds,
+      });
+    },
+  );
 
   it.each(["search", "extract"] as const)("rejects unavailable %s capability", async (kind) => {
     const unavailable = Object.assign(new Error("Tavily capability unavailable"), {
@@ -81,14 +174,14 @@ describe("tavily client", () => {
   });
 
   it.each(["search", "extract"] as const)("rejects invalid %s proxies", async (kind) => {
-    resolveTavilyBaseUrl.mockReturnValueOnce("not a url");
+    vi.stubEnv("TAVILY_BASE_URL", "not a url");
     await expect(run(kind)).rejects.toBeInstanceOf(TypeError);
     expect(postTrustedWebToolsJson).not.toHaveBeenCalled();
     expect(writeCache).not.toHaveBeenCalled();
   });
 
   it.each(["search", "extract"] as const)("appends %s to proxy paths", async (kind) => {
-    resolveTavilyBaseUrl.mockReturnValueOnce("https://proxy.example/tavily/");
+    vi.stubEnv("TAVILY_BASE_URL", "https://proxy.example/tavily/");
     await run(kind);
     expect(postTrustedWebToolsJson).toHaveBeenCalledOnce();
     const request = postTrustedWebToolsJson.mock.calls[0]?.[0];

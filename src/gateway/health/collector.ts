@@ -139,12 +139,15 @@ async function prepareHealthAgentSummaries(
   cfg: OpenClawConfig,
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
   projection?: SessionRowProjection,
+  cronStorePath?: string,
 ) {
   const { prepareStatusSessionStores } = await import("../../status/session-stores.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   // Receipts list the primary job first; retain it when converted siblings share an agent.
   const heartbeatJobs = new Map(
-    (await readHeartbeatSummarySnapshot(cfg)).toReversed().map((job) => [job.agentId, job]),
+    (await readHeartbeatSummarySnapshot(cfg, cronStorePath))
+      .toReversed()
+      .map((job) => [job.agentId, job]),
   );
   const prepared = await prepareStatusSessionStores(
     cfg,
@@ -516,6 +519,7 @@ export async function collectGatewayHealthSnapshot(params: {
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
   sessionRowProjection?: SessionRowProjection;
+  cronStorePath?: string;
 }): Promise<HealthSummary> {
   const stateContext = captureDeliveryQueueHealthContext();
   const start = performance.now();
@@ -527,6 +531,7 @@ export async function collectGatewayHealthSnapshot(params: {
     cfg,
     { defaultAgentId, ordered },
     params.sessionRowProjection,
+    params.cronStorePath,
   );
 
   const includeSensitive = params.audience === "admin";

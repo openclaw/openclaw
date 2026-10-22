@@ -36,7 +36,9 @@ function authorizedUrl(
   url: string,
   nowMs?: number,
 ) {
-  return hasAuthorizedClientPluginNodeCapabilityUrl({ client, surface, url, nowMs });
+  const now = nowMs ?? Date.now();
+  using _ = vi.spyOn(Date, "now").mockReturnValueOnce(now);
+  return hasAuthorizedClientPluginNodeCapabilityUrl({ client, surface, url });
 }
 
 function authorizeCapability(
@@ -45,11 +47,11 @@ function authorizeCapability(
   capability = "canvas-token",
   nowMs = 1_000,
 ) {
+  using _ = vi.spyOn(Date, "now").mockReturnValueOnce(nowMs);
   return hasAuthorizedPluginNodeCapability({
     clients: new Set([client]),
     surface,
     capability,
-    nowMs,
   });
 }
 
@@ -397,12 +399,12 @@ describe("plugin node capability helpers", () => {
       },
     });
 
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(1_000);
     expect(
       hasAuthorizedPluginNodeCapability({
         clients: new Set([client]),
         surface: { surface: "canvas", ttlMs: 100 },
         capability: "canvas-token",
-        nowMs: 1_000,
       }),
     ).toBe(false);
     expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(1_500);
@@ -420,12 +422,12 @@ describe("plugin node capability helpers", () => {
         canvas: { capability: "canvas-token", expiresAtMs: Number.POSITIVE_INFINITY },
       },
     });
+    using _ = vi.spyOn(Date, "now").mockReturnValueOnce(1_000);
     expect(
       hasAuthorizedPluginNodeCapability({
         clients: new Set([client]),
         surface: { surface: "canvas", ttlMs: 100 },
         capability: "canvas-token",
-        nowMs: 1_000,
       }),
     ).toBe(false);
   });

@@ -19,7 +19,7 @@ access hundreds of models through a single endpoint.
 | Model catalog | Auto-discovered via `/v1/models`       |
 
 <Tip>
-OpenClaw auto-discovers the Gateway `/v1/models` catalog, so both the
+OpenClaw auto-discovers the Gateway `/v1/models` catalog with your API key, so both the
 `/models vercel-ai-gateway` chat command and
 `openclaw models list --provider vercel-ai-gateway` include current model
 refs such as `vercel-ai-gateway/openai/gpt-5.5` and
@@ -69,6 +69,15 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice ai-gateway-api-key \
   --ai-gateway-api-key "$AI_GATEWAY_API_KEY"
 ```
+
+## Token Pass
+
+[Vercel Token Pass](https://vercel.com/docs/ai-gateway/token-pass) uses a
+Token Pass API key in place of a regular AI Gateway API key. Set it up with
+the same auth choice. Vercel lists only Token Pass models for that key, so
+`openclaw models list --provider vercel-ai-gateway` shows exactly the models
+the key can use. Pick one of them as the agent model, because the onboarding
+default is not a Token Pass model.
 
 ## Model ID shorthand
 

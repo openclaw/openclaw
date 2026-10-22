@@ -139,11 +139,10 @@ function createDependencyInstall(
     },
     readMarker: () => fs.readFileSync(markerPath(), "utf8"),
     isRetained: () => hasRetainedManagedNpmInstallMarker(rootDir),
-    retain: (retainedAt?: string) =>
+    retain: () =>
       markRetainedManagedNpmInstall({
         packageDir: rootDir,
         pluginId,
-        retainedAt,
         reason: "existing-owner",
       }),
     manifest: fs.readFileSync(path.join(rootDir, "package.json"), "utf8"),
@@ -311,7 +310,7 @@ it.each([
     const originalPayload = readPayload(rootDir);
     const { markerPath, readMarker, retain, isRetained } = fixture;
     if (preexisting) {
-      await retain("2026-05-01T00:00:00.000Z");
+      await retain();
     }
     const originalMarker = preexisting ? readMarker() : undefined;
     const record = {

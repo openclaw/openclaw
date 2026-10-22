@@ -297,6 +297,27 @@ describe("scheduled plugin command loaded-owner checks", () => {
     );
   });
 
+  it("requires a re-armed instance to still run the code the schedule accepted", () => {
+    const { registry, schedule, instance } = registeredSchedule();
+    instance.sourceDigest = "accepted-digest";
+    const binding = {
+      pluginIncarnation: schedule.pluginIncarnation,
+      sourceDigest: "accepted-digest",
+    };
+    expect(() => assertPluginCommandScheduleRegistry(registry, schedule, binding)).not.toThrow();
+    expect(() =>
+      assertPluginCommandScheduleRegistry(registry, schedule, {
+        ...binding,
+        sourceDigest: "other-digest",
+      }),
+    ).toThrow("original loaded plugin");
+    // An instance without captured source can never serve a restartable binding.
+    instance.sourceDigest = undefined;
+    expect(() => assertPluginCommandScheduleRegistry(registry, schedule, binding)).toThrow(
+      "original loaded plugin",
+    );
+  });
+
   it("uses real registered canonical ownership without requiring scheduling capability on the target", () => {
     const { registry, schedule } = registeredSchedule();
     expect(() => assertPluginCommandScheduleRegistry(registry, schedule)).not.toThrow();
