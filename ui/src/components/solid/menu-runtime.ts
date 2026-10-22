@@ -468,11 +468,6 @@ export function createMenuRuntime(
           result.onPointerMove?.(event);
         },
         tabIndex: options.focus !== "retain" && api.highlightedValue === value ? 0 : -1,
-        onFocusIn: () => {
-          if (api.highlightedValue !== value) {
-            api.setHighlightedValue(value);
-          }
-        },
       };
     },
     trigger(parentBinding?: MenuRuntime, disabled = false) {

@@ -94,6 +94,15 @@ it.each([
   }
 });
 
+it("continues from the entry row when focus returns to the trigger during first load", async () => {
+  const { handle, trigger, surface } = mountMenu();
+  expect(handle.open()).toBe(true);
+  expect(document.activeElement).toBe(surface.querySelector('[data-value="alpha"]'));
+  trigger.focus();
+  expect(key(trigger, " ").defaultPrevented).toBe(true);
+  await expect.poll(() => document.activeElement?.getAttribute("data-value")).toBe("beta");
+});
+
 it("leaves native control activation keys unhandled during first load", () => {
   const { handle, surface } = mountMenu({
     children: (

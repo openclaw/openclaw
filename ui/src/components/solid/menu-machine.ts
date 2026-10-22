@@ -231,6 +231,8 @@ export function useMenuMachine(
   };
   const keydown = (event: KeyboardEvent) =>
     runtime ? runtime.keydown(event) : deferKey(event, "input");
+  const setHighlightedValue = (value: string | null) =>
+    run((loaded) => loaded.service.send({ type: "HIGHLIGHTED.SET", value }));
   return {
     runtime: current,
     items,
@@ -250,8 +252,7 @@ export function useMenuMachine(
     },
     highlightedValue: () => current()?.read().highlightedValue ?? null,
     highlightedValueNow: () => runtime?.service.context.get("highlightedValue") ?? null,
-    setHighlightedValue: (value) =>
-      run((loaded) => loaded.service.send({ type: "HIGHLIGHTED.SET", value })),
+    setHighlightedValue,
     typeahead: (key) => run((loaded) => loaded.service.send({ type: "TYPEAHEAD", key })),
     itemId: (value) => `${overlay.id}:${value}`,
     keydown,
@@ -275,6 +276,8 @@ export function useMenuMachine(
         "data-valuetext": label,
         tabIndex: -1,
         ...current()?.item(value, disabled, type, checked, label),
+        // Preserve native entry focus even if focus leaves the row before navigation loads.
+        onFocusIn: () => setHighlightedValue(value),
         onClick: (event: MouseEvent) => {
           if (disabled || !overlay.open) {
             event.preventDefault();
