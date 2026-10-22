@@ -14,8 +14,8 @@ import {
   type FixtureReceiptChannel,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { CLAUDE_PROTOCOL_FIXTURE } from "./cli-runtime.protocol.test-support.js";
 import {
-  CLAUDE_PROTOCOL_FIXTURE,
   collectClaudeCli,
   createCliTestHarness,
   prepareClaudeCli,
@@ -229,36 +229,83 @@ describe("Claude native stdio boundary", () => {
     await expect(access(fixtureFile(context, "fixture.pid"))).rejects.toThrow();
   });
 
-  it.each(["background-success", "background-agent-subagent-bash"])(
-    "awaits background agent results (%s)",
-    async (scenario) => {
-      const release = createDeferred<CliBackendToolPermissionResult>();
-      const decision = { behavior: "deny" as const, message: "Fixture released." };
-      const context = await createContext(scenario, {
-        requestToolPermission: () => release.promise,
-      });
-      const { liveSession } = context;
-      const results: Record<string, unknown>[] = [];
-      try {
-        for await (const record of executeClaudeCli(context)) {
-          if (record.type !== "result") {
-            continue;
-          }
-          results.push(record);
-          if (results.length === 1) {
-            expect(record).toHaveProperty("openclaw_interim_result", true);
-            expect(liveSession.current()?.isIdle()).toBe(false);
-            release.resolve(decision);
-          } else {
-            expect(resultDetail([record]).finalBackgroundAnswer).toBe(true);
-            expect(record).not.toHaveProperty("openclaw_interim_result");
-          }
+  it.each([
+    "background-success",
+    "background-agent-subagent-bash-completed",
+    "background-agent-subagent-bash-stopped",
+    "background-parent-stopped-child-completed",
+    "background-parent-stopped-child-stopped",
+    "background-agent-foreground-bash",
+    "background-agent-foreground-bash-run-ids",
+  ])("preserves parent result ownership and warm reuse for %s", async (scenario) => {
+    const liveSession = createLiveSession();
+    const release = createDeferred<CliBackendToolPermissionResult>();
+    const decision = { behavior: "deny" as const, message: "Fixture released." };
+    const context = await createContext(scenario, {
+      liveSession,
+      requestToolPermission: () => release.promise,
+    });
+    const results: Record<string, unknown>[] = [];
+    try {
+      for await (const record of executeClaudeCli(context)) {
+        if (record.type !== "result") {
+          continue;
         }
-      } finally {
-        release.resolve(decision);
+        results.push(record);
+        if (results.length === 1) {
+          expect(record).toHaveProperty("openclaw_interim_result", true);
+          expect(liveSession.current()?.isIdle()).toBe(false);
+          release.resolve(decision);
+        }
       }
-      expect(results).toHaveLength(2);
-      expect(liveSession.current()?.isIdle()).toBe(true);
+    } finally {
+      release.resolve(decision);
+    }
+    expect(results).toHaveLength(
+      scenario.startsWith("background-parent-stopped")
+        ? 4
+        : scenario === "background-success" || scenario.startsWith("background-agent-foreground")
+          ? 2
+          : 3,
+    );
+    for (const result of results.slice(0, -1)) {
+      expect(result).toHaveProperty("openclaw_interim_result", true);
+    }
+    expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+    const detail = resultDetail(results);
+    expect(detail.finalBackgroundAnswer).toBe(true);
+    const handle = liveSession.current();
+    expect(handle?.isIdle()).toBe(true);
+    const next = resultDetail(await collect({ ...context, prompt: "next input", useResume: true }));
+    expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+    expect(liveSession.current()).toBe(handle);
+  });
+
+  it.each(["late-child", "late-child-run-ids"])(
+    "keeps a prior turn's resumed Agent and late child out of later inputs for %s",
+    async (scenario) => {
+      const liveSession = createLiveSession();
+      const context = await createContext(scenario, { liveSession });
+      const turns: Record<string, unknown>[][] = [];
+      for (const prompt of ["first input", "warm input", "next input"]) {
+        turns.push(await collect({ ...context, prompt, useResume: turns.length > 0 }));
+        expect(liveSession.current()?.isIdle()).toBe(true);
+      }
+      // The old child resumes its Agent during the warm input and that Agent's deferred
+      // answer arrives during the next one; neither settles nor holds a later input.
+      const results = turns.map((records) => records.filter((record) => record.type === "result"));
+      expect(results.map((list) => list.length)).toEqual([2, 1, scenario.endsWith("ids") ? 3 : 2]);
+      for (const list of results) {
+        expect(list.slice(0, -1).every((result) => result.openclaw_interim_result)).toBe(true);
+        expect(list.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      }
+      const [first, warm, next] = turns.map((records) => resultDetail(records));
+      if (!first) {
+        throw new Error("Expected a first-turn result.");
+      }
+      expect(first.childLaunched).toBe(true);
+      expect(warm).toMatchObject({ warmAnswer: true, turn: 2, user: "warm input", pid: first.pid });
+      expect(next).toMatchObject({ finalBackgroundAnswer: true, turn: 3, pid: first.pid });
     },
   );
 
@@ -330,6 +377,96 @@ describe("Claude native stdio boundary", () => {
             : { permissionDecisionReason: decision.message }),
         },
       });
+    },
+  );
+
+  it.for(["background-bash-captured-stopped", "background-bash-captured-stopped-overlap"])(
+    "settles captured 2.1.286 shape for %s with same-process reuse",
+    async (scenario, { signal }) => {
+      const barrierReached = createDeferred<void>();
+      const release = createDeferred<CliBackendToolPermissionResult>();
+      const decision = { behavior: "deny" as const, message: "Fixture released." };
+      const context = await createContext(scenario, {
+        liveSession: createLiveSession(),
+        requestToolPermission: async ({ toolCallId, toolInput }) => {
+          if (toolCallId !== "captured-release") {
+            return { behavior: "allow", updatedInput: toolInput };
+          }
+          barrierReached.resolve();
+          return release.promise;
+        },
+      });
+      let settled = false;
+      const running = collect(context).then((records) => {
+        settled = true;
+        return records;
+      });
+      void running.catch(() => {});
+      try {
+        await withinTest(Promise.race([barrierReached.promise, running]), signal);
+        expect(settled).toBe(false);
+      } finally {
+        release.resolve(decision);
+      }
+      const records = await withinTest(running, signal);
+      const results = records.filter((record) => record.type === "result");
+      expect(results).toHaveLength(scenario.endsWith("-overlap") ? 2 : 1);
+      if (scenario.endsWith("-overlap")) {
+        expect(results[0]).toHaveProperty("openclaw_interim_result", true);
+      }
+      expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      expect(
+        records
+          .filter((record) => record.subtype === "task_started")
+          .every((record) => record.is_backgrounded === true),
+      ).toBe(true);
+      expect(records.some((record) => record.type === "user" && record.isReplay === true)).toBe(
+        false,
+      );
+      expect(resultDetail(records).capturedShapeAnswered).toBe(true);
+      const detail = resultDetail(records);
+      expect(context.liveSession?.current()?.isIdle()).toBe(true);
+      const next = resultDetail(
+        await collect({ ...context, prompt: "next input", useResume: true }),
+      );
+      expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+    },
+  );
+
+  it.for([
+    "background-bash-stopped-final",
+    "background-bash-stopped-final-run-ids",
+    "background-bash-stopped-final-slow",
+    "background-bash-stopped-final-slow-run-ids",
+  ])(
+    "accepts the final answer after a TaskStopped auto-backgrounded Bash for %s",
+    async (scenario, { signal }) => {
+      const liveSession = createLiveSession();
+      const context = await createContext(scenario, {
+        liveSession,
+        requestToolPermission: async ({ toolInput }) => ({
+          behavior: "allow",
+          updatedInput: toolInput,
+        }),
+      });
+      // Native sends nothing after this result; holding it would wait for the no-output watchdog.
+      const records = await withinTest(collect(context), signal);
+      const results = records.filter((record) => record.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]).not.toHaveProperty("openclaw_interim_result");
+      expect(records.at(-2)).toMatchObject({
+        type: "assistant",
+        message: { stop_reason: "end_turn" },
+      });
+      const detail = resultDetail(records);
+      expect(detail).toMatchObject({ stoppedBashFinal: true, turn: 1 });
+      const handle = liveSession.current();
+      expect(handle?.isIdle()).toBe(true);
+      const next = resultDetail(
+        await collect({ ...context, prompt: "next input", useResume: true }),
+      );
+      expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+      expect(liveSession.current()).toBe(handle);
     },
   );
 

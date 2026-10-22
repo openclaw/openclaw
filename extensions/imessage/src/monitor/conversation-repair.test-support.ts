@@ -117,7 +117,7 @@ describe("repairIMessageConversationAnchor", () => {
     expect(repaired?.destination_caller_id ?? null).toBeNull();
 
     const decision = await resolveIMessageInboundDecision(
-      createInboundDecisionParams({ message: repaired!, isKnownFromMeMessageId: undefined }),
+      createInboundDecisionParams({ message: repaired! }),
     );
     expect(decision.kind).toBe("dispatch");
     if (decision.kind !== "dispatch") {

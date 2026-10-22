@@ -462,6 +462,8 @@ describe("CI changed lint", () => {
         "flush",
         "getOwner",
         "runWithOwner",
+        "onCleanup",
+        "manualImport",
       ]) {
         write(`config/control-ui-${pattern}-baseline.txt`, "");
       }

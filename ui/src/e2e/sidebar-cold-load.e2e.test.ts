@@ -25,6 +25,8 @@ import {
 const suite = createSessionManagementE2eSuite();
 const selectedKey = "agent:main:dashboard:00000000-0000-4000-8000-000000000006";
 const railPins = ["route:sessions", `session:${selectedKey}`, "plugin:reports/overview"];
+// Sidebar pins are not rail shortcuts.
+const railEntries = railPins.filter((entry) => !entry.startsWith("session:"));
 const pluginPath = "/__openclaw__/plugins/control-ui/reports/one/index.js";
 const avatarUrl =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAIElEQVR4nGN4nhWCFTEQkPj64w8ag5AEPqPgiDgdmAgA9YRzYZfFh50AAAAASUVORK5CYII=";
@@ -36,7 +38,9 @@ async function observeShape(sidebar: Locator) {
       all(selector).map((row) => row.getAttribute(name));
     const texts = (selector: string) => all(selector).map((row) => row.textContent?.trim() ?? "");
     const read = () => {
-      const selected = element.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"]`);
+      const selected = element.querySelector(
+        `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${key}"]`,
+      );
       const bounds = selected?.getBoundingClientRect();
       return {
         navigation: attributes("[data-sidebar-entry]", "data-sidebar-entry"),
@@ -336,7 +340,7 @@ suite.define(() => {
                 .locator(".sidebar-rail [data-sidebar-entry]")
                 .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-sidebar-entry"))),
             )
-            .toEqual(railPins);
+            .toEqual(railEntries);
           await waitForSavedSidebar(page, view);
           await settleFrames(page);
           const reference = await observeShape(sidebar);
@@ -344,11 +348,11 @@ suite.define(() => {
           await reference.evaluate((observer) => observer.stop());
           await reference.dispose();
           expect(settled.navigation.filter((key) => key?.startsWith("session:"))).toHaveLength(
-            view === "pages" ? 12 : 1,
+            view === "pages" ? 11 : 0,
           );
           expect(settled).toMatchObject({
-            sessions: [],
-            rail: railPins,
+            sessions: view === "pages" ? [] : [selectedKey],
+            rail: railEntries,
             view,
             agents: view === "pages" ? [] : ["main", "forge", "scout"],
             agentNames: view === "pages" ? [] : ["Harbor", "Forge", "Scout"],
@@ -357,7 +361,7 @@ suite.define(() => {
             footer: "Riley",
             online: [],
           });
-          expect(settled.selectedBounds).not.toBeNull();
+          expect(settled.selectedBounds !== null).toBe(view === "sessions");
 
           await reloadCached();
           const restored = await observeShape(sidebar);

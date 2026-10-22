@@ -232,7 +232,10 @@ suite.define(() => {
           await ui.button(ownRow, "Unpin session").waitFor();
         }
         const pinRef = `session:${own.key}`;
-        await ui.expectCount(page.locator(`.sidebar-rail [data-sidebar-entry="${pinRef}"]`), 1);
+        await ui.expectCount(
+          page.locator(`[data-session-section="pinned"] [data-session-key="${own.key}"]`),
+          1,
+        );
         await expect
           .poll(() =>
             page.evaluate(

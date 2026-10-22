@@ -16,6 +16,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { withEnv } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -330,7 +331,10 @@ async function withCanvasGatewayHarness(
       return true;
     },
     ...shared,
-    preauthConnectionBudget: createPreauthConnectionBudget(8),
+    preauthConnectionBudget: withEnv(
+      { OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP: "8" },
+      createPreauthConnectionBudget,
+    ),
     desktopSessionRegistry: params.desktopSessionRegistry,
   });
 

@@ -69,10 +69,8 @@ export async function waitForMatrixQaObserverEvent(params: {
   observer: MatrixQaRoomObserver;
   predicate: (event: MatrixQaObservedEvent) => boolean;
   roomId: string;
-  sleepImpl?: (ms: number) => Promise<unknown>;
   timeoutMs: number;
 }): Promise<MatrixQaRoomEventWaitResult> {
-  const sleepImpl = params.sleepImpl ?? sleep;
   for (;;) {
     const expectedInterruptionAtStart = params.isExpectedInterruption();
     try {
@@ -86,7 +84,7 @@ export async function waitForMatrixQaObserverEvent(params: {
       if (!expectedInterruptionAtStart && !params.isExpectedInterruption()) {
         throw error;
       }
-      await sleepImpl(MATRIX_EXPECTED_INTERRUPTION_RETRY_MS);
+      await sleep(MATRIX_EXPECTED_INTERRUPTION_RETRY_MS);
     }
   }
 }

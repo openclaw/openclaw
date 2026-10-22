@@ -35,10 +35,6 @@ export function useChatSessionSharingMenu(
 } {
   const presentation = createChatSessionSharingPresentation(() => props);
   const busy = () => presentation.busy() || props.state?.loading === true;
-  const readMembers = () => {
-    latest(presentation.read);
-    return null;
-  };
   const result = () => props.state?.result;
   const visibility = () => props.session?.visibility ?? "shared";
   const owner = () => result()?.owner ?? props.session?.owner?.actor;
@@ -346,7 +342,7 @@ export function useChatSessionSharingMenu(
             </div>
           }
         >
-          {readMembers()}
+          {(latest(presentation.read), null)}
           <div aria-busy={isPending(presentation.read) || busy() ? "true" : "false"}>
             {renderItems(() => memberItems()())}
             <Show when={memberItems()().length === 0}>

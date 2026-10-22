@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, lazy, Loading, Show, type Accessor } from "solid-js";
+import { createMemo, Errored, lazy, Loading, Show, type Accessor } from "solid-js";
 import {
   isThemeAvatarHatId,
   type ThemeBranding,
@@ -77,9 +77,11 @@ export function AgentIdentityAvatar(props: {
           <Show
             when={props.agent.textAvatar}
             fallback={
-              <Loading>
-                <AgentAvatarFace agentId={props.agent.id} />
-              </Loading>
+              <Errored fallback={<span class="identity-avatar__text" data-avatar="?" />}>
+                <Loading>
+                  <AgentAvatarFace agentId={props.agent.id} />
+                </Loading>
+              </Errored>
             }
           >
             <span class="identity-avatar__text" data-avatar={props.agent.textAvatar} />

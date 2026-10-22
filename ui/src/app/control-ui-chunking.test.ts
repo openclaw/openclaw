@@ -138,7 +138,19 @@ describe("Control UI build chunking", () => {
                 // Exercise grouping below the production chunk-size floor.
                 minSize: 0,
                 ...(group.name === "control-ui-boot-shared"
-                  ? { test: (id: string) => id === devices || group.test(id) }
+                  ? {
+                      // Fixture sharing is independent of changing production captures.
+                      test: (id: string) =>
+                        [devices, sharedUi, pluginActions, sharedStyle, sidebarStyle].includes(
+                          id,
+                        ) || group.test(id),
+                    }
+                  : {}),
+                ...(group.name === "control-ui-boot-shared-styles"
+                  ? {
+                      test: (id: string) =>
+                        id === sharedStyle || id === sidebarStyle || group.test(id),
+                    }
                   : {}),
               })),
             },

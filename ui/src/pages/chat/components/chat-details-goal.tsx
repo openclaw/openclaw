@@ -60,7 +60,7 @@ function GoalEditDialog(props: {
     () =>
       completion()?.then(
         (value) => Boolean(value),
-        () => true,
+        () => false,
       ) ?? false,
     { loadingValue: false },
   );

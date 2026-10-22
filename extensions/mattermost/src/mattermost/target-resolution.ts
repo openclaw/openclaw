@@ -17,7 +17,6 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 type MattermostOpaqueTargetResolution = {
   kind: "user" | "channel" | "group";
-  id: string;
   to: string;
 };
 
@@ -137,5 +136,5 @@ export async function resolveMattermostOpaqueTarget(
     { allowStale: false },
   );
   const kind = value ?? "channel";
-  return { kind, id: input, to: `${kind === "user" ? "user" : "channel"}:${input}` };
+  return { kind, to: `${kind === "user" ? "user" : "channel"}:${input}` };
 }

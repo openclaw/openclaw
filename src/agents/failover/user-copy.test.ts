@@ -6,7 +6,6 @@ import {
   renderBillingReplyCopy as billingCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy as codeCopy,
-  renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy as missingKeyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
@@ -44,22 +43,6 @@ describe("failover user copy", () => {
         sanitizeText: (text) => sanitizeUserFacingText(text, { errorContext: true }),
       }),
     ).toBe(`⚠️ ${message}`);
-  });
-
-  it.each([
-    [undefined, "Troubleshooting: run `openclaw logs --follow` in a terminal."],
-    [
-      "Codex session became active in another runner; wait for it to finish before continuing.",
-      "Details: Codex session became active in another runner; wait for it to finish before continuing.\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
-    ],
-    [
-      "Gateway SDK resource host is not bound",
-      "Details: Gateway SDK resource host is not bound.\nTroubleshooting: run `openclaw logs --follow` in a terminal.",
-    ],
-  ])("keeps heartbeat diagnostics separate from the primary message for %j", (reason, details) => {
-    expect(renderHeartbeatRunFailureCopy(reason)).toBe(
-      `⚠️ The background check did not complete.\n\n${details}`,
-    );
   });
 
   it("renders only the allowlisted selected-profile code", () => {

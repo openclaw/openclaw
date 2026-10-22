@@ -1,3 +1,18 @@
+.cmd-palette__session-heading {
+  padding: 12px 18px 0;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cmd-palette[data-attachment-drop-active] {
+  background: color-mix(in srgb, var(--accent) 10%, var(--card));
+}
+
+.cmd-palette[data-attachment-drop-active] > * {
+  opacity: 0.5;
+}
+
 .cmd-palette__attachments {
   --chat-composer-editor-inset-inline: 14px;
   --chat-attachment-inset-block: 6px;

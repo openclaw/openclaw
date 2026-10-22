@@ -372,7 +372,7 @@ extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	5
 extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-handler.runtime.ts	3
-extensions/matrix/src/approval-native.ts	5
+extensions/matrix/src/approval-native.ts	4
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
 extensions/matrix/src/channel.ts	4

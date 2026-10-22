@@ -471,11 +471,20 @@ export async function resolveMediaToolReferenceAccess(params: {
           inboundFallbackDir: "media/inbound",
         })
       : { resolved: resolveHostPath() };
+  // A policy that lets read open host files lets media tools load the same file.
+  const hostReadRoot =
+    params.fsPolicy?.workspaceOnly === false &&
+    !params.sandbox &&
+    !params.isDataUrl &&
+    path.isAbsolute(pathInfo.resolved)
+      ? [path.dirname(pathInfo.resolved)]
+      : [];
   return {
     resolvedPath: params.isDataUrl ? null : pathInfo.resolved,
     localRoots: uniqueStrings([
       ...(workspaceOnly ? hostRoots : [...getDefaultLocalRootsCore(), ...hostRoots]),
       ...(params.fsPolicy?.readOnlyRoots ?? []),
+      ...hostReadRoot,
     ]),
     ...(pathInfo.rewrittenFrom ? { rewrittenFrom: pathInfo.rewrittenFrom } : {}),
   };

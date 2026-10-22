@@ -2,7 +2,6 @@ import { FileDiff, preloadHighlighter } from "@pierre/diffs";
 import type { FileDiffOptions, SupportedLanguages } from "@pierre/diffs";
 import { normalizeDiffViewerPayloadLanguages } from "./language-hints.js";
 import type { DiffViewerPayload, DiffLayout, DiffTheme } from "./types.js";
-import { parseViewerPayloadJson } from "./viewer-payload.js";
 
 // oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
 declare const __OPENCLAW_DIFFS_LANGUAGE_PACK__: boolean | undefined;
@@ -33,7 +32,12 @@ function parsePayload(element: HTMLScriptElement): DiffViewerPayload {
   if (!raw) {
     throw new Error("Diff payload was empty.");
   }
-  return parseViewerPayloadJson(raw);
+  // Decode the typed payload emitted by renderDiffCard, not external tool input.
+  try {
+    return JSON.parse(raw);
+  } catch {
+    throw new Error("Diff payload is not valid JSON.");
+  }
 }
 
 function getCards(): Array<{ host: HTMLElement; payload: DiffViewerPayload }> {

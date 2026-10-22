@@ -177,7 +177,7 @@ function buildDiscoveredModelDefinition(value: unknown): ModelDefinitionConfig |
 }
 
 export async function discoverVercelAiGatewayModels(
-  options: { discoveryMode?: "strict" } = {},
+  options: { discoveryMode?: "strict"; discoveryApiKey?: string } = {},
 ): Promise<ModelDefinitionConfig[]> {
   const provider = await buildLiveModelProviderConfig({
     ...options,

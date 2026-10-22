@@ -15,11 +15,7 @@ const mocks = vi.hoisted(() => ({
   applySkillEnvOverridesFromSnapshot: vi.fn(),
   mapSandboxSkillEntriesForPrompt: vi.fn(),
   prepareInstalledSkillCatalog: vi.fn(),
-  resolveEmbeddedRunSkillEntries: vi.fn(() => ({
-    shouldLoadSkillEntries: true,
-    skillEntries: [],
-    loadSkillEntries: vi.fn(() => []),
-  })),
+  prepareWorkspaceSkills: vi.fn(async () => []),
 }));
 
 vi.mock("../../installed-skill-runtime.js", () => ({
@@ -32,8 +28,9 @@ vi.mock("../../../skills/runtime/env-overrides.js", () => ({
 }));
 
 // mock-isolation: inject skill entries without filesystem discovery while testing startup cleanup.
-vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
-  resolveEmbeddedRunSkillEntries: mocks.resolveEmbeddedRunSkillEntries,
+vi.mock("../../../skills/loading/workspace-skill-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../skills/loading/workspace-skill-loader.js")>()),
+  prepareWorkspaceSkills: mocks.prepareWorkspaceSkills,
 }));
 
 vi.mock("../sandbox-skills.js", async (importOriginal) => ({
@@ -92,7 +89,7 @@ it.each([{ modelRun: true }, { promptMode: "none" as const }])(
     expect(prepared.skillsPrompt).toBe("");
     expect(prepared.skillsSnapshotForRun).toBeUndefined();
     expect(prepared.codeModeSkills).toEqual([]);
-    expect(mocks.resolveEmbeddedRunSkillEntries).not.toHaveBeenCalled();
+    expect(mocks.prepareWorkspaceSkills).not.toHaveBeenCalled();
     expect(mocks.applySkillEnvOverrides).not.toHaveBeenCalled();
     expect(mocks.applySkillEnvOverridesFromSnapshot).not.toHaveBeenCalled();
     expect(mocks.prepareInstalledSkillCatalog).not.toHaveBeenCalled();
@@ -127,7 +124,7 @@ it.each([
   prepared.restoreSkillEnv();
 
   expect(prepared.skillsPrompt).toBe("skills prompt");
-  expect(mocks.resolveEmbeddedRunSkillEntries).toHaveBeenCalledOnce();
+  expect(mocks.prepareWorkspaceSkills).toHaveBeenCalledOnce();
   expect(mocks.applySkillEnvOverridesFromSnapshot).toHaveBeenCalledOnce();
   expect(mocks.prepareInstalledSkillCatalog).toHaveBeenCalledOnce();
 });

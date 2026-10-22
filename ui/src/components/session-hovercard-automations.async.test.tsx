@@ -263,3 +263,24 @@ it("appends the next owner page without replacing the selected automation", asyn
     expect(ui.retry()).toBeNull();
   });
 });
+
+it("names a scheduled plugin command instead of its reserved placeholder", async () => {
+  const placeholder = "[plugin-command-scheduled-turn:v1]";
+  const request = createGatewayRequestMock(async () =>
+    cronJobsListResponse(
+      [
+        createCronJob("scheduled-command", "Watch workflow", {
+          payload: { kind: "agentTurn", message: placeholder },
+          payloadSource: { kind: "pluginCommand", pluginId: "watcher", command: "watch" },
+        }),
+      ],
+      { limit: 20 },
+    ),
+  );
+  const ui = mount(connect(request));
+  await waitForSolid(() => {
+    expect(ui.name()?.textContent).toBe("Watch workflow");
+    expect(ui.text()).toContain("Plugin command: /watch (watcher)");
+  });
+  expect(ui.text()).not.toContain(placeholder);
+});

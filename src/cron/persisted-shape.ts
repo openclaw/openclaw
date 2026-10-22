@@ -52,6 +52,11 @@ export function assertCronJobStateTimestamps(state: Partial<CronJobState>): void
       "cron state.pluginCommandRuns is private launch accounting and cannot be authored",
     );
   }
+  if (Object.hasOwn(state, "pluginCommandBinding")) {
+    throw new Error(
+      "cron state.pluginCommandBinding is private restart continuity and cannot be authored",
+    );
+  }
   const invalidField = getInvalidCronJobStateTimestampField(state);
   if (invalidField) {
     throw new Error(

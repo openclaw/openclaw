@@ -22,7 +22,10 @@ import {
   acquireCronInferenceAuthorization,
   captureCronInferenceBinding,
 } from "../cron/inference-binding.runtime.js";
-import { decodePluginCommandSchedule } from "../cron/plugin-command-schedule.js";
+import {
+  decodePluginCommandSchedule,
+  resolvePluginCommandScheduleBinding,
+} from "../cron/plugin-command-schedule.js";
 import {
   PLUGIN_COMMAND_SCHEDULE_MESSAGE,
   type PluginCommandSchedule,
@@ -36,7 +39,10 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { pluginCommandSupportsChannel } from "../plugins/plugin-command-metadata.js";
 import { listRegisteredPluginCommands } from "../plugins/plugin-command-registry.js";
 import * as commandRuntime from "../plugins/plugin-command-runtime.js";
-import { getPluginInstanceIncarnation } from "../plugins/plugin-instance-scope.js";
+import {
+  getPluginInstanceIncarnation,
+  getPluginInstanceSourceDigest,
+} from "../plugins/plugin-instance-scope.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { PluginCommandResult } from "../plugins/types.js";
@@ -100,7 +106,7 @@ export function readPluginCommandScheduledJob(
   return schedule;
 }
 
-/** The bound managed plugin instance was replaced; incarnations are never reconstructed. */
+/** The bound managed plugin instance was replaced in this process; the schedule ends. */
 class PluginCommandScheduleInstanceReplacedError extends Error {
   constructor() {
     super("Scheduled plugin command's original plugin instance was replaced; the schedule ended.");
@@ -108,17 +114,23 @@ class PluginCommandScheduleInstanceReplacedError extends Error {
   }
 }
 
-/** The live registry, not persisted metadata or a caller-created command object, owns dispatch. */
+/**
+ * The live registry, not persisted metadata or a caller-created command object, owns dispatch.
+ * `binding` is what the scheduler claim bound: the creating instance, or after a Gateway restart
+ * the instance the claim re-armed the schedule onto, which must still run the accepted code.
+ */
 export function assertPluginCommandScheduleRegistry(
   registry: PluginRegistry,
   schedule: PluginCommandSchedule,
+  binding: { pluginIncarnation: string; sourceDigest?: string } = schedule,
 ): void {
+  const { pluginIncarnation } = binding;
   const plugin = registry.plugins.find((record) => record.id === schedule.pluginId);
   const liveIncarnation = plugin && getPluginInstanceIncarnation(plugin);
   if (
     !isPluginRegistryRetired(registry) &&
     liveIncarnation !== undefined &&
-    liveIncarnation !== schedule.pluginIncarnation
+    liveIncarnation !== pluginIncarnation
   ) {
     // A current registry already serves another live instance. A transient gap (retired
     // registry, unloading or disposed instance) stays an ordinary refusal: adoption can keep it.
@@ -130,7 +142,9 @@ export function assertPluginCommandScheduleRegistry(
   if (
     isPluginRegistryRetired(registry) ||
     !plugin ||
-    getPluginInstanceIncarnation(plugin) !== schedule.pluginIncarnation ||
+    getPluginInstanceIncarnation(plugin) !== pluginIncarnation ||
+    (binding.sourceDigest !== undefined &&
+      getPluginInstanceSourceDigest(plugin) !== binding.sourceDigest) ||
     plugin.status !== "loaded" ||
     !plugin.enabled ||
     plugin.source !== schedule.pluginSource ||
@@ -172,6 +186,7 @@ export async function runPluginCommandScheduledTurn(params: {
       throw new Error("Scheduled plugin command has no native tool ceiling.");
     }
     const toolsAllow = [...job.payload.toolsAllow];
+    const binding = resolvePluginCommandScheduleBinding(job, schedule);
     const context = params.resolveGatewayContext?.();
     const registry = params.resolvePluginRegistry?.();
     const assertOccurrence = captureCronJobSourceAuthority(job.id);
@@ -210,11 +225,12 @@ export async function runPluginCommandScheduledTurn(params: {
         !current ||
         resolveCronRequesterExecutionRevision(current) !== revision ||
         !isDeepStrictEqual(current.pluginCommand, schedule) ||
+        !isDeepStrictEqual(current.state.pluginCommandBinding, job.state.pluginCommandBinding) ||
         Date.now() >= schedule.deadlineAtMs
       ) {
         throw new Error("Scheduled plugin command source changed or expired.");
       }
-      assertPluginCommandScheduleRegistry(registry, schedule);
+      assertPluginCommandScheduleRegistry(registry, schedule, binding);
     };
     assertSource();
     // The ordinary dispatcher exposes ambient completion and converts failures to chat text.

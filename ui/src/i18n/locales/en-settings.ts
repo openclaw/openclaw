@@ -1540,6 +1540,16 @@ const enSettings = {
     themeRemoved: "Custom theme removed.",
   },
   configView: {
+    form: "Form",
+    raw: "Raw",
+    formUnsafeTitle: "Form view can't safely edit some fields",
+    rawTitle: "Edit raw JSON/JSON5 config",
+    rawUnavailableTitle: "Raw mode unavailable for this snapshot",
+    rawDiscard: "Discard",
+    rawDraftPendingFormTitle:
+      "Unsaved raw config edits — save or discard them before switching to Form.",
+    rawDiffUnavailable: "Changes detected (JSON diff not available)",
+    rawConfig: "Raw config (JSON/JSON5)",
     categories: {
       core: "Core",
       ai: "Agent Defaults",

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { prepareRuntimeSkillEntries as resolveEntries } from "../../agents/embedded-agent-runner/skills-prompt.js";
 import { createDeferredCore as deferred } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync as closeDatabase,
@@ -13,7 +14,6 @@ import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-d
 import { saveSkillLibrary } from "../library/service.js";
 import * as loader from "../loading/workspace-skill-loader.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
-import { resolveEmbeddedRunSkillEntries as resolveEntries } from "./embedded-run-entries.js";
 
 const dirs = useStateDatabaseTempDirs();
 const content = "---\nname: guide\ndescription: Saved procedure\n---\n# Synthetic guide\n";
@@ -45,7 +45,11 @@ async function fixture() {
   const expected = { skill, syncDirName: `library-${skillId}-${revision}` };
   await closeDatabase();
   const resolve = (skillsSnapshot = snapshot) =>
-    resolveEntries({ workspaceDir, config: { plugins: { enabled: false } }, skillsSnapshot });
+    resolveEntries({
+      skillsAnchorWorkspace: workspaceDir,
+      config: { plugins: { enabled: false } },
+      skillsSnapshot,
+    });
   const run = (test: () => Promise<void>) =>
     withEnvAsync({ OPENCLAW_STATE_DIR: root, OPENCLAW_BUNDLED_SKILLS_DIR: workspaceDir }, test);
   const check = (entries: SkillEntry[]) => expect(entries).toMatchObject([expected, expected]);
