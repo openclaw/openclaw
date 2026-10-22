@@ -296,7 +296,8 @@ export function createComposerEmojiMenu() {
     activeLabel: () => (state.items.length ? `:${state.items[state.index]}:` : ""),
     popupRef,
     dispose() {
-      close();
+      // Retire the native target without publishing state from the disposed view.
+      textarea = null;
       catalog.dispose();
       popupRef();
     },
