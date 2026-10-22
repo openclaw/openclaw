@@ -111,8 +111,12 @@ it("propagates failed publisher admission before effects", async () => {
   noEffects(r);
 });
 
-it("rejects foreign-run artifacts before finalizer effects", async () => {
-  const r = await harness.run({ artifactFault: "foreign-run", publish: true });
+it.each([
+  ["foreign-run", "does not belong to this source and workflow attempt"],
+  ["path", "invalid or duplicate memory path"],
+  ["fallback", "fallback-containing locale artifact"],
+] as const)("rejects %s before finalizer effects", async (artifactFault, error) => {
+  const r = await harness.run({ artifactFault, publish: true });
   expect(r.workerRequests.length).toBeGreaterThan(0);
   expect(r).toMatchObject({
     providerRequests: [],
@@ -120,7 +124,7 @@ it("rejects foreign-run artifacts before finalizer effects", async () => {
     publication: { branchExists: false },
   });
   expect(r.trace).toContainEqual({ step: "Restore same-run locale memory", status: 1 });
-  expect(r.failure).toContain("does not belong to this source and workflow attempt");
+  expect(r.failure).toContain(error);
   expect(r.trace).toContainEqual({
     step: "Finalize control UI generated artifacts",
     status: "skipped",

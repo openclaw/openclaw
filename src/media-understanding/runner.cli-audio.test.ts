@@ -357,11 +357,13 @@ it.each([
       );
       expect(result.outputs[0]?.text).toBe("fixture transcript");
     });
-    const args = runExecMock.mock.calls.find(
-      ([executable]) =>
-        executable === path.join(dir, command) || executable === path.join(dir, `${command}.cmd`),
-    )?.[1];
-    expect(args).toBeDefined();
+    const args = expectDefined(
+      runExecMock.mock.calls.find(
+        ([executable]) =>
+          executable === path.join(dir, command) || executable === path.join(dir, `${command}.cmd`),
+      ),
+      "CLI invocation",
+    )[1];
     if (sherpa) {
       expect(args).toEqual([
         ...sherpaFiles.map((name) => `--${name.split(".")[0]}=${path.join(dir, name)}`),
@@ -376,9 +378,11 @@ it.each([
         ..."-ac 1 -ar 16000 -c:a pcm_s16le -f wav".split(" "),
         expect.stringMatching(/\.wav.*\.part$/),
       ]);
-      expect(path.basename(runFfmpegMock.mock.calls[0]?.[0].at(-1))).toContain(
-        `${path.parse(mediaPath).name}.wav`,
-      );
+      expect(
+        path.basename(
+          expectDefined(runFfmpegMock.mock.calls[0]?.[0].at(-1), "converted audio path"),
+        ),
+      ).toContain(`${path.parse(mediaPath).name}.wav`);
       expect(args.slice(0, 4)).toEqual(["-m", model, "-otxt", "-of"]);
       expect(args[5]).toBe("-nt");
       expect(path.basename(args[6])).toBe(`${path.parse(mediaPath).name}.wav`);

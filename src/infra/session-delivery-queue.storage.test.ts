@@ -45,7 +45,7 @@ const mediaAttachments = {
   "/tmp/one.png": { type: "image" as const, path: "/tmp/one.png", mimeType: "image/png" },
   "/tmp/two.png": { type: "image" as const, path: "/tmp/two.png", mimeType: "image/png" },
 };
-const imageBlocks = (artifactId: string) => [{ type: "image", artifactId }];
+const imageBlocks = (artifactId: string) => [{ type: "image" as const, artifactId }];
 
 describe("session-delivery queue storage", () => {
   async function settleSessionDelivery(

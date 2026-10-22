@@ -40,7 +40,7 @@ const REMOTE_IDENTITY = operatorMcpOAuthIdentity("Remote Docs", "https://mcp.exa
 const CALENDLY_IDENTITY = operatorMcpOAuthIdentity("Calendly", "https://mcp.calendly.com/");
 const metadataUrl = () => new URL("https://mcp.example.com/.well-known/oauth-protected-resource");
 const readStore = () => readStoreFor(REMOTE_IDENTITY.storeKey);
-const storedTokens = () => withProvider((provider) => provider.tokens());
+const storedTokens = () => withProvider(async (provider) => provider.tokens());
 const loginInstruction = "Run openclaw mcp login Remote Docs.";
 
 const resolveRemoteToken = (options: Omit<Parameters<typeof resolveToken>[0], "identity"> = {}) =>

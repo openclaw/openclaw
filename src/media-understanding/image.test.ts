@@ -73,7 +73,7 @@ function stubProviderStream(result = vi.fn(async () => opencodeCompletion())) {
   registerProviderStreamForModelMock.mockReturnValue(stream);
   return {
     stream,
-    options(index: number) {
+    options: (index: number) => {
       const options = expectDefined(
         stream.mock.calls.at(index),
         `provider stream call ${index}`,

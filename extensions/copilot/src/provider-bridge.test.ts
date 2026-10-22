@@ -27,7 +27,7 @@ const azureModel = {
   api: "azure-openai-responses",
   id: "deployment-gpt",
   baseUrl: "https://example.openai.azure.com/openai/v1",
-};
+} satisfies Partial<Input["model"]>;
 const azureExpected = {
   type: "azure",
   wireApi: "responses",
@@ -263,9 +263,12 @@ describe("resolveCopilotProvider", () => {
       baseUrl: "https://google.example",
     },
     { provider: "custom", api: "openai-completions", id: "model", baseUrl: undefined },
-  ])("rejects an unrepresentable provider or missing endpoint: $provider", (model) => {
-    expect(() => resolveModel(model)).toThrow(
-      "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl",
-    );
-  });
+  ] satisfies Array<Partial<Input["model"]>>)(
+    "rejects an unrepresentable provider or missing endpoint: $provider",
+    (model) => {
+      expect(() => resolveModel(model)).toThrow(
+        "[copilot-attempt] BYOK requires an OpenAI-compatible or Anthropic model api and a non-empty baseUrl",
+      );
+    },
+  );
 });
