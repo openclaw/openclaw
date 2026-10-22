@@ -1017,7 +1017,7 @@ describe("web push Gateway reconciliation", () => {
         ),
         { container },
       );
-      const initialRead = createDeferred();
+      const initialRead = createDeferred<unknown>();
       const stop = capability.subscribe(() => {
         setSnapshot({ ...capability.snapshot });
         flush();
