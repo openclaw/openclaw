@@ -11,7 +11,6 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import { EDITOR_IDS, EDITOR_LABELS } from "../../../lib/editor-links.ts";
 import "../../../styles/session-panel-rail.css";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import type { FileCopyAction } from "./chat-file-copy.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileReaderChromeProps, FileViewControls } from "./chat-file-reader-controls.ts";
 import { WorkspaceBreadcrumb } from "./chat-session-workspace-breadcrumb.tsx";
@@ -447,8 +446,8 @@ export function FileAction(props: {
   );
 }
 
-export function FileCopyButton(props: { action: FileCopyAction; controls?: FileViewControls }) {
-  const feedback = () => props.controls?.copyFeedback[props.action];
+export function FileCopyButton(props: { controls?: FileViewControls }) {
+  const feedback = () => props.controls?.copyFeedback.contents;
   return (
     <FileAction
       label={t(
@@ -456,12 +455,10 @@ export function FileCopyButton(props: { action: FileCopyAction; controls?: FileV
           ? "common.copyFailed"
           : feedback() === "copied"
             ? "common.copied"
-            : props.action === "path"
-              ? "chat.detailPanel.copyPath"
-              : "chat.detailPanel.copyContents",
+            : "chat.detailPanel.copyContents",
       )}
       icon={feedback() === "copied" ? "check" : "copy"}
-      onClick={() => props.controls?.onCopy(props.action)}
+      onClick={() => props.controls?.onCopy("contents")}
       class={feedback() === "copied" ? "copied" : ""}
     />
   );

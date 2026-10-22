@@ -255,25 +255,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         title,
         status,
         statusLabel,
-        activity:
-          status === "queued" || status === "waiting"
-            ? statusLabel
-            : active
-              ? row.activity || row.toolDisplayName
-              : undefined,
-        calls:
-          row.callCount === undefined
-            ? undefined
-            : t(
-                !row.callCount.exact
-                  ? "chat.subagentsPanel.callsAtLeast"
-                  : row.callCount.count === 1
-                    ? "chat.subagentsPanel.callsOne"
-                    : "chat.subagentsPanel.callsMany",
-                { count: String(row.callCount.count) },
-              ),
         elapsed: renderElapsed(row),
-        elapsedLabel: t(active ? "chat.subagentsPanel.elapsed" : "chat.subagentsPanel.duration"),
         stop:
           active && row.session.activeRunIds?.length === 1
             ? {

@@ -37,12 +37,8 @@ export type ChatSubagentMobileItem = {
   title: string;
   status: "running" | "waiting" | "queued" | "finished" | "failed" | "stopped";
   statusLabel: string;
-  activity?: string;
-  /** Localized native count, including the lower-bound marker when not exact. */
-  calls?: string;
   /** The native elapsed-time element or formatted duration; no presenter timer. */
   elapsed?: JSX.Element;
-  elapsedLabel?: string;
   /** Omitted when the native owner does not offer Stop for this run. */
   stop?: ChatSubagentMobileStop;
 };
