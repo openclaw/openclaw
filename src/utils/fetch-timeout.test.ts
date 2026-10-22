@@ -41,9 +41,10 @@ function abortingBody(signal?: AbortSignal | null, chunk?: string) {
 
 const SYNTHETIC_TELEGRAM_BOT_TOKEN = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcd";
 const timeoutMessage = "fetch timeout after 25ms (elapsed 25ms)";
+const timeoutError = { name: "TimeoutError", message: "request timed out" };
 
-const fetchUntilAborted: typeof fetch = async (_input, init) =>
-  await new Promise<Response>((_resolve, reject) => {
+const fetchUntilAborted: typeof fetch = (_input, init) =>
+  new Promise<Response>((_resolve, reject) => {
     const signal = init?.signal;
     if (!signal) {
       reject(new Error("missing signal"));
@@ -84,10 +85,7 @@ describe("fetch timeouts", () => {
         : undefined,
     });
     await vi.advanceTimersByTimeAsync(25);
-    expect(signal).toMatchObject({
-      aborted: true,
-      reason: { name: "TimeoutError", message: "request timed out" },
-    });
+    expect(signal).toMatchObject({ aborted: true, reason: timeoutError });
     const record = {
       timeoutMs: 25,
       elapsedMs: 25,
@@ -112,7 +110,7 @@ describe("fetch timeouts", () => {
     const pending = iterator.next().catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(25);
 
-    expect(await pending).toMatchObject({ name: "TimeoutError", message: "request timed out" });
+    expect(await pending).toMatchObject(timeoutError);
   });
 
   it("annotates timeout logs when the timer fires late", async () => {
@@ -153,10 +151,7 @@ describe("fetch timeouts", () => {
 
   it("tags fetch timeout aborts so callers can distinguish them from parent aborts", async () => {
     const result = fetchTimeout();
-    const assertion = expect(result).rejects.toMatchObject({
-      name: "TimeoutError",
-      message: "request timed out",
-    });
+    const assertion = expect(result).rejects.toMatchObject(timeoutError);
     await vi.advanceTimersByTimeAsync(25);
 
     await assertion;
@@ -165,13 +160,12 @@ describe("fetch timeouts", () => {
   it("keeps following caller aborts while the returned body is consumed", async () => {
     const parent = new AbortController();
     const reason = new Error("caller stopped after headers");
-    let fetchSignal: AbortSignal | null | undefined;
-    const fetchFn: typeof fetch = async (_input, init) => {
-      fetchSignal = init?.signal;
-      return new Response(abortingBody(fetchSignal));
-    };
+    const fetchFn = vi.fn<typeof fetch>(
+      async (_input, init) => new Response(abortingBody(init?.signal)),
+    );
 
     const response = await fetchTimeout({ signal: parent.signal }, fetchFn);
+    const fetchSignal = fetchFn.mock.calls[0]?.[1]?.signal;
     const body = response.text();
 
     await vi.advanceTimersByTimeAsync(25);
