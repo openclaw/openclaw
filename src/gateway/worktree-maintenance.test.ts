@@ -56,6 +56,14 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
       release = () => held.release.resolve(completedResult());
       return held;
     },
+    async runHeld(repeat = false, overrides: Partial<typeof params> = {}) {
+      const held = this.hold(repeat);
+      const owner = this.start(overrides);
+      const receipt = owner.request();
+      const running = this.run();
+      const guard = await awaitCleanup(held.entered.promise, running);
+      return { ...held, owner, receipt, running, guard };
+    },
     async [Symbol.asyncDispose]() {
       release();
       for (const owner of owners) {
@@ -200,13 +208,9 @@ it.each([
 
 it("waits for admitted cleanup to settle when stopped and withdraws its authority immediately", async () => {
   await using fixture = maintenanceFixture();
-  const { getRuntimeConfig, onComplete, onError, start } = fixture;
-  const { entered, release } = fixture.hold(true);
-  const owner = start();
-  owner.request();
-  const running = fixture.run();
+  const { getRuntimeConfig, onComplete, onError } = fixture;
+  const { owner, guard, release } = await fixture.runHeld(true);
   let stopped = false;
-  const guard = await awaitCleanup(entered.promise, running);
   const stopping = owner.stop().then(() => {
     stopped = true;
   });
@@ -228,11 +232,7 @@ it("waits for admitted cleanup to settle when stopped and withdraws its authorit
 it("drains a replaced owner before its successor starts another sweep", async () => {
   await using fixture = maintenanceFixture();
   const { getRuntimeConfig, onComplete, start } = fixture;
-  const { entered, release, gc } = fixture.hold();
-  const first = start();
-  first.request();
-  const oldRun = fixture.run();
-  await awaitCleanup(entered.promise, oldRun);
+  const { owner: first, running: oldRun, release, gc } = await fixture.runHeld();
   const successor = start();
   const receipt = successor.request();
   const newRun = fixture.run();
@@ -280,13 +280,11 @@ it.each<[string, OpenClawConfig, boolean?, boolean?]>([
   async (_name, change, cancels = true, inPlace = false) => {
     await using fixture = maintenanceFixture();
     const { onComplete } = fixture;
-    const { entered, release } = fixture.hold(true);
     const config: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(config);
-    const owner = fixture.start({ getRuntimeConfig: () => getRuntimeConfigSnapshot()! });
-    const receipt = owner.request();
-    const running = fixture.run();
-    const guard = await awaitCleanup(entered.promise, running);
+    const { owner, receipt, running, guard, release } = await fixture.runHeld(true, {
+      getRuntimeConfig: () => getRuntimeConfigSnapshot()!,
+    });
     setRuntimeConfigSnapshot(inPlace ? Object.assign(config, change) : { ...config, ...change });
     if (cancels) {
       expect(() => guard.commitGuard!()).toThrow(/configuration changed/);

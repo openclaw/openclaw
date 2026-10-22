@@ -24,6 +24,57 @@ import { assertDoctorMaintenanceReady } from "./doctor-maintenance-inspection.js
 import { restoreDoctorMigrationBackup } from "./doctor-migration-backup-restore.js";
 import { prepareDoctorDatabaseMigrations } from "./doctor-schema-migrations.js";
 
+function openLegacyDatabase(pathname: string, version = 26, agentId = "main") {
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  const database = new DatabaseSync(pathname);
+  database.exec(
+    fs.readFileSync(
+      new URL(`../../test/fixtures/sqlite/openclaw-agent-schema-v${version}.sql`, import.meta.url),
+      "utf8",
+    ),
+  );
+  database.exec(`PRAGMA user_version = ${version}`);
+  database
+    .prepare(`INSERT INTO schema_meta
+    (meta_key, role, schema_version, agent_id, created_at, updated_at)
+    VALUES ('primary', 'agent', ?, ?, 1, 1)`)
+    .run(version, agentId);
+  return database;
+}
+
+function migrationParams(
+  env: NodeJS.ProcessEnv,
+  pendingMigrations: (NonNullable<
+    Parameters<typeof prepareDoctorDatabaseMigrations>[0]["pendingMigrations"]
+  >[number] & { agentId: string })[],
+) {
+  const paths = pendingMigrations.map(({ path: pathname }) => pathname);
+  return {
+    env,
+    pendingMigrations,
+    pendingDatabasePaths: paths,
+    databasePaths: paths,
+    agentDatabaseTargets: pendingMigrations.map(({ agentId, path: pathname }) => ({
+      agentId,
+      path: pathname,
+      realPath: pathname,
+      source: "disk" as const,
+    })),
+  };
+}
+
+async function withMaintenance<T>(run: () => Promise<T>) {
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent: () => {},
+  });
+  try {
+    return await maintenance.run(run);
+  } finally {
+    await maintenance.close();
+  }
+}
+
 it.each([
   { version: 24, check: undefined },
   { version: 24, check: "full" },
@@ -35,22 +86,9 @@ it.each([
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       openOpenClawStateDatabase({ env: state.env });
       const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-      fs.mkdirSync(path.dirname(pathname), { recursive: true });
       {
-        using database = new DatabaseSync(pathname);
-        database.exec(
-          fs.readFileSync(
-            new URL(
-              `../../test/fixtures/sqlite/openclaw-agent-schema-v${version}.sql`,
-              import.meta.url,
-            ),
-            "utf8",
-          ),
-        );
+        using database = openLegacyDatabase(pathname, version);
         database.exec(`
-          PRAGMA user_version = ${version};
-          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-          VALUES ('primary', 'agent', ${version}, 'main', 1, 1);
           DROP INDEX idx_agent_cache_updated;
           CREATE INDEX idx_agent_cache_updated ON cache_entries(scope, key, updated_at);
           INSERT INTO cache_entries (scope, key, value_json, updated_at)
@@ -74,25 +112,15 @@ it.each([
         foundVersion: version,
         supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
       };
-      const maintenance = createOpenClawDatabaseMaintenanceScope({
-        schemaMaintenance: true,
-        assertOwnerCurrent: () => {},
-      });
       try {
-        const result = maintenance.run(async () => {
+        const result = withMaintenance(async () => {
           const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
             env: state.env,
             configuredAgentDatabaseTargets: [{ agentId: "main", path: pathname }],
           });
           const prepared = await prepareDoctorDatabaseMigrations({
-            env: state.env,
+            ...migrationParams(state.env, [migration]),
             check,
-            pendingDatabasePaths: [pathname],
-            pendingMigrations: [migration],
-            databasePaths: [pathname],
-            agentDatabaseTargets: [
-              { agentId: "main", path: pathname, realPath: pathname, source: "disk" },
-            ],
           });
           expect(prepared.warnings).toEqual([]);
           preparedDiscovery.versionMigrations = prepared.versionMigrations;
@@ -112,7 +140,6 @@ it.each([
           }
         }
       } finally {
-        await maintenance.close();
         worker.mockRestore();
       }
       using database = new DatabaseSync(pathname, { readOnly: true });
@@ -149,19 +176,9 @@ it.each([
       openOpenClawStateDatabase({ env: state.env });
       const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
       const target = { agentId: "main", path: pathname };
-      fs.mkdirSync(path.dirname(pathname), { recursive: true });
       {
-        using database = new DatabaseSync(pathname);
-        database.exec(
-          fs.readFileSync(
-            new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
-            "utf8",
-          ),
-        );
+        using database = openLegacyDatabase(pathname);
         database.exec(`
-          PRAGMA user_version = 26;
-          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-          VALUES ('primary', 'agent', 26, 'main', 1, 1);
           INSERT INTO cache_entries (scope, key, value_json, updated_at)
           VALUES ('retained', 'history', '"preserved"', 1);
         `);
@@ -187,29 +204,22 @@ it.each([
         localFullChecks +
         worker.mock.calls.filter((call) => call[0] === pathname && call[5]?.check !== "quick")
           .length;
-      const maintenance = createOpenClawDatabaseMaintenanceScope({
-        schemaMaintenance: true,
-        assertOwnerCurrent: () => {},
-      });
       try {
-        await maintenance.run(async () => {
+        await withMaintenance(async () => {
           const preparedDiscovery = prepareAgentDatabaseMigrationDiscovery({
             env: state.env,
             configuredAgentDatabaseTargets: [target],
           });
           const result = await prepareDoctorDatabaseMigrations({
-            env: state.env,
-            check,
-            pendingDatabasePaths: [pathname],
-            pendingMigrations: [
+            ...migrationParams(state.env, [
               {
                 kind: "agent",
                 ...target,
                 foundVersion: 26,
                 supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
               },
-            ],
-            databasePaths: [pathname],
+            ]),
+            check,
             agentDatabaseTargets: [{ ...target, realPath: pathname, source: "configured" }],
           });
           expect(result.warnings).toEqual([]);
@@ -244,7 +254,6 @@ it.each([
           expect(readSqliteDatabaseIntegrityVerification(pathname)).toBeDefined();
         });
       } finally {
-        await maintenance.close();
         vi.restoreAllMocks();
       }
     });
@@ -258,21 +267,8 @@ it("excludes an older database that is both pending and indeterminate from versi
       agentId,
       path: state.statePath("agents", agentId, "agent", "openclaw-agent.sqlite"),
     }));
-    const schema = fs.readFileSync(
-      new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
-      "utf8",
-    );
     for (const target of targets) {
-      fs.mkdirSync(path.dirname(target.path), { recursive: true });
-      using database = new DatabaseSync(target.path);
-      database.exec(schema);
-      database.exec("PRAGMA user_version = 26");
-      database
-        .prepare(
-          `INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-           VALUES ('primary', 'agent', 26, ?, 1, 1)`,
-        )
-        .run(target.agentId);
+      openLegacyDatabase(target.path, 26, target.agentId).close();
     }
     const preflight = await preflightOpenClawDatabaseSchemas({
       env: state.env,
@@ -288,29 +284,21 @@ it("excludes an older database that is both pending and indeterminate from versi
     const admitted = targets.filter(
       (target) => !preflight.indeterminate.some((failure) => failure.path === target.path),
     );
-    const maintenance = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: () => {},
-    });
-    try {
-      const result = await maintenance.run(() =>
-        prepareDoctorDatabaseMigrations({
-          env: state.env,
-          pendingDatabasePaths: preflight.pendingMigrations!.map((entry) => entry.path),
-          pendingMigrations: preflight.pendingMigrations,
-          databasePaths: admitted.map((target) => target.path),
-          agentDatabaseTargets: admitted.map((target) => ({
-            agentId: target.agentId,
-            path: target.path,
-            realPath: target.path,
-            source: "configured" as const,
-          })),
-        }),
-      );
-      expect(result.versionMigrations).toEqual([]);
-    } finally {
-      await maintenance.close();
-    }
+    const result = await withMaintenance(() =>
+      prepareDoctorDatabaseMigrations({
+        env: state.env,
+        pendingDatabasePaths: preflight.pendingMigrations!.map((entry) => entry.path),
+        pendingMigrations: preflight.pendingMigrations,
+        databasePaths: admitted.map((target) => target.path),
+        agentDatabaseTargets: admitted.map((target) => ({
+          agentId: target.agentId,
+          path: target.path,
+          realPath: target.path,
+          source: "configured" as const,
+        })),
+      }),
+    );
+    expect(result.versionMigrations).toEqual([]);
     for (const target of targets) {
       using database = new DatabaseSync(target.path, { readOnly: true });
       expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(26);
@@ -321,18 +309,8 @@ it("excludes an older database that is both pending and indeterminate from versi
 it("bounds the version phase and restores a committed member when a later migration fails", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const pathname = state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
-    fs.mkdirSync(path.dirname(pathname), { recursive: true });
-    using database = new DatabaseSync(pathname);
-    database.exec(
-      fs.readFileSync(
-        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
-        "utf8",
-      ),
-    );
+    using database = openLegacyDatabase(pathname);
     database.exec(`
-      PRAGMA user_version = 26;
-      INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-      VALUES ('primary', 'agent', 26, 'main', 1, 1);
       INSERT INTO context_engine_turn_outbox
         (rowid, advancement_key, engine_id, session_id, payload_json, created_at)
       VALUES (40, 'z-first', 'test', 'history', '{"state":"ready"}', 1),
@@ -368,21 +346,11 @@ it("bounds the version phase and restores a committed member when a later migrat
       agentId: "broken",
       path: state.statePath("agents", "broken", "agent", "openclaw-agent.sqlite"),
     };
-    fs.mkdirSync(path.dirname(failedMigration.path), { recursive: true });
     {
-      using broken = new DatabaseSync(failedMigration.path);
-      broken.exec(
-        fs.readFileSync(
-          new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
-          "utf8",
-        ),
-      );
+      using broken = openLegacyDatabase(failedMigration.path, 26, "broken");
       // Valid SQLite, but an unsupported outbox shape makes the real version
       // runner fail after the first member has committed.
       broken.exec(`
-        PRAGMA user_version = 26;
-        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-        VALUES ('primary', 'agent', 26, 'broken', 1, 1);
         ALTER TABLE context_engine_turn_outbox DROP COLUMN last_error;
       `);
     }
@@ -394,32 +362,13 @@ it("bounds the version phase and restores a committed member when a later migrat
     const outboxSchemaQuery = `SELECT type, name, sql FROM sqlite_schema
       WHERE tbl_name = 'context_engine_turn_outbox' ORDER BY type, name`;
     const originalOutboxSchema = database.prepare(outboxSchemaQuery).all();
-    const maintenance = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: () => {},
-    });
-    try {
-      await maintenance.run(async () => {
-        await assertSqliteMigrationScopePreserved(database, tables, async () => {
-          await expect(
-            prepareDoctorDatabaseMigrations({
-              env: state.env,
-              pendingDatabasePaths: migrations.map((entry) => entry.path),
-              pendingMigrations: migrations,
-              databasePaths: migrations.map((entry) => entry.path),
-              agentDatabaseTargets: migrations.map((entry) => ({
-                agentId: entry.agentId,
-                path: entry.path,
-                realPath: entry.path,
-                source: "disk" as const,
-              })),
-            }),
-          ).rejects.toThrow(/context_engine_turn_outbox|last_error/);
-        });
+    await withMaintenance(async () => {
+      await assertSqliteMigrationScopePreserved(database, tables, async () => {
+        await expect(
+          prepareDoctorDatabaseMigrations(migrationParams(state.env, migrations)),
+        ).rejects.toThrow(/context_engine_turn_outbox|last_error/);
       });
-    } finally {
-      await maintenance.close();
-    }
+    });
     expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(
       OPENCLAW_AGENT_SCHEMA_VERSION,
     );
@@ -492,21 +441,9 @@ it("preserves orphan history before admitting a group of scoped version migratio
       foundVersion: 26,
       supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
     }));
-    const schema = fs.readFileSync(
-      new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v26.sql", import.meta.url),
-      "utf8",
-    );
     for (const migration of migrations) {
-      fs.mkdirSync(path.dirname(migration.path), { recursive: true });
-      using database = new DatabaseSync(migration.path);
-      database.exec(schema);
-      database.exec("PRAGMA user_version = 26; PRAGMA foreign_keys = OFF;");
-      database
-        .prepare(
-          `INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
-           VALUES ('primary', 'agent', 26, ?, 1, 1)`,
-        )
-        .run(migration.agentId);
+      using database = openLegacyDatabase(migration.path, 26, migration.agentId);
+      database.exec("PRAGMA foreign_keys = OFF;");
       database.exec(`
         INSERT INTO context_engine_turn_outbox
           (advancement_key, engine_id, session_id, payload_json, created_at)
@@ -535,32 +472,13 @@ it("preserves orphan history before admitting a group of scoped version migratio
       original = readHistory(database);
       expect(database.prepare("PRAGMA foreign_key_check").all()).toHaveLength(1);
     }
-    const maintenance = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent: () => {},
+    await withMaintenance(async () => {
+      const result = await prepareDoctorDatabaseMigrations(migrationParams(state.env, migrations));
+      expect(result.warnings).toEqual([]);
+      expect(result.changes).toContain(
+        `Removed 1 orphan session window(s) from ${damagedPath}; their dependent history remains in the backup.`,
+      );
     });
-    try {
-      await maintenance.run(async () => {
-        const result = await prepareDoctorDatabaseMigrations({
-          env: state.env,
-          pendingDatabasePaths: migrations.map((migration) => migration.path),
-          pendingMigrations: migrations,
-          databasePaths: migrations.map((migration) => migration.path),
-          agentDatabaseTargets: migrations.map((migration) => ({
-            agentId: migration.agentId,
-            path: migration.path,
-            realPath: migration.path,
-            source: "disk" as const,
-          })),
-        });
-        expect(result.warnings).toEqual([]);
-        expect(result.changes).toContain(
-          `Removed 1 orphan session window(s) from ${damagedPath}; their dependent history remains in the backup.`,
-        );
-      });
-    } finally {
-      await maintenance.close();
-    }
     for (const migration of migrations) {
       using database = new DatabaseSync(migration.path, { readOnly: true });
       expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(

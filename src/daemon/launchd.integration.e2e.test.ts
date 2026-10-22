@@ -97,6 +97,35 @@ describeLaunchdIntegration("launchd integration", () => {
     programArguments = [process.execPath, "-e", "setInterval(() => {}, 1000);"],
   ) => ({ env: launchEnv, stdout, programArguments });
 
+  it("recovers registered services after their plists are deleted", async () => {
+    const fixture = await launchFixture(`missing-plist-${randomUUID().slice(0, 8)}`);
+    const plist = resolveLaunchAgentPlistPath(fixture.env);
+    try {
+      await installLaunchAgent(launchArgs(fixture.env));
+      await waitForRunningRuntime(fixture.env);
+      await fs.unlink(plist);
+
+      await uninstallLaunchAgent({ env: fixture.env, stdout });
+      await waitForNotRunningRuntime(fixture.env);
+
+      await installLaunchAgent(launchArgs(fixture.env));
+      const previous = await waitForRunningRuntime(fixture.env);
+      await fs.unlink(plist);
+      const warnings: string[] = [];
+
+      await installLaunchAgent({
+        ...launchArgs(fixture.env),
+        warn: (message) => warnings.push(message),
+      });
+
+      await expectRuntimePidReplaced(fixture.env, previous.pid);
+      expect(warnings.some((message) => message.includes("plist is missing"))).toBe(true);
+    } finally {
+      await uninstallLaunchAgent({ env: fixture.env, stdout });
+      await fs.rm(fixture.homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("real launchctl: node-host LaunchAgent stop/restart survives a co-located busy Gateway port (#124296)", async () => {
     // #124296: real launchctl jobs and TCP probes, with no port-inspection mocks.
     const testId = randomUUID().slice(0, 8);

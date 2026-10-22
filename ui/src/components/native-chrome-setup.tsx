@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createStore, For, onSettled, Show } from "solid-js";
 import type { NativeChromeExtensionSetupAction } from "../app/native-chrome-setup.ts";
 import type { LegacyChromeInstallResult } from "../app/native-device-settings.ts";
 import { projectNativeDeviceSettings } from "../lib/reactive/application-native.ts";
@@ -12,7 +12,7 @@ export function NativeChromeSetup() {
   const capability = useOptionalApplication()?.nativeDeviceSettings;
   const projection = capability ? projectNativeDeviceSettings(capability) : undefined;
   const browser = () => projection?.read()?.browser;
-  const [state, setState] = createSignal<ChromeSetupStatusProps>({
+  const [state, setState] = createStore<ChromeSetupStatusProps>({
     running: false,
     failed: null,
     result: null,
@@ -20,7 +20,7 @@ export function NativeChromeSetup() {
   });
   let disposed = false;
   let pending = false;
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
   });
   const actions = createMemo<readonly NativeChromeExtensionSetupAction[]>(() => {
@@ -42,7 +42,7 @@ export function NativeChromeSetup() {
     }
     const isCurrent = () => !disposed && host.isConnected;
     pending = true;
-    setState({ running: true, failed: null, result: null, legacyResult: null });
+    setState(() => ({ running: true, failed: null, result: null, legacyResult: null }));
     try {
       if (browser()?.chromeSetupActions === undefined) {
         let legacyResult: LegacyChromeInstallResult;
@@ -54,25 +54,30 @@ export function NativeChromeSetup() {
           return;
         }
         if (isCurrent() && actions().includes(action)) {
-          setState((value) => ({ ...value, legacyResult }));
+          setState((value) => {
+            value.legacyResult = legacyResult;
+          });
         }
       } else {
         const result = await capability.setupChromeExtension(action);
         if (isCurrent() && actions().includes(action)) {
-          setState((value) => ({ ...value, result }));
+          setState((value) => {
+            value.result = result;
+          });
         }
       }
     } catch {
       if (isCurrent()) {
-        setState((value) => ({
-          ...value,
-          failed: "setup",
-        }));
+        setState((value) => {
+          value.failed = "setup";
+        });
       }
     } finally {
       if (isCurrent()) {
         pending = false;
-        setState((value) => ({ ...value, running: false }));
+        setState((value) => {
+          value.running = false;
+        });
       }
     }
   };
@@ -95,7 +100,7 @@ export function NativeChromeSetup() {
                 <button
                   type="button"
                   class="btn"
-                  disabled={state().running}
+                  disabled={state.running}
                   onClick={() => void setup(action)}
                 >
                   {t(`configPage.deviceSettings.${label}`)}
@@ -104,10 +109,10 @@ export function NativeChromeSetup() {
             </For>
           </div>
           <ChromeSetupStatus
-            result={state().result}
-            legacyResult={state().legacyResult}
-            running={state().running}
-            failed={state().failed}
+            result={state.result}
+            legacyResult={state.legacyResult}
+            running={state.running}
+            failed={state.failed}
           />
         </div>
       </Show>

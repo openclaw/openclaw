@@ -1,4 +1,5 @@
 /* @vitest-environment jsdom */
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -10,7 +11,12 @@ import {
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
+import { SessionAutomationMobileList } from "./chat-automation-mobile.tsx";
+import { ChatDetailsMobileContent } from "./chat-details-mobile-content.tsx";
+import {
+  ChatSummaryAutomations,
+  createSessionAutomationInventory,
+} from "./chat-summary-automations.tsx";
 
 type Page = CronJobsListResult<CronCompactJob>;
 
@@ -47,30 +53,36 @@ function sequence(...pages: (Page | Promise<Page>)[]) {
   pages.forEach((response) => request.mockResolvedValueOnce(response));
   return request;
 }
+function source(request = sequence(page([job()])), offline = false, scopes = ["operator.read"]) {
+  return {
+    request,
+    ...createApplicationGateway({
+      ...createApplicationGateway().gateway.snapshot,
+      client: createTestGatewayClient(request),
+      phase: offline ? "offline" : "connected",
+      hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes } },
+      assistantAgentId: "ops",
+      sessionKey: "agent:ops:task",
+    }),
+  };
+}
 function component(
   request = sequence(page([job()])),
   presented = true,
   offline = false,
   scopes = ["operator.read"],
 ) {
-  const source = createApplicationGateway({
-    ...createApplicationGateway().gateway.snapshot,
-    client: createTestGatewayClient(request),
-    phase: offline ? "offline" : "connected",
-    hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes } },
-    assistantAgentId: "ops",
-    sessionKey: "agent:ops:task",
-  });
+  const current = source(request, offline, scopes);
   type Props = Parameters<typeof ChatSummaryAutomations>[0];
   const [props, setProps] = createSignal<Props>({
-    gateway: source.gateway,
+    gateway: current.gateway,
     sessionKey: "agent:ops:task",
     presented,
   });
   const view = mountSolid(() => <ChatSummaryAutomations {...props()} />);
   const element = view.container.querySelector<HTMLElement>("openclaw-chat-summary-automations")!;
   return {
-    ...source,
+    ...current,
     request,
     ...view,
     element,
@@ -83,9 +95,9 @@ function component(
     empty: () =>
       waitForSolid(() => expect(element.querySelector(".chat-summary__automations")).toBeNull()),
     cron: (action = "updated", payload: Record<string, unknown> = {}) =>
-      source.publishEvent({ type: "event", event: "cron", payload: { ...payload, action } }),
+      current.publishEvent({ type: "event", event: "cron", payload: { ...payload, action } }),
     update: (next: Partial<Props>) => {
-      setProps((current) => ({ ...current, ...next }));
+      setProps((previous) => ({ ...previous, ...next }));
       flush();
     },
   };
@@ -185,7 +197,7 @@ it("updates a held automation's runtime state without rereading its inventory", 
       state: { lastRunAtMs: 3, lastRunStatus: "ok", nextRunAtMs: 600_003 },
     },
   });
-  await current.ready("Every 10m");
+  await current.ready("Every 10 minutes");
   expect(current.element.textContent).not.toContain("Running");
   expect(current.request).toHaveBeenCalledTimes(1);
   current.unmount();
@@ -198,7 +210,7 @@ it("admits only presented session-scoped reads and uses the existing automation 
   flush();
   expect(current.request).not.toHaveBeenCalled();
   current.update({ presented: true });
-  expect(element.textContent).toContain("Loading automations…");
+  expect(element.textContent?.trim()).toBe("");
   expect(element.textContent).not.toContain("No automations");
   expect(current.request).toHaveBeenCalledWith(
     "cron.list",
@@ -220,7 +232,7 @@ it("admits only presented session-scoped reads and uses the existing automation 
   await current.ready(fullTitle);
   const link = find<HTMLAnchorElement>(".chat-summary__automation")!;
   expect(link.getAttribute("href")).toBe("/automations?job=summary-job");
-  expect(link.textContent).toContain("Every 10m");
+  expect(link.textContent).toContain("Every 10 minutes");
   expect(find(".chat-summary__automation-title")?.textContent?.trim()).toBe(fullTitle);
   expect(find<HTMLDetailsElement>('[data-details-group="automations"]')?.open).toBe(true);
   expect(link.querySelector("svg")).not.toBeNull();
@@ -265,11 +277,135 @@ it("omits confirmed-empty sections and preserves manual collapse until the conte
   expect(find<HTMLDetailsElement>("details")?.open).toBe(true);
 });
 
+it.each([false, true])(
+  "recovers inventory reads without changing paused jobs: loaded=%s",
+  async (loaded) => {
+    vi.useFakeTimers();
+    const request = createGatewayRequestMock();
+    if (loaded) {
+      request.mockResolvedValueOnce(page([job({ enabled: false })]));
+    }
+    request.mockRejectedValueOnce(new Error("Temporary inventory failure"));
+    const current = component(request);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      if (loaded) {
+        current.cron();
+        await vi.advanceTimersByTimeAsync(0);
+        flush();
+        expect(current.element.textContent).toContain("Paused");
+      }
+      expect(current.find(".chat-summary__automation-retry")).toBeNull();
+      const count = request.mock.calls.length;
+      request.mockResolvedValue(page([job({ name: "Recovered automation", enabled: false })]));
+      current.publish({ ...current.gateway.snapshot });
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(request).toHaveBeenCalledTimes(count);
+      await vi.advanceTimersByTimeAsync(1);
+      flush();
+      expect(current.element.textContent).toContain("Recovered automation");
+      expect(current.element.textContent).toContain("Paused");
+      expect(current.find(".chat-summary__automation-retry")).toBeNull();
+      expect(request).toHaveBeenCalledTimes(count + 1);
+      expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
+    } finally {
+      current.unmount();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each(["retry", "event", "reconnect"] as const)(
+  "retires refused automation content until a new %s read",
+  async (recovery) => {
+    vi.useFakeTimers();
+    const request = createGatewayRequestMock().mockResolvedValueOnce(
+      page([job({ enabled: false })]),
+    );
+    const current = component(request);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(current.element.textContent).toContain("Check the task");
+      request.mockRejectedValue(
+        new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Read authority revoked" }),
+      );
+      current.cron();
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(current.element.textContent).not.toContain("Check the task");
+      expect(current.find(".chat-summary__automation-more")).toBeNull();
+      current.publish({ ...current.gateway.snapshot });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(vi.getTimerCount()).toBe(0);
+      request.mockResolvedValue(page([job({ name: "Authorized automation", enabled: false })]));
+      if (recovery === "retry") {
+        current.find<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
+      } else if (recovery === "event") {
+        current.cron();
+      } else {
+        const snapshot = current.gateway.snapshot;
+        current.publish({ ...snapshot, phase: "reconnecting" });
+        current.publish(snapshot);
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      expect(current.element.textContent).toContain("Authorized automation");
+      expect(current.element.textContent).toContain("Paused");
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
+    } finally {
+      current.unmount();
+      vi.useRealTimers();
+    }
+  },
+);
+
+it.each(["hidden", "offline", "denied", "unmounted"] as const)(
+  "retires pending inventory recovery when %s",
+  async (boundary) => {
+    vi.useFakeTimers();
+    const current = component(
+      createGatewayRequestMock().mockRejectedValue(new Error("Temporary failure")),
+    );
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      flush();
+      if (boundary === "hidden") {
+        current.update({ presented: false });
+      } else if (boundary === "offline") {
+        current.publish({ ...current.gateway.snapshot, phase: "reconnecting" });
+      } else if (boundary === "denied") {
+        current.publish({
+          ...current.gateway.snapshot,
+          hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
+        });
+      } else {
+        current.unmount();
+      }
+      const count = current.request.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      flush();
+      expect(current.request).toHaveBeenCalledTimes(count);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      if (boundary !== "unmounted") {
+        current.unmount();
+      }
+      vi.useRealTimers();
+    }
+  },
+);
+
 it.each([false, true])("restores retry focus: moved=%s", async (moved) => {
   const pending = createDeferred<Page>();
   const current = component(
     createGatewayRequestMock()
-      .mockRejectedValueOnce(new Error("private server detail"))
+      .mockRejectedValueOnce(
+        new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "private server detail" }),
+      )
       .mockReturnValueOnce(pending.promise),
   );
   const { element, find } = current;
@@ -333,19 +469,21 @@ it.each([false, true])("preserves offline inventory: loaded=%s", async (loaded) 
     current.publish({ ...current.gateway.snapshot, phase: "offline", client: null });
   }
   flush();
-  expect(element.textContent).toContain(
-    loaded ? "Check the task" : "Offline · last-known automations",
-  );
+  if (loaded) {
+    expect(element.textContent).toContain("Check the task");
+  } else {
+    expect(element.textContent?.trim()).toBe("");
+  }
   expect(element.textContent).not.toContain("No automations");
   if (loaded) {
     expect(element.textContent).not.toContain("Reconnect to load");
   }
   current.update({ sessionKey: loaded ? "agent:ops:other" : "unresolved-session" });
-  expect(element.textContent).not.toContain("Check the task");
+  await waitForSolid(() => expect(element.textContent).not.toContain("Check the task"));
   if (!loaded) {
     current.publish({ ...current.gateway.snapshot, phase: "connected" });
     flush();
-    expect(element.textContent).toContain("Automations unavailable for this session.");
+    expect(element.textContent?.trim()).toBe("");
     expect(current.request).not.toHaveBeenCalled();
   }
 });
@@ -422,4 +560,251 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   current.publish(authorized);
   await current.ready("Current automation");
   expect(current.element.textContent).not.toContain("Retired automation");
+});
+
+it("shares the session inventory with consumers without starting another catalog", async () => {
+  const current = source(createGatewayRequestMock(async () => page([job()])));
+  const view = mountSolid(() => {
+    let host!: HTMLElement;
+    const props = { gateway: current.gateway, sessionKey: "agent:ops:task", presented: true };
+    const inventory = createSessionAutomationInventory(props, () => host);
+    return (
+      <section ref={(element) => (host = element)}>
+        {inventory.lifecycle}
+        <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>
+        <ChatSummaryAutomations {...props} inventory={inventory} />
+      </section>
+    );
+  });
+  await waitForSolid(() => {
+    expect(view.container.textContent).toContain("Check the task");
+    expect(view.container.querySelector('[aria-busy="false"]')).not.toBeNull();
+  });
+  expect(view.container.querySelector("output")?.textContent).toBe("1");
+  expect(current.request).toHaveBeenCalledTimes(1);
+  current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+  await waitForSolid(() => {
+    expect(view.container.textContent).toContain("Check the task");
+    expect(view.container.querySelector('[aria-busy="false"]')).not.toBeNull();
+  });
+  expect(current.request).toHaveBeenCalledTimes(2);
+  view.unmount();
+});
+
+it("shares pending reads, retained rows, and failed refresh recovery with mobile", async () => {
+  const first = createDeferred<Page>();
+  const refresh = createDeferred<Page>();
+  const recovery = createDeferred<Page>();
+  const current = source(sequence(first.promise, refresh.promise, recovery.promise));
+  const view = mountSolid(() => {
+    let host!: HTMLElement;
+    const props = { gateway: current.gateway, sessionKey: "agent:ops:task", presented: true };
+    const inventory = createSessionAutomationInventory(props, () => host);
+    return (
+      <section ref={(element) => (host = element)}>
+        {inventory.lifecycle}
+        <ChatSummaryAutomations {...props} inventory={inventory} />
+        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
+        <ChatDetailsMobileContent
+          details={{
+            sessionKey: "agent:ops:task",
+            selectedSession: { key: "agent:ops:task", kind: "direct" },
+            currentAgentId: "ops",
+            messages: [],
+          }}
+          presented
+          page={{
+            kind: "root",
+            content: {
+              entries: {
+                labels: {
+                  people: "People",
+                  taskProgress: "Task progress",
+                  subagents: "Subagents",
+                  processes: "Processes",
+                  environment: "Environment",
+                  context: "Context",
+                  pullRequests: "Pull requests",
+                  automations: "Automations",
+                  generatedFiles: "Generated files",
+                  session: "Session",
+                },
+                people: { label: "People" },
+                versions: { label: "Versions", metadata: 1 },
+                onNavigate: vi.fn(),
+              },
+              processes: undefined,
+              subagents: {
+                workingLabel: "Working",
+                onOpenSubagent: vi.fn(),
+                onOpenSubagents: vi.fn(),
+              },
+              automations: { inventory, summary: { label: "Automations" } },
+            },
+          }}
+        />
+      </section>
+    );
+  });
+  await waitForSolid(() => {
+    expect(view.container.textContent).toContain("Loading automations…");
+    expect(current.request).toHaveBeenCalledTimes(1);
+    expect(
+      view.container.querySelector('.chat-details-mobile-root [data-details-group="automations"]'),
+    ).toBeNull();
+  });
+  first.resolve(page([job()]));
+  const rows = () => view.container.querySelectorAll<HTMLAnchorElement>("a");
+  await waitForSolid(() => expect(rows()).toHaveLength(2));
+  const retainedRows = [...rows()];
+  retainedRows[1]!.focus();
+  current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
+  await waitForSolid(() =>
+    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(2),
+  );
+  expect(current.request).toHaveBeenCalledTimes(2);
+  retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
+  refresh.reject(new Error("private inventory failure"));
+  await waitForSolid(() => {
+    expect(view.container.querySelector(".chat-summary__automation-error")).toBeNull();
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Couldn't update automations.",
+    );
+    expect(view.container.querySelector('[aria-busy="true"]')).toBeNull();
+  });
+  retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
+  expect(document.activeElement).toBe(retainedRows[1]);
+  expect(view.container.textContent).not.toContain("private inventory failure");
+  view.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+  await waitForSolid(() =>
+    expect(view.container.querySelectorAll('[aria-busy="true"]')).toHaveLength(2),
+  );
+  expect(current.request).toHaveBeenCalledTimes(3);
+  recovery.resolve(page([job({ name: "Recovered automation" })]));
+  await waitForSolid(() => {
+    expect(rows()[0]?.textContent).toContain("Recovered automation");
+    expect(rows()[1]?.textContent).toContain("Recovered automation");
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  });
+  retainedRows.forEach((row, index) => expect(rows()[index]).toBe(row));
+  view.unmount();
+});
+
+it("expands 25 retained jobs in tens independently of RPC pagination and resets on reentry", async () => {
+  const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const jobs = Array.from({ length: 25 }, (_, index) =>
+    job({ id: `job-${index}`, name: `Automation ${index + 1}` }),
+  );
+  const current = component(
+    createGatewayRequestMock()
+      .mockResolvedValueOnce(page(jobs))
+      .mockImplementationOnce(() => pending.promise),
+  );
+  const view = current;
+  const { element } = current;
+  await waitForSolid(() => {
+    expect(element.textContent).toContain("Automation 1");
+    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
+  });
+  const rows = () => element.querySelectorAll<HTMLAnchorElement>(".chat-summary__automation");
+  expect(rows()).toHaveLength(10);
+  const more = element.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
+  more.focus();
+  more.click();
+  flush();
+  expect(rows()).toHaveLength(20);
+  expect(document.activeElement).toBe(rows()[10]);
+  more.focus();
+  more.click();
+  flush();
+  expect(rows()).toHaveLength(25);
+  expect(document.activeElement).toBe(rows()[20]);
+  expect(element.querySelector(".chat-summary__automation-more")).toBeNull();
+  expect(current.request).toHaveBeenCalledTimes(1);
+  view.update({ onNavigate: vi.fn() });
+  flush();
+  expect(rows()).toHaveLength(25);
+  view.update({ presented: false });
+  flush();
+  view.update({ presented: true });
+  flush();
+  expect(rows()).toHaveLength(10);
+  expect(current.request).toHaveBeenCalledTimes(2);
+  pending.reject(new Error("refresh failed"));
+  await waitForSolid(() => {
+    expect(element.textContent).not.toContain("Couldn't update automations.");
+    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
+  });
+  expect(rows()).toHaveLength(10);
+  expect(element.querySelector("summary")?.textContent?.trim()).toBe("Automations");
+});
+
+it("retains reconnect facts and distinguishes auto-disabled from paused and stale running", async () => {
+  const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const current = component(
+    createGatewayRequestMock()
+      .mockResolvedValueOnce(
+        page([
+          job({
+            id: "attention",
+            name: "Needs attention",
+            enabled: false,
+            autoDisabled: { reason: "consecutive-failures", atMs: 1, consecutiveErrors: 3 },
+          }),
+          job({ id: "paused", name: "User paused", enabled: false }),
+          job({ id: "running", name: "In progress", runningAtMs: 42 }),
+        ]),
+      )
+      .mockImplementationOnce(() => pending.promise),
+  );
+  const { element } = current;
+  await waitForSolid(() => {
+    expect(element.textContent).toContain("Needs attention");
+    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
+  });
+  const attention = element.querySelector<HTMLAnchorElement>('[href$="job=attention"]')!;
+  expect(attention.textContent).not.toContain("Paused");
+  expect(attention.querySelector(".chat-summary__automation-attention")).not.toBeNull();
+  expect(element.querySelectorAll(".chat-summary__automation-paused")).toHaveLength(1);
+  expect(element.querySelectorAll(".session-run-spinner")).toHaveLength(1);
+  const snapshot = current.gateway.snapshot;
+  current.publish({ ...snapshot, phase: "reconnecting" });
+  await waitForSolid(() => {
+    expect(element.textContent).toContain("In progress");
+    expect(element.textContent).not.toContain("Running");
+  });
+  current.publish(snapshot);
+  flush();
+  expect(element.querySelectorAll(".chat-summary__automation")).toHaveLength(3);
+  pending.resolve(page());
+  await current.empty();
+});
+
+it("describes cron weekdays and non-uniform minute steps without inventing a fixed interval", async () => {
+  const current = component(
+    sequence(
+      page([
+        job({
+          id: "weekdays",
+          name: "Weekday review",
+          scheduleKind: "cron",
+          schedule: { kind: "cron", expr: "0 9 * * MON-FRI", tz: "UTC" },
+        }),
+        job({
+          id: "minute-grid",
+          name: "Minute grid",
+          scheduleKind: "cron",
+          schedule: { kind: "cron", expr: "*/7 * * * *", tz: "UTC" },
+        }),
+      ]),
+    ),
+  );
+  await current.ready("Weekday review");
+  const weekday = current.element.querySelector<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
+  const minutes = current.element.querySelector<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
+  expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
+  expect(minutes.textContent).toContain(
+    "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
+  );
+  expect(minutes.textContent).not.toContain("Every 7 minutes");
 });

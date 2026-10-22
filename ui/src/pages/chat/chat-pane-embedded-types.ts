@@ -7,6 +7,7 @@ import type {
   BrowserTabSelection,
   BrowserTabTarget,
 } from "../../components/browser/browser-target.ts";
+import type { HostDesktopRuntimeConfig } from "../../components/desktop/host-desktop-setup.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
@@ -18,20 +19,39 @@ import type {
 } from "./chat-session-companion.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view-frame.ts";
+import type { ChatModelControlsProps } from "./components/chat-model-controls.tsx";
 import type { SessionWorkspaceState } from "./components/chat-session-workspace-types.ts";
-import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
-import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
+import type {
+  SessionDiffProps,
+  SidebarSelection,
+} from "./components/chat-sidebar-content-types.ts";
+import type {
+  ChatDetailPanelProps,
+  SessionWorkspaceProps,
+} from "./components/chat-sidebar-view-types.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
 export type ChatDetailSlotProps = {
+  active?: boolean;
+  presentation?: "desktop" | "mobile";
+  fileBack?: ChatDetailPanelProps["fileBack"];
+  fileWorkspace?: ChatDetailPanelProps["fileWorkspace"];
+  onOpenMobilePage?: SessionDiffProps["onOpenMobilePage"];
+  filePresentation?: ChatDetailPanelProps["filePresentation"];
+  onFileInteraction?: ChatDetailPanelProps["onFileInteraction"];
+  onFileDraftChange?: ChatDetailPanelProps["onFileDraftChange"];
   chat: ChatProps;
   content: SidebarSelection;
   host: ChatPageHost;
+  onWorkspaceIntent?: () => void;
 };
 
 export type SidebarPanelDefinitionParams = {
+  onScrollPortRef?: ChatProps["onScrollPortRef"];
+  presentation?: "desktop" | "mobile";
   panePresentation?: PresentationValue;
+  detailPresented?: PresentationValue;
   state: ChatPageHost;
   paneId: string;
   panePresentationId: string;
@@ -58,9 +78,12 @@ export type SidebarPanelDefinitionParams = {
   preferredBrowserTab?: BrowserTabSelection;
   sessionBrowserTabs?: BrowserTabTarget[];
   desktopPresented: PresentationValue;
+  desktopExpanded?: boolean;
+  onToggleDesktopExpanded?: () => void;
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   desktopSource: string | null;
+  desktopRuntimeConfig: HostDesktopRuntimeConfig | null;
   desktopFocusHref: string;
   portalPresented?: PresentationValue;
   onDesktopFocusTargetChange: (
@@ -68,18 +91,20 @@ export type SidebarPanelDefinitionParams = {
   ) => void;
   dashboard: Parameters<typeof ChatBoardPanel>[0] | null;
   workspace: SessionWorkspaceProps | undefined;
+  workspacePresented?: PresentationValue;
   detail: Omit<ChatDetailSlotProps, "content">;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
   pullRequests: ControlUiSessionPullRequest[];
   companion: ChatSessionCompanionThread;
+  companionModelControls?: ChatModelControlsProps;
   companionPresented: PresentationValue;
   companionFocusRequest: (() => boolean) | undefined;
   onCompanionSubmit: (question: string | ChatSessionCompanionTurn) => void;
   onCompanionDraftChange: (draft: string) => void;
   onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
   connected: boolean;
-  onClearCompanion: () => void;
+  onClearCompanion: () => Promise<boolean>;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;

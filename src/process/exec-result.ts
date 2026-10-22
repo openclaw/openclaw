@@ -48,6 +48,14 @@ export function hasCommandProcessCleanupError(error: unknown): boolean {
   return collectNestedErrorCandidates(error).some(isCanonicalCommandProcessCleanupError);
 }
 
+/** Best-effort command reads must still propagate uncertain cleanup. */
+export function ignoreNonCleanupCommandError(error: unknown): null {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
+  return null;
+}
+
 export type SpawnResult = {
   pid?: number;
   stdout: string;

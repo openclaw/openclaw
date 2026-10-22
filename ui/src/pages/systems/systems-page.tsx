@@ -1,10 +1,24 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createEffect, createMemo, onCleanup, onSettled } from "solid-js";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  createEffect,
+  createMemo,
+  createOptimistic,
+  latest,
+  onSettled,
+} from "solid-js";
+import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
 import "../../components/sparkline-tile.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
 import "../../components/desktop/desktop-panel.ts";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -18,6 +32,7 @@ import {
 import type { SparklineSample } from "../../lib/sparkline-types.ts";
 import { SystemsBackups } from "./systems-backups.tsx";
 import type { SystemsInventoryRow } from "./systems-data.ts";
+import { createSystemsRead } from "./systems-read.ts";
 import { systemKind, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
 import type { Systems } from "./systems-state.ts";
 import {
@@ -156,6 +171,7 @@ export function SystemsPage(props: { controller: Systems; presented: boolean }) 
     config().revision();
     return projection().read();
   };
+  const inventoryRead = createSystemsRead(() => controller().inventoryRead);
   // The systems owner starts and parks its Gateway polling with page visibility.
   createEffect(
     () => ({ controller: source(), presented: isPresented() }),
@@ -232,6 +248,7 @@ export function SystemsPage(props: { controller: Systems; presented: boolean }) 
       >
         <SystemsWorkspace
           controller={controller()}
+          inventoryRead={inventoryRead}
           presented={props.presented}
           onDesktopPanel={(panel) => {
             desktopPanel = panel;
@@ -326,36 +343,41 @@ function SystemsDetails(props: { controller: Systems; row: SystemsInventoryRow }
   );
 }
 
-function HostDesktopSetup(props: { controller: Systems; row: SystemsInventoryRow }) {
+function HostDesktopSetup(props: {
+  controller: Systems;
+  row: SystemsInventoryRow;
+  loading: boolean;
+}) {
   const controller = () => props.controller;
   const row = () => props.row;
   const setup = () => row()!.environment.desktopSetup;
   const enabled = () => controller().hostDesktopEnabled();
   const isMac = () => systemPlatform(row())?.startsWith("macOS") === true;
   const ready = () => setup()?.state === "ready" || setup()?.state === "managed";
-  const title = () =>
-    enabled()
-      ? "systems.desktopSetupEnabled"
-      : ([
-          ["managed", "systems.managedDesktopConfigured"],
-          ["ready", isMac() ? "systems.screenSharingDetected" : "systems.desktopDetected"],
-          ["needs-server", isMac() ? "systems.screenSharingNeeded" : "systems.desktopServerNeeded"],
-        ].find(([kind]) => kind === setup()?.state)?.[1] ?? "systems.desktopSetupAttention");
-  const hint = () =>
-    enabled()
-      ? "systems.desktopSetupConnecting"
-      : ready()
-        ? "systems.desktopSetupEnableHint"
-        : isMac() && setup()?.state === "needs-server"
-          ? "systems.screenSharingSetupHint"
-          : "systems.desktopServerSetupHint";
+  const copy = () => hostDesktopSetupCopy(setup()?.state, isMac(), enabled());
+  const [enabling, setEnabling] = createOptimistic(false);
+  const presentEnable = action(function* (
+    operation: NonNullable<ReturnType<Systems["enableHostDesktop"]>>,
+  ) {
+    setEnabling(true);
+    yield Promise.race([operation.completion, operation.retired]);
+  });
+  const enable = async () => {
+    const operation = controller().enableHostDesktop();
+    if (!operation) {
+      return;
+    }
+    // Let the owner's admission publish before starting its optimistic presentation.
+    await Promise.resolve();
+    await presentEnable(operation);
+  };
   return (
     <div class="systems-state" role="status">
       <span class="systems-state__icon" aria-hidden="true">
         <Icon name="monitor" />
       </span>
-      <h2>{t(title())}</h2>
-      <p>{t(hint())}</p>
+      <h2>{t(copy().title)}</h2>
+      <p>{t(copy().hint)}</p>
       {setup()?.state === "unsupported" && setup()!.detail ? <p>{setup()!.detail}</p> : null}
       {controller().state.desktopSetupError ? (
         <p class="systems-callout--error" role="alert">
@@ -366,14 +388,12 @@ function HostDesktopSetup(props: { controller: Systems; row: SystemsInventoryRow
         <>
           <button
             class="btn primary systems-text-button"
-            disabled={!controller().canEnableHostDesktop() || controller().desktopSetupBusy()}
-            onClick={() => void controller().enableHostDesktop()}
+            disabled={
+              enabling() || controller().desktopSetupBusy() || !controller().canEnableHostDesktop()
+            }
+            onClick={() => void enable()}
           >
-            {t(
-              controller().desktopSetupBusy()
-                ? "systems.desktopSetupEnabling"
-                : "systems.enableDesktopAccess",
-            )}
+            {t(enabling() ? "systems.desktopSetupEnabling" : "systems.enableDesktopAccess")}
           </button>
           <p>
             {t(
@@ -387,7 +407,7 @@ function HostDesktopSetup(props: { controller: Systems; row: SystemsInventoryRow
       {!enabled() && !ready() ? (
         <button
           class="systems-text-button"
-          disabled={controller().loading() || !controller().connected()}
+          disabled={props.loading || !controller().connected()}
           onClick={() => void controller().refresh("manual")}
         >
           {t("systems.desktopSetupCheckAgain")}
@@ -399,11 +419,16 @@ function HostDesktopSetup(props: { controller: Systems; row: SystemsInventoryRow
 
 function SystemsWorkspace(props: {
   controller: Systems;
+  inventoryRead: ReturnType<typeof createSystemsRead>;
   presented: boolean;
   onDesktopPanel: (panel: HTMLElementTagNameMap["openclaw-desktop-panel"] | undefined) => void;
 }) {
   const controller = () => props.controller;
   const row = () => controller().selected();
+  const readStatus = () => {
+    latest(props.inventoryRead.read);
+    return null;
+  };
   const canView = () =>
     Boolean(
       row()?.environment.desktop &&
@@ -411,12 +436,12 @@ function SystemsWorkspace(props: {
       controller().desktopAvailable() &&
       props.presented,
     );
-  const title = () => (row() ? systemName(row()!) : t("systems.title"));
+  const title = () => (row() ? systemName(row()!) : t("systems.select"));
   const auxiliaryErrors = () => Object.values(controller().state.inventory?.errors ?? {});
   const emptyTitle = () =>
     !controller().connected()
       ? t("systems.offlineGateway")
-      : controller().loading() && !controller().state.inventory
+      : props.inventoryRead.pending() && !controller().state.inventory
         ? t("systems.loading")
         : controller().state.selectedId && !row()
           ? t("systems.missingTitle")
@@ -444,10 +469,14 @@ function SystemsWorkspace(props: {
               )
             : t("systems.accessHint");
   const Desktop = () => {
-    onCleanup(() => props.onDesktopPanel(undefined));
+    let panel!: HTMLElementTagNameMap["openclaw-desktop-panel"];
+    onSettled(() => {
+      props.onDesktopPanel(panel);
+      return () => props.onDesktopPanel(undefined);
+    });
     return (
       <openclaw-desktop-panel
-        ref={(panel) => props.onDesktopPanel(panel)}
+        ref={(element) => (panel = element)}
         embedded
         data-chat-autotype-exempt
         prop:client={controller().context.gateway.snapshot.client}
@@ -462,9 +491,15 @@ function SystemsWorkspace(props: {
   };
   return (
     <section class="systems-workspace" aria-label={t("systems.title")}>
+      <HubPageHeader
+        active="systems"
+        wide
+        docsUrl="https://docs.openclaw.ai/web/control-ui/sessions-and-sidebar#systems-workspace"
+        class="systems-page-header"
+      />
       <header class="systems-toolbar">
         <div class="systems-heading">
-          <h1>{title()}</h1>
+          <h2>{title()}</h2>
           <span>{row() ? t("systems." + systemKind(row()!)) : t("systems.selectHint")}</span>
         </div>
         <select
@@ -510,17 +545,25 @@ function SystemsWorkspace(props: {
           <Icon name="panelRightOpen" />
         </button>
       </header>
-      {controller().state.error ? (
-        <div class="systems-callout systems-callout--error" role="alert">
-          {controller().state.error}
-          <button
-            onClick={() => void controller().refresh("manual")}
-            disabled={controller().loading()}
+      <Show when={props.inventoryRead.receipt()} keyed>
+        {(receipt) => (
+          <Errored
+            fallback={(error) => (
+              <div class="systems-callout systems-callout--error" role="alert">
+                {formatUiError(error())}
+                <button
+                  onClick={() => void controller().refresh("manual")}
+                  disabled={props.inventoryRead.pending()}
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            )}
           >
-            {t("common.retry")}
-          </button>
-        </div>
-      ) : null}
+            <Loading on={receipt}>{readStatus()}</Loading>
+          </Errored>
+        )}
+      </Show>
       {!controller().connected() ? (
         <div class="systems-callout" role="status">
           {t("systems.offlineGateway")}
@@ -549,7 +592,11 @@ function SystemsWorkspace(props: {
               (row()!.environment.desktop &&
                 controller().hostDesktopEnabled() &&
                 controller().context.runtimeConfig.canPatch === true)) ? (
-            <HostDesktopSetup controller={controller()} row={row()!} />
+            <HostDesktopSetup
+              controller={controller()}
+              row={row()!}
+              loading={props.inventoryRead.pending()}
+            />
           ) : (
             <div class="systems-state" role="status">
               <span class="systems-state__icon" aria-hidden="true">

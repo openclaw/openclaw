@@ -87,7 +87,7 @@ const commandProcessScope = new AsyncLocalStorage<CommandProcessScope>();
 
 export function resolveCommandProcessSignal(signal?: AbortSignal): AbortSignal | undefined {
   const inherited = commandProcessScope.getStore()?.signal;
-  return inherited ? AbortSignal.any(signal ? [inherited, signal] : [inherited]) : signal;
+  return inherited && signal ? AbortSignal.any([inherited, signal]) : (inherited ?? signal);
 }
 
 /** Cleanup helpers must outlive cancellation of the commands they are settling. */

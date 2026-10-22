@@ -58,6 +58,9 @@ export type RetainedClaim = {
 export type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
   active: boolean;
+  localClaimSessions: Set<string>;
+  localAdmissionReservations: Map<string, number>;
+  localMutationSettlements: Map<string, Set<Promise<void>>>;
   changeListeners: Set<(placement: WorkerSessionPlacementIdentity) => void>;
   claims: Map<string, Set<RetainedClaim>>;
   placements: Map<

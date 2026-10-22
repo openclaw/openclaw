@@ -8,14 +8,14 @@
   },
   "type": "module",
   "dependencies": {
-    "@solidjs/web": "2.0.0-rc.14",
+    "@solidjs/web": "2.0.0-rc.16",
     "nostr-tools": "2.25.2",
-    "solid-js": "2.0.0-rc.14",
-    "zod": "4.6.6"
+    "solid-js": "2.0.0-rc.16",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@solidjs/compiler": "2.0.0-rc.14",
+    "@solidjs/compiler": "2.0.0-rc.16",
     "esbuild": "0.28.2",
     "openclaw": "workspace:*"
   },

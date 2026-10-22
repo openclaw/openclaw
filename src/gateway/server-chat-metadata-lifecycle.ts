@@ -20,6 +20,7 @@ export function broadcastChatMetadataChanged(
   payload: Partial<SessionCostUsagePublication> & {
     modelSelectionChanged?: boolean;
     modelCatalogChanged?: boolean;
+    modelCatalogStatusChanged?: true;
     authChanged?: boolean;
     commandsChanged?: false;
   } = {},

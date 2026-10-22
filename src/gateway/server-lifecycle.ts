@@ -5,6 +5,7 @@ import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycl
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { commitPresence, upsertPresence } from "../infra/system-presence.js";
 import { stopGatewayDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -26,6 +27,7 @@ import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
+import { publishHooksTokenEnvKey } from "./hooks.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import { startNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { waitForNodeWorkerSupervisor } from "./node-registry-private.js";
@@ -207,10 +209,18 @@ export async function prepareGatewayLifecycle(params: {
   watchNodeRequestHandler.current = watchNodeHttpRuntime.handleRequest;
   const { TerminalSessionManager, DEFAULT_TERMINAL_DETACH_SECONDS } =
     await import("./terminal/session-manager.js");
-  const { createTerminalSessionTransport } = await import("./terminal/gateway-transport.js");
+  const { TERMINAL_EVENT_DATA } = await import("./terminal/session-types.js");
   const terminalSessions = new TerminalSessionManager({
+    disableGatewayLocalTerminals: isTruthyEnvValue(
+      process.env.OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS,
+    ),
     withOpenAdmission: withAgentTerminalOpenAdmission,
-    ...createTerminalSessionTransport(broadcastToConnIds, getBufferedAmount),
+    emit: (connId: string, event: string, payload: unknown) =>
+      broadcastToConnIds(event, payload, new Set([connId]), {
+        // PTY flow control is primary; dropping is the last-resort socket cap guard.
+        dropIfSlow: event === TERMINAL_EVENT_DATA,
+      }),
+    getBufferedAmount,
     detachGraceMs:
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
         DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
@@ -272,10 +282,10 @@ export async function prepareGatewayLifecycle(params: {
       return previous;
     },
     setScheduledServiceHandles: (handles: {
-      heartbeatRunner: typeof runtimeState.heartbeatRunner;
+      stopScheduledServices: typeof runtimeState.stopScheduledServices;
       stopDeliveryRecovery: typeof runtimeState.stopDeliveryRecovery;
     }) => {
-      runtimeState.heartbeatRunner = handles.heartbeatRunner;
+      runtimeState.stopScheduledServices = handles.stopScheduledServices;
       runtimeState.stopDeliveryRecovery = handles.stopDeliveryRecovery;
     },
     setPostAttachHandles: (handles: {
@@ -292,7 +302,6 @@ export async function prepareGatewayLifecycle(params: {
     getReloadState: () => ({
       hooksConfig: runtimeState.hooksConfig,
       hookClientIpConfig: runtimeState.hookClientIpConfig,
-      heartbeatRunner: runtimeState.heartbeatRunner,
       cronState: runtimeState.cronState,
     }),
     setReloadHookState: (next: {
@@ -300,10 +309,8 @@ export async function prepareGatewayLifecycle(params: {
       hookClientIpConfig: typeof runtimeState.hookClientIpConfig;
     }) => {
       runtimeState.hooksConfig = next.hooksConfig;
+      publishHooksTokenEnvKey(next.hooksConfig);
       runtimeState.hookClientIpConfig = next.hookClientIpConfig;
-    },
-    setHeartbeatRunner: (next: typeof runtimeState.heartbeatRunner) => {
-      runtimeState.heartbeatRunner = next;
     },
     // Stable callbacks keep reload transactions out of retained plugin contexts.
     getCronService: () => runtimeState.cronState.cron,
@@ -334,6 +341,7 @@ export async function prepareGatewayLifecycle(params: {
       const client = clients.getByConnectionId(connId);
       return client
         ? createControlUiSessionPrRead({
+            allowOwnImportedPullRequest: true,
             client,
             ...session,
             getRuntimeConfig,
@@ -575,7 +583,7 @@ export async function prepareGatewayLifecycle(params: {
               pluginServices: runtimeState.pluginServices,
               cron: runtimeState.cronState.cron,
               stopCronMaintenance: shutdownRuntime.stopCronMaintenance,
-              heartbeatRunner: runtimeState.heartbeatRunner,
+              stopScheduledServices: runtimeState.stopScheduledServices,
               maintenance: runtimeState.maintenance,
               stopMediaCleanup: stopMediaCleanupForClose,
               agentUnsub: runtimeState.agentUnsub,

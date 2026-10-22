@@ -46,16 +46,29 @@ function normalizeNarrationText(raw: string): string {
   return compactProgressText(collapsed, NARRATION_MAX_CHARS);
 }
 
-function createProgressNarrator(params: {
+/** Requires onNarrationUpdate and a utility model; utilityModel: "" disables narration. */
+export function attachProgressNarratorToReplyOptions(params: {
   cfg: OpenClawConfig;
   agentId: string;
   userMessage?: string;
-  onUpdate: (payload: { text: string }) => Promise<void> | void;
-  isProgressDraftVisible?: () => boolean;
-  abortSignal?: AbortSignal;
-  /** Mirror of the channel's commandText: "status" policy for narration input. */
-  hideCommandText?: boolean;
-}) {
+  opts?: InternalGetReplyOptions;
+  /** Model-locked native sessions must never invoke the utility model. */
+  disabled?: boolean;
+}): InternalGetReplyOptions | undefined {
+  const opts = params.opts;
+  const onNarrationUpdate = opts?.onNarrationUpdate;
+  if (!opts || !onNarrationUpdate || params.disabled === true) {
+    return opts;
+  }
+  // Explicit config or a provider-declared default both enable narration;
+  // utilityModel: "" and providers without a default keep it off.
+  if (!resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId })) {
+    return opts;
+  }
+  const { cfg, agentId } = params;
+  const { abortSignal, isProgressDraftVisible } = opts;
+  const hideCommandText = opts.narrationHideCommandText === true;
+  const onUpdate = onNarrationUpdate;
   let activity = createSessionActivityNoteState();
   let disabled = false;
   let inFlight = false;
@@ -116,26 +129,26 @@ function createProgressNarrator(params: {
       return;
     }
     disabled = true;
-    if (!lastText || params.abortSignal?.aborted) {
+    if (!lastText || abortSignal?.aborted) {
       return;
     }
     lastText = "";
-    void Promise.resolve(params.onUpdate({ text: "" })).catch((err: unknown) => {
+    void Promise.resolve(onUpdate({ text: "" })).catch((err: unknown) => {
       logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
     });
   }
 
-  const generate = async (input: ProgressNarrationInput, abortSignal: AbortSignal) => {
+  const generate = async (input: ProgressNarrationInput, turnSignal: AbortSignal) => {
     const deadline = performance.now() + NARRATION_TIMEOUT_MS;
     const controller = new AbortController();
-    const signal = AbortSignal.any([abortSignal, controller.signal]);
+    const signal = AbortSignal.any([turnSignal, controller.signal]);
     const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
     try {
       // Preparation shares the request budget, but stays awaited so expired work
       // cannot abandon the cached route or start another preparation in parallel.
       const prepared = await (preparedPromise ??= prepareNarrationModel({
-        cfg: params.cfg,
-        agentId: params.agentId,
+        cfg,
+        agentId,
       }));
       // Failed or borrowed routes recheck credentials on the next narration.
       if (!prepared || prepared.agentHarnessRuntimeOverride) {
@@ -152,7 +165,7 @@ function createProgressNarrator(params: {
       const { provider, model, authProfileId } = prepared;
       utilityModelLabel = `${provider}/${model}${authProfileId ? ` via ${authProfileId}` : ""}`;
       const outcome = await generateNarrationWithUtilityModel({
-        cfg: params.cfg,
+        cfg,
         prepared,
         input,
         abortSignal: signal,
@@ -170,7 +183,7 @@ function createProgressNarrator(params: {
     data: Record<string, unknown>,
     options?: { immediate?: boolean; flushAssistant?: boolean },
   ): void => {
-    if (turnController.signal.aborted || disabled || params.abortSignal?.aborted) {
+    if (turnController.signal.aborted || disabled || abortSignal?.aborted) {
       return;
     }
     visibilityRetryCount = 0;
@@ -210,11 +223,11 @@ function createProgressNarrator(params: {
   };
 
   function maybeRun(immediate: boolean) {
-    if (turnController.signal.aborted || disabled || params.abortSignal?.aborted) {
+    if (turnController.signal.aborted || disabled || abortSignal?.aborted) {
       clearRetryTimer();
       return;
     }
-    if (params.isProgressDraftVisible?.() === false) {
+    if (isProgressDraftVisible?.() === false) {
       if (visibilityRetryCount < MAX_VISIBILITY_RETRIES) {
         visibilityRetryCount += 1;
         scheduleRetry(VISIBILITY_RETRY_MS, immediate);
@@ -284,11 +297,11 @@ function createProgressNarrator(params: {
           return;
         }
         consecutiveFailures = 0;
-        if (text === lastText || params.abortSignal?.aborted) {
+        if (text === lastText || abortSignal?.aborted) {
           return;
         }
         lastText = text;
-        await params.onUpdate({ text });
+        await onUpdate({ text });
       } catch (err) {
         logVerbose(`progress-narrator: update failed: ${String(err)}`);
       } finally {
@@ -303,17 +316,16 @@ function createProgressNarrator(params: {
     })();
   }
 
-  params.abortSignal?.addEventListener("abort", stopTurn, { once: true });
+  abortSignal?.addEventListener("abort", stopTurn, { once: true });
 
-  return {
+  const narrator = {
     beginTurn: resetTurnState,
     stopTurn,
     noteToolStart(payload: ToolStartPayload) {
       if (payload.phase !== "start" || !isChannelProgressDraftWorkToolName(payload.name)) {
         return;
       }
-      const hideDetail =
-        params.hideCommandText === true && isCommandBearingToolCall(payload.name, payload.args);
+      const hideDetail = hideCommandText && isCommandBearingToolCall(payload.name, payload.args);
       recordEvent("tool", {
         phase: "start",
         name: payload.name,
@@ -332,7 +344,7 @@ function createProgressNarrator(params: {
       }
       // Command-output titles usually carry the raw command text; honor the
       // channel's commandText: "status" policy for the failure note too.
-      const title = (!params.hideCommandText && payload.title) || payload.name || "command";
+      const title = (!hideCommandText && payload.title) || payload.name || "command";
       recordEvent(
         "command_output",
         {
@@ -372,36 +384,6 @@ function createProgressNarrator(params: {
       );
     },
   };
-}
-
-/** Requires onNarrationUpdate and a utility model; utilityModel: "" disables narration. */
-export function attachProgressNarratorToReplyOptions(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  userMessage?: string;
-  opts?: InternalGetReplyOptions;
-  /** Model-locked native sessions must never invoke the utility model. */
-  disabled?: boolean;
-}): InternalGetReplyOptions | undefined {
-  const opts = params.opts;
-  const onNarrationUpdate = opts?.onNarrationUpdate;
-  if (!opts || !onNarrationUpdate || params.disabled === true) {
-    return opts;
-  }
-  // Explicit config or a provider-declared default both enable narration;
-  // utilityModel: "" and providers without a default keep it off.
-  if (!resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId })) {
-    return opts;
-  }
-  const narrator = createProgressNarrator({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    userMessage: params.userMessage,
-    onUpdate: onNarrationUpdate,
-    isProgressDraftVisible: opts.isProgressDraftVisible,
-    abortSignal: opts.abortSignal,
-    hideCommandText: opts.narrationHideCommandText === true,
-  });
   opts.onProgressNarratorLifecycle?.({
     beginTurn: narrator.beginTurn,
     stopTurn: narrator.stopTurn,

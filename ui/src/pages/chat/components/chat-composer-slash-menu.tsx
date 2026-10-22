@@ -560,13 +560,11 @@ export function SlashMenu(props: { menu: SlashMenu; host: SlashMenuHost; draft: 
   const mode = () =>
     isSlashMenuVisible(state()) ? (state().slashMenuMode === "args" ? "args" : "command") : null;
   const grouped = createMemo(() => {
-    const commands = state().slashMenuItems.filter((command) => command.source !== "skill");
-    const skills = state().slashMenuItems.filter((command) => command.source === "skill");
     const groups: Array<
-      [SlashCommandCategory, Array<{ command: SlashCommandDef; index: number }>]
+      [SlashCommandCategory | "skills", Array<{ command: SlashCommandDef; index: number }>]
     > = [];
-    for (const [index, command] of commands.entries()) {
-      const category = command.category ?? "session";
+    for (const [index, command] of state().slashMenuItems.entries()) {
+      const category = command.source === "skill" ? "skills" : (command.category ?? "session");
       const group = props.draft === "/" ? groups.find(([key]) => key === category) : groups.at(-1);
       if (group?.[0] === category) {
         group[1].push({ command, index });
@@ -574,7 +572,7 @@ export function SlashMenu(props: { menu: SlashMenu; host: SlashMenuHost; draft: 
         groups.push([category, [{ command, index }]]);
       }
     }
-    return { groups, skills, commandCount: commands.length };
+    return groups;
   });
   return (
     <Show when={mode()} keyed>
@@ -622,44 +620,33 @@ export function SlashMenu(props: { menu: SlashMenu; host: SlashMenuHost; draft: 
               </For>
             </div>
           ) : (
-            <>
-              <For each={grouped().groups}>
-                {(group) => (
-                  <div class="slash-menu-group">
-                    <div class="slash-menu-group__label">
-                      {getSlashCommandCategoryLabel(group[0])}
-                    </div>
-                    <For each={group[1]}>
-                      {(entry) => (
-                        <CommandOption
-                          menu={props.menu}
-                          host={props.host}
-                          command={entry.command}
-                          index={entry.index}
-                          query={props.draft.slice(1)}
-                        />
-                      )}
-                    </For>
+            <For each={grouped()}>
+              {(group) => (
+                <div
+                  class={[
+                    "slash-menu-group",
+                    { "slash-menu-group--skills": group[0] === "skills" },
+                  ]}
+                >
+                  <div class="slash-menu-group__label">
+                    {group[0] === "skills"
+                      ? t("chat.skills.label")
+                      : getSlashCommandCategoryLabel(group[0])}
                   </div>
-                )}
-              </For>
-              <Show when={grouped().skills.length > 0}>
-                <div class="slash-menu-group slash-menu-group--skills">
-                  <div class="slash-menu-group__label">{t("chat.skills.label")}</div>
-                  <For each={grouped().skills}>
-                    {(command, index) => (
+                  <For each={group[1]}>
+                    {(entry) => (
                       <CommandOption
                         menu={props.menu}
                         host={props.host}
-                        command={command}
-                        index={grouped().commandCount + index()}
+                        command={entry.command}
+                        index={entry.index}
                         query={props.draft.slice(1)}
                       />
                     )}
                   </For>
                 </div>
-              </Show>
-            </>
+              )}
+            </For>
           )}
         </ComposerMenu>
       )}

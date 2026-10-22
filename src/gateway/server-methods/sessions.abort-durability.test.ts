@@ -15,6 +15,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { heartbeatNotifications } from "../../infra/heartbeat-events.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -53,6 +54,7 @@ it.each([
         databasePath: resolveOpenClawStateSqlitePath(state.env),
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           configPath: state.configPath,
           stateDir: state.stateDir,

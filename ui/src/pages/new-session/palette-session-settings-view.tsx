@@ -1,12 +1,26 @@
-import { createMemo, createSignal, For, onCleanup, onSettled } from "solid-js";
+import {
+  action,
+  affects,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  For,
+  latest,
+  Loading,
+  onCleanup,
+  onSettled,
+  refresh,
+} from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-session-settings.ts";
+import { repositoryIssueText } from "./submit-gates.ts";
 import { AgentSelect, RequiredSessionPlacement } from "./target-controls-view.tsx";
 
 type SettingsProjection = ReturnType<typeof resolvePaletteSessionSettings>;
@@ -14,21 +28,11 @@ type FocusTarget = "back" | "search" | "workspace";
 
 function SettingsIcon() {
   return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
+    <StrokeIcon width="24" height="24">
       <path d="M4 7h8m4 0h4M4 17h2m4 0h10" />
       <circle cx="14" cy="7" r="2" />
       <circle cx="8" cy="17" r="2" />
-    </svg>
+    </StrokeIcon>
   );
 }
 
@@ -48,6 +52,7 @@ export function PaletteSessionSettingsView(properties: {
   const focusControls = new Set<HTMLElement>();
   const controlRef = () => {
     let control: HTMLElement;
+    // Each conditional control owns its registration, including removal before the panel settles.
     onCleanup(() => focusControls.delete(control));
     return (element: HTMLElement) => {
       focusControls.delete(control);
@@ -55,9 +60,9 @@ export function PaletteSessionSettingsView(properties: {
     };
   };
   let readAgentControls: (() => readonly HTMLElement[]) | undefined;
-  let trigger!: HTMLButtonElement;
   let popover!: PopoverHandle;
-  const close = () => {
+  const close = (preferences: SettingsOptions["preferences"]) => {
+    preferences.retirePresentation();
     setOpen(false);
     setPlaces(false);
     setQuery("");
@@ -91,7 +96,14 @@ export function PaletteSessionSettingsView(properties: {
     properties.options.onChange();
     showPlaces(false);
   };
-  onSettled(() => properties.registerClose(close));
+  onSettled(() => {
+    const preferences = properties.options.preferences;
+    const unregister = properties.registerClose(() => close(preferences));
+    return () => {
+      preferences.retirePresentation();
+      unregister();
+    };
+  });
   const keydown = nativeListener("keydown", (event) => {
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
       return;
@@ -113,8 +125,8 @@ export function PaletteSessionSettingsView(properties: {
       if (places()) {
         showPlaces(false);
       } else {
-        close();
-        trigger.focus({ preventScroll: true });
+        close(properties.options.preferences);
+        popover.overlay.trigger?.focus({ preventScroll: true });
       }
       return;
     }
@@ -140,8 +152,63 @@ export function PaletteSessionSettingsView(properties: {
       (current + (event.key === "ArrowDown" ? 1 : -1) + controls.length) % controls.length
     ]?.focus();
   });
-  const retry = nativeListener("click", () => properties.options.preferences.retry());
+  const lifetime = createMemo(
+    () => {
+      open();
+      return {
+        owner: properties.options.preferences,
+        retired: properties.options.preferences.presentationLifetime,
+      };
+    },
+    {
+      equals: (previous, next) =>
+        previous.owner === next.owner && previous.retired === next.retired,
+    },
+  );
+  const presentation = createMemo(() => {
+    const scope = lifetime();
+    const [saving, setSaving] = createOptimistic(false);
+    return { ...scope, saving, setSaving };
+  });
+  const failed = createMemo(() => properties.options.preferences.failed);
+  const isCurrent = (pendingView: ReturnType<typeof presentation>) =>
+    properties.options.preferences === pendingView.owner &&
+    pendingView.owner.presentationLifetime === pendingView.retired;
+  const present = action(function* (
+    pendingView: ReturnType<typeof presentation>,
+    pending: Promise<void> | undefined,
+  ) {
+    if (isCurrent(pendingView)) {
+      pendingView.setSaving(true);
+      affects(failed);
+    }
+    yield Promise.race([pending, pendingView.retired]);
+    if (isCurrent(pendingView)) {
+      yield refresh(failed);
+    }
+  });
+  const save = async (operation: () => Promise<void> | undefined) => {
+    const pendingView = presentation();
+    const pending = operation();
+    // Publish the synchronous owner intent before its temporary saving presentation.
+    await Promise.resolve();
+    void present(pendingView, pending).catch(() => {
+      if (isCurrent(pendingView)) {
+        pendingView.owner.reportFailure();
+      }
+    });
+    return pending;
+  };
+  const retry = nativeListener(
+    "click",
+    () => void save(() => properties.options.preferences.retry()),
+  );
   function SettingsPlaces() {
+    const completion = createMemo(
+      () => ({ promise: properties.options.draft.gateway.cloudProfilesRead }),
+      { equals: (previous, next) => previous.promise === next.promise },
+    );
+    const cloudProfilesRead = createMemo(() => completion().promise?.then(() => null));
     onSettled(() => {
       if (focusTarget) {
         focusTargets[focusTarget]?.focus({ preventScroll: true });
@@ -198,11 +265,16 @@ export function PaletteSessionSettingsView(properties: {
               {t("newSession.environmentSearchEmpty")}
             </div>
           ) : undefined}
-          {properties.options.draft.gateway.cloudProfilesPending ? (
-            <div role="status" class="palette-session-settings__unavailable">
-              {t("common.loading")}
-            </div>
-          ) : undefined}
+          <Loading
+            on={completion()}
+            fallback={
+              <div role="status" class="palette-session-settings__unavailable">
+                {t("common.loading")}
+              </div>
+            }
+          >
+            {cloudProfilesRead()}
+          </Loading>
         </div>
         {properties.options.draft.place.isAdmin() ? (
           <button
@@ -284,13 +356,13 @@ export function PaletteSessionSettingsView(properties: {
   }
 
   function SettingsSummary() {
-    onCleanup(() => {
-      readAgentControls = undefined;
-    });
     onSettled(() => {
       if (focusTarget === "workspace") {
         focusTargets.workspace?.focus({ preventScroll: true });
       }
+      return () => {
+        readAgentControls = undefined;
+      };
     });
     const place = () => properties.options.draft.place;
     const workspace = nativeListener("click", (event) => showPlaces(true, event.detail > 0));
@@ -368,7 +440,8 @@ export function PaletteSessionSettingsView(properties: {
                   place().remotePlacement
                     ? t("newSession.checkoutRemoteLocked")
                     : !place().worktreeAvailable()
-                      ? t("newSession.gitCheckUnavailable")
+                      ? (repositoryIssueText(place().repository) ??
+                        t("newSession.gitCheckUnavailable"))
                       : undefined
                 }
                 disabled={view().locked || place().remotePlacement}
@@ -388,79 +461,69 @@ export function PaletteSessionSettingsView(properties: {
   }
 
   return (
-    <>
-      <button
-        id={properties.id + "-settings-trigger"}
-        ref={(node) => {
-          trigger = node;
-        }}
-        onClick={() => popover.overlay.request(!popover.overlay.open)}
-        class="palette-session-settings__trigger"
-        type="button"
-        aria-label={t("commandPalette.newSessionSettings")}
-        title={t("commandPalette.newSessionSettings")}
-        aria-haspopup="dialog"
-        aria-controls={properties.id + "-settings-popover"}
-        aria-expanded={open() ? "true" : "false"}
-      >
-        <SettingsIcon />
-      </button>
-      <Popover
-        ref={(handle) => {
-          popover = handle;
-        }}
-        id={properties.id + "-settings-popover"}
-        label={t("commandPalette.newSessionSettings")}
-        class="palette-session-settings"
-        anchor={trigger}
-        placement="bottom-end"
-        open={open()}
-        onOpenChange={(value) => (value ? setOpen(true) : close())}
-      >
-        <div class="palette-session-settings__content" ref={keydown}>
-          {places() ? <SettingsPlaces /> : <SettingsSummary />}
-          {!places() || properties.options.preferences.failed ? (
-            <div class="palette-session-settings__footer">
-              {!places() ? (
-                <label
-                  class="palette-session-settings__remember"
-                  title={
-                    !properties.options.preferences.available
-                      ? t("commandPalette.rememberUnavailable")
-                      : undefined
+    <Popover
+      triggerId={properties.id + "-settings-trigger"}
+      triggerClass="palette-session-settings__trigger"
+      triggerTitle={t("commandPalette.newSessionSettings")}
+      trigger={<SettingsIcon />}
+      ref={(handle) => {
+        popover = handle;
+      }}
+      id={properties.id + "-settings-popover"}
+      label={t("commandPalette.newSessionSettings")}
+      class="palette-session-settings"
+      placement="bottom-end"
+      open={open()}
+      onOpenChange={(value) => (value ? setOpen(true) : close(properties.options.preferences))}
+    >
+      <div class="palette-session-settings__content" ref={keydown}>
+        {places() ? <SettingsPlaces /> : <SettingsSummary />}
+        {!places() || latest(failed) ? (
+          <div
+            class="palette-session-settings__footer"
+            aria-busy={presentation().saving() ? "true" : "false"}
+          >
+            {!places() ? (
+              <label
+                class="palette-session-settings__remember"
+                title={
+                  !properties.options.preferences.available
+                    ? t("commandPalette.rememberUnavailable")
+                    : undefined
+                }
+              >
+                <input
+                  type="checkbox"
+                  ref={controlRef()}
+                  checked={properties.options.preferences.remember}
+                  disabled={view().locked || !properties.options.preferences.available}
+                  onChange={(event) =>
+                    void save(() =>
+                      properties.options.preferences.setRemember(event.currentTarget.checked),
+                    )
                   }
-                >
-                  <input
-                    type="checkbox"
-                    ref={controlRef()}
-                    checked={properties.options.preferences.remember}
-                    disabled={view().locked || !properties.options.preferences.available}
-                    onChange={(event) =>
-                      properties.options.preferences.setRemember(event.currentTarget.checked)
-                    }
+                />
+                <span>
+                  <ShortcutText
+                    text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
+                    shortcut={() => (
+                      <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />
+                    )}
                   />
-                  <span>
-                    <ShortcutText
-                      text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
-                      shortcut={() => (
-                        <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />
-                      )}
-                    />
-                  </span>
-                </label>
-              ) : undefined}
-              {properties.options.preferences.failed ? (
-                <div class="palette-session-settings__error" role="alert">
-                  {t("commandPalette.settingsSaveFailed")}{" "}
-                  <button type="button" class="btn btn--sm" ref={[controlRef(), retry]}>
-                    {t("common.retry")}
-                  </button>
-                </div>
-              ) : undefined}
-            </div>
-          ) : undefined}
-        </div>
-      </Popover>
-    </>
+                </span>
+              </label>
+            ) : undefined}
+            {latest(failed) ? (
+              <div class="palette-session-settings__error" role="alert">
+                {t("commandPalette.settingsSaveFailed")}{" "}
+                <button type="button" class="btn btn--sm" ref={[controlRef(), retry]}>
+                  {t("common.retry")}
+                </button>
+              </div>
+            ) : undefined}
+          </div>
+        ) : undefined}
+      </div>
+    </Popover>
   );
 }

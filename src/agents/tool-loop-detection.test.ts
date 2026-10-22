@@ -254,7 +254,6 @@ describe("tool-loop-detection", () => {
       stuck: true,
       level: "warning",
       detector: "argument_churn",
-      livenessSignal: "argument_churn",
       count: HISTORY_SIZE,
     });
     recordToolCall(loop.state, "write", writeParams("/a"), "pending-sibling");
@@ -307,16 +306,6 @@ describe("tool-loop-detection", () => {
     );
     const result = loop.detect();
     expect(result).toMatchObject({ stuck: true, level: "warning", detector: "generic_repeat" });
-    expect(result).not.toHaveProperty("livenessSignal");
-  });
-
-  it("preserves churn liveness when strict alternation owns the warning", () => {
-    expect(createChurn(WARNING_THRESHOLD, ["/a", "/b"]).detect()).toMatchObject({
-      stuck: true,
-      level: "warning",
-      detector: "ping_pong",
-      livenessSignal: "argument_churn",
-    });
   });
 
   it.each([

@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
@@ -14,9 +15,12 @@ import { readLegacyAcpMigrationContext } from "../../config/sessions/session-acc
 import { retainPreparedSessionSharingFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import * as entryPublication from "../../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
+import * as sessionEntryWorker from "../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as historyMaintenance from "../../config/sessions/session-history-eviction.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import * as admissions from "../../infra/sqlite-worker-operation-admission.js";
 import {
   sessionChanges,
@@ -40,7 +44,7 @@ import { createAcpMeta, interceptAcpCommit } from "./session-meta-lifecycle.test
 import { readAcpSessionEntryAsync } from "./session-meta-read.js";
 import { readAcpSessionMetaForEntries } from "./session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
-import { readAcpSessionEntry } from "./session-meta.js";
+import { listAcpSessionEntries, readAcpSessionEntry } from "./session-meta.js";
 
 const META = createAcpMeta({ agent: "fixture-agent" });
 
@@ -76,6 +80,68 @@ function requireEntry(scope: Scope) {
   assert(entry, "Expected a canonical ACP lifecycle");
   return entry;
 }
+
+it("retains storage guidance when ACP entry rollback loses native settlement", () =>
+  withSession("unknown-storage", async (_state, scope) => {
+    await upsertAcpSessionMeta({ ...scope, mutate: () => META });
+    const initial = await readAcpSessionEntryAsync(scope);
+    const storageError = Object.assign(new Error("database or disk is full"), {
+      code: "SQLITE_FULL",
+    });
+    const settlementError = new Error("Native ACP settlement was lost");
+    const original = sessionEntryWorker.withSessionEntryWorker;
+    const restoreSettlement: Array<() => void> = [];
+    const intercepted = vi
+      .spyOn(sessionEntryWorker, "withSessionEntryWorker")
+      .mockImplementation((...args) => {
+        const [options, identity, assertCurrent, run, onCommit, ...rest] = args;
+        return original(
+          options,
+          identity,
+          assertCurrent,
+          run,
+          (admission, retained, facts) => {
+            // Lose only settlement evidence; the native writer still rolls back the refused commit.
+            const settlement = vi
+              .spyOn(admission, "settlement", "get")
+              .mockReturnValue({ kind: "unknown" });
+            restoreSettlement.push(() => settlement.mockRestore());
+            onCommit?.(
+              admission,
+              {
+                settled: retained.settled.then(() => ({
+                  kind: "unknown" as const,
+                  error: settlementError,
+                })),
+              },
+              facts,
+            );
+            throw storageError;
+          },
+          ...rest,
+        );
+      });
+    try {
+      await expect(
+        upsertAcpSessionMeta({ ...scope, mutate: () => ({ ...META, lastActivityAt: 200 }) }),
+      ).rejects.toSatisfy((error: unknown) => {
+        expect(formatErrorMessageWithCode(error)).toContain(storageError.message);
+        expect(formatErrorMessageWithCode(error)).toContain(settlementError.message);
+        expect(
+          renderAssistantRequestFailureCopy({
+            storageFailure: classifyGatewayStorageFailure(error),
+          }),
+        ).toContain("disk is full. Free up space");
+        return true;
+      });
+    } finally {
+      intercepted.mockRestore();
+      for (const restore of restoreSettlement) {
+        restore();
+      }
+    }
+    expect((await readAcpSessionEntryAsync(scope))?.entry).toEqual(initial?.entry);
+  }));
 
 it("does not publish a delayed ACP postimage over a newer native publication", () =>
   withSession("native-order", async (_state, scope) => {
@@ -165,23 +231,41 @@ it.each(["incognito", "file"] as const)(
         }
       });
       const maintenance = vi.spyOn(historyMaintenance, "kickSessionHistoryDiskBudgetMaintenance");
-      const initialize = vi.fn(() => META);
-      const updatedMeta = { ...META, state: "running" as const, lastActivityAt: 200 };
+      const initialMeta = { ...META, cwd: "/repo" };
+      const initialize = vi.fn(() => initialMeta);
+      const updatedMeta = { ...initialMeta, state: "running" as const, lastActivityAt: 200 };
       const update = vi.fn((current: SessionAcpMeta | undefined) => {
-        expect(current).toEqual(META);
+        expect(current).toEqual(initialMeta);
         return updatedMeta;
       });
       try {
-        const created = await upsertAcpSessionMeta({ ...scope, mutate: initialize });
-        expect(created?.acp).toEqual(META);
+        const created = await upsertAcpSessionMeta({
+          ...scope,
+          now: () => 200,
+          mutate: initialize,
+        });
+        expect(created?.acp).toEqual(initialMeta);
         expect(observedAcp.at(-1)).toMatchObject({
           kind: "acp",
           sessionId: created?.sessionId,
           lifecycleRevision: created?.lifecycleRevision ?? null,
-          acp: META,
+          acp: initialMeta,
         });
         assert(created, "Expected the initialized ACP session");
-        await expectMetadata(created, META);
+        await expectMetadata(created, initialMeta);
+        if (!incognito) {
+          const stored = (await readAcpSessionEntryAsync(scope))?.entry;
+          expect(stored).toMatchObject({
+            sessionId: expect.any(String),
+            lifecycleRevision: expect.any(String),
+            updatedAt: expect.any(Number),
+          });
+          expect(created.sessionId).toEqual(expect.any(String));
+          expect(stored?.sessionStartedAt).toBeGreaterThan(200);
+          expect(stored?.acp).toBeUndefined();
+          expect(fs.existsSync(paths.at(-1)!)).toBe(false);
+          expect(await listAcpSessionEntries(scope)).toHaveLength(1);
+        }
         const retainedMembership: boolean[] = [];
         using releases = new DisposableStack();
         const retainPublication = entryPublication.retainSessionEntryWorkerPublication;

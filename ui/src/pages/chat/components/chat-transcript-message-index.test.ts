@@ -4,7 +4,11 @@ import { resetWorkingProgress } from "../chat-progress.ts";
 import { buildChatItems, type BuildChatItemsProps } from "../chat-thread-build.ts";
 import { buildCachedChatItems, resetChatThreadState, setExpansionState } from "../chat-thread.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
-import { projectTranscriptChain, projectTranscriptIndex } from "./chat-transcript-message-index.ts";
+import {
+  projectTranscriptChain,
+  projectTranscriptIndex,
+  projectTranscriptRows,
+} from "./chat-transcript-message-index.ts";
 
 const sessionKey = "agent:main:dashboard:0f6d5a1c-5a9e-4c1e-9b1a-2f3c4d5e6f70";
 function makeMessage(
@@ -15,6 +19,8 @@ function makeMessage(
   const { role = "assistant", timestamp = seq * 10, runId = "run-1", ...extra } = fields;
   return { role, content: id, timestamp, __openclaw: { id, seq, runId }, ...extra };
 }
+const finalAnswer = (id: string, seq: number, fields = {}) =>
+  makeMessage(id, seq, { phase: "final_answer", stopReason: "stop", ...fields });
 function makeTool(
   id: string,
   seq: number,
@@ -72,8 +78,7 @@ function projectHistory(
 ) {
   return chainFor(chatItems({ messages, ...options }), options);
 }
-const framesOf = (chain: Chain) =>
-  chain.transcriptItems.filter((item) => item.kind === "agent-run-frame");
+const framesOf = (chain: Chain) => kind(chain.transcriptItems, "agent-run-frame");
 function onlyFrame(chain: Chain) {
   const frames = framesOf(chain);
   expect(frames).toHaveLength(1);
@@ -81,13 +86,12 @@ function onlyFrame(chain: Chain) {
 }
 const transcriptParts = (chain: Chain) =>
   chain.transcriptItems.flatMap((item) => (item.kind === "agent-run-frame" ? item.parts : [item]));
+const kind = <K extends RenderItem["kind"]>(items: readonly RenderItem[], type: K) =>
+  items.filter((item): item is Extract<RenderItem, { kind: K }> => item.kind === type);
 const messagesIn = (items: readonly Parameters<typeof chatItemGroups>[0][]) =>
   items.flatMap(chatItemGroups).flatMap((group) => group.messages.map(({ message }) => message));
 const frameShows = (frame: RenderItem | undefined, message: unknown) =>
-  frame?.kind === "agent-run-frame" &&
-  frame.parts.some(
-    (part) => part.kind === "group" && part.messages.some((source) => source.message === message),
-  );
+  frame?.kind === "agent-run-frame" && messagesIn(kind(frame.parts, "group")).includes(message);
 const completedOutcome = (message: unknown) => ({ kind: "completed", actionOwner: { message } });
 const replyFrameShape = (outcome: unknown, ...parts: unknown[]) => ({
   kind: "agent-run-frame",
@@ -115,14 +119,14 @@ it.each([false, true])("merges adjacent continuation work across runs while live
     const options = { ...chainOptions, runWorking: live };
     const chain = chainFor(items, options);
     const parts = transcriptParts(chain);
-    const activities = parts.filter((item) => item.kind === "activity-run");
+    const activities = kind(parts, "activity-run");
     expect(activities).toHaveLength(1);
     expect(activities[0]?.groups.map((group) => group.runId)).toEqual([
       "run-1",
       "announce:review",
       "announce:resume",
     ]);
-    expect(messagesIn(parts.filter((item) => item.kind === "group"))).toContain(persisted[1]);
+    expect(messagesIn(kind(parts, "group"))).toContain(persisted[1]);
     expect(parts.some((item) => item.kind === "stream-run")).toBe(live);
     expect(chainFor(items, { ...options })).toBe(chain);
     const index = indexFor(chain);
@@ -139,11 +143,7 @@ it.each([
   { key: "agent:main:telegram:direct:42", working: false, projected: true, untagged: false },
   { key: "agent:main:telegram:direct:42", working: false, projected: true, untagged: true },
 ])("frames continued answers: %j", ({ key, working, projected, untagged }) => {
-  const answer = makeMessage("answer", 4, {
-    phase: "final_answer",
-    stopReason: "stop",
-    runId: "run-b",
-  });
+  const answer = finalAnswer("answer", 4, { runId: "run-b" });
   const messages = [
     history[0],
     ...["run-a", "run-b"].map((runId, index) =>
@@ -179,11 +179,7 @@ describe("completed reply frame ownership", () => {
       ...workRunIds.map((runId, index) =>
         makeTool("work-" + index, 2 + index * 2, runId, 20 + index),
       ),
-      makeMessage("final", 10, {
-        phase: "final_answer",
-        stopReason: "stop",
-        timestamp: 40,
-      }),
+      finalAnswer("final", 10, { timestamp: 40 }),
     ];
   }
 
@@ -278,16 +274,12 @@ describe("completed reply frame ownership", () => {
     expect(work).toBeDefined();
     if (forwarded) {
       expect(messagesIn(frames(chain))).not.toContain(inserted);
-      const standalone = phase
-        ? chain.transcriptItems.filter((item) => item.kind === "group")
-        : [work!];
+      const standalone = phase ? kind(chain.transcriptItems, "group") : [work!];
       expect(messagesIn(standalone)).toContain(inserted);
     } else {
       expect(
         messagesIn(
-          transcriptParts(chain).filter(
-            (item) => item.kind === "group" && item.role === "assistant",
-          ),
+          kind(transcriptParts(chain), "group").filter((item) => item.role === "assistant"),
         ),
       ).toEqual([inserted, messages.at(-1)]);
       expect(frames(chain).map((frame) => frame.runId)).toEqual(
@@ -393,8 +385,13 @@ vi.mock("./chat-position-projection.ts", async (importOriginal) => {
   return {
     ...original,
     projectChatPositions: (...args: Parameters<typeof original.projectChatPositions>) => {
-      work.positionItems += args[0].length;
-      return original.projectChatPositions(...args);
+      function* counted() {
+        for (const item of args[0]) {
+          work.positionItems++;
+          yield item;
+        }
+      }
+      return original.projectChatPositions(counted(), args[1], args[2], args[3]);
     },
   };
 });
@@ -448,27 +445,31 @@ it("keeps stream-only projection work bounded by the tail across history sizes",
     resetChatThreadState();
     const input = streamInput(size);
     const expanded = new Map<string, boolean>();
+    let initialChain: Chain | undefined;
     const project = (stream: string) => {
       const items = buildCachedChatItems({ ...input, stream });
-      return indexFor(
-        chainFor(items, {
-          ...chainOptions,
-          runWorking: true,
-        }),
-        expanded,
-        labels,
-      );
+      const chain = chainFor(items, { ...chainOptions, runWorking: true });
+      initialChain ??= chain;
+      expect(chain.transcriptItems).toBe(initialChain.transcriptItems);
+      expect(chain.collapsedItems).toBe(initialChain.collapsedItems);
+      return indexFor(chain, expanded, labels);
     };
-    project("Initial");
+    const initial = project("Initial");
+    const previews = new Map();
+    const presentation = projectTranscriptRows(initial.rows, previews, []);
     Object.assign(work, { chainCalls: 0, chainItems: 0, positionItems: 0 });
     for (const stream of ["One", "One two", "One two three"]) {
-      project(stream);
+      const next = project(stream);
+      expect(next.rows).toBe(initial.rows);
+      expect(next.positionIndex.markers).toBe(initial.positionIndex.markers);
+      expect(projectTranscriptRows(next.rows, previews, [])).toBe(presentation);
     }
     return { ...work };
   };
   const small = measure(20);
   const large = measure(400);
   expect(large).toEqual(small);
+  expect(measure(1_000)).toEqual(small);
   expect(large.chainCalls).toBe(0);
   expect(large.positionItems).toBeLessThanOrEqual(6);
 });
@@ -536,13 +537,39 @@ it.each([
     const index = indexFor(chain, expanded);
     const fullChain = chainFor([...items], options);
     const fullIndex = indexFor(fullChain, expanded);
-    expect(chain).toEqual(fullChain);
-    expect(index).toEqual(fullIndex);
+    const currentChain = (value: Chain) => ({
+      ...value,
+      collapsedItems: value.collapsedItems.map((item) =>
+        item.key === value.live?.item.key ? value.live.item : item,
+      ),
+      transcriptItems: value.transcriptItems.map((item) =>
+        item.key === value.live?.item.key ? value.live.item : item,
+      ),
+    });
+    const currentIndex = (value: Index) => ({
+      ...value,
+      rows: value.rows.map((row) =>
+        row.kind === "item" && row.key === value.liveItem?.key
+          ? { ...row, item: value.liveItem }
+          : row,
+      ),
+      positionIndex: {
+        ...value.positionIndex,
+        markers: value.positionIndex.markers.map((marker) => ({
+          ...marker,
+          message:
+            value.positionIndex.liveMarkers?.find((candidate) => candidate.id === marker.id)
+              ?.message ?? marker.message,
+        })),
+      },
+    });
+    expect(currentChain(chain)).toEqual(currentChain(fullChain));
+    expect(currentIndex(index)).toEqual(currentIndex(fullIndex));
     expect(chainFor(items, options)).toBe(chain);
     expect(indexFor(chain, expanded)).toBe(index);
     if (live) {
       const ownerKey = index.transcriptMessageKeys.get(live.key);
-      const owner = chain.transcriptItems.find((item) => item.key === ownerKey);
+      const owner = chain.live?.item ?? chain.transcriptItems.find((item) => item.key === ownerKey);
       expect(owner?.kind).toBe(framed && !searchActive ? "agent-run-frame" : "stream-run");
       const visible = delta !== 1 && delta !== 7;
       expect(index.positionIndex.markerIdsByMessageId.has(live.key)).toBe(visible);
@@ -554,7 +581,8 @@ it.each([
       }
       if (framed && visible) {
         expect(
-          index.positionIndex.markers.find((marker) => marker.id === "run:live")?.message,
+          currentIndex(index).positionIndex.markers.find((marker) => marker.id === "run:live")
+            ?.message,
         ).toMatchObject({ content: [{ type: "text", text: stream }] });
       }
       if ([3, 4, 6, 9].includes(delta)) {
@@ -612,75 +640,69 @@ describe("subagent handoff", () => {
   });
   const waitingChain = () =>
     projectHistory(waiting, { subagentWait: { startedAt: 32, runId: "run-1" } });
-  const lifecycle = {
-    waiting: waitingChain,
-    "wait ended": () => projectHistory(waiting),
-    "resume pending": () => projectHistory(waiting, { runWorking: true, runActive: true }),
-    answered: () =>
-      projectHistory([...waiting, readRow("read-2", "announce:resume", 7), answer], {
-        session: {
-          key: sessionKey,
-          lastRunId: "announce:resume",
-          status: "done",
-          runtimeMs: 4_000,
-        },
-      }),
-  };
-
-  it.each(["waiting", "wait ended", "resume pending", "answered"] as const)(
-    "preserves handoff: %s",
-    (state) => {
-      const waitingKey = onlyFrame(waitingChain()).key;
+  const resumedSession = {
+    key: sessionKey,
+    lastRunId: "announce:resume",
+    status: "done",
+    runtimeMs: 4_000,
+  } as const;
+  it.each([
+    [
+      "waiting",
+      { subagentWait: { startedAt: 32, runId: "run-1" } },
+      "run-1",
+      { waitingOn: "subagents" },
+    ],
+    ["wait ended", {}, "run-1", null],
+    ["resume pending", { runWorking: true, runActive: true }, undefined, { startedAt: 10 }],
+    ["answered", { session: resumedSession }, "announce:resume", null],
+  ] as const)("preserves handoff: %s", (state, options, runId, statusShape) => {
+    const waitingKey = onlyFrame(waitingChain()).key;
+    if (state === "resume pending") {
+      resetWorkingProgress();
+    }
+    const completed = state === "answered";
+    const messages = completed
+      ? [...waiting, readRow("read-2", "announce:resume", 7), answer]
+      : waiting;
+    const chain = projectHistory(messages, options);
+    const frame = onlyFrame(chain);
+    expect(frame).toMatchObject({
+      key: waitingKey,
+      ...(runId ? { runId } : {}),
+    });
+    expect(frameShows(frame, prose)).toBe(true);
+    expect(frame.parts.some((part) => part.kind === "work-group")).toBe(false);
+    expect(chain.transcriptItems.some((item) => item.kind === "notice")).toBe(false);
+    expect(chain.transcriptItems.some((item) => item.kind === "stream-run")).toBe(false);
+    if (state !== "wait ended") {
+      expect(frame.outcome).toMatchObject(
+        completed ? completedOutcome(answer) : { kind: "active" },
+      );
+    }
+    if (statusShape) {
+      const status = frame.parts.flatMap((part) => (part.kind === "stream-run" ? part.parts : []));
+      expect(status).toEqual([
+        expect.objectContaining({ kind: "reading-indicator", ...statusShape }),
+      ]);
       if (state === "resume pending") {
-        resetWorkingProgress();
+        expect(status[0]).not.toHaveProperty("runId");
       }
-      const completed = state === "answered";
-      const chain = lifecycle[state]();
-      const frame = onlyFrame(chain);
-      expect(frame).toMatchObject({
-        key: waitingKey,
-        ...(state === "resume pending" ? {} : { runId: completed ? "announce:resume" : "run-1" }),
-      });
-      expect(frameShows(frame, prose)).toBe(true);
-      expect(frame.parts.some((part) => part.kind === "work-group")).toBe(false);
-      expect(chain.transcriptItems.some((item) => item.kind === "notice")).toBe(false);
-      expect(chain.transcriptItems.some((item) => item.kind === "stream-run")).toBe(false);
-      if (state !== "wait ended") {
-        expect(frame.outcome).toMatchObject(
-          completed ? completedOutcome(answer) : { kind: "active" },
-        );
-      }
-      if (state === "waiting" || state === "resume pending") {
-        const status = frame.parts.flatMap((part) =>
-          part.kind === "stream-run" ? part.parts : [],
-        );
-        expect(status).toEqual([
-          expect.objectContaining({
-            kind: "reading-indicator",
-            ...(state === "waiting" ? { waitingOn: "subagents" } : { startedAt: 10 }),
-          }),
-        ]);
-        if (state === "resume pending") {
-          expect(status[0]).not.toHaveProperty("runId");
-        }
-      }
-      if (completed) {
-        expect(frameShows(frame, answer)).toBe(true);
-        expect(new Set(chatItemGroups(frame).map((group) => group.runId))).toEqual(
-          new Set(["run-1", "announce:resume"]),
-        );
-      }
-      if (state === "wait ended") {
-        expect(frame.parts.at(-1)).toMatchObject({ kind: "group", role: "tool" });
-      }
-    },
-  );
+    }
+    if (completed) {
+      expect(frameShows(frame, answer)).toBe(true);
+      expect(new Set(chatItemGroups(frame).map((group) => group.runId))).toEqual(
+        new Set(["run-1", "announce:resume"]),
+      );
+    }
+    if (state === "wait ended") {
+      expect(frame.parts.at(-1)).toMatchObject({ kind: "group", role: "tool" });
+    }
+  });
 
   it("keeps operations on either side of a handoff in one row unless the agent spoke between", () => {
     const logsOf = (messages: unknown[]) =>
-      framesOf(projectHistory(messages)).flatMap((frame) =>
-        frame.parts.filter((part) => part.kind === "activity-run"),
-      );
+      framesOf(projectHistory(messages)).flatMap((frame) => kind(frame.parts, "activity-run"));
     const waitingRow = framesOf(waitingChain())[0]?.parts.find(
       (part) => part.kind === "group" && part.messages.every((source) => source.message !== prose),
     );
@@ -722,9 +744,7 @@ describe("subagent handoff", () => {
         last?.kind === "group" && last.messages.some((source) => source.message === answer),
       ).toBe(answerLast);
       if (logSizes) {
-        expect(
-          parts.flatMap((part) => (part.kind === "activity-run" ? [part.groups.length] : [])),
-        ).toEqual(logSizes);
+        expect(kind(parts, "activity-run").map((part) => part.groups.length)).toEqual(logSizes);
       }
     }
   });

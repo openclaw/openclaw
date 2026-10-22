@@ -20,9 +20,8 @@ import { captureDiscussionRegistration } from "./register.test-support.js";
 import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 import { asyncDiscussionTestStore, createDiscussionMemoryStore } from "./service-test-support.js";
 
-const boundSessionKey = "agent:research:main";
+const mainSessionKey = "agent:research:main";
 async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
-  const mainSessionKey = boundSessionKey;
   const store = createDiscussionMemoryStore<unknown>();
   const config = createInboundDiscussionConfig();
   const runtime = createInboundRuntime(false);
@@ -42,15 +41,15 @@ async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
     authority
       ? asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, storeOptions, authority)
       : (asyncStore as PluginStateKeyedStore<T, 2>);
-  const initialBinding = createInboundDiscussionBinding();
+  const binding = createInboundDiscussionBinding();
   if (options.persistedBeforeOpening) {
-    store.register(mainSessionKey, initialBinding);
+    store.register(mainSessionKey, binding);
   }
   const bindingStore = getClickClackDiscussionBindingStore(runtime);
   if (!options.persistedBeforeOpening) {
-    await bindingStore.setIfCurrent(mainSessionKey, undefined, initialBinding);
+    await bindingStore.setIfCurrent(mainSessionKey, undefined, binding);
   }
-  const sideSessionKey = discussionSessionKey({ runtime, mainSessionKey, ...initialBinding });
+  const sideSessionKey = discussionSessionKey({ runtime, mainSessionKey, ...binding });
   if (!sideSessionKey) {
     throw new Error("expected discussion session key");
   }
@@ -59,9 +58,9 @@ async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
     registration.run({ toolName, params: toolParams }, { toolName, sessionKey: sideSessionKey });
   return {
     asyncStore,
+    binding,
     bindingStore,
     config,
-    mainSessionKey,
     runtime,
     run,
     sideSessionKey,
@@ -79,25 +78,16 @@ async function expectSessionAccess(
   expect(await run("sessions_history", { sessionKey })).toEqual(expected);
   expect(await run("sessions_send", { sessionKey, message: "x" })).toEqual(expected);
 }
-function currentBinding(store: ReturnType<typeof getClickClackDiscussionBindingStore>) {
-  const binding = store.get(boundSessionKey);
-  if (!binding) {
-    throw new Error("expected binding");
-  }
-  return binding;
-}
 describe("ClickClack discussion session tool policy", () => {
   it("authorizes a persisted binding synchronously before index preparation after restart", async () => {
-    const { mainSessionKey, sideSessionKey, run, target } = await setup({
-      persistedBeforeOpening: true,
-    });
+    const { sideSessionKey, run, target } = await setup({ persistedBeforeOpening: true });
 
     expect(target(sideSessionKey, mainSessionKey)?.expectedSessionId).toBe("session-id");
     expect(await run("sessions_history", { sessionKey: mainSessionKey })).toBeUndefined();
   });
 
   it("allows the three observer tools only against the attached main session", async () => {
-    const { mainSessionKey, run } = await setup();
+    const { run } = await setup();
     for (const [tool, params] of [
       ["sessions_history", {}],
       ["session_status", { changesSince: 12 }],
@@ -108,7 +98,7 @@ describe("ClickClack discussion session tool policy", () => {
   });
 
   it("blocks cross-session, discovery, alternate-target, and status-mutation calls", async () => {
-    const { mainSessionKey, run } = await setup();
+    const { run } = await setup();
 
     const denied: Array<[string, Record<string, unknown>]> = [
       ["sessions_history", { sessionKey: "agent:research:other" }],
@@ -128,7 +118,7 @@ describe("ClickClack discussion session tool policy", () => {
   it.each(["disabled", "retargeted", "reset", "archived", "revoked", "ambiguous"] as const)(
     "revokes session-tool authority when the binding is %s",
     async (change) => {
-      const { config, mainSessionKey, run, runtime, bindingStore } = await setup();
+      const { config, run, runtime, binding } = await setup();
       const account = config.channels!.clickclack!;
       if (change === "disabled") {
         account.enabled = false;
@@ -141,11 +131,7 @@ describe("ClickClack discussion session tool policy", () => {
           ...(change === "archived" ? { archivedAt: 1 } : {}),
         });
       } else if (change === "revoked") {
-        await markClickClackDiscussionChannelRevoked(
-          runtime,
-          mainSessionKey,
-          currentBinding(bindingStore),
-        );
+        await markClickClackDiscussionChannelRevoked(runtime, mainSessionKey, binding);
       } else {
         config.channels!.clickclack = {
           accounts: {
@@ -170,15 +156,14 @@ describe("ClickClack discussion session tool policy", () => {
   });
 
   it("ignores legacy session-derived archive metadata on a durable room", async () => {
-    const { bindingStore, mainSessionKey, run } = await setup();
-    const binding = currentBinding(bindingStore);
+    const { bindingStore, binding, run } = await setup();
     await bindingStore.setIfCurrent(mainSessionKey, binding, { ...binding, archived: true });
     await expectSessionAccess(run, mainSessionKey, false);
   });
 
   it("fails closed for a revoked discussion session after its binding is deleted", async () => {
-    const { bindingStore, mainSessionKey, run } = await setup();
-    await bindingStore.deleteIfCurrent(mainSessionKey, bindingStore.get(mainSessionKey)!);
+    const { bindingStore, binding, run } = await setup();
+    await bindingStore.deleteIfCurrent(mainSessionKey, binding);
 
     expect((await run("sessions_history", { sessionKey: mainSessionKey }))?.block).toBe(true);
     expect((await run("sessions_list", {}))?.block).toBe(true);
@@ -187,8 +172,7 @@ describe("ClickClack discussion session tool policy", () => {
   it.each([{ channelId: "chn_replacement" }, { externalRef: "openclaw:replacement:research" }])(
     "rejects old side-session authority after an external binding replacement: %j",
     async (replacement) => {
-      const { bindingStore, mainSessionKey, run, sideSessionKey, store, target } = await setup();
-      const previous = bindingStore.get(mainSessionKey)!;
+      const { bindingStore, binding: previous, run, sideSessionKey, store, target } = await setup();
       // Bypass the index owner, as a foreign process or released native writer can.
       store.register(mainSessionKey, { ...previous, ...replacement });
 
@@ -205,22 +189,20 @@ describe("ClickClack discussion session tool policy", () => {
   it.each(["replace", "delete"] as const)(
     "preserves a committed %s while the initial worker index snapshot is pending",
     async (operation) => {
-      const { asyncStore, bindingStore, mainSessionKey, run, store } = await setup();
-      const previous = bindingStore.get(mainSessionKey)!;
+      const { asyncStore, bindingStore, binding: previous, run, store } = await setup();
       const snapshot = store.entries();
       const pending = createDeferred<typeof snapshot>();
       vi.spyOn(asyncStore, "entries").mockReturnValueOnce(pending.promise);
       const preparing = bindingStore.prepare();
-      if (operation === "replace") {
-        await bindingStore.setIfCurrent(mainSessionKey, previous, {
-          ...previous,
-          channelId: "chn_replacement",
-        });
-      } else {
-        await bindingStore.deleteIfCurrent(mainSessionKey, previous);
-      }
+      const mutation =
+        operation === "replace"
+          ? bindingStore.setIfCurrent(mainSessionKey, previous, {
+              ...previous,
+              channelId: "chn_replacement",
+            })
+          : bindingStore.deleteIfCurrent(mainSessionKey, previous);
       pending.resolve(snapshot);
-      await preparing;
+      await Promise.all([preparing, mutation]);
 
       expect((await run("sessions_history", { sessionKey: mainSessionKey }))?.block).toBe(true);
       expect(
@@ -235,8 +217,7 @@ describe("ClickClack discussion session tool policy", () => {
   it.each(["register", "delete"] as const)(
     "preserves routing indexes when %s fails",
     async (operation) => {
-      const { bindingStore, mainSessionKey, run, store } = await setup();
-      const previous = currentBinding(bindingStore);
+      const { bindingStore, binding: previous, run, store } = await setup();
       const { serverBaseUrl, channelId } = previous;
       const message = operation === "register" ? "SQLITE_FULL" : "SQLITE_IOERR";
       store[operation] = vi.fn(() => {
@@ -257,8 +238,7 @@ describe("ClickClack discussion session tool policy", () => {
   );
 
   it("keeps the old attachment authoritative when reset persistence fails", async () => {
-    const { bindingStore, mainSessionKey, run, runtime, store } = await setup();
-    const previous = currentBinding(bindingStore);
+    const { bindingStore, binding: previous, run, runtime, store } = await setup();
     const replacement = { sessionId: "replacement-session-id", updatedAt: 2 };
     vi.mocked(runtime.agent.session.getSessionEntry).mockReturnValue(replacement);
     vi.mocked(runtime.agent.session.getSessionEntryAsync).mockResolvedValue(replacement);
@@ -279,7 +259,7 @@ describe("ClickClack discussion session tool policy", () => {
   });
 
   it("uses a different side-session identity after a server retarget", async () => {
-    const { mainSessionKey, runtime, sideSessionKey } = await setup();
+    const { runtime, sideSessionKey } = await setup();
     const retargeted = discussionSessionKey({
       runtime,
       agentId: "research",

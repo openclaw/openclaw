@@ -301,11 +301,9 @@ describe("createOpenClawTools browser plugin integration", () => {
           mediaLocalRoots: expect.arrayContaining([workspaceDir]),
         }),
       );
-      expect(providerNativeSend).not.toHaveBeenCalled();
       await expect(
         activeDelivery.send({ text: "outside media", mediaUrl: outsideMediaUrl }),
       ).rejects.toThrow(/not under an allowed directory/i);
-      expect(platformSendMedia).toHaveBeenCalledOnce();
       deferTransportDispatch = true;
       const pending = withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
         activeDelivery.send({ text: "closing", mediaUrl }),
@@ -314,10 +312,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       revokeMessageActionTurnCapability(turnCapability);
       resumeTransportDispatch.resolve();
       await expect(pending).rejects.toThrow(inactive);
-      expect(platformSendMedia).toHaveBeenCalledTimes(1);
-      expect(providerNativeSend).not.toHaveBeenCalled();
       await expect(activeDelivery.send({ text: "too late" })).rejects.toThrow(inactive);
-      expect(platformSendMedia).toHaveBeenCalledTimes(1);
       const { delivery: replacementDelivery } = bindTurn(2);
       setActivePluginRegistry(createEmptyPluginRegistry());
       await expect(replacementDelivery.send({ text: "stale registry" })).rejects.toThrow(inactive);
@@ -325,6 +320,8 @@ describe("createOpenClawTools browser plugin integration", () => {
       await expect(replacementDelivery.send({ text: "reactivated registry" })).rejects.toThrow(
         inactive,
       );
+      expect(platformSendMedia).toHaveBeenCalledOnce();
+      expect(providerNativeSend).not.toHaveBeenCalled();
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(outsideMediaUrl, { force: true });

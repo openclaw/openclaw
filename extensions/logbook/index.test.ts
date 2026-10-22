@@ -53,14 +53,11 @@ describe("logbook registration", () => {
       const ids: number[] = [];
       for (const [index, offset] of [0, 0, 2000].entries()) {
         const capturedAtMs = startMs + offset;
-        const id = await store.insertFrame({
+        const id = await store.captureFrame({
           capturedAtMs,
           day,
-          path: store.frameFilePath(day, capturedAtMs),
           screenIndex: 0,
-          byteSize: 9,
-          contentHash: `synthetic-${ids.length}`,
-          idle: index === 1,
+          buffer: Buffer.from(index < 2 ? "synthetic initial" : "synthetic changed"),
         });
         ids.push(id);
       }

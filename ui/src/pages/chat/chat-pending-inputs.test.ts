@@ -20,6 +20,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
 import {
   input,
   makeChatPageHost,
@@ -33,7 +34,6 @@ import {
   getChatPendingInputs,
 } from "./chat-pending-inputs.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
-import { projectChatRun } from "./chat-run-projection.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
@@ -105,17 +105,16 @@ afterEach(() => {
 
 describe("server-owned pending input display", () => {
   it("publishes custody changes through the run projection while retaining the pending view", () => {
-    const host = makeChatHost(pendingScope);
     const rendered: (readonly string[])[] = [];
-    const dispose = createRoot((stop) => {
-      projectChatRun(host);
+    const { host, dispose } = createRoot((stop) => {
+      const createdHost = createTestPageState(makeChatHost(pendingScope));
       createEffect(
-        () => getChatPendingInputs(host)?.page.items.map((item) => item.id) ?? [],
+        () => getChatPendingInputs(createdHost)?.page.items.map((item) => item.id) ?? [],
         (items) => {
           rendered.push(items);
         },
       );
-      return stop;
+      return { host: createdHost, dispose: stop };
     });
     onTestFinished(dispose);
     flush();

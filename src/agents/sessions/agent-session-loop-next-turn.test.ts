@@ -34,7 +34,7 @@ import {
   agentSessionSetPromptPreparation,
 } from "./agent-session-prompting.js";
 import type { AgentSession } from "./agent-session.js";
-import type { ToolDefinition } from "./extensions/types.js";
+import type { ExtensionFactory, ToolDefinition } from "./extensions/types.js";
 import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -57,8 +57,8 @@ const imageQueues = [
 const toolResult = (text: string) => ({ content: [{ type: "text" as const, text }], details: {} });
 const makeTool = (
   name: string,
-  execute: ToolDefinition["execute"] = async () => toolResult("done"),
-): ToolDefinition => ({
+  execute: AgentTool["execute"] = async () => toolResult("done"),
+): AgentTool => ({
   name,
   label: name,
   description: name,
@@ -66,9 +66,7 @@ const makeTool = (
   execute,
 });
 const textStream = (model: Model, text = "done") =>
-  createAssistantResultStream(createAssistant(model, [{ type: "text", text }]));
-const handlersFor = (handlers: Record<string, () => Promise<unknown>>) =>
-  new Map(Object.entries(handlers).map(([name, handler]) => [name, [handler]]));
+  createAssistantResultStream(createAssistant(model, text));
 
 function heldResponse(model: Model, signal?: AbortSignal) {
   const stream = createAssistantMessageEventStream();
@@ -90,7 +88,7 @@ function heldResponse(model: Model, signal?: AbortSignal) {
       stream.push({
         type: "done",
         reason: "stop",
-        message: createAssistant(model, [{ type: "text", text }]),
+        message: createAssistant(model, text),
       });
       stream.end();
     },
@@ -214,13 +212,13 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       const hookRelease = createDeferredCore();
       const preparationEntered = createDeferredCore();
       const preparationRelease = createDeferredCore();
-      const handlers = handlersFor({
-        before_agent_start: async () => {
+      const handlers: ExtensionFactory = (api) => {
+        api.on("before_agent_start", async () => {
           hookEntered.resolve();
           await hookRelease.promise;
           return { systemPrompt: "late SDK override" };
-        },
-      });
+        });
+      };
       const tools = ["read_policy", "write_policy"].map((name) =>
         makeTool(name, async () => ({ content: [], details: {} })),
       );
@@ -233,7 +231,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         return textStream(model);
       });
       const { session } = await createTestSession({
-        resourceLoader: createResourceLoader(handlers),
+        resourceLoader: await createResourceLoader(handlers),
         customTools: tools,
       });
       const prompt = session.prompt("apply permissions before the first request");
@@ -296,23 +294,27 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const sessionRef: { current?: AgentSession } = {};
     let queued = false;
     const lifecycleEvents: string[] = [];
-    const handlers = handlersFor({
-      agent_end: async () => {
+    const handlers: ExtensionFactory = (api) => {
+      api.on("agent_end", async () => {
         lifecycleEvents.push("agent_end");
         if (!queued) {
           queued = true;
           await sessionRef.current?.followUp("queued after end");
         }
         return undefined;
-      },
-      agent_settled: async () => lifecycleEvents.push("agent_settled"),
-    });
+      });
+      api.on("agent_settled", async () => {
+        lifecycleEvents.push("agent_settled");
+      });
+    };
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
       requests.push(context);
       return textStream(activeModel, `answer ${requests.length}`);
     });
-    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
+    const { session } = await createTestSession({
+      resourceLoader: await createResourceLoader(handlers),
+    });
     sessionRef.current = session;
 
     await session.prompt("initial prompt");
@@ -327,10 +329,12 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const firstGate = createDeferredCore();
     const secondGate = createDeferredCore();
     let admissionCount = 0;
-    const handlers = handlersFor({
-      before_agent_start: async () =>
-        await (admissionCount++ === 0 ? firstGate : secondGate).promise,
-    });
+    const handlers: ExtensionFactory = (api) => {
+      api.on(
+        "before_agent_start",
+        async () => await (admissionCount++ === 0 ? firstGate : secondGate).promise,
+      );
+    };
     let finishResponse: (() => void) | undefined;
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
@@ -339,7 +343,9 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       finishResponse = () => response.finish("finished");
       return response.stream;
     });
-    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
+    const { session } = await createTestSession({
+      resourceLoader: await createResourceLoader(handlers),
+    });
     const settled = vi.fn();
     session.subscribe((event) => {
       if (event.type === "agent_settled") {
@@ -422,24 +428,23 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         steering: readonly string[];
         followUp: readonly string[];
       }> = [];
+      const recordQueue = (type: "queue_update" | "image_message_start") => {
+        queueEvents.push({
+          type,
+          steering: [...session.getSteeringMessages()],
+          followUp: [...session.getFollowUpMessages()],
+        });
+      };
       session.subscribe((event) => {
         if (event.type === "queue_update") {
-          queueEvents.push({
-            type: "queue_update",
-            steering: event.steering,
-            followUp: event.followUp,
-          });
+          recordQueue("queue_update");
         } else if (
           event.type === "message_start" &&
           event.message.role === "user" &&
           Array.isArray(event.message.content) &&
           event.message.content.some((part) => part.type === "image")
         ) {
-          queueEvents.push({
-            type: "image_message_start",
-            steering: [...session.getSteeringMessages()],
-            followUp: [...session.getFollowUpMessages()],
-          });
+          recordQueue("image_message_start");
         }
       });
       const initialPrompt = session.prompt("describe the next image");
@@ -727,9 +732,9 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       return toolResult("switched");
     });
     const secondTool = makeTool("second_tool");
-    const handlers = handlersFor({
-      before_agent_start: async () => ({ systemPrompt: "prompt override" }),
-    });
+    const handlers: ExtensionFactory = (api) => {
+      api.on("before_agent_start", async () => ({ systemPrompt: "prompt override" }));
+    };
     const requests: Array<{ model: string; prompt: string; tools: string[] }> = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
       requests.push({
@@ -746,7 +751,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
       );
     });
     const { session } = await createTestSession({
-      resourceLoader: createResourceLoader(handlers),
+      resourceLoader: await createResourceLoader(handlers),
       customTools: [switchTool, secondTool],
     });
     sessionRef.current = session;
@@ -807,13 +812,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
   it("preserves explicit updates from an existing next-turn hook", async () => {
     const hookModel = { ...testModel, id: "hook-model" };
-    const hookTool: AgentTool = {
-      name: "hook_tool",
-      label: "Hook tool",
-      description: "provided by the existing turn hook",
-      parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: "text", text: "done" }], details: {} }),
-    };
+    const hookTool = makeTool("hook_tool");
     const hookContext = {
       systemPrompt: "hook prompt",
       messages: [],
@@ -832,7 +831,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     if (!contextualHook) {
       throw new Error("context-aware next-turn hook was not installed");
     }
-    const message = createAssistant(testModel, [{ type: "text", text: "turn complete" }]);
+    const message = createAssistant(testModel, "turn complete");
     const newMessages = [message];
 
     const firstUpdate = await contextualHook({
@@ -861,13 +860,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
   });
 
   it("preserves fields omitted by an existing next-turn context replacement", async () => {
-    const sessionTool: AgentTool = {
-      name: "session_tool",
-      label: "Session tool",
-      description: "available in session state",
-      parameters: Type.Object({}),
-      execute: async () => toolResult("done"),
-    };
+    const sessionTool = makeTool("session_tool");
     const initialHook = vi.fn(() => ({
       context: { systemPrompt: "stale prompt", messages: [], tools: [sessionTool] },
     }));
@@ -878,7 +871,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     session.setActiveToolsByName([sessionTool.name]);
     session.agent.prepareNextTurn = initialHook;
     session.agent.prepareNextTurn = replacementHook;
-    const message = createAssistant(testModel, [{ type: "text", text: "turn complete" }]);
+    const message = createAssistant(testModel, "turn complete");
     const contextualHook = session.agent.prepareNextTurnWithContext;
     if (!contextualHook) {
       throw new Error("context-aware next-turn hook was not installed");
@@ -933,7 +926,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const { session } = await createTestSession({ settingsManager });
     settingsManager.setSteeringMode("all");
     settingsManager.setFollowUpMode("all");
-    await settingsManager.flush();
 
     expect(session.agent.steeringMode).toBe("one-at-a-time");
     expect(session.agent.followUpMode).toBe("one-at-a-time");

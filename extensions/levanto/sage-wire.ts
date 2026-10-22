@@ -1,17 +1,8 @@
 // Vendor-private wire contract. This is not an OpenClaw model or inference API.
 type SageReasoning = "auto" | "off" | "on";
-type SageGrounding = {
-  trigger?: "never" | "low_confidence" | "always";
-  confidence_floor?: number;
-  max_results?: number;
-  max_context_tokens?: number;
-  return_sources?: boolean;
-};
-type SageText = string | { kind: "text"; value: string };
-type SageList = { kind: "list"; value: { id: string; content: SageText | SageList }[] };
 export type SageContent =
-  | SageText
-  | SageList
+  | string
+  | { kind: "list"; value: { id: string; content: string }[] }
   | { kind: "image"; media: string; text?: string | null };
 type QuestionBase = { id: string; instructions: string };
 export type SageQuestion =
@@ -23,17 +14,15 @@ export type SageQuestion =
       id: string;
       kind: "tags";
       instructions?: string | null;
-      tags: { id: string; name?: string | null; threshold?: number | null }[];
+      tags: { id: string; name?: string | null }[];
     };
-type SageBatchQuestion = SageQuestion & { grounding?: SageGrounding | null };
 export type SageRequest = {
   content: SageContent;
   question: SageQuestion;
   reasoning?: SageReasoning;
-  grounding?: SageGrounding | null;
 };
 export type SageBatchRequest = {
-  requests: { content: SageContent; questions: SageBatchQuestion[] }[];
+  requests: { content: SageContent; questions: SageQuestion[] }[];
   reasoning?: SageReasoning;
 };
 type SageJson = null | boolean | number | string | SageJson[] | { [key: string]: SageJson };

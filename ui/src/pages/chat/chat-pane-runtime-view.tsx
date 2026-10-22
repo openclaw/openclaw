@@ -7,7 +7,6 @@ import {
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
-import { projectsForGateway } from "../../lib/projects.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
@@ -28,6 +27,7 @@ import {
   createChatProviderReview,
   type ChatProviderReviewOwner,
 } from "./chat-provider-review-controller.tsx";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import { sessionWorkspaceForHost } from "./components/chat-session-workspace-state.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
@@ -51,6 +51,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     runtime.boardPresentation,
     runtime.pendingPanelToggles,
     runtime.workspaceConflicts,
+    runtime.mobilePresentation,
   ]) {
     projectChatFields(owner);
   }
@@ -58,6 +59,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     ...chatPanePropertyKeys,
     "paneWidth",
     "desktopFocus",
+    "dashboardControls",
     "replyNavigationSessionKey",
     "replyNavigationId",
   ]);
@@ -165,7 +167,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       (source) => source.read().attachments,
       Object.is,
     );
-    const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
     const queuedEdit =
       state &&
       projectSource(state, {
@@ -249,7 +250,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         parentSession.read();
         progress.read();
         realtime()?.read();
-        projects.read();
         theme.preferences.read();
         controlCommand.read();
         attachments.read();
@@ -267,6 +267,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       source: () => frame().providerReviewSource,
       readState: () => runtime.state,
     });
+    const questions = createComposerQuestions(
+      runtime.presentationId,
+      () => frame().layout?.primary.chat ?? null,
+    );
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(
       () => ({ frame: frame(), presented: runtime.presented }),
@@ -294,7 +298,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         prop:agentId={runtime.agentId ?? parseAgentSessionKey(runtime.sessionKey)?.agentId}
         prop:sessionKey={runtime.sessionKey}
       >
-        <PaneLayout layout={frame().layout} />
+        <PaneLayout layout={frame().layout} questions={questions} />
         <ChatProviderReviewDialog owner={providerReview} />
         <Show when={frame().capabilityDialogs}>
           {(dialogs) => <ChatComposerCapabilityDialogs {...dialogs()} />}

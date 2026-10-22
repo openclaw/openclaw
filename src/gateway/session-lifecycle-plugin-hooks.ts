@@ -117,7 +117,6 @@ export function emitGatewaySessionEndPluginHook(params: {
 }
 
 export function emitGatewaySessionStartPluginHook(params: {
-  cfg: OpenClawConfig;
   sessionKey: string;
   sessionId?: string;
   resumedFrom?: string;
@@ -130,7 +129,6 @@ export function emitGatewaySessionStartPluginHook(params: {
   }
   if (params.storePath) {
     noteActiveSessionForShutdown({
-      cfg: params.cfg,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       storePath: params.storePath,

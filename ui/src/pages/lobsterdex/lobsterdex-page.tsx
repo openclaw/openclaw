@@ -1,5 +1,5 @@
 import "../../styles/settings.css";
-import { createMemo, createSignal, For, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, For, onSettled } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { getLobsterdexEntries } from "../../components/lobster-dex.ts";
@@ -46,7 +46,7 @@ export function LobsterdexPage() {
   let disposed = false;
   let copyAttempt = 0;
   let copyResetTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     copyAttempt += 1;
     globalThis.clearTimeout(copyResetTimer);
@@ -97,12 +97,11 @@ export function LobsterdexPage() {
     const seenCount = createMemo(
       () => LOBSTER_PET_PALETTES.filter((palette) => props.entries.has(palette.id)).length,
     );
-    const countLabel = createMemo(() =>
+    const countLabel = () =>
       t("quickSettings.appearance.lobsterdexSeen", {
         seen: String(seenCount()),
         total: String(LOBSTER_PET_PALETTES.length),
-      }),
-    );
+      });
     return (
       <section class="lobsterdex-page">
         <header

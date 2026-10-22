@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createLazyCustomElementRequests } from "../../app/lazy-custom-element.ts";
@@ -13,8 +14,8 @@ import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
 import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
+import { DirectDictationControl } from "../chat/composer-direct-dictation.ts";
 import * as catalog from "./catalog-target.ts";
-import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -31,6 +32,7 @@ import type { createNewSessionTitle } from "./draft-title.ts";
 import { NewSessionDraft } from "./draft.ts";
 import { forgetInstantThreadPage } from "./instant-thread-restore.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import type { SubmissionPresentation } from "./submission-action.ts";
 
 const attachmentPanelElement = {
   tagName: "openclaw-chat-detail-panel",
@@ -51,7 +53,21 @@ export type PageHost = SolidBridgeElement<
 >;
 
 export class NewSessionPageOwner {
-  private readonly listeners = new Set<() => void>();
+  private submissionLifetimeValue = Promise.withResolvers<void>();
+  presentSubmit: SubmissionPresentation["presentSubmit"];
+  get submissionLifetime() {
+    return this.submissionLifetimeValue.promise;
+  }
+  readonly retireSubmissionPresentation = () => {
+    this.submissionLifetimeValue.resolve();
+    this.submissionLifetimeValue = Promise.withResolvers<void>();
+    this.listeners.publish();
+  };
+  submit(background = false) {
+    const operation = () => this.submission.submit(undefined, background);
+    return this.presentSubmit ? this.presentSubmit(operation) : operation();
+  }
+  private readonly listeners = createChangeListeners();
   private contextSubscriptions: Array<() => void> = [];
   isConnected = false;
   private pendingChange = false;
@@ -70,14 +86,9 @@ export class NewSessionPageOwner {
         }
       });
     }
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   };
-  subscribe(listener: () => void) {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
   context?: ApplicationContext;
   get data() {
     return this.host.data;
@@ -122,7 +133,7 @@ export class NewSessionPageOwner {
   readonly browser: DraftPlaceBrowser;
   readonly place: DraftPlaceState;
   readonly submission: DraftSubmissionFlow;
-  readonly dictation: NewSessionDictationControl;
+  readonly dictation: DirectDictationControl;
   titlePreparation?: ReturnType<typeof createNewSessionTitle>;
   readonly flushDraft = () => this.submission.draftPersistence.persistNow();
   readonly setImageLightbox = (item: ImageLightboxItem | null) => {
@@ -139,6 +150,7 @@ export class NewSessionPageOwner {
         changed: this.changed,
         activeElement: () => this.host.ownerDocument.activeElement,
         onInvalidate: () => {
+          this.retireSubmissionPresentation();
           this.closeAttachmentPanel();
           this.connectMachine?.close();
         },
@@ -186,14 +198,14 @@ export class NewSessionPageOwner {
       () => ({ client: this.gateway.client, connected: this.gateway.connected }),
       this.changed,
     );
-    this.dictation = new NewSessionDictationControl({
+    this.dictation = new DirectDictationControl({
       textarea: this.submission.composerTextarea,
       getClient: () => this.gateway.client,
       isConnected: () => this.gateway.connected,
       canCommit: () => !this.submission.submitting && !this.submission.pendingPlacement.sessionKey,
       onMessage: (message) => this.setMessageFromUser(message),
       onError: (message) => this.submission.setError(message),
-      onSubmit: () => void this.submission.submit(),
+      onSubmit: () => void this.submit(),
     });
     // Dictation receipts reconcile draft availability before the page projection reads it.
     this.dictation.subscribe(this.changed);
@@ -235,6 +247,16 @@ export class NewSessionPageOwner {
         context.runtimeConfig,
         context.config,
       ].map((source) => source.subscribe(this.changed));
+      let location = context.router.getState().location;
+      this.contextSubscriptions.push(
+        context.router.subscribe((state) => {
+          if (state.location !== location) {
+            location = state.location;
+            this.retireSubmissionPresentation();
+            this.browser.close();
+          }
+        }),
+      );
     }
     this.draft.connect();
     this.submission.draftPersistence.connect();
@@ -243,9 +265,11 @@ export class NewSessionPageOwner {
   }
 
   disconnect() {
+    this.retireSubmissionPresentation();
     if (!this.isConnected) {
       return;
     }
+    this.browser.close();
     for (const stop of this.contextSubscriptions.splice(0)) {
       stop();
     }
@@ -338,6 +362,7 @@ export class NewSessionPageOwner {
   }
 
   resetDraft() {
+    this.retireSubmissionPresentation();
     this.place.resetDraft();
     this.submission.resetDraft();
     this.messageOwnerKey = catalog.routeKey(this.data);
@@ -425,11 +450,11 @@ export class NewSessionPageOwner {
           submission.setVisibility(visibility);
         }
       },
-      onSubmit: () => void submission.submit(),
+      onSubmit: () => void this.submit(),
       onBackgroundSubmit:
         submission.visibility === "draft" || isCatalogTarget
           ? undefined
-          : () => void submission.submit(undefined, true),
+          : () => void this.submit(true),
     };
   }
 
@@ -464,7 +489,7 @@ export class NewSessionPageOwner {
         hello: gateway?.hello ?? null,
       },
       onDraftChange: (next) => this.setMessageFromUser(next),
-      onSend: () => void this.submission.submit(),
+      onSend: () => void this.submit(),
       onOpenSession: (sessionKey) => {
         const { context, submission } = this;
         if (!context || submission.submitting || submission.pendingPlacement.sessionKey) {

@@ -203,7 +203,6 @@ function checkDepth(walked: readonly SlotSub[]): void {
   if (walked.length > MAX_TRAVERSAL_DEPTH) {
     throw new OcPathError(
       `findOcPaths exceeded MAX_TRAVERSAL_DEPTH (${MAX_TRAVERSAL_DEPTH}) — likely a pathological pattern`,
-      "",
       "OC_PATH_DEPTH_EXCEEDED",
     );
   }

@@ -19,6 +19,7 @@ import {
   chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
+  assistantGroupIsIndependentBoundary,
 } from "./chat-turn-boundary.ts";
 
 type AgentRunFramePart =
@@ -276,7 +277,12 @@ export function coalesceAgentRunFrames(
       presentationBoundaryKey = boundaryGroup.key;
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
-      if (boundaryGroup.role === "user" || hasForwardedSource(boundaryGroup) || !nextBoundaryId) {
+      if (
+        boundaryGroup.role === "user" ||
+        hasForwardedSource(boundaryGroup) ||
+        assistantGroupIsIndependentBoundary(boundaryGroup) ||
+        !nextBoundaryId
+      ) {
         result.push(item);
         boundaryId = nextBoundaryId;
         continue;

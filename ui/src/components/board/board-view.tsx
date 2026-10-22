@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import {
   BOARD_GRID_COLUMNS,
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
@@ -180,11 +180,12 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     // Hybrid devices move the chrome in/out of flow when pointer capability changes.
     const pointer =
       typeof window.matchMedia === "function" ? window.matchMedia(FINE_POINTER_QUERY) : null;
-    return pointer ? listen(pointer, "change", invalidateLayout) : undefined;
-  });
-  onCleanup(() => {
-    disposed = true;
-    views.delete(host);
+    const stop = pointer ? listen(pointer, "change", invalidateLayout) : undefined;
+    return () => {
+      disposed = true;
+      views.delete(host);
+      stop?.();
+    };
   });
 
   return (

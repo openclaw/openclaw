@@ -29,7 +29,6 @@ type ManifestModelCatalogRegistry = {
 };
 
 type ManifestModelCatalogPlanEntry = {
-  pluginId: string;
   provider: string;
   discovery?: ModelCatalogDiscovery;
   rows: readonly NormalizedModelCatalogRow[];
@@ -230,7 +229,6 @@ export function planManifestModelCatalogRows(params: {
         }
         const alias = plugin.modelCatalog?.aliases?.[plannedProvider];
         entries.push({
-          pluginId: plugin.id,
           provider: plannedProvider,
           discovery: plugin.modelCatalog?.discovery?.[normalizedProvider],
           rows: alias

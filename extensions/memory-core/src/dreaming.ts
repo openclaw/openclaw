@@ -569,7 +569,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     },
   });
 
-  api.on("gateway_start", async (_event, ctx) => {
+  api.on("gateway_start", (_event, ctx) => {
     const startupStartedAtMs = serviceStartedAtMs;
     if (disposed || startupStartedAtMs === undefined) {
       return;
@@ -578,7 +578,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       clearTimeout(startupDreamingCleanupTimer);
       startupDreamingCleanupTimer = null;
     }
-    await trackDreamingTask(() =>
+    // Historical cleanup is maintenance, not activation. Keep it owned by the
+    // instance and joined at service stop without consuming the start hook deadline.
+    void trackDreamingTask(() =>
       startDreamingSessionCleanup(ctx.config ?? api.config, startupStartedAtMs),
     ).catch((error: unknown) => {
       api.logger.warn(`memory-core: dreaming startup cleanup failed: ${formatErrorMessage(error)}`);

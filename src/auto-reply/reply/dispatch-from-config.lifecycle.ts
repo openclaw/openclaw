@@ -4,6 +4,7 @@ import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecy
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import { logVerbose } from "../../globals.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
 import {
   type ReplyOperation,
   waitForReplyBarrierSettlement,
@@ -98,9 +99,7 @@ export function createDispatchReplyOperationCoordinator(
         }),
       );
     }
-    if (!dispatchReplyOperation && !preDispatchLifecycleAdmission) {
-      return;
-    }
+    // A native command can acquire its operation after resolver work starts.
     const pending = dispatchLifecycleWork[phase];
     const settled = work.then(
       () => {},
@@ -178,10 +177,13 @@ export function createDispatchReplyOperationCoordinator(
     if (dispatchReplyOperation) {
       return await runWithReplyOperationLifecycleAdmission(dispatchReplyOperation, run);
     }
-    const work = preDispatchLifecycleAdmission
-      ? preDispatchLifecycleAdmission.run(run)
-      : Promise.resolve().then(run);
     const input = readReplySourceInput(params.replyOptions);
+    // Without an operation or claim, only the source identifies this turn's own
+    // input; otherwise a /new rollover inside it cancels the input it runs on.
+    const runAsSource = input ? () => withSessionControllerSource(input, run) : run;
+    const work = preDispatchLifecycleAdmission
+      ? preDispatchLifecycleAdmission.run(runAsSource)
+      : Promise.resolve().then(runAsSource);
     if (input) {
       // The abort race is cancellation; raw resolver failures have their own receipt.
       trackSessionControllerSourceWork(
@@ -225,7 +227,12 @@ export function createDispatchReplyOperationCoordinator(
         resolveCommandTurnTargetSessionKey(params.ctx) !== params.dispatchOperationSessionKey)
     ) {
       assertRequestCurrent();
-      if (input?.retirementRequested || getPreDispatchAbortSignal()?.aborted) {
+      // A resolved command may consume its input before delivering its refusal.
+      // Retirement bars new work; cancellation still bars final delivery.
+      if (
+        getPreDispatchAbortSignal()?.aborted ||
+        (phase !== "dispatch" && input?.retirementRequested)
+      ) {
         return { status: "aborted" };
       }
       return { status: "ready" };
@@ -599,7 +606,6 @@ export function createDispatchReplyOperationCoordinator(
     params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
   let agentRunTerminalOutcome: "completed" | "failed" | undefined;
-  let agentRunId = params.replyOptions?.runId;
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -627,8 +633,6 @@ export function createDispatchReplyOperationCoordinator(
         : {}),
       ...observeAgentRunStart(params.replyOptions, (start) => {
         agentRunTerminalOutcome = "completed";
-        // Execution may generate its ID in copied options; finalization needs the observed run.
-        agentRunId = start.runId;
         params.messageAuditTerminal?.observeRunId(start.runId);
       }),
       onAgentRunTerminalOutcome: (outcome) => {
@@ -638,23 +642,21 @@ export function createDispatchReplyOperationCoordinator(
         params.replyOptions?.onAgentRunTerminalOutcome?.(outcome);
       },
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
-      ...(params.replyOptions?.internalEventExecution
-        ? {
-            onReplyOperationOwned: (operation: ReplyOperation) => {
-              if (dispatchReplyOperation && dispatchReplyOperation !== operation) {
-                throw new Error("Reply dispatch already owns another operation");
-              }
-              operation.abortSignal.throwIfAborted();
-              params.replyOptions?.abortSignal?.throwIfAborted();
-              params.replyOptions?.onReplyOperationOwned?.(operation);
-              params.replyOptions?.internalEventExecution?.assertCurrent?.();
-              dispatchReplyOperation = operation;
-              dispatchAbortOperation = operation;
-              admittedExpectedSessionId = operation.sessionId;
-              return true;
-            },
-          }
-        : {}),
+      // Native command continuations acquire their operation in the runner. Its
+      // completion belongs to dispatch so the final answer retains delivery authority.
+      onReplyOperationOwned: (operation: ReplyOperation) => {
+        if (dispatchReplyOperation && dispatchReplyOperation !== operation) {
+          throw new Error("Reply dispatch already owns another operation");
+        }
+        operation.abortSignal.throwIfAborted();
+        params.replyOptions?.abortSignal?.throwIfAborted();
+        params.replyOptions?.onReplyOperationOwned?.(operation);
+        params.replyOptions?.internalEventExecution?.assertCurrent?.();
+        dispatchReplyOperation = operation;
+        dispatchAbortOperation = operation;
+        admittedExpectedSessionId = operation.sessionId;
+        return true;
+      },
     };
   };
 
@@ -724,7 +726,6 @@ export function createDispatchReplyOperationCoordinator(
     turnLedger,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
-    getAgentRunId: () => agentRunId,
     getAgentRunTerminalOutcome: () => agentRunTerminalOutcome,
     getDispatchAbortOperation: () => dispatchAbortOperation,
     getDispatchAbortSignal,

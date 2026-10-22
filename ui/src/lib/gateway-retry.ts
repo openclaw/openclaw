@@ -15,11 +15,11 @@ export function createGatewayRetryOwner() {
 
   return {
     cancel,
-    reset() {
+    reset(this: void) {
       cancel();
       nextDelayMs = GATEWAY_RETRY_INITIAL_DELAY_MS;
     },
-    schedule(retry: () => void) {
+    schedule(this: void, retry: () => void) {
       cancel();
       const delayMs = nextDelayMs;
       nextDelayMs = Math.min(nextDelayMs * 2, GATEWAY_RETRY_MAX_DELAY_MS);

@@ -145,6 +145,25 @@ const enCron = {
       now: "Now",
       nextHeartbeat: "Next heartbeat",
       wakeModeHelp: "Now triggers immediately. Next heartbeat waits for the next cycle.",
+      activeHours: "Active hours",
+      activeHoursHelp:
+        "Only run within this window, including manual runs. Overnight windows are supported; the end is exclusive.",
+      activeHoursStart: "Window start",
+      activeHoursEnd: "Window end",
+      idleOnly: "Wait until idle",
+      idleOnlyHelp: "Yield to active work before starting this automation.",
+      skipIfScratchEmpty: "Skip empty scratch",
+      skipIfScratchEmptyHelp:
+        "Skip when saved scratch has no tasks. Missing scratch does not suppress runs.",
+      deliveryTarget: "Destination",
+      channelTarget: "Channel destination",
+      ownerTarget: "Owner direct message",
+      ownerTargetHelp:
+        "Owner delivery resolves a concrete owner DM each run, never the last group conversation. Channel and account optionally scope owner lookup.",
+      directPolicy: "Direct messages",
+      defaultPolicy: "Default policy",
+      allowDirect: "Allow",
+      blockDirect: "Block",
       action: "Action",
       command: "Command",
       script: "Script",
@@ -206,6 +225,8 @@ const enCron = {
       accountIdHelp: "Optional channel account ID for multi-account setups.",
       lightContext: "Light context",
       lightContextHelp: "Use lightweight bootstrap context for this agent job.",
+      includeReasoning: "Include reasoning",
+      includeReasoningHelp: "Include available model reasoning in this automation's delivery.",
       model: "Model",
       customModel: "Custom model…",
       modelPlaceholder: "openai/gpt-5.2",
@@ -300,6 +321,25 @@ const enCron = {
     linkedRun: {
       label: "Showing the linked run.",
       showAll: "Show all runs",
+    },
+    scratch: {
+      title: "Job scratch",
+      help: "Private working notes for this automation. Loaded only when requested; never included in the task list or run history. Do not store credentials here.",
+      content: "Scratch content",
+      load: "Load scratch",
+      reload: "Reload scratch",
+      save: "Save scratch",
+      clear: "Remove scratch",
+      empty:
+        "No scratch saved. Saving an empty editor creates explicit empty scratch; removing it restores missing scratch.",
+      limit: "{bytes} / {max} bytes",
+      conflict:
+        "Scratch changed during editing. Your draft is preserved. Reload the latest version before saving again.",
+      redacted:
+        "Sensitive content was redacted. Saving is disabled to protect the original. You can remove this scratch without revealing it.",
+      saved: "Scratch saved.",
+      removed: "Scratch removed.",
+      tooLarge: "Scratch exceeds the byte limit.",
     },
     suggestions: {
       title: "Starter automations",

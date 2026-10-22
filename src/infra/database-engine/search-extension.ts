@@ -88,11 +88,10 @@ export function admitStoreSearchExtension(
     const after = verifyAndRecordPostgresSchema(db, facts.namespace, next);
     invalidateLocalSqliteSchemaAdmissions(db);
     stageSqliteTransactionState(db, {
-      // Later admissions in the same owner transaction consume this definition.
-      stage: () => retainPostgresSchema(db, next),
-      rollback: () => retainPostgresSchema(db, base),
       commit: () => publishSqliteDatabaseSchemaChange(db),
     });
+    // Publish the new revision before its facts; admission owns rollback too.
+    retainPostgresSchema(db, next);
     publishPostgresSearchExtensionFacts(db, facts, after.catalog);
     for (const item of [next.search, ...Object.values(next.searchExtensions)].filter(
       (candidate) => candidate !== undefined,

@@ -2,6 +2,7 @@ import { isParentOwnedBackgroundAcpSession } from "@openclaw/acp-core/session-in
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { withAcpSessionEntryRead } from "../../acp/runtime/session-meta-read.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import { logVerbose } from "../../globals.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -18,7 +19,6 @@ import {
   loadReplyMediaPathsRuntime,
   loadRouteReplyRuntime,
 } from "./dispatch-from-config.runtime-loaders.js";
-import { resolveReplyPolicyConversationType } from "./get-reply-conversation-type.js";
 import type { ReplyDispatchKind, ReplyDispatchOperation } from "./reply-dispatcher.types.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import {
@@ -27,6 +27,16 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
+
+function resolveReplyPolicyConversationType(ctx: GatherDispatchRequestReadyState["ctx"]) {
+  const sourceSessionKey = ctx.SessionKey;
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
+  if (targetSessionKey && targetSessionKey !== sourceSessionKey) {
+    return undefined;
+  }
+  const chatType = normalizeChatType(ctx.ChatType);
+  return chatType === "channel" ? "group" : chatType;
+}
 
 export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyState) {
   const {

@@ -1,5 +1,5 @@
 import type { DesktopSource, WorkerDesktopAppId } from "@openclaw/gateway-protocol";
-import { createSignal, onCleanup } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
@@ -17,7 +17,7 @@ export function createDesktopAppLauncher(target: () => LaunchTarget) {
   const [feedback, setFeedback] = createSignal<{ app?: WorkerDesktopAppId; error?: string }>({});
   // Admission must see a same-turn launch before Solid publishes its busy indicator.
   let pending: { app: WorkerDesktopAppId } | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     pending = undefined;
   });
   const clear = () => {

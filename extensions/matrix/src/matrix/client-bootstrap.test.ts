@@ -93,14 +93,12 @@ describe("client bootstrap", () => {
       async (client) => {
         expect(client).toBe(sharedClient);
       },
-      "persist",
     );
 
     expect(acquireSharedMatrixClientMock).toHaveBeenCalledWith({
       cfg: TEST_CFG,
       timeoutMs: undefined,
       accountId: "default",
-      startClient: false,
       role: "transient",
     });
     expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "persist" });
@@ -142,7 +140,6 @@ describe("client bootstrap", () => {
       async (client) => {
         expect(client).toBe(injected);
       },
-      "persist",
     );
 
     expect(start).toHaveBeenCalledTimes(1);
@@ -172,7 +169,6 @@ describe("client bootstrap", () => {
         current = false;
         return "must not disclose";
       },
-      "persist",
     ).then(
       () => {
         throw new Error("Revoked result escaped");

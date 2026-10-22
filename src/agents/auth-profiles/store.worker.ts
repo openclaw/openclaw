@@ -38,12 +38,9 @@ import type {
   AuthProfileUsageResult,
   AuthStoreUpdateInput,
 } from "./store.worker-contract.js";
-import type { AuthProfileRowRead, UserModelAuthProfile } from "./types.js";
+import type { AuthProfileRowRead, ProfileUsageStats, UserModelAuthProfile } from "./types.js";
 import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
-import type {
-  PersonalAuthProfileUsageReduction,
-  PersonalAuthProfileUsageResult,
-} from "./usage-reduction.js";
+import type { PersonalAuthProfileUsageReduction } from "./usage-reduction.js";
 import { reduceAuthProfileFailure } from "./usage-reduction.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
 
@@ -183,8 +180,8 @@ export const authProfileOperations = {
   "authProfiles.personalUsage": (
     input: { profileId: string; reduction: PersonalAuthProfileUsageReduction },
     { stateOptions },
-  ): PersonalAuthProfileUsageResult | undefined => {
-    let result: PersonalAuthProfileUsageResult | undefined;
+  ): ProfileUsageStats | undefined => {
+    let result: ProfileUsageStats | undefined;
     updateUserModelAuthProfile(
       input.profileId,
       (profile) => {
@@ -208,7 +205,7 @@ export const authProfileOperations = {
           return false;
         }
         profile.usageStats = next;
-        result = { previous, next, now };
+        result = next;
         return true;
       },
       stateOptions(),

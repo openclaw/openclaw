@@ -308,8 +308,5 @@ export function createSubagentRegistryContextCleanup(config: {
       reason: SubagentLifecycleEndedReason;
     }) => params.reason === SUBAGENT_ENDED_REASON_KILLED || params.entry.spawnMode !== "session",
     emitSubagentEndedHookForRun,
-    reset: () => {
-      endedHookInFlightOwners.clear();
-    },
   };
 }

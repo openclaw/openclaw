@@ -15,7 +15,9 @@ const inputs = vi.hoisted(() => ({
   state: "CREATE TABLE user_profiles (id TEXT);",
   agentVersion: 31,
   stateVersion: 28,
-  storageIdentity: "sqlite-3.53.4-source-build" as string | undefined,
+  storageIdentity: { sourceId: "source", compileOptions: "COMPILER=clang-21,ENABLE_FTS5" } as
+    | { sourceId: string; compileOptions: string }
+    | undefined,
 }));
 vi.mock("../infra/sqlite-native-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/sqlite-native-runtime.js")>();
@@ -23,6 +25,8 @@ vi.mock("../infra/sqlite-native-runtime.js", async (importOriginal) => {
     ...actual,
     captureSqliteNativeRuntimeAdmission: () => ({
       ...actual.captureSqliteNativeRuntimeAdmission(),
+      version: "3.53.4",
+      runtime: { nodeVersion: "26.0.0" },
       storageIdentity: inputs.storageIdentity,
     }),
   };
@@ -63,7 +67,7 @@ beforeEach(() => {
   inputs.state = "CREATE TABLE user_profiles (id TEXT);";
   inputs.agentVersion = 31;
   inputs.stateVersion = 28;
-  inputs.storageIdentity = "sqlite-3.53.4-source-build";
+  inputs.storageIdentity = { sourceId: "source", compileOptions: "COMPILER=clang-21,ENABLE_FTS5" };
 });
 
 it.each(["agent", "state"] as const)(
@@ -128,8 +132,26 @@ it.each(["agent", "state"] as const)(
 it("invalidates proof for a different or unknown SQLite storage stack", async () => {
   const { sqliteDatabaseSealSchemaFor } = await import("./openclaw-database-seal-schema.js");
   const before = sqliteDatabaseSealSchemaFor("agent");
-  inputs.storageIdentity = "sqlite-3.54.0-source-build";
+  inputs.storageIdentity = { sourceId: "new-source", compileOptions: "ENABLE_FTS5" };
   expect(sqliteDatabaseSealSchemaFor("agent")).not.toEqual(before);
   inputs.storageIdentity = undefined;
   expect(sqliteDatabaseSealSchemaFor("agent")).toBeUndefined();
+});
+
+it("compares feature options without compiler metadata and preserves the legacy digest", async () => {
+  const { sqliteDatabaseSealSchemaFor } = await import("./openclaw-database-seal-schema.js");
+  const before = sqliteDatabaseSealSchemaFor("agent")!;
+  // Persisted by the combined-hash implementation with this synthetic native tuple.
+  expect(before.schemaIdentity).toBe(
+    "9f93c4304456e20100a54354c11099c82974e1ff9711eeb07f6335302d41b4df",
+  );
+  inputs.storageIdentity = { sourceId: "source", compileOptions: "COMPILER=gcc-14,ENABLE_FTS5" };
+  const rebuilt = sqliteDatabaseSealSchemaFor("agent")!;
+  expect(rebuilt.identity).toEqual(before.identity);
+  expect(rebuilt.identity.sqlite.compileOptions).toBe("ENABLE_FTS5");
+  expect(rebuilt.schemaIdentity).not.toBe(before.schemaIdentity);
+  inputs.storageIdentity.compileOptions += ",OMIT_JSON";
+  expect(sqliteDatabaseSealSchemaFor("agent")!.identity.sqlite.compileOptions).toBe(
+    "ENABLE_FTS5,OMIT_JSON",
+  );
 });

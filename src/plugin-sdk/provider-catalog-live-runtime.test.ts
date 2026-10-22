@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { withProviderCatalogDiscoveryBudget } from "../plugins/provider-catalog-expiry.js";
 import { NON_ENV_SECRETREF_MARKER } from "./provider-auth-runtime.js";
 import {
   buildLiveModelProviderConfig,
@@ -8,6 +10,7 @@ import {
   buildOpenAICompatibleProviderFamilyCatalog,
   clearLiveCatalogCacheForTests,
   fetchLiveProviderModelIds,
+  getCachedLiveProviderModelRows,
   LiveModelCatalogHttpError,
   readLiveModelCatalogStringField,
   type LiveModelCatalogFetchGuard,
@@ -748,5 +751,71 @@ describe("provider catalog live-runtime scope", () => {
     resolveProviderApiKey.mockClear();
     await expect(family.catalog.run({ ...context, providerIds: ["other"] })).resolves.toBeNull();
     expect(resolveProviderApiKey).not.toHaveBeenCalled();
+  });
+});
+
+it.each([false, true])("isolates cached HTTP caps inside acquisition=%s", async (scoped) => {
+  clearLiveCatalogCacheForTests();
+  const firstResponse = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const secondResponse = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const fetchGuard = vi
+    .fn<LiveModelCatalogFetchGuard>()
+    .mockImplementationOnce(() => firstResponse.promise)
+    .mockImplementationOnce(() => secondResponse.promise);
+  const response = (id: string) => ({
+    response: new Response(JSON.stringify({ data: [{ id }] })),
+    finalUrl: "https://caps.example.test/models",
+    release: async () => undefined,
+  });
+  const run = async () => {
+    const read = (timeoutMs?: number) =>
+      getCachedLiveProviderModelRows({
+        providerId: "caps",
+        endpoint: "https://caps.example.test/models",
+        timeoutMs,
+        fetchGuard,
+      });
+    const short = read(5_000);
+    const long = read(scoped ? undefined : 180_000);
+    try {
+      expect(fetchGuard).toHaveBeenCalledTimes(2);
+      expect(fetchGuard.mock.calls[0]?.[0].timeoutMs).toBeLessThanOrEqual(5_000);
+      expect(fetchGuard.mock.calls[1]?.[0].timeoutMs).toBeGreaterThan(5_000);
+    } finally {
+      firstResponse.resolve(response("short"));
+      secondResponse.resolve(response("long"));
+    }
+    expect(await short).toEqual([{ id: "short" }]);
+    expect(await long).toEqual([{ id: "long" }]);
+  };
+  if (scoped) {
+    await withProviderCatalogDiscoveryBudget(180_000, run);
+  } else {
+    await run();
+  }
+});
+
+it("does not let an immediate row timeout join its enclosing long pending load", async () => {
+  clearLiveCatalogCacheForTests();
+  const completion = createDeferred<Awaited<ReturnType<LiveModelCatalogFetchGuard>>>();
+  const fetchGuard = vi.fn<LiveModelCatalogFetchGuard>(() => completion.promise);
+  await withProviderCatalogDiscoveryBudget(180_000, async () => {
+    const read = (timeoutMs?: number) =>
+      getCachedLiveProviderModelRows({
+        providerId: "zero-cap",
+        endpoint: "https://zero.example.test/models",
+        timeoutMs,
+        fetchGuard,
+      });
+    const long = read();
+    const immediate = expect(read(0)).rejects.toThrow("before the catalog completed");
+    completion.resolve({
+      response: new Response(JSON.stringify({ data: [{ id: "healthy" }] })),
+      finalUrl: "https://zero.example.test/models",
+      release: async () => undefined,
+    });
+    await immediate;
+    expect(await long).toEqual([{ id: "healthy" }]);
+    expect(fetchGuard).toHaveBeenCalledOnce();
   });
 });

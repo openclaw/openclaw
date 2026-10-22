@@ -1,14 +1,21 @@
 import { deepStrictEqual, ok } from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { serialize } from "node:v8";
 import { execa } from "execa";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createRemoteShellSandboxSession } from "../../agents/sandbox/remote-shell-transport.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { withCommandProcessScope } from "../exec-spawn.js";
-import { runCommandWithTimeout } from "../exec.js";
+import { runCommandBuffered, runCommandWithTimeout, runExec } from "../exec.js";
+import { prepareOomScoreAdjustedSpawn } from "../linux-oom-score.js";
+import { createChildAdapter } from "../supervisor/adapters/child.js";
+import { createServiceChildRelayAdapter } from "../supervisor/service-child-relay-host.js";
 import { BrokerChild } from "./child.js";
 import { runWithSpawnBroker } from "./context.js";
 import { brokerExecaOptions, spawnBrokerCommand } from "./execa-client.js";
@@ -20,7 +27,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const nodeArgv = (source: string, ...args: string[]) => [process.execPath, "-e", source, ...args];
 
-describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", () => {
+describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker command transports", () => {
   let host: SpawnBrokerHost;
   beforeAll(async () => {
     host = createSpawnBrokerHost();
@@ -39,7 +46,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
   const start = (source: string, options: CommandSpawnOptions, broker = true) =>
     launch(nodeArgv(source), options, broker);
 
-  async function ready(command: ReturnType<typeof start>, required = true) {
+  async function readyCommand(command: ReturnType<typeof start>, required = true) {
     const child = command.nodeChildProcess;
     if (required || child instanceof BrokerChild) {
       ok(child instanceof BrokerChild, "Fixture did not use the broker");
@@ -155,7 +162,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
         broker,
       );
       try {
-        await ready(command, broker);
+        await readyCommand(command, broker);
         await new Promise<void>((resolve) => {
           command.stdout!.once("data", () => resolve());
         });
@@ -201,7 +208,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
           },
           broker,
         );
-        await ready(command, broker);
+        await readyCommand(command, broker);
         if (cancel) {
           command.stdout?.once("data", () => controller.abort());
         }
@@ -243,7 +250,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
           stripFinalNewline: false,
         },
       );
-      await ready(command);
+      await readyCommand(command);
       const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
       command.stdout?.on("data", (chunk: Buffer) => chunks.stdout.push(chunk));
       command.stderr?.on("data", (chunk: Buffer) => chunks.stderr.push(chunk));
@@ -331,7 +338,7 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
     const command = start("process.stdout.write('ready');setTimeout(()=>{},2000)", {
       stdin: "ignore",
     });
-    await ready(command);
+    await readyCommand(command);
     const oldPid = host.pid!;
     process.kill(oldPid, "SIGKILL");
     await expect(command).rejects.toMatchObject({ code: "ERR_SPAWN_BROKER_UNAVAILABLE" });
@@ -339,5 +346,165 @@ describe.skipIf(!supportsSpawnBrokerCommandTransport())("broker execa parity", (
     const result = await start("process.stdout.write(String(process.ppid))", { stdin: "ignore" });
     expect(Number(result.stdout)).toBe(host.pid);
     expect(host.pid).not.toBe(oldPid);
+  });
+
+  it.runIf(process.platform === "linux").each([
+    { name: "adjusted", enabled: true, missing: false },
+    { name: "opt-out", enabled: false, missing: false },
+    { name: "failed launch", enabled: true, missing: true },
+  ])("restores the broker OOM score after $name", async ({ enabled, missing }) => {
+    const scorePath = `/proc/${host.pid}/oom_score_adj`;
+    const original = await readFile(scorePath, "utf8");
+    const prepared = prepareOomScoreAdjustedSpawn(
+      missing ? "/openclaw-nonexistent-oom-command" : "/bin/cat",
+      missing ? [] : ["/proc/self/oom_score_adj"],
+      { env: { ...process.env, OPENCLAW_CHILD_OOM_SCORE_ADJ: enabled ? "1" : "0" } },
+    );
+    const child = host.spawn(prepared.command, prepared.args, {
+      env: prepared.env,
+      stdio: missing ? "ignore" : ["ignore", "pipe", "ignore"],
+    });
+    if (missing) {
+      await expect(child.ready()).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await child.ready();
+      const output = text(child.stdout!);
+      expect(await once(child, "close")).toEqual([0, null]);
+      expect((await output).trim()).toBe(enabled ? "1000" : original.trim());
+      expect(child.spawnfile).toBe("/bin/cat");
+    }
+    expect(await readFile(scorePath, "utf8")).toBe(original);
+  });
+
+  it.each(["exec", "buffered", "adapter", "one-shot"] as const)("routes %s", async (transport) => {
+    await runWithSpawnBroker(transport === "one-shot" ? undefined : host, async () => {
+      const args = ["-e", "process.stdout.write(String(process.ppid))"];
+      let output = "";
+      if (transport === "buffered") {
+        const result = await runCommandBuffered([process.execPath, ...args]);
+        expect(result.termination).toBe("exit");
+        output = result.stdout.toString();
+      } else if (transport === "adapter") {
+        const { adapter, ready } = await createChildAdapter({
+          argv: [process.execPath, ...args],
+          stdinMode: "pipe-closed",
+          exactEnv: true,
+        });
+        adapter.onStdout((chunk) => {
+          output += chunk;
+        });
+        const result = await ready.then(() => adapter.wait()).finally(() => adapter.dispose());
+        expect(result).toEqual({ code: 0, signal: null });
+      } else {
+        output = (await runExec(process.execPath, args, { logOutput: false })).stdout;
+      }
+      expect(Number(output)).toBe(transport === "one-shot" ? process.pid : host.pid);
+    });
+  });
+
+  it("preserves runExec launch error metadata across asynchronous readiness", async () => {
+    const command = "/openclaw-nonexistent-spawn-broker-command";
+    const run = () => runExec(command, [], { logOutput: false }).catch((error: unknown) => error);
+    const local = await run();
+    const remote = await runWithSpawnBroker(host, run);
+    expect(local).toBeInstanceOf(Error);
+    const message = (local as Error).message;
+    expect(remote).toMatchObject({ code: "ENOENT", failed: true, stdout: "", stderr: "", message });
+  });
+
+  describe("brokered process lifecycle owners", () => {
+    aroundEach((runTest) => runWithSpawnBroker(host, runTest));
+
+    it("retains relay control and lineage through root exit and tree cancellation", async ({
+      signal,
+    }) => {
+      const { adapter, ready } = await createServiceChildRelayAdapter({
+        command: process.execPath,
+        args: [
+          "-e",
+          `
+          const {spawn}=require('node:child_process');
+          const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{
+            stdio:['ignore','ignore','ignore',3],
+          });
+          process.stdout.write(String(process.ppid));
+          child.unref();
+        `,
+        ],
+        stdinMode: "pipe-closed",
+        oomScoreWrapperSelected: false,
+      });
+      let output = "";
+      adapter.onStdout((chunk) => {
+        output += chunk;
+      });
+      adapter.onStderr(() => {});
+      const extinction = adapter.waitForExtinction();
+      const extinct = vi.fn();
+      void extinction.then(extinct, () => {});
+      try {
+        await ready;
+        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+        expect(extinct).not.toHaveBeenCalled();
+        const anchorPid = Number(output);
+        expect(anchorPid).toBeGreaterThan(0);
+        const parentOf = async (pid: number) =>
+          Number(
+            (await runExec("ps", ["-o", "ppid=", "-p", String(pid)], { logOutput: false })).stdout,
+          );
+        // Native custody is brokered directly; process-group custody adds a relay.
+        const brokerChildPid =
+          adapter.treeOwnership === "linux-subreaper" ? anchorPid : await parentOf(anchorPid);
+        expect(await parentOf(brokerChildPid)).toBe(host.pid);
+        adapter.kill("SIGTERM");
+        await withinTest(extinction, signal);
+        expect(extinct).toHaveBeenCalled();
+      } finally {
+        adapter.kill("SIGKILL");
+        await extinction.catch(() => {});
+        adapter.dispose();
+      }
+    });
+
+    it("forwards the ownedWorker start gate and disconnect through the broker", async ({
+      signal,
+    }) => {
+      const response = createDeferredCore<unknown>();
+      const { adapter, ready } = await createChildAdapter({
+        argv: [
+          process.execPath,
+          "-e",
+          `
+          process.once('message',()=>process.send({ppid:process.ppid}));
+          process.once('disconnect',()=>process.exit(0));
+        `,
+        ],
+        ownedWorker: true,
+        exactEnv: true,
+        stdinMode: "pipe-closed",
+        onWorkerMessage: response.resolve,
+      });
+      adapter.onStdout(() => {});
+      adapter.onStderr(() => {});
+      try {
+        await ready;
+        await adapter.openStartGate?.();
+        await expect(
+          withinTest(
+            awaitGateBeforeSettlement(
+              response.promise,
+              adapter.wait(),
+              "worker settled before acknowledging its start gate",
+            ),
+            signal,
+          ),
+        ).resolves.toEqual({ ppid: host.pid });
+        adapter.closeStartGate?.();
+        await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+      } finally {
+        adapter.kill("SIGKILL");
+        adapter.dispose();
+      }
+    });
   });
 });

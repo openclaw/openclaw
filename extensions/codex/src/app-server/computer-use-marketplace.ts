@@ -19,7 +19,6 @@ import {
   type CodexUnifiedComputerUseRuntime,
 } from "./computer-use-unified.js";
 import {
-  resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
   resolveMacOSDesktopCodexAppPathCandidates,
   type MacOSDesktopCodexAppPathCandidate,
 } from "./desktop-app-paths.js";
@@ -152,18 +151,18 @@ async function publishManagedWrapper(params: {
       );
     }
     if (existing) {
-      await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
+      assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
       assertCurrent?.();
       // The wrapper is generated from the desktop bundle. If publication fails
       // after removal, the next acquisition rebuilds it without a rollback tree.
       await fs.rm(physicalTargetPath, { recursive: true });
     }
-    await assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
+    assertDirectoryIdentityStable(parent, "managed bundled marketplace parent");
     assertCurrent?.();
     await fs.rename(stagingPath, physicalTargetPath);
     return targetPath;
   } finally {
-    if (await directoryIdentityIsStable(parent)) {
+    if (directoryIdentityIsStable(parent)) {
       await fs.rm(stagingPath, { recursive: true, force: true });
     }
   }
@@ -312,21 +311,4 @@ export async function resolveClientManagedBundledMarketplacePath(
   }
   const managedPath = resolveCodexManagedBundledMarketplacePath(codexHome);
   return existsSync(managedPath) ? managedPath : undefined;
-}
-
-export function resolveBundledComputerUseMarketplacePath(params: {
-  defaultBundledMarketplacePath?: string;
-  defaultBundledMarketplacePathCandidates?: readonly string[];
-}): string | undefined {
-  if (params.defaultBundledMarketplacePath) {
-    return existsSync(params.defaultBundledMarketplacePath)
-      ? params.defaultBundledMarketplacePath
-      : undefined;
-  }
-  if (!params.defaultBundledMarketplacePathCandidates) {
-    return undefined;
-  }
-  return resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath({
-    candidates: params.defaultBundledMarketplacePathCandidates,
-  });
 }

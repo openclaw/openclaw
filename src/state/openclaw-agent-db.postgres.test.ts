@@ -8,39 +8,49 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  rewriteDoctorSessionEntries,
-  scanDoctorSessionEntryRecords,
-} from "../commands/doctor/shared/session-entry-rewrite.js";
+import * as doctorEntries from "../commands/doctor/shared/session-entry-rewrite.js";
 import { migrateLegacySessionEntryState } from "../commands/doctor/shared/session-entry-shape.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import type { TranscriptTurnBoundary } from "../config/sessions/transcript-entry-anchor.js";
 import { createTranscriptEventInserter } from "../config/sessions/transcript-payload.js";
 import type { ContextEngine } from "../context-engine/types.js";
-import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
-import {
-  installDatabaseEngineSelection,
-  withDatabaseEngineSelection,
-} from "../infra/database-engine/context.js";
+import { withEngineStoreAdmission as admit } from "../infra/database-engine/admission-scope.js";
+import * as engineSelection from "../infra/database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import type { SearchSchema } from "../infra/database-engine/contract.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
-import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { getPostgresPhysicalFacts as postgresFacts } from "../infra/database-engine/physical-facts.js";
 import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { iterateSqliteQuerySync } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
-import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
+import { retireSqliteDatabaseAdmissionForPath as retireAdmission } from "../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { migrateHistoricalTranscriptDirectives } from "../infra/state-migrations.transcript-directives.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION as schemaVersion } from "./openclaw-agent-db-contract.js";
 import { agentEngineSchema } from "./openclaw-agent-db-engine.js";
-import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import { readOpenClawAgentDatabaseIdentity as readIdentity } from "./openclaw-agent-db-identity.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import { loadOwners } from "./openclaw-agent-db.postgres.test-support.js";
+import {
+  createDatabaseOpener,
+  expectAnchorOnly,
+  loadOwners,
+} from "./openclaw-agent-db.postgres.test-support.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+
+const closeReceipts = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (name: string) => {
+      const logger = actual.createSubsystemLogger(name);
+      return name === "state/agent-db" ? { ...logger, info: closeReceipts } : logger;
+    },
+  };
+});
 
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -48,8 +58,58 @@ const prefix = `agenttest_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
 let root: string;
 let client: pg.Client;
 let owners: Awaited<ReturnType<typeof loadOwners>>;
+let openDatabase: ReturnType<typeof createDatabaseOpener>;
+
+const targetFor = (sessionId: string, agentId = "actor", key = sessionId) => ({
+  agentId,
+  sessionId,
+  sessionKey: `agent:${agentId}:${key}`,
+  storePath: path.join(root, "agents", agentId, "sessions", "sessions.json"),
+  env: process.env,
+});
+
+async function createSession(sessionId: string, agentId = "actor", key = sessionId) {
+  const target = targetFor(sessionId, agentId, key);
+  await owners.upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+  return target;
+}
+
+const closeDatabase = (databasePath: string) =>
+  admit(() => owners.closeOpenClawAgentDatabaseByPath(databasePath));
+
+function exportFts(database: { db: EngineConnection }, sessionId: string) {
+  return Array.from(
+    iterateSqliteQuerySync(
+      database.db,
+      owners.selectSessionTranscriptFtsRows(database.db, sessionId),
+    ),
+  );
+}
+
+async function inspectSchema(pathname: string, agentId?: string) {
+  await using inspector = owners.createAgentSchemaInspectionWorker();
+  const result = await inspector.inspect({
+    pathname,
+    ...(agentId ? { agentId } : {}),
+    env: process.env,
+    supportedVersion: schemaVersion,
+    verifyCurrentSchemaShape: true,
+    inspectOwnership: true,
+    requireStartupMigrationReadiness: true,
+  });
+  expect(inspector).toMatchObject({ snapshotCount: 0, processCount: 1 });
+  return result;
+}
+
+async function queryRows<T extends pg.QueryResultRow = pg.QueryResultRow>(
+  sql: string,
+  values?: unknown[],
+) {
+  return (await client.query<T>(sql, values)).rows;
+}
 if (connection) {
   owners = await loadOwners();
+  openDatabase = createDatabaseOpener(owners);
 }
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -58,7 +118,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     }
     try {
       if (owners) {
-        withEngineStoreAdmission(() => {
+        admit(() => {
           for (const options of [
             { agentId: "main" },
             { agentId: "actor" },
@@ -75,11 +135,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
         });
         await owners.cleanupSessionStateForTest({ stateDir: root });
       }
-      const schemas = await client.query<{ nspname: string }>(
+      const schemas = await queryRows<{ nspname: string }>(
         "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
         [prefix.length + 1, `${prefix}_`],
       );
-      for (const { nspname } of schemas.rows) {
+      for (const { nspname } of schemas) {
         await client.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
       }
     } finally {
@@ -95,7 +155,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
   beforeAll(async () => {
     root = tempDirs.make("agent-postgres-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    installDatabaseEngineSelection({
+    engineSelection.installDatabaseEngineSelection({
       effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
       postgres: { connection: connection!, schemaPrefix: prefix },
     });
@@ -110,47 +170,32 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       await import("../agents/plugin-model-catalog-execution.js");
     const agentId = "model-catalog";
     const contents = JSON.stringify({ providers: { fixture: { models: [{ id: "synthetic" }] } } });
-    const databasePath = withEngineStoreAdmission(() => {
-      const database = owners.openOpenClawAgentDatabase({ agentId });
-      owners.runOpenClawAgentWriteTransaction(
-        ({ db }) =>
-          db
-            .prepare(
-              "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
-            )
-            .run("plugin-model-catalog-v1", "fixture", contents, 1),
-        { agentId },
-      );
-      owners.closeOpenClawAgentDatabaseByPath(database.path);
-      return database.path;
-    });
+    const database = openDatabase({ agentId });
+    database.write(
+      "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+      "plugin-model-catalog-v1",
+      "fixture",
+      contents,
+      1,
+    );
+    const databasePath = database.path;
+    closeDatabase(databasePath);
     expect(await loadPersistedPluginModelCatalogs(path.dirname(databasePath), ["fixture"])).toEqual(
       [{ pluginId: "fixture", contents }],
     );
-    using anchor = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    expect(anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
-      { name: "openclaw_engine_anchor" },
-    ]);
+    expectAnchorOnly(databasePath);
   });
 
   it("inspects clean PostgreSQL transcripts and preserves history requiring a file repair backup", async () => {
-    const target = {
-      agentId: "doctor-transcripts",
-      sessionId: "doctor-transcript",
-      sessionKey: "agent:doctor-transcripts:main",
-      storePath: path.join(root, "agents", "doctor-transcripts", "sessions", "sessions.json"),
-    };
-    await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const target = await createSession("doctor-transcript", "doctor-transcripts", "main");
     await owners.appendTranscriptMessage(target, {
       message: { role: "assistant", content: "Keep [[literal]] text." },
       now: 1,
     });
-    const database = withEngineStoreAdmission(() =>
-      owners.openOpenClawAgentDatabase({ agentId: target.agentId }),
-    );
+    using database = openDatabase({ agentId: target.agentId });
     const inspect = () => {
       let result: ReturnType<typeof migrateHistoricalTranscriptDirectives> | undefined;
-      withEngineStoreAdmission(() => {
+      admit(() => {
         result = migrateHistoricalTranscriptDirectives({
           env: process.env,
           preparedTargets: [
@@ -165,167 +210,127 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       });
       return result!;
     };
-    try {
-      expect(await inspect()).toEqual({ changes: [], warnings: [] });
-      const raw = withEngineStoreAdmission(() => {
-        const row = database.db
-          .prepare(
-            "SELECT event_json FROM transcript_events WHERE message_role = 'assistant' LIMIT 1",
-          )
-          .get();
-        const event = JSON.parse(String(row?.event_json));
-        event.message.content = [{ type: "text", text: "[[reply_to_current]] Legacy reply" }];
-        const next = JSON.stringify(event);
-        owners.runOpenClawAgentWriteTransaction(
-          ({ db }) =>
-            db
-              .prepare(
-                "UPDATE transcript_events SET event_json = ? WHERE message_role = 'assistant'",
-              )
-              .run(next),
-          { agentId: target.agentId },
-        );
-        return next;
-      });
-      const result = await inspect();
-      expect(result.changes).toEqual([]);
-      expect(result.warnings).toEqual([
-        expect.stringContaining("PostgreSQL cannot use SQLite repair"),
-      ]);
-      withEngineStoreAdmission(() => {
-        expect(
-          database.db
-            .prepare(
-              "SELECT event_json FROM transcript_events WHERE message_role = 'assistant' LIMIT 1",
-            )
-            .get(),
-        ).toEqual({ event_json: raw });
-      });
-      using anchor = openNodeSqliteDatabase(database.path, { readOnly: true });
-      expect(anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([
-        { name: "openclaw_engine_anchor" },
-      ]);
-    } finally {
-      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
-    }
+    expect(await inspect()).toEqual({ changes: [], warnings: [] });
+    const eventQuery =
+      "SELECT event_json FROM transcript_events WHERE message_role = 'assistant' LIMIT 1";
+    const event = JSON.parse(String(database.get(eventQuery)?.event_json));
+    event.message.content = [{ type: "text", text: "[[reply_to_current]] Legacy reply" }];
+    const raw = JSON.stringify(event);
+    database.write(
+      "UPDATE transcript_events SET event_json = ? WHERE message_role = 'assistant'",
+      raw,
+    );
+    expect(await inspect()).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("PostgreSQL cannot use SQLite repair")],
+    });
+    expect(database.get(eventQuery)).toEqual({ event_json: raw });
+    expectAnchorOnly(database.path);
   });
 
   it("scans and repairs legacy Doctor state while retaining opaque PostgreSQL JSON numbers", () => {
-    withEngineStoreAdmission(() => {
-      const database = owners.openOpenClawAgentDatabase({ agentId: "doctor" });
+    admit(() => {
+      using database = openDatabase({ agentId: "doctor" });
       const sessionKey = "agent:doctor:main";
       const raw =
         '{"sessionId":"doctor-session","updatedAt":42,"status":"queued","pendingFinalDelivery":true,"pendingFinalDeliveryText":"saved reply","opaqueCount":9007199254740993,"opaque":{"value":123456789012345678901234567890,"label":"retained"}}';
-      try {
-        database.db
-          .prepare(
-            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
-          )
-          .run(sessionKey, "doctor-session", raw, 42);
-        database.db
-          .prepare(
-            "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES (?, ?, 'conversation', ?, ?)",
-          )
-          .run("doctor-session", sessionKey, 42, 42);
-        const scope = { agentId: "doctor", storePath: database.path };
-        const expectedIdentity = readDatabasePathIdentitySync(database.path);
-        const scanned: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
-        scanDoctorSessionEntryRecords(scope, (record) => scanned.push(record), expectedIdentity);
-        expect(scanned).toEqual([
-          {
-            sessionKey,
-            entry: expect.objectContaining({ status: "queued", pendingFinalDelivery: true }),
-          },
-        ]);
-        expect(
-          rewriteDoctorSessionEntries({
-            scope,
-            sessionKeys: [sessionKey],
-            expectedIdentity,
-            rawTransform: (entry, key, updatedAt) =>
-              migrateLegacySessionEntryState(entry, updatedAt, key),
-          }),
-        ).toBe(1);
-        const row = database.db
-          .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-          .get(sessionKey);
-        const repairedRaw = row?.entry_json;
-        assert(typeof repairedRaw === "string");
-        expect(JSON.parse(repairedRaw)).toMatchObject({
-          sessionId: "doctor-session",
-          updatedAt: 42,
-          status: "interrupted",
-          pendingFinalDelivery: { kind: "replayable", text: "saved reply", createdAt: 42 },
-          opaque: { label: "retained" },
-        });
-        expect(repairedRaw).not.toContain("pendingFinalDeliveryText");
-        expect(repairedRaw).toContain("9007199254740993");
-        expect(repairedRaw).toContain("123456789012345678901234567890");
-        using anchor = openNodeSqliteDatabase(database.path, { readOnly: true });
-        expect(
-          anchor.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all(),
-        ).toEqual([{ name: "openclaw_engine_anchor" }]);
-      } finally {
-        owners.closeOpenClawAgentDatabaseByPath(database.path);
-      }
+      database.run(
+        "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+        sessionKey,
+        "doctor-session",
+        raw,
+        42,
+      );
+      database.run(
+        "INSERT INTO session_windows (session_id, session_key, session_scope, created_at, updated_at) VALUES (?, ?, 'conversation', ?, ?)",
+        "doctor-session",
+        sessionKey,
+        42,
+        42,
+      );
+      const scope = { agentId: "doctor", storePath: database.path };
+      const expectedIdentity = readDatabasePathIdentitySync(database.path);
+      const scanned: Array<{ sessionKey: string; entry: Record<string, unknown> }> = [];
+      doctorEntries.scanDoctorSessionEntryRecords(
+        scope,
+        (record) => scanned.push(record),
+        expectedIdentity,
+      );
+      expect(scanned).toEqual([
+        {
+          sessionKey,
+          entry: expect.objectContaining({ status: "queued", pendingFinalDelivery: true }),
+        },
+      ]);
+      expect(
+        doctorEntries.rewriteDoctorSessionEntries({
+          scope,
+          sessionKeys: [sessionKey],
+          expectedIdentity,
+          rawTransform: (entry, key, updatedAt) =>
+            migrateLegacySessionEntryState(entry, updatedAt, key),
+        }),
+      ).toBe(1);
+      const repairedRaw = database.get(
+        "SELECT entry_json FROM session_nodes WHERE session_key = ?",
+        sessionKey,
+      )?.entry_json;
+      assert(typeof repairedRaw === "string");
+      expect(JSON.parse(repairedRaw)).toMatchObject({
+        sessionId: "doctor-session",
+        updatedAt: 42,
+        status: "interrupted",
+        pendingFinalDelivery: { kind: "replayable", text: "saved reply", createdAt: 42 },
+        opaque: { label: "retained" },
+      });
+      expect(repairedRaw).not.toContain("pendingFinalDeliveryText");
+      expect(repairedRaw).toContain("9007199254740993");
+      expect(repairedRaw).toContain("123456789012345678901234567890");
+      expectAnchorOnly(database.path);
     });
   });
 
   it("opens default and explicit stores, retains identity, and closes both handles", () => {
-    return withEngineStoreAdmission(() => {
-      const {
-        openOpenClawAgentDatabase,
-        closeOpenClawAgentDatabaseByPath,
-        retainOpenClawAgentDatabaseReadOnly,
-      } = owners;
+    return admit(() => {
       for (const options of [
         { agentId: "main" },
         { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
       ]) {
-        const database = openOpenClawAgentDatabase(options);
+        const database = openDatabase(options);
         assert(isPostgresSqlConnection(database.db));
-        const facts = getPostgresPhysicalFacts(database.db);
-        expect(facts).toMatchObject({ store: "agent", version: OPENCLAW_AGENT_SCHEMA_VERSION });
+        const facts = postgresFacts(database.db);
+        expect(facts).toMatchObject({ store: "agent", version: schemaVersion });
         expect(
-          database.db
-            .prepare(
-              "SELECT agent_id, role, schema_version FROM schema_meta WHERE meta_key = 'primary'",
-            )
-            .get(),
-        ).toEqual({
-          agent_id: options.agentId,
-          role: "agent",
-          schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        });
-        const identity = readOpenClawAgentDatabaseIdentity(database);
-        const retained = retainOpenClawAgentDatabaseReadOnly(options);
+          database.get(
+            "SELECT agent_id, role, schema_version FROM schema_meta WHERE meta_key = 'primary'",
+          ),
+        ).toEqual({ agent_id: options.agentId, role: "agent", schema_version: schemaVersion });
+        const identity = readIdentity(database);
+        const retained = owners.retainOpenClawAgentDatabaseReadOnly(options);
         assert(retained.found);
         expect(retained.claim.identity).toBe(identity.identity);
         expect(retained.claim.isCurrent()).toBe(true);
         retained.claim.release();
         const anchor = database.db.anchor;
-        expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        expect(database.db.isOpen).toBe(false);
-        expect(anchor.isOpen).toBe(false);
-        const reopened = openOpenClawAgentDatabase(options);
-        assert(isPostgresSqlConnection(reopened.db));
-        expect(getPostgresPhysicalFacts(reopened.db)?.namespace).toBe(facts?.namespace);
-        expect(readOpenClawAgentDatabaseIdentity(reopened).identity).toBe(identity.identity);
-        expect(readOpenClawAgentDatabaseIdentity(reopened).incarnation).not.toBe(
-          identity.incarnation,
+        closeReceipts.mockClear();
+        expect(owners.closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+        expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
+        expect(closeReceipts).toHaveBeenCalledWith(
+          `agent database clean-close receipt: postgres-closed; agent=${options.agentId}`,
+          expect.objectContaining({ agentId: options.agentId, receipt: "postgres-closed" }),
         );
-        closeOpenClawAgentDatabaseByPath(reopened.path);
+        const reopened = owners.openOpenClawAgentDatabase(options);
+        assert(isPostgresSqlConnection(reopened.db));
+        expect(postgresFacts(reopened.db)?.namespace).toBe(facts?.namespace);
+        expect(readIdentity(reopened).identity).toBe(identity.identity);
+        expect(readIdentity(reopened).incarnation).not.toBe(identity.incarnation);
+        closeDatabase(reopened.path);
       }
     });
   });
 
   it("migrates version 27 indexes and revision triggers while retaining rows and search", async () => {
-    const target = {
-      agentId: "migration",
-      sessionId: "migration-session",
-      sessionKey: "agent:migration:main",
-      storePath: path.join(root, "agents", "migration", "sessions", "sessions.json"),
-    };
+    const target = targetFor("migration-session", "migration", "main");
     const memorySearch: SearchSchema = {
       text: {
         body: {
@@ -336,14 +341,10 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       },
     };
     const assertMemorySearch = (db: EngineConnection) => {
-      expect(
-        JSON.parse(
-          String(
-            db.prepare("SELECT search_extensions FROM openclaw_schema_meta").get()
-              ?.search_extensions,
-          ),
-        ),
-      ).toEqual({ "memory.text": memorySearch });
+      const extensions = db.prepare("SELECT search_extensions FROM openclaw_schema_meta").get();
+      expect(JSON.parse(String(extensions?.search_extensions))).toEqual({
+        "memory.text": memorySearch,
+      });
       expect(
         db
           .prepare(`SELECT id, text FROM memory_index_chunks
@@ -355,7 +356,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     const databasePath = resolveOpenClawAgentSqlitePath(options);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const migration = agentEngineSchema.postgresMigrations!.find((step) => step.version === 28)!;
-    const facts = withEngineStoreAdmission(() => {
+    const facts = admit(() => {
       using anchor = openNodeSqliteDatabase(databasePath);
       const db = openEngineStore({
         anchor,
@@ -377,44 +378,28 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
         db.runTransaction(() => {
           db.exec(`INSERT INTO schema_meta VALUES ('primary', 'agent', 27, 'migration', NULL, 1, 1);
             INSERT INTO session_key_contract (id, main_key, updated_at) VALUES (1, 'main', 0);
-            INSERT INTO memory_index_state VALUES (1, 0);`);
-          db.prepare(`INSERT INTO session_nodes
+            INSERT INTO memory_index_state VALUES (1, 0);
+            INSERT INTO session_nodes
             (session_key, current_session_id, entry_json, entry_valid, updated_at)
-            VALUES (?, ?, ?, 1, 1)`).run(
-            target.sessionKey,
-            target.sessionId,
-            JSON.stringify({ sessionId: target.sessionId, updatedAt: 1 }),
-          );
-          db.prepare(`INSERT INTO session_windows
+            VALUES ('${target.sessionKey}', '${target.sessionId}', '${JSON.stringify({ sessionId: target.sessionId, updatedAt: 1 })}', 1, 1);
+            INSERT INTO session_windows
             (session_id, session_key, created_at, updated_at, transcript_updated_at)
-            VALUES (?, ?, 1, 1, 1)`).run(target.sessionId, target.sessionKey);
-          db.prepare(`INSERT INTO memory_entry_origins
+            VALUES ('${target.sessionId}', '${target.sessionKey}', 1, 1, 1);
+            INSERT INTO memory_entry_origins
             (entry_key, agent_id, session_id, session_key, origin_class, observed_at)
-            VALUES (?, ?, ?, ?, 'agent', 1)`).run(
-            "retained-memory",
-            target.agentId,
-            target.sessionId,
-            target.sessionKey,
-          );
-          db.prepare(`INSERT INTO memory_index_chunks
+            VALUES ('retained-memory', '${target.agentId}', '${target.sessionId}', '${target.sessionKey}', 'agent', 1);
+            INSERT INTO memory_index_chunks
             (chunk_rowid, id, path, start_line, end_line, hash, model, text, embedding, updated_at)
             VALUES (1, 'migration-memory', 'memory/migration.md', 1, 1, 'migration-hash',
-              'text-only', 'café optional memory', ?, 1)`).run(new Uint8Array());
+              'text-only', 'café optional memory', decode('', 'hex'), 1);`);
           const insert = createTranscriptEventInserter(db, target.sessionId);
-          for (const [seq, event] of [
-            {
-              type: "message",
-              id: "migration-user",
-              parentId: null,
-              message: { role: "user", content: "migration searchable archive" },
-            },
-            {
-              type: "message",
-              id: "migration-reply",
-              parentId: "migration-user",
-              message: { role: "assistant", content: "migration retained reply" },
-            },
-          ].entries()) {
+          for (const [seq, [id, parentId, role, content]] of (
+            [
+              ["migration-user", null, "user", "migration searchable archive"],
+              ["migration-reply", "migration-user", "assistant", "migration retained reply"],
+            ] as const
+          ).entries()) {
+            const event = { type: "message", id, parentId, message: { role, content } };
             insert({ seq, eventJson: JSON.stringify(event), createdAt: 1 });
             db.prepare(`INSERT INTO transcript_event_identities
               (session_id, event_id, seq, event_type, parent_id, created_at)
@@ -433,7 +418,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
           () => undefined,
         );
         assertMemorySearch(db);
-        const admitted = getPostgresPhysicalFacts(db);
+        const admitted = postgresFacts(db);
         assert(admitted);
         return admitted;
       } finally {
@@ -441,10 +426,10 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       }
     });
     try {
-      const retained = await client.query(
+      const retained = await queryRows(
         `SELECT session_id, event_id, parent_id FROM "${facts.namespace}".transcript_event_identities ORDER BY seq`,
       );
-      retireSqliteDatabaseAdmissionForPath(databasePath);
+      retireAdmission(databasePath);
       await client.query(`UPDATE "${facts.namespace}".openclaw_schema_meta
         SET fingerprint = NULL, ddl_hash = NULL, server_major = NULL;`);
       const owner = acquireGatewayStateOwner({ databasePath: resolveOpenClawStateSqlitePath() });
@@ -460,7 +445,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
             async (lease) => {
               using anchor = openNodeSqliteDatabase(databasePath);
               lease.assertOwned();
-              withEngineStoreAdmission(() => {
+              admit(() => {
                 const engine = owners.openAgentEngineStore(
                   anchor,
                   target.agentId,
@@ -481,94 +466,86 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
           owner.release();
         }
       }
-      const upgraded = withEngineStoreAdmission(() => owners.openOpenClawAgentDatabase(options));
+      const upgraded = openDatabase(options);
       assert(isPostgresSqlConnection(upgraded.db));
-      expect(getPostgresPhysicalFacts(upgraded.db)?.version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-      withEngineStoreAdmission(() => {
+      expect(postgresFacts(upgraded.db)?.version).toBe(schemaVersion);
+      admit(() => {
         assertMemorySearch(upgraded.db);
         expect(
-          upgraded.db
-            .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-            .get(),
-        ).toEqual({ schema_version: OPENCLAW_AGENT_SCHEMA_VERSION });
+          upgraded.get("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'"),
+        ).toEqual({ schema_version: schemaVersion });
         expect(
-          upgraded.db
-            .prepare(
-              "SELECT version, fingerprint, ddl_hash, server_major FROM openclaw_schema_meta",
-            )
-            .get(),
+          upgraded.get(
+            "SELECT version, fingerprint, ddl_hash, server_major FROM openclaw_schema_meta",
+          ),
         ).toEqual({
-          version: OPENCLAW_AGENT_SCHEMA_VERSION,
+          version: schemaVersion,
           fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
           ddl_hash: expect.stringMatching(/^[0-9a-f]{64}$/),
           server_major: facts.capabilities.serverMajor,
         });
       });
-      const indexes = await client.query(
+      const indexes = await queryRows(
         `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1
           AND indexname IN ('idx_agent_session_windows_conversation', 'idx_agent_transcript_event_parent',
             'idx_agent_session_nodes_last_interaction_at', 'idx_agent_session_reactions_message')`,
         [facts.namespace],
       );
-      expect(indexes.rows).toEqual([
+      expect(indexes).toEqual([
         {
           indexname: "idx_agent_session_windows_conversation",
           indexdef: `CREATE INDEX idx_agent_session_windows_conversation ON ${facts.namespace}.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)`,
         },
       ]);
       expect(
-        (
-          await client.query(
-            `SELECT p.proname FROM pg_proc p
+        await queryRows(
+          `SELECT p.proname FROM pg_proc p
               JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = $1 AND p.proname IN
                 ('openclaw_memory_index_sources_trigger', 'openclaw_memory_index_chunks_trigger')`,
-            [facts.namespace],
-          )
-        ).rows,
+          [facts.namespace],
+        ),
       ).toEqual([]);
       expect(
-        (await client.query(`SELECT revision FROM "${facts.namespace}".memory_index_state`)).rows,
+        await queryRows(`SELECT revision FROM "${facts.namespace}".memory_index_state`),
       ).toEqual([{ revision: "1" }]);
-      const navigationFunction = await client.query(
+      const navigationFunction = await queryRows(
         `SELECT p.proisstrict, p.proconfig FROM pg_proc p
           JOIN pg_namespace n ON n.oid = p.pronamespace
           WHERE n.nspname = $1 AND p.proname = 'openclaw_transcript_navigation_check'`,
         [facts.namespace],
       );
-      expect(navigationFunction.rows).toEqual([
+      expect(navigationFunction).toEqual([
         { proisstrict: true, proconfig: ["search_path=pg_catalog"] },
       ]);
       expect(
-        (
-          await client.query(
-            `SELECT session_id, event_id, parent_id FROM "${facts.namespace}".transcript_event_identities ORDER BY seq`,
-          )
-        ).rows,
-      ).toEqual(retained.rows);
-      withEngineStoreAdmission(() => {
+        await queryRows(
+          `SELECT session_id, event_id, parent_id FROM "${facts.namespace}".transcript_event_identities ORDER BY seq`,
+        ),
+      ).toEqual(retained);
+      admit(() => {
         expect(
           upgraded.db.prepare("SELECT entry_key, origin_class FROM memory_entry_origins").all(),
         ).toEqual([{ entry_key: "retained-memory", origin_class: "agent" }]);
       });
-      expect(
-        await owners.searchSessionTranscripts({ ...target, query: "archive", env: process.env }),
-      ).toMatchObject({ hits: [expect.objectContaining({ messageId: "migration-user" })] });
-      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(databasePath));
+      expect(await owners.searchSessionTranscripts({ ...target, query: "archive" })).toMatchObject({
+        hits: [expect.objectContaining({ messageId: "migration-user" })],
+      });
+      closeDatabase(databasePath);
       await owners.closeOpenClawAgentDatabaseByPathAsync(databasePath);
-      retireSqliteDatabaseAdmissionForPath(databasePath);
-      const reopened = withEngineStoreAdmission(() => owners.openOpenClawAgentDatabase(options));
-      expect(getPostgresPhysicalFacts(reopened.db)?.version).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
-      withEngineStoreAdmission(() => assertMemorySearch(reopened.db));
+      retireAdmission(databasePath);
+      const reopened = openDatabase(options);
+      expect(postgresFacts(reopened.db)?.version).toBe(schemaVersion);
+      admit(() => assertMemorySearch(reopened.db));
     } finally {
-      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(databasePath));
+      closeDatabase(databasePath);
       await owners.closeOpenClawAgentDatabaseByPathAsync(databasePath);
     }
   });
 
   it("discovers a cold explicit store owner through the selected reader worker", async () => {
     const pathname = path.join(root, "explicit", "openclaw-agent.sqlite");
-    withEngineStoreAdmission(() => {
+    admit(() => {
       owners.openOpenClawAgentDatabase({ agentId: "alternate", path: pathname });
       owners.closeOpenClawAgentDatabaseByPath(pathname);
     });
@@ -576,72 +553,47 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     const { readActiveOpenClawAgentDatabaseLeasesReadOnly } =
       await import("./openclaw-agent-db-lease.js");
     const activeLeases = () =>
-      withEngineStoreAdmission(() =>
+      admit(() =>
         readActiveOpenClawAgentDatabaseLeasesReadOnly({ env: process.env }).filter(
           (lease) => lease.path === pathname,
         ),
       );
     expect(activeLeases()).toEqual([]);
-    retireSqliteDatabaseAdmissionForPath(pathname);
-    await using inspector = owners.createAgentSchemaInspectionWorker();
-    expect(
-      await inspector.inspect({
-        pathname,
-        env: process.env,
-        supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-        verifyCurrentSchemaShape: true,
-        inspectOwnership: true,
-        requireStartupMigrationReadiness: true,
-      }),
-    ).toMatchObject({
-      agentSchemaMeta: {
-        agentId: "alternate",
-        role: "agent",
-        schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-      },
+    retireAdmission(pathname);
+    expect(await inspectSchema(pathname)).toMatchObject({
+      agentSchemaMeta: { agentId: "alternate", role: "agent", schemaVersion },
     });
-    expect(inspector.snapshotCount).toBe(0);
-    expect(inspector.processCount).toBe(1);
     expect(activeLeases()).toEqual([]);
   });
 
   it("appends and hydrates plain transcript JSON and drains interleaved turns through the agent worker in FIFO order", async () => {
     const {
-      upsertSessionEntryCore,
       appendTranscriptMessage,
       prepareSessionTranscriptHydration,
-      openOpenClawAgentDatabase,
       openContextEngineTurnOutboxWorkerStore,
       drainContextEngineTurnOutbox,
     } = owners;
-    const target = {
-      agentId: "actor",
-      sessionId: "postgres-transcript",
-      sessionKey: "agent:actor:postgres-transcript",
-      storePath: path.join(root, "agents", "actor", "sessions", "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const target = await createSession("postgres-transcript");
+    const append = (
+      role: "user" | "assistant",
+      content: string,
+      parentId: string | undefined,
+      now: number,
+    ) => appendTranscriptMessage(target, { message: { role, content }, parentId, now });
     const boundaries: TranscriptTurnBoundary[] = [];
     let parentId: string | undefined;
     for (const [index, key] of ["z-first", "a-second", "m-third"].entries()) {
-      const user = await appendTranscriptMessage(target, {
-        message: { role: "user", content: `${key} ${"λ🦞".repeat(1_000)}` },
-        parentId,
-        now: index * 3 + 1,
-      });
+      const user = await append("user", `${key} ${"λ🦞".repeat(1_000)}`, parentId, index * 3 + 1);
       const intermediate =
         index === 0
-          ? await appendTranscriptMessage(target, {
-              message: { role: "assistant", content: `${key} progress` },
-              parentId: user?.messageId,
-              now: index * 3 + 2,
-            })
+          ? await append("assistant", `${key} progress`, user?.messageId, index * 3 + 2)
           : undefined;
-      const reply = await appendTranscriptMessage(target, {
-        message: { role: "assistant", content: `${key} reply` },
-        parentId: intermediate?.messageId ?? user?.messageId,
-        now: index * 3 + 3,
-      });
+      const reply = await append(
+        "assistant",
+        `${key} reply`,
+        intermediate?.messageId ?? user?.messageId,
+        index * 3 + 3,
+      );
       assert(user?.anchor && reply?.anchor);
       boundaries.push({
         admission: { ...user.anchor, logicalTurnId: key, role: "user" },
@@ -653,9 +605,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     expect(
       hydrated.snapshot.events.filter((event) => isRecord(event) && event.type === "message"),
     ).toHaveLength(7);
-    expect(
-      await owners.searchSessionTranscripts({ ...target, query: "progress", env: process.env }),
-    ).toMatchObject({
+    expect(await owners.searchSessionTranscripts({ ...target, query: "progress" })).toMatchObject({
       hits: [
         {
           sessionId: target.sessionId,
@@ -666,45 +616,21 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       ],
       indexing: false,
     });
-    const database = withEngineStoreAdmission(() =>
-      openOpenClawAgentDatabase({ agentId: "actor" }),
-    );
+    const database = openDatabase({ agentId: "actor" });
     assert(isPostgresSqlConnection(database.db));
-    const facts = getPostgresPhysicalFacts(database.db);
+    const facts = postgresFacts(database.db);
     assert(facts);
-    {
-      await using inspector = owners.createAgentSchemaInspectionWorker();
-      expect(
-        await inspector.inspect({
-          pathname: database.path,
-          agentId: "actor",
-          env: process.env,
-          supportedVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-          verifyCurrentSchemaShape: true,
-          inspectOwnership: true,
-          requireStartupMigrationReadiness: true,
-        }),
-      ).toMatchObject({
-        version: OPENCLAW_AGENT_SCHEMA_VERSION,
-        agentSchemaMeta: {
-          agentId: "actor",
-          role: "agent",
-          schemaVersion: OPENCLAW_AGENT_SCHEMA_VERSION,
-        },
-      });
-      expect(inspector.snapshotCount).toBe(0);
-      expect(inspector.processCount).toBe(1);
-    }
-    const payloads = await client.query<{ event_json: string; event_zstd: Buffer | null }>(
+    expect(await inspectSchema(database.path, "actor")).toMatchObject({
+      version: schemaVersion,
+      agentSchemaMeta: { agentId: "actor", role: "agent", schemaVersion },
+    });
+    const payloads = await queryRows<{ event_json: string; event_zstd: Buffer | null }>(
       `SELECT event_json, event_zstd FROM "${facts.namespace}".transcript_events ORDER BY seq`,
     );
-    expect(payloads.rows).toHaveLength(hydrated.snapshot.events.length);
     expect(
-      payloads.rows.every((row) => row.event_zstd === null && typeof row.event_json === "string"),
+      payloads.every((row) => row.event_zstd === null && typeof row.event_json === "string"),
     ).toBe(true);
-    expect(payloads.rows.map((row) => JSON.parse(row.event_json))).toEqual(
-      hydrated.snapshot.events,
-    );
+    expect(payloads.map((row) => JSON.parse(row.event_json))).toEqual(hydrated.snapshot.events);
     let store = openContextEngineTurnOutboxWorkerStore({ agentId: "actor", path: database.path });
     const filter = { engineId: "postgres-fixture", isHeartbeat: false };
     const enqueue = (boundary: TranscriptTurnBoundary) =>
@@ -721,16 +647,12 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     await enqueue(boundaries[2]!);
     await publish(boundaries[1]!);
     await publish(boundaries[2]!);
-    const queued = await client.query<{ advancement_key: string; enqueue_sequence: string }>(
+    const queued = await queryRows<{ advancement_key: string; enqueue_sequence: string }>(
       `SELECT advancement_key, enqueue_sequence FROM "${facts.namespace}".context_engine_turn_outbox ORDER BY enqueue_sequence`,
     );
-    expect(queued.rows.map((row) => row.advancement_key)).toEqual([
-      "z-first",
-      "a-second",
-      "m-third",
-    ]);
-    expect(queued.rows.map((row) => Number(row.enqueue_sequence))).toEqual([1, 2, 3]);
-    withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
+    expect(queued.map((row) => row.advancement_key)).toEqual(["z-first", "a-second", "m-third"]);
+    expect(queued.map((row) => Number(row.enqueue_sequence))).toEqual([1, 2, 3]);
+    closeDatabase(database.path);
     await owners.cleanupSessionStateForTest({ stateDir: root });
     // Reverse timestamps under exclusive fixture custody: a timestamp sorter
     // would now deliver third first, while durable enqueue order must survive.
@@ -759,19 +681,12 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     expect(committed).toEqual(["z-first", "a-second", "m-third"]);
     expect(warn).not.toHaveBeenCalled();
     expect(
-      (await client.query(`SELECT count(*) FROM "${facts.namespace}".context_engine_turn_outbox`))
-        .rows,
+      await queryRows(`SELECT count(*) FROM "${facts.namespace}".context_engine_turn_outbox`),
     ).toEqual([{ count: "0" }]);
   });
 
   it("searches active branches through the worker with session and role filters and lifecycle deletion", async () => {
-    const target = {
-      agentId: "actor",
-      sessionId: "search-branch",
-      sessionKey: "agent:actor:search-branch",
-      storePath: path.join(root, "agents", "actor", "sessions", "sessions.json"),
-      env: process.env,
-    };
+    const target = targetFor("search-branch");
     const sibling = {
       ...target,
       sessionId: "search-sibling",
@@ -801,14 +716,16 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       query: "searchable",
       sessionKeys: [target.sessionKey, sibling.sessionKey],
     };
-    expect((await owners.searchSessionTranscripts({ ...search, role: "assistant" })).hits).toEqual([
+    const find = (overrides: Partial<Parameters<typeof owners.searchSessionTranscripts>[0]> = {}) =>
+      owners.searchSessionTranscripts({ ...search, ...overrides });
+    expect((await find({ role: "assistant" })).hits).toEqual([
       expect.objectContaining({ messageId: "search-assistant" }),
     ]);
+    expect((await find({ sessionId: sibling.sessionId })).hits).toEqual([
+      expect.objectContaining({ messageId: "search-sibling-user" }),
+    ]);
     expect(
-      (await owners.searchSessionTranscripts({ ...search, sessionId: sibling.sessionId })).hits,
-    ).toEqual([expect.objectContaining({ messageId: "search-sibling-user" })]);
-    expect(
-      (await owners.searchSessionTranscripts({ ...search, sessionKeys: [target.sessionKey] })).hits
+      (await find({ sessionKeys: [target.sessionKey] })).hits
         .map((hit) => hit.messageId)
         .toSorted(),
     ).toEqual(["search-assistant", "search-user"]);
@@ -818,17 +735,17 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       parentId: "search-assistant",
       targetId: "search-user",
     });
-    expect((await owners.searchSessionTranscripts({ ...search, query: "beta" })).hits).toEqual([]);
+    expect((await find({ query: "beta" })).hits).toEqual([]);
     const options = { agentId: target.agentId, env: process.env };
     await owners.waitForSessionTranscriptIndexReconcile(options);
-    if ((await owners.searchSessionTranscripts(search)).indexing) {
+    if ((await find()).indexing) {
       await owners.reconcileSessionTranscriptIndexes(options);
     }
-    expect(await owners.searchSessionTranscripts({ ...search, query: "alpha" })).toMatchObject({
+    expect(await find({ query: "alpha" })).toMatchObject({
       hits: [expect.objectContaining({ messageId: "search-user" })],
       indexing: false,
     });
-    expect((await owners.searchSessionTranscripts({ ...search, query: "beta" })).hits).toEqual([]);
+    expect((await find({ query: "beta" })).hits).toEqual([]);
     const removal = {
       ...target,
       target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
@@ -837,34 +754,25 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     };
     await owners.upsertSessionEntryCore(sibling, { previousSessionId: target.sessionId });
     expect(await owners.deleteSessionEntryLifecycle(removal)).toMatchObject({ deleted: true });
-    expect((await owners.searchSessionTranscripts({ ...search, query: "alpha" })).hits).toEqual([
+    expect((await find({ query: "alpha" })).hits).toEqual([
       expect.objectContaining({ sessionId: target.sessionId, messageId: "search-user" }),
     ]);
     await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 2 });
     await owners.upsertSessionEntryCore(sibling, { previousSessionId: undefined });
-    expect(await owners.deleteSessionEntryLifecycle(removal)).toMatchObject({ deleted: true });
-    expect((await owners.searchSessionTranscripts(search)).hits).toEqual([
+    expect(
+      await owners.deleteSessionEntryLifecycle({ ...removal, archiveTranscript: true }),
+    ).toMatchObject({ deleted: true, archivedTranscripts: [expect.anything()] });
+    expect((await find()).hits).toEqual([
       expect.objectContaining({ sessionId: sibling.sessionId, messageId: "search-sibling-user" }),
     ]);
   });
 
   it("indexes only accepted searchable messages from a transcript append batch", async () => {
-    const target = {
-      agentId: "actor",
-      sessionId: "fts-append-batch",
-      sessionKey: "agent:actor:fts-append-batch",
-      storePath: path.join(root, "agents", "actor", "sessions", "sessions.json"),
-      env: process.env,
-    };
-    await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const event = (id: string, parentId: string | null, role: string, content: string) => ({
-      type: "message",
-      id,
-      parentId,
-      timestamp: 1,
-      message: { role, content },
-    });
-    withEngineStoreAdmission(() =>
+    const target = await createSession("fts-append-batch");
+    function event(id: string, parentId: string | null, role: string, content: string) {
+      return { type: "message", id, parentId, timestamp: 1, message: { role, content } };
+    }
+    admit(() =>
       owners.runOpenClawAgentWriteTransaction(
         (database) => {
           expect(
@@ -893,10 +801,10 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     async (count) => {
       const sessionId = `fts-identities-${count}`;
       const options = { agentId: "actor" };
-      const database = withEngineStoreAdmission(() => owners.openOpenClawAgentDatabase(options));
+      const database = openDatabase(options);
       const postgres = database.db;
       assert(isPostgresSqlConnection(postgres));
-      const facts = getPostgresPhysicalFacts(postgres);
+      const facts = postgresFacts(postgres);
       assert(facts);
       // Cold restoration preserves these nullable/repeated stored IDs; normal
       // transcript append filters absent IDs and deduplicates event identities.
@@ -913,7 +821,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
           statements += 1;
         }
       };
-      withEngineStoreAdmission(() =>
+      admit(() =>
         owners.runOpenClawAgentWriteTransaction(({ db }) => {
           const insert = owners.createSessionTranscriptFtsInserter(db, sessionId);
           observation.subscribe(observe);
@@ -924,7 +832,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
           }
         }, options),
       );
-      const persisted = await client.query(
+      const persisted = await queryRows(
         `SELECT r.id, r.id = f.rowid AS same_id, r.message_id AS owner_message_id,
           f.message_id, f.text, f.role, f.timestamp
           FROM "${facts.namespace}".session_transcript_fts_rows r
@@ -932,52 +840,33 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
           WHERE r.session_id = $1 ORDER BY f.timestamp`,
         [sessionId],
       );
-      expect(persisted.rows).toHaveLength(count);
-      expect(persisted.rows.map(({ id: _id, ...row }) => row)).toEqual(
-        entries.map((entry) => ({
-          same_id: true,
-          owner_message_id: entry.messageId,
-          message_id: entry.messageId,
-          text: entry.text,
-          role: entry.role,
-          timestamp: entry.timestamp,
-        })),
+      const expected = entries.map(({ messageId, ...entry }) => ({
+        message_id: messageId,
+        ...entry,
+      }));
+      expect(persisted.map(({ id: _id, ...row }) => row)).toEqual(
+        expected.map((entry) => ({ same_id: true, owner_message_id: entry.message_id, ...entry })),
       );
-      const ids = persisted.rows.map((row) => BigInt(row.id));
+      const ids = persisted.map((row) => BigInt(row.id));
       for (let index = 1; index < ids.length; index++) {
         expect(ids[index]).toBeGreaterThan(ids[index - 1]!);
       }
-      const exported = withEngineStoreAdmission(() =>
-        Array.from(
-          iterateSqliteQuerySync(
-            database.db,
-            owners.selectSessionTranscriptFtsRows(database.db, sessionId),
-          ),
-        ),
-      );
-      expect(exported).toEqual(
-        entries.map((entry) => ({
-          message_id: entry.messageId,
-          text: entry.text,
-          role: entry.role,
-          timestamp: entry.timestamp,
-        })),
-      );
+      expect(admit(() => exportFts(database, sessionId))).toEqual(expected);
       for (const index of [0, 1, 2, 3]) {
-        const searched = await client.query(
+        const searched = await queryRows(
           `SELECT message_id, text FROM "${facts.namespace}".session_transcript_fts
             WHERE session_id = $1 AND openclaw_search @@
               plainto_tsquery('"${facts.namespace}".openclaw_simple_unaccent', $2)`,
           [sessionId, `ftskeytoken${index}`],
         );
-        expect(searched.rows).toEqual([
+        expect(searched).toEqual([
           { message_id: index < 2 ? null : "repeated", text: `ftskeytoken${index}` },
         ]);
       }
       // Each observed PostgreSQL statement makes one bridge/server request.
       expect(statements).toBe(count === 4 ? 1 : 2);
       if (count > 512) {
-        withEngineStoreAdmission(() => {
+        admit(() => {
           // Keep the first bridge open so the pooled writer uses another backend.
           const next = owners.openAgentEngineStore(
             postgres.anchor,
@@ -1021,13 +910,13 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       message: { role: "user", content: `chronologyneedle entry ${index}` },
     }));
     const results = (["sqlite", "postgres"] as const).map((engine) =>
-      withDatabaseEngineSelection(
+      engineSelection.withDatabaseEngineSelection(
         {
           effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine } }),
           postgres: { connection: connection!, schemaPrefix: prefix },
         },
         () =>
-          withEngineStoreAdmission(() => {
+          admit(() => {
             const options = {
               agentId: "actor",
               ...(engine === "sqlite"
@@ -1039,41 +928,30 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
               sessionId: "fts-chronology",
               sessionKey: "agent:actor:fts-chronology",
             };
-            const database = owners.openOpenClawAgentDatabase(options);
-            try {
-              owners.runOpenClawAgentWriteTransaction((writer) => {
-                expect(
-                  owners.appendTranscriptEventsInTransaction(writer, target, events, {
-                    scheduleProjectionReconcile: false,
-                  }),
-                ).toBe(events.length);
-              }, options);
-              const exported = Array.from(
-                iterateSqliteQuerySync(
-                  database.db,
-                  owners.selectSessionTranscriptFtsRows(database.db, target.sessionId),
-                ),
+            using database = openDatabase(options);
+            owners.runOpenClawAgentWriteTransaction((writer) => {
+              expect(
+                owners.appendTranscriptEventsInTransaction(writer, target, events, {
+                  scheduleProjectionReconcile: false,
+                }),
+              ).toBe(events.length);
+            }, options);
+            const exported = exportFts(database, target.sessionId);
+            expect(exported.map((row) => row.message_id)).toEqual(events.map((event) => event.id));
+            return [1, 3, 25].map((limit) => {
+              const result = owners.searchSessionTranscriptsReadOnlySync(
+                { ...target, query: "chronologyneedle", order: "recent", limit },
+                { ...options, path: database.path },
               );
-              expect(exported.map((row) => row.message_id)).toEqual(
-                events.map((event) => event.id),
+              const ids = result.hits.map((hit) => hit.messageId);
+              expect(ids).toEqual(
+                events
+                  .slice(-limit)
+                  .toReversed()
+                  .map((event) => event.id),
               );
-              return [1, 3, 25].map((limit) => {
-                const result = owners.searchSessionTranscriptsReadOnlySync(
-                  { ...target, query: "chronologyneedle", order: "recent", limit },
-                  { ...options, path: database.path },
-                );
-                const ids = result.hits.map((hit) => hit.messageId);
-                expect(ids).toEqual(
-                  events
-                    .slice(-limit)
-                    .toReversed()
-                    .map((event) => event.id),
-                );
-                return ids;
-              });
-            } finally {
-              owners.closeOpenClawAgentDatabaseByPath(database.path);
-            }
+              return ids;
+            });
           }),
       ),
     );
@@ -1081,13 +959,6 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
   });
 
   it("reads persisted auth through the selected owner and agent worker", async () => {
-    const {
-      openOpenClawAgentDatabase,
-      runOpenClawAgentWriteTransaction,
-      writeAuthProfileJsonCell,
-      inspectPersistedAuthProfileStoreRaw,
-      prepareAgentAuthProfileRowsRead,
-    } = owners;
     const store = {
       version: 1,
       profiles: { fixture: { type: "api_key", provider: "fixture", key: "synthetic" } },
@@ -1096,24 +967,19 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       { agentId: "main" },
       { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
     ]) {
-      const database = withEngineStoreAdmission(() => openOpenClawAgentDatabase(options));
-      withEngineStoreAdmission(() =>
-        runOpenClawAgentWriteTransaction(
-          ({ db }) => writeAuthProfileJsonCell(db, "store", "agent", store),
+      const database = openDatabase(options);
+      admit(() =>
+        owners.runOpenClawAgentWriteTransaction(
+          ({ db }) => owners.writeAuthProfileJsonCell(db, "store", "agent", store),
           options,
         ),
       );
       expect(
-        withEngineStoreAdmission(() =>
-          inspectPersistedAuthProfileStoreRaw(path.dirname(database.path)),
-        ),
-      ).toEqual({
-        status: "readable",
-        raw: store,
-      });
-      withEngineStoreAdmission(() => owners.closeOpenClawAgentDatabaseByPath(database.path));
+        admit(() => owners.inspectPersistedAuthProfileStoreRaw(path.dirname(database.path))),
+      ).toEqual({ status: "readable", raw: store });
+      closeDatabase(database.path);
       await owners.closeOpenClawAgentDatabaseByPathAsync(database.path);
-      const reader = prepareAgentAuthProfileRowsRead({
+      const reader = owners.prepareAgentAuthProfileRowsRead({
         databasePath: database.path,
         agentId: options.agentId,
         env: process.env,
@@ -1126,7 +992,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     }
     const sharedMainPath = path.join(root, "agents", "main", "agent", "openclaw-agent.sqlite");
     await owners.closeOpenClawAgentDatabaseByPathAsync(sharedMainPath);
-    retireSqliteDatabaseAdmissionForPath(sharedMainPath);
+    retireAdmission(sharedMainPath);
     expect(
       await owners.prepareFreshSharedAuthStoreWriteAsync({
         agentDir: undefined,
@@ -1140,21 +1006,20 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
   });
 
   it.each(["ownership", "schema drift"])("refuses changed %s after readmission", async (change) => {
-    const { openOpenClawAgentDatabase, closeOpenClawAgentDatabaseByPath } = owners;
     const agentId = change === "ownership" ? "wrong-owner" : "drift";
     const options = { agentId, path: path.join(root, agentId, "agent.sqlite") };
-    const database = withEngineStoreAdmission(() => openOpenClawAgentDatabase(options));
+    const database = openDatabase(options);
     assert(isPostgresSqlConnection(database.db));
-    const facts = getPostgresPhysicalFacts(database.db);
+    const facts = postgresFacts(database.db);
     assert(facts);
-    withEngineStoreAdmission(() => closeOpenClawAgentDatabaseByPath(database.path));
-    retireSqliteDatabaseAdmissionForPath(database.path);
+    closeDatabase(database.path);
+    retireAdmission(database.path);
     await client.query(
       change === "ownership"
         ? `UPDATE "${facts.namespace}".schema_meta SET agent_id = 'different'`
         : `ALTER TABLE "${facts.namespace}".cache_entries ADD COLUMN unexpected TEXT`,
     );
-    expect(() => withEngineStoreAdmission(() => openOpenClawAgentDatabase(options))).toThrow(
+    expect(() => openDatabase(options)).toThrow(
       change === "ownership"
         ? /belongs to agent different; requested agent wrong-owner/
         : /schema drift/i,

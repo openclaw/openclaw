@@ -117,11 +117,11 @@ Omitting `runtimes` uses every supported runtime declared in the plugin's
 Supply `runtimes` only to select a subset of that declaration. Registration
 rejects an empty runtime list or any targeted runtime missing from the manifest.
 
-Legacy bundled plugins can still use
-`api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
-middleware, but new result transforms should use the runtime-neutral API. The
-embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been
-removed; embedded tool-result transforms must use runtime-neutral middleware.
+The legacy `api.registerCodexAppServerExtensionFactory(...)` and
+`api.registerEmbeddedExtensionFactory(...)` hooks have been removed. Use
+`api.registerAgentToolResultMiddleware(...)` for tool-result transforms, with
+`contracts.agentToolResultMiddleware: ["codex"]` for Codex-only middleware. See
+the [removed factory registration and replacement](/plugins/sdk-migration/removed-surfaces#codex-app-server-extension-factories).
 
 Retain `details.messageDelivery.sourceReplyDelivered` from the host message tool
 before middleware transforms its result, and carry it into the attempt result.
@@ -258,6 +258,10 @@ Official harnesses use the private JavaScript-only
 existing execution boundary, monotonic execution snapshots, middleware, and
 cleanup. Its result and failure callbacks carry those facts to native adapters
 without taking over their receipt or timeout owner.
+Execution argument snapshots are readonly and shared by progress and terminal
+observers. Tool execution and result middleware receive separate mutable inputs;
+terminal formatters retain their own post-execution capture so they can observe
+changes made by the tool without aliasing later middleware.
 `recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
 cron, and heartbeat facts using the caller's prepared source-reply projection.
 The invocation preserves execution failures when presentation middleware

@@ -18,7 +18,6 @@ import {
   ackPendingAgentSteeringItems,
   releasePendingAgentSteeringItems,
 } from "../../agents/subagents/registry/subagent-registry.js";
-import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { logInfo } from "../../logger.js";
@@ -342,7 +341,7 @@ export async function executeWorkerTurn(
       assertCurrent: assertToolSurfaceCurrent,
       signal,
       prepare: async (identity) => {
-        const inheritedPublicationToolRef: { current?: AnyAgentTool } = {};
+        const additionalInheritedToolNamesRef: string[] = [];
         const placementTools = createWorkerPlacementTools({
           ...turn,
           ...placement,
@@ -372,7 +371,7 @@ export async function executeWorkerTurn(
                   preparedModelRuntime: preparedRuntime.snapshot,
                   installedSkills,
                   githubPublicationAvailable: true,
-                  inheritedPublicationToolRef,
+                  additionalInheritedToolNamesRef,
                   cronCreatorAuthorityUnavailableReason: undefined,
                   runSessionKey: placement.sessionKey,
                   sessionKey: turn.sandboxSessionKey ?? placement.sessionKey,
@@ -394,14 +393,8 @@ export async function executeWorkerTurn(
                 { assertCurrent: assertToolSurfaceCurrent, signal },
               );
               if (turn.disableTools || turn.modelRun || turn.promptMode === "none") {
-                inheritedPublicationToolRef.current = undefined;
+                additionalInheritedToolNamesRef.length = 0;
                 return [];
-              }
-              if (inheritedPublicationToolRef.current) {
-                inheritedPublicationToolRef.current = applyEmbeddedAttemptToolsAllow(
-                  [inheritedPublicationToolRef.current],
-                  turn.toolsAllow,
-                )[0];
               }
               return applyEmbeddedAttemptToolsAllow(prepared, turn.toolsAllow).filter((tool) => {
                 const location = getAgentToolExecutionLocation(tool);
@@ -427,7 +420,10 @@ export async function executeWorkerTurn(
         return {
           policy: toolPolicy,
           presentation,
-          inheritedPublicationTool: inheritedPublicationToolRef.current,
+          additionalInheritedToolNames: applyEmbeddedAttemptToolsAllow(
+            additionalInheritedToolNamesRef.map((name) => ({ name })),
+            turn.toolsAllow,
+          ).map((tool) => tool.name),
           tools: tools.map((tool) =>
             copyAgentToolMetadata(tool, {
               ...tool,

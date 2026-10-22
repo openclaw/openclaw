@@ -18,7 +18,7 @@ import {
   cronJobMessageToolAuthorityInputsEqual,
 } from "./jobs-tool-policy.js";
 import { publishCronRunReceiptMutation } from "./run-receipts.js";
-import { emit, type CronServiceState } from "./state.js";
+import { emit, type CronServiceState, type CronAddOptions } from "./state.js";
 import { persistCronJobMutation, type captureCronJobMutationSource } from "./store.js";
 
 export async function persistUpdatedJob(params: {
@@ -28,6 +28,10 @@ export async function persistUpdatedJob(params: {
   source: ReturnType<typeof captureCronJobMutationSource>;
   mutationMethod: "cron.add" | "cron.update";
   commitGuard?: () => void;
+  streamAuthority?: Pick<
+    CronAddOptions,
+    "execPolicy" | "sessionEntryCurrent" | "streamExecApproval"
+  >;
   agentId?: string;
   preconditionJob?: CronJob;
   jobMutation: CronJobMutation;
@@ -71,6 +75,7 @@ export async function persistUpdatedJob(params: {
       resolveCronJobEffectiveAgentId(previousJob, currentDefaultAgentId);
       resolveCronJobEffectiveAgentId(nextJob, currentDefaultAgentId);
     },
+    streamAuthority: params.streamAuthority,
     agentId: params.agentId,
     preconditionJob: params.preconditionJob,
     expectedJob: { id: previousJob.id, configRevision: resolveCronJobConfigRevision(previousJob) },

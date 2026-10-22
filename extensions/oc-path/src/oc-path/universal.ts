@@ -124,7 +124,6 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
   if (isPattern(path)) {
     throw new OcPathError(
       `resolveOcPath received a wildcard pattern; use findOcPaths instead: ${formatOcPath(path)}`,
-      formatOcPath(path),
       "OC_PATH_WILDCARD_IN_RESOLVE",
     );
   }

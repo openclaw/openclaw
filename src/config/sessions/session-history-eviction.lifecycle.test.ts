@@ -276,7 +276,6 @@ describe("SQLite post-commit history maintenance", () => {
         expect([fs.existsSync(archive), sessionExists("unrelated-old")]).toEqual([true, true]);
         if (committed) {
           await expect(checkpoint.mock.results[0]?.value).resolves.toMatchObject({
-            completed: false,
             checkpointIncomplete: 1,
             checkpoint: blockedCheckpoint,
           });

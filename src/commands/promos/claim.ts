@@ -8,7 +8,6 @@ import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { fetchClawHubPromotion, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
-import { markPromotionSlugsNotified, recordPromotionClaim } from "../../infra/promotions-feed.js";
 import { enablePluginWithCapabilityConsent } from "../../plugins/enable.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import { applyAuthChoiceLoadedPluginProvider } from "../../plugins/provider-auth-choice.js";
@@ -354,16 +353,6 @@ export async function promosClaimCommand(
     }
     return next;
   });
-
-  // Config has no promo marker; the state DB owns provenance for model-list annotations.
-  await recordPromotionClaim({
-    slug: promotion.slug,
-    provider,
-    modelKeys: [...new Set(registered)],
-    endsAtMs: promotion.endsAt,
-    claimedAtMs: Date.now(),
-  });
-  await markPromotionSlugsNotified([promotion.slug]);
 
   if (makeDefault && suggested) {
     // Keep default-change runtime repair aligned with `models set`.

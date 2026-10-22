@@ -1,18 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../packages/gateway-protocol/src/client-info.js";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import { bindDeviceWorkerAvailability } from "./worker-environments/device-provider.js";
+import { createNodeWorkerBundleTestNode } from "./worker-environments/node-worker-bundle.test-support.js";
+import type { WorkerPlacementMoveTarget } from "./worker-environments/placement-move-intent.types.js";
 import { createWorkerPlacementMoveService } from "./worker-environments/placement-move-service.js";
 
 afterEach(clearRuntimeConfigSnapshot);
@@ -20,60 +17,31 @@ afterEach(clearRuntimeConfigSnapshot);
 const SESSION_KEY = "agent:main:move-source";
 const CODEX_COMMAND = "codex.exec-server.stdio.v1";
 const DEVICE_REQUIREMENT = { requiredNodeCommands: [CODEX_COMMAND], consumesWorkerSlot: false };
+const DEVICE_TARGET = { kind: "device", deviceId: "paired-build-mac" } as const;
 
-describe("worker placement move destination owner", () => {
-  it.each([
-    {
-      name: "allows an explicitly enabled zero-slot paired-device runtime",
-      target: { kind: "device" as const, deviceId: "paired-build-mac" },
-      supported: true,
-      expectedError: "source placement barrier started",
-      barrierCalls: 1,
-    },
-    {
-      name: "rejects an unsupported paired-device runtime before source mutation",
-      target: { kind: "device" as const, deviceId: "paired-build-mac" },
-      supported: false,
-      expectedError: "runtime codex does not support paired-device placement",
-      barrierCalls: 0,
-    },
-    {
-      name: "rejects an incompatible profile before changing its exact active source",
-      target: { kind: "profile" as const, profileId: "incompatible" },
-      supported: false,
-      expectedError: "worker profile incompatible does not support remote-exec placement",
-      barrierCalls: 0,
-    },
-    {
-      name: "carries runtime-owned node command requirements into a compatible cloud profile",
-      target: {
-        kind: "profile" as const,
-        profileId: "compatible",
-        machineClass: "tiny",
-        os: "os-a",
-      },
-      supported: true,
-      expectedError: "source placement barrier started",
-      barrierCalls: 1,
-    },
-  ])("$name", async ({ target, supported, expectedError, barrierCalls }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const source = Object.freeze({
-        sessionId: "session-move-source",
-        state: "active",
-        generation: 4,
-        environmentId: "environment-source",
-        activeOwnerEpoch: 2,
-        executionMode: "remote-exec",
-      });
-      const sourceBefore = JSON.stringify(source);
+it.each<[WorkerPlacementMoveTarget, boolean, string]>([
+  [DEVICE_TARGET, true, "source placement barrier started"],
+  [DEVICE_TARGET, false, "runtime codex does not support paired-device placement"],
+  [
+    { kind: "profile", profileId: "incompatible" },
+    false,
+    "worker profile incompatible does not support remote-exec placement",
+  ],
+  [
+    { kind: "profile", profileId: "compatible", machineClass: "tiny", os: "os-a" },
+    true,
+    "source placement barrier started",
+  ],
+])(
+  "validates worker move destination %j (device-capable runtime: %s)",
+  (target, supported, expectedError) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const sessionId = "session-move-source";
+      const source = { generation: 4, environmentId: "environment-source", ownerEpoch: 2 };
+      const worktree = { id: "worktree-recovery", ownerId: SESSION_KEY, path: state.root };
       const entry = {
-        sessionId: source.sessionId,
-        worktree: {
-          id: "worktree-recovery",
-          branch: "recovery",
-          repoRoot: "/gateway/workspace",
-        },
+        sessionId,
+        worktree: { id: worktree.id, branch: "recovery", repoRoot: worktree.path },
       };
       const config = {
         session: { store: state.path("sessions.sqlite") },
@@ -95,13 +63,8 @@ describe("worker placement move destination owner", () => {
       bindDeviceWorkerAvailability(environments, async (deviceId) => ({
         available: true,
         node: {
+          ...createNodeWorkerBundleTestNode(),
           nodeId: deviceId,
-          connId: `conn-${deviceId}`,
-          pairingIdentity: `identity-${deviceId}`,
-          pairingGeneration: `generation-${deviceId}`,
-          clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-          clientMode: GATEWAY_CLIENT_MODES.NODE,
-          protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
           workerHost: { enabled: true, capacity: { total: 2, available: 0 } },
           commands: [CODEX_COMMAND],
         },
@@ -113,11 +76,7 @@ describe("worker placement move destination owner", () => {
           loadSessionRuntime: async () =>
             ({
               managedWorktrees: {
-                findLiveByOwner: async () => ({
-                  id: "worktree-recovery",
-                  ownerId: SESSION_KEY,
-                  path: "/gateway/workspace",
-                }),
+                findLiveByOwner: async () => worktree,
               },
               resolveGatewaySessionStoreTargetInWorker,
               resolveCanonicalSessionEntryFromStoreKeys: () => entry,
@@ -132,20 +91,21 @@ describe("worker placement move destination owner", () => {
       const runMoveBarrier = vi.fn(async () => {
         throw new Error("source placement barrier started");
       });
-      const reclaimSource = vi.fn();
-      const dispatch = vi.fn();
-      const beginPlacementMove = vi.fn();
-      const destroy = vi.fn();
+      const mutations = {
+        reclaimSource: vi.fn(),
+        dispatch: vi.fn(),
+        beginPlacementMove: vi.fn(),
+        destroy: vi.fn(),
+      };
       const moves = createWorkerPlacementMoveService({
         placements: {
-          getAsync: async () => source,
           getPlacementMoveAsync: async () => undefined,
-          beginPlacementMove,
+          beginPlacementMove: mutations.beginPlacementMove,
         } as never,
-        environments: { get: () => undefined, destroy } as never,
+        environments: { get: () => undefined, destroy: mutations.destroy } as never,
         runMoveBarrier,
-        dispatch,
-        reclaimSource,
+        dispatch: mutations.dispatch,
+        reclaimSource: mutations.reclaimSource,
         validateAbandonSource: vi.fn(),
         abandonSource: vi.fn(),
         resolveDestination,
@@ -153,24 +113,18 @@ describe("worker placement move destination owner", () => {
 
       await expect(
         moves.move({
-          sessionId: source.sessionId,
+          sessionId,
           sessionKey: SESSION_KEY,
           agentId: "main",
-          source: {
-            generation: source.generation,
-            environmentId: source.environmentId,
-            ownerEpoch: source.activeOwnerEpoch,
-          },
+          source,
           target,
         }),
       ).rejects.toThrow(expectedError);
 
-      expect(runMoveBarrier).toHaveBeenCalledTimes(barrierCalls);
-      expect(beginPlacementMove).not.toHaveBeenCalled();
-      expect(reclaimSource).not.toHaveBeenCalled();
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(destroy).not.toHaveBeenCalled();
-      expect(JSON.stringify(source)).toBe(sourceBefore);
+      expect(runMoveBarrier).toHaveBeenCalledTimes(Number(supported));
+      for (const mutation of Object.values(mutations)) {
+        expect(mutation).not.toHaveBeenCalled();
+      }
       if (supported) {
         await expect(resolveDestination.mock.results[0]?.value).resolves.toMatchObject({
           executionMode: "remote-exec",
@@ -183,6 +137,5 @@ describe("worker placement move destination owner", () => {
       if (target.kind === "profile") {
         expect(supportsExecutionMode).toHaveBeenCalledWith(target.profileId, "remote-exec");
       }
-    });
-  });
-});
+    }),
+);

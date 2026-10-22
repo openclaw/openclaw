@@ -1,16 +1,19 @@
+import type { JSX } from "@solidjs/web";
 import { For, Loading, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import type { SessionSystemPromptReport } from "../../../../../src/config/sessions/session-system-prompt-report.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   areUiSessionKeysEquivalent,
   scopedSessionArtifactKey,
 } from "../../../lib/sessions/session-key.ts";
 import { requestSessionUsage } from "../../../lib/sessions/usage.ts";
+import "../../../styles/chat/context-breakdown.css";
 import {
   buildChatContextCategories,
   buildDeferredContextGroups,
@@ -18,7 +21,9 @@ import {
   type ContextGroup,
   type ContextCategory,
 } from "./chat-context-breakdown-model.ts";
-import "../../../styles/chat/context-breakdown.css";
+import { createDetailsDesktopReveal } from "./chat-details-desktop-section.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const labelKeys = {
   messages: "contextMessages",
@@ -83,7 +88,7 @@ function ContextGroups(props: { groups: ContextGroup[] }) {
   );
 }
 
-function ContextRow(props: { category: ContextCategory; limit: number }) {
+function ContextRow(props: { category: ContextCategory; limit: number; desktop?: boolean }) {
   const tokens = () => props.category.tokens;
   const value = () => (tokens() === null ? "—" : "~" + formatCompactTokenCount(tokens()!));
   const percent = () =>
@@ -105,6 +110,16 @@ function ContextRow(props: { category: ContextCategory; limit: number }) {
       <span class="chat-context__percent">{percent()}</span>
     </>
   );
+  const entries = () => (
+    <div class="chat-context__entries">
+      <Show
+        when={props.category.groups}
+        fallback={<ContextEntries entries={props.category.entries} />}
+      >
+        {(groups) => <ContextGroups groups={groups()} />}
+      </Show>
+    </div>
+  );
   return (
     <Show
       when={props.category.entries.length > 0}
@@ -114,21 +129,63 @@ function ContextRow(props: { category: ContextCategory; limit: number }) {
         </div>
       }
     >
-      <details class="chat-context__details" data-context-details={props.category.id}>
-        <summary class="chat-context__row" data-context-category={props.category.id}>
-          {content()}
-          <Icon name="chevronDown" />
-        </summary>
-        <div class="chat-context__entries">
-          <Show
-            when={props.category.groups}
-            fallback={<ContextEntries entries={props.category.entries} />}
-          >
-            {(groups) => <ContextGroups groups={groups()} />}
-          </Show>
-        </div>
-      </details>
+      <Show
+        when={props.desktop}
+        fallback={
+          <details class="chat-context__details" data-context-details={props.category.id}>
+            <summary class="chat-context__row" data-context-category={props.category.id}>
+              {content()}
+              <Icon name="chevronDown" />
+            </summary>
+            {entries()}
+          </details>
+        }
+      >
+        <DesktopContextDisclosure category={props.category.id} heading={content()}>
+          {entries()}
+        </DesktopContextDisclosure>
+      </Show>
     </Show>
+  );
+}
+
+/** Same category rows and entries, with desktop-only disclosure motion. */
+function DesktopContextDisclosure(props: {
+  category: ContextCategory["id"];
+  heading: JSX.Element;
+  children: JSX.Element;
+}) {
+  const [expanded, setExpanded] = createSignal(false);
+  // The Context content owner mounts this only while its page/section is presented.
+  const reveal = createDetailsDesktopReveal(() => [expanded(), true]);
+  return (
+    <details
+      ref={reveal.details}
+      class="chat-context__details"
+      data-context-details={props.category}
+    >
+      <summary
+        class="chat-context__row"
+        data-context-category={props.category}
+        aria-expanded={expanded() ? "true" : "false"}
+        onClick={(event) => {
+          event.preventDefault();
+          reveal.prepareClick(event);
+          setExpanded(!expanded());
+        }}
+      >
+        {props.heading}
+        <Icon name="chevronDown" />
+      </summary>
+      <div
+        ref={reveal.body}
+        class="chat-details-desktop-section__body"
+        inert={!expanded()}
+        aria-hidden={expanded() ? "false" : "true"}
+      >
+        <div ref={reveal.content}>{props.children}</div>
+      </div>
+    </details>
   );
 }
 
@@ -139,6 +196,7 @@ export function ChatContextBreakdown(props: {
   used: number;
   limit: number;
   approximate?: boolean;
+  desktop?: boolean;
 }) {
   const gateway = createMemo(() => projectGateway(props.gateway));
   const [revision, setRevision] = createSignal(0);
@@ -259,7 +317,13 @@ export function ChatContextBreakdown(props: {
                 </div>
                 <div class="chat-context__legend">
                   <For each={categories()} keyed={(category) => category.id}>
-                    {(category) => <ContextRow category={category()} limit={props.limit} />}
+                    {(category) => (
+                      <ContextRow
+                        category={category()}
+                        limit={props.limit}
+                        desktop={props.desktop}
+                      />
+                    )}
                   </For>
                   <div class="chat-context__row" data-context-category="free">
                     <span class="chat-context__swatch chat-context__free" aria-hidden="true" />

@@ -568,6 +568,7 @@ export async function finalizeWorkerTurnResult(
     ...(reply.text || reply.mediaUrl || reply.mediaUrls?.length ? { payloads: [reply] } : {}),
     meta: {
       durationMs,
+      systemPromptReport: promptContext.systemPromptReport,
       agentMeta: {
         sessionId: placement.sessionId,
         sessionFile: turn.sessionFile,

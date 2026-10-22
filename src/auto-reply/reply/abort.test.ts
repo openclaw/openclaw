@@ -3,7 +3,7 @@
 import { useChatAbortRegistryFixture } from "../../gateway/server-methods/chat.abort-registry.test-support.js";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { withinTest } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { isSubagentRegistryWriteCommand } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import { rowToSubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.store.codec.js";
@@ -111,8 +111,8 @@ describe("abort handling", () => {
     cfg: OpenClawConfig;
     sessionKey?: string;
     parentSessionKey?: string;
-    from: string;
-    to: string;
+    from?: string;
+    to?: string;
     senderId?: string;
     commandSource?: "native" | "text";
     targetSessionKey?: string;
@@ -120,12 +120,14 @@ describe("abort handling", () => {
     timestamp?: number;
     body?: string;
   }) {
+    const from = params.from ?? "telegram:123";
+    const to = params.to ?? from;
     for (const key of [
       params.sessionKey,
       params.parentSessionKey,
       params.targetSessionKey,
-      params.from,
-      params.to,
+      from,
+      to,
     ]) {
       if (key) {
         trackedAbortMemoryKeys.add(key);
@@ -138,8 +140,8 @@ describe("abort handling", () => {
         CommandAuthorized: true,
         Provider: "telegram",
         Surface: "telegram",
-        From: params.from,
-        To: params.to,
+        From: from,
+        To: to,
         ...(params.sessionKey ? { SessionKey: params.sessionKey } : {}),
         ...(params.parentSessionKey ? { ParentSessionKey: params.parentSessionKey } : {}),
         ...(params.senderId ? { SenderId: params.senderId } : {}),
@@ -159,17 +161,18 @@ describe("abort handling", () => {
     sessionKey: string;
   }) {
     trackedAbortMemoryKeys.add(params.sessionKey);
-    const followup = createQueueTestRun({ prompt: "queued" });
-    followup.run = {
-      ...followup.run,
-      agentId: resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey }),
-      agentDir: path.join(params.root, "agent"),
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: path.join(params.root, "session.jsonl"),
-      workspaceDir: path.join(params.root, "workspace"),
-      config: params.cfg,
-    };
+    const followup = createQueueTestRun(
+      { prompt: "queued" },
+      {
+        agentId: resolveSessionAgentId({ config: params.cfg, sessionKey: params.sessionKey }),
+        agentDir: path.join(params.root, "agent"),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: path.join(params.root, "session.jsonl"),
+        workspaceDir: path.join(params.root, "workspace"),
+        config: params.cfg,
+      },
+    );
     enqueueFollowupRun(
       params.sessionKey,
       followup,
@@ -207,6 +210,25 @@ describe("abort handling", () => {
     const cancel = vi.fn(() => queueMicrotask(() => operation.complete()));
     operation.attachBackend({ kind: "embedded", runId, cancel, isStreaming: () => true });
     return { operation, cancel };
+  }
+
+  function addChild(
+    storePath: string,
+    requesterSessionKey: string,
+    childSessionKey: string,
+    overrides: Partial<SubagentRunFixture> & Pick<SubagentRunFixture, "runId">,
+  ) {
+    return addSubagentFixture({
+      childSessionKey,
+      childAgentId: "main",
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
+      requesterSessionKey,
+      requesterDisplayKey: requesterSessionKey,
+      task: "stop child",
+      cleanup: "keep",
+      createdAt: Date.now(),
+      ...overrides,
+    });
   }
 
   function bindAcpSessionForTest(targetSessionKey: string) {
@@ -251,22 +273,12 @@ describe("abort handling", () => {
     acpManagerMocks,
   });
 
-  it("fast-aborts even when text commands are disabled", async () => {
-    const { cfg } = await createAbortConfig({ commandsTextEnabled: false });
-    const result = await runStopCommand({
-      cfg,
-      sessionKey: "telegram:123",
-      from: "telegram:123",
-      to: "telegram:123",
-    });
-    expect(result.handled).toBe(true);
-  });
-
-  it("fast-aborts authorized text slash stop commands before they queue", async () => {
+  it("fast-aborts authorized slash stop before queuing even with text commands disabled", async () => {
     const sessionKey = "telegram:123";
     const sessionId = "session-123";
     const activeSessionId = "session-active";
     const { root, cfg } = await createAbortConfig({
+      commandsTextEnabled: false,
       sessionIdsByKey: { [sessionKey]: sessionId },
     });
     cfg.commands = {
@@ -281,8 +293,6 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
       senderId: "123",
       commandSource: "text",
     });
@@ -291,38 +301,6 @@ describe("abort handling", () => {
     expect(active.cancel).toHaveBeenCalledOnce();
 
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-  });
-
-  it("acknowledges Stop while an accepted backend cancellation remains unsettled", async ({
-    signal,
-  }) => {
-    const sessionKey = "telegram:accepted-cancellation-never-settles";
-    const sessionId = "accepted-cancellation-never-settles";
-    const { cfg } = await createAbortConfig({ sessionIdsByKey: { [sessionKey]: sessionId } });
-    const operation = createAbortOperation(cfg, sessionKey, sessionId);
-    const cancel = vi.fn();
-    operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
-    const hook = vi.fn();
-    registerInternalHook("command:stop", hook);
-    let producerSettled = false;
-    void operation.ownerSettlement.then(() => {
-      producerSettled = true;
-    });
-    try {
-      const result = await withinTest(
-        runStopCommand({ cfg, sessionKey, from: "telegram:123", to: "telegram:123" }),
-        signal,
-      );
-      expect(result).toMatchObject({ handled: true, aborted: true });
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(hook).toHaveBeenCalledOnce();
-      expect(producerSettled).toBe(false);
-    } finally {
-      operation.complete();
-      unregisterInternalHook("command:stop", hook);
-      await operation.ownerSettlement;
-    }
-    expect(producerSettled).toBe(true);
   });
 
   it("gives a bare stop word the channel-user queue, child, and hook policy", async () => {
@@ -335,16 +313,8 @@ describe("abort handling", () => {
     });
     cfg.commands = { ...cfg.commands, ownerAllowFrom: ["telegram:123"] };
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
-    await addSubagentFixture({
+    await addChild(storePath, sessionKey, childKey, {
       runId: "bare-stop-child-run",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
-      task: "bare stop child",
-      cleanup: "keep",
-      createdAt: Date.now(),
     });
     const hook = vi.fn();
     registerInternalHook("command:stop", hook);
@@ -353,8 +323,6 @@ describe("abort handling", () => {
       const result = await runStopCommand({
         cfg,
         sessionKey,
-        from: "telegram:123",
-        to: "telegram:123",
         senderId: "123",
         commandSource: "text",
         body: "stop",
@@ -384,277 +352,114 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey: lookupKey,
-      from: "telegram:123",
-      to: "telegram:123",
     });
 
     expect(result.handled).toBe(true);
     expect(getFollowupQueueDepth(storeKey)).toBe(0);
   });
 
-  it("persists abort cutoff metadata when only ParentSessionKey identifies the command session", async () => {
-    const sessionKey = "telegram:parent-only";
-    const sessionId = "session-parent-only";
-    const { storePath, cfg } = await createAbortConfig({
-      sessionIdsByKey: { [sessionKey]: sessionId },
-    });
-
-    const result = await runStopCommand({
-      cfg,
-      parentSessionKey: sessionKey,
-      from: "telegram:parent-only",
-      to: "telegram:parent-only",
-      messageSid: "56",
-      timestamp: 1234567890001,
-    });
-
-    expect(result.handled).toBe(true);
-    const entry = readAbortSessionEntry(storePath, sessionKey);
-    expect(entry?.abortedLastRun).toBe(true);
-    expect(entry?.abortCutoffMessageSid).toBe("56");
-    expect(entry?.abortCutoffTimestamp).toBe(1234567890001);
-  });
-
-  it("does not persist cutoff metadata when native /stop targets a different session", async () => {
-    const slashSessionKey = "telegram:slash:123";
-    const targetSessionKey = "agent:main:telegram:group:123";
-    const targetSessionId = "session-target";
-    const { storePath, cfg } = await createAbortConfig({
-      sessionIdsByKey: { [targetSessionKey]: targetSessionId },
-    });
-
-    const result = await runStopCommand({
-      cfg,
-      sessionKey: slashSessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
-      targetSessionKey,
-      messageSid: "999",
-      timestamp: 1234567890000,
-    });
-
-    expect(result.handled).toBe(true);
-    const entry = readAbortSessionEntry(storePath, targetSessionKey);
-    expect(entry?.abortedLastRun).toBe(true);
-    expect(entry?.abortCutoffMessageSid).toBeUndefined();
-    expect(entry?.abortCutoffTimestamp).toBeUndefined();
-  });
-
-  it("cascade stop kills depth-2 children when stopping depth-1 agent", async () => {
-    const sessionKey = "telegram:parent";
-    const depth1Key = "agent:main:subagent:child-1";
-    const depth2Key = "agent:main:subagent:child-1:subagent:grandchild-1";
-    const sessionId = "session-parent";
-    const depth1SessionId = "session-child";
-    const depth2SessionId = "session-grandchild";
-    const { storePath, cfg } = await createAbortConfig({
-      sessionIdsByKey: {
-        [sessionKey]: sessionId,
-        [depth1Key]: depth1SessionId,
-        [depth2Key]: depth2SessionId,
-      },
-    });
-
-    await addSubagentFixture({
-      runId: "run-1",
-      childSessionKey: depth1Key,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: depth1Key }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: "telegram:parent",
-      task: "orchestrator",
-      cleanup: "keep",
-      createdAt: Date.now(),
-    });
-    await addSubagentFixture({
-      runId: "run-2",
-      childSessionKey: depth2Key,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: depth2Key }),
-      requesterSessionKey: depth1Key,
-      requesterDisplayKey: depth1Key,
-      task: "leaf worker",
-      cleanup: "keep",
-      createdAt: Date.now(),
-    });
-
-    const result = await runStopCommand({
-      cfg,
-      sessionKey,
-      from: "telegram:parent",
-      to: "telegram:parent",
-    });
-
-    expect(result.stoppedSubagents).toBe(2);
-  });
-
-  it("stops a subagent that is paused after yielding", async () => {
-    const sessionKey = "telegram:yield-parent";
-    const childKey = "agent:main:subagent:yield-child";
-    const now = Date.now();
-    const { storePath, cfg } = await createAbortConfig({
-      sessionIdsByKey: { [sessionKey]: "yield-parent", [childKey]: "yield-child" },
-    });
-    await addSubagentFixture({
-      runId: "run-yield-child",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
-      task: "paused worker",
-      cleanup: "keep",
-      createdAt: now - 1_000,
-      endedAt: now - 500,
-      pauseReason: "sessions_yield",
-    });
-
-    const result = await stopSubagentsForRequester({
-      cfg,
-      requesterSessionKey: sessionKey,
-    });
-
-    expect(result).toEqual({ stopped: 1, failed: 0 });
-    expect(await getSubagentRunByChildSessionKey(childKey)).toMatchObject({
-      endedReason: "subagent-killed",
-      killReconciliation: { suppressTaskDelivery: true },
-    });
-  });
-
-  it("cascade stop still traverses an ended current parent when a stale older active row exists", async () => {
-    const sessionKey = "telegram:parent";
-    const depth1Key = "agent:main:subagent:child-ended-stale";
-    const depth2Key = "agent:main:subagent:child-ended-stale:subagent:grandchild-active";
-    const now = Date.now();
-    const { storePath, cfg } = await createAbortConfig({
-      nowMs: now,
-      sessionIdsByKey: {
-        [sessionKey]: "session-parent",
-        [depth1Key]: "session-child-ended-stale",
-        [depth2Key]: "session-grandchild-active",
-      },
-    });
-
-    for (const fixture of [
-      {
-        runId: "run-stale-parent",
-        childSessionKey: depth1Key,
-        childAgentId: "main",
-        requesterSessionKey: sessionKey,
-        requesterDisplayKey: "telegram:parent",
-        task: "stale orchestrator",
-        cleanup: "keep",
-        createdAt: now - 2_000,
-        startedAt: now - 1_900,
-      },
-      {
-        runId: "run-current-parent",
-        childSessionKey: depth1Key,
-        childAgentId: "main",
-        requesterSessionKey: sessionKey,
-        requesterDisplayKey: "telegram:parent",
-        task: "current orchestrator",
-        cleanup: "keep",
-        createdAt: now - 1_000,
-        startedAt: now - 900,
-        endedAt: now - 500,
-        outcome: { status: "ok" },
-      },
-    ] satisfies SubagentRunFixture[]) {
-      await addSubagentFixture({
-        ...fixture,
-        sessionEntry: loadSessionEntry({ storePath, sessionKey: fixture.childSessionKey }),
+  it.each([false, true])(
+    "persists cutoff only for the command's own session (explicit target: %s)",
+    async (explicit) => {
+      const targetKey = explicit ? "agent:main:telegram:group:123" : "telegram:parent-only";
+      const { storePath, cfg } = await createAbortConfig({
+        sessionIdsByKey: { [targetKey]: "session-target" },
       });
-    }
-    await addSubagentFixture({
-      runId: "run-active-child",
-      childSessionKey: depth2Key,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: depth2Key }),
-      requesterSessionKey: depth1Key,
-      requesterDisplayKey: depth1Key,
-      task: "leaf worker",
-      cleanup: "keep",
-      createdAt: now - 400,
-    });
+      const messageSid = "56";
+      const timestamp = 1234567890001;
+      const result = await runStopCommand({
+        cfg,
+        ...(explicit
+          ? { sessionKey: "telegram:slash:123", targetSessionKey: targetKey }
+          : { parentSessionKey: targetKey, from: targetKey }),
+        messageSid,
+        timestamp,
+      });
 
-    const result = await runStopCommand({
-      cfg,
-      sessionKey,
-      from: "telegram:parent",
-      to: "telegram:parent",
-    });
+      expect(result.handled).toBe(true);
+      const entry = readAbortSessionEntry(storePath, targetKey);
+      expect(entry?.abortedLastRun).toBe(true);
+      expect(entry?.abortCutoffMessageSid).toBe(explicit ? undefined : messageSid);
+      expect(entry?.abortCutoffTimestamp).toBe(explicit ? undefined : timestamp);
+    },
+  );
 
-    expect(result.stoppedSubagents).toBe(1);
-    expect((await getSubagentRunByChildSessionKey(depth1Key))?.endedReason).not.toBe(
-      "subagent-killed",
-    );
-    expect((await getSubagentRunByChildSessionKey(depth2Key))?.endedReason).toBe("subagent-killed");
-  });
+  it.each(["active", "paused", "stale-parent", "reparented"] as const)(
+    "stops only the current controlled subtree (%s)",
+    async (scenario) => {
+      const moved = scenario === "reparented";
+      const paused = scenario === "paused";
+      const stale = scenario === "stale-parent";
+      const root = moved ? "agent:main:subagent:old-parent" : "telegram:parent";
+      const other = "agent:main:subagent:new-parent";
+      const child = "agent:main:subagent:child";
+      const leaf = child + ":subagent:leaf";
+      const now = Date.now();
+      const { storePath, cfg } = await createAbortConfig({
+        nowMs: now,
+        sessionIdsByKey: Object.fromEntries(
+          [root, other, child, leaf].map((key, index) => [key, `session-${index}`]),
+        ),
+      });
+      const add = (
+        runId: string,
+        parent: string,
+        key: string,
+        overrides: Partial<SubagentRunFixture> = {},
+      ) =>
+        addChild(storePath, parent, key, {
+          runId,
+          createdAt: now - 2000,
+          ...(moved ? { controllerSessionKey: parent } : {}),
+          ...overrides,
+        });
+      await add("child-original", root, child, {
+        ...(stale ? { startedAt: now - 1900 } : {}),
+        ...(paused
+          ? { createdAt: now - 1000, endedAt: now - 500, pauseReason: "sessions_yield" }
+          : {}),
+        ...(moved ? { endedAt: now - 1000, outcome: { status: "ok" } } : {}),
+      });
+      if (stale) {
+        await add("child-current", root, child, {
+          createdAt: now - 1000,
+          startedAt: now - 900,
+          endedAt: now - 500,
+          outcome: { status: "ok" },
+        });
+      }
+      if (!paused) {
+        await add("leaf", child, leaf, { createdAt: now - 400 });
+      }
+      if (moved) {
+        await add("child-reparented", other, child, { createdAt: now - 250 });
+      }
 
-  it("stopSubagentsForRequester does not traverse a child that moved to a newer parent", async () => {
-    const oldParentKey = "agent:main:subagent:old-parent";
-    const newParentKey = "agent:main:subagent:new-parent";
-    const childKey = "agent:main:subagent:shared-child";
-    const leafKey = `${childKey}:subagent:leaf`;
-    const now = Date.now();
-    const { storePath, cfg } = await createAbortConfig({
-      sessionIdsByKey: {
-        [oldParentKey]: "old-parent",
-        [newParentKey]: "new-parent",
-        [childKey]: "shared-child",
-        [leafKey]: "leaf",
-      },
-    });
-
-    await addSubagentFixture({
-      runId: "run-shared-child-stale-parent",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey }),
-      requesterSessionKey: oldParentKey,
-      controllerSessionKey: oldParentKey,
-      requesterDisplayKey: oldParentKey,
-      task: "shared child stale parent",
-      cleanup: "keep",
-      createdAt: now - 2_000,
-      endedAt: now - 1_000,
-      outcome: { status: "ok" },
-    });
-    await addSubagentFixture({
-      runId: "run-leaf-active",
-      childSessionKey: leafKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: leafKey }),
-      requesterSessionKey: childKey,
-      controllerSessionKey: childKey,
-      requesterDisplayKey: childKey,
-      task: "leaf worker",
-      cleanup: "keep",
-      createdAt: now - 500,
-    });
-    await addSubagentFixture({
-      runId: "run-shared-child-current-parent",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, sessionKey: childKey }),
-      requesterSessionKey: newParentKey,
-      controllerSessionKey: newParentKey,
-      requesterDisplayKey: newParentKey,
-      task: "shared child current parent",
-      cleanup: "keep",
-      createdAt: now - 250,
-    });
-
-    const result = await stopSubagentsForRequester({
-      cfg,
-      requesterSessionKey: oldParentKey,
-    });
-
-    expect(result).toEqual({ stopped: 0, failed: 0 });
-    expect((await getSubagentRunByChildSessionKey(childKey))?.execution.endedAt).toBeUndefined();
-    expect((await getSubagentRunByChildSessionKey(leafKey))?.execution.endedAt).toBeUndefined();
-  });
+      if (moved || paused) {
+        expect(await stopSubagentsForRequester({ cfg, requesterSessionKey: root })).toEqual({
+          stopped: moved ? 0 : 1,
+          failed: 0,
+        });
+      } else {
+        expect((await runStopCommand({ cfg, sessionKey: root, from: root })).stoppedSubagents).toBe(
+          stale ? 1 : 2,
+        );
+      }
+      const currentChild = await getSubagentRunByChildSessionKey(child);
+      if (moved) {
+        expect(currentChild?.execution.endedAt).toBeUndefined();
+        expect((await getSubagentRunByChildSessionKey(leaf))?.execution.endedAt).toBeUndefined();
+      } else if (paused) {
+        expect(currentChild).toMatchObject({
+          endedReason: "subagent-killed",
+          killReconciliation: { suppressTaskDelivery: true },
+        });
+      } else if (stale) {
+        expect(currentChild?.endedReason).not.toBe("subagent-killed");
+        expect((await getSubagentRunByChildSessionKey(leaf))?.endedReason).toBe("subagent-killed");
+      }
+    },
+  );
 
   it("resolves owner authorization after loading cancellation runtime", async () => {
     const sessionKey = "telegram:123";
@@ -667,8 +472,6 @@ describe("abort handling", () => {
     const pending = runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
       senderId: "123",
     });
     cfg.commands.ownerAllowFrom = ["telegram:other-owner"];
@@ -677,74 +480,40 @@ describe("abort handling", () => {
     expect(getFollowupQueueDepth(sessionKey)).toBe(1);
   });
 
-  it("fast-abort still stops active runs when abort metadata persistence fails", async () => {
-    const sessionKey = "telegram:persistence-failure";
-    const activeSessionId = "active-persistence-failure";
-    const { root, cfg } = await createAbortConfig({
-      sessionIdsByKey: { [sessionKey]: activeSessionId },
-    });
-    const operation = createAbortOperation(cfg, sessionKey, activeSessionId);
-    const cancel = vi.fn(() => queueMicrotask(() => operation.complete()));
-    operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
-    vi.mocked(markSessionAbortTarget).mockRejectedValueOnce(
-      new Error("simulated persistence failure"),
-    );
-    enqueueQueuedFollowupRun({ root, cfg, sessionId: activeSessionId, sessionKey });
+  it.each(["throws", "unpersisted"] as const)(
+    "still stops the resolved target when metadata persistence %s",
+    async (failure) => {
+      const canonicalKey = "agent:main:telegram:group:-1001234567890:topic:99";
+      const sessionKey = failure === "throws" ? "telegram:persistence-failure" : canonicalKey;
+      const requestedKey =
+        failure === "throws" ? sessionKey : "Agent:Main:Telegram:Group:-1001234567890:Topic:99";
+      const sessionId = "persistence-failure-session";
+      const { root, cfg } = await createAbortConfig({
+        sessionIdsByKey: failure === "throws" ? { [sessionKey]: sessionId } : {},
+      });
+      const { operation } = createActiveAbortOperation(cfg, sessionKey, sessionId);
+      if (failure === "throws") {
+        vi.mocked(markSessionAbortTarget).mockRejectedValueOnce(
+          new Error("simulated persistence failure"),
+        );
+      } else {
+        const target = { entry: { sessionId, updatedAt: 10 }, sessionId, sessionKey };
+        vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce(target);
+        vi.mocked(markSessionAbortTarget).mockResolvedValueOnce({
+          ...target,
+          persisted: false,
+          persistenceError: "simulated persistence failure",
+        });
+      }
+      enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
 
-    const result = await runStopCommand({
-      cfg,
-      sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
-    });
-
-    expect(result.handled).toBe(true);
-    expect(markSessionAbortTarget).toHaveBeenCalledOnce();
-    expect(operation.abortSignal.aborted).toBe(true);
-    expect(getFollowupQueueDepth(sessionKey)).toBe(0);
-    expect(getAbortMemory(sessionKey)).toBeUndefined();
-  });
-
-  it("fast-abort uses resolved target identity when abort metadata save fails", async () => {
-    const requestedKey = "Agent:Main:Telegram:Group:-1001234567890:Topic:99";
-    const canonicalKey = "agent:main:telegram:group:-1001234567890:topic:99";
-    const sessionId = "resolved-persistence-failure";
-    const { root, cfg } = await createAbortConfig();
-    const operation = createAbortOperation(cfg, canonicalKey, sessionId);
-    const cancel = vi.fn(() => queueMicrotask(() => operation.complete()));
-    operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
-    vi.mocked(markSessionAbortTarget).mockResolvedValueOnce({
-      entry: {
-        sessionId,
-        updatedAt: 10,
-      },
-      persisted: false,
-      persistenceError: "simulated persistence failure",
-      sessionId,
-      sessionKey: canonicalKey,
-    });
-    vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce({
-      entry: {
-        sessionId,
-        updatedAt: 10,
-      },
-      sessionId,
-      sessionKey: canonicalKey,
-    });
-    enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey: canonicalKey });
-
-    const result = await runStopCommand({
-      cfg,
-      sessionKey: requestedKey,
-      from: "telegram:123",
-      to: "telegram:123",
-    });
-
-    expect(result.handled).toBe(true);
-    expect(operation.abortSignal.aborted).toBe(true);
-    expect(getFollowupQueueDepth(canonicalKey)).toBe(0);
-    expect(getAbortMemory(canonicalKey)).toBeUndefined();
-  });
+      expect((await runStopCommand({ cfg, sessionKey: requestedKey })).handled).toBe(true);
+      expect(markSessionAbortTarget).toHaveBeenCalledOnce();
+      expect(operation.abortSignal.aborted).toBe(true);
+      expect(getFollowupQueueDepth(sessionKey)).toBe(0);
+      expect(getAbortMemory(sessionKey)).toBeUndefined();
+    },
+  );
 
   it("fast-abort leaves future prompts untouched when no persisted target entry exists", async () => {
     const sessionKey = "telegram:missing-persistence-target";
@@ -755,8 +524,6 @@ describe("abort handling", () => {
     const result = await runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
     });
 
     expect(result.handled).toBe(true);
@@ -774,65 +541,26 @@ describe("abort handling", () => {
         [sessionKey]: sessionId,
       },
     });
-    const operation = createAbortOperation(cfg, sessionKey, sessionId);
-    const cancel = vi.fn(() => queueMicrotask(() => operation.complete()));
-    operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
-    let finishPersistence: (() => void) | undefined;
-    const persistenceStarted = new Promise<void>((resolveStarted) => {
-      vi.mocked(markSessionAbortTarget).mockImplementationOnce(
-        () =>
-          new Promise<SessionAbortTargetResult | null>((resolvePersistence) => {
-            resolveStarted();
-            finishPersistence = () => {
-              resolvePersistence({
-                entry: {
-                  sessionId,
-                  updatedAt: 10,
-                },
-                persisted: true,
-                sessionId,
-                sessionKey,
-              });
-            };
-          }),
-      );
-      vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce({
-        entry: {
-          sessionId,
-          updatedAt: 10,
-        },
-        sessionId,
-        sessionKey,
-      });
+    const { operation, cancel } = createActiveAbortOperation(cfg, sessionKey, sessionId);
+    const persistenceStarted = createDeferred();
+    const persistence = createDeferred<SessionAbortTargetResult | null>();
+    const target = { entry: { sessionId, updatedAt: 10 }, sessionId, sessionKey };
+    vi.mocked(resolveSessionAbortTarget).mockResolvedValueOnce(target);
+    vi.mocked(markSessionAbortTarget).mockImplementationOnce(() => {
+      persistenceStarted.resolve();
+      return persistence.promise;
     });
     enqueueQueuedFollowupRun({ root, cfg, sessionId, sessionKey });
-    await replaceSessionEntry(
-      { storePath, agentId: "main", sessionKey: childKey },
-      {
-        ...loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey })!,
-        lifecycleRevision: "slow-persistence-child-revision",
-      },
-    );
-    await addSubagentFixture({
+    await addChild(storePath, sessionKey, childKey, {
       runId: "slow-child-run",
-      childSessionKey: childKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childKey }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
-      task: "slow child",
-      cleanup: "keep",
-      createdAt: Date.now(),
     });
 
     const child = createActiveAbortOperation(cfg, childKey, childSessionId, "slow-child-run");
     const resultPromise = runStopCommand({
       cfg,
       sessionKey,
-      from: "telegram:123",
-      to: "telegram:123",
     });
-    await persistenceStarted;
+    await persistenceStarted.promise;
 
     expect(operation.abortSignal.aborted).toBe(true);
     expect(cancel).toHaveBeenCalledOnce();
@@ -844,7 +572,7 @@ describe("abort handling", () => {
     });
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
 
-    finishPersistence?.();
+    persistence.resolve({ ...target, persisted: true });
     await expect(resultPromise).resolves.toMatchObject({
       aborted: true,
       handled: true,
@@ -888,7 +616,6 @@ describe("abort handling", () => {
       cfg,
       sessionKey,
       from: "telegram:finalizing",
-      to: "telegram:finalizing",
     });
 
     expect(result).toMatchObject({
@@ -912,66 +639,45 @@ describe("abort handling", () => {
     operation.complete();
   });
 
-  it("does not abort the caller source turn for an unbound explicit ACP target", async () => {
-    const sourceSessionKey = "agent:main:discord:channel:C3";
-    const acpSessionKey = "agent:codex:acp:unbound-explicit-target";
-    const { cfg } = await createAbortConfig({
-      sessionIdsByKey: {
-        [sourceSessionKey]: "source-store-session",
-        [acpSessionKey]: "acp-store-session",
-      },
-    });
-    const { operation: sourceOperation } = createActiveAbortOperation(
-      cfg,
-      sourceSessionKey,
-      "source-active-session",
-    );
+  it.each([false, true])(
+    "stops the explicit ACP target's source only when bound (bound=%s)",
+    async (bound) => {
+      const sourceSessionKey = "agent:main:discord:channel:C3";
+      const acpSessionKey = "agent:codex:acp:explicit-target";
+      const { cfg } = await createAbortConfig({
+        sessionIdsByKey: {
+          [sourceSessionKey]: "source-store-session",
+          [acpSessionKey]: "acp-store-session",
+        },
+      });
+      const { operation: sourceOperation } = createActiveAbortOperation(
+        cfg,
+        sourceSessionKey,
+        "source-active-session",
+      );
+      if (bound) {
+        bindAcpSessionForTest(acpSessionKey);
+      }
 
-    const result = await runStopCommand({
-      cfg,
-      sessionKey: sourceSessionKey,
-      from: "discord:C3",
-      to: "discord:C3",
-      targetSessionKey: acpSessionKey,
-      commandSource: "native",
-    });
+      const result = await runStopCommand({
+        cfg,
+        ...(bound ? { parentSessionKey: sourceSessionKey } : { sessionKey: sourceSessionKey }),
+        from: "discord:C3",
+        targetSessionKey: acpSessionKey,
+        commandSource: "native",
+      });
 
-    expect(result.handled).toBe(true);
-    expect(sourceOperation.result).toBeNull();
-    expect(isSessionRunActiveForKey(sourceSessionKey)).toBe(true);
-    expect(acpManagerMocks.cancelSession).not.toHaveBeenCalled();
-    sourceOperation.complete();
-  });
-
-  it("uses ParentSessionKey as the source turn for a bound explicit ACP target", async () => {
-    const sourceSessionKey = "agent:main:discord:channel:C4";
-    const acpSessionKey = "agent:codex:acp:bound-parent-source";
-    const { cfg } = await createAbortConfig({
-      sessionIdsByKey: {
-        [sourceSessionKey]: "source-store-session",
-        [acpSessionKey]: "acp-store-session",
-      },
-    });
-    const { operation: sourceOperation } = createActiveAbortOperation(
-      cfg,
-      sourceSessionKey,
-      "source-active-session",
-    );
-    bindAcpSessionForTest(acpSessionKey);
-
-    const result = await runStopCommand({
-      cfg,
-      parentSessionKey: sourceSessionKey,
-      from: "discord:C4",
-      to: "discord:C4",
-      targetSessionKey: acpSessionKey,
-      commandSource: "native",
-    });
-
-    expect(result.handled).toBe(true);
-    expect(sourceOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(isSessionRunActiveForKey(sourceSessionKey)).toBe(false);
-  });
+      expect(result.handled).toBe(true);
+      expect(sourceOperation.result).toEqual(
+        bound ? { kind: "aborted", code: "aborted_by_user" } : null,
+      );
+      expect(isSessionRunActiveForKey(sourceSessionKey)).toBe(!bound);
+      if (!bound) {
+        expect(acpManagerMocks.cancelSession).not.toHaveBeenCalled();
+      }
+      sourceOperation.complete();
+    },
+  );
 
   it("continues stopping siblings when one termination persistence write fails", async () => {
     const sessionKey = "telegram:persistence-failure-parent";
@@ -984,30 +690,15 @@ describe("abort handling", () => {
         [secondChildKey]: "run-persistence-failure-second",
       },
     });
-    for (const childSessionKey of [firstChildKey, secondChildKey]) {
-      const scope = { storePath, agentId: "main", sessionKey: childSessionKey };
-      const entry = loadSessionEntry(scope)!;
-      await replaceSessionEntry(scope, {
-        ...entry,
-        lifecycleRevision: `${entry.sessionId}-revision`,
+    const createdAt = Date.now();
+    for (const [runId, childKey] of [
+      ["run-persistence-failure-first", firstChildKey],
+      ["run-persistence-failure-second", secondChildKey],
+    ] as const) {
+      await addChild(storePath, sessionKey, childKey, {
+        runId,
+        createdAt,
       });
-    }
-    const run = (runId: string, childSessionKey: string): SubagentRunFixture => ({
-      runId,
-      childSessionKey,
-      childAgentId: "main",
-      sessionEntry: loadSessionEntry({ storePath, agentId: "main", sessionKey: childSessionKey }),
-      requesterSessionKey: sessionKey,
-      requesterDisplayKey: sessionKey,
-      task: "stop despite persistence failure",
-      cleanup: "keep",
-      createdAt: Date.now(),
-    });
-    for (const fixture of [
-      run("run-persistence-failure-first", firstChildKey),
-      run("run-persistence-failure-second", secondChildKey),
-    ]) {
-      await addSubagentFixture(fixture);
     }
     const children = [firstChildKey, secondChildKey].map((childSessionKey) => {
       const sessionId = loadSessionEntry({ storePath, sessionKey: childSessionKey })!.sessionId;

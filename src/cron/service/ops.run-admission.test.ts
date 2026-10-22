@@ -268,6 +268,7 @@ describe("cron service run admission", () => {
     const storeKey = cronStoreKey(store.storePath);
     const job = makeJob("invalid-manual-stale-notification", dueAt, dueAt);
     job.sessionTarget = "main";
+    job.payload = { kind: "command", argv: ["echo", "invalid main payload"] };
     job.failureAlert = { after: 1, cooldownMs: 60_000, includeSkipped: true };
     const sendCronFailureAlert = vi.fn(async () => {});
     const editedName = "edited after invalid-run commit";

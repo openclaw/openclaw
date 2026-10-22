@@ -814,7 +814,7 @@ it("keeps authority revoked when COMMIT succeeds but its outcome is lost", async
   }
 });
 
-it("shares claim revocation across facades while restart clearing leaves worker claims live", async () => {
+it("shares local and worker claim revocation across database aliases", async () => {
   const active = await advanceToActive();
   const worker = await store.claimTurn(workerClaimInput("shared-facade", active));
   const local = await store.claimTurn({
@@ -833,7 +833,9 @@ it("shares claim revocation across facades while restart clearing leaves worker 
     database: openOpenClawStateDatabase({ path: alias }),
   });
   try {
-    expect(await facade.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
+    expect((await facade.getAsync(local.sessionId))?.turnClaim?.claimId).toBe(local.claimId);
+    expect(localAuthority.isCurrent()).toBe(true);
+    await facade.releaseTurn(local);
     expect(localAuthority.isCurrent()).toBe(false);
     expect(workerAuthority.isCurrent()).toBe(true);
     await facade.retireSessionPlacementAsync({

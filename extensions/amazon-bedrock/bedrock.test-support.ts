@@ -1,26 +1,24 @@
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime";
-import type { Context, Model, UserMessage } from "openclaw/plugin-sdk/llm";
+import type { Context, Model, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { expect, vi } from "vitest";
 import type { BedrockOptions } from "./bedrock-options.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
 
-export function bedrockModel(
-  overrides: Partial<Model<"bedrock-converse-stream">> = {},
-): Model<"bedrock-converse-stream"> {
-  return {
-    api: "bedrock-converse-stream",
-    provider: "amazon-bedrock",
-    id: "amazon.nova-micro-v1:0",
-    name: "Nova Micro",
-    baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 4096,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    ...overrides,
-  };
-}
+type BedrockModel = Model<"bedrock-converse-stream">;
+type ClientSpy = ReturnType<typeof vi.spyOn>;
+export const bedrockModel = (overrides: Partial<BedrockModel> = {}): BedrockModel => ({
+  api: "bedrock-converse-stream",
+  provider: "amazon-bedrock",
+  id: "amazon.nova-micro-v1:0",
+  name: "Nova Micro",
+  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+  reasoning: true,
+  input: ["text"],
+  contextWindow: 128000,
+  maxTokens: 4096,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  ...overrides,
+});
 export const startEvent = { messageStart: { role: "assistant" } };
 export const stopEvent = { messageStop: { stopReason: "end_turn" } };
 export const userContext = (content = "Hello"): Context => ({
@@ -32,12 +30,33 @@ export const runtimeUser = (content: UserMessage["content"], timestamp: number) 
   timestamp,
   runtimeContext: {},
 });
+export const textBlock = (text: string) => ({ type: "text" as const, text });
+export const wireText = (text: string) => ({ text });
+export const wireUser = (...content: Record<string, unknown>[]) => ({ role: "user", content });
+export const checkpoint = { cachePoint: { type: "default" } };
+export const png =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+export function toolResult(
+  toolCallId: string,
+  content: ToolResultMessage["content"],
+  toolName = "inspect",
+  isError = false,
+  timestamp = 0,
+): ToolResultMessage {
+  return { role: "toolResult", toolCallId, toolName, content, isError, timestamp };
+}
+export const replayAssistant = <Content>(model: string, content: Content[]) => ({
+  role: "assistant" as const,
+  api: "bedrock-converse-stream" as const,
+  provider: "amazon-bedrock",
+  model,
+  content,
+});
 export async function* streamEvents(events: unknown[]) {
   yield* events;
 }
-export function mockStream(events: unknown[] = [startEvent, stopEvent]) {
-  return mockResponse(streamEvents(events));
-}
+export const mockStream = (events: unknown[] = [startEvent, stopEvent]) =>
+  mockResponse(streamEvents(events));
 export function mockResponse(
   stream: unknown,
   metadata: { httpStatusCode: number; requestId?: string } = { httpStatusCode: 200 },
@@ -47,10 +66,7 @@ export function mockResponse(
     stream,
   } as never);
 }
-export function expectDestroyedClient(
-  send: ReturnType<typeof vi.spyOn>,
-  destroy: ReturnType<typeof vi.spyOn>,
-) {
+export function expectDestroyedClient(send: ClientSpy, destroy: ClientSpy) {
   expect(send).toHaveBeenCalledOnce();
   expect(destroy).toHaveBeenCalledOnce();
   expect(destroy.mock.contexts[0]).toBe(send.mock.contexts[0]);
@@ -58,15 +74,19 @@ export function expectDestroyedClient(
     send.mock.invocationCallOrder[0] ?? 0,
   );
 }
-export function streamBedrockForTest(
-  model: Model<"bedrock-converse-stream">,
+export const streamBedrockForTest = (
+  model: BedrockModel,
   context: Context,
   options: BedrockOptions = {},
-) {
-  return streamSimpleBedrock(model, context, options as never);
+) => streamSimpleBedrock(model, context, options as never);
+function commandInput(command: unknown) {
+  if (!(command instanceof ConverseStreamCommand)) {
+    throw new Error("expected ConverseStreamCommand");
+  }
+  return command.input;
 }
 export async function capturePayload(
-  model: Model<"bedrock-converse-stream">,
+  model: BedrockModel,
   context: Context,
   options: BedrockOptions = {},
   validate?: (input: ConverseStreamCommand["input"]) => void,
@@ -74,10 +94,7 @@ export async function capturePayload(
   const send = mockStream();
   if (validate) {
     send.mockImplementation((command) => {
-      if (!(command instanceof ConverseStreamCommand)) {
-        throw new Error("expected ConverseStreamCommand");
-      }
-      validate(command.input);
+      validate(commandInput(command));
       return {
         $metadata: { httpStatusCode: 200 },
         stream: streamEvents([startEvent, stopEvent]),
@@ -85,16 +102,10 @@ export async function capturePayload(
     });
   }
   const result = await streamBedrockForTest(model, context, options).result();
-  if (validate && result.stopReason !== "stop") {
-    throw new Error(
-      `Bedrock request fixture rejected replay: ${result.errorMessage ?? result.stopReason}`,
-    );
+  if (validate) {
+    expect(result.stopReason, result.errorMessage).toBe("stop");
   }
-  const command = send.mock.calls.at(-1)?.[0];
-  if (!(command instanceof ConverseStreamCommand)) {
-    throw new Error("expected ConverseStreamCommand");
-  }
-  return command.input;
+  return commandInput(send.mock.calls.at(-1)?.[0]);
 }
 export async function collectStream(stream: ReturnType<typeof streamSimpleBedrock>) {
   const eventTypes: string[] = [];

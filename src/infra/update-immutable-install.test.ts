@@ -44,7 +44,6 @@ vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
 }));
 vi.mock("./update-immutable-service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-immutable-service.js")>()),
-  verifyImmutableService: async () => {},
   readImmutableService: async () => ({ command: { environment: { PATH: "/usr/bin:/bin" } } }),
 }));
 vi.mock("../process/exec.js", async (original) => ({

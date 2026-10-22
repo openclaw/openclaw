@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GithubItem, GithubSource, SourceRuntime } from "../../types.js";
+import { bindReportFetch, type ReportFixtureFetch } from "../../report-network.test-support.js";
+import type { GithubItem, GithubSource } from "../../types.js";
 import { createGithubSource } from "./index.js";
 import {
   advisory,
@@ -20,10 +21,10 @@ import {
 
 function source(route: (url: URL, init?: RequestInit) => Response | Promise<Response>) {
   const logs = { ...logger, info: vi.fn() };
-  const fetchImpl = vi.fn<NonNullable<SourceRuntime["fetchImpl"]>>((input, init) =>
+  const fetchImpl = vi.fn<ReportFixtureFetch>((input, init) =>
     Promise.resolve(route(new URL(input), init)),
   );
-  const streaming = createGithubSource({ logger: logs, fetchImpl });
+  const streaming = bindReportFetch(createGithubSource({ logger: logs }), fetchImpl);
   return {
     streaming,
     api: {
@@ -780,11 +781,8 @@ describe("GitHub reports source", () => {
 
   it("never includes transport failures or server payloads in logs and status", async () => {
     const logs = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const api = createGithubSource({
-      logger: logs,
-      fetchImpl: async () => {
-        throw new Error(`transport ${config.token}`);
-      },
+    const api = bindReportFetch(createGithubSource({ logger: logs }), async () => {
+      throw new Error(`transport ${config.token}`);
     });
     const result = await api.loadRoster(config);
     expect(result.status.ok).toBe(false);

@@ -221,7 +221,8 @@ export function dispatchAgentRunFromGateway(params: {
     }));
   };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
-    ? createCronCreatorAuthorityCapability(
+    ? (params.cronCreatorAuthority.boundRunScope ??
+      createCronCreatorAuthorityCapability(
         params.cronCreatorAuthority.runId,
         params.cronCreatorAuthority.callerOrigin,
         params.cronCreatorAuthority.managementEntitlement,
@@ -229,9 +230,9 @@ export function dispatchAgentRunFromGateway(params: {
         undefined,
         params.cronCreatorAuthority.requesterOwner,
         params.cronCreatorAuthority.callerScopedCreation,
-      )
+      ))
     : undefined;
-  if (cronCreatorAuthorityCapability) {
+  if (cronCreatorAuthorityCapability && !params.cronCreatorAuthority?.boundRunScope) {
     params.cronCreatorAuthority?.bindRunScope?.(cronCreatorAuthorityCapability);
   }
   const terminalProducer = bindGatewayAgentTerminalProducer({

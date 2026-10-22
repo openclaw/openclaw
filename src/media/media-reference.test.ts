@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import {
   classifyMediaReferenceSource,
@@ -22,11 +22,19 @@ async function expectMediaReferenceError(
 }
 
 const inboundPath = (id: string) => path.join(resolveStateDir(), "media", "inbound", id);
-async function createInboundFile(id: string) {
-  const filePath = inboundPath(id);
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, Buffer.from("png"));
-  return filePath;
+const makeId = (prefix = "ref") =>
+  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+const cleanup: string[] = [];
+afterEach(async () => {
+  await Promise.all(cleanup.splice(0).map((file) => fs.rm(file, { recursive: true, force: true })));
+});
+
+async function createInboundFile(id = makeId()) {
+  const file = inboundPath(id);
+  cleanup.push(file);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, Buffer.from("png"));
+  return { id, file, source: `media://inbound/${id}`, physicalPath: await fs.realpath(file) };
 }
 
 function expectClassification(
@@ -59,21 +67,11 @@ describe("media reference helpers", () => {
   });
 
   it("resolves canonical inbound media URIs", async () => {
-    const stateDir = resolveStateDir();
-    const id = `ref-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
-    const filePath = path.join(stateDir, "media", "inbound", id);
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, Buffer.from("png"));
-    const realFilePath = await fs.realpath(filePath);
-
-    try {
-      await expect(resolveInbound(`media://inbound/${id}`)).resolves.toStrictEqual({
-        id,
-        physicalPath: realFilePath,
-      });
-    } finally {
-      await fs.rm(filePath, { force: true });
-    }
+    const { id, source, physicalPath } = await createInboundFile();
+    await expect(resolveInbound(source)).resolves.toStrictEqual({
+      id,
+      physicalPath,
+    });
   });
 
   it("parses inbound media URIs for sandbox-relative staging", () => {
@@ -91,49 +89,29 @@ describe("media reference helpers", () => {
   });
 
   it("maps canonical inbound media URIs to local paths for direct file readers", async () => {
-    const id = `ref-local-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
-    const filePath = await createInboundFile(id);
-    const realFilePath = await fs.realpath(filePath);
-
-    try {
-      await expect(resolveMediaReferenceLocalPath(`media://inbound/${id}`)).resolves.toBe(
-        realFilePath,
-      );
-      await expect(
-        resolveMediaReferenceLocalPathInfo(`media://inbound/${id}`),
-      ).resolves.toStrictEqual({ kind: "inbound", path: realFilePath });
-      await expect(resolveMediaReferenceLocalPath("  MEDIA: ./out.png")).resolves.toBe("./out.png");
-      await expect(resolveMediaReferenceLocalPathInfo("  MEDIA: ./out.png")).resolves.toStrictEqual(
-        { kind: "local", path: "./out.png" },
-      );
-    } finally {
-      await fs.rm(filePath, { force: true });
-    }
+    const { source, physicalPath } = await createInboundFile();
+    await expect(resolveMediaReferenceLocalPath(source)).resolves.toBe(physicalPath);
+    await expect(resolveMediaReferenceLocalPathInfo(source)).resolves.toStrictEqual({
+      kind: "inbound",
+      path: physicalPath,
+    });
+    await expect(resolveMediaReferenceLocalPath("  MEDIA: ./out.png")).resolves.toBe("./out.png");
+    await expect(resolveMediaReferenceLocalPathInfo("  MEDIA: ./out.png")).resolves.toStrictEqual({
+      kind: "local",
+      path: "./out.png",
+    });
   });
 
   it("resolves direct absolute paths only for first-level inbound media files", async () => {
     const stateDir = resolveStateDir();
-    const ids = [
-      `ref-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`,
-      `..ref-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`,
-    ] as const;
-    const filePaths = await Promise.all(ids.map(createInboundFile));
-
-    try {
-      for (const id of ids) {
-        const filePath = inboundPath(id);
-        await expect(resolveInbound(filePath)).resolves.toStrictEqual({
-          id,
-          physicalPath: await fs.realpath(filePath),
-        });
-      }
-      await expect(resolveInbound(inboundPath(path.join("nested", ids[0])))).resolves.toBeNull();
-      await expect(
-        resolveInbound(path.join(stateDir, "media", "outbound", ids[0])),
-      ).resolves.toBeNull();
-    } finally {
-      await Promise.all(filePaths.map((filePath) => fs.rm(filePath, { force: true })));
+    const ids = [makeId("ref-path"), makeId("..ref-path")] as const;
+    for (const { id, file, physicalPath } of await Promise.all(ids.map(createInboundFile))) {
+      await expect(resolveInbound(file)).resolves.toStrictEqual({ id, physicalPath });
     }
+    await expect(resolveInbound(inboundPath(path.join("nested", ids[0])))).resolves.toBeNull();
+    await expect(
+      resolveInbound(path.join(stateDir, "media", "outbound", ids[0])),
+    ).resolves.toBeNull();
   });
 
   it("rejects inbound media URIs with unsupported locations or unsafe ids", async () => {
@@ -162,19 +140,15 @@ describe("media reference helpers", () => {
     const stateDir = resolveStateDir();
     const targetDir = path.join(stateDir, "media-reference-test-target");
     const targetPath = path.join(targetDir, "target.png");
-    const id = `ref-link-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const id = makeId("ref-link");
     const linkPath = path.join(stateDir, "media", "inbound", id);
+    cleanup.push(linkPath, targetDir);
     await fs.mkdir(targetDir, { recursive: true });
     await fs.mkdir(path.dirname(linkPath), { recursive: true });
     await fs.writeFile(targetPath, Buffer.from("png"));
     await fs.symlink(targetPath, linkPath);
 
-    try {
-      await expectMediaReferenceError(`media://inbound/${id}`, "invalid-path");
-      await expectMediaReferenceError(linkPath, "invalid-path");
-    } finally {
-      await fs.rm(linkPath, { force: true });
-      await fs.rm(targetDir, { recursive: true, force: true });
-    }
+    await expectMediaReferenceError(`media://inbound/${id}`, "invalid-path");
+    await expectMediaReferenceError(linkPath, "invalid-path");
   });
 });

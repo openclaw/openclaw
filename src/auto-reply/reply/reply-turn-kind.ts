@@ -13,11 +13,13 @@ export function resolveReplyTurnKind(opts?: {
 
 export function resolveReplyRunTrigger(turn: {
   isHeartbeat: boolean;
-  followupRun: { run: { internalEventExecution?: unknown } };
+  followupRun: { run: { internalEventExecution?: unknown; scheduledAutomation?: unknown } };
 }) {
   return turn.isHeartbeat
     ? "heartbeat"
-    : turn.followupRun.run.internalEventExecution
-      ? "event"
-      : "user";
+    : turn.followupRun.run.scheduledAutomation
+      ? "cron"
+      : turn.followupRun.run.internalEventExecution
+        ? "event"
+        : "user";
 }

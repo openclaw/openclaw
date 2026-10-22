@@ -30,9 +30,7 @@ describe("managed handoff sentinel owner", () => {
     status: "skipped" as const,
     ts: 1,
     stats: {
-      handoffId: handoff.handoffId,
-      runId: handoff.runId,
-      root: handoff.root,
+      ...handoff,
       reason: "restart-health-pending",
     },
   };
@@ -44,6 +42,10 @@ describe("managed handoff sentinel owner", () => {
     serviceKind: "launchd",
     handoffFailure: "candidate failed",
   };
+  const recordOutcome = (
+    overrides: Partial<Parameters<typeof recordManagedHandoffSentinelOutcome>[0]> = {},
+  ) =>
+    recordManagedHandoffSentinelOutcome({ ...handoffOutcome, ...overrides }, process.env, () => {});
 
   it("records a managed recovery through the writer while preserving the child failure", async () => {
     await withRestartSentinelStateDir(async () => {
@@ -55,16 +57,11 @@ describe("managed handoff sentinel owner", () => {
       });
       const inspected = await inspectManagedHandoffSentinel(handoff);
       expect(inspected.sentinel?.payload.stats?.reason).toBe("candidate-doctor-failed");
-      const recorded = await recordManagedHandoffSentinelOutcome(
-        {
-          ...handoffOutcome,
-          expectedRevision: inspected.revision,
-          completedStatus: "error",
-          restored: true,
-        },
-        process.env,
-        () => {},
-      );
+      const recorded = await recordOutcome({
+        expectedRevision: inspected.revision,
+        completedStatus: "error",
+        restored: true,
+      });
       expect(recorded.kind).toBe("recorded");
       expect(recorded.sentinel?.payload).toMatchObject({
         status: "error",
@@ -101,15 +98,10 @@ describe("managed handoff sentinel owner", () => {
           });
         }
         const before = await readRestartSentinel();
-        const result = await recordManagedHandoffSentinelOutcome(
-          {
-            ...handoffOutcome,
-            ...(scenario === "consumed" || scenario === "changed"
-              ? { expectedRevision: inspected.revision }
-              : {}),
-          },
-          process.env,
-          () => {},
+        const result = await recordOutcome(
+          scenario === "consumed" || scenario === "changed"
+            ? { expectedRevision: inspected.revision }
+            : {},
         );
         expect(result.kind).toBe("refused");
         expect(await readRestartSentinel()).toEqual(before);
@@ -121,13 +113,10 @@ describe("managed handoff sentinel owner", () => {
     await withRestartSentinelStateDir(async () => {
       const written = await writeRestartSentinel(handoffPayload);
       await clearRestartSentinelIfRevision(written.revision);
-      await expect(
-        recordManagedHandoffSentinelOutcome(
-          { ...handoffOutcome, completedStatus: "skipped", restored: true },
-          process.env,
-          () => {},
-        ),
-      ).resolves.toEqual({ kind: "unchanged", sentinel: null });
+      await expect(recordOutcome({ completedStatus: "skipped", restored: true })).resolves.toEqual({
+        kind: "unchanged",
+        sentinel: null,
+      });
       expect(await readRestartSentinel()).toBeNull();
     });
   });

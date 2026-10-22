@@ -4,9 +4,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -144,7 +145,11 @@ export class NodeWorkerTurnKernel {
           stage: "transaction",
           facts: { kind: "node-worker-journal" },
         });
-        turnSchema(db);
+        if (isPostgresSqlConnection(db)) {
+          ensureStatePostgresFragment(db, "node_worker_turns");
+        } else {
+          turnSchema(db);
+        }
         return operation(db);
       },
       this.databaseOptions,

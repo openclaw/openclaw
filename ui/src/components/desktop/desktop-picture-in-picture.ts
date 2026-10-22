@@ -1,4 +1,4 @@
-import { createSignal, onCleanup } from "solid-js";
+import { action, createOptimistic, createSignal, onSettled } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -22,6 +22,7 @@ export function createDesktopPictureInPicture(
     pending?: boolean;
     errorText?: string;
   }>({});
+  const [opening, setOpening] = createOptimistic(false);
   let activePopup: Window | null = null;
   let pending: { cancelled: boolean } | undefined;
   let stopMirror: (() => void) | null = null;
@@ -36,7 +37,7 @@ export function createDesktopPictureInPicture(
     activePopup = null;
     popup?.close();
   };
-  onCleanup(() => {
+  onSettled(() => () => {
     pending = undefined;
     release();
   });
@@ -46,9 +47,9 @@ export function createDesktopPictureInPicture(
       pending.cancelled = true;
     }
     release();
-    setFeedback({ pending: Boolean(pending) });
+    setFeedback({});
   };
-  const toggle = async () => {
+  const toggle = action(function* (): Generator<Promise<Window>, void, Window> {
     if (activePopup) {
       close();
       return;
@@ -61,12 +62,12 @@ export function createDesktopPictureInPicture(
     }
     const request = { cancelled: false };
     pending = request;
-    setFeedback({ pending: true });
+    setOpening(true);
     let popup: Window | null = null;
     let errorText: string | undefined;
     try {
-      // Must happen directly in the click's user activation, before any await.
-      popup = await api.requestWindow({ width: 640, height: 400 });
+      // Must happen directly in the click's user activation, before yielding.
+      popup = yield api.requestWindow({ width: 640, height: 400 });
       if (
         popup.closed ||
         pending !== request ||
@@ -91,7 +92,7 @@ export function createDesktopPictureInPicture(
         setFeedback({ active: activePopup !== null, errorText });
       }
     }
-  };
+  });
 
   const startMirror = (popup: Window, source: HTMLCanvasElement) => {
     const doc = popup.document;
@@ -176,7 +177,12 @@ export function createDesktopPictureInPicture(
     frame = popup.requestAnimationFrame(paint);
   };
 
-  return { feedback, supported, close, toggle };
+  return {
+    feedback: (): ReturnType<typeof feedback> => (opening() ? { pending: true } : feedback()),
+    supported,
+    close,
+    toggle,
+  };
 }
 
 export type DesktopPictureInPicture = ReturnType<typeof createDesktopPictureInPicture>;

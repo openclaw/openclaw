@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createComponent, createMemo, lazy, Loading, Show, type Accessor } from "solid-js";
+import { createMemo, lazy, Loading, Show, type Accessor } from "solid-js";
 import {
   isThemeAvatarHatId,
   type ThemeBranding,
@@ -115,7 +115,10 @@ export function AgentAvatarHat(props: { agentId: string; branding: ThemeBranding
               </Show>
             }
           >
-            {(id) => createComponent(AVATAR_HAT_ARTWORK[id], {})}
+            {(id) => {
+              const Artwork = AVATAR_HAT_ARTWORK[id];
+              return <Artwork />;
+            }}
           </Show>
         </span>
       )}

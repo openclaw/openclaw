@@ -46,7 +46,6 @@ export async function findCursorInteractiveElements(
             el.setAttribute("${attr}", String(out.length));
             out.push({
               text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
-              tagName,
               hasCursorPointer,
               hasOnClick,
               hasTabIndex,
@@ -62,12 +61,11 @@ export async function findCursorInteractiveElements(
     const values: unknown[] = Array.isArray(evaluated?.result?.value) ? evaluated.result.value : [];
     const entries: (CursorInteractiveInfo | undefined)[] = values.map((value) => {
       const entry = asOptionalRecord(value);
-      if (typeof entry?.text !== "string" || typeof entry.tagName !== "string") {
+      if (typeof entry?.text !== "string") {
         return undefined;
       }
       return {
         text: truncateUtf16Safe(entry.text, 100),
-        tagName: entry.tagName,
         hasOnClick: entry.hasOnClick === true,
         hasCursorPointer: entry.hasCursorPointer === true,
         hasTabIndex: entry.hasTabIndex === true,

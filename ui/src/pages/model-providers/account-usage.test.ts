@@ -81,6 +81,8 @@ it("drops a pending response when the selected agent changes and shows the curre
   });
   const view = await mount(request);
   await waitForSolid(() => expect(request.mock.calls.length).toBe(1));
+  expect(view.textContent).toContain("Loading");
+  expect(view.querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
   view.agentId = "other";
   await waitForSolid(() => expect(view.textContent).toContain("Account usage unavailable"));
   stale.resolve();
@@ -93,6 +95,57 @@ it("drops a pending response when the selected agent changes and shows the curre
   view.client = null;
   await view.updateComplete;
   expect(view.textContent?.trim()).toBe("");
+});
+
+it("retries failed reads through the refresh button and native refresh method", async () => {
+  let attempt = 0;
+  const retry = createDeferredCore();
+  const request = createGatewayRequestMock(async () => {
+    if (++attempt < 3) {
+      if (attempt === 2) {
+        await retry.promise;
+      }
+      throw new Error(`Usage attempt ${attempt} failed`);
+    }
+    return snapshot;
+  });
+  const view = await mount(request);
+  await waitForSolid(() => expect(view.textContent).toContain("Usage attempt 1 failed"));
+  const button = view.querySelector<HTMLButtonElement>("button")!;
+  button.focus();
+  button.click();
+  expect(request).toHaveBeenCalledTimes(2);
+  await waitForSolid(() => expect(view.textContent).toContain("Loading"));
+  expect(view.querySelector("button")).toBe(button);
+  expect(button.disabled).toBe(true);
+  retry.resolve();
+  await waitForSolid(() => expect(view.textContent).toContain("Usage attempt 2 failed"));
+  expect(view.querySelector("button")).toBe(button);
+  expect(document.activeElement).toBe(button);
+  view.refreshUsage();
+  await waitForSolid(() => expect(view.textContent).toContain("12 credits"));
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(view.querySelector(".provider-usage-error")).toBeNull();
+  expect(view.querySelector("button")).toBe(button);
+});
+
+it("handles synchronously failed receipts replaced before Solid observes them", async () => {
+  const request = createGatewayRequestMock(async () => snapshot);
+  const view = await mount(request);
+  await waitForSolid(() => expect(view.textContent).toContain("12 credits"));
+  let attempt = 0;
+  const client = createTestGatewayClient(request);
+  client.request = () => {
+    throw new Error(`Synchronous usage failure ${++attempt}`);
+  };
+  view.client = client;
+  view.refreshUsage();
+  view.refreshUsage();
+  await waitForSolid(() => expect(view.textContent).toContain("Synchronous usage failure 2"));
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  expect(attempt).toBe(2);
 });
 
 it("retires native scope changes immediately and coalesces them across explicit refresh", async () => {

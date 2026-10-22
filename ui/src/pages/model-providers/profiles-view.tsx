@@ -1,8 +1,9 @@
 import "./account-usage.tsx";
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
@@ -52,6 +53,7 @@ export type ProviderProfilesViewProps = {
   usageAgentId?: string;
   registerAccountUsage?: (element: ModelAccountUsageElement) => () => void;
   busy: Record<string, boolean>;
+  logoutSaving?: Record<string, boolean>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   profileOrders: Record<string, string[]>;
@@ -328,49 +330,56 @@ function ProfileIdentity(props: {
   );
 }
 
-export function renderProviderAccountSummary(
-  cards: ModelProviderCard[],
+export function ProviderAccountSummary(props: {
+  cards: ModelProviderCard[];
   recovery?: {
     authProvider: string;
     disabled: boolean;
     onUse: (profileId: string) => void;
-  },
-) {
-  const profiles = cards.flatMap((card) =>
-    card.profiles.map((profile) => ({
-      profile,
-      authRejected: card.catalogStatus === "auth-rejected",
-      // A display card can combine providers whose credentials are not interchangeable.
-      canUse:
-        card.profileProviderIds[profile.profileId] === recovery?.authProvider &&
-        (profile.source === "saved" || profile.source === "inherited"),
-    })),
+  };
+}) {
+  const profiles = createMemo(() =>
+    props.cards.flatMap((card) =>
+      card.profiles.map((profile) => ({
+        key: JSON.stringify([
+          card.id,
+          card.profileProviderIds[profile.profileId],
+          profile.profileId,
+        ]),
+        profile,
+        authRejected: card.catalogStatus === "auth-rejected",
+        // A display card can combine providers whose credentials are not interchangeable.
+        canUse:
+          card.profileProviderIds[profile.profileId] === props.recovery?.authProvider &&
+          (profile.source === "saved" || profile.source === "inherited"),
+      })),
+    ),
   );
-  const sources = [...new Set(cards.map(apiKeySource).filter(Boolean))];
+  const sources = createMemo(() => [...new Set(props.cards.map(apiKeySource).filter(Boolean))]);
   return (
     <section class="model-provider-login__accounts" aria-label={t("modelProviders.login.accounts")}>
       <h3>{t("modelProviders.login.accounts")}</h3>
-      {profiles.length ? (
+      {profiles().length ? (
         <div role="list">
-          <For each={profiles}>
+          <For each={profiles()} keyed={(entry) => entry.key}>
             {(entry, index) => (
               <div
                 class="model-provider-login__account"
                 role="listitem"
-                data-profile-id={entry.profile.profileId}
+                data-profile-id={entry().profile.profileId}
               >
                 <ProfileIdentity
-                  profile={entry.profile}
-                  identity={profileIdentity(entry.profile, index())}
+                  profile={entry().profile}
+                  identity={profileIdentity(entry().profile, index())}
                   showDetails={false}
                 />
-                {profileStatus(entry.profile, entry.authRejected)}
-                {entry.canUse && recovery ? (
+                {profileStatus(entry().profile, entry().authRejected)}
+                {entry().canUse && props.recovery ? (
                   <button
                     class="btn"
                     data-models-use-account
-                    disabled={recovery.disabled}
-                    onClick={() => recovery.onUse(entry.profile.profileId)}
+                    disabled={props.recovery.disabled}
+                    onClick={() => props.recovery?.onUse(entry().profile.profileId)}
                   >
                     {t("modelProviders.login.useAccount")}
                   </button>
@@ -380,8 +389,8 @@ export function renderProviderAccountSummary(
           </For>
         </div>
       ) : undefined}
-      <For each={sources}>{(source) => <p class="muted">{source}</p>}</For>
-      {!profiles.length && !sources.length ? (
+      <For each={sources()}>{(source) => <p class="muted">{source}</p>}</For>
+      {!profiles().length && !sources().length ? (
         <p class="muted">{t("modelProviders.login.noAccounts")}</p>
       ) : undefined}
     </section>
@@ -492,16 +501,14 @@ function ProviderProfileRow(
   },
 ) {
   let rowElement!: HTMLElement;
-  let registeredId: string | undefined;
   const drag = createPointerDrag();
-  let releaseUsage: (() => void) | undefined;
-  onCleanup(() => {
-    releaseUsage?.();
-    if (registeredId) {
-      props.rowElements.delete(registeredId);
-    }
-  });
   const profile = () => props.row.profile;
+  onSettled(() => {
+    const initialProfileId = profile().profileId;
+    const rowElements = props.rowElements;
+    rowElements.set(initialProfileId, rowElement);
+    return () => rowElements.delete(initialProfileId);
+  });
   const group = () => props.row.group;
   const provider = () => group().provider;
   const order = () => group().order;
@@ -548,11 +555,7 @@ function ProviderProfileRow(
   return (
     <div
       class="model-providers__profile"
-      ref={(element) => {
-        rowElement = element;
-        registeredId = profile().profileId;
-        props.rowElements.set(registeredId, element);
-      }}
+      ref={(element) => (rowElement = element)}
       role="listitem"
       data-profile-id={profile().profileId}
       data-profile-provider={provider()}
@@ -612,14 +615,20 @@ function ProviderProfileRow(
         ) : undefined}
       </span>
       <ProfileIdentity profile={profile()} identity={props.identity} showDetails />
-      {provider() === "openai" && profile().type !== "api_key" ? (
-        <openclaw-model-account-usage
-          ref={(element) => (releaseUsage = props.registerAccountUsage?.(element))}
-          prop:client={props.usageClient ?? null}
-          prop:agentId={props.usageAgentId ?? ""}
-          prop:profileId={profile().profileId}
-        />
-      ) : undefined}
+      <Show when={provider() === "openai" && profile().type !== "api_key"}>
+        {(_shown) => {
+          let usageElement!: ModelAccountUsageElement;
+          onSettled(() => props.registerAccountUsage?.(usageElement));
+          return (
+            <openclaw-model-account-usage
+              ref={(element) => (usageElement = element)}
+              prop:client={props.usageClient ?? null}
+              prop:agentId={props.usageAgentId ?? ""}
+              prop:profileId={profile().profileId}
+            />
+          );
+        }}
+      </Show>
       <span class="model-providers__profile-status">
         {profileStatus(profile(), props.card.catalogStatus === "auth-rejected")}
       </span>
@@ -630,7 +639,11 @@ function ProviderProfileRow(
             class="model-providers__profile-logout"
             aria-label={logoutLabel()}
             title={logoutBlocked()}
-            disabled={!props.canMutate || props.busy[`logout:${props.card.id}`]}
+            disabled={
+              props.logoutSaving?.[props.card.id] ||
+              !props.canMutate ||
+              props.busy[`logout:${props.card.id}`]
+            }
             onClick={() => {
               const targetProvider = logoutProvider();
               if (targetProvider) {
@@ -642,18 +655,11 @@ function ProviderProfileRow(
               }
             }}
           >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <StrokeIcon>
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" x2="9" y1="12" y2="12" />
-            </svg>
+            </StrokeIcon>
           </button>
         ) : undefined}
       </span>

@@ -51,11 +51,13 @@ async function warmArchives(
   );
 }
 
-it.for(["search", "full"] as const)(
+it.for(["search", "full", "overflow"] as const)(
   "prepares evicted category facts through %s reads",
   async (mode) => {
     await withCategoryState(async () => {
-      const queries = Array.from({ length: 101 }, (_, index) => ({
+      const overflow = mode === "overflow";
+      const count = overflow ? DEFAULT_WORKER_PENDING_TASKS * MAX_SESSION_ROW_FACTS_KEYS + 1 : 101;
+      const queries = Array.from({ length: count }, (_, index) => ({
         agentId: "main",
         key: `agent:main:cold-category-${index}`,
       }));
@@ -64,41 +66,91 @@ it.for(["search", "full"] as const)(
         writeRow(query.key, {
           archivedAt: 1,
           category: "Work",
-          ...(query === oldest ? { label: "Cold category target" } : {}),
+          ...(!overflow && query === oldest ? { label: "Cold category target" } : {}),
         });
       }
       using _ = holdForeground();
       using projection = await createTestProjection({ cfg, modelCatalog: [] });
       let sql: ReturnType<typeof observeHostDataSql> | undefined;
       try {
-        await warmArchives(projection, queries);
+        await warmArchives(projection, queries.slice(0, 101));
         const materialized = projection.materializedCount;
         expect(materialized).toBe(101);
+        expect(projection.capture(oldest)?.materialized).toBeDefined();
         const reads: string[][] = [];
         observeRowFacts((owner) => async (input) => {
           reads.push([...input.sessionKeys]);
           return owner.readRowFacts(input);
         });
+        const admitted: string[][] = [];
+        if (overflow) {
+          const prepare = projection.withPreparedExactRows.bind(projection);
+          vi.spyOn(projection, "withPreparedExactRows").mockImplementation(
+            (select, consume, options) => {
+              const selected = select(cfg);
+              admitted.push(selected.map(({ key }) => key));
+              return prepare(
+                (config) => {
+                  // Reentry retains this admission slice, not the changing live set.
+                  expect(select(config)).toEqual(selected);
+                  return selected;
+                },
+                consume,
+                options,
+              );
+            },
+          );
+        }
         sql = observeHostDataSql();
         const prepare = async () => {
-          sessionChanges.emit({ sessionKey: oldest.key, factsInvalidated: "category" });
+          if (overflow) {
+            sessionChanges.emitBatch(
+              queries.map(({ key }) => ({
+                sessionKey: key,
+                factsInvalidated: "category" as const,
+              })),
+            );
+          } else {
+            sessionChanges.emit({ sessionKey: oldest.key, factsInvalidated: "category" });
+          }
           projection.setArchivePageSize(100);
           expect(projection.capture(oldest)?.materialized).toBeUndefined();
           expect(projection.sharingTargetState(oldest)).toEqual({ status: "pending" });
-          expect.soft(projection.dirtyRowCount).toBe(1);
-          expect.soft(projection.needsSelectionPreparation()).toBe(true);
-          if (mode === "search") {
-            const result = await listProjectedSessions({
-              projection,
-              opts: { archived: "all", search: "Cold category target", limit: 1 },
-            });
-            expect(result.sessions.map(({ key }) => key)).toEqual([oldest.key]);
+          if (overflow) {
+            for (const metadataPrepared of [false, true]) {
+              expect(() => projection.selectEntries({ key: oldest.key }, metadataPrepared)).toThrow(
+                SessionRowFactsPending,
+              );
+            }
+            await projection.prepareMembership();
+            expect(projection.needsMembershipPreparation()).toBe(false);
+            expect(projection.selectEntries({ key: oldest.key }, true)).toHaveLength(1);
+            expect(admitted.length).toBeGreaterThan(0);
+            expect(admitted.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
+            expect(reads.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
+            expect([...new Set(reads.flat())].toSorted()).toEqual(
+              queries.map(({ key }) => key).toSorted(),
+            );
+            for (const query of queries) {
+              expect(projection.sharingTargetState(query)).toMatchObject({ status: "ready" });
+              expect(projection.capture(query)?.sharingEntry?.category).toBe("Work");
+            }
           } else {
-            await projection.ensureMaterialized();
+            expect.soft(projection.dirtyRowCount).toBe(1);
+            expect.soft(projection.needsSelectionPreparation()).toBe(true);
+            if (mode === "search") {
+              const result = await listProjectedSessions({
+                projection,
+                opts: { archived: "all", search: "Cold category target", limit: 1 },
+              });
+              expect(result.sessions.map(({ key }) => key)).toEqual([oldest.key]);
+            } else {
+              await projection.ensureMaterialized();
+            }
+            expect(projection.sharingTargetState(oldest)).toMatchObject({ status: "ready" });
+            expect(projection.sharingTarget(oldest)?.entry.category).toBe("Work");
+            expect(projection.materializedCount - materialized).toBe(mode === "search" ? 1 : 0);
           }
-          expect(projection.sharingTargetState(oldest)).toMatchObject({ status: "ready" });
-          expect(projection.sharingTarget(oldest)?.entry.category).toBe("Work");
-          expect(projection.materializedCount - materialized).toBe(mode === "search" ? 1 : 0);
         };
         if (mode === "search") {
           await projection.withSelectionPreparation(prepare);
@@ -115,82 +167,6 @@ it.for(["search", "full"] as const)(
     });
   },
 );
-
-it("reconciles more category rows than exact admission permits and survives archive eviction", async () => {
-  await withCategoryState(async () => {
-    const count = DEFAULT_WORKER_PENDING_TASKS * MAX_SESSION_ROW_FACTS_KEYS + 1;
-    const queries = Array.from({ length: count }, (_, index) => ({
-      agentId: "main",
-      key: `agent:main:category-archive-${index}`,
-    }));
-    for (const query of queries) {
-      writeRow(query.key, { archivedAt: 1, category: "Work" });
-    }
-    using _ = holdForeground();
-    using projection = await createTestProjection({ cfg, modelCatalog: [] });
-    let sql: ReturnType<typeof observeHostDataSql> | undefined;
-    try {
-      // The oldest of 101 retained archives must survive eviction as reconciliation work.
-      await warmArchives(projection, queries.slice(0, 101));
-      const oldest = queries[0]!;
-      expect(projection.capture(oldest)?.materialized).toBeDefined();
-      const admitted: string[][] = [];
-      const prepare = projection.withPreparedExactRows.bind(projection);
-      vi.spyOn(projection, "withPreparedExactRows").mockImplementation(
-        (select, consume, options) => {
-          const selected = select(cfg);
-          admitted.push(selected.map(({ key }) => key));
-          return prepare(
-            (config) => {
-              // Reentry must retain this admission slice instead of draining a live set.
-              expect(select(config)).toEqual(selected);
-              return selected;
-            },
-            consume,
-            options,
-          );
-        },
-      );
-      const reads: string[][] = [];
-      observeRowFacts((owner) => async (input) => {
-        reads.push([...input.sessionKeys]);
-        return owner.readRowFacts(input);
-      });
-      sql = observeHostDataSql();
-      sessionChanges.emitBatch(
-        queries.map((query) => ({
-          sessionKey: query.key,
-          factsInvalidated: "category" as const,
-        })),
-      );
-      projection.setArchivePageSize(100);
-      expect(projection.capture(oldest)?.materialized).toBeUndefined();
-      expect(projection.sharingTargetState(oldest)).toEqual({ status: "pending" });
-      expect(() => projection.selectEntries({ key: oldest.key })).toThrow(SessionRowFactsPending);
-      expect(() => projection.selectEntries({ key: oldest.key }, true)).toThrow(
-        SessionRowFactsPending,
-      );
-      await projection.prepareMembership();
-      expect(projection.needsMembershipPreparation()).toBe(false);
-      expect(projection.selectEntries({ key: oldest.key }, true)).toHaveLength(1);
-      expect(admitted.length).toBeGreaterThan(0);
-      expect(admitted.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
-      expect(reads.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
-      // Cold exact materialization may reread metadata already accepted by bulk preparation.
-      expect([...new Set(reads.flat())].toSorted()).toEqual(
-        queries.map(({ key }) => key).toSorted(),
-      );
-      for (const query of queries) {
-        expect(projection.sharingTargetState(query)).toMatchObject({ status: "ready" });
-        expect(projection.capture(query)?.sharingEntry?.category).toBe("Work");
-      }
-      expect(sql.queries).toEqual([]);
-    } finally {
-      await projection.ensureMaterialized().catch(() => undefined);
-      sql?.restore();
-    }
-  });
-});
 
 it("keeps failed category facts pending and reenters selection through exact preparation", async () => {
   await withCategoryState(async () => {

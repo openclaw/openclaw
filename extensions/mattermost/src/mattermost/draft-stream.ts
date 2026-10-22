@@ -29,37 +29,12 @@ type MattermostFinalTextResolution =
       publishedParts: readonly MattermostDraftPublishedPart[];
     };
 
-function normalizeMattermostDraftText(text: string, maxChars: number): string {
-  const trimmed = text.trim();
-  if (!trimmed) {
-    return "";
-  }
-  return truncateWithMarker(trimmed, maxChars, { marker: "...", reserve: 3, trimEnd: true });
-}
-
-function consumeMattermostPublishedChunk(params: {
-  source: string;
-  offset: number;
-  chunk: string;
-}): number | undefined {
-  const chunk = params.chunk.trim();
-  if (!chunk) {
-    return params.offset;
-  }
-  let offset = params.offset;
-  while (offset < params.source.length && /\s/.test(params.source[offset] ?? "")) {
-    offset += 1;
-  }
-  return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
-}
-
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
   rootId?: string;
   maxChars?: number;
   throttleMs?: number;
-  renderText?: (text: string) => string;
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
@@ -106,8 +81,10 @@ export function createMattermostDraftStream(params: {
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     const target = currentGeneration;
-    const rendered = params.renderText?.(text) ?? text;
-    const normalized = normalizeMattermostDraftText(rendered, maxChars);
+    const trimmed = text.trim();
+    const normalized = trimmed
+      ? truncateWithMarker(trimmed, maxChars, { marker: "...", reserve: 3, trimEnd: true })
+      : "";
     if (!normalized) {
       return false;
     }
@@ -190,9 +167,15 @@ export function createMattermostDraftStream(params: {
         return;
       }
       publishedAssistantParts.set(messageId, { messageId, content });
+      const chunk = content.trim();
+      let nextOffset = offset;
+      if (chunk) {
+        while (nextOffset < assistantText.length && /\s/.test(assistantText[nextOffset] ?? "")) {
+          nextOffset += 1;
+        }
+      }
       publishedAssistantOffset =
-        consumeMattermostPublishedChunk({ source: assistantText, offset, chunk: content }) ??
-        offset;
+        !chunk || assistantText.startsWith(chunk, nextOffset) ? nextOffset + chunk.length : offset;
     };
     const boundary = (async () => {
       try {
@@ -204,8 +187,7 @@ export function createMattermostDraftStream(params: {
           return;
         }
         const sourceText = pendingText.trim() ? pendingText : sealed.latestSourceText;
-        const rendered = params.renderText?.(sourceText) ?? sourceText;
-        const finalizedText = rendered.trim();
+        const finalizedText = sourceText.trim();
         const chunks =
           params.chunkText?.(finalizedText) ??
           chunkMarkdownTextWithMode(finalizedText, maxChars, "length");

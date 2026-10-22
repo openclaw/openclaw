@@ -75,7 +75,7 @@ export async function spawnSubagentDirect(
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const { gatewayContextResolver, operatorAuthority, requester } =
+  const { gatewayContextResolver, operatorAuthority, requester, creatorProfileId } =
     captureSubagentSpawnGatewayContext();
   const requestResolution = await resolveSubagentSpawnRequest(params, ctx);
   if (!requestResolution.ok) {
@@ -153,6 +153,7 @@ export async function spawnSubagentDirect(
       sandboxMode,
       swarmEnabled: swarmConfig.enabled,
       requesterSandboxed: ctx.sandboxed,
+      creatorProfileId,
     });
     if (!childPlan.ok) {
       return childPlan.result;
@@ -547,6 +548,7 @@ export async function spawnSubagentDirect(
         return {
           runId,
           requesterTurnRunId: ctx.requesterTurnRunId,
+          nativePluginOwner: params.collect ? ctx.nativePluginOwner : undefined,
           ...childTarget,
           controllerSessionKey: ownership.controllerSessionKey,
           sessionEntry: childEntry,

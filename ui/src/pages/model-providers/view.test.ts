@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { resolveDefaultModelPresentation } from "./data.ts";
 import { card, mount, props, text } from "./view.test-support.tsx";
 
@@ -333,16 +334,19 @@ describe("renderModelProviders", () => {
     await i18n.setLocale("en");
   });
 
-  it("keeps discovery failure recovery visible while another provider is pending", () => {
+  it("keeps discovery failure recovery visible while another provider is pending", async () => {
     const container = mount(
       props({ catalogDiscovering: true, catalogDiscoveryError: "A provider failed discovery." }),
     );
     expect(
       container.querySelector('.model-providers__catalog-progress[role="status"]'),
     ).not.toBeNull();
-    expect(
-      container.querySelector('.model-providers__catalog-progress[role="alert"] span')?.textContent,
-    ).toBe("A provider failed discovery.");
+    await waitForFast(() =>
+      expect(
+        container.querySelector('.model-providers__catalog-progress[role="alert"] span')
+          ?.textContent,
+      ).toBe("A provider failed discovery."),
+    );
     const retry = container.querySelector<HTMLButtonElement>(
       '.model-providers__catalog-progress[role="alert"] button',
     );

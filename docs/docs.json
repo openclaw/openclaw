@@ -2292,6 +2292,7 @@
                   {
                     "group": "Gateways and routers",
                     "pages": [
+                      "providers/bifrost",
                       "providers/claude-max-api-proxy",
                       "providers/clawrouter",
                       "providers/cloudflare-ai-gateway",
@@ -3380,6 +3381,7 @@
                 "group": "Start here",
                 "pages": [
                   "help/index",
+                  "help/support",
                   "help/troubleshooting",
                   "help/debugging"
                 ]

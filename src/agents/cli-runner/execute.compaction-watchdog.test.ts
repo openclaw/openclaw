@@ -17,12 +17,11 @@ import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-suppo
 import type { CliBackendParseJsonlLifecycleEvent } from "../../plugins/cli-backend.types.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
-import { defaultCliWatchdogClock } from "./execute-plugin-watchdog.js";
+import * as pluginWatchdog from "./execute-plugin-watchdog.js";
 import { waitUntilAborted } from "./execute-plugin.test-support.js";
 import { executePreparedCliRun } from "./execute.js";
 import {
   createManagedRun,
-  setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
@@ -145,7 +144,7 @@ afterEach(async () => {
     closeDiagnosticEmbeddedRunOwner(owner);
   }
   supervisorSpawnMock.mockReset();
-  setCliRunnerExecuteTestDeps({ watchdogClock: defaultCliWatchdogClock });
+  vi.restoreAllMocks();
   resetDiagnosticStateForTest();
   vi.useRealTimers();
 });
@@ -184,8 +183,11 @@ it("requests diagnostics recovery when compaction never ends", async () => {
   const context = contextFor("compaction-stuck");
   const recover = diagnostics(context);
   // Silence only the competing watchdog so recovery is observed at its own heartbeat.
-  setCliRunnerExecuteTestDeps({
-    watchdogClock: { now: () => Date.now(), setTimeout: () => () => {} },
+  const createWatchdog = pluginWatchdog.createCliPluginWatchdog;
+  vi.spyOn(pluginWatchdog, "createCliPluginWatchdog").mockImplementationOnce((params) => {
+    const watchdog = createWatchdog(params);
+    watchdog.dispose();
+    return watchdog;
   });
   const { run, started, finish } = startCompaction(context);
   await started.promise;

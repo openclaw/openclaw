@@ -1,4 +1,4 @@
-import { readFile, symlink, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   createNativeSessionBindingAuthority,
@@ -187,6 +187,9 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     const reportAlias = "c:\\work\\repo\\reports\\slack-upload.txt";
     const reportPath = `${remoteRoot}/reports/slack-upload.txt`;
     const imagePath = `${remoteRoot}/images/preview.png`;
+    const localReport = path.join(openClawState.workspaceDir, "reports", "slack-upload.txt");
+    await mkdir(path.dirname(localReport), { recursive: true });
+    await writeFile(localReport, "stale local report\n");
     const readRemoteFile = createRemoteFileReader({
       [reportPath]: "authoritative remote report\n",
       [imagePath]: "authoritative remote image\n",
@@ -220,18 +223,6 @@ describe("prepareCodexRemoteWorkspaceMessageMedia", () => {
     expect(report).toContain(`${path.sep}media${path.sep}outbound${path.sep}`);
     await expect(readText(report)).resolves.toBe("authoritative remote report\n");
     await expect(readText(image)).resolves.toBe("authoritative remote image\n");
-  });
-
-  it("uses authoritative remote bytes when a stale local file exists", async () => {
-    const remotePath = `${remoteWorkspaceRoot}/reused-upload.txt`;
-    await writeFile(path.join(openClawState.workspaceDir, "reused-upload.txt"), "stale\n");
-
-    const result = await prepareMedia(
-      { filePath: remotePath },
-      createRemoteFileReader({ [remotePath]: "authoritative remote content\n" }),
-    );
-
-    await expect(readText(result.args.filePath)).resolves.toBe("authoritative remote content\n");
   });
 
   it("preserves the original argument object for URL-backed media", async () => {

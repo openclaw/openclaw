@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
@@ -20,6 +21,20 @@ describe("slack socket reconnect loop", () => {
       runtime,
       setStatus,
     });
+  function failStarts(count: number, error: () => Error, ready = () => controller.abort()) {
+    let attempts = 0;
+    slackTestState.appStartMock.mockImplementation(async () => {
+      if (attempts++ < count) {
+        throw error();
+      }
+      ready();
+    });
+  }
+  async function finishRetries() {
+    const run = start();
+    await vi.runAllTimersAsync();
+    await expect(run).resolves.toBeUndefined();
+  }
   beforeEach(async () => {
     await resetSlackTestState();
     controller = new AbortController();
@@ -36,24 +51,14 @@ describe("slack socket reconnect loop", () => {
   });
 
   it("continues after thirteen consecutive recoverable Slack Web API HTTP failures", async () => {
-    let attempts = 0;
-    slackTestState.appStartMock.mockImplementation(async () => {
-      attempts += 1;
-      if (attempts <= 13) {
-        throw Object.assign(new Error("Slack Web API HTTP error"), {
-          code: "slack_webapi_http_error",
-          statusCode: 503,
-          statusMessage: "Service Unavailable",
-        });
-      }
-      controller.abort();
-    });
-
-    const run = start();
-
-    await vi.runAllTimersAsync();
-    await expect(run).resolves.toBeUndefined();
-
+    failStarts(13, () =>
+      Object.assign(new Error("Slack Web API HTTP error"), {
+        code: "slack_webapi_http_error",
+        statusCode: 503,
+        statusMessage: "Service Unavailable",
+      }),
+    );
+    await finishRetries();
     expect(slackTestState.appStartMock).toHaveBeenCalledTimes(14);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("retry 13/∞"));
     const error =
@@ -68,23 +73,13 @@ describe("slack socket reconnect loop", () => {
 
   it("includes the configured Socket Mode logger context in start retry diagnostics", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    let attempts = 0;
-    slackTestState.appStartMock.mockImplementation(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        slackTestState.socketModeLogger?.error("failed to retrieve WSS URL", {
-          data: { error: "missing_scope", needed: "connections:write" },
-        });
-        throw new Error();
-      }
-      controller.abort();
+    failStarts(1, () => {
+      slackTestState.socketModeLogger?.error("failed to retrieve WSS URL", {
+        data: { error: "missing_scope", needed: "connections:write" },
+      });
+      return new Error();
     });
-
-    const run = start();
-
-    await vi.runAllTimersAsync();
-    await expect(run).resolves.toBeUndefined();
-
+    await finishRetries();
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining(
         "last SDK log: socket-mode:socket-mode failed to retrieve WSS URL slack error: missing_scope; needed: connections:write",
@@ -112,23 +107,13 @@ describe("slack socket reconnect loop", () => {
       team_id: "T1",
       is_enterprise_install: false,
     });
-    let attempts = 0;
-    let resolveSecondStart: (() => void) | undefined;
-    const secondStart = new Promise<void>((resolve) => {
-      resolveSecondStart = resolve;
-    });
-    slackTestState.appStartMock.mockImplementation(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new Error("ECONNRESET");
-      }
-      resolveSecondStart?.();
-    });
+    const secondStart = createDeferred<void>();
+    failStarts(1, () => new Error("ECONNRESET"), secondStart.resolve);
 
     const run = start();
 
     await vi.runOnlyPendingTimersAsync();
-    await secondStart;
+    await secondStart.promise;
     await Promise.resolve();
     await Promise.resolve();
 

@@ -1,3 +1,4 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { fetchWithControlUiAuth } from "../app/control-ui-auth.ts";
 import { isConfiguredUiDevGateway } from "../dev-gateway.ts";
@@ -10,14 +11,9 @@ let gatewayRequests = new AbortController();
 // More than one cache is keyed by the Gateway HTTP context (avatars,
 // geolocation), so every subscriber must be notified on a switch. A single slot
 // would silently drop whichever registered first.
-const gatewayContextResets = new Set<() => void>();
+const gatewayContextResets = createChangeListeners();
 
-export function registerAvatarGatewayReset(reset: () => void): () => void {
-  gatewayContextResets.add(reset);
-  return () => {
-    gatewayContextResets.delete(reset);
-  };
-}
+export const registerAvatarGatewayReset = gatewayContextResets.subscribe;
 
 export function readAvatarGatewayContext() {
   return {
@@ -88,9 +84,7 @@ export function setAvatarGatewayOrigin(
     // its rejected credential to another saved secret.
     gatewayRequests.abort();
     gatewayRequests = new AbortController();
-    for (const reset of gatewayContextResets) {
-      reset();
-    }
+    gatewayContextResets.publish();
   }
   appGatewayOrigin = nextOrigin;
   appGatewayResourceBasePath = nextResourceBasePath;

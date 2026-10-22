@@ -12,6 +12,7 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginProviderRegistration } from "../plugins/provider-plugin.types.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry-types.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,
@@ -368,10 +369,7 @@ export class DecisionProviderHost {
     const budget = Math.min(options.timeoutMs, 30_000);
     const deadlineMonotonicMs = started + budget;
     const timer = setTimeout(() => controller.abort("decision-deadline"), budget);
-    let settle!: () => void;
-    const done = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
+    const { promise: done, resolve: settle } = createDeferredCore();
     this.pending.set(controller, { consumerId, done });
     let observedInterruption: Outcome | undefined;
     let admissionError: { error: unknown } | undefined;

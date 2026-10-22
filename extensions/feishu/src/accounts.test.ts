@@ -4,7 +4,6 @@ import {
   FeishuSecretRefUnavailableError,
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
-  resolveDefaultFeishuAccountSelection,
   resolveFeishuAccount,
   resolveFeishuCredentials,
   resolveFeishuRuntimeAccount,
@@ -47,11 +46,11 @@ describe("Feishu account resolution", () => {
   });
 
   it.each([
-    [{ defaultAccount: "router-d", accounts: {} }, "router-d", "explicit-default"],
-    [{ accounts: { default: credentials } }, "default", "mapped-default"],
-  ] as const)("reports selection source for %j", (config, accountId, source) => {
+    [{ defaultAccount: "router-d", accounts: {} }, "router-d"],
+    [{ accounts: { default: credentials } }, "default"],
+  ] as const)("selects the configured default account for %j", (config, accountId) => {
     const cfg = createFeishuTestConfig(config);
-    expect(resolveDefaultFeishuAccountSelection(cfg)).toEqual({ accountId, source });
+    expect(resolveFeishuAccount({ cfg }).accountId).toBe(accountId);
   });
   it("resolves a punctuation-bearing account key to its own configuration and credentials", () => {
     const cfg = createFeishuTestConfig({
@@ -66,17 +65,15 @@ describe("Feishu account resolution", () => {
       },
     });
 
-    // By exact raw key ...
-    const byKey = resolveFeishuAccount({ cfg, accountId: "sales.eu" });
-    expect(byKey.appId).toBe("app-sales");
-    expect(byKey.config.tools?.perm).toBe(false);
-
-    // ... and by its normalized alias. A normalized alias must never
-    // silently inherit the root account's credentials or tool policy.
-    const byAlias = resolveFeishuAccount({ cfg, accountId: "sales-eu" });
-    expect(byAlias.accountId).toBe("sales-eu");
-    expect(byAlias.appId).toBe("app-sales");
-    expect(byAlias.config.tools?.perm).toBe(false);
+    expect(resolveFeishuAccount({ cfg, accountId: "sales.eu" })).toMatchObject({
+      appId: "app-sales",
+      config: { tools: { perm: false } },
+    });
+    expect(resolveFeishuAccount({ cfg, accountId: "sales-eu" })).toMatchObject({
+      accountId: "sales-eu",
+      appId: "app-sales",
+      config: { tools: { perm: false } },
+    });
   });
 
   it("resolves env SecretRef objects in inspect mode", () => {

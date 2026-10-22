@@ -55,7 +55,7 @@ function newCut(packageVersion = RELEASE, missing = ""): FakeStep[] {
     fetchMain(),
     mainSha(),
     step("git", ["ls-remote", "--heads", "origin", `release/${RELEASE}`]),
-    step("git", ["push", "origin", `${CUT_SHA}:refs/heads/release/${RELEASE}`]),
+    step("pnpm", ["release:push", "--", "--head", CUT_SHA, "--branch", `release/${RELEASE}`]),
     gitShow(`${CUT_SHA}:package.json`, JSON.stringify({ version: packageVersion })),
     gitShow(
       `${CUT_SHA}:CHANGELOG/${RELEASE}.md`,
@@ -131,12 +131,19 @@ describe("release:stable CLI", () => {
       phases: { cut: { status: phaseStatus } },
       operator: { cutShaConfirmed: CUT_SHA },
     });
-    expect(result.calls.filter((call) => call.bin === "git" && call.args[0] === "push")).toEqual([
-      { bin: "git", args: ["push", "origin", `${CUT_SHA}:refs/heads/release/${RELEASE}`] },
+    expect(
+      result.calls.filter((call) => call.bin === "pnpm" && call.args[0] === "release:push"),
+    ).toEqual([
+      {
+        bin: "pnpm",
+        args: ["release:push", "--", "--head", CUT_SHA, "--branch", `release/${RELEASE}`],
+      },
     ]);
     if (code === 2) {
       expect(result.stderr).toContain(`pnpm release:prepare -- --version ${RELEASE} --write`);
       expect(result.stderr).toContain("pnpm changelog:check");
+      expect(result.stderr).toContain("pnpm release:push");
+      expect(result.stderr).not.toContain(`git push origin release/${RELEASE}`);
       expect(result.stderr).toContain(`pnpm release:stable ${RELEASE} --from cut`);
       expect(retained.cut.releaseSha).toBeUndefined();
     } else {

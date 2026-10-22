@@ -68,6 +68,7 @@ import { createRequesterSettleReceiptAdmission } from "./subagent-announce.reque
 import {
   readSharedBatchState,
   REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS,
+  needsRequesterSettleFindings,
   resolveRequesterSettleRetryState,
   captureRequesterRunOwner,
   isRequesterSettleDeliveryClosed,
@@ -345,7 +346,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     (entry) => entry.expectsCompletionMessage === true || interruptedContinuations.includes(entry),
   );
   // A yielded batch owns a rearm generation even when its child settles later.
-  // Otherwise a delivered single child clears the batch before its requester wakes.
   const requesterYieldedAfterDelivery =
     selectedState.afterRequesterYield === true ||
     (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
@@ -357,10 +357,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   // Ordinary nested waves remain owned by the descendant-settle path.
   if (
     !pauseNotice &&
-    (requiredSettled.length === 0 ||
-      (requiredSettled.length < 2 &&
-        !requiredSettled.some((entry) => entry.delivery?.status !== "delivered") &&
-        !requesterYieldedAfterDelivery) ||
+    ((requiredSettled.every((entry) => !needsRequesterSettleFindings(entry)) &&
+      (requiredSettled.length === 0 || !requesterYieldedAfterDelivery)) ||
       (!requesterYieldedAfterDelivery &&
         interruptedContinuations.length === 0 &&
         !hasRequesterCompletionCohort(currentSettledEntry) &&
@@ -369,7 +367,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     await completeBatch(settledBatch, selectedState);
     return false;
   }
-  // Only an owed continuation waits for descendants. A delivered single-child
+  // Only an owed continuation waits for descendants. An entirely delivered
   // wave must not retain its redundant wake behind unrelated running siblings.
   if (waitForDescendants(initialDescendants)) {
     return false;
@@ -421,7 +419,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     }
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
-      : await readChildCompletionFindings(completionRows);
+      : await readChildCompletionFindings(completionRows.filter(needsRequesterSettleFindings));
     if (await retireReplacedStore()) {
       return false;
     }
@@ -564,9 +562,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         !isGatewayClosed()
       ) {
         // Cancellation refused before Gateway admission: keep the unspent durable obligation.
-        await params.transitionBatch(settledBatch, state, () => {
-          refreshBatch();
-        });
+        await params.transitionBatch(settledBatch, state, refreshBatch);
         return true;
       }
       if (
@@ -577,19 +573,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       ) {
         return true;
       }
-      if (isBatchDeliveryClosed() || !isRequesterCurrent()) {
-        if (
-          pauseNotice &&
-          !isBatchDeliveryClosed() &&
-          sourceReceiptAdmission.isRequesterCurrent()
-        ) {
-          // Requester turnover closes this attempt, not the child's pending question.
-          return true;
-        }
-        await completeBatch(settledBatch, state);
-        return true;
+      if (!isBatchDeliveryClosed() && isRequesterCurrent()) {
+        return false;
       }
-      return false;
+      // Requester turnover closes this attempt, not the child's pending question.
+      if (!pauseNotice || isBatchDeliveryClosed() || !sourceReceiptAdmission.isRequesterCurrent()) {
+        await completeBatch(settledBatch, state);
+      }
+      return true;
     };
     if (
       isSourceSessionEffectsAllowed() &&
@@ -665,7 +656,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
               settledBatch,
               directIdempotencyKey,
               () => !pauseNotice && isSourceSessionEffectsAllowed(),
-              () => subagentRuns.runWithCompletionBatchAuthority(settledBatch, deliver),
+              () => {
+                if (!isSourceSessionEffectsAllowed()) {
+                  throw new Error(
+                    "Requester completion source changed before continuation admission.",
+                  );
+                }
+                return subagentRuns.runWithCompletionBatchAuthority(settledBatch, deliver);
+              },
             );
       };
       delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>

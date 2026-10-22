@@ -5,6 +5,7 @@ import { createWriteStream, mkdirSync, readFileSync, statSync, writeFileSync } f
 import { createServer } from "node:net";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { pipeline } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.ts";
@@ -14,9 +15,11 @@ import type { TranscriptEvent } from "../../src/config/sessions/session-accessor
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import {
   controlGatewayProfile,
+  measureGatewayAllocations,
   measureGatewayCpuUsage,
   readGatewayCpuProfile,
   readGatewayCpuUsage,
+  readGatewayGcTrace,
 } from "../lib/gateway-bench-profile.ts";
 import { buildGatewayBenchChildArgs, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
@@ -38,6 +41,7 @@ const { values } = parseArgs({
     rounds: { type: "string", default: "5" },
     "warmup-cohorts": { type: "string", default: "5" },
     scenario: { type: "string", default: "all" },
+    allocations: { type: "boolean", default: false },
     "start-at": { type: "string" },
     output: { type: "string" },
     revision: { type: "string" },
@@ -186,6 +190,7 @@ async function seed() {
                 source_paths_json: "[]",
                 baseline_json: null,
                 baseline_ref: null,
+                checkpoint_json: null,
                 pending_ref: null,
                 pending_target: null,
                 journal_json: null,
@@ -389,6 +394,9 @@ async function measure() {
   const clients: ReturnType<typeof createGatewayWsClient>[] = [];
   const readerProfileIds = new Set<string>();
   let gateway: ChildProcess | undefined;
+  const gcLogPath = path.join(output, "gateway-gc.log");
+  let gcCapture: Promise<void> | undefined;
+  let gcCaptureFailure: Error | undefined;
   let closing = false;
   let clientFailure: Error | undefined;
   let cleanupPromise: Promise<void> | undefined;
@@ -400,6 +408,10 @@ async function measure() {
       }
       if (gateway) {
         await stopChild(gateway, { teardownGraceMs: 10_000, killGraceMs: 2000 });
+      }
+      await gcCapture;
+      if (gcCaptureFailure) {
+        throw gcCaptureFailure;
       }
     })());
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
@@ -431,6 +443,7 @@ async function measure() {
     });
     const log = createWriteStream(path.join(output, "gateway.log"));
     const childArgs = buildGatewayBenchChildArgs(values.entry, port, [
+      ...(values.allocations ? ["--trace-gc-nvp"] : []),
       "--import",
       "./scripts/tsx.mjs",
       "--import",
@@ -446,6 +459,12 @@ async function measure() {
     });
     gateway.stdout?.pipe(log);
     gateway.stderr?.pipe(log);
+    if (values.allocations && gateway.stdout) {
+      // Keep V8 lines and synchronous capture markers together, without stderr interleaving.
+      gcCapture = pipeline(gateway.stdout, createWriteStream(gcLogPath)).catch((error: unknown) => {
+        gcCaptureFailure = error instanceof Error ? error : new Error(String(error));
+      });
+    }
     let startup = "";
     let listening = false;
     const observe = (chunk: Buffer) => {
@@ -638,25 +657,48 @@ async function measure() {
       }
     }
     const results = [];
+    const waitForStart = async () => {
+      if (results.length === 0 && startAt !== undefined) {
+        if (Date.now() >= startAt) {
+          throw new Error("--start-at passed before measurement readiness");
+        }
+        await delay(startAt - Date.now());
+      }
+    };
     for (let round = 0; round < rounds; round++) {
       for (const variant of variants) {
-        const profilePath = path.join(output, `${variant.name}-${round}.cpuprofile`);
-        await controlGatewayProfile(gateway, "cpu", "start", profilePath);
-        const before = await readGatewayCpuUsage(gateway);
-        if (results.length === 0 && startAt !== undefined) {
-          if (Date.now() >= startAt) {
-            throw new Error("--start-at passed before concurrent warmup and profiler readiness");
+        const profilePath = path.join(
+          output,
+          `${variant.name}-${round}.${values.allocations ? "heapprofile" : "cpuprofile"}`,
+        );
+        let startedAt = 0;
+        const samples: Awaited<ReturnType<typeof request>>[] = [];
+        const workload = async () => {
+          startedAt = Date.now();
+          for (let operation = 0; operation < operations; operation++) {
+            samples.push(...(await Promise.all(clients.map((client) => request(client, variant)))));
           }
-          await delay(startAt - Date.now());
+        };
+        let cpu;
+        let profileResult;
+        if (values.allocations) {
+          await waitForStart();
+          profileResult = await measureGatewayAllocations(
+            gateway,
+            profilePath,
+            clientCount * operations,
+            workload,
+          );
+          cpu = profileResult.cpu;
+        } else {
+          await controlGatewayProfile(gateway, "cpu", "start", profilePath);
+          const before = await readGatewayCpuUsage(gateway);
+          await waitForStart();
+          await workload();
+          cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(gateway));
+          await controlGatewayProfile(gateway, "cpu", "stop", profilePath);
+          profileResult = readGatewayCpuProfile(profilePath);
         }
-        const startedAt = Date.now();
-        const samples = [];
-        for (let operation = 0; operation < operations; operation++) {
-          samples.push(...(await Promise.all(clients.map((client) => request(client, variant)))));
-        }
-        const cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(gateway));
-        await controlGatewayProfile(gateway, "cpu", "stop", profilePath);
-        const profileResult = readGatewayCpuProfile(profilePath);
         if (
           !profileResult.diagnostics ||
           profileResult.diagnostics.collectionErrors ||
@@ -689,10 +731,15 @@ async function measure() {
         );
       }
     }
+    // Promotion parsing needs complete stdout, including the final capture's stop marker.
+    if (values.allocations) {
+      await cleanup();
+    }
     const report = {
       revision: values.revision ?? null,
       entry: values.entry,
       scenario: values.scenario,
+      profiling: values.allocations ? "allocations" : "cpu",
       reader: scopedReader ? "scoped-profile" : "admin",
       readerProfileIds: [...readerProfileIds],
       fixture,
@@ -704,7 +751,18 @@ async function measure() {
       requestedStartAt: startAt ?? null,
       startSkewMs: startAt === undefined ? null : results[0]!.startedAt - startAt,
       warmup,
-      results,
+      results: results.map((result) => {
+        if (!values.allocations) {
+          return result;
+        }
+        const promotion = readGatewayGcTrace(gcLogPath, result.profile.profilePath);
+        return Object.assign(result, {
+          promotion: {
+            ...promotion,
+            promotedBytesPerOperation: promotion.promotedBytes / (clientCount * operations),
+          },
+        });
+      }),
     };
     writeFileSync(path.join(output, "result.json"), `${JSON.stringify(report, null, 2)}\n`);
     console.log(`RESULT ${path.join(output, "result.json")}`);

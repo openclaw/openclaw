@@ -1,4 +1,4 @@
-import { createMemo, createSignal, merge, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, merge, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
@@ -27,7 +27,6 @@ import {
 
 /** Only resolved local worktree destinations are offered by the menu host. */
 export type SessionMenuWork = {
-  loading: boolean;
   pullRequestUrl: string | null;
   worktreePath: string | null;
 };
@@ -119,7 +118,7 @@ function SessionMenuContent(
   };
   let stopShortcut: (() => void) | undefined;
   let stopAfterHide: (() => void) | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     stopShortcut?.();
     stopAfterHide?.();
   });

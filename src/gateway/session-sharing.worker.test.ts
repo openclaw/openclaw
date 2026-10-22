@@ -1,14 +1,31 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import { initSessionState } from "../auto-reply/reply/session.js";
 import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-accessor.entry.js";
+import {
+  listSessionPendingInputs,
+  stageSessionPendingInput,
+  type SessionPendingInputReceipt,
+} from "../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
+import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -20,6 +37,12 @@ import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-ad
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { registerChatAbortController } from "./chat-abort.js";
+import {
+  assertChatSendWorkAdmissionCurrent,
+  createChatSendPendingInputAdmission,
+  createChatSendWorkAdmission,
+} from "./server-methods/chat-send-work-admission.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -300,6 +323,188 @@ it("does not replay an authorization consumer after its own effect changes the r
     });
     expect(effect).toHaveBeenCalledOnce();
   }));
+
+it.each([
+  { scopeName: "operator.write", change: "none" },
+  { scopeName: "operator.sessions.write", change: "none" },
+  { scopeName: "operator.sessions.write", change: "revoke-at-commit" },
+  { scopeName: "operator.sessions.write", change: "foreign-reset" },
+  { scopeName: "operator.sessions.write", change: "replacement" },
+] as const)(
+  "checks $scopeName idle-rollover input at the pending-input write ($change)",
+  ({ scopeName, change }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = {
+        ...rolePolicyConfig(),
+        agents: { defaults: { workspace: state.workspaceDir } },
+        session: { reset: { mode: "idle" as const, idleMinutes: 1 } },
+      };
+      const client = roleClient("write", "idle-rollover-owner");
+      client.connect.scopes = [scopeName];
+      const scope = { agentId: "main", sessionKey: "agent:main:idle-rollover" };
+      const entry = {
+        sessionId: "idle-rollover-session",
+        lifecycleRevision: "before-idle-rollover",
+        updatedAt: Date.now(),
+        lastInteractionAt: 1,
+        createdActor: createdActor(client.authenticatedUserProfile!.profileId),
+      };
+      replaceSessionEntrySync(scope, entry);
+      const captured = await resolveSessionMutationAuthorizationAsync({
+        client,
+        method: "chat.send",
+        requestParams: scope,
+        sessionScope: scopeName === "operator.sessions.write" ? scopeName : undefined,
+        context: { getRuntimeConfig: () => cfg } as GatewayRequestContext,
+      });
+      expect(captured.error).toBeNull();
+      const authorization = captured.authorization!;
+      using _ = { [Symbol.dispose]: () => authorization.release?.() };
+      const target = captureSessionTarget({
+        ...scope,
+        storeScope: resolveSessionStorePathForScope(scope, cfg),
+        incarnation: entry.sessionId,
+      });
+      const runId = `idle-rollover-${change}`;
+      const registration = registerChatAbortController({
+        ...scope,
+        sessionId: entry.sessionId,
+        target,
+        runId,
+        timeoutMs: 60_000,
+      });
+      const sourceRef = registration.entry!;
+      const effect = await beginSessionEffect({
+        target,
+        sourceInput: sourceRef.input,
+        assertAllowed: () => authorization.assertCurrent(),
+        onInterrupt: () => work.release(),
+      });
+      const work = createChatSendWorkAdmission({
+        admission: effect,
+        logGateway: { warn: vi.fn() },
+      });
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const admission = createChatSendPendingInputAdmission({
+        runId,
+        sessionMutationAuthorization: authorization,
+        assertCustodyLifetimeCurrent: () =>
+          assertChatSendWorkAdmissionCurrent({
+            retainedWork: work,
+            admission: effect,
+            lifecycleGeneration,
+            controller: registration.controller,
+            sourceRef,
+          }),
+      });
+      const initialize = (body: string) =>
+        initSessionState({
+          cfg,
+          commandAuthorized: true,
+          expectedExistingSessionId: entry.sessionId,
+          ctx: finalizeInboundContext({
+            Body: body,
+            SessionKey: scope.sessionKey,
+            From: "idle-rollover-owner",
+            To: "assistant",
+            Provider: "webchat",
+            Surface: "webchat",
+            ChatType: "direct",
+          }),
+        });
+      let receipt: SessionPendingInputReceipt | undefined;
+      let commitChecks = 0;
+      const commit = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, check) => {
+        let publication = asOptionalRecord(asOptionalRecord(request.facts)?.publication);
+        if (publication?.kind === "session-actor-admission") {
+          publication = asOptionalRecord(publication.publication);
+        }
+        const staged = asOptionalRecord(publication?.receipt);
+        if (
+          request.stage === "commit" &&
+          publication?.kind === "pending-input-settlement-custody" &&
+          staged?.operation === "stage" &&
+          staged.runId === runId
+        ) {
+          commitChecks += 1;
+          if (change === "revoke-at-commit") {
+            client.connect.scopes = [];
+          }
+        }
+        check(request, grant);
+      });
+      try {
+        const reset = await effect.run(() => initialize("Continue after the idle interval."));
+        expect(reset.isNewSession).toBe(true);
+        expect(reset.resetTriggered).toBe(false);
+        expect(reset.sessionId).toBe(entry.sessionId);
+        expect(reset.sessionEntry.lifecycleRevision).not.toBe(entry.lifecycleRevision);
+        expect(effect.isActive()).toBe(true);
+        expect(() => authorization.assertCurrent()).toThrow("session changed before chat.send");
+
+        if (change === "foreign-reset") {
+          const foreign = await initialize("/new");
+          expect(foreign.sessionId).toBe(entry.sessionId);
+          expect(foreign.sessionEntry.lifecycleRevision).not.toBe(
+            reset.sessionEntry.lifecycleRevision,
+          );
+        } else if (change === "replacement") {
+          await runSessionMutation({
+            target,
+            kind: "reset",
+            policy: "preempt",
+            preempt: { activeRun: "abort", waitingInputs: "cancel" },
+            run: async () => {
+              replaceSessionEntrySync(scope, { ...reset.sessionEntry, sessionId: "replacement" });
+            },
+          });
+          expect(() => authorization.assertAdmittedInputCurrent!()).toThrow("session changed");
+        }
+        const pending = stageSessionPendingInput(
+          { ...scope, sessionId: entry.sessionId },
+          {
+            ...admission,
+            message: {
+              role: "user",
+              content: "Continue after the idle interval.",
+              timestamp: 1,
+              idempotencyKey: `${runId}:user`,
+            },
+          },
+        );
+        if (change === "none") {
+          receipt = await pending;
+          expect(receipt).toBeDefined();
+          expect(commitChecks).toBe(1);
+          expect(
+            await listSessionPendingInputs({ ...scope, sessionId: entry.sessionId }),
+          ).toMatchObject({
+            total: 1,
+            items: [{ runId, message: { content: "Continue after the idle interval." } }],
+          });
+        } else {
+          await expect(pending).rejects.toThrow(
+            change === "revoke-at-commit"
+              ? "Session-scoped writes require your own session."
+              : "Chat admission ended or was cancelled",
+          );
+          expect(commitChecks).toBe(change === "revoke-at-commit" ? 1 : 0);
+          expect(await listSessionPendingInputs({ ...scope, sessionId: entry.sessionId })).toEqual({
+            items: [],
+            total: 0,
+          });
+        }
+      } finally {
+        commit.mockRestore();
+        receipt?.finish("interrupted");
+        await receipt?.settled?.();
+        work.release();
+        registration.cleanup();
+        await effect.released;
+        await sourceRef.input.settlement.promise;
+      }
+    }),
+);
 
 it.for([false, true])(
   "checks committed chat authority while an unrelated writer is held (revoked=%s)",

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createServer, type ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
@@ -26,6 +27,7 @@ import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { cleanupSessionStateForTest } from "../../../src/test-utils/session-state-cleanup.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -318,9 +320,53 @@ suite.define(() => {
                 );
               });
               const snapshots: Record<string, unknown>[] = [];
-              page.on("websocket", (socket) =>
+              type Subscription = {
+                foreground: boolean;
+                passive: boolean;
+                acknowledged: boolean | null;
+              };
+              let latestSubscription: Subscription | undefined;
+              let foregroundEver = false;
+              let foregroundAcknowledged = false;
+              let foregroundRejected = false;
+              page.on("websocket", (socket) => {
+                const pending = new Map<string, Subscription>();
+                socket.on("framesent", ({ payload }) => {
+                  const frame: unknown = JSON.parse(String(payload));
+                  if (
+                    !isRecord(frame) ||
+                    frame.type !== "req" ||
+                    frame.method !== "controlUi.sessionPullRequests.subscribe" ||
+                    typeof frame.id !== "string" ||
+                    !isRecord(frame.params)
+                  ) {
+                    return;
+                  }
+                  const subscription: Subscription = {
+                    foreground:
+                      Array.isArray(frame.params.sessionKeys) &&
+                      frame.params.sessionKeys.includes(parentKey),
+                    passive:
+                      Array.isArray(frame.params.passiveSessionKeys) &&
+                      frame.params.passiveSessionKeys.includes(parentKey),
+                    acknowledged: null,
+                  };
+                  pending.set(frame.id, subscription);
+                  latestSubscription = subscription;
+                  foregroundEver ||= subscription.foreground;
+                });
                 socket.on("framereceived", ({ payload }) => {
                   const frame: unknown = JSON.parse(String(payload));
+                  if (isRecord(frame) && frame.type === "res" && typeof frame.id === "string") {
+                    const subscription = pending.get(frame.id);
+                    if (subscription) {
+                      subscription.acknowledged = frame.ok === true;
+                      foregroundAcknowledged ||=
+                        subscription.foreground && subscription.acknowledged;
+                      foregroundRejected ||= subscription.foreground && !subscription.acknowledged;
+                      pending.delete(frame.id);
+                    }
+                  }
                   if (
                     !isRecord(frame) ||
                     frame.event !== CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT ||
@@ -333,8 +379,8 @@ suite.define(() => {
                   if (isRecord(snapshot)) {
                     snapshots.push(snapshot);
                   }
-                }),
-              );
+                });
+              });
               const url = new URL(controlUiSessionUrl(suite.server.baseUrl, selectedKey));
               url.hash = new URLSearchParams({ gatewayUrl: browserGatewayUrl.href }).toString();
               await page.goto(url.href);
@@ -354,7 +400,14 @@ suite.define(() => {
                 }
                 await row.locator(".sidebar-recent-session__link").focus();
                 await card.waitFor();
-                await expect.poll(() => snapshots.at(-1)?.status).toBeTruthy();
+                // The earlier passive receipt snapshot is already ready.
+                await expect
+                  .poll(() => latestSubscription)
+                  .toMatchObject({
+                    foreground: true,
+                    passive: false,
+                    acknowledged: true,
+                  });
                 activated = true;
               };
               try {
@@ -403,6 +456,54 @@ suite.define(() => {
                       .count(),
                   ).toBe(1);
                 }
+              } catch (error) {
+                const hydratedCount = (snapshot: Record<string, unknown> | undefined) =>
+                  Array.isArray(snapshot?.taskPullRequests)
+                    ? snapshot.taskPullRequests.filter(
+                        (item: unknown) => isRecord(item) && isRecord(item.pullRequest),
+                      ).length
+                    : 0;
+                const latestSnapshot = snapshots.at(-1);
+                recordControlUiE2eFailureFacts(page, {
+                  taskPrSnapshotCount: snapshots.length,
+                  taskPrLatestReceiptCount: Array.isArray(latestSnapshot?.taskPullRequests)
+                    ? latestSnapshot.taskPullRequests.length
+                    : 0,
+                  taskPrLatestHydratedCount: hydratedCount(latestSnapshot),
+                  taskPrMaxHydratedCount: Math.max(0, ...snapshots.map(hydratedCount)),
+                  taskPrLatestReceiptOnly: latestSnapshot?.branchRead === false,
+                  taskPrLatestUnavailable: latestSnapshot?.status === "unavailable",
+                  taskPrForegroundEver: foregroundEver,
+                  taskPrForegroundAcknowledged: foregroundAcknowledged,
+                  taskPrForegroundRejected: foregroundRejected,
+                  taskPrLatestForeground: latestSubscription?.foreground ?? null,
+                  taskPrLatestPassive: latestSubscription?.passive ?? null,
+                  taskPrLatestAcknowledged: latestSubscription?.acknowledged ?? null,
+                  taskPrGithubRequestCount: githubRequests.length - requestsBeforeStage,
+                });
+                await withTimeout(
+                  page.evaluate((key) => {
+                    const diagnosticRow = document.querySelector(
+                      '.sidebar-recent-session[data-session-key="' + key + '"]',
+                    );
+                    const trigger = diagnosticRow?.querySelector(".sidebar-recent-session__link");
+                    const diagnosticCard = document.querySelector(".session-progress-hovercard");
+                    return {
+                      taskPrDocumentHidden: document.hidden,
+                      taskPrTriggerPresent: Boolean(trigger),
+                      taskPrTriggerFocused: Boolean(trigger && document.activeElement === trigger),
+                      taskPrCardPresent: Boolean(diagnosticCard),
+                      taskPrCardVisible:
+                        diagnosticCard?.checkVisibility({ visibilityProperty: true }) ?? false,
+                      taskPrCardRowCount:
+                        diagnosticCard?.querySelectorAll(".session-hovercard__pr-row").length ?? 0,
+                    };
+                  }, parentKey),
+                  1_000,
+                )
+                  .then((facts) => recordControlUiE2eFailureFacts(page, facts))
+                  .catch(() => undefined);
+                throw error;
               } finally {
                 // On red, show the same parent hovercard rather than a transient loading shell.
                 await activate();

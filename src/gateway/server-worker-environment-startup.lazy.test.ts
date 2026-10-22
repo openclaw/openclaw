@@ -5,9 +5,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import * as version from "../version.js";
-import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import * as bundles from "./worker-environments/bundle.js";
 import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
 import * as bootstrapArtifacts from "./worker-environments/node-bootstrap-artifact.js";
@@ -41,10 +39,8 @@ vi.mock("./worker-environments/worker-session-tool-executor.js", () => ({
   createWorkerGatewayTools: mocks.createTools,
 }));
 
-import {
-  createGatewayWorkerEnvironmentRuntime,
-  loadGatewayWorkerEnvironmentStartupState,
-} from "./server-worker-environment-startup.js";
+import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.js";
+import { createWorkerStartupRuntime } from "./server-worker-environment-startup.runtime.test-support.js";
 import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -62,16 +58,7 @@ async function withWorkerRuntime(run: () => Promise<void>) {
   await withGatewayWorkerEnvironmentStartupState(stateDir, async () => {
     const startup = await loadGatewayWorkerEnvironmentStartupState();
     const registry = createEmptyPluginRegistry();
-    await createGatewayWorkerEnvironmentRuntime({
-      scheduler: createTestGatewayScheduler(),
-      getPluginRegistry: () => registry,
-      getPortalRuntime: () => undefined,
-      resolveGatewayContext: () => undefined,
-      desktopSessionRegistry: createDesktopSessionRegistry(),
-      startup,
-      log: { child: () => ({ info: () => {}, warn: () => {} }) },
-    });
-
+    await createWorkerStartupRuntime(startup, () => registry);
     await run();
   });
 }

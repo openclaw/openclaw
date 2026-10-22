@@ -69,16 +69,12 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   }
   const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
     ownerHost: previous.host,
-    readHeartbeatAt: () => previous.heartbeatAt,
   });
   if (namespace === "dead") {
     return previous;
   }
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(previous);
-  }
-  if (previous.expired && previous.state !== "live") {
-    return previous;
   }
   throw new Error(
     `Another Gateway owner lease is still active for this state directory: ${describeGatewayLockHolder(previous, undefined, previous.state === "live" ? "live" : "unknown")}`,
@@ -311,7 +307,7 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        // Foreign-namespace recovery expires heartbeat evidence before the lease's TTL.
+        // Keep holder diagnostics fresh even when its process namespace is not visible.
         heartbeatMs: Math.floor(
           Math.min(STARTUP_MIGRATION_LEASE_TTL_MS, GATEWAY_OWNER_HEARTBEAT_STALE_MS) / 3,
         ),

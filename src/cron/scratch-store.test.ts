@@ -5,6 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
+import {
+  deleteCronJobScratch,
+  writeCronJobScratchForMaintenance,
+} from "../../test/helpers/cron/scratch-store.js";
 import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
@@ -19,12 +23,8 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
-import {
-  deleteCronJobScratch,
-  hashCronScratchSource,
-  readCronJobScratchState,
-} from "./scratch-store.js";
-import { writeCronJobScratchForMaintenance } from "./scratch-write.kernel.js";
+import { hashCronScratchSource, readCronJobScratchState } from "./scratch-store.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import * as runtimeMutation from "./service/runtime-mutation.js";
 import * as cronStore from "./store.js";
@@ -300,18 +300,15 @@ async function createFixture(jobIds = ["job-1"]) {
     storePath: path.join(root, "cron", "jobs.json"),
     options: { env },
   };
-  const job: CronJob = {
+  const job = cronTestJob({
     id: "job-1",
     name: "scratch-owner",
-    enabled: true,
     createdAtMs: 1,
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: 0 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
-    state: {},
-  };
+  });
   runOpenClawStateWriteTransaction(({ db }) => {
     for (const [index, id] of jobIds.entries()) {
       upsertCronJobRow(db, cronStoreKey(fixture.storePath), { ...job, id }, index);

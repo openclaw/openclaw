@@ -1,6 +1,6 @@
 # Solid 2 idioms
 
-Use this when writing or auditing rendering consumers. The installed rc.14
+Use this when writing or auditing rendering consumers. The installed rc.16
 `solid-js/CHEATSHEET.md`, `solid-js/types/client/flow.d.ts`, and
 `@solidjs/signals/dist/types/` own the API contract; Solid 1 examples are not a
 substitute. Examples below abbreviate code from the named OpenClaw modules.
@@ -112,7 +112,7 @@ return <SanitizedHtml tag="pre" html={markup()} />;
 
 Use `createSignal` for local interaction state, such as whether a disclosure is
 open. A writable derivation (`createSignal(() => source())`) fits a local draft
-that deliberately resets or reconciles when its source changes. rc.14 re-derives
+that deliberately resets or reconciles when its source changes. Solid re-derives
 from the locally written previous value: explain the reset policy, rather than
 using it to mirror owner state. Gateway decisions and synchronous domain state
 remain in their existing TypeScript owners.
@@ -250,7 +250,7 @@ identities. Never serialize a store proxy as the authoritative data model;
 
 ## Key lists by the lifetime you intend
 
-rc.14 callback arguments depend on `For`'s keying mode:
+rc.16 callback arguments depend on `For`'s keying mode:
 
 | Mode                        | Item          | Index    | Lifetime               |
 | --------------------------- | ------------- | -------- | ---------------------- |
@@ -292,7 +292,7 @@ control flow, not just the resulting markup.
 
 ## Async values and mutations
 
-rc.14 has **no `createAsync` export**. Pure async reads are computations returning
+rc.16 has **no `createAsync` export**. Pure async reads are computations returning
 a Promise or AsyncIterable. Read all reactive dependencies before the first
 `await`; later reads are untracked.
 
@@ -316,7 +316,8 @@ existing owners: do not replace them merely to remove a loading flag.
 
 Place `Loading` around the data-dependent slot, preserving surrounding chrome.
 Once content has rendered, revalidation retains it. `on={identity()}` re-arms
-fallback on dependency changes; it is not a key and does not remount children.
+fallback on dependency changes; pass the value, not `on={() => identity()}`.
+It is not a key and does not remount children.
 Keep all reads of that pending data under the boundary, or an outside hold can
 prevent its fallback from appearing.
 
@@ -326,6 +327,18 @@ network request. A bare `refresh(details)` re-asks the same question quietly;
 Do not call either from a pure read. A "saving" process indicator is a local
 optimistic flag or an existing owner's mutation state, not inferred from every
 read's pending status.
+
+Refresh a derived store at its root (`await refresh(details)`), then read its
+nested value; a nested object is not a refresh target. Return-form object
+derivations can omit the seed (`createProjection(() => owner.readDetails())`);
+if supplied, the seed must be complete. Array derivations retain their `[]`
+seed. These remain presentation stores, not replacements for domain owners.
+
+`createDeferred(fn)` is for a deliberate lagging view: its first answer suspends
+like a memo, but subsequent refetches keep the previous answer without holding
+the rest of the screen. `isPending` still reports the refetch. Use it only when
+showing stale content is intended; ordinary `createMemo` keeps its existing
+transition contract.
 
 For presentation mutations, `action(function* (...) { yield ownerMutation(); })`
 keeps Solid's transition context across async work; plain `await` does not.
@@ -341,8 +354,10 @@ owner's visible error/retry outcome and catch async rendering errors with
 returns `T` and throws `ContextNotFoundError` outside a provider, so don't add a
 `useX()` wrapper whose only job is to rethrow. Use a default only for primitive
 fallbacks (theme, locale). The context itself is the provider:
-`<ThemeContext value={theme()}>`. App-wide state is not context: in OpenClaw it
-lives in plain TypeScript owners reached through `useApplication()`.
+`<ThemeContext value={theme()}>`. Create subtree-owned state in its provider;
+module scope is shared across server requests and should hold constants.
+OpenClaw's application state remains in plain TypeScript owners reached through
+`useApplication()`; a provider passes those owners without taking their authority.
 
 Type components with `Component<P>`, `VoidComponent<P>`, `ParentComponent<P>`,
 or `FlowComponent<P, C>`; renderer-neutral children are `Element` from
@@ -367,7 +382,7 @@ captures the node and writes to it.
 
 ## Dev diagnostics are bug reports
 
-Treat these rc.14 dev warnings as real defects, not noise:
+Treat these rc.16 dev warnings as real defects, not noise:
 
 - **Top-level reactive read in a component body.** The body runs once. Read in
   JSX, a memo, or an accessor.

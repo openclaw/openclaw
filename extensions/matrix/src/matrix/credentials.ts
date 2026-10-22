@@ -80,21 +80,6 @@ async function persistMatrixCredentials(
   return result;
 }
 
-export async function touchMatrixCredentials(
-  env: NodeJS.ProcessEnv = process.env,
-  accountId?: string | null,
-): Promise<void> {
-  const normalizedAccountId = normalizeAccountId(accountId);
-  await updateMatrixCredentials(env, normalizedAccountId, (current) => {
-    // A delayed activity touch must preserve an explicit logout tombstone.
-    if (isMatrixCredentialRevocation(current, normalizedAccountId)) {
-      return current;
-    }
-    const existing = normalizeMatrixStoredCredentials(current, normalizedAccountId);
-    return existing ? { ...existing, lastUsedAt: new Date().toISOString() } : undefined;
-  });
-}
-
 async function updateMatrixCredentials(
   env: NodeJS.ProcessEnv,
   accountId: string,

@@ -8,6 +8,7 @@ import { containsAsciiControlCharacter } from "@openclaw/normalization-core/stri
 import { isChannelRunAuthorizationError } from "../channels/message-access/run-authorization-error.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isSqliteTranscriptMutationConflict } from "../config/sessions/session-mutation-conflict-error.js";
+import { isSessionWorkStartInvalidatedError } from "../config/sessions/work-start-error.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { collectErrorGraphCandidates, readErrorName } from "../infra/errors.js";
@@ -305,6 +306,7 @@ function hasRuntimeCoordinationFailure(err: unknown): boolean {
   }
   return collectErrorGraphCandidates(err, resolveNestedErrors).some(
     (candidate) =>
+      isSessionWorkStartInvalidatedError(candidate) ||
       RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
       resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
   );

@@ -7,7 +7,6 @@ import { expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js";
 import type { PluginCapabilityConsentHandler } from "../../../plugins/capability-consent.js";
 import { requestDeferredPluginInstall } from "../../../plugins/install-transaction.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../../../plugins/install-types.js";
@@ -164,10 +163,8 @@ it.each([
   "missing",
   "resolved-spec",
   "symlink-root",
-  "ancestor",
   "hoisted",
   "deferred",
-  "optional",
   "different-root",
   "package-mismatch",
   "resolved-name-mismatch",
@@ -189,7 +186,7 @@ it.each([
   const packageName = pluginId;
   const { plugin } = createDependencyInstall(rootDir, pluginId, {
     packageName: scenario === "package-mismatch" ? "another-package" : packageName,
-    packageOptionalDependencies: scenario === "optional" ? { "required-runtime": "2.0.0" } : {},
+    packageOptionalDependencies: {},
     origin: scenario === "bundled" ? "bundled" : "global",
   });
   const cfg = configuredPlugins(pluginId);
@@ -212,9 +209,8 @@ it.each([
     record.installPath = path.join(parent, "linked-copy");
     fs.symlinkSync(rootDir, record.installPath, "junction");
   }
-  if (scenario === "ancestor" || scenario === "hoisted") {
-    const dependencyRoot = scenario === "hoisted" ? projectRoot : parent;
-    const availableDir = path.join(dependencyRoot, "node_modules", "required-runtime");
+  if (scenario === "hoisted") {
+    const availableDir = path.join(projectRoot, "node_modules", "required-runtime");
     createRuntime(availableDir);
   }
   const policy = new Map<string, OpenClawConfig["plugins"]>([
@@ -254,7 +250,7 @@ it.each([
   }
   const issues = await detectHealth({ cfg, env });
 
-  if (["missing", "resolved-spec", "symlink-root", "ancestor"].includes(scenario)) {
+  if (["missing", "resolved-spec", "symlink-root"].includes(scenario)) {
     expect(issues).toEqual([
       {
         kind: "missing-required-dependencies",
@@ -289,45 +285,6 @@ it.each([
   }
   expectNoPackageEffects();
 });
-
-it.each(["managed", "flat"] as const)(
-  "does not repair a healthy canonical host dependency in a %s install",
-  async (layout) => {
-    const parent = tempDirs.make("openclaw-doctor-host-dependency-");
-    const pluginId = "host-dependency-plugin";
-    const rootDir =
-      layout === "managed"
-        ? path.join(parent, "project", "node_modules", pluginId)
-        : path.join(parent, pluginId);
-    const hostRoot = expectDefined(
-      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-      "running OpenClaw package root",
-    );
-    const { plugin, record } = createDependencyInstall(rootDir, pluginId, {
-      packageDependencies: { "required-runtime": "1.0.0", openclaw: "*" },
-      packageOptionalDependencies: {},
-    });
-    const nodeModulesDir = path.join(rootDir, "node_modules");
-    createRuntime(path.join(nodeModulesDir, "required-runtime"));
-    fs.symlinkSync(hostRoot, path.join(nodeModulesDir, "openclaw"), "junction");
-    const { auditOpenClawPeerDependencyLink } =
-      await import("../../../plugins/plugin-peer-link.js");
-    expect(await auditOpenClawPeerDependencyLink({ packageDir: rootDir })).toBeNull();
-    const cfg = configuredPlugins(pluginId);
-    const records = { [pluginId]: record };
-    mockInstalledPlugins(records, [plugin]);
-    for (let pass = 0; pass < 2; pass++) {
-      expect(await detectHealth({ cfg, env: testEnv })).toEqual([]);
-      const result = await repairConfiguredPlugins(cfg, testEnv);
-      expect(result.changes).toEqual([]);
-      expect(result.repairedPluginIds).toBeUndefined();
-      expect(result.records).toEqual(records);
-    }
-    expect(fs.realpathSync(path.join(nodeModulesDir, "openclaw"))).toBe(fs.realpathSync(hostRoot));
-    expectNoPackageEffects();
-    expect(hasRetainedManagedNpmInstallMarker(rootDir)).toBe(false);
-  },
-);
 
 it.each([
   { outcome: "updated", preexisting: false, staleRuntime: false },

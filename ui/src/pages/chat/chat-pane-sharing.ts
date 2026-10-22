@@ -31,7 +31,7 @@ import {
   type ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
-import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
+import { canManageChatSessionSharing } from "./components/chat-session-sharing.solid.tsx";
 
 const TYPING_ACTIVE_MS = 2_500;
 const TYPING_DRAFT_ACTIVE_MS = 10_000;

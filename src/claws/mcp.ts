@@ -12,7 +12,6 @@ export type { PersistedClawMcpServerRef } from "./mcp-records.js";
 
 export class ClawMcpInstallError extends Error {
   constructor(
-    readonly code: string,
     message: string,
     readonly mcpServers: PersistedClawMcpServerRef[],
   ) {
@@ -49,7 +48,6 @@ export async function installClawMcpServersStateless(
       const server = action.details ? mcpServerFromActionDetails(action.details) : undefined;
       if (!server) {
         throw new ClawMcpInstallError(
-          "mcp_plan_invalid",
           `MCP server action ${JSON.stringify(action.id)} is invalid.`,
           refs,
         );
@@ -57,13 +55,12 @@ export async function installClawMcpServersStateless(
       const listed = await listConfiguredMcpServers();
       assertCurrent();
       if (!listed.ok) {
-        throw new ClawMcpInstallError("mcp_preflight_failed", listed.error, refs);
+        throw new ClawMcpInstallError(listed.error, refs);
       }
       const configured = listed.mcpServers[action.id];
       const configDigest = digestClawMcpServer(server);
       if (configured && digestClawMcpServer(configured) !== configDigest) {
         throw new ClawMcpInstallError(
-          "mcp_config_conflict",
           `MCP server ${JSON.stringify(action.id)} already exists with different configuration.`,
           refs,
         );
@@ -91,7 +88,7 @@ export async function installClawMcpServersStateless(
             assertCurrent,
           });
           if (!result.ok) {
-            throw new ClawMcpInstallError("mcp_install_failed", result.error, refs);
+            throw new ClawMcpInstallError(result.error, refs);
           }
           refs.push(ref);
           assertCurrent();
@@ -99,7 +96,7 @@ export async function installClawMcpServersStateless(
           if (error instanceof ClawMcpInstallError) {
             throw error;
           }
-          throw new ClawMcpInstallError("mcp_install_uncertain", coerceErrorMessage(error), refs);
+          throw new ClawMcpInstallError(coerceErrorMessage(error), refs);
         }
       }
       if (configured) {

@@ -21,7 +21,6 @@ import {
   type McpAppFormOrigin,
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
-import { readRetainedSessionEntryFacts } from "../config/sessions/session-entry-read-facts.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveMcpAppRequesterId, callMcpAppToolWithElicitation } from "./mcp-app-operations.js";
@@ -261,34 +260,35 @@ export async function executeMcpAppFormResource(
     throw new Error("MCP form resource request limit reached");
   }
   form.operations += 1;
-  const caller = readGatewayRequestMutationAuthority(options);
-  const read = await retainSessionScopedRead(options, record.sessionKey, record.agentId);
-  const authorized = prepareQuestionAuthorization(
-    options,
-    observation,
-    record.id,
-    parsed.action === "upload" ? "mutate" : "read",
-  );
-  const assertCurrent = () => {
-    caller.assertCurrent();
-    options.sessionMutationAuthorization?.assertCurrent();
-    read?.assertCurrent();
-    owner.assertCurrent();
-    if (options.context.getRuntimeConfig().mcp?.apps?.enabled !== true) {
-      throw new Error("MCP App runtime is unavailable");
-    }
-    if (
-      manager.get(record.id) !== record ||
-      !observation.isCurrent() ||
-      record.status !== "pending" ||
-      resolveMcpAppRequesterId(options.client) !== form.origin.requesterId ||
-      owner.pending.get(record.id)?.record !== record
-    ) {
-      throw new Error("Question resource authority expired");
-    }
-  };
   form.activeOperations += 1;
+  let read: Awaited<ReturnType<typeof retainSessionScopedRead>>;
   try {
+    const caller = readGatewayRequestMutationAuthority(options);
+    read = await retainSessionScopedRead(options, record.sessionKey, record.agentId);
+    const authorized = prepareQuestionAuthorization(
+      options,
+      observation,
+      record.id,
+      parsed.action === "upload" ? "mutate" : "read",
+    );
+    const assertCurrent = () => {
+      caller.assertCurrent();
+      options.sessionMutationAuthorization?.assertCurrent();
+      read?.assertCurrent();
+      owner.assertCurrent();
+      if (options.context.getRuntimeConfig().mcp?.apps?.enabled !== true) {
+        throw new Error("MCP App runtime is unavailable");
+      }
+      if (
+        manager.get(record.id) !== record ||
+        !observation.isCurrent() ||
+        record.status !== "pending" ||
+        resolveMcpAppRequesterId(options.client) !== form.origin.requesterId ||
+        owner.pending.get(record.id)?.record !== record
+      ) {
+        throw new Error("Question resource authority expired");
+      }
+    };
     await withPreparedQuestionSessions(
       options,
       [authorized.target],
@@ -495,7 +495,7 @@ export function createMcpAppWorkspaceUploadProvider(params: {
     withSessionFileRoot(
       params,
       request.options.context.getRuntimeConfig(),
-      async (loaded, assertSourceCurrent) => {
+      async (loaded, assertSourceCurrent, readEntry) => {
         const assertCurrent = () => {
           params.assertCurrent();
           assertSourceCurrent();
@@ -510,19 +510,7 @@ export function createMcpAppWorkspaceUploadProvider(params: {
               throw new Error("Form upload session generation changed");
             }
           }
-          const current = metadata
-            ? metadata.readCurrent()
-            : readRetainedSessionEntryFacts(
-                {
-                  agentId: loaded.readSource?.agentId ?? params.agentId,
-                  path: loaded.readSource?.path ?? loaded.storePath,
-                },
-                {
-                  sessionKeys: [loaded.canonicalKey],
-                  projection: "exact",
-                  snapshotFields: ["skillsSnapshot"],
-                },
-              )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry;
+          const current = metadata ? metadata.readCurrent() : readEntry();
           if (!current || current.execNode || loaded.root !== params.workspaceDir) {
             throw new Error("Form upload workspace authority changed");
           }

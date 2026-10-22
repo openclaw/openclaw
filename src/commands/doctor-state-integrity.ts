@@ -87,10 +87,6 @@ import { iterateDoctorSessionKeyBatches } from "./doctor/shared/session-entry-re
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
-type DoctorPrompterLike = Pick<DoctorPrompter, "confirmRuntimeRepair"> & {
-  note?: typeof note;
-};
-
 type RuntimeDirLabel = "Sessions dir" | "Session store dir" | "OAuth dir";
 
 function resolveSessionRuntimeDirectories(
@@ -345,8 +341,8 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
     return true;
   }
-  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json, so a
-  // channel id with no effective plugin owner can never pair and must not require the dir.
+  // Legacy pairing allowlists lived under credentials/<channel>-allowFrom.json;
+  // only channels with an effective plugin owner need that directory's repair hint.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
     const scopedChannelId = normalizeOptionalLowercaseString(channelId);
     if (!scopedChannelId || !withPersistedAuth.has(scopedChannelId)) {
@@ -531,7 +527,6 @@ export function stateIntegrityIssueToHealthFinding(
       return finding(
         `${issue.label} is missing.`,
         "Run `openclaw doctor --fix` to create missing runtime state directories.",
-        "error",
       );
     case "runtime-dir-not-writable":
       return finding(
@@ -577,13 +572,12 @@ export function stateIntegrityIssueToRepairEffect(
 /** Emits state integrity warnings and applies selected runtime repairs. */
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
-  prompter: DoctorPrompterLike,
+  prompter: Pick<DoctorPrompter, "confirmRuntimeRepair">,
   configPath?: string,
   options?: { stateDirExistedAtStart?: boolean },
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
-  const noteFn = prompter.note ?? note;
   const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
@@ -740,7 +734,7 @@ export async function noteStateIntegrity(
         if (label !== "OAuth dir") {
           continue;
         }
-        warnings.push(`- CRITICAL: ${label} missing (${displayDir}).`);
+        warnings.push(`- ${label} missing (${displayDir}).`);
         const create = await prompter.confirmRuntimeRepair({
           message: `Create ${label} at ${displayDir}?`,
           initialValue: true,
@@ -1020,10 +1014,10 @@ export async function noteStateIntegrity(
   }
 
   if (warnings.length > 0) {
-    noteFn(warnings.join("\n"), "State integrity");
+    note(warnings.join("\n"), "State integrity");
   }
   if (changes.length > 0) {
-    noteFn(changes.join("\n"), "Doctor changes");
+    note(changes.join("\n"), "Doctor changes");
   }
 }
 

@@ -38,22 +38,17 @@ const officialOpenAIModel = {
 } satisfies Model<"openai-responses">;
 const customModel = { ...model, provider: "custom", baseUrl: "https://responses.example/v1" };
 const rewritten = "rewritten by the Responses payload policy";
-const retainedWindow = (content: unknown[], role = "user") => [
-  { type: "message", role, content },
-  { type: "compaction", encrypted_content: "opaque" },
-];
-
 const context = {
   systemPrompt: "Retain the conversation.",
   messages: [{ role: "user", content: "Remember NORTH-COPPER-17.", timestamp: 1 }],
 } satisfies Context;
 
 const compactionItem = { type: "compaction", id: "cmp_1", encrypted_content: "opaque" };
-const retainedUser = {
-  type: "message",
-  role: "user",
-  content: [{ type: "input_text", text: "Remember NORTH-COPPER-17." }],
-};
+const retainedWindow = (content: unknown[], role = "user") => [
+  { type: "message", role, content },
+  { type: "compaction", encrypted_content: "opaque" },
+];
+const retainedUser = retainedWindow([{ type: "input_text", text: "Remember NORTH-COPPER-17." }])[0];
 function mockCompactResponse(
   output: unknown[],
   usage = { input_tokens: 1, output_tokens: 1 },
@@ -112,29 +107,32 @@ it("sends the system prompt as instructions and accepts retained users from offi
 });
 
 it.each([
-  { role: "user", content: [{ type: "input_text", text: "Retained fact." }] },
-  {
-    role: "assistant",
-    content: [{ type: "output_text", text: "Retained answer.", annotations: [] }],
+  ["user", [{ type: "input_text", text: "Retained fact." }]],
+  ["assistant", [{ type: "output_text", text: "Retained answer.", annotations: [] }]],
+] as const)(
+  "accepts a canonical retained %s window with fewer users than its input",
+  async (role, content) => {
+    const output = retainedWindow([...content], role);
+    mockCompactResponse(output, { input_tokens: 100, output_tokens: 10 });
+    const result = await compact(officialOpenAIModel, {
+      ...context,
+      messages: [
+        ...context.messages,
+        { role: "user", content: "A second user message.", timestamp: 2 },
+      ],
+    });
+    expect(result.output).toEqual(output);
+    expect(result.historyMode).toBe("retained-users");
+    expectCompactBody(
+      expect.objectContaining({
+        input: [
+          expect.objectContaining({ role: "user" }),
+          expect.objectContaining({ role: "user" }),
+        ],
+      }),
+    );
   },
-])("accepts a canonical retained $role window with fewer users than its input", async (message) => {
-  const output = retainedWindow(message.content, message.role);
-  mockCompactResponse(output, { input_tokens: 100, output_tokens: 10 });
-  const result = await compact(officialOpenAIModel, {
-    ...context,
-    messages: [
-      ...context.messages,
-      { role: "user", content: "A second user message.", timestamp: 2 },
-    ],
-  });
-  expect(result.output).toEqual(output);
-  expect(result.historyMode).toBe("retained-users");
-  expectCompactBody(
-    expect.objectContaining({
-      input: [expect.objectContaining({ role: "user" }), expect.objectContaining({ role: "user" })],
-    }),
-  );
-});
+);
 
 it.each<{ output: unknown[]; reason: string; route?: Model }>([
   {
@@ -188,34 +186,28 @@ it("rejects retained-message prefixes from native xAI", async () => {
   });
 });
 
+const createRoute = (overrides: Partial<Model>) => ({ ...officialOpenAIModel, ...overrides });
 it.each([
   ["native xAI alias default", { ...model, provider: "x-ai" }, undefined, true],
   ["public OpenAI default", officialOpenAIModel, undefined, true],
   ["public OpenAI opt-out", officialOpenAIModel, { responsesCompactEndpoint: false }, false],
   ["custom Responses opt-in", customModel, { responsesCompactEndpoint: true }, true],
-  [
-    "OpenAI without a resolved endpoint",
-    { ...officialOpenAIModel, baseUrl: undefined },
-    undefined,
-    false,
-  ],
+  ["OpenAI without a resolved endpoint", createRoute({ baseUrl: undefined }), undefined, false],
   [
     "ChatGPT default",
-    {
-      ...officialOpenAIModel,
+    createRoute({
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
-    },
+    }),
     undefined,
     false,
   ],
   [
     "Azure default",
-    {
-      ...officialOpenAIModel,
+    createRoute({
       provider: "azure-openai",
       baseUrl: "https://example.openai.azure.com",
-    },
+    }),
     undefined,
     false,
   ],

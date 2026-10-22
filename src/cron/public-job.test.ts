@@ -1,111 +1,83 @@
 import { describe, expect, it } from "vitest";
 import { makeCronJob } from "./delivery.test-helpers.js";
+import { cronJobDefinitionFromReadView, cronJobReadView } from "./job-read-view.js";
 import { toPublicCronJob } from "./public-job.js";
+import { makeCronStreamSandboxTarget } from "./stream-sandbox.test-support.js";
 import type { CronStoredJob } from "./types.js";
 
+function publicJob(job: CronStoredJob, privateFields: string[] = []) {
+  const before = structuredClone(job);
+  const result = toPublicCronJob(job);
+  for (const field of privateFields) {
+    expect(result).not.toHaveProperty(field);
+  }
+  expect(job).toEqual(before);
+  return result;
+}
+
 describe("toPublicCronJob", () => {
-  it("strips scheduler-only state without mutating the stored job", () => {
-    const job = makeCronJob({
-      state: {
-        nextRunAtMs: 2_000,
-        queuedAtMs: 1_900,
-        runningReceiptId: "pending-receipt",
-        startupCatchupAtMs: 2_000,
-        pacedNextRunAtMs: 2_000,
-        forcePreservedNextRunAtMs: 2_000,
-        runningScheduleChangeId: "pending-run-edit",
-        failureAlertIncident: { signature: "internal-incident", scope: "run" },
-        lastFailureNotificationId: "internal-notification",
-      },
-    });
-
-    const publicJob = toPublicCronJob(job);
-
-    expect(publicJob.state.queuedAtMs).toBeUndefined();
-    expect(publicJob.state.runningReceiptId).toBeUndefined();
-    expect(publicJob.state.startupCatchupAtMs).toBeUndefined();
-    expect(publicJob.state.pacedNextRunAtMs).toBeUndefined();
-    expect(publicJob.state.forcePreservedNextRunAtMs).toBeUndefined();
-    expect(publicJob.state).not.toHaveProperty("runningScheduleChangeId");
-    expect(publicJob.state).not.toHaveProperty("failureAlertIncident");
-    expect(publicJob.state).not.toHaveProperty("lastFailureNotificationId");
-    expect(job.state.queuedAtMs).toBe(1_900);
-    expect(job.state.runningReceiptId).toBe("pending-receipt");
-    expect(job.state.startupCatchupAtMs).toBe(2_000);
-    expect(job.state.pacedNextRunAtMs).toBe(2_000);
-    expect(job.state.forcePreservedNextRunAtMs).toBe(2_000);
-    expect(job.state.runningScheduleChangeId).toBe("pending-run-edit");
-    expect(job.state.failureAlertIncident).toEqual({
-      signature: "internal-incident",
-      scope: "run",
-    });
-    expect(job.state.lastFailureNotificationId).toBe("internal-notification");
-  });
-
-  it("projects script payload fields without exposing scheduler-only state", () => {
-    const job = makeCronJob({
-      sessionTarget: "isolated",
-      payload: {
-        kind: "script",
-        script: "return { notify: 'done' }",
-        timeoutSeconds: 300,
-        toolBudget: 50,
-      },
-      state: { triggerState: { revision: 1 }, pacedNextRunAtMs: 2_000 },
-    });
-
-    expect(toPublicCronJob(job)).toMatchObject({
-      payload: {
-        kind: "script",
-        script: "return { notify: 'done' }",
-        timeoutSeconds: 300,
-        toolBudget: 50,
-      },
-      state: { triggerState: { revision: 1 } },
+  it("preserves script fields and public state without mutating the stored job", () => {
+    const state = {
+      nextRunAtMs: 2_000,
+      queuedAtMs: 1_900,
+      runningReceiptId: "pending-receipt",
+      startupCatchupAtMs: 2_000,
+      pacedNextRunAtMs: 2_000,
+      forcePreservedNextRunAtMs: 2_000,
+      runningScheduleChangeId: "pending-run-edit",
+      failureAlertIncident: { signature: "internal-incident", scope: "run" as const },
+      lastFailureNotificationId: "internal-notification",
+      triggerState: { revision: 1 },
+    };
+    const payload = {
+      kind: "script",
+      script: "return { notify: 'done' }",
+      timeoutSeconds: 300,
+      toolBudget: 50,
+    } as const;
+    const job = makeCronJob({ payload, state });
+    const result = publicJob(job);
+    expect(result).toMatchObject({ payload });
+    expect(result.state).toStrictEqual({
+      nextRunAtMs: 2_000,
+      triggerState: { revision: 1 },
     });
   });
 
-  it.each(["final-executable-surface", "authenticated-requester"] as const)(
-    "strips private %s provenance without mutating the stored job",
-    (source) => {
-      const channelRequester = {
-        version: 1 as const,
-        channel: "discord",
-        accountId: "work",
-        senderId: "123456789012345678",
-      };
-      const toolsAllowProvenance =
-        source === "final-executable-surface"
-          ? {
-              version: 1 as const,
-              source,
-              callerOrigin: { kind: "unknown" as const },
-              channelRequester,
-            }
-          : { version: 1 as const, source, channelRequester };
-      const job: CronStoredJob = {
-        ...makeCronJob({}),
-        toolsAllowProvenance,
-        toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
-        toolsAllowExecTargetRequirement: {
-          version: 1,
-          target: { version: 1, host: "gateway", ask: "always" },
-          grantIndex: 0,
-        },
-      };
+  it("strips runtime and executable provenance without mutating the stored job", () => {
+    const channelRequester = {
+      version: 1 as const,
+      channel: "discord",
+      accountId: "work",
+      senderId: "123456789012345678",
+    };
+    const target = { version: 1, host: "gateway", ask: "always" } as const;
+    const fields: Partial<CronStoredJob> = {
+      runtimeAuthority: {
+        version: 1,
+        runtimeId: "codex",
+        namespace: "codex.apps",
+        payload: { apps: [{ id: "calendar" }] },
+      },
+      runtimeAuthorityRecoveryRequired: true,
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "unknown" },
+        channelRequester,
+      },
+      toolsAllowExecTarget: target,
+      toolsAllowExecTargetRequirement: { version: 1, target, grantIndex: 0 },
+    };
+    publicJob({ ...makeCronJob({}), ...fields }, Object.keys(fields));
+  });
 
-      expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowProvenance");
-      expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTarget");
-      expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTargetRequirement");
-      expect(job.toolsAllowProvenance).toEqual(toolsAllowProvenance);
-      expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
-    },
-  );
-
-  it("strips private creator provenance without mutating the stored job", () => {
+  it("strips private creator provenance and sandbox target without mutating the stored job", () => {
+    const streamSandbox = makeCronStreamSandboxTarget();
     const job: CronStoredJob = {
-      ...makeCronJob({}),
+      ...makeCronJob({ schedule: { kind: "stream", command: ["watch-source"] } }),
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      streamSandbox,
       sourceConversation: {
         sessionKey: "agent:main:conversation",
         sessionId: "creating-session",
@@ -113,28 +85,19 @@ describe("toPublicCronJob", () => {
       },
     };
 
-    expect(toPublicCronJob(job)).not.toHaveProperty("createdActor");
-    expect(toPublicCronJob(job)).not.toHaveProperty("sourceConversation");
-    expect(job.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
-    expect(job.sourceConversation?.lifecycleRevision).toBe("generation-1");
-  });
-
-  it("strips private runtime authority without mutating the stored job", () => {
-    const runtimeAuthority = {
-      version: 1 as const,
-      runtimeId: "codex",
-      namespace: "codex.apps",
-      payload: { apps: [{ id: "calendar" }] },
-    };
-    const job: CronStoredJob = {
-      ...makeCronJob({}),
-      runtimeAuthority,
-      runtimeAuthorityRecoveryRequired: true,
-    };
-
-    expect(toPublicCronJob(job)).not.toHaveProperty("runtimeAuthority");
-    expect(toPublicCronJob(job)).not.toHaveProperty("runtimeAuthorityRecoveryRequired");
-    expect(job.runtimeAuthority).toEqual(runtimeAuthority);
-    expect(job.runtimeAuthorityRecoveryRequired).toBe(true);
+    expect(publicJob(job, ["createdActor", "sourceConversation", "streamSandbox"])).toMatchObject({
+      schedule: { kind: "stream" },
+      streamExecutionHost: "sandbox",
+    });
+    expect(toPublicCronJob({ ...job, streamSandbox: undefined }).streamExecutionHost).toBe(
+      "gateway",
+    );
+    expect(toPublicCronJob(makeCronJob({}))).not.toHaveProperty("streamExecutionHost");
+    for (const storedJob of [job, { ...job, streamSandbox: undefined }]) {
+      const view = cronJobReadView(storedJob);
+      const definition = cronJobDefinitionFromReadView(view);
+      expect(definition).not.toHaveProperty("streamExecutionHost");
+      expect(definition.schedule).toEqual(storedJob.schedule);
+    }
   });
 });

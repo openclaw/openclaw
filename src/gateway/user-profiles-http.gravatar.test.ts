@@ -3,7 +3,7 @@ import { createServer, request, type ClientRequest, type ServerResponse } from "
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
@@ -34,8 +34,13 @@ describe("Gravatar HTTP waiter lifetimes", () => {
   const handled = new Map<string, { response: ServerResponse; promise: Promise<boolean> }>();
   const producers: Array<ReturnType<typeof createDeferred<Response>>> = [];
   const fetchImpl = vi.fn<typeof fetch>();
+  let nativeUpstream: ((res: ServerResponse) => void) | undefined;
   const server = createServer((req, res) => {
     const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (pathname === "/native-gravatar" && nativeUpstream) {
+      nativeUpstream(res);
+      return;
+    }
     const promise = handleUserProfileAvatarHttpRequest(req, res, pathname, {
       auth: { mode: "none", allowTailscale: false },
     });
@@ -84,6 +89,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     clients.length = 0;
     producers.length = 0;
     handled.clear();
+    nativeUpstream = undefined;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -126,6 +132,34 @@ describe("Gravatar HTTP waiter lifetimes", () => {
         }),
     };
   }
+
+  it("cancels an oversized native Gravatar response without retaining its connection", async ({
+    signal,
+  }) => {
+    const closed = createDeferred();
+    nativeUpstream = (res) => {
+      res.once("close", () => closed.resolve());
+      res.writeHead(200, { "content-type": "image/png" });
+      res.write(Buffer.alloc(600_000));
+      res.write(Buffer.alloc(600_000));
+    };
+    profileFixture.mockReturnValue({
+      id: "native-overflow",
+      emails: ["native-overflow@example.test"],
+    });
+    // Only the fixed upstream URL is redirected; fetch, body cancellation and socket are native.
+    vi.unstubAllGlobals();
+    const nativeFetch = fetch;
+    fetchImpl.mockImplementation((_input, init) => nativeFetch(`${origin}/native-gravatar`, init));
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const result = await withinTest(startRequest("native-overflow").result, signal);
+    expect(result.statusCode).toBe(502);
+    expect(result.body?.toString()).toBe(
+      JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
+    );
+    await withinTest(closed.promise, signal);
+  });
 
   it.each(["deadline", "disconnect"] as const)(
     "keeps a fresh HTTP waiter alive after the older waiter's %s",

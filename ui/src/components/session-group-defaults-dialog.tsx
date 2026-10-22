@@ -1,5 +1,15 @@
 import { readMissingScopeError } from "@openclaw/gateway-client/browser";
-import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  isPending,
+  Loading,
+  onSettled,
+  Reveal,
+} from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -15,7 +25,7 @@ import { PlaceBrowser } from "../pages/new-session/place-browser.tsx";
 import "../styles/new-session.css";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { Icon } from "./solid/icon.tsx";
-import { Menu } from "./solid/menu.tsx";
+import { Menu, type MenuEntry } from "./solid/menu.tsx";
 import { Popover, type PopoverHandle } from "./solid/popover.tsx";
 
 registerEnglishCatalog(registerSessionOrganizationEnglish);
@@ -45,25 +55,24 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     const [cwd, setCwd] = createSignal(options.defaults.cwd);
     const [worktree, setWorktree] = createSignal(false);
     let repositoryStatus: RepositoryStatus = "checking";
-    const [repository, setRepository] = createSignal<RepositoryStatus>("checking");
+    const [inspection, setInspection] = createSignal<Promise<RepositoryStatus>>();
     let repositoryRequestToken = 0;
     // Admission stays synchronous while the signals publish the visible status.
     let submitting = false;
-    const [saving, setSaving] = createSignal(false);
+    const [saving, setSaving] = createOptimistic(false);
     const [failure, setFailure] = createSignal<string | null>(null);
     const [browserVisible, setBrowserVisible] = createSignal(false);
     let folderPopover: PopoverHandle | undefined;
     const browser = new PlaceBrowserState(options.listDirectory, () => publishBrowser(browser));
     const [browserView, publishBrowser] = createSignal(browser, { equals: false });
 
-    const handleSubmit = async (event: Event) => {
+    const handleSubmit = action(async function* (event: Event) {
       event.preventDefault();
       if (submitting || (repositoryStatus !== "git" && repositoryStatus !== "not_git")) {
         return;
       }
       submitting = true;
       setSaving(true);
-      setFailure(null);
       let errorMessage: string | null;
       try {
         errorMessage = await options.submit({
@@ -73,6 +82,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       } catch (error) {
         errorMessage = formatUiError(error);
       }
+      yield;
       if (modal.settled) {
         return;
       }
@@ -81,9 +91,8 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         return;
       }
       submitting = false;
-      setSaving(false);
       setFailure(errorMessage);
-    };
+    });
 
     const closePicker = () => {
       folderPopover?.overlay.request(false, "return");
@@ -102,29 +111,29 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
       void inspectRepository(false, nextCwd);
     };
 
-    const inspectRepository = async (restoreSavedWorktree: boolean, path: string) => {
+    const inspectRepository = (restoreSavedWorktree: boolean, path: string) => {
       const requestToken = ++repositoryRequestToken;
       repositoryStatus = "checking";
-      setRepository(repositoryStatus);
       setWorktree(false);
       setFailure(null);
-      try {
-        const status = await options.inspectRepository(path.trim() || undefined);
-        if (requestToken !== repositoryRequestToken) {
-          return;
+      const result = (async () => {
+        let status: RepositoryStatus;
+        try {
+          status = await options.inspectRepository(path.trim() || undefined);
+        } catch (error) {
+          // A path-authorization denial is not a repository status: collapsing it
+          // into "couldn't verify Git" would present a retry that can never
+          // succeed while the connection still lacks the required operator scope.
+          status = readMissingScopeError(error) ? "restricted" : "unavailable";
         }
-        repositoryStatus = status;
-        setWorktree(status === "git" && restoreSavedWorktree && options.defaults.worktree);
-      } catch (error) {
-        if (requestToken !== repositoryRequestToken) {
-          return;
+        if (requestToken === repositoryRequestToken) {
+          repositoryStatus = status;
+          setWorktree(status === "git" && restoreSavedWorktree && options.defaults.worktree);
         }
-        // A path-authorization denial is not a repository status: collapsing it
-        // into "couldn't verify Git" would present a retry that can never
-        // succeed while the connection still lacks the required operator scope.
-        repositoryStatus = readMissingScopeError(error) ? "restricted" : "unavailable";
-      }
-      setRepository(repositoryStatus);
+        return status;
+      })();
+      void setInspection(result);
+      return result;
     };
 
     const selectWorktree = (value: boolean) => {
@@ -140,7 +149,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
     function Dialog() {
       let folderAnchor!: HTMLButtonElement;
       let rootButton!: HTMLButtonElement;
-      onCleanup(() => {
+      onSettled(() => () => {
         browser.reset();
         repositoryRequestToken += 1;
       });
@@ -164,14 +173,39 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         },
       ]);
       const selectedEnvironment = () => environmentOptions()[worktree() ? 1 : 0]!;
-      const environmentState = () =>
-        repository() === "checking"
-          ? "checking"
-          : repository() === "git"
-            ? "git"
-            : repository() === "restricted"
-              ? "restricted"
-              : "local";
+      const environmentItems = createMemo<MenuEntry[]>(() =>
+        environmentOptions().map((option) => ({
+          id: option.value,
+          label: `${option.label}, ${option.description}`,
+          type: "radio" as const,
+          checked: option.value === selectedEnvironment().value,
+          disabled: saving(),
+          class: "session-group-defaults__mode-option",
+          attributes: {
+            "data-environment-mode": option.value,
+            "data-selected": option.value === selectedEnvironment().value ? "" : undefined,
+            "data-initial-focus": option.value === selectedEnvironment().value ? "" : undefined,
+          },
+          icon: (
+            <span
+              class="new-session-page__target-icon session-group-defaults__mode-option-icon"
+              aria-hidden="true"
+            >
+              <Icon name={option.icon} />
+            </span>
+          ),
+          content: (
+            <span class="session-group-defaults__resolved-copy">
+              <strong>{option.label}</strong>
+              <small>{option.description}</small>
+            </span>
+          ),
+        })),
+      );
+      const repositoryRead = createMemo(
+        () => inspection() ?? Promise.resolve<RepositoryStatus>("checking"),
+      );
+      const repository = () => (isPending(repositoryRead) ? "checking" : repositoryRead());
       function Browser() {
         let pathInput!: HTMLInputElement;
         onSettled(() => {
@@ -182,13 +216,18 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
           id: "session-group-defaults-browser",
           label: t("newSession.gateway"),
           registerProjectPath: null,
-          registeringProject: false,
           onBack: showPickerRoot,
           onClose: showPickerRoot,
           onApplyFolder: applyFolder,
           onRegisterProject: () => {},
         }));
-        return <PlaceBrowser params={content()} pathRef={(node) => (pathInput = node)} />;
+        return (
+          <PlaceBrowser
+            params={content()}
+            registeringProject={false}
+            pathRef={(node) => (pathInput = node)}
+          />
+        );
       }
       function PickerRoot() {
         onSettled(() => {
@@ -234,6 +273,109 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
           </div>
         );
       }
+      function Environment(props: { status: RepositoryStatus }) {
+        const environmentState = () =>
+          props.status === "checking" || props.status === "git" || props.status === "restricted"
+            ? props.status
+            : "local";
+        return (
+          <div class="field">
+            <span>{t("sessionsView.groupDefaultsMode")}</span>
+            <div
+              class="session-group-defaults__environment"
+              data-session-group-environment={environmentState()}
+              aria-live="polite"
+            >
+              {props.status === "git" ? (
+                <Menu
+                  id="session-group-defaults-mode"
+                  class="session-group-defaults__mode-dropdown"
+                  panelClass="session-group-defaults__mode-menu"
+                  triggerClass="session-group-defaults__resolved-mode session-group-defaults__mode-trigger"
+                  triggerAttributes={{
+                    id: "session-group-defaults-mode-trigger",
+                    "data-value": selectedEnvironment().value,
+                  }}
+                  label={`${t("sessionsView.groupDefaultsMode")}: ${selectedEnvironment().label}`}
+                  disabled={saving()}
+                  onSelect={(item) => selectWorktree(item.id === "worktree")}
+                  items={environmentItems()}
+                  trigger={
+                    <>
+                      <span class="new-session-page__target-icon" aria-hidden="true">
+                        <Icon name={selectedEnvironment().icon} />
+                      </span>
+                      <span class="session-group-defaults__resolved-copy">
+                        <strong>{selectedEnvironment().label}</strong>
+                        <small>{selectedEnvironment().description}</small>
+                      </span>
+                      <span class="new-session-page__trigger-chevron" aria-hidden="true">
+                        <Icon name="chevronDown" />
+                      </span>
+                    </>
+                  }
+                />
+              ) : (
+                <div
+                  class="session-group-defaults__resolved-mode"
+                  role={props.status === "checking" ? "status" : undefined}
+                >
+                  <span class="new-session-page__target-icon" aria-hidden="true">
+                    <Icon name={props.status === "checking" ? "gitBranch" : "monitor"} />
+                  </span>
+                  <span class="session-group-defaults__resolved-copy">
+                    <strong>
+                      {props.status === "checking"
+                        ? t("newSession.checkingGit")
+                        : t("sessionsView.groupDefaultsLocal")}
+                    </strong>
+                    {props.status !== "checking" ? (
+                      <small>
+                        {props.status === "restricted"
+                          ? t("sessionsView.groupDefaultsRequiresAdmin")
+                          : props.status === "unavailable"
+                            ? t("newSession.gitCheckUnavailable")
+                            : t("newSession.checkoutCurrentNote")}
+                      </small>
+                    ) : undefined}
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+      function RepositoryActions(props: { status: RepositoryStatus; onRetry?: () => void }) {
+        return (
+          <>
+            {props.status === "unavailable" || props.status === "restricted" ? (
+              <button
+                type="button"
+                class="btn"
+                disabled={saving()}
+                onClick={() => {
+                  void inspectRepository(cwd().trim() === options.defaults.cwd.trim(), cwd());
+                  props.onRetry?.();
+                }}
+              >
+                {t("common.retry")}
+              </button>
+            ) : undefined}
+            <button
+              type="submit"
+              class="btn primary"
+              disabled={
+                saving() ||
+                props.status === "checking" ||
+                props.status === "unavailable" ||
+                props.status === "restricted"
+              }
+            >
+              {t("common.save")}
+            </button>
+          </>
+        );
+      }
       return (
         <openclaw-modal-dialog
           label={t("sessionsView.groupDefaultsTitle", { group: options.group })}
@@ -257,185 +399,93 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                 <div class="exec-approval-sub">{t("sessionsView.groupDefaultsDescription")}</div>
               </div>
             </div>
-            <div class="session-group-defaults__fields">
-              <div class="field">
-                <span>{t("sessionsView.groupDefaultsCwd")}</span>
-                <button
-                  id="session-group-defaults-folder-trigger"
-                  type="button"
-                  class="new-session-page__trigger session-group-defaults__folder"
-                  aria-label={`${t("sessionsView.groupDefaultsCwd")}: ${folderLabel()}`}
-                  aria-haspopup="dialog"
-                  aria-controls="session-group-defaults-folder-popover"
-                  disabled={saving()}
-                  ref={(element) => {
-                    folderAnchor = element;
-                  }}
-                  onClick={() => {
-                    const overlay = folderPopover?.overlay;
-                    overlay?.request(!overlay.open, overlay.open ? "return" : "none");
-                  }}
-                >
-                  <span class="new-session-page__target-icon" aria-hidden="true">
-                    <Icon name="folder" />
-                  </span>
-                  <span class="session-group-defaults__folder-copy">
-                    <strong>{folderLabel()}</strong>
-                    <small title={trimmedCwd() || undefined}>
-                      {trimmedCwd() || t("sessionsView.groupDefaultsCwdHint")}
-                    </small>
-                  </span>
-                  <span class="new-session-page__trigger-chevron" aria-hidden="true">
-                    <Icon name="chevronDown" />
-                  </span>
-                </button>
-                <Popover
-                  id="session-group-defaults-folder-popover"
-                  label={`${t("sessionsView.groupDefaultsCwd")}: ${folderLabel()}`}
-                  anchor={folderAnchor}
-                  class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover session-group-defaults__folder-popover"
-                  placement="bottom-start"
-                  ref={(handle) => {
-                    folderPopover = handle;
-                  }}
-                  onOpenChange={(open) => {
-                    if (open) {
-                      rootButton?.focus({ preventScroll: true });
-                    } else {
-                      showPickerRoot();
-                    }
-                  }}
-                >
-                  {browserVisible() ? <Browser /> : <PickerRoot />}
-                </Popover>
-              </div>
-              <div class="field">
-                <span>{t("sessionsView.groupDefaultsMode")}</span>
-                <div
-                  class="session-group-defaults__environment"
-                  data-session-group-environment={environmentState()}
-                  aria-live="polite"
-                >
-                  {repository() === "git" ? (
-                    <Menu
-                      id="session-group-defaults-mode"
-                      class="session-group-defaults__mode-dropdown"
-                      panelClass="session-group-defaults__mode-menu"
-                      triggerClass="session-group-defaults__resolved-mode session-group-defaults__mode-trigger"
-                      triggerAttributes={{
-                        id: "session-group-defaults-mode-trigger",
-                        "data-value": selectedEnvironment().value,
-                      }}
-                      label={`${t("sessionsView.groupDefaultsMode")}: ${selectedEnvironment().label}`}
+            <Errored
+              fallback={(error, reset) => (
+                <>
+                  <div class="exec-approval-error" role="alert">
+                    {formatUiError(error())}
+                  </div>
+                  <openclaw-modal-actions class="exec-approval-actions">
+                    <RepositoryActions status="unavailable" onRetry={reset} />
+                    <button type="button" class="btn" disabled={saving()} onClick={() => finish()}>
+                      {t("common.cancel")}
+                    </button>
+                  </openclaw-modal-actions>
+                </>
+              )}
+            >
+              <Reveal order="together">
+                <div class="session-group-defaults__fields">
+                  <div class="field">
+                    <span>{t("sessionsView.groupDefaultsCwd")}</span>
+                    <button
+                      id="session-group-defaults-folder-trigger"
+                      type="button"
+                      class="new-session-page__trigger session-group-defaults__folder"
+                      aria-label={`${t("sessionsView.groupDefaultsCwd")}: ${folderLabel()}`}
+                      aria-haspopup="dialog"
+                      aria-controls="session-group-defaults-folder-popover"
                       disabled={saving()}
-                      onSelect={(item) => selectWorktree(item.id === "worktree")}
-                      items={environmentOptions().map((option) => ({
-                        id: option.value,
-                        label: `${option.label}, ${option.description}`,
-                        type: "radio" as const,
-                        checked: option.value === selectedEnvironment().value,
-                        disabled: saving(),
-                        class: "session-group-defaults__mode-option",
-                        attributes: {
-                          "data-environment-mode": option.value,
-                          "data-selected":
-                            option.value === selectedEnvironment().value ? "" : undefined,
-                          "data-initial-focus":
-                            option.value === selectedEnvironment().value ? "" : undefined,
-                        },
-                        icon: (
-                          <span
-                            class="new-session-page__target-icon session-group-defaults__mode-option-icon"
-                            aria-hidden="true"
-                          >
-                            <Icon name={option.icon} />
-                          </span>
-                        ),
-                        content: (
-                          <span class="session-group-defaults__resolved-copy">
-                            <strong>{option.label}</strong>
-                            <small>{option.description}</small>
-                          </span>
-                        ),
-                      }))}
-                      trigger={
-                        <>
-                          <span class="new-session-page__target-icon" aria-hidden="true">
-                            <Icon name={selectedEnvironment().icon} />
-                          </span>
-                          <span class="session-group-defaults__resolved-copy">
-                            <strong>{selectedEnvironment().label}</strong>
-                            <small>{selectedEnvironment().description}</small>
-                          </span>
-                          <span class="new-session-page__trigger-chevron" aria-hidden="true">
-                            <Icon name="chevronDown" />
-                          </span>
-                        </>
-                      }
-                    />
-                  ) : (
-                    <div
-                      class="session-group-defaults__resolved-mode"
-                      role={repository() === "checking" ? "status" : undefined}
+                      ref={(element) => {
+                        folderAnchor = element;
+                      }}
+                      onClick={() => {
+                        const overlay = folderPopover?.overlay;
+                        overlay?.request(!overlay.open, overlay.open ? "return" : "none");
+                      }}
                     >
                       <span class="new-session-page__target-icon" aria-hidden="true">
-                        <Icon name={repository() === "checking" ? "gitBranch" : "monitor"} />
+                        <Icon name="folder" />
                       </span>
-                      <span class="session-group-defaults__resolved-copy">
-                        <strong>
-                          {repository() === "checking"
-                            ? t("newSession.checkingGit")
-                            : t("sessionsView.groupDefaultsLocal")}
-                        </strong>
-                        {repository() !== "checking" ? (
-                          <small>
-                            {repository() === "restricted"
-                              ? t("sessionsView.groupDefaultsRequiresAdmin")
-                              : repository() === "unavailable"
-                                ? t("newSession.gitCheckUnavailable")
-                                : t("newSession.checkoutCurrentNote")}
-                          </small>
-                        ) : undefined}
+                      <span class="session-group-defaults__folder-copy">
+                        <strong>{folderLabel()}</strong>
+                        <small title={trimmedCwd() || undefined}>
+                          {trimmedCwd() || t("sessionsView.groupDefaultsCwdHint")}
+                        </small>
                       </span>
-                    </div>
-                  )}
+                      <span class="new-session-page__trigger-chevron" aria-hidden="true">
+                        <Icon name="chevronDown" />
+                      </span>
+                    </button>
+                    <Popover
+                      id="session-group-defaults-folder-popover"
+                      label={`${t("sessionsView.groupDefaultsCwd")}: ${folderLabel()}`}
+                      anchor={folderAnchor}
+                      class="new-session-page__select new-session-page__project-popover new-session-page__picker-popover session-group-defaults__folder-popover"
+                      placement="bottom-start"
+                      ref={(handle) => {
+                        folderPopover = handle;
+                      }}
+                      onOpenChange={(open) => {
+                        if (open) {
+                          rootButton?.focus({ preventScroll: true });
+                        } else {
+                          showPickerRoot();
+                        }
+                      }}
+                    >
+                      {browserVisible() ? <Browser /> : <PickerRoot />}
+                    </Popover>
+                  </div>
+                  <Loading fallback={<Environment status="checking" />}>
+                    <Environment status={repository()} />
+                  </Loading>
                 </div>
-              </div>
-            </div>
-            {failure() ? (
-              <div class="exec-approval-error" role="alert">
-                {failure()}
-              </div>
-            ) : undefined}
-            <openclaw-modal-actions class="exec-approval-actions">
-              <button
-                type="submit"
-                class="btn primary"
-                disabled={
-                  saving() ||
-                  repository() === "checking" ||
-                  repository() === "unavailable" ||
-                  repository() === "restricted"
-                }
-              >
-                {t("common.save")}
-              </button>
-              {repository() === "unavailable" || repository() === "restricted" ? (
-                <button
-                  type="button"
-                  class="btn"
-                  disabled={saving()}
-                  onClick={() =>
-                    void inspectRepository(cwd().trim() === options.defaults.cwd.trim(), cwd())
-                  }
-                >
-                  {t("common.retry")}
-                </button>
-              ) : undefined}
-              <button type="button" class="btn" disabled={saving()} onClick={() => finish()}>
-                {t("common.cancel")}
-              </button>
-            </openclaw-modal-actions>
+                {failure() && !saving() ? (
+                  <div class="exec-approval-error" role="alert">
+                    {failure()}
+                  </div>
+                ) : undefined}
+                <openclaw-modal-actions class="exec-approval-actions">
+                  <button type="button" class="btn" disabled={saving()} onClick={() => finish()}>
+                    {t("common.cancel")}
+                  </button>
+                  <Loading fallback={<RepositoryActions status="checking" />}>
+                    <RepositoryActions status={repository()} />
+                  </Loading>
+                </openclaw-modal-actions>
+              </Reveal>
+            </Errored>
           </form>
         </openclaw-modal-dialog>
       );

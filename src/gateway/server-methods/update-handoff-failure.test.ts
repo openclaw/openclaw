@@ -280,7 +280,8 @@ describe("update.run handoff refusal diagnostics", () => {
         expect(report.body).toContain("Recovery outcome: Gateway kept serving");
         expect(report.body).toContain("handoff-payload-failed");
         expect.soft(report.body).toContain("Failing check managed-service (Error)");
-        expect.soft(report.body).toContain(message);
+        expect.soft(report.body).not.toContain(message);
+        expect.soft(report.body).toContain("[redacted-diagnostic]");
       } else {
         expect(report.body).not.toContain("Recovery outcome: Gateway kept serving");
         expect.soft(report.body).toContain(`Failed phase requested: ${message}`);

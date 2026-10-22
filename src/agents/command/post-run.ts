@@ -37,7 +37,6 @@ import {
   persistPendingFinalDeliveryMarker,
 } from "../pending-final-delivery-marker.js";
 import type { PendingFinalRecoverySource } from "../pending-final-recovery-source.js";
-import type { AgentRunSessionTarget } from "../run-session-target.types.js";
 import {
   createAgentRunRestartAbortError,
   throwAgentRunRestartAbortReason,
@@ -82,7 +81,6 @@ export async function finalizeEmbeddedAgentCommand(params: {
     runOwnedSessionId: string;
     sessionReboundDuringRun: boolean;
   };
-  trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
   onSessionOwnershipChanged: (
     ownership: { runOwnedSessionId: string; sessionReboundDuringRun: boolean },
     committedCompactionSessionId?: string,

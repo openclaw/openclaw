@@ -1,106 +1,122 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
+  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
 import {
+  chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
   renderPaneHeaderInto,
 } from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
-import { openSlot, promoteSidebarPanel, setSidebarOpen } from "./sidebar-layout.ts";
+import {
+  ensureSidebarConversation,
+  openSlot,
+  promoteSidebarPanel,
+  setSidebarExpanded,
+  setSidebarOpen,
+  isSidebarSlotVisible,
+} from "./sidebar-layout.ts";
 
-it("keeps Layout actions available across plugin panel swaps", async () => {
-  const { pane, state } = createTestChatPane({
-    client: { request: vi.fn() } as unknown as GatewayBrowserClient,
-    sessions: createSessionCapabilityFixture(),
-  });
-  const slot = "plugin:fixture/notes";
-  const definitions: SidebarPanelDefinition[] = [
-    ...sidebarPanelDefinitions(),
-    {
+it.each([
+  { slot: "plugin:fixture/notes", mode: "split" },
+  { slot: "dashboard", mode: "split" },
+  { slot: "dashboard", mode: "expanded" },
+  { slot: "dashboard", mode: "closed" },
+] as const)(
+  "retains $slot main when Panels toggles from $mode and reopens offline",
+  ({ slot, mode }) => {
+    const { pane, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    const definitions: SidebarPanelDefinition[] = [
+      ...sidebarPanelDefinitions(),
+      {
+        slot: "plugin:fixture/notes",
+        label: "Fixture notes",
+        icon: sidebarPanelDefinitions()[0]!.icon,
+        available: true,
+        content: "Notes",
+        loading: { variant: "files", label: "Loading notes" },
+        empty: { description: "No notes" },
+      },
+    ];
+    state.sidebarLayout = promoteSidebarPanel(
+      openSlot(ensureSidebarConversation({ columns: [] }), slot),
       slot,
-      label: "Fixture notes",
-      icon: sidebarPanelDefinitions()[0]!.icon,
-      available: true,
-      content: "Notes",
-      loading: { variant: "files", label: "Loading notes" },
-      empty: { description: "No notes" },
-    },
-  ];
-  state.sidebarLayout = promoteSidebarPanel(openSlot({ columns: [] }, slot), slot);
-  const container = document.body.appendChild(document.createElement("div"));
-  onTestFinished(() => container.remove());
-  const paint = () => {
-    renderPaneHeaderInto(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(state),
-        { key: state.sessionKey, kind: "direct", updatedAt: 0 },
-        false,
-        undefined,
-        false,
-        null,
-        state.sidebarLayout,
-        definitions,
-      ),
-      container,
     );
+    if (mode === "expanded") {
+      state.sidebarLayout = setSidebarExpanded(state.sidebarLayout, true);
+    } else if (mode === "closed") {
+      state.sidebarLayout = setSidebarOpen(state.sidebarLayout, false);
+    }
+    const columns = structuredClone(state.sidebarLayout.columns);
+    const container = document.body.appendChild(document.createElement("div"));
+    onTestFinished(() => container.remove());
+    const paint = () => {
+      renderPaneHeaderInto(
+        pane.renderPaneHeader(
+          createPaneHeaderWorkspaceFixture(state),
+          { key: state.sessionKey, kind: "direct", updatedAt: 0 },
+          false,
+          undefined,
+          false,
+          null,
+          state.sidebarLayout,
+          definitions,
+          undefined,
+          {
+            presentation: true,
+            mobile: false,
+            setRef: () => {},
+            externalTrigger: true,
+            conversationVisible: isSidebarSlotVisible(state.sidebarLayout, "conversation"),
+          },
+        ),
+        container,
+      );
+      flush();
+    };
+    paint();
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '.chat-pane__header button[aria-label="Panels"]',
+    )!;
+    expect(container.querySelectorAll(".chat-pane__header")).toHaveLength(1);
+    expect(trigger).not.toBeNull();
+    expect(container.querySelectorAll(".chat-pane__chat-toggle")).toHaveLength(
+      slot === "dashboard" ? 0 : 1,
+    );
+    expect(trigger.getAttribute("aria-expanded")).toBe(mode === "split" ? "true" : "false");
+    if (mode !== "split") {
+      trigger.click();
+      paint();
+      expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
+      expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    }
+    trigger.click();
     flush();
-  };
-  const action = (label: string) => container.querySelector<HTMLElement>(`[aria-label="${label}"]`);
-  const open = async () => {
-    const menu = container.querySelector(".chat-pane__layout-menu")!;
-    const panel = menu.querySelector<HTMLElement>(".oc-menu")!;
-    if (!panel.matches(":popover-open")) {
-      menu.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!.click();
-    }
-    await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(true));
-    return panel;
-  };
-  const activate = async (label: string) => {
-    const panel = await open();
-    const item = action(label);
-    if (!item) {
-      throw new Error(`Expected Layout action: ${label}`);
-    }
-    item.click();
-    await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(false));
-  };
+    expect(state.sidebarLayout.open).toBe(false);
+    state.connected = false;
+    paint();
+    expect(container.querySelector('.chat-pane__header button[aria-label="Panels"]')).toBe(trigger);
+    expect(trigger.disabled).toBe(false);
+    trigger.click();
+    flush();
+    expect(state.sidebarLayout.open).toBe(true);
+    expect(state.sidebarLayout.mainPanelId).toBe(slot);
+    expect(state.sidebarLayout.columns).toEqual(columns);
+    expect(isSidebarSlotVisible(state.sidebarLayout, "conversation")).toBe(true);
+  },
+);
 
-  paint();
-  await open();
-  expect(container.querySelectorAll(".chat-pane__header")).toHaveLength(1);
-  expect(container.querySelectorAll(".chat-side-panel-toggle")).toHaveLength(1);
-  expect(action("Swap Fixture notes and Chat")).not.toBeNull();
-  await activate("Focus");
-  expect(state.sidebarLayout.expanded).toBe(true);
-  state.connected = false;
-  paint();
-  expect(container.querySelector(".chat-panel-swap")).toBeNull();
-  expect(action("Restore split")!.matches(":disabled")).toBe(false);
-  await activate("Restore split");
-  expect(state.sidebarLayout.expanded).toBe(false);
-  paint();
-  expect(action("Swap Fixture notes and Chat")!.matches(":disabled")).toBe(false);
-  await activate("Swap Fixture notes and Chat");
-  paint();
-  expect(action("Swap Chat and Fixture notes")).not.toBeNull();
-
-  state.sidebarLayout = setSidebarOpen({ columns: [] }, true);
-  paint();
-  expect(container.querySelector(".chat-panel-swap")).toBeNull();
-  expect(container.querySelectorAll(".chat-side-panel-toggle")).toHaveLength(1);
-  await activate("Minimize side panel");
-  expect(state.sidebarLayout.open).toBe(false);
-});
-
-it("retains focused Layout controls and an open menu when header props refresh", async () => {
+it("retains focused session menu controls through header refresh and restores focus before splitting", async () => {
   const focusAtSplit: (Element | null)[] = [];
   const onSplitRight = vi.fn<(paneId: string) => void>(() => {
     focusAtSplit.push(document.activeElement);
@@ -109,6 +125,11 @@ it("retains focused Layout controls and an open menu when header props refresh",
   const mounted = mountChatPaneHeader([], {
     onClosePane: vi.fn(),
     onSplitRight,
+    sessionMenuAction: {
+      ...chatPaneHeaderSessionMenu(),
+      session: { ...chatPaneHeaderSessionMenu().session, target: { key: "agent:main:test" } },
+      splitAllowed: true,
+    },
     sidebarLayout: sidebarLayout(),
     panelDefinitions: sidebarPanelDefinitions(),
     onLayoutChange: vi.fn(),
@@ -117,58 +138,63 @@ it("retains focused Layout controls and an open menu when header props refresh",
     mounted.unmount();
     mounted.container.remove();
   });
-  const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!;
-  const menu = mounted.container.querySelector<HTMLElement>(".chat-pane__layout-menu")!;
-  const panel = menu.querySelector<HTMLElement>(".oc-menu")!;
-  flush();
+  const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
+  await menu.updateComplete;
+  const trigger = menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!;
   trigger.click();
-  await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(true));
-  const close = mounted.container.querySelector(".chat-pane__close-pane")!;
-  const split = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__split-right")!;
-  trigger.focus();
+  await waitForSolid(() =>
+    expect(menu.querySelector(".chat-header-session-menu__panel")?.matches(":popover-open")).toBe(
+      true,
+    ),
+  );
+  menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')!.click();
+  await waitForSolid(() =>
+    expect(menu.querySelector('[data-value="submenu:open-in"]')).not.toBeNull(),
+  );
+  const openIn = menu.querySelector<HTMLButtonElement>('[data-value="submenu:open-in"]')!;
+  openIn.click();
+  await waitForSolid(() => expect(menu.querySelector('[data-value="split-right"]')).not.toBeNull());
+  const split = menu.querySelector<HTMLButtonElement>('[data-value="split-right"]')!;
+  split.focus();
   mounted.update({
     title: "Updated session title",
     sidebarLayout: sidebarLayout(),
     panelDefinitions: sidebarPanelDefinitions(),
   });
-  expect(mounted.container.querySelector(".chat-pane__layout-trigger")).toBe(trigger);
-  expect(mounted.container.querySelector(".chat-pane__close-pane")).toBe(close);
-  expect(mounted.container.querySelector(".chat-pane__split-right")).toBe(split);
-  expect(document.activeElement).toBe(trigger);
-  expect(mounted.container.querySelector(".chat-pane__layout-menu")).toBe(menu);
-  expect(panel.matches(":popover-open")).toBe(true);
-  split.focus();
+  await menu.updateComplete;
+  expect(mounted.container.querySelector("openclaw-chat-header-session-menu")).toBe(menu);
+  expect(menu.querySelector(".chat-header-session-menu__trigger")).toBe(trigger);
+  expect(menu.querySelector('[data-value="submenu:open-in"]')).toBe(openIn);
+  expect(menu.querySelector('[data-value="split-right"]')).toBe(split);
+  expect(document.activeElement).toBe(split);
+  expect(split.closest('[role="menu"]')?.matches(":popover-open")).toBe(true);
   split.click();
-  await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(false));
+  await waitForSolid(() =>
+    expect(menu.querySelector(".chat-header-session-menu__panel")?.matches(":popover-open")).toBe(
+      false,
+    ),
+  );
   expect(document.activeElement).toBe(trigger);
   expect(focusAtSplit).toEqual([trigger]);
   expect(onSplitRight).toHaveBeenCalledExactlyOnceWith("pane-1");
 });
 
-it("keeps a native external panel link when it is the only Layout action", async () => {
-  // jsdom has no layout; this fixture's only native control is visible.
-  Object.defineProperty(HTMLElement.prototype, "checkVisibility", {
-    configurable: true,
-    value: () => true,
-  });
-  onTestFinished(() => {
-    Reflect.deleteProperty(HTMLElement.prototype, "checkVisibility");
-  });
+it("renders a native external link in the main panel header", () => {
   const panelDefinitions = sidebarPanelDefinitions();
-  panelDefinitions.find((definition) => definition.slot === "conversation")!.headerLink = {
+  panelDefinitions.find((definition) => definition.slot === "workspace")!.headerLink = {
     href: "https://example.test/panel",
     label: "Open panel",
   };
-  const mounted = mountChatPaneHeader([], { sidebarLayout: { columns: [] }, panelDefinitions });
+  const mounted = mountChatPaneHeader([], {
+    sidebarLayout: promoteSidebarPanel(openSlot({ columns: [] }, "workspace"), "workspace"),
+    panelDefinitions,
+    panelActionDestinations: { main: true, side: false, dashboard: false },
+  });
   onTestFinished(mounted.unmount);
-  const trigger = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__layout-trigger")!;
-  trigger.click();
-  await waitForSolid(() =>
-    expect(mounted.container.querySelector('a[aria-label="Open panel"]')).not.toBeNull(),
-  );
   const link = mounted.container.querySelector<HTMLAnchorElement>('a[aria-label="Open panel"]')!;
+  expect(link).not.toBeNull();
   expect(link.href).toBe("https://example.test/panel");
   expect(link.target).toBe("_blank");
   expect(link.rel).toBe("noopener");
-  expect(link.closest(".oc-menu")?.matches(":popover-open")).toBe(true);
+  expect(link.closest(".chat-pane__header")).not.toBeNull();
 });

@@ -23,8 +23,10 @@ vi.mock("node:child_process", async () => {
 vi.mock("./tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
 }));
-// mock-isolation: launcher paths are supplied without probing the host Task Scheduler.
-vi.mock("../daemon/schtasks.js", () => ({ resolveTaskScriptPath: resolveTaskScriptPathMock }));
+vi.mock("../daemon/schtasks-layout.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/schtasks-layout.js")>()),
+  resolveTaskScriptPath: resolveTaskScriptPathMock,
+}));
 vi.mock("./windows-encoding.js", async (original) => ({
   ...(await original<typeof import("./windows-encoding.js")>()),
   resolveWindowsOemCodePage: () => 437,
@@ -244,6 +246,8 @@ it("retains an unidentified Gateway", () => {
 });
 
 it("isolates task names from PowerShell observation", () => {
+  process.argv[1] = "C:\\OpenClaw\\Bob's ‘gateway’ ‚‛\\entry.js";
+  resolveWindowsOemEncodingMock.mockReturnValue("utf8");
   const observations: string[][] = [];
   for (const taskName of ["OpenClaw Gateway", "OpenClaw Gateway (Bob's work)"]) {
     const result = relaunchGatewayScheduledTask({
@@ -259,6 +263,9 @@ it("isolates task names from PowerShell observation", () => {
   }
   expect(observations[0]).toHaveLength(2);
   expect(observations[1]).toEqual(observations[0]);
+  expect(observations[0]?.[1]).toContain(
+    "$entry = [regex]::Escape('C:\\OpenClaw\\Bob''s ‘‘gateway’’ ‚‚‛‛\\entry.js')",
+  );
 });
 
 // Keep host home/state paths ASCII; only the task name tests GBK encoding.

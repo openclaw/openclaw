@@ -1,19 +1,22 @@
+import type { SessionConfig } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessLlmInputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createSessionConfig, type resolvePoolAcquire } from "./attempt-config.js";
+import { readResolvedAttemptPath, type resolvePoolAcquire } from "./attempt-config.js";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
-import { assertCopilotAttemptHostCapabilities } from "./attempt-types.js";
-import type {
-  AttemptParamsLike,
-  CopilotAgentEndHookParams,
-  CopilotAttemptDeps,
-  ModelRef,
+import {
+  assertCopilotAttemptHostCapabilities,
+  COPILOT_ASK_USER_AVAILABLE_TOOLS,
+  COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE,
 } from "./attempt-types.js";
+import type { AttemptParamsLike, CopilotAgentEndHookParams, ModelRef } from "./attempt-types.js";
+import { createHooksBridge } from "./hooks-bridge.js";
+import { createPermissionBridge, rejectAllPolicy } from "./permission-bridge.js";
 import { buildCopilotPromptGuidance } from "./prompt-guidance.js";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
+import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
 import { shouldForceCopilotMessageTool, type createCopilotToolBridge } from "./tool-bridge.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 import { loadCopilotWorkspaceInstructions } from "./workspace-bootstrap.js";
@@ -25,7 +28,6 @@ export async function createCopilotSessionSetup(params: {
   hookContext: CopilotAgentEndHookParams["ctx"];
   modelRef: ModelRef;
   messages: AgentMessage[];
-  operation: CopilotAttemptDeps["operation"];
   poolAcquire: ReturnType<typeof resolvePoolAcquire>;
   ringZeroSystemAgentRun: boolean;
   promptToolPolicy?: Awaited<ReturnType<typeof createCopilotToolBridge>>["promptToolPolicy"];
@@ -41,7 +43,6 @@ export async function createCopilotSessionSetup(params: {
     hookContext,
     modelRef,
     messages,
-    operation,
     poolAcquire,
     ringZeroSystemAgentRun,
     promptToolPolicy,
@@ -142,28 +143,72 @@ export async function createCopilotSessionSetup(params: {
         assertCopilotAttemptHostCapabilities(attemptInput);
         return createCopilotUserInputBridge({ paramsForRun: attemptInput, signal });
       })();
-  const buildSessionConfig = (provider: ResolvedCopilotProvider) =>
-    createSessionConfig(
-      attemptInput,
-      modelRef.id,
-      promptTools,
-      poolAcquire.auth,
-      provider,
-      finalDeveloperInstructions || undefined,
-      effectiveWorkspaceDir,
-      effectiveCwd,
-      userInputBridge?.onUserInputRequest,
-      {
-        hooksBridgeOptions: hasNativePromptHook
+  const buildSessionConfig = (provider: ResolvedCopilotProvider): SessionConfig => {
+    const onUserInputRequest = userInputBridge?.onUserInputRequest;
+    const permissionPolicy = settledToolFinalization
+      ? rejectAllPolicy
+      : (attemptInput.permissionPolicy ?? rejectAllPolicy);
+    const hooks = settledToolFinalization
+      ? undefined
+      : createHooksBridge(
+          attemptInput.hooksConfig,
+          hasNativePromptHook
+            ? {
+                onUserPromptSubmitted: ({ additionalContext, prompt }) =>
+                  emitLlmInput(prompt, additionalContext),
+              }
+            : undefined,
+        );
+    const availableTools = promptTools.map((tool) => tool.name);
+    if (includeAskUser) {
+      availableTools.push(...COPILOT_ASK_USER_AVAILABLE_TOOLS);
+    }
+    return {
+      model: modelRef.id,
+      onPermissionRequest: createPermissionBridge(permissionPolicy),
+      ...(onUserInputRequest ? { onUserInputRequest } : {}),
+      ...(provider.provider ? { provider: provider.provider } : {}),
+      ...(hooks ? { hooks } : {}),
+      ...(attemptInput.enableSessionTelemetry !== undefined
+        ? { enableSessionTelemetry: attemptInput.enableSessionTelemetry }
+        : {}),
+      ...(settledToolFinalization
+        ? {}
+        : attemptInput.infiniteSessionConfig
+          ? { infiniteSessions: attemptInput.infiniteSessionConfig }
+          : {}),
+      reasoningEffort: attemptInput.reasoningEffort,
+      tools: promptTools,
+      availableTools: [...new Set(availableTools)],
+      ...(settledToolFinalization ? createCopilotIsolatedSessionRestrictions() : {}),
+      workingDirectory:
+        effectiveCwd ?? effectiveWorkspaceDir ?? readResolvedAttemptPath(attemptInput.workspaceDir),
+      ...(!settledToolFinalization &&
+      effectiveWorkspaceDir &&
+      effectiveCwd &&
+      effectiveCwd !== effectiveWorkspaceDir
+        ? { instructionDirectories: [effectiveWorkspaceDir] }
+        : {}),
+      ...(poolAcquire.auth.authMode === "gitHubToken" && poolAcquire.auth.gitHubToken
+        ? { gitHubToken: poolAcquire.auth.gitHubToken }
+        : {}),
+      ...(settledToolFinalization
+        ? {
+            systemMessage: {
+              mode: "customize" as const,
+              content: COPILOT_SETTLED_FINALIZATION_SYSTEM_MESSAGE,
+            },
+          }
+        : finalDeveloperInstructions
           ? {
-              onUserPromptSubmitted: ({ additionalContext, prompt }) =>
-                emitLlmInput(prompt, additionalContext),
+              systemMessage: {
+                mode: "append" as const,
+                content: finalDeveloperInstructions,
+              },
             }
-          : undefined,
-        includeAskUser,
-        operation: operation ?? "attempt",
-      },
-    );
+          : {}),
+    };
+  };
   const sessionConfig = buildSessionConfig(sessionProvider);
   const compactionSessionConfig = byokProxy
     ? buildSessionConfig(poolAcquire.provider)

@@ -170,7 +170,7 @@ export async function buildMediaGenerateToolExecutionResult(params: {
     .filter(Boolean)
     .join("\n");
   return {
-    ...identity,
+    count: identity.count,
     attachments,
     contentText,
     wakeResult: contentText,

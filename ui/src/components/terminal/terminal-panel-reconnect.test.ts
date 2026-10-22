@@ -219,6 +219,125 @@ describe("OpenClawTerminalPanel reconnect", () => {
     expect(panel.querySelector(".tp-upload-card")).toBeNull();
   });
 
+  it("retains the composed command and attachments until failed recovery is retried", async () => {
+    vi.useFakeTimers();
+    const terminal = createTerminalController();
+    terminal.setReadOnly.mockImplementation((readOnly: boolean) => {
+      terminal.readOnly = readOnly;
+    });
+    createGhosttyTerminalMock.mockImplementation(async (options) => {
+      // The emulator emits bytes; the real startup-input owner admits or rejects them.
+      terminal.terminal.paste.mockImplementation((text: string) => {
+        options.onData?.(new TextEncoder().encode(text));
+      });
+      terminal.terminal.input.mockImplementation((text: string, wasUserInput: boolean) => {
+        if (wasUserInput) {
+          options.onData?.(new TextEncoder().encode(text));
+        }
+      });
+      return terminal;
+    });
+    const recovered = { ...terminalOpenResult("retained"), buffer: "", seq: 0 };
+    const recovery = createDeferred<typeof recovered>();
+    let attachAttempts = 0;
+    let opened = false;
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "terminal.open") {
+        opened = true;
+        return terminalOpenResult("retained");
+      }
+      if (method === "terminal.attach") {
+        return attachAttempts++ === 0 ? recovery.promise : recovered;
+      }
+      if (method === "terminal.list") {
+        return {
+          sessions: opened
+            ? [{ ...terminalOpenResult("retained"), attached: true, createdAtMs: 1 }]
+            : [],
+        };
+      }
+      if (method === "terminal.upload") {
+        return { path: "/tmp/notes.txt", size: 4 };
+      }
+      return { ok: true };
+    });
+    const client: TerminalGatewayClient = {
+      forceReconnect: vi.fn(),
+      // SAFETY: This Gateway fixture returns the response selected by the requested method.
+      request: <T>(method: string, params?: unknown) => request(method, params) as Promise<T>,
+      addEventListener: () => () => {},
+    };
+    const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
+    panel.embedded = true;
+    panel.client = client;
+    panel.available = true;
+    document.body.append(panel);
+    await panel.updateComplete;
+    await vi.dynamicImportSettled();
+    await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
+    panel.selectHostedTab(panel.activeHostedTabId!);
+    await panel.updateComplete;
+    const input = panel.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!;
+    input.value = "cat";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    const file = new File(["test"], "notes.txt");
+    Object.defineProperty(file, "arrayBuffer", {
+      value: async () => new TextEncoder().encode("test").buffer,
+    });
+    const fileInput = panel.querySelector<HTMLInputElement>(".tp-file-input")!;
+    Object.defineProperty(fileInput, "files", { value: [file] });
+    fileInput.dispatchEvent(new Event("change"));
+    await waitForFast(() =>
+      expect(panel.querySelector(".tp-attachment")?.textContent).toContain("notes.txt"),
+    );
+
+    panel.gatewayConnected = false;
+    await panel.updateComplete;
+    await waitForFast(() => expect(terminal.readOnly).toBe(true));
+    panel.gatewayConnected = true;
+    await panel.updateComplete;
+    await waitForFast(() => expect(attachAttempts).toBe(1));
+    const send = () =>
+      panel.querySelector<HTMLButtonElement>('[aria-label="Send terminal input"]')!.click();
+    const expectRetainedDraft = () => {
+      expect(panel.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!.value).toBe(
+        "cat",
+      );
+      expect(panel.querySelector(".tp-attachment")?.textContent).toContain("notes.txt");
+      expect(request.mock.calls.filter(([method]) => method === "terminal.input")).toEqual([]);
+    };
+    send();
+    await panel.updateComplete;
+    expectRetainedDraft();
+
+    recovery.reject(new Error("temporary attach failure"));
+    await waitForFast(() =>
+      expect(panel.querySelector(".tp-error")?.textContent).toContain(
+        "Could not attach terminal session",
+      ),
+    );
+    expect(panel.hostedTabs[0]?.className).toBe("is-live");
+    expect(terminal.readOnly).toBe(true);
+    send();
+    await panel.updateComplete;
+    expectRetainedDraft();
+    expect(panel.querySelector(".tp-error")?.textContent).toContain(
+      "Could not attach terminal session",
+    );
+
+    panel.querySelector<HTMLButtonElement>(".tp-error .btn")!.click();
+    await waitForFast(() => expect(terminal.readOnly).toBe(false));
+    expectRetainedDraft();
+    send();
+    await panel.updateComplete;
+    expect(request.mock.calls.filter(([method]) => method === "terminal.input")).toEqual([
+      ["terminal.input", { sessionId: "retained", data: "cat /tmp/notes.txt" }],
+      ["terminal.input", { sessionId: "retained", data: "\r" }],
+    ]);
+    expect(panel.querySelector<HTMLInputElement>('[aria-label="Terminal input"]')!.value).toBe("");
+    expect(panel.querySelector(".tp-attachment")).toBeNull();
+  });
+
   it.each([
     ["input", false],
     ["resize", false],
@@ -765,7 +884,6 @@ describe("OpenClawTerminalPanel reconnect", () => {
       }),
     );
     const panel = createTestTerminalPanel(TERMINAL_PANEL_ELEMENT_NAME);
-    panel.catalogReadyTimeoutMs = 10;
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -785,7 +903,7 @@ describe("OpenClawTerminalPanel reconnect", () => {
       }),
     );
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(30_000);
     await panel.updateComplete;
     expect(panel.querySelector(".tp-error")?.textContent).toContain(
       "Reload this page to continue the terminal action",

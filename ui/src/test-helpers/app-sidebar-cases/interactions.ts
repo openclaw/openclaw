@@ -6,7 +6,7 @@ import type {
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import { loadStoredHiddenSessionCatalogIds } from "../../components/app-sidebar-session-types.ts";
 import {
   createGatewayHarness,

@@ -1,4 +1,3 @@
-import { createSignal, merge } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -7,6 +6,7 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid as mountComponent } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -19,6 +19,7 @@ import {
 import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { clearSubmittedComposerState, cancelChatDelivery } from "./chat-send-composer.ts";
+import { appendChatAttachmentFiles } from "./components/chat-attachments.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
@@ -33,8 +34,7 @@ afterEach(() => resetComposerFixture());
 function mountComposer(initial: Partial<ChatComposerProps>) {
   const container = document.body.appendChild(createComposerContainer());
   let props = createComposerProps(initial);
-  const paint = () => renderComposerInto(container, props);
-  paint();
+  renderComposerInto(container, props);
   const query = container.querySelector.bind(container);
   return {
     container,
@@ -43,7 +43,7 @@ function mountComposer(initial: Partial<ChatComposerProps>) {
     goal: () => query(".agent-chat__goal-mode"),
     update: (next: Partial<ChatComposerProps> = {}) => {
       props = { ...props, ...next };
-      paint();
+      renderComposerInto(container, props);
     },
   };
 }
@@ -106,6 +106,7 @@ it("updates edits and history from the draft owner without remounting the input"
   state.chatLocalInputHistoryBySession[state.sessionKey] = [{ text: "Earlier input", ts: 1 }];
   state.handleChatInputHistoryKey({
     key: "ArrowUp",
+    keyCode: 38,
     selectionStart: 0,
     selectionEnd: 0,
     altKey: false,
@@ -113,7 +114,6 @@ it("updates edits and history from the draft owner without remounting the input"
     metaKey: false,
     shiftKey: false,
     isComposing: false,
-    keyCode: 38,
   });
   flush();
   expect(textarea.value).toBe("Earlier input");
@@ -125,6 +125,31 @@ it("updates edits and history from the draft owner without remounting the input"
   flush();
   expect(draftChanged).not.toHaveBeenCalled();
   expect(view.textarea()).toBe(textarea);
+});
+
+it("publishes attachment read progress through the composer owner without a draft edit", async () => {
+  const { owner, state, view } = mountOwnedComposer();
+  let reportProgress: (() => void) | undefined;
+  vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
+    reportProgress = () =>
+      this.dispatchEvent(
+        new ProgressEvent("progress", { lengthComputable: true, loaded: 1, total: 2 }),
+      );
+  });
+  onTestFinished(() => owner.attachmentReads.abortReads());
+  const props = owner.attachmentInputProps(state);
+  view.update(props);
+  appendChatAttachmentFiles(
+    [new File(["progress"], "progress.txt", { type: "text/plain" })],
+    props,
+  );
+  await waitForSolid(() => expect(view.query(".chat-attachment-loading > span")).not.toBeNull());
+  reportProgress?.();
+  flush();
+  expect(view.query<HTMLElement>(".chat-attachment-loading > span")?.style.transform).toBe(
+    "scaleX(0.5)",
+  );
+  expect(view.textarea().value).toBe("");
 });
 
 it("publishes submitted and restored drafts without remounting the input", () => {
@@ -456,13 +481,13 @@ it("keeps a pending dictation send bound to the action that started it", async (
   vi.spyOn(controller, "finishActive").mockReturnValue(finish.promise);
   const firstSend = vi.fn();
   const laterSend = vi.fn();
-  const [props, setProps] = createSignal({ readDictation: () => controller, onSend: firstSend });
-  const actionProps = merge(props);
-  const view = mountSolid(() => <ComposerDictationSendAction {...actionProps} />);
+  const view = mountComponent(ComposerDictationSendAction, {
+    readDictation: () => controller,
+    onSend: firstSend,
+  });
   onTestFinished(() => controller.dispose());
   view.container.querySelector<HTMLButtonElement>("button")!.click();
-  setProps({ readDictation: () => controller, onSend: laterSend });
-  flush();
+  view.update({ readDictation: () => controller, onSend: laterSend });
   finish.resolve(true);
   await Promise.resolve();
   expect(firstSend).toHaveBeenCalledOnce();

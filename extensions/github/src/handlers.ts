@@ -46,7 +46,7 @@ async function handleGitHubRequest(
       respond(false, result.payload, result.error, result.meta);
       return;
     }
-    if (method === "github.preview" && parsed.target.kind !== "commit") {
+    if (method === "github.preview") {
       // The entitled dispatcher retains this request's exact client. The host
       // adapter alone selects/revalidates managed identities and caller lifetime.
       if (

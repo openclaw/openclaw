@@ -1,14 +1,11 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   startControlUiE2eServer,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -21,6 +18,16 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const shellModule = /\/src\/app\/app-host\.tsx(?:\?.*)?$/u;
+
+function trackDocuments(page: Page) {
+  let count = 0;
+  page.on("request", (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      count += 1;
+    }
+  });
+  return () => count;
+}
 
 suite.define(() => {
   it("hands the boot skeleton to the pending route without a blank shell", async () => {
@@ -75,12 +82,7 @@ suite.define(() => {
   it("reloads into the real shell after its failed import becomes reachable", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       let failedImports = 0;
-      let documents = 0;
-      page.on("request", (request) => {
-        if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
-          documents += 1;
-        }
-      });
+      const documents = trackDocuments(page);
       await page.route(shellModule, async (route) => {
         failedImports += 1;
         await route.abort("failed");
@@ -102,7 +104,7 @@ suite.define(() => {
       await waitForControlUiRoute(page, { routeId: "new-session" });
       expect(await page.locator("openclaw-app-shell").count()).toBe(1);
       expect(await failure.count()).toBe(0);
-      expect(documents).toBe(2);
+      expect(documents()).toBe(2);
     });
   });
 
@@ -114,12 +116,7 @@ suite.define(() => {
         async ({ page }) => {
           const sidebarModule = "**/src/pages/chat/components/chat-sidebar-region.runtime.tsx*";
           let failedImports = 0;
-          let documents = 0;
-          page.on("request", (request) => {
-            if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
-              documents += 1;
-            }
-          });
+          const documents = trackDocuments(page);
           await page.route(sidebarModule, async (route) => {
             failedImports += 1;
             await route.fulfill({
@@ -130,7 +127,23 @@ suite.define(() => {
           const gateway = await installMockGateway(page, {
             historyMessages: [
               { role: "assistant", content: "The conversation remains available." },
+              { role: "assistant", content: "[Recovery file](notes.txt)" },
             ],
+            methodResponses: {
+              "sessions.files.get": {
+                sessionKey: "agent:main:main",
+                root: "/workspace",
+                file: {
+                  path: "notes.txt",
+                  name: "notes.txt",
+                  kind: "read",
+                  previewKind: "text",
+                  contentEncoding: "utf8",
+                  content: "The file remains available after recovery.",
+                  missing: false,
+                },
+              },
+            },
           });
           if (dirtyConfig) {
             await page.goto(suite.server.baseUrl + "settings/advanced");
@@ -145,22 +158,15 @@ suite.define(() => {
             await page.goto(suite.server.baseUrl + "chat/main");
           }
           const composer = page.locator(".agent-chat__composer-combobox textarea");
-          await composer.fill("Keep this draft while the panel is unavailable.");
-          await openChatSidePanelType(page, "Files");
+          const draft = "Keep this draft while the panel is unavailable.";
+          const conversation = page.getByText("The conversation remains available.", {
+            exact: true,
+          });
+          await composer.fill(draft);
+          await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
           const failure = page.locator(".sidebar-region__right-runtime .lazy-view-error");
           await failure.getByText("Panel failed to load", { exact: true }).waitFor();
           expect(failedImports).toBe(1);
-          if (!dirtyConfig && process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              page.locator("openclaw-chat-page"),
-              [failure, composer],
-              { animations: "disabled" },
-            );
-            const screenshot = path.join(suite.artifactDir, "failed-sidebar.png");
-            await writeFile(screenshot, frame.png);
-            console.info("Failed sidebar proof:", screenshot);
-          }
           const close = page.getByRole("button", { name: "Close Files", exact: true });
           expect(await close.count()).toBe(1);
           if (dirtyConfig) {
@@ -170,30 +176,22 @@ suite.define(() => {
                 exact: true,
               })
               .waitFor();
-            expect(documents).toBe(1);
+            expect(documents()).toBe(1);
           }
           await close.click();
           await expect.poll(() => failure.count()).toBe(0);
-          expect(await composer.inputValue()).toBe(
-            "Keep this draft while the panel is unavailable.",
-          );
-          expect(
-            await page
-              .getByText("The conversation remains available.", { exact: true })
-              .isVisible(),
-          ).toBe(true);
-          expect(documents).toBe(1);
+          expect(await composer.inputValue()).toBe(draft);
+          expect(await conversation.isVisible()).toBe(true);
+          expect(documents()).toBe(1);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           if (!dirtyConfig) {
-            await openChatSidePanelType(page, "Files");
+            await page.locator('a.markdown-file-link[data-file-path="notes.txt"]').click();
             await failure.waitFor();
             await page.unroute(sidebarModule);
             await failure.getByRole("button", { name: "Retry", exact: true }).click();
             await page.locator('.sidebar-region [data-panel-slot="workspace"]').waitFor();
-            expect(documents).toBe(2);
-            expect(await composer.inputValue()).toBe(
-              "Keep this draft while the panel is unavailable.",
-            );
+            expect(documents()).toBe(2);
+            expect(await composer.inputValue()).toBe(draft);
             await page.getByRole("button", { name: "Close Files", exact: true }).click();
             expect(await page.locator(".sidebar-region--open").count()).toBe(0);
           }

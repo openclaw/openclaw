@@ -14,13 +14,6 @@ import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
 
-export function requireMatrixQaE2eeOutputDir(context: MatrixQaScenarioContext) {
-  if (!context.outputDir) {
-    throw new Error("Matrix E2EE destructive QA scenarios require an output directory");
-  }
-  return context.outputDir;
-}
-
 function requireMatrixQaCliRuntimeEnv(context: MatrixQaScenarioContext) {
   if (!context.gatewayRuntimeEnv) {
     throw new Error(
@@ -58,7 +51,7 @@ export async function createMatrixQaRecoveryCliRuntime(params: {
       name: `Matrix QA ${params.label}`,
       userId: params.userId,
     }),
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
+    outputDir: params.context.outputDir,
     runtimeEnv: requireMatrixQaCliRuntimeEnv(params.context),
   });
 }

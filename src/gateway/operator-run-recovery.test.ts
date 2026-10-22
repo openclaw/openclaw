@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import * as stableJson from "@openclaw/normalization-core/stable-stringify";
 import { describe, expect, it, vi } from "vitest";
 import {
   createOperationalRunInstanceRef,
@@ -49,6 +50,7 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -56,7 +58,10 @@ import {
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import {
+  decodeQueuedOperatorRecoverySource,
+  normalizeGatewayOperatorRecoverySnapshot,
+} from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
   readGatewayOperatorRecoverySource,
@@ -162,6 +167,69 @@ function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => v
 }
 
 describe("restart recovery authenticated operator source", () => {
+  it("retains the validated auth policy across checks and rejects a changed grant", () =>
+    withRecovery(async (fixture) => {
+      const email = "recovery@example.test";
+      const config: OpenClawConfig = {
+        gateway: { auth: { identityScopes: { [email]: ["operator.admin"] } } },
+      };
+      fixture.setConfig(config);
+      const snapshot = expectDefined(
+        normalizeGatewayOperatorRecoverySnapshot({
+          ...expectDefined(fixture.sourceAuthority.recoverySnapshot, "captured source"),
+          authPolicy: {
+            ...captureGatewayAuthPolicy(config, {
+              role: "operator",
+              authMethod: "token",
+              verifiedIdentity: email,
+            }),
+            generation: "",
+          },
+        }),
+        "serialized source",
+      );
+      const restored = await restoreGatewayOperatorSource({
+        snapshot,
+        target: fixture.target,
+        context: fixture.context,
+        assertCurrent() {},
+      });
+      using _ = { [Symbol.dispose]: restored.release };
+      const stringify = vi.spyOn(stableJson, "stableStringify");
+      try {
+        restored.authority.assertCurrent();
+        restored.assertPolicyCurrent();
+        expect(stringify).not.toHaveBeenCalled();
+
+        const equivalent = structuredClone(config);
+        equivalent.gateway!.trustedProxies = ["192.0.2.10"];
+        equivalent.gateway!.auth!.identityScopes![email] = ["operator.admin", "operator.read"];
+        fixture.setConfig(equivalent);
+        expectCurrent(restored.authority);
+        stringify.mockClear();
+        restored.authority.assertCurrent();
+        restored.assertPolicyCurrent();
+        expect(stringify).not.toHaveBeenCalled();
+
+        const revoked = structuredClone(equivalent);
+        revoked.gateway!.auth!.identityScopes![email] = ["operator.read"];
+        fixture.setConfig(revoked);
+        expectRevoked(restored.authority);
+        fixture.setConfig(config);
+        expect(restored.assertPolicyCurrent).toThrow();
+        await expect(
+          restoreGatewayOperatorSource({
+            snapshot,
+            target: fixture.target,
+            context: { ...fixture.context, getRuntimeConfig: () => revoked },
+            assertCurrent() {},
+          }),
+        ).rejects.toThrow("source policy changed");
+      } finally {
+        stringify.mockRestore();
+      }
+    }));
+
   it("keeps an accepted child current after its recovered requester settles", () =>
     withRecovery(async (fixture, stateDir) => {
       const restored = expectDefined(await fixture.restore(), "recovered requester authority");

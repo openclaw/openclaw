@@ -29,7 +29,10 @@ import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import type { QueuedFollowupReplyDelivery } from "./queue/types.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplySourceBinding } from "./reply-source-binding.types.js";
-import type { SessionEventExecution } from "./session-event-contract.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "./session-event-contract.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -49,14 +52,29 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Dispatch-owned command requester binding; never part of the public plugin API. */
+  withCommandNativeSubagents?: <T>(
+    binding: { agentId: string; sessionKey: string; entry: SessionEntry },
+    run: (
+      create:
+        | import("../../plugins/runtime/native-subagent-context.js").NativeSubagentCommandFactory
+        | undefined,
+    ) => Promise<T>,
+  ) => Promise<T>;
   /** Settles attribution before tool effects; model preparation may run concurrently. */
   awaitSessionDiffBaseline?: () => Promise<void>;
+  /** One-shot model selection for host-owned turns; never persisted as a user preference. */
+  modelOverride?: string;
+  /** Host-owned scheduling authority retained through ordinary session execution. */
+  scheduledAutomation?: ScheduledSessionAutomation;
   /** Producer callbacks follow this occurrence through queueing and delivery. */
   internalEventExecution?: SessionEventExecution;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Live channel policy retained from ingress through awaited lifecycle mutations. */
+  assertChannelAuthority?: () => void;
   extractedFileImages?: ExtractedFileImage[];
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;

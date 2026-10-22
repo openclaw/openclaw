@@ -145,6 +145,29 @@ export class ChatPageRetainedSessions {
     return new Map(bound.map((pane) => [pane.id, this.retainPane(pane)]));
   }
 
+  retainProvisional(
+    panes: readonly ChatSplitPane[],
+  ): ReadonlyMap<string, readonly (string | undefined)[]> {
+    // Provisional keys are display-only: rollback must not start their chats,
+    // and admission alone owns eviction and saved pane binding.
+    return new Map(
+      panes.map((pane) => {
+        const slots: (string | undefined)[] = Array.from(
+          { length: RETAINED_SESSIONS_PER_PANE },
+          () => undefined,
+        );
+        for (const [key, slot] of this.sessionsByPane.get(pane.id) ?? []) {
+          slots[slot] = key;
+        }
+        if (!slots.some((key) => key && areUiSessionKeysEquivalent(key, pane.sessionKey))) {
+          const emptySlot = slots.indexOf(undefined);
+          slots[emptySlot < 0 ? slots.length : emptySlot] = pane.sessionKey;
+        }
+        return [pane.id, slots];
+      }),
+    );
+  }
+
   private retainPane(pane: ChatSplitPane): (string | undefined)[] {
     let retained = this.sessionsByPane.get(pane.id);
     if (!retained) {

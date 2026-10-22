@@ -64,10 +64,9 @@ ends unexpectedly.
 The private worker validates core and node configuration through a read-only
 bootstrap, without Gateway-wide Doctor preflight or channel-schema validation.
 Node plugins still validate their own settings before publishing commands, and
-the node runtime owns its MCP clients. Node startup retains the Doctor-owned
-device-auth, device-identity, and exec-approval migrations; this is not a promise
-that all worker startup is read-only. Public `node run`, Gateway, and Doctor
-retain their existing startup policies.
+the node runtime owns its MCP clients. Node startup prepares client credentials
+through their migration owner before using them, and retains exec-approval
+migrations; this is not a promise that all worker startup is read-only.
 
 The native app loads private identities and cached device tokens from its local
 `client/credentials.sqlite` before connecting, without opening the selected
@@ -76,13 +75,16 @@ holding exclusive SQLite custody only for each operation. A fresh client can cre
 PostgreSQL or the Gateway is unavailable; shared approval policy still requires
 its existing state owner.
 
-Updater or Doctor migrates existing shared credentials before the new clients
-use them. A recognized credential-only native version-zero database can be
+The packaged app runs the matching bundled CLI's narrow, noninteractive
+credential preparation before native admission. Gateway and node startup use
+the same migration owner. Ordinary pending migrations and validated remounts
+complete automatically without a manual Doctor command or a recovery prompt.
+A recognized credential-only native version-zero database can be
 extracted under exclusive custody before PostgreSQL bootstrap. Unknown data or
 other application tables require the supported Doctor/port route. Existing
 private keys are preserved; migration failure never silently creates replacement
-keys. Update older apps after shared credential retirement and run the matching
-`openclaw doctor --fix` for an incomplete migration.
+keys. Update older apps after shared credential retirement. Doctor remains the
+recovery path for unsupported or inconsistent source state.
 
 Independent native credential sources remain untouched after their read-only
 import. The previous app can still read them after rollback. The local copy keeps
@@ -139,7 +141,7 @@ menu bar, or run `openclaw-mac status --json`, which reports the app version
 and build.
 
 For a manual install, use Node 26 (recommended) or another supported release:
-Node 24.16+ or Node 26.1+. Install `openclaw` globally:
+Node 24.22.1+ or Node 26.12.1+. Install `openclaw` globally:
 
 The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
 omit `--allow-scripts=openclaw`.

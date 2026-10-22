@@ -10,8 +10,7 @@ export function createLineSendReceipt(params: {
   kind?: MessageReceiptPartKind;
   messageCount?: number;
 }): MessageReceipt {
-  const messageIds = params.messageIds.map((messageId) => messageId.trim()).filter(Boolean);
-  const chatId = params.chatId.trim();
+  const { messageIds, chatId } = params;
   return createMessageReceiptFromOutboundResults({
     results: messageIds.map((messageId) => ({
       channel: "line",

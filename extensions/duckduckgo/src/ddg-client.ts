@@ -5,12 +5,10 @@ import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/html
 import { ProviderHttpError, readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
-  DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
-  normalizeCacheKey,
   readCachedSearchPayload,
   readResponseText,
-  resolveCacheTtlMs,
+  resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSiteName,
   resolveTimeoutSeconds,
@@ -18,7 +16,13 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { resolveDdgRegion, resolveDdgSafeSearch, type DdgSafeSearch } from "./config.js";
+import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+type DdgSafeSearch = "strict" | "moderate" | "off";
 
 const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -122,26 +126,30 @@ export async function runDuckDuckGoSearch(params: {
   region?: string;
   safeSearch?: DdgSafeSearch;
   timeoutSeconds?: number;
-  cacheTtlMinutes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
-  const region = params.region ?? resolveDdgRegion(params.config);
-  const safeSearch = params.safeSearch ?? resolveDdgSafeSearch(params.config);
+  const region =
+    params.region ??
+    normalizeOptionalString(
+      resolveProviderWebSearchPluginConfig(params.config, "duckduckgo")?.region,
+    );
+  let safeSearch = params.safeSearch;
+  if (safeSearch == null) {
+    const normalized = normalizeLowercaseStringOrEmpty(
+      resolveProviderWebSearchPluginConfig(params.config, "duckduckgo")?.safeSearch,
+    );
+    safeSearch = normalized === "strict" || normalized === "off" ? normalized : "moderate";
+  }
   const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
-  const cacheTtlMs = resolveCacheTtlMs(
-    params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
-    DEFAULT_CACHE_TTL_MINUTES,
-  );
-  const cacheKey = normalizeCacheKey(
-    JSON.stringify({
-      provider: "duckduckgo",
-      query: params.query,
-      count,
-      region: region ?? "",
-      safeSearch,
-    }),
-  );
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.config?.tools?.web?.search);
+  const cacheKey = JSON.stringify({
+    provider: "duckduckgo",
+    query: params.query,
+    count,
+    region: region ?? "",
+    safeSearch,
+  });
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi, type MockInstance } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
   QuestionRequestParamsSchema,
@@ -22,8 +22,11 @@ import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import * as questionDispatch from "../harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "../harness/gateway-question.js";
-import { reserveAskUserPromptDelivery, settleAskUserPromptDelivery } from "./ask-user-tool.js";
-import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
+import {
+  cancelAskUserPromptDelivery,
+  reserveAskUserPromptDelivery,
+  settleAskUserPromptDelivery,
+} from "./ask-user-tool.js";
 import type { GatewayQuestionCall } from "./gateway-question-lifecycle.js";
 import * as gatewayTransport from "./gateway.js";
 import { createSecretsTool, normalizeSecretsRequestParams } from "./secrets-tool.js";
@@ -107,7 +110,16 @@ const questions = normalizeSecretsRequestParams(secretRequest).questions;
 const storedMethods = ["question.request", "question.waitAnswer", "secrets.store.list"];
 
 function reservePrompt(toolCallId: string, sessionKey: string) {
-  return reserveAskUserPromptDelivery({ toolCallId, sessionKey, questions, timeoutSeconds: 900 });
+  const reservation = reserveAskUserPromptDelivery({
+    toolCallId,
+    sessionKey,
+    questions,
+    timeoutSeconds: 900,
+  });
+  if (reservation) {
+    onTestFinished(() => cancelAskUserPromptDelivery(toolCallId, sessionKey));
+  }
+  return reservation;
 }
 
 function outcome<T>(pending: Promise<T>) {
@@ -115,6 +127,14 @@ function outcome<T>(pending: Promise<T>) {
     (result) => ({ result }),
     (error: unknown) => ({ error }),
   );
+}
+
+function settleOnCleanup(pending: Promise<unknown>, release: () => void) {
+  const settled = Promise.allSettled([pending]);
+  onTestFinished(async () => {
+    release();
+    await settled;
+  });
 }
 let storeTransportSpy: MockInstance<typeof gatewayTransport.callGatewayTool> | undefined;
 let questionResolverSpy:
@@ -217,15 +237,13 @@ function promptOptions(
   };
 }
 
-afterEach(() => {
-  try {
-    resetPendingAskUserQuestionsForTest();
-  } finally {
+beforeEach(() => {
+  onTestFinished(() => {
     questionResolverSpy?.mockRestore();
     storeTransportSpy?.mockRestore();
     questionResolverSpy = undefined;
     storeTransportSpy = undefined;
-  }
+  });
 });
 
 describe("secrets request normalization", () => {
@@ -305,6 +323,7 @@ describe("secrets tool", () => {
       runId: "run-secrets",
     });
     const pending = tool.execute("call-secret", proposedRequest);
+    settleOnCleanup(pending, () => answer.resolve({ status: "cancelled" }));
     await waiting;
 
     await expect(
@@ -533,6 +552,7 @@ describe("secrets tool", () => {
       secretRequest,
       controller.signal,
     );
+    settleOnCleanup(pending, () => controller.abort());
     await vi.waitFor(() =>
       expect(methodCalls(gateway, "question.waitAnswer").length).toBeGreaterThan(0),
     );
@@ -558,7 +578,8 @@ describe("secrets tool", () => {
           details: { reason: "QUESTION_ID_IN_USE" },
         });
       }
-      const manager = new QuestionManager(createTestGatewayScheduler());
+      const scheduler = createTestGatewayScheduler();
+      const manager = new QuestionManager(scheduler);
       const controller = new AbortController();
       const sessionKey = "agent:main:secret-registration";
       const reservation = refused ? reservePrompt("call-registration", sessionKey) : undefined;
@@ -616,6 +637,8 @@ describe("secrets tool", () => {
         expect(reservePrompt("call-after-registration", sessionKey)).toBeDefined();
       } finally {
         manager.close();
+        await manager.drain();
+        await scheduler.stop();
       }
     },
   );
@@ -636,6 +659,7 @@ describe("secrets tool", () => {
         channel,
       );
       const pending = secretTool(gateway, options).execute("call-secret-direct", secretRequest);
+      settleOnCleanup(pending, () => answer.resolve({ status: "cancelled" }));
       await waiting;
       if (deliver) {
         await vi.waitFor(() => expect(sent).toHaveLength(1));
@@ -656,6 +680,7 @@ describe("secrets tool", () => {
   it("ends credential publication before post-answer metadata finishes", async () => {
     let capturedSignal: AbortSignal | undefined;
     const answer = createDeferred<unknown>();
+    const promptReleased = createDeferred();
     const metadataStarted = createDeferred();
     const metadata = createDeferred<{ entries: (typeof secretEntry)[] }>();
     const gateway = requestGateway({
@@ -669,9 +694,14 @@ describe("secrets tool", () => {
       gateway,
       promptOptions("agent:main:secret-direct-dispatch-abort", (_payload, options) => {
         capturedSignal = options?.signal;
-        return new Promise<void>(() => {});
+        return promptReleased.promise;
       }),
     ).execute("call-secret-direct-abort", secretRequest);
+    settleOnCleanup(pending, () => {
+      answer.resolve({ status: "cancelled" });
+      metadata.resolve({ entries: [secretEntry] });
+      promptReleased.resolve();
+    });
 
     await vi.waitFor(() => expect(capturedSignal).toBeDefined());
     expect(capturedSignal?.aborted).toBe(false);

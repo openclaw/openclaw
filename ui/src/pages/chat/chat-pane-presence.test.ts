@@ -10,9 +10,8 @@ import {
   createInitializationContext,
   createRenderTestChatPane,
   connectPaneTestView,
+  type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import type { createChatState } from "./chat-state-controller.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 
 const sessionKey = "agent:main:dashboard:presence";
 
@@ -29,13 +28,35 @@ function person(id: string, overrides: Partial<PresenceEntry> = {}): PresenceEnt
   };
 }
 
-async function createPane(presence: PresenceEntry[]) {
-  const pane = createRenderTestChatPane() as unknown as ReturnType<
-    typeof createRenderTestChatPane
-  > & {
-    performUpdate: () => void;
-    chatState: ReturnType<typeof createChatState<ChatPageHost>>;
+const withSelf = (...others: PresenceEntry[]) => [person("self"), ...others];
+const self = (name: string, avatarUrl?: string) =>
+  person("self", {
+    watchedSessions: [],
+    user: { id: "self", identity: { type: "profile", id: "self" }, name, avatarUrl },
+  });
+function viewerChange(name: string, overrides: Partial<PresenceEntry>, wasPresent = true) {
+  return {
+    name,
+    previous: withSelf(...(wasPresent ? [person("Riley")] : [])),
+    next: withSelf(person("Riley", overrides)),
+    updates: 1,
   };
+}
+
+async function publishPresence(
+  pane: ReturnType<typeof createRenderTestChatPane>,
+  presence: PresenceEntry[],
+) {
+  const payload = { presence };
+  pane.presence.update(payload);
+  vi.advanceTimersToNextFrame();
+  await settleLitElement(pane);
+  return payload;
+}
+
+async function createPane(presence: PresenceEntry[]) {
+  const pane = createRenderTestChatPane();
+  const { chatState } = pane as unknown as TestChatPane;
   const context = createInitializationContext(
     createGatewayBrowserClientFixture({ instanceId: "self-tab" }),
   );
@@ -44,32 +65,25 @@ async function createPane(presence: PresenceEntry[]) {
     gatewayListeners.add(listener);
     return () => gatewayListeners.delete(listener);
   };
-  const publishGateway = () => {
-    for (const listener of gatewayListeners) {
-      listener(context.gateway.snapshot);
-    }
-  };
+  const publishGateway = () =>
+    gatewayListeners.forEach((listener) => listener(context.gateway.snapshot));
   const state = pane.initialize(context);
   pane.sessionKey = sessionKey;
   state.sessionKey = sessionKey;
   state.chatMessages = [{ role: "assistant", content: "Retained conversation", timestamp: 1 }];
   pane.presence.update({ presence });
   connectPaneTestView(pane);
-  state.renderLifecycle = pane.chatState.createRenderLifecycle();
-  pane.chatState.attach(state);
+  state.renderLifecycle = chatState.createRenderLifecycle();
+  chatState.attach(state);
   await settleLitElement(pane);
   onTestFinished(() => pane.disconnectedCallback());
-  return { pane, context, state, publishGateway, update: vi.spyOn(pane, "render") };
+  return { pane, context, publishGateway, update: vi.spyOn(pane, "render") };
 }
 
 it.each([
   {
     name: "heartbeats and unrelated viewers",
-    previous: [
-      person("self"),
-      person("Riley"),
-      person("Alex", { watchedSessions: ["agent:main:other"] }),
-    ],
+    previous: withSelf(person("Riley"), person("Alex", { watchedSessions: ["agent:main:other"] })),
     next: [
       person("Alex", {
         ts: 2,
@@ -89,92 +103,39 @@ it.each([
     ],
     updates: 0,
   },
-  {
-    name: "viewer leaves",
-    previous: [person("self"), person("Riley")],
-    next: [person("self"), person("Riley", { watchedSessions: [] })],
-  },
-  {
-    name: "viewer name changes",
-    previous: [person("self"), person("Riley")],
-    next: [person("self"), person("Riley", { user: { id: "Riley", name: "Renamed viewer" } })],
-  },
-  {
-    name: "viewer avatar changes",
-    previous: [person("self"), person("Riley")],
-    next: [
-      person("self"),
-      person("Riley", { user: { id: "Riley", avatarUrl: "/api/users/Riley/avatar?v=2" } }),
-    ],
-  },
-  {
-    name: "viewer identity changes",
-    previous: [person("self"), person("Riley")],
-    next: [
-      person("self"),
-      person("Riley", {
-        user: { id: "Riley", identity: { type: "profile", id: "Riley-merged" }, name: "Riley" },
-      }),
-    ],
-  },
-  {
-    name: "collaboration becomes available",
-    previous: [person("self")],
-    next: [person("self"), person("Riley", { watchedSessions: [] })],
-  },
+  viewerChange("viewer leaves", { watchedSessions: [] }),
+  viewerChange("viewer name changes", { user: { id: "Riley", name: "Renamed viewer" } }),
+  viewerChange("viewer avatar changes", {
+    user: { id: "Riley", avatarUrl: "/riley-v2.png" },
+  }),
+  viewerChange("viewer identity changes", {
+    user: { id: "Riley", identity: { type: "profile", id: "Riley-merged" }, name: "Riley" },
+  }),
+  viewerChange("collaboration becomes available", { watchedSessions: [] }, false),
 ])(
   "updates presentation only when visible facts change: $name",
-  async ({ previous, next, updates = 1 }) => {
+  async ({ previous, next, updates }) => {
     const { pane, update } = await createPane(previous);
-    const payload = { presence: next };
-    pane.presence.update(payload);
-    vi.advanceTimersToNextFrame();
-    await settleLitElement(pane);
+    const payload = await publishPresence(pane, next);
     expect(update).toHaveBeenCalledTimes(updates);
     expect(pane.presence.snapshot).toBe(payload);
-    expect(pane.presence.snapshot?.presence).toBe(next);
     expect(pane.chatProps?.userName).toBe("self");
   },
 );
 
 it("refreshes the fallback self identity and defers to the authoritative profile", async () => {
-  const { pane, context, publishGateway, update } = await createPane([
-    person("self", { watchedSessions: [] }),
-  ]);
-  pane.presence.update({
-    presence: [
-      person("self", {
-        watchedSessions: [],
-        user: {
-          id: "self",
-          identity: { type: "profile", id: "self" },
-          name: "Updated self",
-          avatarUrl: "/api/users/self/avatar?v=2",
-        },
-      }),
-    ],
-  });
-  vi.advanceTimersToNextFrame();
-  await settleLitElement(pane);
+  const { pane, context, publishGateway, update } = await createPane([self("self")]);
+  await publishPresence(pane, [self("Updated self", "/self-v2.png")]);
   expect(update).toHaveBeenCalledOnce();
-  expect(pane.chatProps?.userName).toBe("Updated self");
-  expect(pane.chatProps?.userAvatar).toBe("/api/users/self/avatar?v=2");
+  expect(pane.chatProps).toMatchObject({ userName: "Updated self", userAvatar: "/self-v2.png" });
 
-  context.gateway.snapshot.selfUser = {
-    id: "self",
-    identity: { type: "profile", id: "self" },
-    name: "Authoritative self",
-  };
+  context.gateway.snapshot.selfUser = self("Authoritative self").user;
   publishGateway();
   await settleLitElement(pane);
   update.mockClear();
-  pane.presence.update({
-    presence: [
-      person("self", { watchedSessions: [], user: { id: "self", name: "Old tab label" } }),
-    ],
-  });
-  vi.advanceTimersToNextFrame();
-  await settleLitElement(pane);
+  await publishPresence(pane, [
+    person("self", { watchedSessions: [], user: { id: "self", name: "Old tab label" } }),
+  ]);
   expect(update).not.toHaveBeenCalled();
   expect(pane.chatProps?.userName).toBe("Authoritative self");
 });

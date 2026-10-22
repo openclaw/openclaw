@@ -778,10 +778,8 @@ export class ChatComposerPersistence {
     );
   }
 
-  private resolveDurableScope(
-    state: DurableChatComposerPersistenceState,
-    scope: StoredChatOutboxScope = resolveUiConversationIdentity(state, state.sessionKey),
-  ) {
+  private resolveDurableScope(state: DurableChatComposerPersistenceState) {
+    const scope = resolveUiConversationIdentity(state, state.sessionKey);
     if (isIncognitoComposerScope(state, scope)) {
       return null;
     }

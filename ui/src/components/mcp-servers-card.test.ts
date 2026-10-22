@@ -19,7 +19,13 @@ import {
   createSolidApplicationContextProvider,
 } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import { McpServersCard } from "./mcp-servers-card.tsx";
+
+vi.mock("./confirm-dialog.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./confirm-dialog.ts")>()),
+  showConfirmDialog: vi.fn(),
+}));
 type ConfigPatchBuilder = Parameters<RuntimeConfigCapability["patchFromSnapshot"]>[0];
 type RuntimeConfigHarness = ReturnType<typeof createRuntimeConfig>;
 function createGateway(
@@ -196,6 +202,7 @@ async function mountLoginCard(
 describe("openclaw-mcp-servers-card", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
+    vi.mocked(showConfirmDialog).mockReset().mockResolvedValue(true);
   });
   afterEach(() => {
     cleanupSolid();
@@ -224,8 +231,14 @@ describe("openclaw-mcp-servers-card", () => {
     actionButton(card, "Remove local").click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
     expect(disable.disabled).toBe(true);
+    expect(disable.textContent?.trim()).toBe("Working…");
+    expect(actionButton(card, "Add server").disabled).toBe(true);
     completion.resolve(true);
-    await waitForFast(() => expect(disable.disabled).toBe(false));
+    await waitForFast(() => {
+      expect(disable.disabled).toBe(false);
+      expect(card.querySelector('[role="status"]')?.textContent).toBe("Disabled MCP server local.");
+    });
+    expect(disable.textContent?.trim()).toBe("Disable");
     disable.click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
   });
@@ -566,10 +579,31 @@ describe("openclaw-mcp-servers-card", () => {
     });
     actionButton(card, "Remove docs").click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
+    expect(showConfirmDialog).toHaveBeenCalledOnce();
     expect(firstPatchCall(harness)).toEqual({
       raw: { mcp: { servers: { docs: null } } },
       note: "mcp settings: remove server docs",
       ...(replacePaths.length ? { replacePaths } : {}),
+    });
+  });
+  it("keeps the server and sends no patch when removal is cancelled", async () => {
+    const { card, harness } = await mountCard({
+      config: configWith({ docs: { command: "node", args: ["synthetic-server.mjs"] } }),
+    });
+    vi.mocked(showConfirmDialog).mockResolvedValueOnce(false);
+
+    actionButton(card, "Remove docs").click();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(harness.patch).not.toHaveBeenCalled();
+    expectRow(card, "docs", ["docs"]);
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      title: "Remove docs?",
+      message: expect.stringContaining("saved configuration"),
+      confirmLabel: "Remove",
+      danger: true,
     });
   });
   it.each(["load", "patch rejection", "patch refusal"] as const)(

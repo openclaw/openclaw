@@ -496,7 +496,10 @@ export async function gatherDispatchRequest(
         const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
         return await loadPublishedGatewayReplyDispatchRuntime({
           agentId: preparedReplyDispatchAgentId,
-          demand: params.replyOptions?.isHeartbeat ? "scheduled" : "interactive",
+          demand:
+            params.replyOptions?.isHeartbeat || params.replyOptions?.scheduledAutomation
+              ? "scheduled"
+              : "interactive",
           abortSignal: params.replyOptions?.abortSignal,
           onRuntimeLease,
         });

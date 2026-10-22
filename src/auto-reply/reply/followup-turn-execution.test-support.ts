@@ -161,7 +161,12 @@ export async function executeQueuedFollowupTurnForTest(
       onCompactionNoticePayload: async () => {},
     });
   } finally {
-    admittedOperation?.complete();
+    try {
+      await turn.releaseSourceAdmission?.();
+    } finally {
+      admittedOperation?.complete();
+      await admittedOperation?.ownerSettlement;
+    }
   }
 }
 
