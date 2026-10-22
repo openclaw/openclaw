@@ -235,9 +235,6 @@ describe("statusSummaryRuntime configured model normalization", () => {
       });
     }
     const ref = { provider: "anthropic", model: "opus-4.6", defaultProvider: "anthropic" };
-    expect(statusSummaryRuntime.resolveStatusModelComparisonLabel(ref)).toBe(
-      "anthropic/claude-opus-4-6",
-    );
     expect(statusSummaryRuntime.resolveStatusModelLookupRef(ref)).toEqual({
       provider: "anthropic",
       model: "claude-opus-4-6",

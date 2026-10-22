@@ -153,6 +153,18 @@ suite.define(() => {
             )
             .count(),
         ).toBe(1);
+        // The run ring overhangs the avatar; keep it clear of the hover background's edge.
+        const ringInset = await sidebar
+          .locator('[data-agent-group="forge"] .sidebar-agent-roster__header')
+          .evaluate((header) => {
+            const ring = header.querySelector<HTMLElement>(".session-glyph__ring");
+            if (!ring) {
+              return null;
+            }
+            ring.style.animation = "none";
+            return ring.getBoundingClientRect().left - header.getBoundingClientRect().left;
+          });
+        expect(ringInset).toBeGreaterThanOrEqual(4);
         expect(
           await sidebar
             .locator('.sidebar-rail [data-sidebar-entry="session:agent:forge:project"]')

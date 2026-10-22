@@ -64,6 +64,8 @@ export interface ProcessSession {
   readonly cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */
   agentId?: string;
+  /** Run whose exec call started this process; completion provenance only, never authority. */
+  originRunId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;

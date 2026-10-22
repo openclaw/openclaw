@@ -13,21 +13,20 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import { isModernModelRef } from "./test-helpers/live-model-dynamic-candidates.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const baseModel = (overrides: Partial<Model> = {}): Model =>
-  ({
+  makeProviderModelFixture({
     id: "glm-4.7",
     name: "GLM-4.7",
     api: "openai-completions",
     provider: "zai",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
     reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 8192,
     maxTokens: 1024,
     ...overrides,
-  }) as Model;
+  });
 
 function expectSupportsDeveloperRoleForcedOff(overrides?: Partial<Model>): void {
   const model = baseModel(overrides);

@@ -11,19 +11,6 @@ import {
   getGatewayConfigModule,
 } from "./test/server-sessions.test-helpers.js";
 
-export function sessionProfileIdentity(profile: {
-  id: string;
-  displayName: string | null;
-  updatedAt: number;
-}) {
-  return {
-    profileId: profile.id,
-    displayName: profile.displayName,
-    hasAvatar: false,
-    updatedAt: profile.updatedAt,
-  };
-}
-
 type EnsureSessionDiffBaseline =
   (typeof import("../sessions/session-diff-baseline.js"))["ensureSessionDiffBaseline"];
 type CaptureSessionDiffBaseline =

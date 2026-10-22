@@ -341,7 +341,8 @@ the snapshot.
 
 Plugin snapshots verify inventoried bytes with SHA-256. Native companion captures
 may add or remove hard links while the old Gateway serves; link-only metadata
-changes do not invalidate unchanged files on Windows or POSIX. Content, file
+changes do not invalidate unchanged files on Windows or POSIX, including
+Android/Termux when libuv derives birthtime from ctime without statx. Content, file
 identity, type, permissions, ownership, size, and modification-time changes still
 refuse the snapshot.
 
@@ -832,8 +833,9 @@ path. This avoids repeated backup integrity audits and unnecessary writable open
 while the service is stopped; startup validation retains its own policy.
 
 Settled, verified successful activation removes the current update's database
-snapshots, together with the old package backup. Rollback, failed or unverified
-completion, and restore refusal keep them. Cleanup failures produce a maintenance warning with
+snapshots only while automatic restoration remains available, together with the old
+package backup. Rollback, failed or unverified completion, and restore refusal
+(including refusal recorded after Doctor runs) keep the snapshots. Cleanup failures produce a maintenance warning with
 the retained path. Older snapshot directories remain untouched because their
 ownership and successful outcome cannot be proven from existing receipts;
 Doctor reports older npm snapshot directories with their size and removal command.
@@ -878,7 +880,7 @@ provided by this check.
 If Doctor cannot provide write evidence, rollback requires the last verified
 database generations to remain unchanged.
 Snapshots taken while a Gateway may still be writing, including with
-`--no-restart`, remain available for manual recovery with a warning until verified
+`--no-restart`, remain available for manual recovery with a warning even after verified
 successful activation. They never
 become eligible for automatic restoration just because that Gateway later exits.
 

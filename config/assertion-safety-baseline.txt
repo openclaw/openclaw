@@ -723,7 +723,7 @@ extensions/slack/src/monitor/context.ts	2
 extensions/slack/src/monitor/event-scope.ts	1
 extensions/slack/src/monitor/events/assistant.ts	1
 extensions/slack/src/monitor/events/channels.ts	1
-extensions/slack/src/monitor/events/interactions.block-actions.ts	12
+extensions/slack/src/monitor/events/interactions.block-actions.ts	9
 extensions/slack/src/monitor/events/interactions.modal.ts	1
 extensions/slack/src/monitor/events/message-subtype-handlers.ts	2
 extensions/slack/src/monitor/events/messages.ts	11
@@ -1593,8 +1593,6 @@ src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
 src/commands/doctor/shared/codex-native-assets.ts	1
 src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
-src/commands/doctor/shared/empty-allowlist-policy.ts	12
-src/commands/doctor/shared/empty-allowlist-scan.ts	3
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	1
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
