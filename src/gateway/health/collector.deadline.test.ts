@@ -281,25 +281,21 @@ it("retains timed-out permits across repeated health collections", async () => {
   const accountIds = blockedAccounts;
   const { work, release } = installBlockedProbes(accountIds);
 
-  const firstSnapshot = collectDeadlineSnapshot();
-  await flushHealthPreparation(firstSnapshot);
-  expect(work.started).toEqual(accountIds);
-  await vi.advanceTimersByTimeAsync(7_000);
-  await firstSnapshot;
-
-  const secondSnapshot = collectDeadlineSnapshot();
-  await flushHealthPreparation(secondSnapshot);
-  expect(work.started).toEqual(accountIds);
-  await vi.advanceTimersByTimeAsync(7_000);
-  const second = await secondSnapshot;
-
-  expect(work.started).toEqual(accountIds);
-  expect(work).toMatchObject({ active: 5, maxActive: 5 });
-  for (const accountId of accountIds) {
-    expect(second.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual(timeoutProbe);
+  for (let collection = 0; collection < 2; collection++) {
+    const pending = collectDeadlineSnapshot();
+    await flushHealthPreparation(pending);
+    expect(work.started).toEqual(accountIds);
+    await vi.advanceTimersByTimeAsync(7_000);
+    const snapshot = await pending;
+    expect(work.started).toEqual(accountIds);
+    expect(work).toMatchObject({ active: 5, maxActive: 5 });
+    for (const accountId of accountIds) {
+      expect(snapshot.channels["deadline-test"]?.accounts?.[accountId]?.probe).toEqual(
+        timeoutProbe,
+      );
+    }
   }
   release();
   await vi.advanceTimersByTimeAsync(7_000);
-  await firstSnapshot;
   expect(work.active).toBe(0);
 }, 1_000);
