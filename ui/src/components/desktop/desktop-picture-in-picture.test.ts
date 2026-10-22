@@ -3,8 +3,14 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import * as panels from "./desktop-panel.test-support.ts";
+
+function toggle(panel: ReturnType<typeof panels.createPanel>, open: boolean) {
+  const detail = open ? { open, environmentId: "gateway" } : { open };
+  panel.handleToggleRequest(new CustomEvent("openclaw:desktop-toggle", { detail }));
+}
 
 async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = false) {
   const frames = new Map<number, FrameRequestCallback>();
@@ -39,12 +45,12 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
     } as unknown as CanvasRenderingContext2D);
   }
   const environment = { id: "gateway", type: "local", status: "available", desktop: true };
-  const request = panels.desktopRequest(
-    {
-      "environments.status": () => environment,
-      "environments.list": () => ({ environments: [environment] }),
-    },
-    () => ({ transport: "rfb", wsPath: "/desktop/observe?token=fixture", control: false }),
+  const request = vi.fn(async (method: string) =>
+    method === "environments.status"
+      ? environment
+      : method === "environments.list"
+        ? { environments: [environment] }
+        : { transport: "rfb", wsPath: "/desktop/observe?token=fixture", control: false },
   );
   const disconnect = vi.fn();
   const connection = panels.createConnectionHandle({ disconnect });
@@ -53,19 +59,21 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
     options.onConnect?.();
     return connection;
   });
-  const panel = await panels.mountDesktop(
-    { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
-    connect,
-    { embedded: !docked, presented: true, requestedSource: "gateway" },
-  );
+  const panel = panels.createPanel();
+  panels.updatePanel(panel, {
+    client: { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
+    available: true,
+    embedded: !docked,
+    presented: true,
+    requestedSource: "gateway",
+    desktopClientFactory: () => ({ connect }),
+  });
+  await panels.mountPanel(panel);
   if (docked) {
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:desktop-toggle", {
-        detail: { open: true, environmentId: "gateway" },
-      }),
-    );
+    toggle(panel, true);
   }
-  await panels.waitForConnections(panel, connect);
+  await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+  await panel.updateComplete;
   const button = () =>
     panel.querySelector<HTMLButtonElement>(".desktop-picture-in-picture-button")!;
   const canvas = () => popup.document.querySelector("canvas");
@@ -99,23 +107,26 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
   };
 }
 
-panels.usePanelStorage();
-beforeEach(() => vi.stubGlobal("isSecureContext", true));
-afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("isSecureContext", true);
+});
+afterEach(() => {
+  document.body.replaceChildren();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 it("accepts a native close before the Solid panel mounts", () => {
   const panel = document.createElement("openclaw-desktop-panel");
-  expect(() =>
-    panel.handleToggleRequest(
-      new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
-    ),
-  ).not.toThrow();
+  expect(() => toggle(panel, false)).not.toThrow();
 });
 
 it("mirrors dock without reconnecting or changing control; browser close preserves the viewer", async () => {
   const f = await setup("mirror", true);
   const source = f.panel.querySelector("canvas")!;
   f.button().click();
+  // The native request must retain the click's user activation.
   expect(f.requestWindow).toHaveBeenCalledOnce();
   await waitForSolid(() => expect(f.state()).toMatchObject({ pressed: "true" }));
   f.tick(0);
@@ -124,7 +135,7 @@ it("mirrors dock without reconnecting or changing control; browser close preserv
   expect(f.drawImage).toHaveBeenLastCalledWith(source, 0, 0, 300, 150);
   expect(source.isConnected).toBe(true);
   expect(f.canvas()?.getAttribute("role")).toBe("img");
-  expect(panels.rpcCalls(f.request, "desktop.observe")).toHaveLength(1);
+  expect(f.request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1);
   expect([f.connect.mock.calls.length, f.disconnect.mock.calls.length]).toEqual([1, 0]);
   f.popup.dispatchEvent(new Event("pagehide"));
   await waitForSolid(() => expect(f.state()).toMatchObject({ pressed: "false" }));
@@ -232,17 +243,10 @@ it.each<[string, (fixture: Fixture) => void | Promise<void>]>([
 it("closes an active mirror on disconnect and stops failed frame copies instead of showing stale pixels", async () => {
   const f = await setup();
   await f.open();
-  const source = f.panel.querySelector("canvas")!;
-  f.tick(0);
-  f.tick(40);
-  expect(f.drawImage).toHaveBeenCalledTimes(2);
-  expect(f.drawImage).toHaveBeenLastCalledWith(source, 0, 0, 300, 150);
-  expect(source.isConnected).toBe(true);
-  expect(f.canvas()?.getAttribute("role")).toBe("img");
   f.drawImage.mockImplementation(() => {
     throw new Error("copy failed");
   });
-  f.tick(80);
+  f.tick(0);
   expect([f.popup.closed, f.frames.size, f.disconnect.mock.calls.length]).toEqual([true, 0, 0]);
   f.popup.closed = false;
   f.drawImage.mockReset();

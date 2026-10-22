@@ -1,8 +1,9 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -11,15 +12,6 @@ import { createAgentIdentityCapability, fetchAgentIdentity } from "./identity.ts
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-function identityFixture(request: Parameters<typeof createTestGatewayClient>[0]) {
-  const client = createTestGatewayClient(request);
-  const source = createApplicationGateway();
-  const update = (patch: Partial<ApplicationGatewaySnapshot>) =>
-    source.publish({ ...source.gateway.snapshot, ...patch });
-  update({ client, phase: "connected" });
-  return { client, source, update, capability: createAgentIdentityCapability(source.gateway) };
-}
 
 it.each(["account", "recovery scope"])(
   "retires identities when the same client's %s changes",
@@ -68,13 +60,27 @@ it("retains settled identity during a blip and retires it for a different client
   const refreshed = createDeferred<AgentIdentityResult>();
   const original = { agentId: "main", name: "Main", avatar: "" };
   const request = vi.fn().mockResolvedValueOnce(original).mockReturnValue(refreshed.promise);
-  const { capability, update } = identityFixture(request);
+  const snapshot: { client: GatewayBrowserClient; phase: ApplicationGatewayPhase } = {
+    client: createTestGatewayClient(request),
+    phase: "connected",
+  };
+  let publish = (_snapshot: typeof snapshot) => {};
+  const capability = createAgentIdentityCapability({
+    snapshot,
+    subscribe(listener) {
+      publish = listener;
+      return () => {};
+    },
+  });
   await capability.ensure(["main"]);
-  update({ phase: "reconnecting" });
+  snapshot.phase = "reconnecting";
+  publish(snapshot);
   expect(capability.get("main")).toEqual(original);
-  update({ phase: "connected" });
+  snapshot.phase = "connected";
+  publish(snapshot);
   expect(capability.get("main")).toEqual(original);
-  update({ client: createTestGatewayClient(request) });
+  snapshot.client = createTestGatewayClient(request);
+  publish(snapshot);
   expect(capability.get("main")).toBeNull();
   refreshed.resolve({ ...original, name: "Old connection" });
   await capability.ensure([]);
@@ -93,7 +99,11 @@ it.each([undefined, 7_000])(
       retryAfterMs: hint,
     });
     const request = vi.fn().mockRejectedValue(unavailable);
-    const { client, capability } = identityFixture(request);
+    const client = createTestGatewayClient(request);
+    const capability = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+    });
     let now = 0;
     for (const [attempt, backoff] of [500, 1_000, 2_000, 4_000, 5_000, 5_000].entries()) {
       await capability.ensure([" main ", "main"]);
@@ -135,17 +145,35 @@ it.each([
   const original = { agentId: "main", name: "Main", avatar: "/avatar/main?v=old" };
   const replacement = { ...original, avatar: "/avatar/main?v=new" };
   const request = vi.fn().mockResolvedValueOnce(original).mockResolvedValue(replacement);
-  const { capability, update } = identityFixture(request);
+  const snapshot: Pick<
+    ApplicationGatewaySnapshot,
+    "client" | "phase" | "restartPending" | "suspensionPhase"
+  > = {
+    client: createTestGatewayClient(request),
+    phase: "connected",
+  };
+  let onSnapshot = (_snapshot: typeof snapshot) => {};
+  const capability = createAgentIdentityCapability({
+    snapshot,
+    subscribe(listener) {
+      onSnapshot = listener;
+      return () => undefined;
+    },
+  });
   await capability.ensure(["main"]);
   clock.mockReturnValue(60_000);
-  update(unavailable);
+  snapshot.restartPending = unavailable.restartPending;
+  snapshot.suspensionPhase = unavailable.suspensionPhase;
+  onSnapshot(snapshot);
   for (let render = 0; render < 40; render += 1) {
     await capability.ensure(["main"]);
   }
   expect(request).toHaveBeenCalledOnce();
   expect(capability.get("main")).toBe(original);
 
-  update({ restartPending: false, suspensionPhase: "accepting" });
+  snapshot.restartPending = false;
+  snapshot.suspensionPhase = "accepting";
+  onSnapshot(snapshot);
   await capability.ensure(["main"]);
   expect(request).toHaveBeenCalledOnce();
   expect(capability.get("main")).toBe(original);
@@ -160,13 +188,32 @@ it.each(["reconnect", "config", "agent"])(
       .fn()
       .mockRejectedValueOnce(new Error("Unavailable"))
       .mockResolvedValue(result);
-    const { capability, update, source } = identityFixture(request);
+    const client = createTestGatewayClient(request);
+    const snapshot: { client: GatewayBrowserClient; phase: ApplicationGatewayPhase } = {
+      client,
+      phase: "connected",
+    };
+    let onSnapshot = (_snapshot: typeof snapshot) => {};
+    let onEvent = (_event: { event: string }) => {};
+    const capability = createAgentIdentityCapability({
+      snapshot,
+      subscribe(listener) {
+        onSnapshot = listener;
+        return () => undefined;
+      },
+      subscribeEvents(listener) {
+        onEvent = listener;
+        return () => undefined;
+      },
+    });
     await capability.ensure(["main"]);
     if (kind === "reconnect") {
-      update({ phase: "reconnecting" });
-      update({ phase: "connected" });
+      snapshot.phase = "reconnecting";
+      onSnapshot(snapshot);
+      snapshot.phase = "connected";
+      onSnapshot(snapshot);
     } else if (kind === "config") {
-      source.publishEvent({ type: "event", event: "config.changed", payload: {} });
+      onEvent({ event: "config.changed" });
     } else {
       capability.invalidate(["main"]);
     }
@@ -176,38 +223,84 @@ it.each(["reconnect", "config", "agent"])(
   },
 );
 
-it.each(["reconnect", "local", "Gateway"])(
+it("rejects stale identities after reconnecting the same client", async () => {
+  const oldRequest = createDeferred<AgentIdentityResult>();
+  const currentRequest = createDeferred<AgentIdentityResult>();
+  const request = vi
+    .fn()
+    .mockImplementationOnce(() => oldRequest.promise)
+    .mockImplementationOnce(() => currentRequest.promise);
+  const client = createTestGatewayClient(request);
+  let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
+    client,
+    phase: "connected",
+  };
+  const listeners = new Set<(next: typeof snapshot) => void>();
+  const capability = createAgentIdentityCapability({
+    get snapshot() {
+      return snapshot;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  });
+  const publish = (connected: boolean) => {
+    snapshot = { client, phase: connected ? "connected" : "reconnecting" };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+  };
+
+  const stale = capability.ensure(["main"]);
+  publish(false);
+  publish(true);
+  const current = capability.ensure(["main"]);
+
+  oldRequest.resolve({ agentId: "main", name: "Stale", avatar: "" });
+  await stale;
+  expect(capability.entries()).toEqual([]);
+
+  currentRequest.resolve({ agentId: "main", name: "Current", avatar: "" });
+  await current;
+  expect(capability.get("main")?.name).toBe("Current");
+});
+
+it.each(["local", "Gateway"])(
   "rejects an in-flight identity after %s invalidation",
-  async (kind) => {
+  async (source) => {
     const staleRequest = createDeferred<AgentIdentityResult>();
     const currentRequest = createDeferred<AgentIdentityResult>();
     const request = vi
       .fn()
-      .mockReturnValueOnce(staleRequest.promise)
-      .mockReturnValueOnce(currentRequest.promise);
-    const { capability, update, source } = identityFixture(request);
+      .mockImplementationOnce(() => staleRequest.promise)
+      .mockImplementationOnce(() => currentRequest.promise);
+    const client = createTestGatewayClient(request);
+    let onEvent = (_event: { event: string; payload?: unknown }) => {};
+    const capability = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+      subscribeEvents(listener) {
+        onEvent = listener;
+        return () => undefined;
+      },
+    });
     const publish = vi.fn();
     capability.subscribe(publish);
+
     const stale = capability.ensure(["main"]);
-    if (kind === "reconnect") {
-      update({ phase: "reconnecting" });
-      update({ phase: "connected" });
-    } else if (kind === "Gateway") {
-      source.publishEvent({
-        type: "event",
-        event: "agent.identity.changed",
-        payload: { agentId: "main" },
-      });
+    if (source === "Gateway") {
+      onEvent({ event: "agent.identity.changed", payload: { agentId: "main" } });
     } else {
       capability.invalidate(["main"]);
     }
-    if (kind !== "reconnect") {
-      expect(publish).toHaveBeenCalledOnce();
-    }
+    expect(publish).toHaveBeenCalledOnce();
     const current = capability.ensure(["main"]);
+
     staleRequest.resolve({ agentId: "main", name: "Stale", avatar: "" });
     await stale;
     expect(capability.entries()).toEqual([]);
+
     currentRequest.resolve({ agentId: "main", name: "Current", avatar: "" });
     await current;
     expect(capability.get("main")?.name).toBe("Current");
@@ -221,7 +314,10 @@ it("publishes each fetched snapshot once under overlapping roster and stream upd
     const { agentId } = params as { agentId: string };
     return pending.promise.then(() => ({ agentId, name: agentId, avatar: "" }));
   });
-  const { capability } = identityFixture(request);
+  const capability = createAgentIdentityCapability({
+    snapshot: { client: createTestGatewayClient(request), phase: "connected" },
+    subscribe: () => () => undefined,
+  });
   const publish = vi.fn();
   capability.subscribe(publish);
   const updates = Array.from({ length: 40 }, () => capability.ensure(ids));
@@ -238,7 +334,11 @@ it("shares identity requests between the sidebar and the selected chat", async (
   const { fetchAssistantIdentity } = await import("../../app/assistant-identity.ts");
   const result = { agentId: "main", name: "Main", avatar: "/avatar/main?v=1" };
   const request = vi.fn().mockResolvedValue(result);
-  const { client, capability } = identityFixture(request);
+  const client = createTestGatewayClient(request);
+  const capability = createAgentIdentityCapability({
+    snapshot: { client, phase: "connected" },
+    subscribe: () => () => undefined,
+  });
 
   const [, assistant] = await Promise.all([
     capability.ensure(["main"]),
@@ -258,7 +358,11 @@ it.each(["sidebar", "chat"])(
     const replacement = { ...oldIdentity, avatar: "/avatar/main?v=replaced" };
     const refresh = createDeferred<AgentIdentityResult>();
     const request = vi.fn().mockResolvedValueOnce(oldIdentity).mockReturnValueOnce(refresh.promise);
-    const { client, capability } = identityFixture(request);
+    const client = createTestGatewayClient(request);
+    const capability = createAgentIdentityCapability({
+      snapshot: { client, phase: "connected" },
+      subscribe: () => () => undefined,
+    });
     const publish = vi.fn();
     capability.subscribe(publish);
     await capability.ensure(["main"]);
