@@ -256,10 +256,8 @@ export function createMeetingDurableTranscriptBridge<
           return false;
         }
         active.closing = true;
-        if (active.timer) {
-          clearInterval(active.timer);
-          delete active.timer;
-        }
+        clearInterval(active.timer);
+        delete active.timer;
         const summariesStopped = active.summaryUpdates?.stop();
         try {
           let initializationError: Error | undefined;

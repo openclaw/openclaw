@@ -4,9 +4,9 @@ import {
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { isMattermostConfigured, type ResolvedMattermostAccount } from "./mattermost/accounts.js";
+import { inspectMattermostAccount, isMattermostConfigured } from "./mattermost/accounts.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
@@ -22,37 +22,31 @@ const config = (mattermost: MattermostConfig = {}): OpenClawConfig => ({
 });
 
 describe("mattermost setup", () => {
-  beforeEach(() => {
-    vi.unstubAllEnvs();
-  });
   afterEach(() => {
     normalizeMattermostBaseUrl.mockReset();
     normalizeMattermostBaseUrl.mockImplementation((value: string | undefined) => value);
     vi.unstubAllEnvs();
   });
 
-  it("reports configuration only when token and base url are both present", () => {
-    const configured = (overrides: Partial<ResolvedMattermostAccount>) =>
-      isMattermostConfigured({
-        accountId: DEFAULT_ACCOUNT_ID,
-        enabled: true,
-        streamingMode: "off",
-        botTokenSource: "config",
-        baseUrlSource: "config",
-        botToken: "bot-token",
-        baseUrl,
-        config: {},
-        ...overrides,
-      });
-    expect(configured({})).toBe(true);
+  it("reports configuration with and without credential status metadata", () => {
+    const account = inspectMattermostAccount({ cfg: config({ botToken: "bot-token", baseUrl }) });
+    expect(isMattermostConfigured({ ...account, botTokenStatus: undefined })).toBe(true);
     expect(
-      configured({
+      isMattermostConfigured({
+        ...account,
         botToken: "",
         botTokenStatus: "configured_unavailable",
         config: { botToken: { ...secretToken, id: "MISSING_MATTERMOST_TOKEN" } },
       }),
     ).toBe(true);
-    expect(configured({ botToken: "", baseUrl: "" })).toBe(false);
+    expect(
+      isMattermostConfigured({
+        ...account,
+        botToken: "",
+        botTokenStatus: undefined,
+        baseUrl: "",
+      }),
+    ).toBe(false);
   });
 
   it("validates env and explicit credential requirements", () => {

@@ -21,7 +21,7 @@ import {
 } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import type { PluginCredentialEditorProps } from "./credential-editor.tsx";
+import { createCredentialPresentation } from "./credential-presentation.ts";
 import { installedPluginDetailTabFromHash } from "./detail-tabs.ts";
 import { createPluginDiscovery } from "./plugin-discovery.ts";
 import { createPluginHelp } from "./plugin-help.ts";
@@ -40,7 +40,7 @@ import {
   type PluginMutationAction,
 } from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
-import type { PluginSettingsField } from "./settings-editor.tsx";
+import type { PluginSettingsEditorProps } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
 
@@ -60,6 +60,7 @@ export function createPluginsPage(options: {
   const [settingsTab, setSettingsTab] = createSignal<PluginSettingsTab>("installed");
 
   const state = createPluginsPageState();
+  const credentialPresentation = createCredentialPresentation(context.router);
   const details = createPluginDetailReads({
     state,
     setState,
@@ -158,9 +159,7 @@ export function createPluginsPage(options: {
     return true;
   };
 
-  const resolveCredential = (
-    field: PluginSettingsField,
-  ): PluginCredentialEditorProps | undefined => {
+  const resolveCredential: PluginSettingsEditorProps["resolveCredential"] = (field) => {
     const detail = state.detail;
     const descriptor = detail?.inspection?.credentials?.find(
       (entry) =>
@@ -178,6 +177,7 @@ export function createPluginsPage(options: {
         baseHash: runtime.state.configSnapshot?.hash ?? null,
         gateway,
         canInspect: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
+        getPresentationLifetime: () => credentialPresentation.lifetime,
         // Awaited writes and discards can settle before the presentation catches up.
         get saveError() {
           return runtime.state.lastError;
@@ -193,6 +193,8 @@ export function createPluginsPage(options: {
       },
     };
   };
+
+  const canMutate = () => state.result?.mutationAllowed === true && accessBlockedReason() === null;
 
   const consent = createPluginsConsent({
     gateway,
@@ -440,6 +442,7 @@ export function createPluginsPage(options: {
   }
 
   function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
+    credentialPresentation.retire();
     details.inspection.reset();
     details.catalog.reset();
     mcpLogin.reset();
@@ -487,9 +490,7 @@ export function createPluginsPage(options: {
     }
   }
 
-  function loading(): boolean {
-    return gateway.connected && (!routeDataConsumed || catalogTask.pending);
-  }
+  const loading = () => gateway.connected && (!routeDataConsumed || catalogTask.pending);
 
   function activeRoutePluginId(): string | null {
     const pathname = routeData?.location.pathname ?? "";
@@ -568,10 +569,6 @@ export function createPluginsPage(options: {
       hasAdminAccess: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
       mutationAllowed,
     });
-  }
-
-  function canMutate(): boolean {
-    return state.result?.mutationAllowed === true && accessBlockedReason() === null;
   }
 
   function canEditConfig(): boolean {

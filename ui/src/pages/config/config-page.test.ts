@@ -876,7 +876,7 @@ it("retries a rejected update status read without hiding policy controls", async
   });
 });
 
-it("stages policy changes through patchForm and confirms Update now before overlays", async () => {
+it("stages policy changes through patchForm and confirms Update Gateway… before overlays", async () => {
   const patchForm = vi.fn();
   const updateActions = {
     captureUpdateTarget: () => () => true,
@@ -904,13 +904,16 @@ it("stages policy changes through patchForm and confirms Update now before overl
   });
   const { container } = mountConfigPage(context, { pageId: "updates" });
   const restoreDialogPolyfill = installDialogPolyfill();
-  const updateButton = () => container.querySelector<HTMLButtonElement>(".btn.primary")!;
+  const updateButton = () =>
+    [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Update Gateway…",
+    )!;
   const status = () => container.querySelector(".settings-status")?.textContent;
 
   context.overlays.snapshot.updateStatusRefreshing = true;
   publishConfigSource(context.overlays);
   const checkingButton = updateButton();
-  expect(checkingButton.textContent?.trim()).toBe("Update now");
+  expect(checkingButton.textContent?.trim()).toBe("Update Gateway…");
   expect(checkingButton).toMatchObject({ disabled: true, title: "Checking for updates…" });
   expect(status()).toContain("Checking for updates…");
   expect(container.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(

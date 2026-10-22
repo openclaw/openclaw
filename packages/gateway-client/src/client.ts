@@ -338,10 +338,8 @@ export class GatewayClient {
       onConnectFailure: (error, context) => this.handleConnectRequestFailure(error, context.plan),
       resolveClose: (context) => this.resolveClose(context),
       onClose: (context, decision) => {
-        if (this.tickTimer) {
-          clearInterval(this.tickTimer);
-          this.tickTimer = null;
-        }
+        clearInterval(this.tickTimer ?? undefined);
+        this.tickTimer = null;
         if (decision.notify) {
           this.opts.onClose?.(context.code, context.reason, this.closeInfo(context));
         }
@@ -585,10 +583,8 @@ export class GatewayClient {
     this.stopped = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-      this.tickTimer = null;
-    }
+    clearInterval(this.tickTimer ?? undefined);
+    this.tickTimer = null;
     if (this.pendingStop) {
       return this.pendingStop.promise;
     }
@@ -1220,9 +1216,7 @@ export class GatewayClient {
   }
 
   private startTickWatch() {
-    if (this.tickTimer) {
-      clearInterval(this.tickTimer);
-    }
+    clearInterval(this.tickTimer ?? undefined);
     const rawMinInterval = this.opts.tickWatchMinIntervalMs;
     const minInterval =
       typeof rawMinInterval === "number" && Number.isFinite(rawMinInterval)

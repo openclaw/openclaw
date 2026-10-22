@@ -20,8 +20,8 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DevicesPage } from "./devices-page.tsx";
 import type { DevicesRouteData } from "./view.types.ts";
 
-export const gatewayPresence: PresenceEntry = { mode: "gateway", host: "Gateway host", ts: 1_000 };
-export const pairedDevice = {
+const gatewayPresence: PresenceEntry = { mode: "gateway", host: "Gateway host", ts: 1_000 };
+const pairedDevice = {
   deviceId: "device-1",
   displayName: "MacBook Pro",
   tokens: [{ role: "operator", scopes: [] }],

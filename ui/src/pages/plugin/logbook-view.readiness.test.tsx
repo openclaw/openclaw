@@ -8,6 +8,7 @@ import type { LogbookTimelinePayload } from "./logbook-types.ts";
 import { Logbook } from "./logbook-view.tsx";
 
 const day = localDayKey();
+const neverRetired = new Promise<void>(() => {});
 const status = {
   captureEnabled: true,
   capturePaused: false,
@@ -34,7 +35,9 @@ it("keeps the side editor usable while a delayed timeline fails and retries", as
   const request = vi.fn((method: string) =>
     method === "logbook.status" ? status : retry ? empty : pending.promise,
   );
-  const view = mountSolid(() => <Logbook initialClient={createTestGatewayClient(request)} />);
+  const view = mountSolid(() => (
+    <Logbook initialClient={createTestGatewayClient(request)} getRetired={() => neverRetired} />
+  ));
   await waitForSolid(() =>
     expect(view.container.querySelector(".logbook__timeline")?.textContent).toContain("Loading"),
   );
@@ -81,7 +84,9 @@ it("keeps an expanded card mounted while a foreground refresh is pending", async
     loaded = true;
     return timeline;
   });
-  const view = mountSolid(() => <Logbook initialClient={createTestGatewayClient(request)} />);
+  const view = mountSolid(() => (
+    <Logbook initialClient={createTestGatewayClient(request)} getRetired={() => neverRetired} />
+  ));
   await waitForSolid(() =>
     expect(view.container.querySelector(".logbook-card__header")).not.toBeNull(),
   );

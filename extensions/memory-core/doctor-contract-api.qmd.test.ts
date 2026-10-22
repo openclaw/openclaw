@@ -1,53 +1,28 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { buildSessionEntry } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
-import { createDoctorContext } from "./doctor-contract-api.test-support.js";
+import { read, useDoctorWorkspace, writeFiles } from "./doctor-contract-api.test-support.js";
 
-let rootDir = "";
-let stateDir = "";
-let env: NodeJS.ProcessEnv;
-
-beforeEach(async () => {
-  rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-core-doctor-qmd-"));
-  stateDir = path.join(rootDir, "state");
-  env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-});
-
-afterEach(() => fs.rm(rootDir, { recursive: true, force: true }));
+const { fixture, params } = useDoctorWorkspace("openclaw-memory-core-doctor-qmd-");
 
 function migration(id: string) {
   const entry = stateMigrations.find((candidate) => candidate.id === `memory-core-${id}`);
   if (!entry) {
     throw new Error(`Missing migration: ${id}`);
   }
-  const params = () => ({
-    config: {},
-    env,
-    stateDir,
-    oauthDir: path.join(rootDir, "oauth"),
-    context: createDoctorContext(env),
-  });
   return {
-    detect: () => entry.detectLegacyState(params()),
-    run: () => entry.migrateLegacyState(params()),
+    detect: () => entry.detectLegacyState(params({})),
+    run: () => entry.migrateLegacyState(params({})),
   };
 }
 const workspace = migration("qmd-workspace-retired");
 const locks = migration("qmd-file-locks-to-sqlite-leases");
 
-const statePath = (relative: string) => path.join(stateDir, relative);
-const read = (file: string) => fs.readFile(file, "utf8");
+const statePath = (relative: string) => path.join(fixture.stateDir, relative);
 const lockPayload = (pid: number) =>
   `${JSON.stringify({ pid, createdAt: new Date().toISOString() })}\n`;
-async function writeFiles(paths: string[], contents = "derived") {
-  for (const filePath of paths) {
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, contents, "utf8");
-  }
-}
 async function expectNoop(subject: ReturnType<typeof migration>) {
   await expect(subject.detect()).resolves.toBeNull();
   await expect(subject.run()).resolves.toEqual({
@@ -65,8 +40,8 @@ const lockPreview = (paths: string[]) => ({
 it("preserves nonempty QMD homes and does not schedule them for migration", async () => {
   const qmdHome = statePath("agents/main/qmd");
   const transcript = statePath("agents/main/sessions/a.jsonl.reset.2026-08-23T07-10-59.000Z");
-  const externalModels = path.join(rootDir, "shared-qmd-models");
-  const symlinkHomeTarget = path.join(rootDir, "symlink-qmd-home-target");
+  const externalModels = path.join(fixture.rootDir, "shared-qmd-models");
+  const symlinkHomeTarget = path.join(fixture.rootDir, "symlink-qmd-home-target");
   const symlinkHome = statePath("agents/other/qmd");
   const protectedFiles = [
     statePath("agents/main/agent/openclaw-agent.sqlite"),
@@ -79,11 +54,14 @@ it("preserves nonempty QMD homes and does not schedule them for migration", asyn
     "xdg-config/qmd/index.yml",
     "sessions/session.md",
   ];
-  await writeFiles([
-    ...derivedPaths.map((relative) => path.join(qmdHome, relative)),
-    ...protectedFiles,
-    transcript,
-  ]);
+  await writeFiles(
+    [
+      ...derivedPaths.map((relative) => path.join(qmdHome, relative)),
+      ...protectedFiles,
+      transcript,
+    ],
+    "derived",
+  );
   const message = { role: "user", content: "Retained recall fact" };
   await fs.writeFile(transcript, JSON.stringify({ type: "message", message }), "utf8");
   await fs.symlink(externalModels, path.join(qmdHome, "xdg-cache", "qmd", "models"));
@@ -169,7 +147,7 @@ it("retains live and ambiguous QMD locks and ignores symlink candidates", async 
   const globalLockPath = statePath("qmd/embed.lock.lock");
   const malformedLockPath = statePath("agents/main/qmd-write.lock.lock");
   const symlinkLockPath = statePath("agents/other/qmd-write.lock.lock");
-  const symlinkTargetPath = path.join(rootDir, "stale-lock-target");
+  const symlinkTargetPath = path.join(fixture.rootDir, "stale-lock-target");
   await fs.mkdir(path.dirname(symlinkLockPath), { recursive: true });
   await writeFiles([globalLockPath], lockPayload(process.pid));
   await writeFiles([malformedLockPath], "{");

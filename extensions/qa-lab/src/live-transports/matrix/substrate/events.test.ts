@@ -7,29 +7,33 @@ import {
 
 const roomId = "!room:matrix-qa.test";
 const sender = "@sut:matrix-qa.test";
-
-function message(content: Record<string, unknown>, envelope: Partial<MatrixQaRoomEvent> = {}) {
-  return { event_id: "$event", sender, type: "m.room.message", ...envelope, content };
-}
-
-function expectEvent(
-  content: Record<string, unknown>,
-  expected: Partial<MatrixQaObservedEvent>,
-  envelope: Partial<MatrixQaRoomEvent> = {},
-) {
-  expect(normalizeMatrixQaObservedEvent(roomId, message(content, envelope))).toEqual({
-    eventId: "$event",
-    kind: "message",
-    roomId,
-    sender,
-    type: "m.room.message",
-    ...expected,
-  });
-}
+const driver = "@driver:matrix-qa.test";
+const timestamp = 1_700_000_000_000;
+const approval = {
+  allowedDecisions: ["allow-once", "deny"],
+  state: "pending",
+  type: "approval.request",
+  version: 1,
+};
+const plugin = {
+  id: "plugin:approval-1",
+  kind: "plugin",
+  agentId: "qa",
+  pluginId: "qa-plugin",
+  severity: "medium",
+  toolName: "qa_tool",
+};
+type Case = [
+  string,
+  Record<string, unknown>,
+  Partial<MatrixQaObservedEvent>,
+  Partial<MatrixQaRoomEvent>?,
+];
 
 describe("matrix observed event normalization", () => {
-  it("normalizes message events with thread metadata", () => {
-    expectEvent(
+  it.each<Case>([
+    [
+      "threaded message",
       {
         body: "hello",
         msgtype: "m.text",
@@ -42,35 +46,117 @@ describe("matrix observed event normalization", () => {
         },
       },
       {
-        originServerTs: 1_700_000_000_000,
+        originServerTs: timestamp,
         body: "hello",
         msgtype: "m.text",
+        mentions: { userIds: [sender] },
         relatesTo: {
           relType: "m.thread",
           eventId: "$root",
           inReplyToId: "$driver",
           isFallingBack: true,
         },
-        mentions: { userIds: [sender] },
       },
-      { origin_server_ts: 1_700_000_000_000 },
-    );
+      { origin_server_ts: timestamp },
+    ],
+    [
+      "reaction",
+      {
+        "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
+      },
+      {
+        kind: "reaction",
+        originServerTs: timestamp,
+        relatesTo: { eventId: "$msg", relType: "m.annotation" },
+        reaction: { eventId: "$msg", key: "👍" },
+      },
+      { type: "m.reaction", event_id: "$reaction", sender: driver, origin_server_ts: timestamp },
+    ],
+    [
+      "membership",
+      { membership: "leave" },
+      {
+        kind: "membership",
+        stateKey: sender,
+        membership: "leave",
+      },
+      { type: "m.room.member", event_id: "$membership", sender: driver, state_key: sender },
+    ],
+    [
+      "redaction",
+      {},
+      { kind: "redaction", redactsEventId: "$reaction" },
+      { type: "m.room.redaction", event_id: "$redaction", sender: driver, redacts: "$reaction" },
+    ],
+    [
+      "image with caption",
+      { body: "Image caption", filename: "qa-lighthouse.png", msgtype: "m.image" },
+      {
+        body: "Image caption",
+        msgtype: "m.image",
+        attachment: { kind: "image", caption: "Image caption", filename: "qa-lighthouse.png" },
+      },
+      { event_id: "$image" },
+    ],
+    [
+      "image with filename-like body",
+      { body: "qa-lighthouse.png", msgtype: "m.image" },
+      {
+        body: "qa-lighthouse.png",
+        msgtype: "m.image",
+        attachment: { kind: "image", filename: "qa-lighthouse.png" },
+      },
+      { event_id: "$image" },
+    ],
+    [
+      "approval without raw command text",
+      {
+        body: "React here: ✅ Allow once, ❌ Deny",
+        msgtype: "m.text",
+        "com.openclaw.approval": {
+          ...approval,
+          id: "approval-1",
+          kind: "exec",
+          commandText: "printf " + "A".repeat(300),
+        },
+      },
+      {
+        body: "React here: ✅ Allow once, ❌ Deny",
+        msgtype: "m.text",
+        approval: { ...approval, id: "approval-1", kind: "exec", hasCommandText: true },
+      },
+      { event_id: "$approval" },
+    ],
+    [
+      "plugin approval metadata",
+      {
+        body: "Plugin approval required",
+        msgtype: "m.text",
+        "com.openclaw.approval": { ...approval, ...plugin },
+      },
+      {
+        body: "Plugin approval required",
+        msgtype: "m.text",
+        approval: { ...approval, ...plugin, kind: "plugin" },
+      },
+      { event_id: "$plugin-approval" },
+    ],
+  ] satisfies Case[])("normalizes %s", (_name, content, expected, envelope = {}) => {
+    const event = { event_id: "$event", sender, type: "m.room.message", ...envelope, content };
+    expect(normalizeMatrixQaObservedEvent(roomId, event)).toEqual({
+      eventId: event.event_id,
+      kind: "message",
+      roomId,
+      sender: event.sender,
+      type: event.type,
+      ...expected,
+    });
   });
 
   it.each([
-    {
-      name: "preview edit",
-      newContent: { body: "preview", "org.matrix.msc4357.live": {} },
-      outerContent: {},
-      live: true,
-    },
-    {
-      name: "final edit",
-      newContent: { body: "final" },
-      outerContent: { "org.matrix.msc4357.live": {} },
-      live: undefined,
-    },
-  ])("preserves the live marker only on $name", ({ newContent, outerContent, live }) => {
+    ["preview edit", { body: "preview", "org.matrix.msc4357.live": {} }, {}, true],
+    ["final edit", { body: "final" }, { "org.matrix.msc4357.live": {} }, undefined],
+  ] as const)("preserves the live marker only on %s", (_name, newContent, outerContent, live) => {
     const event = normalizeMatrixQaObservedEvent(roomId, {
       event_id: "$event",
       type: "m.room.message",
@@ -83,140 +169,5 @@ describe("matrix observed event normalization", () => {
       },
     });
     expect(event?.live).toBe(live);
-  });
-
-  it("normalizes Matrix reaction events with target metadata", () => {
-    expectEvent(
-      {
-        "m.relates_to": { rel_type: "m.annotation", event_id: "$msg", key: "👍" },
-      },
-      {
-        eventId: "$reaction",
-        kind: "reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
-        originServerTs: 1_700_000_000_000,
-        relatesTo: { eventId: "$msg", relType: "m.annotation" },
-        reaction: { eventId: "$msg", key: "👍" },
-      },
-      {
-        event_id: "$reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
-        origin_server_ts: 1_700_000_000_000,
-      },
-    );
-  });
-
-  const approval = {
-    allowedDecisions: ["allow-once", "deny"],
-    state: "pending",
-    type: "approval.request",
-    version: 1,
-  };
-  it.each([
-    {
-      name: "command presence without a preview of raw approval text",
-      eventId: "$approval",
-      body: "React here: ✅ Allow once, ❌ Deny",
-      metadata: { id: "approval-1", kind: "exec", commandText: "printf " + "A".repeat(300) },
-      summary: { id: "approval-1", kind: "exec", hasCommandText: true },
-    },
-    {
-      name: "plugin approval metadata fields",
-      eventId: "$plugin-approval",
-      body: "Plugin approval required",
-      metadata: {
-        id: "plugin:approval-1",
-        kind: "plugin",
-        agentId: "qa",
-        pluginId: "qa-plugin",
-        severity: "medium",
-        toolName: "qa_tool",
-      },
-      summary: {
-        id: "plugin:approval-1",
-        kind: "plugin",
-        agentId: "qa",
-        pluginId: "qa-plugin",
-        severity: "medium",
-        toolName: "qa_tool",
-      },
-    },
-  ] as const)("summarizes $name", ({ eventId, body, metadata, summary }) => {
-    expectEvent(
-      {
-        body,
-        msgtype: "m.text",
-        "com.openclaw.approval": { ...structuredClone(approval), ...metadata },
-      },
-      { eventId, body, msgtype: "m.text", approval: { ...approval, ...summary } },
-      { event_id: eventId },
-    );
-  });
-
-  it.each([
-    {
-      name: "explicit filename and caption",
-      content: {
-        body: "Protocol note: generated the QA lighthouse image successfully.",
-        filename: "qa-lighthouse.png",
-      },
-      attachment: {
-        kind: "image",
-        caption: "Protocol note: generated the QA lighthouse image successfully.",
-        filename: "qa-lighthouse.png",
-      },
-    },
-    {
-      name: "filename-like body",
-      content: { body: "qa-lighthouse.png" },
-      attachment: { kind: "image", filename: "qa-lighthouse.png" },
-    },
-  ] as const)("normalizes image messages with $name", ({ content, attachment }) => {
-    expectEvent(
-      { ...content, msgtype: "m.image" },
-      { eventId: "$image", body: content.body, msgtype: "m.image", attachment },
-      { event_id: "$image" },
-    );
-  });
-
-  it("normalizes membership events with explicit membership kind", () => {
-    expectEvent(
-      { membership: "leave" },
-      {
-        eventId: "$membership",
-        kind: "membership",
-        sender: "@driver:matrix-qa.test",
-        stateKey: sender,
-        type: "m.room.member",
-        membership: "leave",
-      },
-      {
-        event_id: "$membership",
-        sender: "@driver:matrix-qa.test",
-        state_key: sender,
-        type: "m.room.member",
-      },
-    );
-  });
-
-  it("classifies Matrix redactions without needing raw event inspection", () => {
-    expectEvent(
-      {},
-      {
-        eventId: "$redaction",
-        kind: "redaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.room.redaction",
-        redactsEventId: "$reaction",
-      },
-      {
-        event_id: "$redaction",
-        redacts: "$reaction",
-        sender: "@driver:matrix-qa.test",
-        type: "m.room.redaction",
-      },
-    );
   });
 });
