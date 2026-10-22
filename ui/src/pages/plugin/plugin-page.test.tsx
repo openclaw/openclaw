@@ -1,3 +1,4 @@
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { createSignal, onCleanup } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginControlUiDiagnostic } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
@@ -75,6 +76,11 @@ function createSnapshot(
 }
 
 function mountPage(context: ApplicationContext, initial: PluginPageProps) {
+  Object.assign(context, {
+    router: createRouter({
+      routes: [definePage({ id: "plugin", path: "/plugin", component: () => ({}) })],
+    }),
+  });
   const [props, setProps] = createSignal(initial);
   const provider = createSolidApplicationContextProvider(context);
   const view = mountSolid(
@@ -212,6 +218,9 @@ describe("PluginPage", () => {
     };
     const navigate = vi.fn();
     const context = {
+      router: createRouter({
+        routes: [definePage({ id: "plugin", path: "/plugin", component: () => ({}) })],
+      }),
       basePath: "/console",
       navigate,
       plugins,
@@ -517,6 +526,28 @@ function logbookResponse(method: string) {
 }
 
 describe("bundled plugin views", () => {
+  it("retires a held capture action when its advertised view disappears", async () => {
+    await import("./logbook-view.tsx");
+    const pending = createDeferred<unknown>();
+    cleanups.push(() => pending.resolve(undefined));
+    const request = vi.fn((method: string) =>
+      method === "logbook.capture.set" ? pending.promise : Promise.resolve(logbookResponse(method)),
+    );
+    const fixture = createBundledPage({ request } as unknown as GatewayBrowserClient);
+    await waitForSolid(() => expect(fixture.page.querySelector(".logbook__chips")).not.toBeNull());
+    const pause = [...fixture.page.querySelectorAll("button")].find(
+      (button) => button.textContent === "Pause",
+    )!;
+    pause.click();
+    await waitForSolid(() => expect(pause.textContent).toBe("Resume"));
+    fixture.hello.controlUiTabs = [];
+    fixture.notify();
+    await waitForSolid(() => expect(fixture.page.querySelector(".logbook")).toBeNull());
+    pending.reject(new Error("Retired capture failed."));
+    await settle();
+    expect(fixture.page.textContent).not.toContain("Retired capture failed.");
+  });
+
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const loaded = createDeferred<BundledView>();
     const disposed = vi.fn();

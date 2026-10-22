@@ -38,7 +38,15 @@ declare module "@solidjs/web" {
 const LOG_BUFFER_LIMIT = 2000;
 const LOGS_POLL_INTERVAL_MS = 2000;
 
-export function LogsPage() {
+export function renderSolid() {
+  return (
+    <ShellLayoutBoundary traits={{ logsPage: true, toolbarHeader: true, settingsWorkspace: true }}>
+      <LogsPage />
+    </ShellLayoutBoundary>
+  );
+}
+
+function LogsPage() {
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });

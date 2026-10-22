@@ -10,7 +10,7 @@ import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { LogsPage } from "./logs-page.tsx";
+import { renderSolid as LogsRoute } from "./logs-page.tsx";
 
 type TestContext = ReturnType<typeof contextWithClient>;
 
@@ -35,7 +35,7 @@ function mountPage(initial: TestContext) {
   };
   const { container, unmount: dispose } = mountSolid(() => (
     <ApplicationProvider value={liveContext as unknown as ApplicationContext}>
-      <LogsPage />
+      <LogsRoute />
     </ApplicationProvider>
   ));
   return {
