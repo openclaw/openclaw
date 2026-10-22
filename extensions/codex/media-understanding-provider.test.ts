@@ -21,6 +21,10 @@ const sharedClientMocks = vi.hoisted(() => ({
 }));
 
 const imageInput = { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" };
+const turnIdentity = { threadId: "thread-1", turnId: "turn-1" };
+const websocketConfig = {
+  appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:4501" },
+};
 const summarySchema = {
   type: "object",
   properties: { summary: { type: "string" } },
@@ -68,12 +72,8 @@ function expectBoundedThread(
   });
 }
 
-function expectStartup(
-  clientFactory: ReturnType<typeof vi.fn<CodexAppServerClientFactory>>,
-  config: ImageDescriptionRequest["cfg"],
-  agentDir?: string,
-) {
-  const options = clientFactory.mock.calls[0]?.[0];
+function expectStartup(config: ImageDescriptionRequest["cfg"], agentDir?: string) {
+  const options = sharedClientMocks.createIsolatedCodexAppServerClient.mock.calls[0]?.[0];
   expect(options).toMatchObject({
     startOptions: expect.any(Object),
     authProfileId: undefined,
@@ -136,14 +136,17 @@ function turnStartResult(status = "inProgress", items: JsonValue[] = []) {
   return { turn: { ...baseTurnStartResult("turn-1", status).turn, items } };
 }
 
-function createFakeClient(options?: {
-  inputModalities?: string[];
-  completeWithItems?: boolean;
-  deferTurnCompletion?: boolean;
-  approvalRequestMethod?: string;
-  responseText?: string;
-  onTurnStart?: () => void;
-}) {
+function createFakeClient(
+  options: {
+    inputModalities?: string[];
+    completeWithItems?: boolean;
+    deferTurnCompletion?: boolean;
+    approvalRequestMethod?: string;
+    responseText?: string;
+    onTurnStart?: () => void;
+  } = {},
+  pluginConfig?: Parameters<typeof buildCodexMediaUnderstandingProvider>[0],
+) {
   const notifications = new Set<(notification: CodexServerNotification) => void>();
   type RequestHandler = Parameters<CodexAppServerClient["addRequestHandler"]>[0];
   const requestHandlers = new Set<RequestHandler>();
@@ -154,7 +157,7 @@ function createFakeClient(options?: {
     if (method === "model/list") {
       const model = baseModel();
       model.description = "GPT-5.4";
-      model.inputModalities = options?.inputModalities ?? ["text", "image"];
+      model.inputModalities = options.inputModalities ?? ["text", "image"];
       return { data: [model], nextCursor: null };
     }
     if (method === "thread/start") {
@@ -165,24 +168,21 @@ function createFakeClient(options?: {
         for (const notify of notifications) {
           notify({
             method: "turn/completed",
-            params: {
-              threadId: "thread-1",
-              turn: turnStartResult("interrupted").turn,
-            },
+            params: { threadId: turnIdentity.threadId, turn: turnStartResult("interrupted").turn },
           });
         }
       });
       return {};
     }
     if (method === "turn/start") {
-      options?.onTurnStart?.();
-      const approvalMethod = options?.approvalRequestMethod;
+      options.onTurnStart?.();
+      const approvalMethod = options.approvalRequestMethod;
       const approvals = approvalMethod
         ? [...requestHandlers].map(async (handler) => {
             const response = await handler({
               id: "approval-1",
               method: approvalMethod,
-              params: { threadId: "thread-1", turnId: "turn-1" },
+              params: turnIdentity,
             });
             if (response !== undefined) {
               approvalResponses.push(response);
@@ -190,24 +190,19 @@ function createFakeClient(options?: {
           })
         : [];
       const completeTurn = () => {
-        if (!options?.completeWithItems && !options?.deferTurnCompletion) {
+        if (!options.completeWithItems && !options.deferTurnCompletion) {
           for (const notify of notifications) {
             notify({
               method: "item/agentMessage/delta",
               params: {
-                threadId: "thread-1",
-                turnId: "turn-1",
+                ...turnIdentity,
                 itemId: "msg-1",
-                delta: options?.responseText ?? "A red square.",
+                delta: options.responseText ?? "A red square.",
               },
             });
             notify({
               method: "turn/completed",
-              params: {
-                threadId: "thread-1",
-                turnId: "turn-1",
-                turn: turnStartResult("completed").turn,
-              },
+              params: { ...turnIdentity, turn: turnStartResult("completed").turn },
             });
           }
         }
@@ -219,13 +214,13 @@ function createFakeClient(options?: {
         completeTurn();
       }
       return turnStartResult(
-        options?.completeWithItems ? "completed" : "inProgress",
-        options?.completeWithItems
+        options.completeWithItems ? "completed" : "inProgress",
+        options.completeWithItems
           ? [
               {
                 id: "msg-1",
                 type: "agentMessage",
-                text: options?.responseText ?? "A blue circle.",
+                text: options.responseText ?? "A blue circle.",
                 phase: null,
                 memoryCitation: null,
               },
@@ -250,11 +245,10 @@ function createFakeClient(options?: {
     addCloseHandler: () => () => undefined,
     closeAndWait,
   } as unknown as CodexAppServerClient;
-
   const clientFactory =
     sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
-  const provider = buildCodexMediaUnderstandingProvider();
-  return { client, clientFactory, provider, requests, approvalResponses, closeAndWait };
+  const provider = buildCodexMediaUnderstandingProvider(pluginConfig);
+  return { clientFactory, provider, requests, approvalResponses, closeAndWait };
 }
 
 describe("codex media understanding provider", () => {
@@ -306,7 +300,7 @@ describe("codex media understanding provider", () => {
   });
 
   it("runs image understanding through a bounded Codex app-server turn", async () => {
-    const { provider, requests, clientFactory } = createFakeClient();
+    const { provider, requests } = createFakeClient();
     const cfg = { auth: { order: { openai: ["openai:work"] } } };
 
     const result = await provider.describeImage?.(
@@ -314,7 +308,7 @@ describe("codex media understanding provider", () => {
     );
 
     expect(result).toEqual({ text: "A red square.", model: "gpt-5.4" });
-    expectStartup(clientFactory, cfg, "/tmp/openclaw-agent");
+    expectStartup(cfg, "/tmp/openclaw-agent");
     expectBoundedThread(
       requests,
       "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
@@ -328,59 +322,40 @@ describe("codex media understanding provider", () => {
   });
 
   it("treats a blank agent directory as absent when starting the app-server", async () => {
-    const { provider, requests, clientFactory } = createFakeClient();
+    const { provider, requests } = createFakeClient();
     const cfg = {};
 
     await provider.describeImage?.(imageRequest({ cfg, agentDir: " " }));
 
-    expectStartup(clientFactory, cfg);
+    expectStartup(cfg);
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
     expect(requests[2]?.params).not.toHaveProperty("cwd");
   });
 
   it("preserves configured WebSocket transport for media turns", async () => {
-    const { client, requests } = createFakeClient();
-    const clientFactory =
-      sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
-    const provider = buildCodexMediaUnderstandingProvider({
-      pluginConfig: {
-        appServer: {
-          transport: "websocket",
-          url: "ws://127.0.0.1:4501",
-        },
-      },
-    });
+    const { provider, requests, clientFactory } = createFakeClient(
+      {},
+      { pluginConfig: websocketConfig },
+    );
 
     await provider.describeImage?.(imageRequest());
 
     const factoryOptions = clientFactory.mock.calls[0]?.[0];
-    expect(factoryOptions).toEqual(
-      expect.objectContaining({
-        startOptions: expect.objectContaining({
-          transport: "websocket",
-          url: "ws://127.0.0.1:4501",
-        }),
-        authProfileId: undefined,
-        agentDir: "/tmp/openclaw-agent",
-        config: {},
-      }),
-    );
-    expect(factoryOptions?.timeoutMs).toBeGreaterThan(0);
-    expect(factoryOptions?.timeoutMs).toBeLessThanOrEqual(30_000);
+    expect(factoryOptions?.startOptions).toMatchObject(websocketConfig.appServer);
+    expectStartup({}, "/tmp/openclaw-agent");
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
     expect(requests[2]?.params).not.toHaveProperty("cwd");
   });
 
   it("interrupts a configured app-server turn when the media request aborts", async () => {
     const controller = new AbortController();
-    const { client, requests } = createFakeClient({
-      deferTurnCompletion: true,
-      onTurnStart: () => setTimeout(() => controller.abort(new Error("media cancelled")), 0),
-    });
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
-    const provider = buildCodexMediaUnderstandingProvider({
-      pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:4501" } },
-    });
+    const { provider, requests } = createFakeClient(
+      {
+        deferTurnCompletion: true,
+        onTurnStart: () => setTimeout(() => controller.abort(new Error("media cancelled")), 0),
+      },
+      { pluginConfig: websocketConfig },
+    );
 
     await expect(
       provider.describeImage?.(imageRequest({ signal: controller.signal })),
@@ -393,9 +368,7 @@ describe("codex media understanding provider", () => {
   });
 
   it("passes the scoped auth store into isolated app-server startup", async () => {
-    const { client, closeAndWait } = createFakeClient();
-    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
-    const provider = buildCodexMediaUnderstandingProvider();
+    const { provider, closeAndWait } = createFakeClient();
     const authStore = {
       version: 1,
       profiles: {
@@ -524,21 +497,20 @@ describe("codex media understanding provider", () => {
     expect(requests).toEqual([]);
   });
 
-  it("returns a controlled error when structured JSON parsing fails", async () => {
-    const { provider } = createFakeClient({ responseText: "not json" });
-
-    await expect(provider.extractStructured?.(structuredRequest())).rejects.toThrow(
-      "Codex structured extraction returned invalid JSON.",
-    );
-  });
-
-  it("validates structured extraction JSON against the requested schema", async () => {
-    const { provider } = createFakeClient({
-      responseText: '{"summary":123,"tags":["shape"]}',
-    });
-
-    await expect(
-      provider.extractStructured?.(structuredRequest({ jsonSchema: summarySchema })),
-    ).rejects.toThrow("Codex structured extraction JSON did not match schema");
-  });
+  it.each([
+    ["not json", "Codex structured extraction returned invalid JSON.", undefined],
+    [
+      '{"summary":123,"tags":["shape"]}',
+      "Codex structured extraction JSON did not match schema",
+      summarySchema,
+    ],
+  ] as const)(
+    "rejects invalid structured response %s",
+    async (responseText, message, jsonSchema) => {
+      const { provider } = createFakeClient({ responseText });
+      await expect(provider.extractStructured?.(structuredRequest({ jsonSchema }))).rejects.toThrow(
+        message,
+      );
+    },
+  );
 });
