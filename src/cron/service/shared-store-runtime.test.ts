@@ -17,7 +17,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import { loadCronStore, saveCronJobsStoreChanges, saveCronStore } from "../store.js";
 import type { CronJobCreate } from "../types.js";
 import type { CronServiceDeps } from "./state.js";
 import * as serviceStore from "./store.js";
@@ -240,4 +240,14 @@ it("prepares from a peer publication received during channel validation", async 
   } finally {
     cron.stop();
   }
+});
+
+it("rejects deleting a row whose config a peer rewrote", async () => {
+  const { storePath, target } = await seedTarget("delete-conflict");
+  const baseline = await loadCronStore(storePath);
+  await rewritePeer(storePath, target.id, { description: "peer rewrite" });
+  await expect(
+    saveCronJobsStoreChanges(storePath, baseline, { version: 1, jobs: [] }),
+  ).rejects.toThrow("changed after it was read");
+  expect((await readJob(storePath, target.id))?.description).toBe("peer rewrite");
 });

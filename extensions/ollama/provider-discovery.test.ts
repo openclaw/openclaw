@@ -112,6 +112,11 @@ describe("Ollama provider", () => {
       { id: "llama3.3:latest", reasoning: false },
     ]);
     expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
+    expect(
+      fetchMock.mock.calls
+        .filter(([url]) => String(url).endsWith("/api/tags"))
+        .map(([, init]) => new Headers(init?.headers).get("authorization")),
+    ).toEqual([null]);
     expect(countFetchCallUrls(fetchMock, "/api/show")).toBe(200);
     expect(provider?.models).toHaveLength(200);
   });

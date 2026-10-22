@@ -34,6 +34,34 @@ it.each([
     undefined,
   ],
   [
+    "explicit host and default port",
+    { webhookHost: "0.0.0.0", accounts: { other: {} } },
+    { ...legacy(8787, "0.0.0.0"), accounts: { other: {} } },
+    1,
+    "legacyWebhook: false",
+  ],
+  [
+    "explicit and inherited opt-outs",
+    withAccounts(
+      { legacyWebhook: false, webhookPort: 8787 },
+      {
+        inherited: { webhookPort: 8789, webhookHost: "0.0.0.0" },
+        disabled: { legacyWebhook: false, webhookPort: 8790 },
+        explicit: { ...legacy(9000), webhookPort: 8791 },
+      },
+    ),
+    withAccounts(
+      { legacyWebhook: false },
+      {
+        inherited: {},
+        disabled: { legacyWebhook: false },
+        explicit: legacy(9000),
+      },
+    ),
+    4,
+    undefined,
+  ],
+  [
     "canonical settings and malformed ports",
     { webhookPort: 8787, ...legacy(9000), accounts: { invalid: { webhookPort: "invalid" } } },
     { ...legacy(9000), accounts: { invalid: legacy("invalid") } },

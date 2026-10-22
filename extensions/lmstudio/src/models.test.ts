@@ -112,6 +112,13 @@ describe("lmstudio-models", () => {
   };
 
   it("preserves an explicit network policy and request headers", () => {
+    expect(
+      normalizeLmstudioProviderConfig({ baseUrl: "http://192.168.1.10:1234", models: [] }),
+    ).toEqual({
+      baseUrl: "http://192.168.1.10:1234/v1",
+      request: { allowPrivateNetwork: true },
+      models: [],
+    });
     const config = {
       baseUrl: "http://gpu-box.local:1234/v1",
       request: { allowPrivateNetwork: false, headers: { "X-Proxy-Auth": "token" } },
