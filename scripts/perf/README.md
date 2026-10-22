@@ -2361,7 +2361,9 @@ revision's files in a baseline directory and use `--session-projection-source
 src/gateway` for the candidate. The preload reads all four before Gateway startup
 and fails on a missing file; it substitutes raw TypeScript while retaining canonical
 module URLs, relative imports, and source line numbers. The report records the
-resolved `sessionProjectionSource`. Use separate fixtures and ports with matching
+resolved `sessionProjectionSource`. It also loads the canonical broadcaster as
+native TypeScript so its function name remains visible in allocation profiles
+without installing the timer. Use separate fixtures and ports with matching
 workload flags. Collect allocation and broadcast-timing comparisons in separate
 passes so the timing observer's allocations do not enter the broadcast profile.
 

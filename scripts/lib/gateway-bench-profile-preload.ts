@@ -92,10 +92,14 @@ if (isMainThread) {
           // Preserve canonical imports and original TypeScript lines in sampled stacks.
           return { ...loaded, format: "module-typescript", source: projectionSource };
         }
-        if (!broadcastTiming || url !== owner) {
+        if (url !== owner) {
           return loaded;
         }
         let source = readFileSync(new URL(url), "utf8");
+        // Native source preserves the broadcaster's name in allocation profiles without a timer.
+        if (!broadcastTiming) {
+          return { ...loaded, format: "module-typescript", source };
+        }
         const opening = "  ) => {\n    if (!retained) {";
         const closing = "\n  };\n\n  const broadcast: GatewayBroadcastFn";
         if (source.split(opening).length !== 2 || source.split(closing).length !== 2) {
