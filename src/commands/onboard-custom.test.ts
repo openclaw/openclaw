@@ -1,6 +1,7 @@
 // Onboard custom tests cover custom provider prompts and API-key credential handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
+import * as providerAuthInput from "../plugins/provider-auth-input.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 
 const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
@@ -77,7 +78,7 @@ async function runPromptCustomApi(
   setup: Partial<
     Pick<
       Parameters<typeof promptCustomApiConfig>[0],
-      "config" | "target" | "verification" | "setAsPrimary"
+      "config" | "target" | "modelWriteTarget" | "verification" | "setAsPrimary"
     >
   > = {},
 ) {
@@ -318,6 +319,30 @@ describe("promptCustomApiConfig", () => {
     );
   });
 
+  it("accepts a shared alias that only the setup agent uses privately", async () => {
+    const prompter = createTestPrompter({
+      text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
+    });
+    stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter, {
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: { models: { "openai/ops": { alias: "Operations" } } }, beta: {} },
+        },
+      },
+      target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+      modelWriteTarget: "defaults",
+    });
+
+    const aliasPrompt = prompter.text.mock.calls.find(
+      ([options]) => options.message === "Model alias (optional)",
+    );
+    expect(aliasPrompt?.[0].validate("Operations")).toBeUndefined();
+  });
+
   it("threads one workspace-scoped manifest snapshot through alias validation", async () => {
     const preparedPlugins = [
       {
@@ -452,6 +477,39 @@ describe("promptCustomApiConfig", () => {
       "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
       "Endpoint detection",
     );
+  });
+
+  it("keeps the setup workspace for the key prompt after changing the base URL", async () => {
+    const ensureApiKey = vi.mocked(providerAuthInput.ensureApiKeyFromEnvOrPrompt);
+    ensureApiKey.mockClear();
+    const prompter = createTestPrompter({
+      text: [
+        "https://bad.example.com/v1",
+        "bad-key",
+        "model-a",
+        "https://ok.example.com/v1",
+        "ok-key",
+        "custom",
+        "",
+      ],
+      select: ["plaintext", "openai", "baseUrl", "plaintext"],
+    });
+    stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
+    const target = {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+    };
+
+    await runPromptCustomApi(prompter, {
+      config: { agents: { ownership: "explicit", entries: { ops: {}, beta: {} } } },
+      target,
+    });
+
+    expect(ensureApiKey).toHaveBeenCalledTimes(2);
+    for (const [params] of ensureApiKey.mock.calls) {
+      expect(params).toMatchObject({ workspaceDir: target.workspaceDir });
+    }
   });
 
   it("aborts verification after timeout", async () => {

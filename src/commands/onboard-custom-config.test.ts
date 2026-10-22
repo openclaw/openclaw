@@ -137,6 +137,32 @@ it("rejects custom aliases already used by the selected agent", () => {
   ).toThrow("Alias Operations already points to openai/ops.");
 });
 
+it("validates a shared custom alias against shared defaults, not the setup agent", () => {
+  const result = applyCustomApiConfig({
+    config: {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { ops: { models: { "openai/ops": { alias: "Operations" } } }, beta: {} },
+      },
+    },
+    baseUrl: "https://llm.example.com/v1",
+    modelId: "foo-large",
+    compatibility: "openai",
+    providerId: "custom",
+    alias: "Operations",
+    target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+    modelWriteTarget: "defaults",
+  });
+
+  expect(result.config.agents?.defaults?.models?.["custom/foo-large"]).toEqual({
+    alias: "Operations",
+  });
+  expect(result.config.agents?.entries?.ops?.models).toEqual({
+    "openai/ops": { alias: "Operations" },
+  });
+});
+
 it("validates authored and inherited aliases without discovering plugin metadata", () => {
   setCurrentManifestModelIdNormalizationPolicies(undefined);
   const currentSnapshot = vi

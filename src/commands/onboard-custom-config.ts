@@ -609,7 +609,8 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams) {
     cfg: params.config,
     modelRef: { provider: providerId, model: modelId },
     manifestPlugins: params.manifestPlugins ?? [],
-    agentId: params.target?.agentId,
+    // Shared writes land on agents.defaults, so an agent's private aliases do not conflict.
+    agentId: params.modelWriteTarget === "defaults" ? undefined : params.target?.agentId,
   });
   if (aliasError) {
     throw new CustomApiError("invalid_alias", aliasError);

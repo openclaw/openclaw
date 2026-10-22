@@ -331,6 +331,7 @@ export async function promptCustomApiConfig(params: {
         config,
         secretInputMode: params.secretInputMode,
         initialBaseUrl: baseUrl,
+        ...(params.target?.workspaceDir ? { workspaceDir: params.target.workspaceDir } : {}),
       }));
     }
     if (retryChoice === "model" || retryChoice === "both") {
@@ -371,7 +372,7 @@ export async function promptCustomApiConfig(params: {
         cfg: config,
         modelRef: { provider: resolvedProvider.providerId, model: modelId },
         manifestPlugins,
-        agentId: params.target?.agentId,
+        agentId: params.modelWriteTarget === "defaults" ? undefined : params.target?.agentId,
       });
     },
   });
