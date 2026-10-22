@@ -48,9 +48,11 @@ function isConfirmedPrPreparationHandoff(card: ToolCard): boolean {
   return receipt?.status === "started" && receipt.async === true && receipt.yielded === true;
 }
 
-/** A handoff's private continuation is never a tool detail, whatever the disclosure preference. */
-export function hasSessionsYieldCall(message: unknown): boolean {
-  return extractToolCardsCached(message).some((card) => card.name === "sessions_yield");
+/** Keep handoff-capable calls and results until the projection can pair them. */
+export function hasHandoffToolCall(message: unknown): boolean {
+  return extractToolCardsCached(message).some(
+    (card) => card.name === "sessions_yield" || card.name === "github_publish",
+  );
 }
 
 /** The latest confirmed handoff that nothing has resumed yet. */
@@ -145,14 +147,14 @@ function scanSessionsYieldItems(
       laterActivity = true;
     }
     let remaining: ChatItem[] = [item];
-    if (
-      message &&
-      yieldCards.length > 0 &&
-      !showToolCalls &&
-      isStandaloneToolMessageForDisplay(message)
-    ) {
+    // Public handoff details follow the display preference after recognition.
+    // Private continuation filtering below still uses only sessions_yield IDs.
+    const filterTools =
+      yieldCards.length > 0 ||
+      (!showToolCalls && cards.some((card) => card.name === "github_publish"));
+    if (message && filterTools && !showToolCalls && isStandaloneToolMessageForDisplay(message)) {
       remaining = [];
-    } else if (message && yieldCards.length > 0 && Array.isArray(message.content)) {
+    } else if (message && filterTools && Array.isArray(message.content)) {
       const yieldIds = new Set(yieldCards.map((card) => card.callId));
       const ids = new Set(yields.map((card) => card.callId));
       const content = message.content.filter((block: unknown) => {
@@ -243,7 +245,7 @@ function scanSessionsYieldItems(
 }
 
 /**
- * Keeps handoff calls out of tool details and separates a resumed run from the
+ * Keeps private yield calls out of tool details and separates a resumed run from the
  * run that handed off. Message waits retain their public acknowledgment/status;
  * child waits use the working indicator.
  *
