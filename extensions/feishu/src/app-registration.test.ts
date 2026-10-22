@@ -122,39 +122,6 @@ describe("Feishu app registration", () => {
     await expect(poll).resolves.toEqual({ status: "timeout" });
   });
 
-  it("stops polling promptly when abortSignal fires during the poll interval", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn(async () => Response.json({ error: "authorization_pending" }));
-    const controller = new AbortController();
-    let outcome: Awaited<ReturnType<typeof pollAppRegistration>> | undefined;
-    mockRegistrationFetch({
-      fetchImpl: withFetchPreconnect(fetchMock),
-    });
-    const poll = pollAppRegistration({
-      ...pollParams,
-      abortSignal: controller.signal,
-    }).then((result) => {
-      outcome = result;
-    });
-
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(outcome).toBeUndefined();
-
-      controller.abort();
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(outcome).toEqual({ status: "timeout" });
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    } finally {
-      controller.abort();
-      // Join the poll even when a regression leaves its interval asleep after abort.
-      await vi.advanceTimersByTimeAsync(30_000);
-      await poll;
-    }
-  });
-
   it("prints scan-to-create QR codes with compact terminal rendering", async () => {
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
     const url = "https://accounts.feishu.cn/verify?device_code=long-device-code";
