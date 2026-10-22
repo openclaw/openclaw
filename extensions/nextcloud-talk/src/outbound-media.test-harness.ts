@@ -42,6 +42,7 @@ export async function withNextcloudTalkOutboundFixture(
     };
     let uploadedPath = "";
     let referenceId = "";
+    let messageType = "comment";
     const respond = async (request: IncomingMessage, response: ServerResponse) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) {
@@ -85,6 +86,7 @@ export async function withNextcloudTalkOutboundFixture(
       } else if (recorded.url.pathname === "/cloud/ocs/v2.php/apps/files_sharing/api/v1/shares") {
         const share = new URLSearchParams(recorded.body.toString());
         referenceId = share.get("referenceId") ?? "";
+        messageType = JSON.parse(share.get("talkMetaData") ?? "{}").messageType ?? "comment";
         data = { id: "700", file_source: 81 };
       } else if (recorded.url.pathname === "/cloud/ocs/v2.php/apps/spreed/api/v1/chat/allowed") {
         data = [
@@ -95,6 +97,7 @@ export async function withNextcloudTalkOutboundFixture(
             actorId: "canonical-user",
             parent: { id: 41 },
             referenceId,
+            messageType,
             messageParameters: { file: { id: "81", path: uploadedPath.slice(1) } },
           },
         ];

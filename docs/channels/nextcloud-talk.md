@@ -249,6 +249,14 @@ replies continue to use the bot. Captions and reply references are included in t
 native file share when supported by the server; ordinary audio is sent as a file,
 not relabeled as a voice note.
 
+Explicit voice replies (`message` with `asVoice: true`, or the existing TTS reply
+flow) use Talk's native voice-note presentation for MP3 and WAV audio. They require
+the same API account as native attachments; a bot-only URL link is not a voice
+note. Captions and reply references are preserved. Other formats remain ordinary
+attachments, even when voice delivery is requested; OpenClaw does not transcode
+them or relabel non-audio files as speech. Voice synthesis still uses your existing
+TTS configuration and does not enable automatic spoken replies by itself.
+
 OpenClaw loads attachments through its shared outbound media policy, including
 approved local-file roots and `mediaMaxMb`. It uploads a uniquely named file to
 `OpenClaw/` in the API user's Files, without overwriting existing files, and grants
