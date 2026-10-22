@@ -39,8 +39,8 @@ export function PluginSettingsReadStatus(props: {
       const outcomes = await Promise.all([
         read
           ? Promise.race([read.completion.promise, read.invalidated.promise.then(() => null)])
-          : null,
-        schema(),
+          : Promise.resolve(null),
+        Promise.resolve(schema()),
       ]);
       // A later write owns its own error; completed reads cannot replace it.
       const failed = outcomes.find(
