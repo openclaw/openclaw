@@ -7,7 +7,7 @@ import { waitForTransportReady } from "./transport-ready.js";
 
 vi.mock("./backoff.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./backoff.js")>();
-  return { sleepWithAbort: vi.fn(actual.sleepWithAbort) };
+  return { ...actual, sleepWithAbort: vi.fn(actual.sleepWithAbort) };
 });
 
 describe("waitForTransportReady", () => {

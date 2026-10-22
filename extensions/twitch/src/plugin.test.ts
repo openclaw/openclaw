@@ -12,7 +12,10 @@ import { twitchPlugin } from "./plugin.js";
 import { twitchSetupPlugin } from "./setup-surface.js";
 
 const monitorTwitchProvider = vi.hoisted(() => vi.fn());
-vi.mock("./monitor.js", () => ({ monitorTwitchProvider }));
+vi.mock("./monitor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor.js")>()),
+  monitorTwitchProvider,
+}));
 
 const startAccount = twitchPlugin.gateway!.startAccount!;
 const lifecycleAccount = {
