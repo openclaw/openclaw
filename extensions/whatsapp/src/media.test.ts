@@ -25,7 +25,6 @@ let largeJpegBuffer: Buffer;
 let largeJpegFile = "";
 let tinyPngBuffer: Buffer;
 let tinyPngFile = "";
-let alphaPngBuffer: Buffer;
 let alphaPngFile = "";
 let fallbackPngFile = "";
 let fallbackPngCap = 0;
@@ -50,7 +49,7 @@ beforeAll(async () => {
   largeJpegFile = await writeTempFile(largeJpegBuffer, ".jpg");
   tinyPngBuffer = createSolidPngBuffer(10, 10, { r: 0, g: 255, b: 0 });
   tinyPngFile = await writeTempFile(tinyPngBuffer, ".png");
-  alphaPngBuffer = createSolidPngBuffer(64, 64, { r: 255, g: 0, b: 0, a: 128 });
+  const alphaPngBuffer = createSolidPngBuffer(64, 64, { r: 255, g: 0, b: 0, a: 128 });
   alphaPngFile = await writeTempFile(alphaPngBuffer, ".png");
   for (const size of [24, 32, 40, 48, 64]) {
     const buffer = createGrayscaleAlphaPngBuffer(size, size);
@@ -105,13 +104,6 @@ describe("web media loading", () => {
     expect(result.buffer.length).toBeLessThan(largeJpegBuffer.length);
   });
 
-  it("allows callers to disable optimization via options object", async () => {
-    const cap = Math.max(1, Math.floor(largeJpegBuffer.length * 0.8));
-    await expect(
-      loadWebMedia(largeJpegFile, { maxBytes: cap, optimizeImages: false }),
-    ).rejects.toThrow(/Media exceeds/i);
-  });
-
   it("blocks SSRF URLs before fetch", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     for (const [url, expectedMessage] of [
@@ -124,15 +116,14 @@ describe("web media loading", () => {
     fetchMock.mockRestore();
   });
 
-  it("keeps raw mode when options object sets optimizeImages true", async () => {
-    const cap = Math.max(1, Math.floor(largeJpegBuffer.length * 0.8));
-
-    await expect(
-      loadWebMediaRaw(largeJpegFile, {
-        maxBytes: cap,
-        optimizeImages: true,
-      }),
-    ).rejects.toThrow(/Media exceeds/i);
+  it.each([
+    [loadWebMedia, false],
+    [loadWebMediaRaw, true],
+  ] as const)("%s rejects oversized media with optimizeImages=%s", async (load, optimizeImages) => {
+    const maxBytes = Math.max(1, Math.floor(largeJpegBuffer.length * 0.8));
+    await expect(load(largeJpegFile, { maxBytes, optimizeImages })).rejects.toThrow(
+      /Media exceeds/i,
+    );
   });
 
   it("preserves PNG alpha when under the cap", async () => {
