@@ -49,6 +49,12 @@ async function attached() {
   expectType(await h.request({ type: "attach", tabId: 101 }));
   return h;
 }
+const revokedMessage = expect.stringMatching(
+  /access was revoked|restricted or unavailable|Debugger attachment retired/,
+);
+function expectError(response: unknown, message: unknown) {
+  expect(response).toMatchObject({ type: "error", message });
+}
 const releases: Array<() => void> = [];
 beforeEach(() => vi.resetModules());
 afterEach(async () => {
@@ -174,7 +180,7 @@ describe("physical tab creation authority", () => {
     expectUnused(h.debuggerAttach, h.tabsRemove);
   });
   it.each(["initial loading snapshot", "same-group update"] as const)(
-    "preserves selected navigation when the %s arrives after its root commit",
+    "preserves navigation with a late %s",
     async (event) => {
       const h = await attached();
       h.debuggerSendCommand.mockImplementationOnce(async () => {
@@ -205,12 +211,7 @@ describe("physical tab creation authority", () => {
       h.tabsUpdatedListener?.(101, { status: "loading" }, initialLoadingTab);
       return { ...navigation };
     });
-    expect(await h.request(cdp("Page.navigate", { url }))).toMatchObject({
-      type: "error",
-      message: expect.stringMatching(
-        /access was revoked|restricted or unavailable|Debugger attachment retired/,
-      ),
-    });
+    expectError(await h.request(cdp("Page.navigate", { url })), revokedMessage);
     expect(h.debuggerSendCommand).toHaveBeenCalledWith({ tabId: 101 }, "Page.navigate", { url });
   });
   it("restores fresh attachment authority without reviving a command admitted before a title change", async () => {
@@ -223,10 +224,10 @@ describe("physical tab creation authority", () => {
       h.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
       return { frameId: "main" };
     });
-    expect(await h.request(cdp("Page.navigate", { url }))).toMatchObject({
-      type: "error",
-      message: expect.stringContaining("access was revoked"),
-    });
+    expectError(
+      await h.request(cdp("Page.navigate", { url })),
+      expect.stringContaining("access was revoked"),
+    );
     await vi.waitFor(() => {
       h.debuggerEventListener?.({ tabId: 101 }, "Runtime.consoleAPICalled", { value: 1 });
       expect(h.frames()).toContainEqual(
@@ -277,7 +278,7 @@ describe("physical tab creation authority", () => {
       }
       lookup.resolve(await h.tabsGet(101));
       await pausing;
-      expect(await attaching).toMatchObject({ type: "error", message: "attach failed" });
+      expectError(await attaching, "attach failed");
       expectUnused(h.tabsRemove);
     },
   );
@@ -296,10 +297,7 @@ describe("physical tab creation authority", () => {
       await runtime(h, "toggleTabAccess", { accessMode, tabId: 101, grant: false }),
     ).toMatchObject({ ok: true });
     deferred.resolve(7);
-    expect(await creating).toMatchObject({
-      type: "error",
-      message: expect.stringMatching(/revoked/),
-    });
+    expectError(await creating, expect.stringMatching(/revoked/));
     expectUnused(h.windowsUpdate, h.tabsRemove);
     expectType(await h.request({ type: "attach", tabId: 101 }), "error");
   });

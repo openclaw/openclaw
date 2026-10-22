@@ -41,6 +41,9 @@ const enable = (socket: FakeWebSocket, seq: number) =>
   reply(socket, seq, { type: "cdp", tabId, method: "Runtime.enable" });
 const absent = (socket: FakeWebSocket, seq: number) =>
   expect(findFrame(socket, seq)).toBeUndefined();
+const expectError = (frame: unknown, text: string) =>
+  expect(frame).toMatchObject({ type: "error", message: expect.stringContaining(text) });
+const ownershipError = "Another debugger is already attached";
 
 async function fixture(initiallyAttached = false) {
   const h = await loadConfiguredBackground(
@@ -205,7 +208,7 @@ describe("authenticated relay debugger lifetime", () => {
     absent(f.old, 9);
   });
   it.each(["activateTab", "createTab"])(
-    "fences %s paused over a tab lookup while preserving creator-owned rollback",
+    "fences %s during lookup, retaining creator-owned rollback",
     async (type) => {
       const f = await fixture(true);
       const gate = heldAccess(f.h);
@@ -231,41 +234,38 @@ describe("authenticated relay debugger lifetime", () => {
       absent(f.old, 8);
     },
   );
-  it.each(["cdp", "attach"])(
-    "fences replacement %s work while the old native session retires",
-    async (type) => {
-      const f = await fixture(true);
-      const gate = deferred(undefined);
-      holdNext(f.h.debuggerDetach, gate.promise);
-      f.old.finishClose();
-      const next = await f.replacement();
-      send(next, 9, type, type === "cdp" ? { method: "Runtime.evaluate" } : {});
-      await reply(next, 10, { type: "ping" });
-      if (type === "attach") {
-        f.h.updateTab(tabId, { url: "chrome://settings" });
-        f.h.updateTab(tabId, { url: "https://example.com/returned" });
-      } else {
-        expectUnused(f.h.debuggerSendCommand);
-      }
-      gate.resolve();
-      await vi.waitFor(() =>
-        expect(frames(next)).toContainEqual({
-          type: "error",
-          seq: 9,
-          message: expect.stringContaining(type === "cdp" ? "not attached" : "access was revoked"),
-        }),
-      );
-      if (type === "attach") {
-        expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
-        await f.attach(next, 11);
-        expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
-      } else {
-        await f.attach(next);
-        await enable(next, 11);
-        expectRuntime(next);
-      }
-    },
-  );
+  it.each(["cdp", "attach"])("fences replacement %s during native retirement", async (type) => {
+    const f = await fixture(true);
+    const gate = deferred(undefined);
+    holdNext(f.h.debuggerDetach, gate.promise);
+    f.old.finishClose();
+    const next = await f.replacement();
+    send(next, 9, type, type === "cdp" ? { method: "Runtime.evaluate" } : {});
+    await reply(next, 10, { type: "ping" });
+    if (type === "attach") {
+      f.h.updateTab(tabId, { url: "chrome://settings" });
+      f.h.updateTab(tabId, { url: "https://example.com/returned" });
+    } else {
+      expectUnused(f.h.debuggerSendCommand);
+    }
+    gate.resolve();
+    await vi.waitFor(() =>
+      expect(frames(next)).toContainEqual({
+        type: "error",
+        seq: 9,
+        message: expect.stringContaining(type === "cdp" ? "not attached" : "access was revoked"),
+      }),
+    );
+    if (type === "attach") {
+      expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
+      await f.attach(next, 11);
+      expect(f.h.debuggerAttach).toHaveBeenCalledTimes(2);
+    } else {
+      await f.attach(next);
+      await enable(next, 11);
+      expectRuntime(next);
+    }
+  });
   it("keeps retirement fenced through an opening deadline and delayed stale close", async () => {
     const f = await fixture(true);
     const gate = deferred(undefined);
@@ -298,32 +298,23 @@ describe("authenticated relay debugger lifetime", () => {
     f.h.debuggerDetach.mockRejectedValue(new Error("native detach refused"));
     f.old.finishClose();
     const next = await f.replacement();
-    expect(await reply(next, 1, { type: "attach", tabId })).toMatchObject({
-      type: "error",
-      message: expect.stringContaining("native detach refused"),
-    });
+    expectError(await reply(next, 1, { type: "attach", tabId }), "native detach refused");
     expect(f.h.debuggerAttach).toHaveBeenCalledTimes(1);
   });
   it("does not adopt or retire an attachment when Chrome rejects ownership", async () => {
     const f = await fixture();
     f.attached.set(tabId, { runtimeEnabled: true });
-    expect(await reply(f.old, 1, { type: "attach", tabId })).toMatchObject({
-      type: "error",
-      message: expect.stringContaining("Another debugger is already attached"),
-    });
+    expectError(await reply(f.old, 1, { type: "attach", tabId }), ownershipError);
     f.old.finishClose();
     const next = await f.replacement();
-    expect(await reply(next, 1, { type: "attach", tabId })).toMatchObject({
-      type: "error",
-      message: expect.stringContaining("Another debugger is already attached"),
-    });
+    expectError(await reply(next, 1, { type: "attach", tabId }), ownershipError);
     expectUnused(f.h.debuggerDetach);
     expect(f.attached.get(tabId)).toEqual({ runtimeEnabled: true });
   });
 });
 
 it.each(["before dispatch", "native completion", "post-access completion"])(
-  "rejects old work held at %s across detach and reattach",
+  "rejects %s work across detach/reattach",
   async (stage) => {
     const f = await fixture(true);
     const gate = deferred(undefined);
