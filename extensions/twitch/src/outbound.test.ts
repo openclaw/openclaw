@@ -35,7 +35,21 @@ describe("outbound", () => {
     accountId: "default",
     clientManager: undefined,
   };
+  const receipt: MessageReceipt = {
+    primaryPlatformMessageId: "twitch-msg-123",
+    platformMessageIds: ["twitch-msg-123"],
+    parts: [{ platformMessageId: "twitch-msg-123", kind: "text", index: 0 }],
+    sentAt: 1700000000000,
+  };
   installTwitchTestHooks();
+
+  function prepareSend() {
+    setupAccountContext();
+    vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
+      messageId: "twitch-msg-123",
+      receipt,
+    });
+  }
 
   function setupAccountContext(params?: {
     account?: typeof mockAccount | null;
@@ -64,21 +78,11 @@ describe("outbound", () => {
   });
 
   it("preserves declared text and media receipts through both outbound interfaces", async () => {
-    setupAccountContext();
+    prepareSend();
     const capabilities = { text: true, media: true, messageSendingHooks: true };
     expect(twitchOutbound.deliveryCapabilities?.durableFinal).toEqual(capabilities);
     expect(twitchMessageAdapter.durableFinal?.capabilities).toEqual(capabilities);
-    const receipt: MessageReceipt = {
-      primaryPlatformMessageId: "twitch-msg-123",
-      platformMessageIds: ["twitch-msg-123"],
-      parts: [{ platformMessageId: "twitch-msg-123", kind: "text", index: 0 }],
-      sentAt: 1700000000000,
-    };
     vi.spyOn(Date, "now").mockReturnValue(1700000000123);
-    vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
-      messageId: "twitch-msg-123",
-      receipt,
-    });
     for (const send of [
       { text: twitchOutbound.sendText!, media: twitchOutbound.sendMedia! },
       { text: twitchMessageAdapter.send!.text!, media: twitchMessageAdapter.send!.media! },
@@ -98,7 +102,6 @@ describe("outbound", () => {
         expect(result.receipt).toBe(receipt);
         expect(result).toMatchObject({ messageId: "twitch-msg-123", timestamp: 1700000000123 });
       }
-      expect(mediaResult.receipt?.parts.map((part) => part.kind)).toEqual(["text"]);
     }
   });
 
@@ -172,16 +175,7 @@ describe("outbound", () => {
   });
 
   it("should send media URL only when no text", async () => {
-    setupAccountContext();
-    vi.mocked(sendMessageTwitchInternal).mockResolvedValue({
-      messageId: "media-only-msg",
-      receipt: createMessageReceiptFromOutboundResults({
-        results: [
-          { channel: "twitch", conversationId: "testchannel", messageId: "media-only-msg" },
-        ],
-        kind: "text",
-      }),
-    });
+    prepareSend();
     await twitchOutbound.sendMedia!({
       ...sendParams,
       text: "",
