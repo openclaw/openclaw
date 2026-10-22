@@ -402,6 +402,9 @@ it.each(["connection", "profile"] as const)(
     expect(harness.request).toHaveBeenLastCalledWith("users.listModelAccounts", {
       profileId: scope === "connection" ? "profile-1" : "profile-2",
     });
+    await waitForSolid(() =>
+      expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
+    );
     old.resolve({
       profileId: "profile-1",
       accounts: [connectedAccount],
@@ -415,6 +418,41 @@ it.each(["connection", "profile"] as const)(
     );
   },
 );
+
+it("retains the account draft through a failed inventory refresh and recovers on retry", async () => {
+  const harness = await mountAccounts(
+    async () => {
+      throw new Error("Unexpected account mutation");
+    },
+    {
+      accounts: [connectedAccount],
+      scopes: ["operator.write", "operator.admin"],
+    },
+  );
+  const draft = await input(harness.accounts, ".profile-auth-link-input", "openai:work");
+  const pending = createDeferred<UsersListModelAccountsResult>();
+  harness.request.mockImplementationOnce(async () => pending.promise);
+  button(harness.accounts, ".profile-auth-accounts-refresh").click();
+  await waitForSolid(() => expect(draft.disabled).toBe(true));
+  expect(harness.accounts.textContent).toContain(connectedAccount.label);
+  pending.reject(new Error("Inventory unavailable"));
+  await waitForSolid(() =>
+    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
+      "Inventory unavailable",
+    ),
+  );
+  expect(harness.accounts.querySelector(".profile-auth-link-input")).toBe(draft);
+  expect(draft.value).toBe("openai:work");
+  harness.request.mockImplementationOnce(async () => ({
+    profileId: "profile-1",
+    accounts: [connectedAccount],
+    links: connectedResult.links,
+  }));
+  button(harness.accounts, ".profile-auth-accounts-refresh").click();
+  await waitForSolid(() => expect(draft.disabled).toBe(false));
+  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
+  expect(draft.value).toBe("openai:work");
+});
 
 it("lets an admin link and unlink an existing model account", async () => {
   const harness = await mountAccounts(

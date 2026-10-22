@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
 import type {
   UserModelAccount,
@@ -31,6 +32,7 @@ function gatewayEndpoint(gatewayUrl: string): string {
 
 function AccountRow(props: {
   readState: () => ModelAccountsState;
+  pending: boolean;
   row: { kind: "linked"; link: UserProfileAuthLink } | { kind: "saved"; account: UserModelAccount };
 }) {
   const state = () => props.readState();
@@ -94,7 +96,7 @@ function AccountRow(props: {
                 ? `${action()}: ${provider()} · ${account()?.label ?? reference().authProfileId}`
                 : `${action()}: ${provider()} · ${label()} (${reference().authProfileId})`
             }
-            disabled={state().busy}
+            disabled={props.pending || state().busy}
             onClick={() =>
               linked()
                 ? state().updateAccount("unlink", reference().provider)
@@ -229,7 +231,7 @@ function SignIn(props: StateProps) {
   );
 }
 
-function ModelAccountRows(props: StateProps) {
+export function ModelAccountInventory(props: StateProps & { pending: boolean }) {
   const state = () => props.readState();
   return (
     <>
@@ -239,7 +241,11 @@ function ModelAccountRows(props: StateProps) {
       >
         <For each={state().links} keyed={(link) => link.authProfileId}>
           {(link) => (
-            <AccountRow readState={props.readState} row={{ kind: "linked", link: link() }} />
+            <AccountRow
+              readState={props.readState}
+              pending={props.pending}
+              row={{ kind: "linked", link: link() }}
+            />
           )}
         </For>
       </Show>
@@ -248,7 +254,11 @@ function ModelAccountRows(props: StateProps) {
         keyed={(account) => account.authProfileId}
       >
         {(account) => (
-          <AccountRow readState={props.readState} row={{ kind: "saved", account: account() }} />
+          <AccountRow
+            readState={props.readState}
+            pending={props.pending}
+            row={{ kind: "saved", account: account() }}
+          />
         )}
       </For>
       <Show when={Boolean(state().nextCursor)}>
@@ -258,7 +268,7 @@ function ModelAccountRows(props: StateProps) {
             <button
               type="button"
               class="btn btn--sm profile-auth-accounts-more"
-              disabled={state().busy}
+              disabled={props.pending || state().busy}
               onClick={() => void state().loadAccounts(state().nextCursor)}
             >
               {t("profilePage.modelAccounts.loadMore")}
@@ -266,6 +276,14 @@ function ModelAccountRows(props: StateProps) {
           }
         />
       </Show>
+    </>
+  );
+}
+
+function ModelAccountActions(props: StateProps) {
+  const state = () => props.readState();
+  return (
+    <>
       <SignIn readState={props.readState} />
       <Show when={state().target?.canAdmin}>
         <SettingsRow
@@ -321,7 +339,7 @@ function ModelAccountRows(props: StateProps) {
   );
 }
 
-export function ModelAccountsSection(props: StateProps) {
+export function ModelAccountsSection(props: StateProps & { inventory: JSX.Element }) {
   const state = () => props.readState();
   const snapshot = () => state().props.target.read().gateway;
   const person = () =>
@@ -408,7 +426,8 @@ export function ModelAccountsSection(props: StateProps) {
           />
         }
       >
-        <ModelAccountRows readState={props.readState} />
+        {props.inventory}
+        <ModelAccountActions readState={props.readState} />
       </Show>
     </SettingsSection>
   );
