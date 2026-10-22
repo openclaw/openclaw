@@ -159,7 +159,8 @@ The video provider accepts these optional provider-specific keys:
     PixVerse returns a `video_id` from the generation request. OpenClaw polls
     `/openapi/v2/video/result/{video_id}` every 5 seconds until the task
     succeeds, fails, or hits the timeout (default 5 minutes; override with
-    `agents.defaults.mediaModels.video.timeoutMs`).
+    `agents.defaults.mediaModels.video.timeoutMs`). Polling honors the
+    provider's private-network policy even without a proxy override.
   </Accordion>
 </AccordionGroup>
 

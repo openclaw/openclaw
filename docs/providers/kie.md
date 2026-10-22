@@ -90,7 +90,8 @@ Set the default video model:
 Kie jobs can take several minutes. OpenClaw polls until completion and
 waits up to ten minutes by default. Override this with
 `agents.defaults.mediaModels.video.timeoutMs` when needed. Provider error
-messages are surfaced even when Kie returns HTTP 200.
+messages are surfaced even when Kie returns HTTP 200. Task polling honors the
+provider's private-network policy even without a proxy override.
 
 Veo is not included yet; its dedicated and market API contracts need to be
 reconciled before support is added.

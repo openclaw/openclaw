@@ -369,7 +369,7 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
           timeoutMessage: `PixVerse video generation task ${videoId} did not finish in time`,
           isComplete: (candidate) => readPixVerseStatus(readResult(candidate)) === 1,
           getFailureMessage: (candidate) => readPixVerseFailureMessage(readResult(candidate)),
-          allowPrivateNetwork,
+          ssrfPolicy: { allowPrivateNetwork },
           dispatcherPolicy,
         });
         const completed = readResult(completedEnvelope);
