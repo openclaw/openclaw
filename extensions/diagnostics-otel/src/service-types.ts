@@ -22,10 +22,6 @@ export type ModelCallLifecycleDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "model.call.completed" | "model.call.error" }
 >;
-export type ModelFailoverDiagnosticEvent = Extract<
-  DiagnosticEventPayload,
-  { type: "model.failover" }
->;
 export type HarnessRunDiagnosticEvent = Extract<
   DiagnosticEventPayload,
   { type: "harness.run.started" | "harness.run.completed" | "harness.run.error" }

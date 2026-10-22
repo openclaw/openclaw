@@ -5,16 +5,16 @@ import type {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatError } from "./service-exporter.js";
 import type { createDiagnosticsLogExporter } from "./service-logs.js";
-import type { createHarnessRecorders } from "./service-recorders-harness.js";
 import type { createModelRecorders } from "./service-recorders-model.js";
 import type { createToolAndSystemRecorders } from "./service-recorders-tools.js";
-import type { createUsageRecorders } from "./service-recorders-usage.js";
 import type { OtelLogger } from "./service-types.js";
 
-type DiagnosticsEventRecorders = ReturnType<typeof createHarnessRecorders> &
-  ReturnType<typeof createModelRecorders> &
-  ReturnType<typeof createToolAndSystemRecorders> &
-  ReturnType<typeof createUsageRecorders> & { operations: DiagnosticHandlers };
+type DiagnosticsEventRecorders = ReturnType<typeof createModelRecorders> &
+  ReturnType<typeof createToolAndSystemRecorders> & {
+    operations: DiagnosticHandlers;
+    harness: DiagnosticHandlers;
+    usage: DiagnosticHandlers;
+  };
 type OtelDiagnosticEventPrivateData = DiagnosticEventPrivateData &
   Readonly<{
     hostPluginId?: string;
@@ -39,30 +39,13 @@ export function createDiagnosticsEventHandler(params: {
   const { logger, recorders, recordLogEvent } = params;
   const handlers: DiagnosticHandlers = {
     ...recorders.operations,
+    ...recorders.harness,
+    ...recorders.usage,
     "diagnostic.gc": recorders.recordGcDuration.bind(recorders),
     "gateway.event_loop.sample": recorders.recordGatewayEventLoopSample.bind(recorders),
-    "model.usage": (evt, metadata, privateData) =>
-      recorders.recordModelUsage(evt, metadata, privateData.hostPluginId),
-    "webhook.received": recorders.recordWebhookReceived.bind(recorders),
-    "webhook.processed": recorders.recordWebhookProcessed.bind(recorders),
-    "webhook.error": recorders.recordWebhookError.bind(recorders),
-    "message.queued": recorders.recordMessageQueued.bind(recorders),
-    "message.received": recorders.recordMessageReceived.bind(recorders),
-    "message.dispatch.started": recorders.recordMessageDispatchStarted.bind(recorders),
-    "message.dispatch.completed": recorders.recordMessageDispatchCompleted.bind(recorders),
-    "message.processed": recorders.recordMessageProcessed.bind(recorders),
-    "message.delivery.started": recorders.recordMessageDeliveryStarted.bind(recorders),
-    "message.delivery.completed": recorders.recordMessageDeliveryFinished.bind(recorders),
-    "message.delivery.error": recorders.recordMessageDeliveryFinished.bind(recorders),
     "diagnostic.heartbeat": recorders.recordHeartbeat.bind(recorders),
     "diagnostic.liveness.warning": recorders.recordLivenessWarning.bind(recorders),
     "diagnostic.phase.completed": recorders.recordDiagnosticPhaseCompleted.bind(recorders),
-    "run.started": recorders.recordRunStarted.bind(recorders),
-    "harness.run.started": recorders.recordHarnessRunStarted.bind(recorders),
-    "agent.commentary": recorders.recordAgentCommentary.bind(recorders),
-    "harness.run.completed": recorders.recordHarnessRunFinished.bind(recorders),
-    "harness.run.error": recorders.recordHarnessRunFinished.bind(recorders),
-    "context.assembled": recorders.recordContextAssembled.bind(recorders),
     "model.call.started": recorders.recordModelCallStarted.bind(recorders),
     "model.call.completed": (evt, metadata, privateData) =>
       recorders.recordModelCallFinished(evt, metadata, privateData.modelContent),
@@ -81,7 +64,6 @@ export function createDiagnosticsEventHandler(params: {
     "security.event": (evt, metadata) => recordLogEvent?.(evt, metadata),
     "telemetry.exporter": recorders.recordTelemetryExporter.bind(recorders),
     "payload.large": recorders.recordPayloadLarge.bind(recorders),
-    "model.failover": recorders.recordModelFailover.bind(recorders),
   };
   return <K extends DiagnosticEventPayload["type"]>(
     evt: DiagnosticEvent<K>,
