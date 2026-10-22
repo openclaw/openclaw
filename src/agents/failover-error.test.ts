@@ -628,6 +628,10 @@ describe("isNonProviderRuntimeCoordinationError", () => {
       createError: () => new Error("CLI history owner changed before preparation"),
     },
     {
+      name: "canonical user-turn projection loss",
+      createError: () => new Error("Model prompt projection lost its canonical user turn"),
+    },
+    {
       name: "current-turn transcript admission change",
       createError: () =>
         new SessionTranscriptReadFenceError(
@@ -636,10 +640,24 @@ describe("isNonProviderRuntimeCoordinationError", () => {
     },
   ])("treats $name as local coordination", ({ createError }) => {
     const error = createError();
-    expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
-    expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-    expect(coerceToFailoverError(error)).toBeNull();
-    expectReason(error, null);
+    const candidates = [
+      error,
+      new Error("runtime wrapper", { cause: error }),
+      new FailoverError("provider wrapper", {
+        reason: "timeout",
+        provider: "openai",
+        cause: error,
+      }),
+    ];
+    for (const candidate of candidates) {
+      expect(isNonProviderRuntimeCoordinationError(candidate)).toBe(true);
+      expect(resolveModelFallbackError(candidate)).toEqual({
+        kind: "coordination",
+        error: candidate,
+      });
+      expect(coerceToFailoverError(candidate)).toBeNull();
+      expectReason(candidate, null);
+    }
   });
 
   it("returns true for stale gateway lifecycle ownership loss", () => {

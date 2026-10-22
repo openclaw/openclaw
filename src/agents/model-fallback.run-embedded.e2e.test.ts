@@ -375,6 +375,10 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
       createError: () => new Error("CLI history owner changed before preparation"),
     },
     {
+      name: "canonical user-turn projection loss",
+      createError: () => new Error("Model prompt projection lost its canonical user turn"),
+    },
+    {
       name: "current-turn transcript admission change",
       createError: () =>
         new SessionTranscriptReadFenceError(

@@ -20,6 +20,7 @@ import { parseImageDimensionError } from "../../embedded-agent-helpers/image-err
 import { pickFallbackThinkingLevel } from "../../embedded-agent-helpers/thinking.js";
 import {
   FailoverError,
+  isNonProviderRuntimeCoordinationError,
   recordModelFallbackStop,
   resolveFailoverStatus,
 } from "../../failover-error.js";
@@ -127,7 +128,11 @@ export async function handleEmbeddedAssistantFailure(input: {
       body: failedAssistant.errorBody,
     });
   }
-  if (isSessionTranscriptTurnMismatchErrorMessage(transcriptError)) {
+  if (
+    isSessionTranscriptTurnMismatchErrorMessage(transcriptError) ||
+    (transcriptError !== undefined &&
+      isNonProviderRuntimeCoordinationError(new Error(transcriptError)))
+  ) {
     throw new Error(transcriptError);
   }
   if (classifyGatewayStorageFailure(failedAssistant)) {

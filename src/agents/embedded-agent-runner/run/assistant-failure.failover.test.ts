@@ -74,6 +74,7 @@ describe("assistant failure recovery", () => {
   });
 
   it.each([
+    { errorMessage: "Model prompt projection lost its canonical user turn" },
     { errorMessage: "Pending input is no longer active in its admitted transcript" },
     { errorMessage: "400 malformed input item", errorType: "invalid_request_error" },
     { errorMessage: "Request rejected by content policy", errorType: "invalid_request_error" },
