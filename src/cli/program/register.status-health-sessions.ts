@@ -66,21 +66,6 @@ function addSessionsGatewayOptions(command: Command): Command {
     .option("--json", "Output JSON", false);
 }
 
-function mergeSessionsListOptions(
-  opts: SessionsListCliOptions,
-  parentOpts?: SessionsListCliOptions,
-): SessionsListCliOptions {
-  return {
-    json: Boolean(opts.json || parentOpts?.json),
-    verbose: Boolean(opts.verbose || parentOpts?.verbose),
-    store: opts.store ?? parentOpts?.store,
-    agent: opts.agent ?? parentOpts?.agent,
-    allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
-    active: opts.active ?? parentOpts?.active,
-    limit: opts.limit ?? parentOpts?.limit,
-  };
-}
-
 async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
   setVerbose(Boolean(opts.verbose));
   const { sessionsCommand } = await import("../../commands/sessions.js");
@@ -306,9 +291,17 @@ export function registerStatusHealthSessionsCommands(program: Command) {
 
   addSessionsListOptions(
     sessionsCmd.command("list").description("List stored conversation sessions"),
-  ).action(async (opts, command) => {
-    const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
-    await runSessionsListCli(mergeSessionsListOptions(opts as SessionsListCliOptions, parentOpts));
+  ).action(async (opts: SessionsListCliOptions, command: Command) => {
+    const parentOpts = command.parent?.opts<SessionsListCliOptions>();
+    await runSessionsListCli({
+      json: Boolean(opts.json || parentOpts?.json),
+      verbose: Boolean(opts.verbose || parentOpts?.verbose),
+      store: opts.store ?? parentOpts?.store,
+      agent: opts.agent ?? parentOpts?.agent,
+      allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+      active: opts.active ?? parentOpts?.active,
+      limit: opts.limit ?? parentOpts?.limit,
+    });
   });
 
   sessionsCmd

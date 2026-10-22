@@ -43,6 +43,7 @@ import {
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { withTestAdmission } from "./run-orchestrator.test-support.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
 
 const tempRoots = createTempDirTracker();
@@ -80,19 +81,7 @@ beforeAll(async () => {
     await import("../prepared-model-runtime.js"));
   const { runEmbeddedAgent: run } = await import("./run.js");
   const { prepareSystemAgentRunAdmission } = await import("../admitted-run-context.js");
-  runEmbeddedAgent = async (params) => {
-    const admission = prepareSystemAgentRunAdmission(
-      params.config ?? {},
-      params.runId,
-      params.agentId ?? "main",
-      "suspension-test",
-    );
-    try {
-      return await run({ ...params, preparedRunAdmission: admission });
-    } finally {
-      admission.close();
-    }
-  };
+  runEmbeddedAgent = withTestAdmission(run, prepareSystemAgentRunAdmission, "suspension-test");
   ({ runWithModelFallback } = await import("../model-fallback-runner.js"));
 });
 
@@ -149,7 +138,7 @@ afterAll(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-async function createRun(agentId: string, sessionPersistence?: "durable" | "detached") {
+async function createRun(sessionPersistence?: "durable" | "detached", agentId = "research") {
   const root = tempRoots.make("openclaw-suspension-boundary-");
   const stateDir = path.join(root, "final");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -233,7 +222,7 @@ function failAttempt(stage: "prompt" | "assistant", sessionId: string) {
 
 describe("embedded run detached session metadata", () => {
   it("preserves caller ownership and fills only missing failure-suspension agent ids", async () => {
-    const { params } = await createRun("research");
+    const { params } = await createRun();
     const requests: SessionSuspensionParams[] = [];
     const runtime = await import("./run/prepared-runtime-context.js");
     const bind = runtime.bindRunToPreparedModelRuntime;
@@ -277,7 +266,7 @@ describe("embedded run detached session metadata", () => {
   });
 
   it("suspends the canonical agent selected during prepared-runtime acquisition", async () => {
-    const { params, scope } = await createRun("main");
+    const { params, scope } = await createRun(undefined, "main");
     // Global keys have an explicit owner but no agent prefix to contradict a rebind.
     params.sessionKey = scope.sessionKey = "global";
     const researchScope = {
@@ -308,7 +297,7 @@ describe("embedded run detached session metadata", () => {
   it.each(["detached", "durable"] as const)(
     "preserves %s persistence when the outer fallback exhausts after deferral",
     async (persistence) => {
-      const { params, scope, database, seed } = await createRun("research", persistence);
+      const { params, scope, database, seed } = await createRun(persistence);
       if (persistence === "durable") {
         await seed();
       }
@@ -353,7 +342,7 @@ describe("embedded run detached session metadata", () => {
   it.each(["success", "assistant", "aborted"] as const)(
     "keeps a detached %s out of an absent final agent root, including key backfill",
     async (outcome) => {
-      const { params, run, expectNoAgent } = await createRun("research", "detached");
+      const { params, run, expectNoAgent } = await createRun("detached");
       if (outcome === "assistant") {
         failAttempt(outcome, params.sessionId);
       } else {
@@ -380,7 +369,7 @@ describe("embedded run detached session metadata", () => {
   it.each(["success", "assistant"] as const)(
     "does not spend a durable pending switch during detached %s",
     async (outcome) => {
-      const { params, scope, seed, run } = await createRun("research", "detached");
+      const { params, scope, seed, run } = await createRun("detached");
       await seed(pendingSwitch());
       const before = loadSessionEntry(scope);
       if (outcome === "success") {
@@ -397,7 +386,7 @@ describe("embedded run detached session metadata", () => {
   );
 
   it("still applies and eagerly clears live switches for durable turns", async () => {
-    const { params, scope, seed, run } = await createRun("research", "durable");
+    const { params, scope, seed, run } = await createRun("durable");
     await seed(pendingSwitch());
     failAttempt("prompt", params.sessionId);
     await expect(run()).rejects.toMatchObject({
@@ -421,7 +410,7 @@ describe("embedded run detached session metadata", () => {
   it.each([false, true])(
     "reads bootstrap state from the detached manager (has messages: %s)",
     async (hasMessages) => {
-      const { params, run, expectNoAgent } = await createRun("research", "detached");
+      const { params, run, expectNoAgent } = await createRun("detached");
       const { resolveExistingAttemptTranscriptState } =
         await import("./run/attempt-transcript-helpers.js");
       if (hasMessages) {
@@ -445,10 +434,7 @@ describe("embedded run detached session metadata", () => {
   ] as const)(
     "compacts the caller's buffer for outer %s recovery without durable access (existing row: %s, owner: %s)",
     async (trigger, existing, owner) => {
-      const { params, scope, database, seed, expectNoAgent, run } = await createRun(
-        "research",
-        "detached",
-      );
+      const { params, scope, database, seed, expectNoAgent, run } = await createRun("detached");
       params.config.agents!.defaults!.compaction = { mode: "default", keepRecentTokens: 1 };
       setRuntimeConfigSnapshot(params.config);
       const manager = params.sessionManager;
@@ -554,7 +540,7 @@ describe("embedded run detached session metadata", () => {
   );
 
   it("retains one detached transcript manager through a real attempt retry", async () => {
-    const { params, run, expectNoAgent } = await createRun("research", "detached");
+    const { params, run, expectNoAgent } = await createRun("detached");
     let firstManager: EmbeddedRunAttemptParams["sessionManager"];
     runAttempt
       .mockImplementationOnce(async (attempt) => {
@@ -593,7 +579,7 @@ describe("embedded run detached session metadata", () => {
   ] as const)(
     "does not persist detached %s trajectory metadata (caller manager: %s)",
     async (harness, suppliedManager) => {
-      const { params, run, expectNoAgent } = await createRun("research", "detached");
+      const { params, run, expectNoAgent } = await createRun("detached");
       const { prepareEmbeddedAttemptTrajectory } = await import("./run/attempt-trajectory.js");
       runAttempt.mockImplementationOnce(async (attempt) => {
         const recorder = await prepareEmbeddedAttemptTrajectory({
@@ -619,7 +605,7 @@ describe("embedded run detached session metadata", () => {
   );
 
   it("does not spend the candidate deferral on a detached run before durable runs", async () => {
-    const { params, scope, database, seed, run } = await createRun("research", "detached");
+    const { params, scope, database, seed, run } = await createRun("detached");
     const deferred: SessionSuspensionParams[] = [];
     failAttempt("prompt", params.sessionId);
     await runWithDeferredSessionSuspension(

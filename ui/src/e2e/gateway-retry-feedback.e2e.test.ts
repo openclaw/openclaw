@@ -101,39 +101,40 @@ suite.define(() => {
         await animation.evaluate((current) => current.play());
         await page.clock.resume();
         const moving = async () => {
-          const movement = await status
-            .locator(".session-run-spinner")
-            .evaluate(async (element) => {
-              const current = element.getAnimations()[0]!;
-              const before = Number(current.currentTime);
-              const transform = getComputedStyle(element).transform;
-              await new Promise<void>((resolve) => {
-                element.addEventListener(
-                  "animationiteration",
-                  () => requestAnimationFrame(() => resolve()),
-                  { once: true },
-                );
-              });
-              return {
-                advanced: Number(current.currentTime) > before,
-                running: current.playState === "running",
-                changed: getComputedStyle(element).transform !== transform,
-              };
-            });
-          expect(movement).toEqual({ advanced: true, running: true, changed: true });
+          const before = await status.locator(".session-run-spinner").evaluate((element) => ({
+            time: Number(element.getAnimations()[0]!.currentTime),
+            transform: getComputedStyle(element).transform,
+          }));
+          // A full iteration can return to the same rotation; observe a distinct painted phase.
+          await expect
+            .poll(() =>
+              status.locator(".session-run-spinner").evaluate(async (element, previous) => {
+                await new Promise<void>((resolve) => {
+                  requestAnimationFrame(() => resolve());
+                });
+                const current = element.getAnimations()[0]!;
+                return {
+                  advanced: Number(current.currentTime) > previous.time,
+                  running: current.playState === "running",
+                  changed: getComputedStyle(element).transform !== previous.transform,
+                };
+              }, before),
+            )
+            .toEqual({ advanced: true, running: true, changed: true });
         };
         await moving();
         await page.emulateMedia({ colorScheme: "light" });
         await aligned();
-        expect(
-          await status
-            .locator(".session-run-spinner")
-            .evaluate((element) => getComputedStyle(element).borderTopColor),
-        ).toBe(
-          await status
-            .locator(".gateway-status__label")
-            .evaluate((element) => getComputedStyle(element).color),
-        );
+        // Read both colors in one frame after the asynchronous system-theme update.
+        await expect
+          .poll(() =>
+            status.evaluate((element) => ({
+              spinner: getComputedStyle(element.querySelector(".session-run-spinner")!)
+                .borderTopColor,
+              label: getComputedStyle(element.querySelector(".gateway-status__label")!).color,
+            })),
+          )
+          .toEqual({ spinner: "rgb(146, 64, 14)", label: "rgb(146, 64, 14)" });
         await capture("reconnecting-light");
         await moving();
         await page.setViewportSize({ width: 390, height: 844 });

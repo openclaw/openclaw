@@ -42,10 +42,8 @@ type GatewayCronContextTestHarness = {
     run: (state: CronFixture) => void | Promise<void>,
   ) => Promise<void>;
   finishedEvent: (jobId?: string) => Record<string, unknown> | undefined;
-  legacyWakeMocks: {
+  legacyEventMocks: {
     enqueue: typeof import("../infra/system-events.js").enqueueSystemEvent;
-    wake: typeof import("../infra/heartbeat-wake.js").requestHeartbeatAndWait;
-    requestWake: typeof import("../infra/heartbeat-wake.js").requestHeartbeat;
   };
   createCronService: (
     cfg: OpenClawConfig,
@@ -73,7 +71,7 @@ export function registerGatewayCronContextTests({
   createMultiAgentConfig,
   withCronService,
   finishedEvent,
-  legacyWakeMocks,
+  legacyEventMocks,
   createCronService,
   getCronState,
   addAgentTurnJob,
@@ -156,9 +154,7 @@ export function registerGatewayCronContextTests({
           }),
         );
         expect(finishedEvent(job.id)).toMatchObject({ status: "ok" });
-        expect(legacyWakeMocks.enqueue).not.toHaveBeenCalled();
-        expect(legacyWakeMocks.wake).not.toHaveBeenCalled();
-        expect(legacyWakeMocks.requestWake).not.toHaveBeenCalled();
+        expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
       });
     },
   );
@@ -179,8 +175,7 @@ export function registerGatewayCronContextTests({
           sessionKey: expect.stringMatching(/^agent:ops:/),
         }),
       );
-      expect(legacyWakeMocks.enqueue).not.toHaveBeenCalled();
-      expect(legacyWakeMocks.requestWake).not.toHaveBeenCalled();
+      expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
     });
   });
 
@@ -200,8 +195,7 @@ export function registerGatewayCronContextTests({
           sessionKey: "agent:ops:main",
         }),
       );
-      expect(legacyWakeMocks.enqueue).not.toHaveBeenCalled();
-      expect(legacyWakeMocks.requestWake).not.toHaveBeenCalled();
+      expect(legacyEventMocks.enqueue).not.toHaveBeenCalled();
     });
   });
 

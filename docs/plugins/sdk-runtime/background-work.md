@@ -37,9 +37,100 @@ const results = await native.collect({ ids: [child.runId], awaitResults: true })
 
 Supported ingress is the Gateway's normal reply-dispatch path with an existing admitted requester session, current operator authority, and the host's user-turn transcript recorder. Before spawning, the host adopts the turn when necessary and commits its actual input through that recorder. Existing restricted-ingress hook exclusions remain unchanged. Direct embedded/CLI `before_agent_reply` hooks, direct ACP dispatch, services, timers, and detached callbacks do not acquire this capability merely by holding its object. Custom runtimes may omit `native`; absence or an unsupported invocation fails explicitly.
 
-Both calls recheck the invoking plugin's full-runtime lifetime and request authority after asynchronous preparation and at effect. The requester's effective native tool policy must allow `sessions_spawn` or `agents_wait`, respectively; disabled Swarm/collector support, denied tools, revoked authority, or a retired hook cannot fall back to an administrator or system actor. Collection checks the exact parent session incarnation and native ownership; unrelated or reset parents cannot read a result.
+Both calls recheck the invoking plugin's full-runtime lifetime and request authority after asynchronous preparation and at effect. The requester's effective native tool policy must allow both `sessions_spawn` and a callable native `agents_wait` for spawn, and `agents_wait` for collection; disabled Swarm/collector support, denied tools, revoked authority, or a retired hook cannot fall back to an administrator or system actor. Collection checks the exact parent session incarnation and native ownership; unrelated or reset parents cannot read a result.
 
 A handler owns its calls only until it settles or times out. Accepted children transfer to native execution custody and do not automatically send a chat reply. A controller can await results while its handler remains active, or retain accepted IDs in its existing plugin store and collect during a later eligible invocation for the same parent incarnation. Persist controller decisions in the plugin's own store; this facade does not add a task engine, scheduler, or model-memory protocol. Existing `subagent.run`, `complete`, and `waitForRun` behavior is unchanged.
+
+## Recover plugin-owned native children
+
+Hosts advertising the string capability `native-subagent-list-v1` support optional
+`native.list({ status? })` on both eligible reply-dispatch and command runtimes.
+Probe the optional method before calling it; older hosts and custom runtimes may
+omit it. An older record without host-captured ownership is not inferred to belong
+to a plugin, even if its label, request key, or parent looks familiar.
+
+Listing recovers native acceptance when the plugin did not persist its receipt.
+It returns at most 200 entries, newest first (the returned run ID, in code-unit order, breaks equal-time ties):
+`{ runId, childSessionKey, requestId, label?, status }`. The status filter is
+applied before the bound, and an unknown status value is rejected. There is no pagination or completeness claim beyond
+that bounded window. A known collector completion has status `done`, `failed`,
+`killed`, or `timeout`; otherwise the native execution state is `queued`,
+`running`, `interrupted`, or `terminal`. Terminal execution alone is not a
+completed result; use `collect` for result/error data.
+
+Only children accepted through this facade by the exact current plugin,
+requester’s profile, and parent session incarnation are returned. Plugins cannot
+supply those identities. A reset parent, another requester, or another plugin
+cannot enumerate them. Listing rechecks request/plugin lifetime, native currency,
+and the current `agents_wait` tool policy; revocation never falls back to an
+administrator. This uses existing native custody and retention, not a separate
+plugin index. If the runtime config changes during preparation or reading, listing
+rejects with a policy-changed error; retry from the still-active invocation. Spawn,
+collection, and reply dispatch signatures remain unchanged.
+
+## Command-scoped native children
+
+A registered slash command can request the same native spawn/collect runtime
+without registering a `reply_dispatch` hook. Declare
+`contracts.commandRuntimeCapabilities: ["subagents"]` in the manifest, then:
+
+```typescript
+api.registerCommand({
+  name: "review-pr",
+  description: "Launch a native review",
+  requireAuth: true,
+  runtimeCapabilities: ["subagents"],
+  async handler(ctx) {
+    const native = ctx.runtimeContext?.subagents;
+    if (!native) return { text: "Native review is unavailable for this request." };
+    const child = await native.spawn({
+      requestId: "review",
+      task: "Review the requested change and report actionable findings.",
+    });
+    const results = await native.collect({ ids: [child.runId], timeoutSeconds: 30 });
+    // Persist pending IDs in the plugin store and offer a resume command.
+    return {
+      text: results.pending.length ? "Review started; resume to collect it." : "Review complete.",
+    };
+  },
+});
+```
+
+The host advertises `command-native-subagents-v1` in the optional
+`api.runtime.capabilities` array. Probe `ctx.runtimeContext?.subagents` at
+invocation time: undeclared commands, unsupported hosts, denied native tool
+surfaces, and non-requester command paths see `undefined`. Both
+`sessions_spawn` and `agents_wait` must be allowed. Subsequent spawn denial
+throws an explicit native error; it never launches an administrator fallback.
+
+Only an authorized sender’s actual external command with current operator
+authority is eligible. Quoted text, foreign commands, internal suggestions,
+services, and timers cannot obtain the capability. Before exposing it, the host
+adopts and commits the actual command text as a user turn and admits its current
+requester under `auto-reply.plugin-command`. Children inherit that requester’s
+lineage and effective tool ceiling. No new hook is registered, so Goal
+start/resume and restart-safe chat admission keep their existing rules.
+
+Channel messages without explicit provenance use the channel’s ordinary sender
+authorization; an authorized non-owner can spend child-model budget only under
+that requester’s tool ceiling. A native slash surface targeting a different
+`CommandTargetSessionKey` than the current dispatch session gets no capability.
+The deprecated direct command registrar cannot grant runtime capabilities; use
+the managed `api.registerCommand` path with its reviewed manifest declaration.
+
+The facade expires when the command settles; retained references fail closed.
+`/stop` aborts in-flight command calls. Accepted children retain native custody;
+store their IDs and collect in a later eligible invocation for the same parent
+incarnation. After reset, old children return `not_owner`. Bounded waits and
+resume/handoff behavior belong to the plugin, not a new host task engine.
+
+Acceptance and completed collection results may include optional
+`selection: { requested, resolved?, observed? }`. `requested` describes
+explicit spawn controls (it can be empty on later collection). `resolved`
+comes from the exact child’s host session controls, not the requested model or
+a tool-result echo. `observed` is absent without independent host execution
+evidence. Unknown facts remain absent; these receipts do not prove that a
+provider honored a control.
 
 ## Background work namespaces
 

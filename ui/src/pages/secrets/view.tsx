@@ -2,7 +2,7 @@ import { For, Show } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import {
   DocsLink,
   SettingsEmpty,
@@ -281,6 +281,9 @@ function SecretDialog(props: {
           </div>
         </Show>
         <openclaw-modal-actions class="secrets-store-dialog__actions">
+          <button class="btn" type="button" disabled={props.view.state.store.busy} onClick={close}>
+            {t("common.cancel")}
+          </button>
           <button
             class="btn primary"
             type="submit"
@@ -293,9 +296,6 @@ function SecretDialog(props: {
             }
           >
             {props.view.state.store.busy ? t("common.saving") : t("common.save")}
-          </button>
-          <button class="btn" type="button" disabled={props.view.state.store.busy} onClick={close}>
-            {t("common.cancel")}
           </button>
         </openclaw-modal-actions>
       </form>

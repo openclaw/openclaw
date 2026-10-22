@@ -1,14 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { afterEach, expect, it } from "vitest";
-import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflowRunner,
   expectIncludes as containsAll,
+  readCiWorkflow,
 } from "./ci-workflow.test-support.js";
 
-const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8"));
+const workflow = readCiWorkflow();
 const job = workflow.jobs["android-access-native"];
 const step = job.steps.find(
   (entry: { name?: string }) => entry.name === "Run packaged Access crypto on Android",

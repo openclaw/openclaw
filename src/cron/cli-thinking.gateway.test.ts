@@ -117,7 +117,6 @@ async function withCronGateway(
       cronEnabled: false,
       log: createNoopLogger(),
       enqueueSystemEvent: execute,
-      requestHeartbeat: execute,
       runIsolatedAgentJob: execute,
       runCommandJob: execute,
       runScriptJob: execute,

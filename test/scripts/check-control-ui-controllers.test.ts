@@ -2,13 +2,25 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-control-ui-controllers.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const errors = vi.fn();
+beforeEach(() => {
+  errors.mockClear();
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(errors);
+});
 afterEach(() => vi.restoreAllMocks());
+
+function write(root: string, file: string, source: string) {
+  const target = path.join(root, file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, source);
+}
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
@@ -20,9 +32,7 @@ function git(cwd: string, args: string[]) {
 
 function fixture(source = "export {};\n") {
   const root = tempDirs.make("openclaw-controller-guard-");
-  fs.mkdirSync(path.join(root, "ui/src"), { recursive: true });
-  fs.writeFileSync(path.join(root, "ui/src/view.ts"), source);
-  fs.mkdirSync(path.join(root, "config"));
+  write(root, "ui/src/view.ts", source);
   for (const pattern of [
     "createEffect",
     "untrack",
@@ -32,7 +42,7 @@ function fixture(source = "export {};\n") {
     "getOwner",
     "runWithOwner",
   ]) {
-    fs.writeFileSync(path.join(root, `config/control-ui-${pattern}-baseline.txt`), "");
+    write(root, `config/control-ui-${pattern}-baseline.txt`, "");
   }
   for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
     git(root, args);
@@ -61,9 +71,7 @@ describe("Control UI controller guard", () => {
     'element[`querySelectorAll`]("button");',
   ])("rejects forbidden production call syntax: %s", (source) => {
     const root = fixture();
-    fs.writeFileSync(path.join(root, "ui/src/new.tsx"), source);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    write(root, "ui/src/new.tsx", source);
     expect(main(root, [])).toBe(1);
     expect(errors.mock.calls.flat().join("\n")).toContain("ui/src/new.tsx:1");
     expect(errors.mock.calls.flat().join("\n")).toContain("refactor-checklist.md");
@@ -71,23 +79,19 @@ describe("Control UI controller guard", () => {
 
   it("excludes test helpers, comments, and strings; permits primitive render effects", () => {
     const root = fixture('// createEffect(() => {});\nconst example = "element.querySelector()";');
-    fs.mkdirSync(path.join(root, "ui/src/lib/reactive"), { recursive: true });
-    fs.writeFileSync(
-      path.join(root, "ui/src/lib/reactive/binding.ts"),
-      "createRenderEffect(read, write);",
-    );
+    write(root, "ui/src/lib/reactive/binding.ts", "createRenderEffect(read, write);");
     for (const name of [
       "view.test.tsx",
       "view.test-helpers.ts",
       "view.test-support.ts",
       "view.test-harness.ts",
     ]) {
-      fs.writeFileSync(
-        path.join(root, "ui/src", name),
+      write(
+        root,
+        `ui/src/${name}`,
         "element.querySelector('button'); element.addEventListener('click', fn);",
       );
     }
-    vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, [])).toBe(0);
   });
 
@@ -102,27 +106,23 @@ describe("Control UI controller guard", () => {
     ["querySelector", "ui/src/components/markdown.ts", "root.querySelectorAll<HTMLElement>('a');"],
   ])("ratchets %s per file and rejects allowance inflation", (pattern, file, source) => {
     const root = fixture();
-    const target = path.join(root, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, source);
+    write(root, file, source);
     const baseline = path.join(root, `config/control-ui-${pattern}-baseline.txt`);
     fs.writeFileSync(baseline, `${file}\t1\n`);
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "existing debt"]);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(main(root, [])).toBe(0);
     const addedCall = pattern === "createEffect" ? "effect(read, write);" : source;
-    fs.writeFileSync(target, `${source}\n${addedCall}`);
+    write(root, file, `${source}\n${addedCall}`);
     fs.writeFileSync(baseline, `${file}\t2\n`);
     expect(main(root, [])).toBe(1);
     expect(errors.mock.calls.flat().join("\n")).toContain("allowances must not increase");
     fs.writeFileSync(baseline, `${file}\t1\n`);
-    fs.writeFileSync(target, "export {};\n");
+    write(root, file, "export {};\n");
     expect(main(root, [])).toBe(1);
     expect(main(root, ["--prune"])).toBe(0);
     expect(fs.readFileSync(baseline, "utf8")).not.toContain(`${file}\t`);
-    fs.writeFileSync(target, source);
+    write(root, file, source);
     expect(main(root, [])).toBe(1);
   });
 
@@ -141,8 +141,6 @@ describe("Control UI controller guard", () => {
       fs.writeFileSync(baseline, "ui/src/view.ts\t3\n");
       git(root, ["add", "."]);
       git(root, ["commit", "-m", "existing Solid calls"]);
-      vi.spyOn(console, "log").mockImplementation(() => {});
-      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
       expect(main(root, [])).toBe(0);
       fs.appendFileSync(path.join(root, "ui/src/view.ts"), "\naction();\n");
       expect(main(root, [])).toBe(1);
@@ -169,8 +167,6 @@ describe("Control UI controller guard", () => {
           `try {} catch (signals) { signals.${pattern}(); }`,
         ].join("\n"),
       );
-      vi.spyOn(console, "log").mockImplementation(() => {});
-      vi.spyOn(console, "error").mockImplementation(() => {});
       expect(main(root, [])).toBe(0);
     },
   );
@@ -182,8 +178,6 @@ describe("Control UI controller guard", () => {
     'import * as solid from "solid-js"; solid["createMemo"](() => null);',
   ])("rejects a memo that only returns a literal: %s", (source) => {
     const root = fixture(source);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(main(root, [])).toBe(1);
     expect(errors.mock.calls.flat().join("\n")).toContain("createMemo of a literal is unnecessary");
   });
@@ -205,8 +199,6 @@ describe("Control UI controller guard", () => {
         "function local(createMemo: any) { createMemo(() => true); }",
       ].join("\n"),
     );
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
     expect(main(root, [])).toBe(0);
   });
 
@@ -219,8 +211,6 @@ describe("Control UI controller guard", () => {
         "flush(); getOwner(); createMemo(() => true);",
       ].join("\n"),
     );
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
     expect(main(root, [])).toBe(0);
   });
 
@@ -229,8 +219,6 @@ describe("Control UI controller guard", () => {
     fs.writeFileSync(path.join(root, "ui/src/view.ts"), "createEffect(read, write);");
     git(root, ["add", "."]);
     fs.writeFileSync(path.join(root, "ui/src/view.ts"), "export {};\n");
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
     expect(main(root, ["--staged"])).toBe(1);
     expect(main(root, [])).toBe(0);
   });
@@ -239,8 +227,6 @@ describe("Control UI controller guard", () => {
     "rejects existing and new production or test consumers of retired %s",
     (module) => {
       const root = fixture(`import "${module}";\n`);
-      vi.spyOn(console, "log").mockImplementation(() => {});
-      vi.spyOn(console, "error").mockImplementation(() => {});
       expect(main(root, [])).toBe(1);
       fs.writeFileSync(path.join(root, "ui/src/view.ts"), "export {};\n");
       for (const name of ["new.ts", "new.test.ts"]) {
@@ -266,19 +252,13 @@ describe("Control UI controller guard", () => {
     "ui/src/lib/subscriptions-controller.ts",
   ])("rejects restoring retired %s without an importer", (file) => {
     const root = fixture("export {};\n");
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    const target = path.join(root, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, "export {};\n");
+    write(root, file, "export {};\n");
     expect(main(root, [])).toBe(1);
     expect(errors.mock.calls.flat().join("\n")).toContain(file);
   });
 
   it("rejects retired host contracts under other production or test paths", () => {
     const root = fixture("export {};\n");
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     for (const name of ["replacement.ts", "replacement.test.ts"]) {
       const file = `ui/src/${name}`;
       const target = path.join(root, file);
@@ -311,8 +291,6 @@ describe("Control UI controller guard", () => {
     "const host = { hostDisconnected() {} };",
   ])("rejects existing controller patterns without a migration baseline: %s", (source) => {
     const root = fixture(source);
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(main(root, []), source).toBe(1);
     expect(errors.mock.calls.flat().join("\n")).toContain("ui/src/view.ts");
     fs.writeFileSync(path.join(root, "ui/src/view.ts"), "export {};\n");
@@ -321,18 +299,12 @@ describe("Control UI controller guard", () => {
 
   it("ignores examples and test-only lifecycle/class patterns", () => {
     const root = fixture('// class OldController {}\nconst text = "hostConnected";\n');
-    fs.writeFileSync(
-      path.join(root, "ui/src/view.test.ts"),
-      "class TestController { hostDisconnected() {} }\n",
-    );
-    vi.spyOn(console, "log").mockImplementation(() => {});
+    write(root, "ui/src/view.test.ts", "class TestController { hostDisconnected() {} }\n");
     expect(main(root, [])).toBe(0);
   });
 
   it("rejects redraw contracts in production and tests independently of controller retirement", () => {
     const root = fixture();
-    vi.spyOn(console, "log").mockImplementation(() => {});
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     for (const name of ["new.tsx", "new.test.tsx"]) {
       const target = path.join(root, "ui/src", name);
       for (const source of [
@@ -370,8 +342,6 @@ describe("Control UI controller guard", () => {
     const source = fixture();
     const root = tempDirs.make("openclaw-controller-shallow-");
     git(root, ["clone", "--depth=1", pathToFileURL(source).href, "."]);
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, [])).toBe(0);
     fs.writeFileSync(path.join(root, "ui/src/new.ts"), "class NewController {}\n");
     expect(main(root, [])).toBe(1);

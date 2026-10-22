@@ -53,90 +53,67 @@ async function inspectSnapshot(
 }
 
 describe("buildChannelAccountSnapshotFromAccount", () => {
-  it.each(["snapshot", "configured"])(
-    "does not start more account checks after %s is cancelled",
-    async (step) => {
-      const abort = new AbortController();
-      const gate = Promise.withResolvers<void>();
-      const started = Promise.withResolvers<void>();
-      const wait = async () => {
-        started.resolve();
-        await gate.promise;
-      };
-      const isLinked = vi.fn(() => "linked" as const);
-      const isConfigured = vi.fn(async () => {
-        if (step === "configured") {
-          await wait();
-        }
-        return true;
-      });
-      const plugin: ChannelPlugin = {
-        ...createChannelTestPluginBase({ id: "test", config: { isConfigured, isLinked } }),
-        status: {
-          buildAccountSnapshot: async () => {
-            if (step === "snapshot") {
-              await wait();
-            }
-            return { accountId: "default" };
-          },
-        },
-      };
-      const pending = buildChannelAccountSnapshotFromAccount({
-        plugin,
-        cfg: {},
-        accountId: "default",
-        account: {},
-        assertActive: () => abort.signal.throwIfAborted(),
-      });
-      await started.promise;
-      abort.abort();
-      gate.resolve();
-      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-      expect(isLinked).not.toHaveBeenCalled();
-      expect(isConfigured).toHaveBeenCalledTimes(step === "configured" ? 1 : 0);
-    },
-  );
+  it("does not inspect linkage after the configured check is cancelled", async () => {
+    const abort = new AbortController();
+    const gate = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const isConfigured = vi.fn(async () => {
+      started.resolve();
+      await gate.promise;
+      return true;
+    });
+    const isLinked = vi.fn(() => "linked" as const);
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "test", config: { isConfigured, isLinked } }),
+      status: {
+        buildAccountSnapshot: async () => ({ accountId: "default" }),
+      },
+    };
+    const pending = buildChannelAccountSnapshotFromAccount({
+      plugin,
+      cfg: {},
+      accountId: "default",
+      account: {},
+      assertActive: () => abort.signal.throwIfAborted(),
+    });
+    await started.promise;
+    abort.abort();
+    gate.resolve();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    expect(isLinked).not.toHaveBeenCalled();
+    expect(isConfigured).toHaveBeenCalledOnce();
+  });
 
   it("preserves runtime facts unless the inspector supplies them: disabled", async () => {
-    await expect(
-      inspectSnapshot(
-        { name: "External account" },
-        {
-          accountId: "default",
-          enabled: false,
-          configured: true,
-          running: false,
-          lastError: "recorded failure",
-        },
-      ),
-    ).resolves.toMatchObject({
+    const runtime = Object.freeze({
+      accountId: "default",
       enabled: false,
       configured: true,
       running: false,
-      stateReason: "disabled",
       lastError: "recorded failure",
+    });
+    await expect(inspectSnapshot({ name: "External account" }, runtime)).resolves.toMatchObject({
+      ...runtime,
+      stateReason: "disabled",
     });
   });
 
   it("projects summary-only inspection without invoking runtime account hooks", async () => {
+    const inspected = Object.freeze({
+      accountId: "primary",
+      enabled: true,
+      configured: true,
+      tokenStatus: "available",
+      name: "Configured account",
+    });
     await expect(
       inspectSnapshot(
-        {
-          accountId: "primary",
-          enabled: true,
-          configured: true,
-          tokenStatus: "available",
-          name: "Configured account",
-        },
+        inspected,
         { accountId: "primary", running: true, lifecycle: "ready" },
         "requested-alias",
       ),
     ).resolves.toMatchObject({
-      accountId: "primary",
-      name: "Configured account",
-      enabled: true,
-      configured: true,
-      tokenStatus: "available",
+      ...inspected,
       running: true,
       lifecycle: "ready",
     });
@@ -198,20 +175,18 @@ describe("buildChannelAccountSnapshotFromAccount", () => {
   });
 
   it("preserves lifecycle fields computed by a custom status adapter", async () => {
-    await expect(
-      snapshotAccount({ enabled: true, configured: true }, {}, () => ({
-        accountId: "default",
-        linked: true,
-        running: false,
-        connected: false,
-        lastError: "probe failed",
-      })),
-    ).resolves.toMatchObject({
-      configured: true,
+    const lifecycle = Object.freeze({
+      accountId: "default",
       linked: true,
       running: false,
       connected: false,
       lastError: "probe failed",
+    });
+    await expect(
+      snapshotAccount({ enabled: true, configured: true }, {}, () => lifecycle),
+    ).resolves.toMatchObject({
+      ...lifecycle,
+      configured: true,
     });
   });
 

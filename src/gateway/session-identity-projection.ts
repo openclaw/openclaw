@@ -33,7 +33,7 @@ import {
   resolveCurrentUserProfileDisplay,
   type CurrentUserProfileDisplay,
 } from "./current-user-profile-display.js";
-import type { SessionListEntry } from "./session-list-order.js";
+import type { SessionEntryPair } from "./session-list-order.js";
 
 export type SessionActorProfileIdentity = Extract<CurrentUserProfileDisplay, { kind: "resolved" }>;
 export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityProjection>;
@@ -293,7 +293,7 @@ export function projectSessionPeople(
 /** Resolve navigation references within the caller-prepared visibility scope. */
 export function* resolveSessionListProfileReference(
   reference: string,
-  entries: readonly SessionListEntry[],
+  entries: readonly SessionEntryPair[],
   identities: Map<string, SessionActorProfileIdentity | undefined>,
   allowedProfileIds: ReadonlySet<string> | undefined,
   shouldYield?: () => boolean,

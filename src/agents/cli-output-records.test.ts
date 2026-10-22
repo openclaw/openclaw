@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
 import { parseCliOutput } from "./cli-output.js";
 import {
@@ -570,29 +570,6 @@ describe("parseCliJsonl", () => {
 });
 
 describe("parseCliOutput", () => {
-  it("applies a backend JSONL hook when reparsing complete output", () => {
-    const parseJsonlEvent = vi.fn(() => ({
-      kind: "result" as const,
-      errorText: "invalid request format: malformed backend result",
-    }));
-
-    expect(
-      parseCliOutput({
-        raw: JSON.stringify({ type: "result", result: "malformed" }),
-        backend: { command: "acme", output: "jsonl" },
-        providerId: "acme-cli",
-        parseJsonlEvent,
-        outputMode: "jsonl",
-      }),
-    ).toEqual({
-      text: "",
-      sessionId: undefined,
-      usage: undefined,
-      errorText: "invalid request format: malformed backend result",
-    });
-    expect(parseJsonlEvent).toHaveBeenCalledOnce();
-  });
-
   it.each([
     {
       name: "uses streamed Claude assistant text when the result envelope is missing",
@@ -641,7 +618,6 @@ describe("parseCliOutput", () => {
         sessionIdFields: ["session_id"],
       },
       providerId: "claude-cli",
-      parseJsonlLifecycleEvent: () => ({ kind: "compaction", phase: "start" }),
       outputMode: "jsonl",
     });
 

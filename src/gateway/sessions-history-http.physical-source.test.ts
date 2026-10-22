@@ -4,13 +4,13 @@ import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { resetSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
-import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import {
   emitSessionTranscriptUpdate,
   onInternalSessionTranscriptUpdate,
   type InternalSessionTranscriptUpdate,
 } from "../sessions/transcript-events.js";
 import { readSseEvent } from "./session-history-fixtures.test-support.js";
+import { appendHistoryMessage, historyStream } from "./sessions-history-http-read.test-support.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   createGatewaySuiteHarness,
@@ -29,24 +29,20 @@ function assistantMessage(text: string) {
   return makeAgentAssistantMessage({ content: [{ type: "text", text }] });
 }
 
-type AppendOptions = Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0];
+type AppendOptions = Parameters<typeof appendHistoryMessage>[0];
 async function appendMessage(
   storePath: string,
   text: string,
   key = sessionKey,
   expected: Pick<AppendOptions, "expectedSessionId" | "expectedLifecycleRevision"> = {},
 ) {
-  const result = await appendExactAssistantMessageToSessionTranscript({
+  const result = await appendHistoryMessage({
     agentId: "main",
     sessionKey: key,
     storePath,
     message: assistantMessage(text),
     ...expected,
   });
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(result.reason);
-  }
   return result.messageId;
 }
 
@@ -87,7 +83,6 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
       throw new Error("expected the committed inline transcript update");
     }
     const harness = await createGatewaySuiteHarness();
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     const abort = new AbortController();
     let deadline: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -96,13 +91,11 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
         headers: { ...headers, accept: "text/event-stream" },
         signal: abort.signal,
       });
-      expect(response.status).toBe(200);
-      reader = expectDefined(response.body?.getReader(), "session history event stream");
-      const stream = { buffer: "" };
-      const initial = await readSseEvent(reader, stream);
-      expect(initial).toMatchObject({
-        event: "history",
-        data: { messages: [historyMessage("bound initial message")] },
+      await using stream = historyStream(response);
+      using _ = { [Symbol.dispose]: () => clearTimeout(deadline) };
+      const { reader } = stream;
+      expect(await stream.next()).toMatchObject({
+        messages: [historyMessage("bound initial message")],
       });
       if (mismatch === "lifecycle owner") {
         const reset = await resetSessionEntryLifecycle({
@@ -130,7 +123,7 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
           expectedSessionId: sessionId,
           expectedLifecycleRevision: "after-reset",
         });
-        let remaining = stream.buffer;
+        let remaining = stream.streamState.buffer;
         const decoder = new TextDecoder();
         for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
           remaining += decoder.decode(chunk.value, { stream: true });
@@ -177,7 +170,7 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
       // The committed bound append is an ordering barrier, so no quiet-period timer is needed.
       let published = "";
       do {
-        published = JSON.stringify((await readSseEvent(reader, stream)).data);
+        published = JSON.stringify((await readSseEvent(reader, stream.streamState)).data);
         expect(published).not.toContain(foreignText);
       } while (!published.includes(visibleText));
       const history = await fetch(url, { headers });
@@ -186,12 +179,7 @@ test.each(["physical store", "canonical key", "lifecycle revision", "lifecycle o
         messages: [historyMessage("bound initial message"), historyMessage(visibleText)],
       });
     } finally {
-      clearTimeout(deadline);
-      try {
-        await reader?.cancel();
-      } finally {
-        await harness.close();
-      }
+      await harness.close();
     }
   },
 );

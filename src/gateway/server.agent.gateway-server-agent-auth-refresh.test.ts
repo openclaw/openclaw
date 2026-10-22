@@ -216,9 +216,7 @@ test("keeps an accepted run on its admitted runtime generation", async () => {
 
     refreshAuth(before.agentDir, "next-generation-key");
     await expect(Promise.race([published.promise, admitted.final])).resolves.toBeUndefined();
-    const after = await loadPublishedGatewayReplyDispatchRuntime({
-      agentId: affectedAgentId,
-    });
+    const after = await loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId });
     expect(after).not.toBe(before.runtime);
     expect(agentCommandCallsFor(admittedRunId)).toHaveLength(0);
     releaseDispatch.resolve();
@@ -297,10 +295,7 @@ test("aborts one affected waiter without cancelling shared auth publication", as
       sessionKey: `agent:${affectedAgentId}:main`,
       runId: abortedRunId,
     });
-    expect(abort).toMatchObject({
-      ok: true,
-      payload: { aborted: true, runIds: [abortedRunId] },
-    });
+    expect(abort).toMatchObject({ ok: true, payload: { aborted: true, runIds: [abortedRunId] } });
     await expect(aborted.response).resolves.toMatchObject({
       ok: true,
       payload: {

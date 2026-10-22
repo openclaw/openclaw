@@ -66,6 +66,7 @@ function renderFiles(
         return { ...createProps().readData(), ...this };
       },
       agentId: "alpha",
+      listRead: null,
       agentFileConflict: null,
       canWrite: true,
       agentFilesLoading: false,
@@ -112,6 +113,18 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
+  it("announces an agent list failure as an alert", async () => {
+    const container = document.createElement("div");
+    renderView({ listRead: Promise.resolve({ error: "Agent list unavailable" }) }, container);
+    await waitForSolid(() =>
+      expect(
+        Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+          alert.textContent?.trim(),
+        ),
+      ).toEqual(["Agent list unavailable"]),
+    );
+  });
+
   it("renders the selected agent's tool catalog loading state", () => {
     const container = document.createElement("div");
     const props = createProps();
@@ -967,24 +980,24 @@ describe("renderAgents toolbar", () => {
   });
 });
 
-it("surfaces agent config save errors in the active panel", () => {
+it("retires agent config errors during save and retains all owner error messages", () => {
   const container = document.createElement("div");
-  renderView(
-    {
-      config: {
-        configForm: { agents: { entries: { beta: {} } } },
-        configSnapshot: null,
-        configLoading: false,
-        configSaving: false,
-        configFormDirty: true,
-        lastError: "mock validation failure",
-      },
-    },
-    container,
-  );
-
-  const alert = container.querySelector('[role="alert"]');
-  expect(alert?.textContent).toContain("mock validation failure");
+  const failedConfig = {
+    configForm: { agents: { entries: { beta: {} } } },
+    configSnapshot: null,
+    configLoading: false,
+    configSaving: false,
+    configFormDirty: true,
+    lastError: "mock validation failure",
+  };
+  renderView({ config: failedConfig }, container);
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain(failedConfig.lastError);
+  renderView({ config: { ...failedConfig, configSaving: true, lastError: null } }, container);
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  for (const lastError of [failedConfig.lastError, "Config could not be loaded"]) {
+    renderView({ config: { ...failedConfig, lastError } }, container);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(lastError);
+  }
 });
 
 it.each([

@@ -15,6 +15,8 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildOAuthRequestSignal,
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
   type OAuthCredentials,
   type OAuthPrompt,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
@@ -111,22 +113,48 @@ async function requestChutesTokenGrant(params: {
     }),
   );
   try {
-    await assertOkOrThrowProviderError(response, `${params.responseLabel} failed`);
-
+    // Login keeps its bounded, redacted HTTP diagnostic; refresh needs structured
+    // protocol facts before presentation can discard token-consumption evidence.
+    if (params.responseLabel === "Chutes token exchange") {
+      await assertOkOrThrowProviderError(response, `${params.responseLabel} failed`);
+    }
     const data = await readProviderJsonResponse<{
+      error?: unknown;
       access_token?: string;
       refresh_token?: string;
       expires_in?: number;
     }>(response, params.responseLabel);
+    if (!response.ok || data.error !== undefined) {
+      throw createOAuthRefreshResponseError(params.responseLabel, response.status, data);
+    }
     const access = normalizeOptionalString(data.access_token);
     const expires = resolveChutesExpiresAt(data.expires_in, params.now ?? Date.now());
     if (!access) {
-      throw new Error(`${params.responseLabel} returned no access_token`);
+      throw createOAuthRefreshError(`${params.responseLabel} returned no access_token`, {
+        version: 1,
+        phase: "after-token-response",
+        outcome: "unknown",
+        status: response.status,
+      });
     }
     if (expires === undefined) {
-      throw new Error(`${params.responseLabel} returned invalid expires_in`);
+      throw createOAuthRefreshError(`${params.responseLabel} returned invalid expires_in`, {
+        version: 1,
+        phase: "after-token-response",
+        outcome: "unknown",
+        status: response.status,
+      });
     }
-    return { access, refresh: normalizeOptionalString(data.refresh_token), expires };
+    const refresh = normalizeOptionalString(data.refresh_token);
+    if (data.refresh_token !== undefined && !refresh) {
+      throw createOAuthRefreshError(`${params.responseLabel} returned invalid refresh_token`, {
+        version: 1,
+        phase: "after-token-response",
+        outcome: "unknown",
+        status: response.status,
+      });
+    }
+    return { access, refresh, expires };
   } finally {
     await release();
   }

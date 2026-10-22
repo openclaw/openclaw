@@ -49,24 +49,6 @@ function createCompletionScriptGenerator(program: Command): (shell: CompletionSh
   };
 }
 
-async function writeCompletionCache(params: {
-  program: Command;
-  shells: CompletionShell[];
-  binName: string;
-}): Promise<void> {
-  const generateScript = createCompletionScriptGenerator(params.program);
-  for (const shell of params.shells) {
-    const script = generateScript(shell);
-    await publishOutputFileAtomically({
-      filePath: resolveCompletionCachePath(shell, params.binName),
-      tempPrefix: ".openclaw-completion-cache",
-      writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, script, { encoding: "utf-8", flag: "wx" });
-      },
-    });
-  }
-}
-
 function writeCompletionRegistrationWarning(message: string): void {
   const diagnostic = `[completion] ${message}`;
   process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message: diagnostic })}\n`);
@@ -149,11 +131,18 @@ export function registerCompletionCli(program: Command) {
 
       if (options.writeState) {
         const writeShells = options.shell ? [shell] : [...COMPLETION_SHELLS];
-        await writeCompletionCache({
-          program,
-          shells: writeShells,
-          binName: program.name(),
-        });
+        const binName = program.name();
+        const generateScript = createCompletionScriptGenerator(program);
+        for (const writeShell of writeShells) {
+          const script = generateScript(writeShell);
+          await publishOutputFileAtomically({
+            filePath: resolveCompletionCachePath(writeShell, binName),
+            tempPrefix: ".openclaw-completion-cache",
+            writeTemp: async (tempPath) => {
+              await fs.writeFile(tempPath, script, { encoding: "utf-8", flag: "wx" });
+            },
+          });
+        }
       }
 
       if (options.install) {

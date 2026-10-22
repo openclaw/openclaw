@@ -443,11 +443,9 @@ describe("createCopilotToolBridge tool conversion", () => {
         .mockResolvedValueOnce(textToolResult("Memory forgotten.", { action: "deleted" }));
       const terminal = createTerminalTracker("run-copilot-forget");
       const sdkTool = await toSdk(tool, { ...terminal, onToolCompleted });
-      const result = await invoke(
-        sdkTool,
-        memoryArgs,
-        makeInvocation({ toolCallId: "forget-1", toolName: "memory_forget" }),
-      );
+      const forget = (toolCallId: string) =>
+        invoke(sdkTool, memoryArgs, makeInvocation({ toolCallId, toolName: "memory_forget" }));
+      const result = await forget("forget-1");
       expect(terminal.lastError()).toMatchObject({ mutatingAction: owned });
       if (!owned) {
         expect(terminal.lastError()).not.toHaveProperty("ownerKey");
@@ -463,11 +461,7 @@ describe("createCopilotToolBridge tool conversion", () => {
       expect(result).toMatchObject({ resultType: "failure", error: message });
       expect(JSON.stringify(result)).not.toContain("memory-lancedb");
 
-      await invoke(
-        sdkTool,
-        memoryArgs,
-        makeInvocation({ toolCallId: "forget-2", toolName: "memory_forget" }),
-      );
+      await forget("forget-2");
       expect(terminal.lastError()).toBeUndefined();
     },
   );

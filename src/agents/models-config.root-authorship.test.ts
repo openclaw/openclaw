@@ -11,7 +11,15 @@ import {
   type OpenClawTestState as State,
 } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { modelDefinition } from "./model-auth.fixtures.test-support.js";
+import {
+  configForProviders,
+  modelDefinition,
+  providerEntry,
+} from "./model-auth.fixtures.test-support.js";
+import {
+  prepareImplicitProviderStaticCatalog,
+  resolveImplicitProviders,
+} from "./models-config.providers.implicit.js";
 
 const { discoverProviders } = vi.hoisted(() => ({ discoverProviders: vi.fn() }));
 vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
@@ -205,4 +213,121 @@ it("keeps discovery output under an unowned hook alias out of the root catalog",
     "fixture",
     "fixture-alias",
   ]);
+});
+
+const customProvider = providerEntry("https://proxy.example/v1");
+function discoveryParams(providers = ["fixture"], selected = providers) {
+  return {
+    ...context(),
+    agentDir,
+    pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          ...catalogOwner,
+          providers,
+          providerEndpoints: [{ endpointClass: "openai-public", hosts: ["native.example"] }],
+        },
+      ],
+    }),
+    providerDiscoveryProviderIds: selected,
+    providerDiscoveryEntriesOnly: true,
+  };
+}
+
+it("does not recover a generated native endpoint over an authored custom provider", async () => {
+  await replacePersistedPluginModelCatalogs({
+    agentDir,
+    pluginCatalogWrites: {
+      "plugins/catalog-owner/catalog.json": JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: { fixture: native },
+      }),
+    },
+  });
+  const authored = { id: "manual-model", name: "Authored model", contextWindow: 16384 };
+  const explicit = {
+    ...native,
+    ...customProvider,
+    models: [{ ...native.models[0]!, ...authored }],
+  };
+  discoverProviders.mockResolvedValue([discovery()]);
+  const planned = await planSource(
+    configForProviders({ fixture: explicit }),
+    agentDir,
+    discoveryParams(),
+  );
+  const catalog = planned.pluginCatalogs.find((entry) => entry.pluginId === "catalog-owner");
+  assert(catalog, "The source plan must contain the authored provider");
+  expect(JSON.parse(catalog.contents).providers.fixture).toMatchObject({
+    baseUrl: customProvider.baseUrl,
+    models: [authored],
+  });
+});
+
+it("preserves a selected native alias when its sibling has a custom endpoint", async () => {
+  const provider = { ...discovery(), aliases: ["alternate"] };
+  discoverProviders.mockResolvedValue([provider]);
+  const params = {
+    config: configForProviders({
+      fixture: customProvider,
+      alternate: providerEntry(native.baseUrl!),
+    }),
+    ...discoveryParams(["fixture", "alternate"], ["alternate"]),
+  };
+  const preparedStaticProviderCatalog = await prepareImplicitProviderStaticCatalog(params);
+  expect(preparedStaticProviderCatalog.entries).toEqual([
+    { provider, providerConfigs: { alternate: native } },
+  ]);
+  const discovered = await resolveImplicitProviders({
+    ...params,
+    preparedStaticProviderCatalog,
+    explicitProviders: {
+      alternate: { ...native, models: [{ ...native.models[0]!, name: "Authored model" }] },
+    },
+  });
+  expect(discovered?.alternate?.models.map(({ id }) => id)).toEqual(["native-model"]);
+  expect(discovered?.alternate?.models[0]?.name).toBe("Authored model");
+  expect(discovered?.fixture).toBeUndefined();
+  const next = await resolveImplicitProviders({ ...params, preparedStaticProviderCatalog });
+  expect(next?.alternate).toMatchObject({
+    baseUrl: native.baseUrl,
+    models: [{ name: "native-model" }],
+  });
+  expect(preparedStaticProviderCatalog.entries[0]?.providerConfigs.alternate?.models[0]?.name).toBe(
+    "native-model",
+  );
+  expect(native.models[0]?.name).toBe("native-model");
+});
+
+it("keeps auth handles but records excluded prepared catalogs as empty", async () => {
+  const run = vi.fn(async () => ({ provider: native }));
+  const provider = { ...discovery(), staticCatalog: { run } };
+  discoverProviders.mockResolvedValue([provider]);
+  const prepared = await prepareImplicitProviderStaticCatalog({
+    ...discoveryParams(),
+    config: configForProviders({ fixture: customProvider }),
+  });
+  expect(prepared.providers).toEqual([provider]);
+  expect(prepared.entries).toEqual([{ provider, providerConfigs: {} }]);
+  expect(run).not.toHaveBeenCalled();
+});
+
+it("preserves an eligible shared-hook output without aliases", async () => {
+  const provider = {
+    ...discovery(),
+    staticCatalog: {
+      order: "simple" as const,
+      run: async () => ({ providers: { fixture: native, alternate: native } }),
+    },
+  };
+  discoverProviders.mockResolvedValue([provider]);
+  const params = {
+    ...discoveryParams(["fixture", "alternate"]),
+    providerDiscoveryProviderIds: undefined,
+    config: configForProviders({ fixture: customProvider }),
+  };
+  const preparedStaticProviderCatalog = await prepareImplicitProviderStaticCatalog(params);
+  const discovered = await resolveImplicitProviders({ ...params, preparedStaticProviderCatalog });
+  expect(discovered?.alternate?.models.map(({ id }) => id)).toEqual(["native-model"]);
+  expect(discovered?.fixture).toBeUndefined();
 });
