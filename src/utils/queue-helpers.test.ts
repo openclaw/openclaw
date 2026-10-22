@@ -114,36 +114,23 @@ describe("waitForQueueDebounce", () => {
 });
 
 describe("queue overflow protection", () => {
-  it("counts only in-flight identities that still intersect the queue", () => {
-    const active = { id: "active" };
-    const pending = { id: "pending" };
-    const alreadyRemoved = { id: "already-removed" };
-
-    expect(countPendingQueueItems([active, pending], new Set([active, alreadyRemoved]))).toBe(1);
-  });
-
-  it.each([false, true])("skips drop victims (in-flight=%s, otherwise protected)", (active) => {
-    const first: Item = { id: "priority", protected: !active };
-    const [a, b, c] = [{ id: "a" }, { id: "b" }, { id: "c" }] as const;
-    const queue = createQueue([first, a, b, c], active ? 2 : 3);
-    expect(dropItems(queue, active ? new Set([first]) : undefined)).toEqual({
-      admitted: true,
-      dropped: ["a", "b"],
-    });
-    expect(queue.items).toEqual([first, c]);
-  });
-
-  it.each([false, true])(
-    "rejects protected-only pending work without mutation (in-flight=%s)",
-    (active) => {
-      const priority: Item = { id: "priority", protected: true };
-      const first: Item = active ? { id: "active" } : { id: "also", protected: true };
-      const queue = createQueue([first, priority], 1);
-      expect(dropItems(queue, active ? new Set([first]) : undefined)).toEqual({
-        admitted: false,
-        dropped: [],
-      });
-      expect(queue.items).toEqual([first, priority]);
+  it.each`
+    active   | protectedFirst | protectedLast | cap  | admitted | dropped
+    ${true}  | ${false}       | ${false}      | ${2} | ${true}  | ${["a", "b"]}
+    ${false} | ${true}        | ${false}      | ${3} | ${true}  | ${["a", "b"]}
+    ${true}  | ${false}       | ${true}       | ${1} | ${false} | ${[]}
+    ${false} | ${true}        | ${true}       | ${1} | ${false} | ${[]}
+  `(
+    "selects only droppable pending items (active=$active, admitted=$admitted)",
+    ({ active, protectedFirst, protectedLast, cap, admitted, dropped }) => {
+      const first: Item = { id: "first", protected: protectedFirst };
+      const last: Item = { id: "c", protected: protectedLast };
+      const items = admitted ? [first, { id: "a" }, { id: "b" }, last] : [first, last];
+      const inFlight = active ? new Set([first, { id: "already-removed" }]) : undefined;
+      expect(countPendingQueueItems(items, inFlight)).toBe(items.length - Number(active));
+      const queue = createQueue(items, cap);
+      expect(dropItems(queue, inFlight)).toEqual({ admitted, dropped });
+      expect(queue.items).toEqual([first, last]);
     },
   );
 });
