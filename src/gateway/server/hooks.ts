@@ -14,6 +14,7 @@ import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.j
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { admitEventOccurrence } from "../../cron/event-occurrence-admission.js";
 import type {
   CronAgentAdmissionDisposition,
   RunCronAgentTurnResult,
@@ -531,8 +532,7 @@ export function createGatewayHookDispatcher(params: {
               eventTarget.agentId,
               eventTarget.eventSessionKey,
             );
-            const { admitScheduledOccurrence, runCronIsolatedAgentTurn } =
-              await loadIsolatedAgentModule();
+            const { runCronIsolatedAgentTurn } = await loadIsolatedAgentModule();
             // Lazy module loading is the last Gateway-owned async boundary before
             // cron preparation, so recheck the deadline after it settles.
             if (startupAbortController.signal.aborted) {
@@ -541,14 +541,7 @@ export function createGatewayHookDispatcher(params: {
             const ingressBoundary = pluginId ? "gateway.hooks.plugin" : "gateway.hooks.agent";
             const runHookIsolatedTurn = async () =>
               await runCronIsolatedAgentTurn({
-                // An event occurrence has no parent, so it holds nothing to release.
-                occurrence: await admitScheduledOccurrence({
-                  cfg,
-                  job,
-                  agentId,
-                  trigger: "event",
-                  ingressBoundary,
-                }),
+                occurrence: await admitEventOccurrence({ cfg, job, agentId, ingressBoundary }),
                 cfg,
                 deps,
                 job,

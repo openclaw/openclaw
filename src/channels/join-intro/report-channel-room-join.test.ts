@@ -17,10 +17,7 @@ const { runCronIsolatedAgentTurn } = vi.hoisted(() => ({
   runCronIsolatedAgentTurn: vi.fn(),
 }));
 
-vi.mock("../../cron/isolated-agent.js", async () => {
-  const { admitScheduledOccurrence } = await import("../../cron/execution-context-admission.js");
-  return { admitScheduledOccurrence, runCronIsolatedAgentTurn };
-});
+vi.mock("../../cron/isolated-agent.js", () => ({ runCronIsolatedAgentTurn }));
 
 let stateDir: string;
 type JoinParams = Parameters<typeof reportChannelRoomJoin>[0];
