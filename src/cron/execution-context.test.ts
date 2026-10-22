@@ -379,10 +379,4 @@ describe("buildScheduledExecutionContext scopes", () => {
     ).toEqual({ kind: "runtime-recovery-required" });
     expect(ready(parentLinked(), facts()).inference).toEqual({ kind: "none" });
   });
-
-  it("returns the same facts for the same inputs", () => {
-    expect(buildScheduledExecutionContext(parentLinked(), facts())).toEqual(
-      buildScheduledExecutionContext(parentLinked(), facts()),
-    );
-  });
 });

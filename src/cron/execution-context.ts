@@ -1,10 +1,9 @@
-import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 /**
  * One per-occurrence description of what a scheduled run is and what it may
  * act on. The builder is pure: callers read the parent session row and run the
- * requester check, then pass the results in as facts. Design:
- * .design/automations-execution-context.md (pebbles openclaw-0d5).
+ * requester check, then pass the results in as facts.
  */
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
@@ -72,7 +71,7 @@ type ScheduledToolPolicy = Readonly<{
 }>;
 
 type ScheduledResourceScopes = Readonly<{
-  /** Phase 2b mints the audience from this plan; the builder holds no leases. */
+  /** Which session's memory audience the run reads; the builder holds no leases. */
   memory:
     | Readonly<{ source: "parent"; parent: ScheduledParentRef; owner: boolean }>
     | Readonly<{ source: "run-session" }>;
@@ -102,7 +101,7 @@ type ScheduledInferenceAccount =
   | Readonly<{ kind: "runtime-recovery-required" }>
   | Readonly<{ kind: "none" }>;
 
-/** The pure part of the context; admission (openclaw-0d5.2) adds the composed live assertion. */
+/** The pure part of the context; admission adds the composed live assertion. */
 export type ScheduledExecutionFacts = Readonly<{
   version: 1;
   jobId: string;
@@ -302,8 +301,7 @@ function resolveAuthority(
     return withSource(owner, owner ? basis : "none");
   }
   if (principal.kind === "unbound-parent" || principal.kind === "operator") {
-    // Legacy embedded runs pass no sender bit, which keeps owner-only tools;
-    // phase 3 makes the CLI surface match this value.
+    // Legacy embedded runs pass no sender bit, which keeps owner-only tools.
     return withSource(true, "legacy");
   }
   // Ingress turns carry no owner authority.

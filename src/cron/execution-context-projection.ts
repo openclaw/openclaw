@@ -1,7 +1,7 @@
 /**
  * Projects what the existing scheduled-run code decides for a stored job and
  * labels where the execution context differs. Pure; shared by the development
- * replay script and Doctor.
+ * replay script and the fixture tests.
  */
 import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { AUTOMATIONS_TOOL_NAME } from "../agents/tools/automations-tool-name.js";

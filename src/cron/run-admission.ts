@@ -157,7 +157,7 @@ export function prepareCronRunAdmission(params: {
       operationalRunInstance,
     }),
     messageActionTurnCapability,
-    /** The minted execution context once the run is admitted; nothing reads it yet. */
+    /** The minted execution context once the run is admitted. */
     readScheduledExecution: () => params.scheduledExecution?.current(),
     close,
     finish: async () => {

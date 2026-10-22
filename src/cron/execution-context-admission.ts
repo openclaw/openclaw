@@ -1,7 +1,6 @@
 /**
  * Collects the live facts one scheduled occurrence needs and mints its
- * execution context. Nothing reads the context yet; consumers switch to it phase
- * by phase. A failure here never fails the run.
+ * execution context. A failure here never fails the run.
  */
 import { access } from "node:fs/promises";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -85,26 +84,35 @@ async function checkRequesterOwner(params: MintParams): Promise<boolean> {
   return false;
 }
 
-// Same precedence as the builder's principal resolution: the operator source names
-// the exact incarnation, then the creating conversation.
-function parentSessionKeyOf(job: CronStoredJob): string | undefined {
+type ScheduledParentLink = Readonly<{
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+}>;
+
+/**
+ * The stored parent link, with the builder's principal precedence: the operator
+ * source names the exact incarnation, then the creating conversation. Shared with
+ * the development replay.
+ */
+export function scheduledParentLinkOf(job: CronStoredJob): ScheduledParentLink | undefined {
   if (job.operatorSource) {
     try {
-      return decodeGatewayOperatorRecoverySource(job.operatorSource.source).sessionKey;
+      return decodeGatewayOperatorRecoverySource(job.operatorSource.source);
     } catch {
       return undefined;
     }
   }
-  return job.sourceConversation?.sessionKey;
+  return job.sourceConversation;
 }
 
 async function readParentRow(params: MintParams): Promise<ScheduledAdmissionFacts["parentRow"]> {
-  const parentSessionKey = parentSessionKeyOf(params.job);
-  if (!parentSessionKey) {
+  const parentLink = scheduledParentLinkOf(params.job);
+  if (!parentLink) {
     return undefined;
   }
   const entry = await readSessionEntryInWorker({
-    sessionKey: parentSessionKey,
+    sessionKey: parentLink.sessionKey,
     storePath: params.storePath,
     readConsistency: "latest",
   });

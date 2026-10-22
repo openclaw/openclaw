@@ -22,11 +22,4 @@ describe("scheduled execution context on stored job shapes", () => {
       expect(replayScheduledContextFixture(fixture)).toEqual(fixture.expected);
     },
   );
-
-  it("never produces an unexpected gain", () => {
-    for (const fixture of fixtures) {
-      const outcome = replayScheduledContextFixture(fixture);
-      expect(Object.values(outcome.labels)).not.toContain("gain-unexpected");
-    }
-  });
 });

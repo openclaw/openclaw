@@ -11,13 +11,20 @@ import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { tryResolveAmbientOwnerAgentId } from "../../src/agents/agent-scope-config.js";
 import { isRuntimeToolAllowed } from "../../src/agents/tool-policy-match.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
+  CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+  tryResolveCronJobEffectiveAgentId,
+} from "../../src/cron/agent-id.js";
+import {
   assembleScheduledAdmissionFacts,
   parentRowFactsFromEntry,
+  scheduledParentLinkOf,
 } from "../../src/cron/execution-context-admission.js";
 import {
   compareScheduledDecisions,
@@ -30,10 +37,12 @@ import {
 import {
   buildScheduledExecutionContext,
   resolveScheduledRequester,
+  type ScheduledAdmissionFacts,
 } from "../../src/cron/execution-context.js";
 import { resolveCronSessionTargetSessionKey } from "../../src/cron/session-target.js";
 import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
+import { decodeGatewayOperatorRecoverySource } from "../../src/gateway/operator-run-recovery-source.codec.js";
 
 type Args = { stateDir: string; configPath?: string; json: boolean; emitFixtures?: string };
 
@@ -98,9 +107,85 @@ function runSessionKeyFor(job: CronStoredJob, agentId: string) {
   );
 }
 
-// Fixture jobs keep the fields the builder reads; identifiers, names, prompts
-// and paths become stable placeholders, so the shape stays a valid stored job.
-function anonymize(job: CronStoredJob, index: number): CronStoredJob {
+type ParentRow = NonNullable<ScheduledAdmissionFacts["parentRow"]>;
+
+// Keeps the discriminators the builder reads from a stored operator source. A
+// source that does not decode stays undecodable, so the fixture keeps failing.
+function anonymizeOperatorSource(
+  operatorSource: NonNullable<CronStoredJob["operatorSource"]>,
+  agentId: string,
+  key: (value: string) => string,
+): CronStoredJob["operatorSource"] {
+  let source;
+  try {
+    source = decodeGatewayOperatorRecoverySource(operatorSource.source);
+  } catch {
+    return { source: { version: 1 }, executionRevision: "execution-1" } as never;
+  }
+  const { snapshot } = source;
+  return {
+    executionRevision: "execution-1",
+    source: {
+      version: 1,
+      agentId: source.agentId === agentId ? "main" : "other",
+      sessionKey: key(source.sessionKey),
+      sessionId: "parent-session",
+      ...(source.lifecycleRevision ? { lifecycleRevision: "rev-1" } : {}),
+      sourceRunId: "source-run",
+      snapshot: {
+        profileId: "profile-1",
+        scopes: [...snapshot.scopes],
+        assignedRole: snapshot.assignedRole === null ? null : "role",
+        githubLogin: null,
+        grant: null,
+        aliasBindingIds: [],
+        authPolicy: {
+          generation: "",
+          grantGeneration: "generation",
+          role: "operator",
+          authMethod: snapshot.authPolicy.authMethod,
+        },
+        controlUiAdmin: snapshot.controlUiAdmin,
+        localOperator: snapshot.localOperator,
+        sourceIngress: snapshot.sourceIngress,
+      },
+    },
+  };
+}
+
+/**
+ * Replaces a parent row's private values while keeping how it relates to the
+ * job's stored parent link: same or replaced session, same or changed lifecycle
+ * revision, and whether its worktree still exists.
+ */
+export function anonymizeParentRow(
+  row: ParentRow | undefined,
+  job: CronStoredJob,
+): ParentRow | undefined {
+  if (!row || row.missing) {
+    return row;
+  }
+  const link = scheduledParentLinkOf(job);
+  const worktreePath = "/work/parent/worktree";
+  return {
+    sessionId: row.sessionId === link?.sessionId ? "parent-session" : "replaced-session",
+    ...(row.lifecycleRevision
+      ? { lifecycleRevision: row.lifecycleRevision === link?.lifecycleRevision ? "rev-1" : "rev-2" }
+      : {}),
+    archived: row.archived,
+    sandboxRequired: row.sandboxRequired,
+    ...(row.workspaceDir ? { workspaceDir: "/work/parent" } : {}),
+    ...(row.cwd ? { cwd: row.cwd === row.worktree?.path ? worktreePath : "/work/parent/cwd" } : {}),
+    ...(row.worktree ? { worktree: { path: worktreePath, exists: row.worktree.exists } } : {}),
+  };
+}
+
+/**
+ * Fixture jobs keep the fields the builder reads; identifiers, names, prompts
+ * and paths become stable placeholders, so the shape stays a valid stored job.
+ * Equal session keys stay equal, so parent and requester relationships survive.
+ */
+export function anonymize(job: CronStoredJob, agentId: string, index: number): CronStoredJob {
   const keys = new Map<string, string>();
   const key = (value: string) => {
     if (!keys.has(value)) {
@@ -108,6 +193,7 @@ function anonymize(job: CronStoredJob, index: number): CronStoredJob {
     }
     return keys.get(value) as string;
   };
+  const channelRequester = job.toolsAllowProvenance?.channelRequester;
   const target = resolveCronSessionTargetSessionKey(job.sessionTarget);
   const payload =
     job.payload.kind === "agentTurn"
@@ -170,6 +256,9 @@ function anonymize(job: CronStoredJob, index: number): CronStoredJob {
               : job.scheduledToolPolicy,
         }
       : {}),
+    ...(job.operatorSource
+      ? { operatorSource: anonymizeOperatorSource(job.operatorSource, agentId, key) }
+      : {}),
     ...(job.sourceConversation
       ? {
           sourceConversation: {
@@ -189,6 +278,16 @@ function anonymize(job: CronStoredJob, index: number): CronStoredJob {
             source: "final-executable-surface",
             ...(job.toolsAllowProvenance.callerOrigin
               ? { callerOrigin: job.toolsAllowProvenance.callerOrigin }
+              : {}),
+            ...(channelRequester
+              ? {
+                  channelRequester: {
+                    version: 1,
+                    channel: channelRequester.channel,
+                    accountId: "default",
+                    senderId: "sender-1",
+                  },
+                }
               : {}),
           },
         }
@@ -245,12 +344,26 @@ async function main() {
       if (job.sessionTarget === "main") {
         continue;
       }
-      const agentId = job.agentId ?? "main";
+      const agentId = tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(cfg));
+      if (!agentId) {
+        rows.push({
+          job: job.name || job.id,
+          agentId: "(unresolved)",
+          enabled: job.enabled,
+          principal: "fail",
+          ownerCheck: "not-needed",
+          divergence: {
+            status: "fail",
+            labels: {},
+            changes: [],
+            reason: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+          },
+        });
+        continue;
+      }
       const runSessionKey = runSessionKeyFor(job, agentId);
-      const parentKey =
-        job.sourceConversation?.sessionKey ?? job.operatorSource?.source?.sessionKey;
+      const parentKey = scheduledParentLinkOf(job)?.sessionKey;
       let parentRow;
-      let parentKind = "none";
       if (parentKey) {
         const node = agentDbs
           .get(agentId)
@@ -267,14 +380,6 @@ async function main() {
           entry,
           worktreePath ? await exists(worktreePath) : false,
         );
-        parentKind = parentRow.missing
-          ? "missing"
-          : parentRow.archived
-            ? "archived"
-            : parentRow.sessionId !== job.sourceConversation?.sessionId &&
-                job.sourceConversation !== undefined
-              ? "reset"
-              : "current";
       }
       const requester = resolveScheduledRequester(job);
       let owner: boolean | undefined;
@@ -320,20 +425,8 @@ async function main() {
         divergence,
       });
       if (args.emitFixtures) {
-        const fixtureJob = anonymize(job, fixtures.size + 1);
-        const fixtureParentRow = parentRow?.missing
-          ? parentRow
-          : parentRow
-            ? {
-                sessionId: parentKind === "reset" ? "replaced-session" : "parent-session",
-                ...(job.sourceConversation?.lifecycleRevision
-                  ? { lifecycleRevision: "rev-1" }
-                  : {}),
-                archived: parentRow.archived,
-                sandboxRequired: parentRow.sandboxRequired,
-                ...(parentRow.workspaceDir ? { workspaceDir: "/work/parent" } : {}),
-              }
-            : undefined;
+        const fixtureJob = anonymize(job, agentId, fixtures.size + 1);
+        const fixtureParentRow = anonymizeParentRow(parentRow, job);
         const shapeKey = JSON.stringify({
           ...fixtureJob,
           id: "",
@@ -391,4 +484,6 @@ async function main() {
   }
 }
 
-await main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main();
+}
