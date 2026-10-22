@@ -5,11 +5,6 @@ import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 
 const DEFAULT_CLI_OUTPUT_TEMP_PREFIX = ".openclaw-media-output";
 
-async function resolveExistingOutputMode(filePath: string): Promise<number | undefined> {
-  const stat = await statIfExists(filePath);
-  return stat === undefined ? undefined : stat.mode & 0o7777;
-}
-
 /** Publish a CLI-owned file only after its sibling temp write completes. */
 export async function publishOutputFileAtomically<T>(params: {
   filePath: string;
@@ -19,7 +14,8 @@ export async function publishOutputFileAtomically<T>(params: {
 }): Promise<T> {
   const dir = path.dirname(params.filePath);
   await fs.mkdir(dir, { recursive: true });
-  const mode = await resolveExistingOutputMode(params.filePath);
+  const stat = await statIfExists(params.filePath);
+  const mode = stat === undefined ? undefined : stat.mode & 0o7777;
   // Keep prior destination bytes and the existing directory mode untouched until completion.
   const { result } = await writeSiblingTempFile({
     dir,

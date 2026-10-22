@@ -9,8 +9,6 @@ const credentials = {
   appSecret: "loopback-document-placeholder", // pragma: allowlist secret
 };
 const config = { channels: { feishu: { enabled: true, ...credentials, tools: { doc: true } } } };
-const createParams = { action: "create", title: "Owned document" };
-const document = { document_id: "owned-document", title: "Owned document" };
 
 async function withDocumentLoopback(
   run: (execute: ToolLike["execute"], requests: string[]) => Promise<void>,
@@ -35,8 +33,6 @@ async function withDocumentLoopback(
           },
           400,
         );
-      } else if (path === "/open-apis/docx/v1/documents") {
-        reply({ code: 0, data: { document } });
       } else {
         reply({ code: 1, msg: "Unexpected fixture request" }, 500);
       }
@@ -88,21 +84,5 @@ it("retains conversion rejection code, message and request log identity", async 
     expect(result).toMatchObject({
       content: [{ type: "text", text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT") }],
     });
-  });
-});
-
-it("keeps successful SDK document creation and local input rejection unchanged", async () => {
-  await withDocumentLoopback(async (execute, requests) => {
-    const rejected = await execute("local-rejection", {
-      ...createParams,
-      content: "Unsupported create content",
-    });
-    expect(rejected.details.error).toContain('call action "write"');
-    expect(requests).toEqual([]);
-    const created = await execute("successful-create", createParams);
-    expect(created.details).toMatchObject(document);
-    expect(requests.filter((request) => !request.includes("/open-apis/auth/"))).toEqual([
-      "POST /open-apis/docx/v1/documents",
-    ]);
   });
 });

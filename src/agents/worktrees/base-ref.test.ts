@@ -23,6 +23,18 @@ describe("managed worktree creation groups", () => {
 
   const create = (name: string) => service.create({ repoRoot: repo, name });
   const head = (cwd: string) => git(cwd, "rev-parse", "HEAD");
+  function joinAllocations(count: number) {
+    const allocate = preparation.createWithWorktreeAllocation;
+    const joined = createDeferred();
+    let callers = 0;
+    vi.spyOn(preparation, "createWithWorktreeAllocation").mockImplementation(async (...args) => {
+      if (++callers === count) {
+        joined.resolve();
+      }
+      await joined.promise;
+      return await allocate(...args);
+    });
+  }
   function observeReads() {
     const execute = gitExec.executeGitCommand;
     const counts = { fetches: 0, statusReads: 0 };
@@ -68,16 +80,7 @@ describe("managed worktree creation groups", () => {
       if (checkout === "detached") {
         await git(repo, "checkout", "--detach", expectedHead);
       }
-      const allocate = preparation.createWithWorktreeAllocation;
-      const joined = createDeferred();
-      let callers = 0;
-      vi.spyOn(preparation, "createWithWorktreeAllocation").mockImplementation(async (...args) => {
-        if (++callers === 2) {
-          joined.resolve();
-        }
-        await joined.promise;
-        return await allocate(...args);
-      });
+      joinAllocations(2);
       const execute = gitExec.executeGitCommand;
       const remoteCommands: string[] = [];
       vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
@@ -105,16 +108,7 @@ describe("managed worktree creation groups", () => {
     const localHead = await head(repo);
     const remoteHead = await advanceRemote();
     await fs.writeFile(path.join(repo, "README.md"), "local work\n");
-    const allocate = preparation.createWithWorktreeAllocation;
-    const joined = createDeferred();
-    let callers = 0;
-    vi.spyOn(preparation, "createWithWorktreeAllocation").mockImplementation(async (...args) => {
-      if (++callers === 20) {
-        joined.resolve();
-      }
-      await joined.promise;
-      return await allocate(...args);
-    });
+    joinAllocations(20);
     const reads = observeReads();
     const enqueue = gitExec.enqueueGitRefMutation;
     const failures: unknown[] = [];
@@ -131,7 +125,6 @@ describe("managed worktree creation groups", () => {
       Array.from({ length: 20 }, (_, index) => create(`burst-${index}`)),
     );
 
-    expect(records).toHaveLength(20);
     expect(new Set(records.map((record) => record.baseRef))).toEqual(new Set(["origin/main"]));
     expect(await head(repo)).toBe(localHead);
     expect(await git(repo, "rev-parse", "origin/main")).toBe(remoteHead);

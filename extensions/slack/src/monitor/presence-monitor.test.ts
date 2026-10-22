@@ -76,6 +76,12 @@ function createPresenceFixture(
     cooldownStore,
     getPresence,
     advancePoll: () => Promise.resolve(clock.wake()),
+    pollAt: async (...times: number[]) => {
+      for (const time of times) {
+        clock.setTime(time);
+        await clock.wake();
+      }
+    },
   };
 }
 
@@ -111,7 +117,16 @@ function createCooldownStore() {
   } satisfies PluginStateKeyedStore<number>;
 }
 
-function createPrepared(params: {
+function createPrepared({
+  userId,
+  teamId,
+  channelId = "D123",
+  channelType = "im",
+  threadId,
+  mode,
+  prompt,
+  sessionKey = `agent:main:slack:channel:${channelId}`,
+}: {
   userId: string;
   teamId?: string;
   channelId?: string;
@@ -121,31 +136,16 @@ function createPrepared(params: {
   prompt?: string;
   sessionKey?: string;
 }): PreparedSlackMessage {
-  const channelId = params.channelId ?? "D123";
-  const channelType = params.channelType ?? "im";
   return {
     ctx: { isRuntimePolicyCurrent: () => true },
-    message: {
-      type: "message",
-      user: params.userId,
-      channel: channelId,
-      channel_type: channelType,
-    },
-    ...(params.teamId ? { eventScope: { teamId: params.teamId, client: {} as never } } : {}),
-    route: {
-      agentId: "main",
-      accountId: "default",
-      sessionKey: params.sessionKey ?? `agent:main:slack:channel:${channelId}`,
-    },
+    message: { type: "message", user: userId, channel: channelId, channel_type: channelType },
+    ...(teamId ? { eventScope: { teamId, client: {} as never } } : {}),
+    route: { agentId: "main", accountId: "default", sessionKey },
     channelConfig:
-      params.mode || params.prompt !== undefined
-        ? {
-            allowed: true,
-            requireMention: false,
-            presenceEvents: { mode: params.mode, prompt: params.prompt },
-          }
+      mode || prompt !== undefined
+        ? { allowed: true, requireMention: false, presenceEvents: { mode, prompt } }
         : null,
-    ctxPayload: { MessageThreadId: params.threadId },
+    ctxPayload: { MessageThreadId: threadId },
     isDirectMessage: channelType === "im",
   } as PreparedSlackMessage;
 }
@@ -230,8 +230,7 @@ describe("Slack presence monitor", () => {
       });
       monitor.observe(createPrepared({ userId: "U123", mode: "auto", prompt }));
       await monitor.advancePoll();
-      clock.setTime(7_500);
-      await monitor.advancePoll();
+      await monitor.pollAt(7_500);
       expect(monitor.enqueue.mock.calls[0]?.[0]).toBe(
         [
           "Slack presence event:",
@@ -251,16 +250,13 @@ describe("Slack presence monitor", () => {
     monitor.observe(createPrepared({ userId: "U123" }));
 
     await monitor.advancePoll();
-    clock.setTime(2_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(2_000);
     expect(enqueue).not.toHaveBeenCalled();
 
-    clock.setTime(4_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(4_000);
     expect(enqueue).not.toHaveBeenCalled();
 
-    clock.setTime(7_500);
-    await monitor.advancePoll();
+    await monitor.pollAt(7_500);
     expect(enqueue).toHaveBeenCalledExactlyOnceWith(
       [
         "Slack presence event:",
@@ -277,10 +273,7 @@ describe("Slack presence monitor", () => {
     );
     expect(monitor.captureTarget).toHaveBeenCalledOnce();
 
-    clock.setTime(8_000);
-    await monitor.advancePoll();
-    clock.setTime(9_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(8_000, 9_000);
     expect(enqueue).toHaveBeenCalledOnce();
   });
 
@@ -369,34 +362,42 @@ describe("Slack presence monitor", () => {
     expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "UDIRECT" });
   });
 
-  it("times out a stalled presence request and polls the next user", async () => {
-    vi.useFakeTimers();
-    const stalled = createDeferred<{ presence: string }>();
-    let polling: Promise<void> | undefined;
-    try {
-      const getPresence = vi
-        .fn()
-        .mockReturnValueOnce(stalled.promise)
-        .mockResolvedValueOnce({ presence: "away" });
-      const monitor = createPresenceFixture({ getPresence });
-      monitor.observe(createPrepared({ userId: "U1", channelId: "D1" }));
-      monitor.observe(createPrepared({ userId: "U2", channelId: "D2" }));
-
-      polling = monitor.advancePoll();
-      const pollSettled = vi.fn();
-      void polling.then(pollSettled);
-      await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
-      expect(pollSettled).toHaveBeenCalledOnce();
-      await polling;
-
-      expect(getPresence).toHaveBeenNthCalledWith(1, { user: "U1" });
-      expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U2" });
-    } finally {
-      stalled.resolve({ presence: "away" });
-      await polling;
-      vi.useRealTimers();
-    }
-  });
+  it.each(["continue", "stop"] as const)(
+    "bounds a stalled request when the poll must %s",
+    async (action) => {
+      vi.useFakeTimers();
+      const stalled = createDeferred<{ presence: string }>();
+      let polling: Promise<void> | undefined;
+      try {
+        const getPresence = vi
+          .fn()
+          .mockReturnValueOnce(stalled.promise)
+          .mockResolvedValueOnce({ presence: "away" });
+        const monitor = createPresenceFixture({ getPresence });
+        monitor.observe(createPrepared({ userId: "U1", channelId: "D1" }));
+        if (action === "continue") {
+          monitor.observe(createPrepared({ userId: "U2", channelId: "D2" }));
+        }
+        polling = monitor.advancePoll();
+        const stopping = action === "stop" ? monitor.stop() : undefined;
+        const settled = vi.fn();
+        void (stopping ?? polling).then(settled);
+        await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
+        expect(settled).toHaveBeenCalledOnce();
+        await Promise.all([polling, stopping]);
+        expect(getPresence).toHaveBeenNthCalledWith(1, { user: "U1" });
+        if (action === "continue") {
+          expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U2" });
+        } else {
+          expect(getPresence).toHaveBeenCalledOnce();
+        }
+      } finally {
+        stalled.resolve({ presence: "away" });
+        await polling;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("honors Slack Retry-After without skipping the unpolled page", async () => {
     const clock = createGatewaySchedulerClock(1_000);
@@ -416,43 +417,16 @@ describe("Slack presence monitor", () => {
     await monitor.advancePoll();
     expect(getPresence).toHaveBeenCalledExactlyOnceWith({ user: "U0001" });
 
-    clock.setTime(120_999);
-    await monitor.advancePoll();
+    await monitor.pollAt(120_999);
     expect(getPresence).toHaveBeenCalledTimes(1);
 
-    clock.setTime(121_000);
-    await monitor.advancePoll();
+    await monitor.pollAt(121_000);
     expect(getPresence).toHaveBeenNthCalledWith(2, { user: "U0001" });
     expect(getPresence).toHaveBeenNthCalledWith(3, { user: "U0002" });
     expect(getPresence).toHaveBeenCalledTimes(46);
 
     await monitor.advancePoll();
     expect(getPresence).toHaveBeenNthCalledWith(47, { user: "U0046" });
-  });
-
-  it("bounds stop while a presence request is stalled", async () => {
-    vi.useFakeTimers();
-    const stalled = createDeferred<{ ok: boolean; presence: string }>();
-    let polling: Promise<void> | undefined;
-    try {
-      const getPresence = vi.fn(() => stalled.promise);
-      const monitor = createPresenceFixture({ getPresence });
-      monitor.observe(createPrepared({ userId: "U1" }));
-
-      polling = monitor.advancePoll();
-      const stopping = monitor.stop();
-      const stopSettled = vi.fn();
-      void stopping.then(stopSettled);
-      await vi.advanceTimersByTimeAsync(SLACK_PRESENCE_REQUEST_TIMEOUT_MS);
-      expect(stopSettled).toHaveBeenCalledOnce();
-      await Promise.all([polling, stopping]);
-
-      expect(getPresence).toHaveBeenCalledOnce();
-    } finally {
-      stalled.resolve({ ok: true, presence: "away" });
-      await polling;
-      vi.useRealTimers();
-    }
   });
 
   it.each(["retarget", "stop", "ineligible", "expired", "replaced"] as const)(

@@ -40,8 +40,8 @@ const settings = {
   "API key": [...configPath, "apiKey"],
   Accounts: [...configPath, "accounts"],
 };
-const publish = (context: Context, owner: object, current = plugin, overview = true) =>
-  publishPluginHelpContext(context, owner, current, { overview, installed: true });
+const publish = (context: Context, owner: object, current = plugin) =>
+  publishPluginHelpContext(context, owner, current, { installed: true });
 type Setting = keyof typeof settings;
 function ask(context: Context, label: Setting, value: unknown, sensitive = false, target = plugin) {
   const request = createPluginHelpRequest(context, target);
@@ -95,7 +95,7 @@ it.each(["cold", "startup", "metadata"] as const)("retains %s drafts", async (ph
   }
   const { context, setPathname, setGatewaySnapshot } = createContext(request);
   setPathname("/settings/plugins/example");
-  publish(context, {}, plugin, false);
+  publish(context, {}, plugin);
   const agentsList = context.agents.state.agentsList;
   if (phase === "metadata") {
     context.agents.state.agentsList = null;

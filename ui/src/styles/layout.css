@@ -1981,6 +1981,8 @@ openclaw-settings-save-indicator:empty {
   > .sidebar-recent-session__link
   > .sidebar-session-indicator {
   order: 1;
+  /* Center the trailing status glyph in the 24px archive action column. */
+  margin-inline-end: calc((24px - var(--sidebar-lead)) / 2);
 
   &:empty {
     display: none;
@@ -4605,6 +4607,22 @@ html.openclaw-native-web-chrome
   overflow: hidden;
   flex: 0 1 auto;
   margin-left: auto;
+}
+
+/* Trailing state shares the hover-action column: inset visible metadata so a
+   12px badge centers on the 24px archive action instead of crowding the
+   sidebar edge. Touch and drawer rows keep their always-visible actions beside
+   the text, and an empty endcap charges the title nothing. */
+@media (hover: hover) and (pointer: fine) {
+  .shell:not(.shell--mobile-nav)
+    .sidebar-recent-session:not(.sidebar-recent-session--child, .sidebar-recent-session--team)
+    .sidebar-recent-session__details-endcap:has(
+      .session-row-badges,
+      .viewer-facepile,
+      .session-row-trail
+    ) {
+    padding-inline-end: calc((24px - 12px) / 2);
+  }
 }
 
 .sidebar-session-attention-tooltip {

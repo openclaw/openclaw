@@ -3,7 +3,7 @@ import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { updateAgentIdentity } from "../../lib/agents/index.ts";
+import { updateAgentIdentity } from "../../lib/agents/mutations.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { fileToAvatarDataUrl, type AvatarDataUrlResult } from "./avatar-image.ts";

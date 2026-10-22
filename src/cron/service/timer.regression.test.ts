@@ -326,7 +326,6 @@ describe("cron service timer regressions", () => {
         }),
       );
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
     } finally {
       await cleanup(state, [timerPromise], [sessionResult]);
       resetActiveCronTaskRunsForTests();
@@ -375,7 +374,6 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(0);
       await Promise.resolve();
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
     } finally {
       await cleanup(state, [timerPromise], [runnerResult]);
       resetActiveCronTaskRunsForTests();
@@ -405,7 +403,6 @@ describe("cron service timer regressions", () => {
       const persisted = await loadCronStore(storePath);
       expect(persisted.jobs[0]?.state.lastStatus).not.toBe("ok");
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
     } finally {
       await cleanup(state, [timerPromise], [release]);
       resetActiveCronTaskRunsForTests();

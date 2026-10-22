@@ -339,10 +339,7 @@ export async function startTelegramWebhook(opts: {
         });
         return;
       } catch (err) {
-        if (
-          !isRetryableTelegramApiError(err, { context: "webhook" }) ||
-          initializationAbortSignal?.aborted
-        ) {
+        if (!isRetryableTelegramApiError(err) || initializationAbortSignal?.aborted) {
           throw err;
         }
         attempt += 1;
@@ -480,7 +477,7 @@ export async function startTelegramWebhook(opts: {
         formatErrorMessage(err),
         isTelegramAuthenticationError(err)
           ? "blocked"
-          : isRetryableTelegramApiError(err, { context: "webhook" })
+          : isRetryableTelegramApiError(err)
             ? "recovering"
             : undefined,
       );
@@ -511,7 +508,7 @@ export async function startTelegramWebhook(opts: {
         await advertiseWebhook();
         return;
       } catch (err) {
-        if (!isRetryableTelegramApiError(err, { context: "webhook" })) {
+        if (!isRetryableTelegramApiError(err)) {
           runtime.error?.(
             `telegram setWebhook retry stopped after non-recoverable error: ${formatErrorMessage(err)}`,
           );
@@ -544,7 +541,7 @@ export async function startTelegramWebhook(opts: {
     try {
       await advertiseWebhook();
     } catch (err) {
-      if (!isRetryableTelegramApiError(err, { context: "webhook" })) {
+      if (!isRetryableTelegramApiError(err)) {
         await shutdown();
         throw err;
       }

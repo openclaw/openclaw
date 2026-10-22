@@ -392,10 +392,21 @@ describe("doctor generated plugin model catalog migration", () => {
     const contents = generatedCatalog("zai");
     const sourcePath = writeLegacyCatalog(agentDir, "zai", contents);
     fs.chmodSync(path.dirname(sourcePath), 0o755);
-    const params = migrationParams([agentDir], false);
+    const reportFindings = vi.fn();
+    const params = { ...migrationParams([agentDir], false), reportFindings };
 
     await maybeMigrateLegacyPluginModelCatalogs(params);
 
+    expect(reportFindings).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({
+          category: "fix-now",
+          checkId: "core/doctor/plugin-model-catalog/repair-pending",
+          fixHint: expect.stringContaining("openclaw doctor --fix"),
+        }),
+      ],
+      undefined,
+    );
     expect(params.prompter.confirmAutoFix).toHaveBeenCalledOnce();
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(contents);
     if (process.platform !== "win32") {

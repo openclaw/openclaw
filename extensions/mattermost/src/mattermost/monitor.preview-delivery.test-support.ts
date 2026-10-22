@@ -8,7 +8,7 @@ import type { OpenClawConfig, ReplyPayload } from "./runtime-api.js";
 
 type DraftStream = ReturnType<typeof import("./draft-stream.js").createMattermostDraftStream>;
 
-export function createFinalDraft<T extends Partial<Omit<DraftStream, "deleteCurrentMessage">>>(
+function createFinalDraft<T extends Partial<Omit<DraftStream, "deleteCurrentMessage">>>(
   overrides: T,
 ) {
   return {

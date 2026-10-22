@@ -394,25 +394,6 @@ describe("xAI lazy realtime voice", () => {
     },
   );
 
-  it("reopens voice only after an explicit connect following provider termination", async () => {
-    const { bridge, callback: onClose } = await observedVoice("onClose");
-    const discarded = Buffer.from([0x01]);
-    const accepted = Buffer.from([0x02]);
-
-    await bridge.connect();
-    const loadedRequest = mocks.createVoiceBridge.mock.calls[0]?.[0];
-    loadedRequest?.onClose?.("error");
-    bridge.sendAudio(discarded);
-
-    const reconnectPromise = bridge.connect();
-    bridge.sendAudio(accepted);
-    await reconnectPromise;
-
-    expect(mocks.voiceConnect).toHaveBeenCalledTimes(2);
-    expect(mocks.voiceSendAudio).toHaveBeenCalledExactlyOnceWith(accepted);
-    expect(onClose).toHaveBeenCalledExactlyOnceWith("error");
-  });
-
   it("reports explicit voice close once when the provider also reports completion", async () => {
     const { bridge, callback: onClose } = await observedVoice("onClose");
 

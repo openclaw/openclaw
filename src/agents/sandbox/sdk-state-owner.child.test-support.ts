@@ -86,6 +86,11 @@ async function callApis(phase: string, selectedConfig = config, workspaceRoot = 
   return { outcomes, backendCalls: backendCalls - callsBefore };
 }
 
+export type SdkStateOwnerReply = {
+  phase: string;
+  data: Awaited<ReturnType<typeof callApis>> & { entries?: Array<{ containerName: string }> };
+};
+
 const send = (phase: string, data: unknown = {}) =>
   process.stdout.write(`sdk-owner-proof:${JSON.stringify({ phase, data })}\n`);
 const workerRoot = path.join(root, "worker-shaped");

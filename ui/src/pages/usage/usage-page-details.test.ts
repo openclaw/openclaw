@@ -20,6 +20,10 @@ import {
   createPendingUsageRouteData,
   focusDocument,
   refreshButton,
+  queryUsagePage,
+  selectUsageSession,
+  settleUsagePage,
+  usageButton,
 } from "./usage-page.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
@@ -63,14 +67,9 @@ describe("UsagePage detail requests", () => {
         : { providers: [], points: [], logs: [] },
     );
     const { page } = await loadUsagePage(request);
-    const settle = async () => {
-      await waitForFast(() => expect(page.usageLoading).toBe(false));
-      await page.updateComplete;
-    };
+    const settle = () => settleUsagePage(page);
     const changePage = async (label: string) => {
-      [...page.querySelectorAll<HTMLButtonElement>(".data-table-pagination button")]
-        .find((button) => button.textContent?.trim() === label)!
-        .click();
+      usageButton(page, label, ".data-table-pagination button").click();
       await settle();
     };
     const compare = (label: string, shiftKey = false) =>
@@ -118,17 +117,9 @@ describe("UsagePage detail requests", () => {
     await settle();
     expect(textOf(page, ".session-detail-title")).toContain("Comparison 53");
 
-    const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
-    input.value = "label:missing";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await settle();
+    await queryUsagePage(page, "label:missing");
     expect(page.querySelector(".session-bar-row, .sessions-selected-group")).toBeNull();
-    const clearSelection = [
-      ...page.querySelectorAll<HTMLButtonElement>(".sessions-card button"),
-    ].find((button) => button.textContent?.trim() === "Clear Selection");
-    expect(clearSelection).toBeDefined();
-    clearSelection!.click();
+    usageButton(page, "Clear Selection", ".sessions-card button").click();
     await settle();
     expect(page.usageSelectedSessions).toEqual([]);
   });
@@ -162,7 +153,7 @@ describe("UsagePage detail requests", () => {
         return { providers: [], points: [] };
       });
       const { page } = await loadUsagePage(request);
-      page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+      selectUsageSession(page);
       await waitForFast(() => expect(page.textContent).toContain(`${agentId} turn`));
 
       for (const method of ["sessions.usage", "sessions.usage.timeseries", "sessions.usage.logs"]) {
@@ -253,7 +244,7 @@ describe("UsagePage detail requests", () => {
     });
     const { context, page } = await loadUsagePage(request);
     context.setGatewaySnapshot({ suspensionPhase: "draining" });
-    page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+    selectUsageSession(page);
     await waitForFast(() =>
       expect(page.read().detail).toMatchObject({
         timeSeriesStatus: { awaitingGateway: true },
@@ -406,9 +397,7 @@ describe("UsagePage detail requests", () => {
     expect(initial[1]).toMatchObject({ includeContextWeight: false });
     expect(request.mock.calls.filter(([, params]) => params?.key)).toHaveLength(0);
 
-    const selectSession = (index: number) => {
-      page.querySelectorAll<HTMLButtonElement>(".session-bar-selection")[index]!.click();
-    };
+    const selectSession = (index: number) => selectUsageSession(page, index);
     selectSession(0);
     await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain("Loading"));
     const firstContext = request.mock.calls.find(
@@ -508,7 +497,7 @@ describe("UsagePage detail requests", () => {
       return { providers: [] };
     });
     const { page } = await loadUsagePage(request);
-    page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+    selectUsageSession(page);
     await waitForFast(() => expect(textOf(page, ".context-details-panel")).toContain(report));
     expect(textOf(page, ".timeseries-summary")).toContain("200");
     expect(textOf(page, ".session-log-content")).toBe("2 completed turns");
@@ -554,11 +543,7 @@ describe("UsagePage detail requests", () => {
     });
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const { page } = await loadUsagePage(request);
-    const query = page.querySelector<HTMLInputElement>(".usage-query-input")!;
-    query.value = "label:Included";
-    query.dispatchEvent(new Event("input", { bubbles: true }));
-    query.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    await page.updateComplete;
+    await queryUsagePage(page, "label:Included");
     const exportJson = () => selectUsageExport(page.querySelector(".usage-export-menu")!, "json");
     await exportJson();
     await page.updateComplete;
@@ -591,10 +576,7 @@ describe("UsagePage detail requests", () => {
     pending = deferred<SessionsUsageResult>();
     await exportJson();
     await page.updateComplete;
-    const scope = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Current instance",
-    )!;
-    scope.click();
+    usageButton(page, "Current instance").click();
     await page.updateComplete;
     pending.resolve(full);
     await waitForFast(() => expect(refreshButton(page).disabled).toBe(false));

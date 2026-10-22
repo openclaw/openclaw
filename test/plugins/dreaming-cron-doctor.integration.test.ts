@@ -208,7 +208,6 @@ function createPausedCronService(fixture: Fixture) {
     log: logger,
     nowMs: () => 1_800_000_000_200,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent(event) {
       if (event.action === "added" || event.action === "updated" || event.action === "removed") {
