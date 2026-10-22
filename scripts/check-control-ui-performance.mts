@@ -52,14 +52,14 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // Small, explicit headroom over the optimized baseline. Budget changes should
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
-  // Schema runtime deferrals use 7/25/20 requests; retain two per path.
+  // Runtime English deferrals use 7/24/19 requests; retain two per path.
   startupJsRequests: 9,
-  chatBootJsRequests: 27,
-  newBootJsRequests: 22,
-  // Combined boot imports: 1,421,045 B Chat and 962,347 B New Session.
-  // Preserve relative Chat headroom and the stricter existing New Session cap.
-  chatBootJsGzipBytes: 1_476_953,
-  newBootJsGzipBytes: 977_485,
+  chatBootJsRequests: 26,
+  newBootJsRequests: 21,
+  // Runtime English: 1,416,919 B Chat and 953,531 B New Session.
+  // Preserve each route's relative headroom against its measured merge base.
+  chatBootJsGzipBytes: 1_471_671,
+  newBootJsGzipBytes: 967_647,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   startupJsGzipBytes: 325_081,

@@ -1,5 +1,5 @@
 {
   "startupJsGzipBytes": 315696,
-  "reason": "Keep shared session status copy separate from the New Session form catalog",
+  "reason": "Keep the stricter startup baseline after runtime English deferrals; measured head 315926 B",
   "updatedAt": "2026-10-22"
 }
