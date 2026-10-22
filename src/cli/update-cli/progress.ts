@@ -82,10 +82,8 @@ export function createUpdateProgress(
     currentSpinner = null;
   };
   const clearTimer = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
   const pausePolling = () => {
     polling = false;
