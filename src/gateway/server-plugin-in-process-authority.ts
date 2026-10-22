@@ -15,7 +15,11 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import {
+  intersectOperatorScopes,
+  operatorActionScope,
+  roleScopesAllow,
+} from "../shared/operator-scope-compat.js";
 import { readInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
 import { isInProcessSessionRun } from "./in-process-session-run.js";
 import {
@@ -450,11 +454,22 @@ export function resolveInProcessGatewayDispatch(
         : requested === SESSION_WRITE_SCOPE
           ? WRITE_SCOPE
           : undefined;
-    return syntheticScopeMode === "minimum" &&
+    const actionScope = broad && operatorActionScope(broad, method);
+    const projected =
       broad &&
       operatorScopes &&
       roleScopesAllow({ role: "operator", requestedScopes: [broad], allowedScopes: operatorScopes })
-      ? broad
+        ? broad
+        : actionScope;
+    return syntheticScopeMode === "minimum" &&
+      projected &&
+      operatorScopes &&
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: [projected],
+        allowedScopes: operatorScopes,
+      })
+      ? projected
       : requested;
   });
   // Narrow by authority, not literal membership: write also authorizes reads
@@ -512,7 +527,7 @@ export function resolveInProcessGatewayDispatch(
     scope?.client?.connect.role === "operator" &&
     roleScopesAllow({
       role: "operator",
-      requestedScopes: [WRITE_SCOPE],
+      requestedScopes: [operatorActionScope(WRITE_SCOPE)],
       allowedScopes: scope.client.connect.scopes ?? [],
     });
   const retainedOperatorCanRequest =
@@ -527,7 +542,7 @@ export function resolveInProcessGatewayDispatch(
     hostApprovalRequestEligible &&
     roleScopesAllow({
       role: "operator",
-      requestedScopes: [WRITE_SCOPE],
+      requestedScopes: [operatorActionScope(WRITE_SCOPE)],
       allowedScopes: operatorScopes ?? [],
     }) &&
     (scopedOperatorCanRequest || retainedOperatorCanRequest)
@@ -536,7 +551,17 @@ export function resolveInProcessGatewayDispatch(
         : signedAgentApprovalOwnerId
       : undefined;
   // The host grants only request admission; it never gives the plugin reviewer scopes.
-  const requestScopes = hostApprovalRequestOwnerId ? [WRITE_SCOPE] : syntheticScopes;
+  const requestScopes = hostApprovalRequestOwnerId
+    ? [
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: [WRITE_SCOPE],
+          allowedScopes: operatorScopes ?? [],
+        })
+          ? WRITE_SCOPE
+          : operatorActionScope(WRITE_SCOPE),
+      ]
+    : syntheticScopes;
   const baseSyntheticClient = createSyntheticPluginRuntimeClient({
     ...(operatorAuthority
       ? { authenticatedUserProfile: operatorAuthority.authenticatedUserProfile }

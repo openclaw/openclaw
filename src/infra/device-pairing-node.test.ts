@@ -543,39 +543,55 @@ describe("node surface approvals", () => {
       ...NODE_EXEC_APPROVALS_COMMANDS,
       NODE_FS_LIST_DIR_COMMAND,
       NODE_TERMINAL_UPLOAD_COMMAND,
-    ].map((command) => ({ command, scopes: ["operator.pairing", "operator.admin"] })),
-    { command: "canvas.present", scopes: ["operator.pairing", "operator.write"] },
-    { command: undefined, scopes: ["operator.pairing"] },
-  ])("reports and enforces approval scopes for $command", async ({ command, scopes }) => {
-    await withNodePairingDir(async (baseDir) => {
-      await seedNodeDevice(baseDir, "node-1");
-      const commands = command ? [command] : undefined;
-      const { request } = await requestNodePairing(
-        { nodeId: "node-1", platform: "darwin", commands },
-        baseDir,
-      );
+    ].map((command) => ({
+      command,
+      scopes: ["operator.pairing", "operator.admin"],
+      restricted: false,
+    })),
+    {
+      command: "canvas.present",
+      scopes: ["operator.pairing", "operator.write"],
+      restricted: false,
+    },
+    { command: "canvas.present", scopes: ["operator.pairing", "operator.write"], restricted: true },
+    { command: undefined, scopes: ["operator.pairing"], restricted: false },
+  ])(
+    "reports and enforces approval scopes for $command",
+    async ({ command, scopes, restricted }) => {
+      await withNodePairingDir(async (baseDir) => {
+        await seedNodeDevice(baseDir, "node-1");
+        const commands = command ? [command] : undefined;
+        const { request } = await requestNodePairing(
+          { nodeId: "node-1", platform: "darwin", commands },
+          baseDir,
+        );
 
-      expect(request.requiredApproveScopes).toEqual(scopes);
-      expect((await listNodePairing(baseDir)).pending).toEqual([request]);
-      await expect(
-        approveNodePairing(request.requestId, { callerScopes: scopes.slice(0, -1) }, baseDir),
-      ).resolves.toEqual({
-        status: "forbidden",
-        missingScope: scopes.at(-1),
-      });
-      await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
+        expect(request.requiredApproveScopes).toEqual(scopes);
+        expect((await listNodePairing(baseDir)).pending).toEqual([request]);
+        await expect(
+          approveNodePairing(request.requestId, { callerScopes: scopes.slice(0, -1) }, baseDir),
+        ).resolves.toEqual({
+          status: "forbidden",
+          missingScope: scopes.at(-1),
+        });
+        await expect(findPairedNode("node-1", baseDir)).resolves.toBeNull();
 
-      const approved = await approveNodePairing(
-        request.requestId,
-        { callerScopes: scopes },
-        baseDir,
-      );
-      expect(approved).toMatchObject({
-        requestId: request.requestId,
-        node: { nodeId: "node-1", commands },
+        const approved = await approveNodePairing(
+          request.requestId,
+          {
+            callerScopes: restricted
+              ? ["operator.pairing", "operator.write.no-credential-enrollment"]
+              : scopes,
+          },
+          baseDir,
+        );
+        expect(approved).toMatchObject({
+          requestId: request.requestId,
+          node: { nodeId: "node-1", commands },
+        });
       });
-    });
-  });
+    },
+  );
 
   test("updates remote skill bins and reports missing nodes", async () => {
     await withNodePairingDir(async (baseDir) => {

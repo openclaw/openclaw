@@ -65,6 +65,13 @@ class GatewayDevicePairingTest {
     val pending = pending("request-1", "device-1").copy(scopes = listOf("operator.read", "operator.admin"))
 
     assertFalse(canApproveGatewayDevicePairing(pairingOnly, listOf("operator.pairing", "operator.read"), pending))
+    assertFalse(
+      canApproveGatewayDevicePairing(
+        pairingOnly,
+        listOf("operator.pairing", "operator.write.no-credential-enrollment"),
+        pending.copy(scopes = listOf("operator.write")),
+      ),
+    )
     assertTrue(
       canApproveGatewayDevicePairing(
         pairingOnly,

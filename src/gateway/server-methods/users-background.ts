@@ -7,7 +7,7 @@ import {
   validateUsersBackgroundRemoveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { USER_BACKGROUND_PREFERENCE_KEY } from "../../../packages/gateway-protocol/src/schema/background-preferences.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { UserBackgroundInputError } from "../../state/user-background-image.js";
 import {
   getUserBackground,
@@ -66,7 +66,11 @@ export async function prepareUserBackgroundAction(
     );
     if (
       ![client.connect.scopes ?? [], ...(policy ? [policy.scopes] : [])].every((allowedScopes) =>
-        roleScopesAllow({ role: "operator", requestedScopes: [scope], allowedScopes }),
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: [operatorActionScope(scope)],
+          allowedScopes,
+        }),
       )
     ) {
       throw new Error("Background request no longer has the required profile scope");

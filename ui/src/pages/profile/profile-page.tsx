@@ -60,8 +60,10 @@ function accessSummary(scopes: readonly string[] | null) {
       [
         ["operator.admin", "admin"],
         ["operator.write", "write"],
+        ["operator.write.no-credential-enrollment", "write"],
         ["operator.sessions.write", "sessionWrite"],
         ["operator.read", "read"],
+        ["operator.read.no-credential-enrollment", "read"],
         ["operator.sessions.read", "sessionRead"],
       ] as const
     ).find(([scope]) => scopes.includes(scope))?.[1] ?? "limited"

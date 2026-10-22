@@ -20,7 +20,7 @@ import {
 import { listAgentRunsForSession, hasLiveAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isGatewaySubordinateWorkAdmissionClosed } from "../../process/gateway-work-admission.js";
 import { matchesTranscriptEvent } from "../../sessions/transcript-visible-record.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { buildBoardWidgetSandboxPath } from "../board-sandbox.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -217,7 +217,12 @@ export const canvasHandlers: GatewayRequestHandlers = {
     async (invocation) => {
       let retained: Awaited<ReturnType<typeof retainWidgetRead>> | undefined;
       try {
-        if (!operatorScopeSatisfied("operator.read", invocation.client?.connect.scopes ?? [])) {
+        if (
+          !operatorScopeSatisfied(
+            operatorActionScope("operator.read"),
+            invocation.client?.connect.scopes ?? [],
+          )
+        ) {
           retained = await retainWidgetRead(invocation);
         }
         if (retained?.pending) {

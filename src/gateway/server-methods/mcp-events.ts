@@ -6,7 +6,7 @@ import {
   prepareMcpEventConnection,
   type McpEventPrincipal,
 } from "../../plugins/service-mcp-events.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { readCronCallerScope } from "./cron-caller-scope.js";
@@ -142,7 +142,10 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
         !client ||
         client.invalidated ||
         hasCurrentClientAuthority?.() === false ||
-        !operatorScopeSatisfied("operator.read", client.connect.scopes ?? []) ||
+        !operatorScopeSatisfied(
+          operatorActionScope("operator.read"),
+          client.connect.scopes ?? [],
+        ) ||
         context.getRuntimeConfig() !== cfg ||
         context.getGatewayMethodRegistry?.() !== registry ||
         client.authenticatedUserId !== identity.user ||

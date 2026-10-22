@@ -895,9 +895,13 @@ it("replaces a retired profile read when the same ID gains profile qualification
   );
 });
 
+const readAccessSummary = "You have permission to view server information.";
+const writeAccessSummary = "You have permission to send messages and make changes.";
 it.each([
-  { scopes: ["operator.read"], summary: "You have permission to view server information." },
-  { scopes: ["operator.write"], summary: "You have permission to send messages and make changes." },
+  { scopes: ["operator.read"], summary: readAccessSummary },
+  { scopes: ["operator.read.no-credential-enrollment"], summary: readAccessSummary },
+  { scopes: ["operator.write"], summary: writeAccessSummary },
+  { scopes: ["operator.write.no-credential-enrollment"], summary: writeAccessSummary },
   {
     scopes: ["operator.sessions.read"],
     summary: "You have permission to view your own sessions.",

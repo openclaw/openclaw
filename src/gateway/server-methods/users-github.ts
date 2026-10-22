@@ -19,7 +19,7 @@ import type {
 import { defineValidatedGatewayMethod } from "./validation.js";
 
 async function runPersonalGitHub(
-  options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal" | "respond">,
+  options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal" | "respond" | "req">,
   fallbackError: string,
   run: (
     action: PersonalGitHubAction,
@@ -33,7 +33,12 @@ async function runPersonalGitHub(
       errorShape(ErrorCodes.FORBIDDEN, error instanceof Error ? error.message : fallbackError),
     );
   try {
-    const action = await preparePersonalGitHubActionV2(options);
+    const action = await preparePersonalGitHubActionV2(
+      options,
+      "operator.read",
+      undefined,
+      options.req.method,
+    );
     const service = options.context.githubOAuthService?.personal;
     if (!service) {
       throw new Error("GitHub connections are unavailable; retry after Gateway startup.");

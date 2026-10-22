@@ -15,7 +15,7 @@ import {
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { GitHubConnections } from "./github-connections.tsx";
-import { createMutationRunner } from "./github-identity-harness.test-support.ts";
+import { authorizationCode, createMutationRunner } from "./github-identity-harness.test-support.ts";
 
 const system: ToolsGitHubStatusResult["effective"] = {
   ...disconnectedGitHub.system,
@@ -283,6 +283,89 @@ it.each(["available", "unavailable"] as const)("loads native %s", async (credent
   );
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
   expect(context.runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
+});
+
+it.each([
+  { scopes: ["operator.read.no-credential-enrollment"], canEnroll: false },
+  { scopes: ["operator.write.no-credential-enrollment"], canEnroll: false },
+  { scopes: ["operator.write"], canEnroll: true },
+  { scopes: ["operator.write.no-credential-enrollment", "operator.read"], canEnroll: true },
+])(
+  "preserves status and disconnect independently of enrollment for $scopes",
+  async ({ scopes, canEnroll }) => {
+    let personal = {
+      ...disconnected,
+      state: "connected",
+      account: { accountId: 583231, login: "octocat" },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "users.github.status") {
+        return { personal, system };
+      }
+      if (method === "users.github.disconnect") {
+        personal = { ...personal, state: "disconnected" };
+        return { disconnected: true };
+      }
+      throw new Error("unexpected method: " + method);
+    });
+    const ui = mount(scopes, "profile-a", request);
+    await ui.waitText(["@octocat", "@system-account"]);
+    expect(ui.button("Change My GitHub").disabled).toBe(!canEnroll);
+    expect(ui.button("Manage connections").disabled).toBe(!canEnroll);
+    expect(ui.button("Verify").disabled).toBe(false);
+    const notice = "Verified GitHub identity and co-author credit remain available.";
+    ui.text(canEnroll ? [] : [notice], canEnroll ? [notice] : []);
+    ui.button("Change My GitHub").click();
+    flush();
+    expect(ui.query("[data-github-setup]") !== null).toBe(canEnroll);
+    expect(ui.button("Disconnect My GitHub").disabled).toBe(false);
+    ui.button("Disconnect My GitHub").click();
+    await ui.waitText(["Not connected"], ["Disconnect My GitHub"]);
+    expect(
+      request.mock.calls.filter(([method]) => method === "users.github.disconnect"),
+    ).toHaveLength(1);
+    expect(
+      request.mock.calls.some(([method]) => method.startsWith("users.github.authorize.")),
+    ).toBe(false);
+    expect(ui.button("Connect My GitHub").disabled).toBe(!canEnroll);
+  },
+);
+
+it("closes personal setup on an enrollment downgrade and discards a delayed authorization code", async () => {
+  const start = createDeferredCore<typeof authorizationCode>();
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.github.status") {
+      return personalStatus;
+    }
+    if (method === "users.github.authorize.start") {
+      return start.promise;
+    }
+    if (method === "users.github.authorize.cancel") {
+      return { cancelled: true };
+    }
+    throw new Error("unexpected method: " + method);
+  });
+  const ui = mount(["operator.write"], "profile-a", request);
+  await ui.waitText(["Connect My GitHub"]);
+  ui.button("Connect My GitHub").click();
+  flush();
+  ui.button("Continue with GitHub").click();
+  await ui.waitText(["Requesting code…"]);
+  ui.emit({ hello: gatewayHelloForMethods([], ["operator.write.no-credential-enrollment"]) });
+  expect(ui.query("[data-github-setup]")).toBeNull();
+  start.resolve(authorizationCode);
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("users.github.authorize.cancel", {
+      requestId: authorizationCode.requestId,
+    }),
+  );
+  await ui.waitText(["Connect My GitHub", "@system-account"]);
+  expect(ui.button("Connect My GitHub").disabled).toBe(true);
+  expect(ui.query("[data-github-setup]")).toBeNull();
+  ui.text([], [authorizationCode.userCode]);
+  expect(
+    request.mock.calls.filter(([method]) => method === "users.github.authorize.poll"),
+  ).toHaveLength(0);
 });
 
 it("closes setup and resets its purpose when the same Gateway snapshot changes profile", async () => {

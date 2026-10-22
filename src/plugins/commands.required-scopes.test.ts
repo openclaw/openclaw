@@ -18,6 +18,38 @@ beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 afterEach(resetPluginRuntimeStateForTest);
 
+it.each([
+  ["operator.write.no-credential-enrollment", true],
+  ["operator.read", false],
+] as const)("keeps ordinary plugin writes available with %s", async (grant, allowed) => {
+  const handler = vi.fn(async () => ({ text: "written" }));
+  expect(
+    registerPluginCommand("demo-plugin", {
+      name: "ordinary-write",
+      description: "Ordinary mutation",
+      requiredScopes: ["operator.write"],
+      handler,
+    }),
+  ).toEqual({ ok: true });
+  const command = expectDefined(
+    matchPluginCommand("/ordinary-write"),
+    "ordinary write command",
+  ).command;
+  const result = await executePluginCommand({
+    command,
+    channel: "webchat",
+    isAuthorizedSender: true,
+    senderIsOwner: false,
+    commandBody: "/ordinary-write",
+    gatewayClientScopes: [grant],
+    config: {},
+  });
+  expect(result).toEqual({
+    text: allowed ? "written" : "⚠️ This command requires gateway scope: operator.write.",
+  });
+  expect(handler).toHaveBeenCalledTimes(allowed ? 1 : 0);
+});
+
 const sparseRequiredScopes: unknown[] = [];
 sparseRequiredScopes.length = 1;
 

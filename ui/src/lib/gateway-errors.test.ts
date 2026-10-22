@@ -47,6 +47,11 @@ describe("gateway error helpers", () => {
   it.each([
     ["structured read scope", missingScope("operator.read", "permission denied"), true],
     [
+      "structured restricted read scope",
+      missingScope("operator.read.no-credential-enrollment", "permission denied"),
+      true,
+    ],
+    [
       "shared client message",
       requestError("INVALID_REQUEST", "missing scope: operator.read"),
       true,

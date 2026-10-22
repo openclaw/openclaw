@@ -20,7 +20,7 @@ import {
   type ApnsRegistration,
   type ApnsRelayConfig,
 } from "../infra/push-apns.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { APPROVALS_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 
 // iOS approval push delivery targets paired operator devices with APNs
@@ -100,7 +100,7 @@ async function resolvePairedTargets(
         operatorToken.revokedAtMs ||
         !roleScopesAllow({
           role: OPERATOR_ROLE,
-          requestedScopes: [APPROVALS_SCOPE, READ_SCOPE],
+          requestedScopes: [APPROVALS_SCOPE, operatorActionScope(READ_SCOPE)],
           allowedScopes: operatorToken.scopes,
         })
       ) {

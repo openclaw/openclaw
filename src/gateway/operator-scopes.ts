@@ -1,6 +1,10 @@
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
+export const READ_NO_CREDENTIAL_ENROLLMENT_SCOPE =
+  "operator.read.no-credential-enrollment" as const;
 export const WRITE_SCOPE = "operator.write" as const;
+export const WRITE_NO_CREDENTIAL_ENROLLMENT_SCOPE =
+  "operator.write.no-credential-enrollment" as const;
 export const SESSION_READ_SCOPE = "operator.sessions.read" as const;
 export const SESSION_WRITE_SCOPE = "operator.sessions.write" as const;
 export const APPROVALS_SCOPE = "operator.approvals" as const;
@@ -12,7 +16,9 @@ export const TALK_SECRETS_SCOPE = "operator.talk.secrets" as const;
 const KNOWN_OPERATOR_SCOPE_VALUES = [
   ADMIN_SCOPE,
   READ_SCOPE,
+  READ_NO_CREDENTIAL_ENROLLMENT_SCOPE,
   WRITE_SCOPE,
+  WRITE_NO_CREDENTIAL_ENROLLMENT_SCOPE,
   SESSION_READ_SCOPE,
   SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,

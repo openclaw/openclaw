@@ -10,7 +10,10 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "../../../src/gateway/control-ui-contract.js";
-import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
+import {
+  operatorActionScope,
+  operatorScopeSatisfied,
+} from "../../../src/shared/operator-scope-compat.js";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "./gateway-methods.ts";
@@ -110,7 +113,10 @@ export function sessionPullRequestsForGateway(
   const canReadPullRequests = () =>
     canCallGatewayMethod(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "operator.read");
   const canReadAllPullRequests = () =>
-    operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? []);
+    operatorScopeSatisfied(
+      operatorActionScope("operator.read"),
+      gateway.snapshot.hello?.auth?.scopes ?? [],
+    );
   let broadRead = canReadAllPullRequests();
 
   const notify = () => Array.from(listeners).forEach((listener) => listener());
@@ -276,7 +282,7 @@ export function sessionPullRequestsForGateway(
       if (
         !changed &&
         ["delete", "sharing", "profile-identity"].includes(String(reason)) &&
-        !operatorScopeSatisfied("operator.read", gateway.snapshot.hello?.auth?.scopes ?? [])
+        !canReadAllPullRequests()
       ) {
         clearSnapshotsAndWaiters();
         for (const key of watchedKeys()) {

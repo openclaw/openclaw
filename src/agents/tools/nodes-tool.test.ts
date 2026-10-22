@@ -512,7 +512,11 @@ it.each([
     request: { requiredApproveScopes: ["operator.pairing", "operator.admin"] },
     scope: "operator.admin",
   },
-  { request: { commands: ["canvas.snapshot"] }, scope: "operator.write" },
+  { request: { commands: ["canvas.snapshot"] }, scope: "operator.write.no-credential-enrollment" },
+  {
+    request: { requiredApproveScopes: ["operator.pairing", "operator.write"] },
+    scope: "operator.write.no-credential-enrollment",
+  },
 ])("approves node pair requests using $scope", async ({ request, scope }) => {
   mockNodePairApproveFlow(request);
   await createNodesTool().execute("call", { action: "approve", requestId: "req-1" });

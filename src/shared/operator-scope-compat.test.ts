@@ -15,6 +15,40 @@ it("does not broaden session write authority to general writes", () => {
   expect(allows("operator", ["operator.write"], ["operator.sessions.write"])).toBe(false);
 });
 
+it("caps full write to non-enrolling write without granting enrollment back", () => {
+  const restricted = "operator.write.no-credential-enrollment";
+  expect(allows("operator", [restricted], ["operator.write"])).toBe(true);
+  expect(allows("operator", ["operator.write"], [restricted])).toBe(false);
+  expect(
+    allows(
+      "operator",
+      ["operator.read.no-credential-enrollment", "operator.talk", "operator.sessions.write"],
+      [restricted],
+    ),
+  ).toBe(true);
+  expect(allows("operator", ["operator.read"], [restricted])).toBe(false);
+  expect(intersect(["operator.read"], [restricted])).toEqual([
+    "operator.read.no-credential-enrollment",
+  ]);
+  expect(intersect(["operator.write"], [restricted])).toEqual([restricted]);
+  expect(intersect([restricted], ["operator.write"])).toEqual([restricted]);
+  expect(allows("operator", ["operator.write"], [restricted, "operator.write"])).toBe(true);
+});
+
+it("keeps ordinary read attenuation read-only and enrollment-free", () => {
+  const read = "operator.read.no-credential-enrollment";
+  expect(allows("operator", [read], ["operator.read"])).toBe(true);
+  for (const requested of [
+    "operator.read",
+    "operator.write",
+    "operator.write.no-credential-enrollment",
+  ]) {
+    expect(allows("operator", [requested], [read])).toBe(false);
+  }
+  expect(allows("operator", ["operator.sessions.read"], [read])).toBe(true);
+  expect(intersect(["operator.read"], ["operator.write.no-credential-enrollment"])).toEqual([read]);
+});
+
 it.each([
   [["read", "write"], ["sessions.write"], ["sessions.write"]],
   [["admin"], ["sessions.read"], ["sessions.read"]],

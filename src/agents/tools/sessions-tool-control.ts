@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { operatorActionScope } from "../../shared/operator-scope-compat.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import {
   jsonResult,
@@ -37,7 +38,7 @@ type ControlTarget = {
 export async function prepareSessionToolControlTarget(target: ControlTarget) {
   const { key, restricted, ...identity } = target;
   const source = restricted ? captureSessionControlAuthority() : undefined;
-  if (restricted && !source?.allows("operator.write")) {
+  if (restricted && !source?.allows(operatorActionScope("operator.write"))) {
     throw new ToolAuthorizationError("Session control requires a current operator write grant");
   }
   return await prepareSessionControlTarget({

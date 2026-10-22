@@ -4,7 +4,10 @@ import type {
   ChannelsPairingDismissParams,
 } from "../../../../packages/gateway-protocol/src/schema/channel-pairing.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
-import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
+import {
+  operatorActionScope,
+  roleScopesAllow,
+} from "../../../../src/shared/operator-scope-compat.ts";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type {
   ChannelAccountSnapshot,
@@ -174,7 +177,7 @@ function channelSnapshotAllowsScope(
   }
   return roleScopesAllow({
     role: auth.role ?? "operator",
-    requestedScopes: [scope],
+    requestedScopes: [operatorActionScope(scope)],
     allowedScopes: auth.scopes,
   });
 }

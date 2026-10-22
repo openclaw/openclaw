@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 public struct OpenClawChatReactionIdentity: Codable, Sendable, Equatable {
     public let id: String
@@ -100,7 +101,7 @@ public struct OpenClawChatReactionAccess: Sendable, Equatable {
               self.methods?.contains("session.reactions.set") == true,
               self.role?.trimmingCharacters(in: .whitespacesAndNewlines) == "operator",
               let scopes = self.scopes?.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }),
-              scopes.contains("operator.write") || scopes.contains("operator.admin")
+              GatewayOperatorScopeAccess.allowsWrite(scopes)
         else { return false }
         let visibility = visibility ?? "shared"
         if visibility == "draft" { return sharingRole == "owner" || sharingRole == "admin" }

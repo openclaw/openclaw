@@ -187,25 +187,28 @@ describe("handleWorkboardCommand", () => {
     await expectReply(command(`show ${card.id}`), "archived: yes (excluded from dispatch)");
   });
 
-  it("moves claimed cards for operators on slash-command surfaces", async () => {
-    const { store, command } = createCommandFixture();
-    const card = await store.create({ title: "Claimed slash card", status: "todo" });
-    await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
+  it.each(["operator.write", "operator.write.no-credential-enrollment"])(
+    "moves claimed cards for %s on slash-command surfaces",
+    async (scope) => {
+      const { store, command } = createCommandFixture();
+      const card = await store.create({ title: "Claimed slash card", status: "todo" });
+      await store.claim(card.id, { ownerId: "worker", token: "secret-token" });
 
-    await expectReply(
-      command(`move ${card.id.slice(0, 8)} --status review`, {
-        gatewayClientScopes: ["operator.write"],
-        assertOwnerCurrent: () => {
-          throw new Error("not a chat owner");
-        },
-      }),
-      "review",
-    );
-    await expect(store.get(card.id)).resolves.toMatchObject({
-      status: "review",
-      metadata: { claim: { ownerId: "worker", token: "secret-token" } },
-    });
-  });
+      await expectReply(
+        command(`move ${card.id.slice(0, 8)} --status review`, {
+          gatewayClientScopes: [scope],
+          assertOwnerCurrent: () => {
+            throw new Error("not a chat owner");
+          },
+        }),
+        "review",
+      );
+      await expect(store.get(card.id)).resolves.toMatchObject({
+        status: "review",
+        metadata: { claim: { ownerId: "worker", token: "secret-token" } },
+      });
+    },
+  );
 
   it("rechecks owner authority after create and move preparation without gating reads", async () => {
     let ownerCurrent = true;

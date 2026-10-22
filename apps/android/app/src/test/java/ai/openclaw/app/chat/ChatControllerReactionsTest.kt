@@ -424,6 +424,7 @@ class ChatControllerReactionsTest {
       assertEquals(case.toString(), case.allowed, allowed(writer.copy(sessionCap = case.cap), session.copy(sharingRole = case.role, visibility = case.visibility)))
     }
     assertTrue(allowed(writer.copy(scopes = setOf("operator.admin"))))
+    assertTrue(allowed(writer.copy(scopes = setOf("operator.write.no-credential-enrollment"))))
     assertFalse(allowed(writer.copy(scopes = setOf("operator.read"))))
     assertFalse(allowed(writer.copy(scopes = setOf("operator.sessions.write"))))
     assertFalse(allowed(writer.copy(role = "node")))

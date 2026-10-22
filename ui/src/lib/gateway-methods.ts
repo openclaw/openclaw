@@ -1,5 +1,5 @@
 import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
-import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
   resolveBaseSessionMutationRequiredScope,
   resolveSessionMethodScope,
@@ -65,14 +65,17 @@ export function canPresentGatewayMethod(
   return roleScopesAllow({
     role: auth.role,
     requestedScopes: [
-      requiredScope === "operator.admin"
-        ? requiredScope
-        : (resolveBaseSessionMutationRequiredScope(method) ??
-          (requiredScope === "operator.read" &&
-          resolveSessionMethodScope(method) === "operator.sessions.read"
-            ? "operator.sessions.read"
-            : undefined) ??
-          requiredScope),
+      operatorActionScope(
+        requiredScope === "operator.admin"
+          ? requiredScope
+          : (resolveBaseSessionMutationRequiredScope(method) ??
+              (requiredScope === "operator.read" &&
+              resolveSessionMethodScope(method) === "operator.sessions.read"
+                ? "operator.sessions.read"
+                : undefined) ??
+              requiredScope),
+        method,
+      ),
     ],
     allowedScopes: auth.scopes,
   });

@@ -72,6 +72,17 @@ describe("session control source capability", () => {
     expect(() => hasSessionControlAuthority(authority)).toThrow("session control source revoked");
   });
 
+  it("admits ordinary controls without manufacturing an enrollment grant", () => {
+    const { authority } = issueAuthority("control-profile", [
+      "operator.write.no-credential-enrollment",
+    ]);
+    expect(hasSessionControlAuthority(authority)).toBe(true);
+    const captured = captureSessionControlAuthority(authority);
+    expect(captured?.authority.scopes).toEqual(["operator.write.no-credential-enrollment"]);
+    expect(captured?.allows("operator.write")).toBe(false);
+    expect(captured?.allows("operator.admin")).toBe(false);
+  });
+
   it("resolves the ambient original but rejects an unrelated prepared upgrade", async () => {
     const { authority } = issueAuthority("control-profile", ["operator.read"]);
     const { authority: upgrade } = issueAuthority("control-profile", ["operator.admin"]);

@@ -6,6 +6,7 @@ import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { operatorActionScope } from "../../shared/operator-scope-compat.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { ToolAuthorizationError } from "./common.js";
@@ -40,7 +41,7 @@ export async function prepareSessionControlTarget(params: {
         throw new ToolAuthorizationError("Session control Gateway instance changed.");
       }
       assertSource();
-      if (source && !source.allows("operator.write")) {
+      if (source && !source.allows(operatorActionScope("operator.write"))) {
         throw new ToolAuthorizationError("Session controls require operator.write.");
       }
     },
@@ -101,7 +102,13 @@ export async function prepareSessionControlTarget(params: {
           client: createSyntheticPluginRuntimeClient({
             operatorRoleActor: { kind: "operator", profileId: source.authority.profileId },
             operatorRunAuthority: source.authority,
-            scopes: [source.allows("operator.admin") ? "operator.admin" : "operator.write"],
+            scopes: [
+              source.allows("operator.admin")
+                ? "operator.admin"
+                : source.allows("operator.write")
+                  ? "operator.write"
+                  : operatorActionScope("operator.write"),
+            ],
           }),
         },
         currentFacts,

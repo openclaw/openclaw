@@ -32,6 +32,26 @@ describe("resolvePluginRouteRuntimeOperatorScopes", () => {
       ).toEqual(["operator.read"]);
     },
   );
+  it.each([false, true])("preserves a non-enrolling device grant (role ceiling=%s)", (capped) => {
+    const scopes = ["operator.write.no-credential-enrollment"] as const;
+    expect(
+      resolvePluginRouteRuntimeOperatorScopes(createReq(), {
+        authMethod: "device-token",
+        trustDeclaredOperatorScopes: false,
+        deviceOperatorScopes: capped ? ["operator.write"] : [...scopes],
+        ...(capped
+          ? {
+              operatorRolePolicy: {
+                sessions: { others: "none" as const },
+                agents: "*" as const,
+                scopes: [...scopes],
+              },
+            }
+          : {}),
+      }),
+    ).toEqual(scopes);
+  });
+
   it("preserves declared trusted-proxy scopes when the header is present", () => {
     expect(
       resolvePluginRouteRuntimeOperatorScopes(createReq({ "x-openclaw-scopes": "operator.read" }), {

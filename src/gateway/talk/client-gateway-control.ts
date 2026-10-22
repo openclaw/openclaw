@@ -10,6 +10,7 @@ import {
   reserveSessionControllerSource,
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -77,7 +78,7 @@ export function resolveTalkAgentConsultAuthority(
       (cap) => cap !== GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
     );
   }
-  if (senderIsOwner || scopes?.includes(WRITE_SCOPE) === true) {
+  if (senderIsOwner || operatorScopeSatisfied(operatorActionScope(WRITE_SCOPE), scopes ?? [])) {
     return { senderIsOwner, ...(replyCaller ? { replyCaller } : {}) };
   }
   return {

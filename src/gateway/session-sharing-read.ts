@@ -5,7 +5,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
@@ -66,7 +66,10 @@ export function canReceiveSessionEvent(params: {
     return (
       (!operatorScopeSatisfied("operator.sessions.read", client.connect.scopes ?? []) ||
         operatorActor?.kind === "system" ||
-        operatorScopeSatisfied("operator.read", client.connect.scopes ?? [])) &&
+        operatorScopeSatisfied(
+          operatorActionScope("operator.read"),
+          client.connect.scopes ?? [],
+        )) &&
       (!policyConfig.gateway?.roles || operatorActor?.kind === "system") &&
       event !== "session.suggestion" &&
       event !== "session.typing"

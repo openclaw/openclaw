@@ -34,9 +34,12 @@ function uploadRequest() {
   return { store, res, run: () => handler(req, res) };
 }
 
-it.each(["current", "observation", "conflict"] as const)(
+it.each(["current", "restricted", "observation", "conflict"] as const)(
   "publishes only with current request authority: %s",
   async (phase) => {
+    requestScope.client.connect.scopes = [
+      phase === "restricted" ? "operator.write.no-credential-enrollment" : "operator.write",
+    ];
     const { store, res, run } = uploadRequest();
     const entered = createDeferred<void>();
     const resume = createDeferred<void>();
@@ -66,7 +69,7 @@ it.each(["current", "observation", "conflict"] as const)(
     const rejected = new Error("request owner rejected publication");
     const outcome = run().catch((error: unknown) => error);
     try {
-      if (phase !== "current") {
+      if (phase === "observation" || phase === "conflict") {
         await expect(
           Promise.race([entered.promise.then(() => true), outcome.then(() => false)]),
           "request must reach the controlled checkpoint before finishing",
@@ -78,13 +81,15 @@ it.each(["current", "observation", "conflict"] as const)(
         });
         resume.resolve();
       }
-      expect(await outcome).toEqual(phase === "current" ? true : rejected);
-      expect(res.statusCode).toBe(phase === "current" ? 200 : 401);
+      expect(await outcome).toEqual(
+        phase === "current" || phase === "restricted" ? true : rejected,
+      );
+      expect(res.statusCode).toBe(phase === "current" || phase === "restricted" ? 200 : 401);
       expect(store.keyedStore.compareAndApply).toHaveBeenCalledTimes(
         phase === "observation" ? 0 : 1,
       );
       expect(await store.get(sampleUpload().beamId)).toEqual(
-        phase === "current"
+        phase === "current" || phase === "restricted"
           ? { ...sampleUpload(), createdAt: 100, receivedAt: 100 }
           : phase === "observation"
             ? undefined

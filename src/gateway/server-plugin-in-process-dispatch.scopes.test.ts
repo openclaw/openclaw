@@ -63,6 +63,47 @@ function syntheticRequest(
 }
 
 describe("synthetic operator scope attenuation", () => {
+  it.each(["minimum", "exact"] as const)(
+    "keeps %s synthetic calls within the non-enrolling source",
+    async (mode) => {
+      const scope = "operator.write.no-credential-enrollment";
+      const handler = vi.fn(({ client, respond }: GatewayRequestHandlerOptions) => {
+        expect(client?.connect.scopes).toEqual([scope]);
+        respond(true, { ok: true });
+      });
+      const context = createContext([["tools.invoke", "operator.write", "scope-proof", handler]]);
+      const request = withOperatorToolGatewayAuthority(
+        {
+          authenticatedUserProfile: {
+            profileId: ensureProfileForEmail("narrow-scope-owner@example.test").id,
+            displayName: null,
+            hasAvatar: false,
+            updatedAt: 1,
+          },
+          scopes: [scope],
+        },
+        () =>
+          dispatchGatewayMethodInProcess(
+            "tools.invoke",
+            {},
+            {
+              forceSyntheticClient: true,
+              syntheticScopes: ["operator.write"],
+              syntheticScopeMode: mode,
+              resolveGatewayContext: () => context,
+            },
+          ),
+      );
+      if (mode === "exact") {
+        await expect(request).rejects.toThrow("missing scope: operator.write");
+        expect(handler).not.toHaveBeenCalled();
+      } else {
+        await expect(request).resolves.toEqual({ ok: true });
+        expect(handler).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it.each([
     ["sessions.create", { incognito: true }, "dynamic", "admin"],
     ["sessions.create", { execNode: "remote" }, "dynamic", "admin"],

@@ -270,9 +270,16 @@ describe("users model-account connection lifecycle", () => {
 
   it.each(
     (["before", "during"] as const).flatMap((phase) =>
-      (["disconnect", "invalidation", "role", "merge", "answerer disconnect"] as const).map(
-        (change) => ({ phase, change }),
-      ),
+      (
+        [
+          "disconnect",
+          "invalidation",
+          "role",
+          "non-enrolling role",
+          "merge",
+          "answerer disconnect",
+        ] as const
+      ).map((change) => ({ phase, change })),
     ),
   )("fences $change $phase provider I/O", async ({ phase, change }) => {
     const writer: GatewayOperatorRoleDefinition = {
@@ -312,6 +319,9 @@ describe("users model-account connection lifecycle", () => {
     }
     if (change === "role") {
       writer.scopes = ["operator.read"];
+    }
+    if (change === "non-enrolling role") {
+      writer.scopes = ["operator.write.no-credential-enrollment"];
     }
     if (change === "merge") {
       resolveProfileId.mockImplementation((id) => (id === "profile-1" ? "profile-merged" : id));

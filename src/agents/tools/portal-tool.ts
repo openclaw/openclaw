@@ -4,6 +4,7 @@ import type {
   PortalSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { WRITE_SCOPE } from "../../gateway/operator-scopes.js";
+import { operatorActionScope } from "../../shared/operator-scope-compat.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -24,7 +25,7 @@ import type { SessionPortalToolTarget } from "./session-portal-target.js";
 
 // Reading a portal's bearer URL is a write-scope capability: it is the same
 // credential action=open mints, so listing must ask for it explicitly.
-const PORTAL_URL_SCOPE = WRITE_SCOPE;
+const PORTAL_URL_SCOPE = operatorActionScope(WRITE_SCOPE);
 
 type PortalToolOutcome =
   | { action: "open"; result: PortalSummary }

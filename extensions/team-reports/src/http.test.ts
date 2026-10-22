@@ -278,21 +278,23 @@ describe("Team Reports HTTP responses", () => {
     },
   );
 
-  it.each(["operator.write", "operator.admin"])(
-    "allows GET and HEAD with %s authority",
-    async (scope) => {
-      runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: [scope] } } });
-      for (const method of ["GET", "HEAD"]) {
-        const response = await page("/reports/day/2026-08-20/", method);
-        if (method === "HEAD") {
-          expect(response.body).toBe("");
-          expect(Number(response.headers["content-length"])).toBeGreaterThan(0);
-        } else {
-          expect(response.body).toContain("Alice");
-        }
+  it.each([
+    "operator.write",
+    "operator.write.no-credential-enrollment",
+    "operator.read.no-credential-enrollment",
+    "operator.admin",
+  ])("allows GET and HEAD with %s authority", async (scope) => {
+    runtimeScopeMock.mockReturnValue({ client: { connect: { scopes: [scope] } } });
+    for (const method of ["GET", "HEAD"]) {
+      const response = await page("/reports/day/2026-08-20/", method);
+      if (method === "HEAD") {
+        expect(response.body).toBe("");
+        expect(Number(response.headers["content-length"])).toBeGreaterThan(0);
+      } else {
+        expect(response.body).toContain("Alice");
       }
-    },
-  );
+    }
+  });
 
   it("serves escaped HTML with one nonce-authorized script and safe navigation", async () => {
     const response = await page("/reports/day/2026-08-20/", "GET", {

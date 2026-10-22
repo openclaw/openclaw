@@ -35,6 +35,7 @@ type AccountTarget = {
   identityId: string;
   profileId: string;
   canAdmin: boolean;
+  canEnroll: boolean;
 };
 type AccountAction = "request" | "answer" | "cancel";
 
@@ -113,11 +114,15 @@ export class ModelAccountsState {
     const canAdmin = transportConnected
       ? canWrite && hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
       : (this.target?.canAdmin ?? false);
+    const canEnroll = transportConnected
+      ? canWrite && hasOperatorWriteAccess(snapshot.hello?.auth ?? null, "users.authConnect.start")
+      : (this.target?.canEnroll ?? false);
     const sameTarget =
       this.target?.client === client &&
       this.target?.identityId === identityId &&
       this.target?.profileId === profileId &&
-      this.target?.canAdmin === canAdmin;
+      this.target?.canAdmin === canAdmin &&
+      this.target?.canEnroll === canEnroll;
     this.connected = connected;
     this.hello = snapshot.hello;
     if (sameTarget && !connectionChanged) {
@@ -137,7 +142,9 @@ export class ModelAccountsState {
     this.notice = null;
     if (!sameTarget) {
       this.target =
-        client && identityId && profileId ? { client, identityId, profileId, canAdmin } : null;
+        client && identityId && profileId
+          ? { client, identityId, profileId, canAdmin, canEnroll }
+          : null;
       this.links = [];
       this.accounts = [];
       this.nextCursor = undefined;
@@ -275,6 +282,9 @@ export class ModelAccountsState {
   }
 
   openSignIn() {
+    if (!this.target?.canEnroll) {
+      return;
+    }
     this.signIn = { providers: [], provider: "", method: "" };
     const pending = this.runAction(
       "request",
@@ -309,6 +319,7 @@ export class ModelAccountsState {
   startConnect() {
     const choice = this.signIn;
     if (
+      !this.target?.canEnroll ||
       !choice?.providers.some(
         (provider) =>
           provider.id === choice.provider &&
@@ -398,7 +409,14 @@ export class ModelAccountsState {
   answerStep(stepId: string, value: unknown) {
     const flow = this.connectFlow;
     const step = flow?.step;
-    if (!this.connected || !flow || !step || step.id !== stepId || step.type === "progress") {
+    if (
+      !this.target?.canEnroll ||
+      !this.connected ||
+      !flow ||
+      !step ||
+      step.id !== stepId ||
+      step.type === "progress"
+    ) {
       return undefined;
     }
     // Do not retain submitted secrets while the Gateway runs the provider-owned step.

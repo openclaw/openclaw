@@ -21,7 +21,7 @@ extension MacGatewayChatTransport: OpenClawSidebarCatalogTransport {
                         let methods = hello.advertisedServerMethods() ?? []
                         let scopes = hello.advertisedOperatorScopes() ?? []
                         guard methods.contains("sessions.catalog.list"),
-                              !scopes.isDisjoint(with: ["operator.read", "operator.write", "operator.admin"]),
+                              GatewayOperatorScopeAccess.allowsRead(scopes),
                               await self.currentOutboxGatewayMatchesConnection(),
                               !Task.isCancelled, delivery.isCurrent
                         else {
@@ -38,7 +38,7 @@ extension MacGatewayChatTransport: OpenClawSidebarCatalogTransport {
                         continuation.yield(.connected(OpenClawSidebarCatalogConnection(
                             profileID: profileID,
                             allowsArchive: methods.contains("sessions.catalog.archive") &&
-                                !scopes.isDisjoint(with: ["operator.write", "operator.admin"]),
+                                GatewayOperatorScopeAccess.allowsWrite(scopes),
                             request: { request in
                                 try await self.connection.request(request, ifCurrentServerLease: lease)
                             },

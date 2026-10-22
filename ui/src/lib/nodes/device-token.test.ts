@@ -99,6 +99,15 @@ describe("current browser device token", () => {
     },
   );
 
+  it.each(["operator.read.no-credential-enrollment", "operator.write.no-credential-enrollment"])(
+    "uses a %s credential for private content reads",
+    (scope) => {
+      storeIdentity();
+      storeToken({ scopes: [scope] });
+      expect(loadCurrentDeviceAuthToken(tokenParams.gatewayUrl)).toBe("current-token");
+    },
+  );
+
   it("rejects a credential that cannot read private content", () => {
     storeIdentity();
     storeToken({ token: "approval-only-token", scopes: ["operator.approvals"] });

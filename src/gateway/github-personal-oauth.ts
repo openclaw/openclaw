@@ -244,7 +244,7 @@ export function createPersonalGitHubOAuthLifecycle() {
     if (pending.candidate) {
       return await install(action, initial.generation, pending);
     }
-    const polled = await pollGitHubDeviceFlow(pending, abort.signal);
+    const polled = await pollGitHubDeviceFlow(pending, abort.signal, () => guard(action));
     guard(action);
     let next: UserGitHubConnection;
     try {
@@ -564,7 +564,7 @@ export function createPersonalGitHubOAuthLifecycle() {
         throw new Error("My GitHub authorization changed.");
       }
       guard(action);
-      const authorization = await startGitHubDeviceFlow(abort.signal);
+      const authorization = await startGitHubDeviceFlow(abort.signal, () => guard(action));
       guard(action);
       if (authorization.expiresAtMs <= Date.now()) {
         throw new Error("My GitHub authorization expired while starting; start again.");

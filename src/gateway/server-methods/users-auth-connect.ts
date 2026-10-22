@@ -13,6 +13,7 @@ import {
   validateUsersListModelAccountsParams,
   validateUsersSelectModelAccountParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { operatorActionScope } from "../../shared/operator-scope-compat.js";
 import { UserProfileNotFoundError } from "../../state/user-profiles.js";
 import type { ModelAccountConnectAction } from "../model-account-authority.js";
 import {
@@ -44,7 +45,7 @@ function connectHandler<P extends { profileId?: string }>(
       const action = await prepareUserModelAccountAction(
         options,
         options.params.profileId,
-        requiredScope,
+        operatorActionScope(requiredScope, method),
       );
       const service = options.context.modelAccountConnectService;
       if (!service) {

@@ -37,7 +37,8 @@ export function isSetupAdmissionBusyError(err: unknown): boolean {
 }
 
 export function isMissingOperatorReadScopeError(err: unknown): boolean {
-  return readMissingScopeError(err)?.missingScope === "operator.read";
+  const scope = readMissingScopeError(err)?.missingScope;
+  return scope === "operator.read" || scope === "operator.read.no-credential-enrollment";
 }
 
 export function isArchiveAccessDeniedError(err: unknown): boolean {

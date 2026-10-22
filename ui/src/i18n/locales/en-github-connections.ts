@@ -23,6 +23,9 @@ const enGitHubConnections = {
     reconnectRequired: "Reconnect required",
     connectMine: "Connect My GitHub",
     changeMine: "Change My GitHub",
+    enrollmentUnavailable: "Personal GitHub connection unavailable",
+    enrollmentUnavailableDescription:
+      "Your access does not allow connecting or changing personal GitHub credentials. Verified GitHub identity and co-author credit remain available.",
     changeSystem: "Change System GitHub",
     disconnectMine: "Disconnect My GitHub",
     disconnectDescription:

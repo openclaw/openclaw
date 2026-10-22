@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
-import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, operatorActionScope } from "../shared/operator-scope-compat.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
@@ -163,7 +163,11 @@ async function verifyHttpOperatorDeviceToken(
       role: CONTROL_UI_OPERATOR_ROLE,
       // Verify the whole observed grant so a concurrent scope reduction cannot
       // leave the HTTP request with authority from the earlier pairing snapshot.
-      scopes: [CONTROL_UI_OPERATOR_READ_SCOPE, ...operatorToken.scopes, ...requiredScopes],
+      scopes: [
+        operatorActionScope(CONTROL_UI_OPERATOR_READ_SCOPE),
+        ...operatorToken.scopes,
+        ...requiredScopes,
+      ],
       requiredSharedGatewaySessionGeneration,
     });
     return verified.ok ? [...operatorToken.scopes] : null;

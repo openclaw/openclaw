@@ -839,6 +839,25 @@ describe("channel refresh sequencing", () => {
     channels.dispose();
   });
 
+  it.each(["operator.read.no-credential-enrollment", "operator.write.no-credential-enrollment"])(
+    "keeps channel status readable with %s",
+    async (scope) => {
+      const result = createChannelsSnapshot("Restricted reader");
+      const request = vi.fn(async () => result);
+      const snapshot = {
+        client: { request },
+        phase: "connected",
+        hello: { auth: { role: "operator", scopes: [scope] } },
+      };
+      const { gateway } = createChannelGatewayFixture(() => snapshot);
+      const channels = createChannelCapability(gateway as never);
+      await channels.refresh();
+      expect(request).toHaveBeenCalledWith("channels.status", { probe: false, timeoutMs: 8000 });
+      expect(channels.state.channelsSnapshot).toBe(result);
+      channels.dispose();
+    },
+  );
+
   it("rejects an in-flight channel snapshot after read access is revoked", async () => {
     const pending = createDeferred<ChannelsStatusSnapshot | null>();
     const request = vi.fn(() => pending.promise);

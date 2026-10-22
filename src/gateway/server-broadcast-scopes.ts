@@ -1,6 +1,6 @@
 import { isProxy } from "node:util/types";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import {
   GATEWAY_EVENT_DEVICE_PAIR_CHANGED,
   GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED,
@@ -180,7 +180,7 @@ export function hasEventScope(
   const pluginScope =
     explicitPluginScope || (!required && event.startsWith("plugin.") ? WRITE_SCOPE : undefined);
   if (pluginScope) {
-    return role === "operator" && operatorScopeSatisfied(pluginScope, scopes);
+    return role === "operator" && operatorScopeSatisfied(operatorActionScope(pluginScope), scopes);
   }
   if (!required) {
     return false;
@@ -190,9 +190,9 @@ export function hasEventScope(
     (role === "operator" &&
       (required.some(
         (scope) =>
-          operatorScopeSatisfied(scope, scopes) &&
+          operatorScopeSatisfied(operatorActionScope(scope), scopes) &&
           (scope !== SESSION_READ_SCOPE ||
-            operatorScopeSatisfied(READ_SCOPE, scopes) ||
+            operatorScopeSatisfied(operatorActionScope(READ_SCOPE), scopes) ||
             hasSessionReadContext?.() === true),
       ) ||
         (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes))))

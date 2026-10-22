@@ -3,9 +3,32 @@ import { resolveOperatorRolePolicyForAssignment } from "../../gateway/operator-r
 import { syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { readSkillLibrary, saveSkillLibrary } from "./service.js";
-import type { SkillLibraryAuthority } from "./store.js";
+import { resolveSkillLibraryActorFromProfile, type SkillLibraryAuthority } from "./store.js";
 
 const dirs = useStateDatabaseTempDirs();
+
+it("retains library writes under the non-enrolling connection and role grant", () => {
+  const scopes = ["operator.write.no-credential-enrollment"];
+  const actor = resolveSkillLibraryActorFromProfile(
+    { scopes },
+    {
+      gateway: {
+        roles: {
+          default: "writer",
+          definitions: {
+            writer: {
+              sessions: { others: "none" },
+              agents: "*",
+              scopes: ["operator.write.no-credential-enrollment"],
+            },
+          },
+        },
+      },
+    },
+    { id: "library-writer", role: null, githubLogin: null },
+  );
+  expect(actor).toEqual({ profileId: "library-writer", read: true, write: true, admin: false });
+});
 
 it("publishes for a verified GitHub-mapped writer with a restrictive default role", async () => {
   const options = { env: { OPENCLAW_STATE_DIR: dirs.make("skill-library-roles-") } };

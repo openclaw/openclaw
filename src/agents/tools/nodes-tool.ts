@@ -9,6 +9,7 @@ import { readConnectPairingRequiredMessage } from "../../../packages/gateway-pro
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
+import { operatorActionScope } from "../../shared/operator-scope-compat.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
@@ -106,10 +107,10 @@ async function resolveNodePairApproveScopes(
         scope === "operator.pairing" || scope === "operator.write" || scope === "operator.admin",
     );
     if (scopes.length > 0) {
-      return scopes;
+      return scopes.map((scope) => operatorActionScope(scope));
     }
   }
-  return resolveNodePairApprovalScopes(match?.commands);
+  return resolveNodePairApprovalScopes(match?.commands).map((scope) => operatorActionScope(scope));
 }
 
 // Flattened schema: runtime validates per-action requirements.

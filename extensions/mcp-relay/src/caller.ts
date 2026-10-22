@@ -18,9 +18,17 @@ export function relayCaller(
   }
   const scopes = client.connect.scopes ?? [];
   const canAdmin = scopes.includes("operator.admin");
-  const canWrite = canAdmin || scopes.includes("operator.write");
+  const fullWrite = canAdmin || scopes.includes("operator.write");
+  const canWrite = fullWrite || scopes.includes("operator.write.no-credential-enrollment");
   const ceiling = [
-    ...new Set([...scopes, ...(canWrite ? ["operator.read", "operator.write"] : [])]),
+    ...new Set([
+      ...scopes,
+      ...(fullWrite
+        ? ["operator.read", "operator.write"]
+        : canWrite
+          ? ["operator.read.no-credential-enrollment"]
+          : []),
+    ]),
   ];
   if (config.gateway?.roles || config.gateway?.auth?.mode === "trusted-proxy") {
     const profile = client.authenticatedUserProfile;
@@ -69,7 +77,13 @@ export function consentAuthority(caller: RelayCaller, value: unknown): RelayGran
     );
   }
   const ceiling =
-    value ?? ["operator.read", "operator.write"].filter((scope) => caller.ceiling.includes(scope));
+    value ??
+    [
+      "operator.read",
+      "operator.read.no-credential-enrollment",
+      "operator.write",
+      "operator.write.no-credential-enrollment",
+    ].filter((scope) => caller.ceiling.includes(scope));
   if (
     !Array.isArray(ceiling) ||
     ceiling.length === 0 ||

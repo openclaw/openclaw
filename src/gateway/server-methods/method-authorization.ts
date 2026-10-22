@@ -4,7 +4,7 @@ import {
   missingScopeErrorShape,
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
@@ -79,7 +79,11 @@ export function authorizeGatewayMethod(
     registeredScope === APPROVALS_SCOPE &&
     client.internal?.syntheticClient === true &&
     client.internal.pluginApprovalRequestOwnerId?.trim() &&
-    roleScopesAllow({ role: "operator", requestedScopes: [WRITE_SCOPE], allowedScopes: scopes })
+    roleScopesAllow({
+      role: "operator",
+      requestedScopes: [operatorActionScope(WRITE_SCOPE)],
+      allowedScopes: scopes,
+    })
   ) {
     return { error: null };
   }
@@ -119,7 +123,11 @@ export function authorizeGatewayMethod(
       !isCronModelManagementAllowed(
         (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
       ) &&
-      roleScopesAllow({ role: "operator", requestedScopes: [WRITE_SCOPE], allowedScopes: scopes })
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: [operatorActionScope(WRITE_SCOPE)],
+        allowedScopes: scopes,
+      })
     ) {
       return { error: null };
     }

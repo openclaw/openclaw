@@ -2,7 +2,7 @@ import type {
   UpdateAvailable,
   UpdateScheduleState,
 } from "../../packages/gateway-protocol/src/index.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { READ_SCOPE } from "./operator-scopes.js";
 
 export const GATEWAY_EVENT_DEVICE_PAIR_CHANGED = "device.pair.changed" as const;
@@ -89,7 +89,7 @@ export const GATEWAY_EVENTS = [
 export function canReadDetailedUpdateMetadata(role: string, scopes: readonly string[]): boolean {
   return roleScopesAllow({
     role,
-    requestedScopes: [READ_SCOPE],
+    requestedScopes: [operatorActionScope(READ_SCOPE)],
     allowedScopes: scopes,
   });
 }

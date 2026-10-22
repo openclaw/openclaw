@@ -4,10 +4,7 @@ import type {
   ToolsGitHubAuthorizePollResult,
   ToolsGitHubAuthorizeStartResult,
 } from "../../packages/gateway-protocol/src/index.js";
-import {
-  captureAgentLifecycleBinding,
-  matchesAgentLifecycleBindingAsync,
-} from "../agents/agent-lifecycle-registry.js";
+import { captureAgentLifecycleBinding } from "../agents/agent-lifecycle-registry.js";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import {
   clearGitHubCredentialVerificationCache,
@@ -62,7 +59,6 @@ import {
   configuredOAuthIdentities,
   captureGitHubOAuthAuthorizationIdentity,
   createGitHubOAuthInventoryReader,
-  identityStillSelected,
   MAINTENANCE_INTERVAL_MS,
   nextGitHubOAuthMaintenanceAtMs,
   pendingInitialOAuthIdentitySelected,
@@ -315,7 +311,11 @@ export function createGitHubOAuthLifecycle(params: {
       await queueDeviceCleanup(requestId);
       return { status: "failed", reason: "identity_changed" };
     }
-    const result = await pollGitHubDeviceFlow(record, deviceController.signal);
+    const result = await pollGitHubDeviceFlow(record, deviceController.signal, async () => {
+      if (!(await authorizationStillOwnedAsync(params.getConfig, record))) {
+        throw new Error("GitHub identity changed before authorization dispatch.");
+      }
+    });
     const currentRecord = await readGitHubDeviceAuthorizationRecord(requestId);
     if (!currentRecord) {
       return { status: "expired" };
@@ -582,18 +582,21 @@ export function createGitHubOAuthLifecycle(params: {
       if (input.scope === "agent" && !agentLifecycleBinding) {
         throw new Error("GitHub authorization requires an active agent.");
       }
-      if (!identityStillSelected(params.getConfig(), input, expectedIdentity)) {
-        throw new Error("GitHub identity changed while authorization was starting.");
-      }
+      const assertCurrent = async () => {
+        if (
+          !(await authorizationStillOwnedAsync(params.getConfig, {
+            ...input,
+            expectedIdentity,
+            agentLifecycleBinding,
+          }))
+        ) {
+          throw new Error("GitHub identity changed while authorization was starting.");
+        }
+      };
+      await assertCurrent();
       deviceController.signal.throwIfAborted();
-      const authorization = await startGitHubDeviceFlow(deviceController.signal);
-      if (
-        !identityStillSelected(params.getConfig(), input, expectedIdentity) ||
-        (agentLifecycleBinding !== undefined &&
-          !(await matchesAgentLifecycleBindingAsync(params.getConfig, agentLifecycleBinding)))
-      ) {
-        throw new Error("GitHub identity changed while authorization was starting.");
-      }
+      const authorization = await startGitHubDeviceFlow(deviceController.signal, assertCurrent);
+      await assertCurrent();
       for (const existing of await listGitHubDeviceAuthorizationRecords()) {
         if (existing.record?.scope === input.scope && existing.record.agentId === input.agentId) {
           await queueDeviceCleanup(existing.requestId);

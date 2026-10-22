@@ -1,7 +1,7 @@
 import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   assertAdmittedRunOperatorAuthority,
   getAdmittedRunSource,
@@ -56,7 +56,7 @@ export function capturePresenceToolAuthority(options?: {
       }
     }
     if (sourceScopes !== undefined) {
-      if (!operatorScopeSatisfied("operator.read", sourceScopes)) {
+      if (!operatorScopeSatisfied(operatorActionScope("operator.read"), sourceScopes)) {
         throw new Error("Presence requires operator.read access.");
       }
       return;

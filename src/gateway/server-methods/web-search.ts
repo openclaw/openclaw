@@ -11,6 +11,7 @@ import {
 } from "../../agents/tools/web-search-output.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { runWebSearch } from "../../web-search/runtime.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { prepareAuthenticatedProfile } from "./users-profile-access.js";
@@ -27,7 +28,11 @@ function hasSearchAuthority(
     !client.invalidated &&
     !client.connectionSignal?.aborted &&
     (client.connect.scopes?.includes("operator.admin") ||
-      (required === "read" && client.connect.scopes?.includes("operator.read"))) &&
+      (required === "read" &&
+        operatorScopeSatisfied(
+          operatorActionScope("operator.read"),
+          client.connect.scopes ?? [],
+        ))) &&
     !signal?.aborted &&
     (!hasCurrentClientAuthority || hasCurrentClientAuthority()),
   );

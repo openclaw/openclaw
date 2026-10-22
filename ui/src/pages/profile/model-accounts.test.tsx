@@ -15,6 +15,7 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -179,7 +180,7 @@ async function mountAccounts(
   });
   const accounts = view.container;
   await waitForSolid(() =>
-    expect(button(accounts, ".profile-auth-add-account").disabled).toBe(false),
+    expect(button(accounts, ".profile-auth-accounts-refresh").disabled).toBe(false),
   );
   return {
     accounts,
@@ -312,48 +313,88 @@ it("refreshes accounts and their saved default when another client changes authe
   expect(harness.request).toHaveBeenCalledTimes(2);
 });
 
-it("lets a writer choose a retained account for new chats and clear the default without removing it", async () => {
-  const work = {
-    ...connectedAccount,
-    authProfileId: "openai:work",
-    label: "Ada · Work workspace",
-    selected: false,
-  };
-  const harness = await mountAccounts(
-    async (method, params) => {
-      if (method === "users.selectModelAccount") {
-        expect(params).toEqual({ profileId: "profile-1", authProfileId: work.authProfileId });
-        return { links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 2 }] };
-      }
-      expect(method).toBe("users.unlinkAuthProfile");
-      expect(params).toEqual({ profileId: "profile-1", provider: "openai" });
-      return { links: [] };
-    },
-    { accounts: [connectedAccount, work] },
-  );
-  expect(harness.accounts.querySelector(".profile-auth-link-input")).toBeNull();
-  expect(harness.accounts.textContent).toContain(connectedAccount.label);
-  expect(harness.accounts.textContent).toContain(work.label);
-  expect(harness.accounts.textContent).not.toContain(work.authProfileId);
-  button(harness.accounts, `[data-auth-profile-id="${work.authProfileId}"]`).click();
-  await waitForSolid(() =>
-    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.selected")),
-  );
+it.each(["operator.write", "operator.write.no-credential-enrollment"])(
+  "lets %s choose and clear a retained account without enrolling credentials",
+  async (scope) => {
+    const work = {
+      ...connectedAccount,
+      authProfileId: "openai:work",
+      label: "Ada · Work workspace",
+      selected: false,
+    };
+    const harness = await mountAccounts(
+      async (method, params) => {
+        if (method === "users.selectModelAccount") {
+          expect(params).toEqual({ profileId: "profile-1", authProfileId: work.authProfileId });
+          return {
+            links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 2 }],
+          };
+        }
+        expect(method).toBe("users.unlinkAuthProfile");
+        expect(params).toEqual({ profileId: "profile-1", provider: "openai" });
+        return { links: [] };
+      },
+      { scopes: [scope], accounts: [connectedAccount, work] },
+    );
+    const addAccount = button(harness.accounts, ".profile-auth-add-account");
+    expect(addAccount.disabled).toBe(scope === "operator.write.no-credential-enrollment");
+    if (addAccount.disabled) {
+      expect(harness.accounts.textContent).toContain(
+        t("profilePage.modelAccounts.unavailable.write"),
+      );
+      addAccount.click();
+      expect(harness.accounts.querySelector(".profile-auth-provider")).toBeNull();
+    }
+    expect(harness.accounts.querySelector(".profile-auth-link-input")).toBeNull();
+    expect(harness.accounts.textContent).toContain(connectedAccount.label);
+    expect(harness.accounts.textContent).toContain(work.label);
+    expect(harness.accounts.textContent).not.toContain(work.authProfileId);
+    button(harness.accounts, `[data-auth-profile-id="${work.authProfileId}"]`).click();
+    await waitForSolid(() =>
+      expect(harness.accounts.textContent).toContain(
+        t("profilePage.modelAccounts.notices.selected"),
+      ),
+    );
+    await waitForSolid(() =>
+      expect(button(harness.accounts, ".profile-auth-link-unlink").disabled).toBe(false),
+    );
+    expect(
+      harness.accounts.querySelector('[data-auth-profile-id="openai:personal"]'),
+    ).not.toBeNull();
+    button(harness.accounts, ".profile-auth-link-unlink").click();
+    await waitForSolid(() =>
+      expect(harness.accounts.textContent).toContain(
+        t("profilePage.modelAccounts.notices.cleared"),
+      ),
+    );
+    await waitForSolid(() =>
+      expect(harness.accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(2),
+    );
+    expect(harness.accounts.querySelector(".profile-auth-link-unlink")).toBeNull();
+    expect(
+      harness.request.mock.calls.some(([method]) => method.startsWith("users.authConnect.")),
+    ).toBe(false);
+  },
+);
+
+it("retires an enrollment flow on restricted-write reconnect without disabling saved accounts", async () => {
+  const harness = await mountAccounts(async () => ({ status: "pending", step: redirectStep() }), {
+    accounts: [connectedAccount],
+  });
+  await harness.start();
+  harness.emit("reconnecting");
+  harness.emitSnapshot({
+    phase: "connected",
+    hello: gatewayHelloForMethods([], ["operator.write.no-credential-enrollment"]),
+  });
   await waitForSolid(() =>
     expect(button(harness.accounts, ".profile-auth-link-unlink").disabled).toBe(false),
   );
-  expect(harness.accounts.querySelector('[data-auth-profile-id="openai:personal"]')).not.toBeNull();
-  button(harness.accounts, ".profile-auth-link-unlink").click();
-  await waitForSolid(() =>
-    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.cleared")),
+  expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(true);
+  expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
+  expect(harness.request.mock.calls.some(([method]) => method === "users.authConnect.answer")).toBe(
+    false,
   );
-  await waitForSolid(() =>
-    expect(harness.accounts.querySelectorAll(".profile-auth-account-select")).toHaveLength(2),
-  );
-  expect(harness.accounts.querySelector(".profile-auth-link-unlink")).toBeNull();
-  expect(
-    harness.request.mock.calls.some(([method]) => method.startsWith("users.authConnect.")),
-  ).toBe(false);
 });
 
 it("shows a pending default selection and restores the accepted account after rejection", async () => {

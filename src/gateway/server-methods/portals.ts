@@ -6,7 +6,8 @@ import {
   validatePortalListParams,
   validatePortalOpenParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { ADMIN_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
+import { WRITE_SCOPE } from "../operator-scopes.js";
 import {
   createPortalOperations,
   redactPortalSummary,
@@ -136,10 +137,9 @@ export const portalHandlers: GatewayRequestHandlers = {
       respond(
         true,
         {
-          portals:
-            scopes.includes(WRITE_SCOPE) || scopes.includes(ADMIN_SCOPE)
-              ? portals
-              : portals.map(redactPortalSummary),
+          portals: operatorScopeSatisfied(operatorActionScope(WRITE_SCOPE), scopes)
+            ? portals
+            : portals.map(redactPortalSummary),
         },
         undefined,
       );

@@ -10,7 +10,7 @@ import {
   resolveEffectiveWebPushPreferences,
 } from "../infra/push-web-preferences.js";
 import { withBoundWebPushSubscriptions, type BoundWebPushSubscription } from "../infra/push-web.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { getUserPreferenceValues } from "../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
@@ -52,7 +52,7 @@ export function listCurrentWebPushTargets(
   const pairedByDeviceId = new Map(params.pairedDevices.map((device) => [device.deviceId, device]));
   return params.subscriptions.flatMap((subscription) => {
     const device = pairedByDeviceId.get(subscription.deviceId);
-    const { cfg, requiredScopes, visibilityScopes: requestedVisibilityScopes } = params;
+    const { cfg, visibilityScopes: requestedVisibilityScopes } = params;
     const profile = subscription.userProfileId
       ? params.profile?.readCurrentIdentity(subscription.userProfileId)
       : undefined;
@@ -103,13 +103,19 @@ export function listCurrentWebPushTargets(
           requestedScopes,
           allowedScopes: rolePolicy.scopes,
         }));
+    // Preserve legacy grants only when both live ceilings actually cover them.
+    const projectActionScope = (scope: string) =>
+      scopesAllowed([scope]) ? scope : operatorActionScope(scope);
+    const requiredScopes = params.requiredScopes.map(projectActionScope);
     if (!scopesAllowed(requiredScopes)) {
       return [];
     }
     // Only targeted callers request extra visibility. Both current authorities must
     // grant it; generic pushes retain their deliberately narrow required scopes.
     const visibilityScopes = rolePolicy
-      ? (requestedVisibilityScopes ?? []).filter((scope) => scopesAllowed([scope]))
+      ? (requestedVisibilityScopes ?? [])
+          .map(projectActionScope)
+          .filter((scope) => scopesAllowed([scope]))
       : [];
     return [
       {

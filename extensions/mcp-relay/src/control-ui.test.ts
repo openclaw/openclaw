@@ -72,21 +72,29 @@ function click(label: string) {
   target?.click();
 }
 
-it("pairs within the caller's ceiling without a browser-supplied principal", async () => {
-  const { request } = fixture([
-    grants,
-    { code: "ABCDE-FGHIJ", expiresAt: 1_800_000_000_000, mcpUrl: "https://relay.example/mcp" },
-  ]);
-  await shows("Pair with code");
-  click("Pair with code");
-  expect(body()).not.toContain("Full role access");
-  click("Create pairing code");
-  await shows("ABCDE-FGHIJ");
-  expect(request).toHaveBeenLastCalledWith("mcp-relay.pair", {
-    ceiling: ["operator.read", "operator.write"],
-  });
-  expect(body()).toContain("https://relay.example/mcp");
-});
+it.each(["operator.write", "operator.write.no-credential-enrollment"])(
+  "pairs within %s without a browser-supplied principal",
+  async (writeScope) => {
+    const scopes = ["operator.read", writeScope];
+    const { request } = fixture([
+      { ...grants, caller: { ...caller, ceiling: scopes } },
+      {
+        code: "ABCDE-FGHIJ",
+        expiresAt: 1_800_000_000_000,
+        mcpUrl: "https://relay.example/mcp",
+      },
+    ]);
+    await shows("Pair with code");
+    click("Pair with code");
+    expect(body()).not.toContain("Full role access");
+    click("Create pairing code");
+    await shows("ABCDE-FGHIJ");
+    expect(request).toHaveBeenLastCalledWith("mcp-relay.pair", {
+      ceiling: scopes,
+    });
+    expect(body()).toContain("https://relay.example/mcp");
+  },
+);
 
 it("escapes app labels and rejects foreign relay continuations", async () => {
   const clientName = '<img src=x onerror="alert(1)">';

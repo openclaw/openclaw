@@ -88,6 +88,7 @@ describe("readSessionMethodAccess", () => {
       "operator.sessions.read",
       "operator.sessions.write",
       "operator.write",
+      "operator.write.no-credential-enrollment",
       "operator.admin",
     ]) {
       expect(
@@ -96,8 +97,11 @@ describe("readSessionMethodAccess", () => {
           params: { key: "agent:main:main", model: null },
         }),
       ).toMatchObject({
-        allowed: scope === "operator.write" || scope === "operator.admin",
-        requiredScope: "operator.write",
+        allowed:
+          scope === "operator.write" ||
+          scope === "operator.write.no-credential-enrollment" ||
+          scope === "operator.admin",
+        requiredScope: "operator.write.no-credential-enrollment",
       });
     }
   });
@@ -107,7 +111,11 @@ describe("readSessionMethodAccess", () => {
     const scoped = snapshot({ methods: [request.method], scopes: ["operator.sessions.write"] });
     expect(
       readSessionMethodAccess(scoped, { ...request, session: { sharingRole: "owner" } }),
-    ).toMatchObject({ allowed: false, requiredScope: "operator.write", cause: "missing-scope" });
+    ).toMatchObject({
+      allowed: false,
+      requiredScope: "operator.write.no-credential-enrollment",
+      cause: "missing-scope",
+    });
     expect(
       readSessionMethodAccess(scoped, {
         ...request,
@@ -128,13 +136,15 @@ describe("readSessionMethodAccess", () => {
         cause: "session-not-owned",
       });
     }
-    expect(
-      access(["operator.write"], {
-        ...request,
-        sessionScope: true,
-        session: { sharingRole: "viewer" },
-      }),
-    ).toEqual({ allowed: true, requiredScope: "operator.sessions.write" });
+    for (const scope of ["operator.write", "operator.write.no-credential-enrollment"]) {
+      expect(
+        access([scope], {
+          ...request,
+          sessionScope: true,
+          session: { sharingRole: "viewer" },
+        }),
+      ).toEqual({ allowed: true, requiredScope: "operator.sessions.write" });
+    }
   });
 
   it("keeps context-window changes separate from write-scoped effort access", () => {
@@ -153,6 +163,7 @@ describe("readSessionMethodAccess", () => {
           "operator.read",
           "operator.sessions.write",
           "operator.write",
+          "operator.write.no-credential-enrollment",
           "operator.admin",
         ]) {
           const result = access([scope], {
@@ -162,7 +173,9 @@ describe("readSessionMethodAccess", () => {
           });
           expect(result.allowed).toBe(
             scope === "operator.admin" ||
-              (scope === "operator.write" && (sharingRole === "owner" || sharingRole === "admin")),
+              ((scope === "operator.write" ||
+                scope === "operator.write.no-credential-enrollment") &&
+                (sharingRole === "owner" || sharingRole === "admin")),
           );
         }
       }
@@ -171,7 +184,13 @@ describe("readSessionMethodAccess", () => {
 
   it("allows read, write, and admin scopes to satisfy read-scoped actions", () => {
     for (const method of ["session.members.list", "session.members.listEvidence"]) {
-      for (const scope of ["operator.read", "operator.write", "operator.admin"]) {
+      for (const scope of [
+        "operator.read",
+        "operator.read.no-credential-enrollment",
+        "operator.write",
+        "operator.write.no-credential-enrollment",
+        "operator.admin",
+      ]) {
         expect(access([scope], { method, requiredScope: "operator.read" }).allowed).toBe(true);
       }
     }
@@ -183,7 +202,11 @@ describe("readSessionMethodAccess", () => {
         method: "session.members.listEvidence",
         requiredScope: "operator.read",
       }),
-    ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.read" });
+    ).toMatchObject({
+      allowed: false,
+      cause: "missing-scope",
+      requiredScope: "operator.read.no-credential-enrollment",
+    });
   });
 
   it("rejects snapshots without advertised auth", () => {

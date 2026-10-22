@@ -543,9 +543,16 @@ it("clears a rendered fallback after the visible snapshot leaves the bounded wat
   }
 });
 
-it("keeps sidebar watches passive across disconnect and reconnect", async () => {
+it.each([
+  "operator.read",
+  "operator.read.no-credential-enrollment",
+  "operator.write.no-credential-enrollment",
+])("keeps sidebar watches passive across disconnect and reconnect with %s", async (scope) => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const { harness, row, host } = mountRow();
+  const { harness, row, host } = mountRow(undefined, [scope]);
+  const initial = { numbers: [42], state: "open" as const };
+  await host.updateComplete;
+  expect(host.indicators.summary(row.key, row.worktreeId ?? "", initial)).toEqual(initial);
   await settle(host);
   const expectWatch = () =>
     expect(harness.request.mock.lastCall?.[1]).toEqual(

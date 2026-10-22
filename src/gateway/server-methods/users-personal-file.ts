@@ -18,7 +18,7 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError } from "../../infra/fs-safe.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
   hasMultipleResidentSessionSharingIdentities,
   readResidentUserProfileId,
@@ -129,7 +129,11 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
         ...(operatorAuthority ? [operatorAuthority.scopes] : []),
         ...(policy ? [policy.scopes] : []),
       ].every((allowedScopes) =>
-        roleScopesAllow({ role: "operator", requestedScopes: ["operator.read"], allowedScopes }),
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: [operatorActionScope("operator.read")],
+          allowedScopes,
+        }),
       )
     ) {
       throw new PersonalFileAccessError(

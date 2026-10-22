@@ -359,12 +359,16 @@ struct ChatSessionSidebarMenuTests {
         "operator.sessions.write",
         "operator.read",
         "operator.write",
+        "operator.write.no-credential-enrollment",
         "operator.admin",
     ])
     func `Markdown accepts scoped reads without widening appearance writes`(_ scope: String) throws {
         let connection = try sidebarMenuConnection(scopes: [scope]) { _ in Data() }
         #expect(connection.allows("chat.history", scope: "operator.sessions.read"))
-        #expect(connection.allows("sessions.patch") == ["operator.write", "operator.admin"].contains(scope))
+        #expect(connection.allows("sessions.patch") == [
+            "operator.write", "operator.write.no-credential-enrollment", "operator.admin",
+        ].contains(scope))
+        #expect(connection.allows("sessions.patch", scope: "operator.admin") == (scope == "operator.admin"))
     }
 
     @Test func `implicit home links stay groupable while explicit children do not`() throws {

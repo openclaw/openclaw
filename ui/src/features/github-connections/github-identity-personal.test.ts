@@ -102,6 +102,43 @@ it("lets an identified reader connect, reconnect and disconnect only their own O
   expect(runExternalMutation).not.toHaveBeenCalled();
 });
 
+it("retires enrollment on downgrade without restoring pending codes or blocking disconnect", async () => {
+  vi.useFakeTimers();
+  let personal: PersonalGitHubStatus = { ...connected, pending: code };
+  const { identity, request, sync } = setup({
+    "users.github.status": () => ({ personal, system }),
+    "users.github.authorize.cancel": () => ({ cancelled: true }),
+    "users.github.disconnect": () => {
+      personal = disconnected;
+      return { disconnected: true };
+    },
+  });
+  await identity.verify();
+  expectCode(identity);
+  sync({ authorizable: false });
+  await identity.verify();
+  expectState(identity, {
+    personal,
+    statusReadable: true,
+    authorizable: false,
+    authorization: { phase: "idle" },
+  });
+  await identity.startAuthorization();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(
+    request.mock.calls.filter(([method]) => method === "users.github.authorize.poll"),
+  ).toHaveLength(0);
+  expect(
+    request.mock.calls.filter(([method]) => method === "users.github.authorize.start"),
+  ).toHaveLength(0);
+  expect(request).toHaveBeenCalledWith("users.github.authorize.cancel", {
+    requestId: code.requestId,
+  });
+  await identity.disconnect();
+  expectState(identity, { personal: disconnected, system });
+  expect(request).toHaveBeenCalledWith("users.github.disconnect", {});
+});
+
 it("restores only the current profile's pending code and honors server retry intervals", async () => {
   vi.useFakeTimers();
   const outcomes = [

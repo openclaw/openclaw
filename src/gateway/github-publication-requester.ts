@@ -2,7 +2,7 @@ import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/sc
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   decodeGitHubPublicationRequester,
   type GitHubPublicationRequesterSnapshot,
@@ -182,7 +182,7 @@ function prepareRequesterPolicy(
         snapshot.actor.kind === "operator" &&
         !roleScopesAllow({
           role: "operator",
-          requestedScopes: ["operator.write"],
+          requestedScopes: [operatorActionScope("operator.write")],
           allowedScopes: snapshot.scopes,
         }) &&
         !prepareSessionCreatorProfile(

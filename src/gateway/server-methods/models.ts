@@ -13,7 +13,7 @@ import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-r
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { isPreparedModelRuntimeMissingOwnerError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { authorizeCurrentOperatorRoleScopes } from "../operator-role-policy.js";
@@ -84,7 +84,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
             }) &&
             !roleScopesAllow({
               role: "operator",
-              requestedScopes: [READ_SCOPE],
+              requestedScopes: [operatorActionScope(READ_SCOPE)],
               allowedScopes: scopes,
             });
           if (limitedSessionRead) {

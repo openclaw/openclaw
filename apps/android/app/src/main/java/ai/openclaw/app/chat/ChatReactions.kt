@@ -3,6 +3,7 @@ package ai.openclaw.app.chat
 import ai.openclaw.app.gateway.GatewaySessionRouting
 import ai.openclaw.app.gateway.MessageReactionSummary
 import ai.openclaw.app.gateway.MessageReactionSummaryIdentitiesItem
+import ai.openclaw.app.operatorScopesAllowWrite
 import android.icu.lang.UCharacter
 import android.icu.lang.UProperty
 import android.icu.text.BreakIterator
@@ -35,7 +36,7 @@ internal fun canReactToSession(
   if (
     !connected || !methodAdvertised || catalog || session.archived == true ||
     access.role?.trim() != "operator" || access.sessionCap == "none" ||
-    access.scopes.none { it.trim() == "operator.write" || it.trim() == "operator.admin" }
+    !operatorScopesAllowWrite(access.scopes.map(String::trim))
   ) {
     return false
   }

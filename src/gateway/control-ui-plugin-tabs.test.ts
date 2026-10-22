@@ -232,6 +232,16 @@ it("uses the first dispatched gateway route as descriptor owner", () => {
   expect(listControlUiPluginTabs(["operator.admin"])).toEqual([]);
 });
 
+it("does not restore credential enrollment through ordinary-read plugin cookies", () => {
+  activateDescriptors(
+    [tab("logbook", { path: "/plugins/logbook/panel" })],
+    [{ pluginId: "logbook", path: "/plugins/logbook", match: "prefix" }],
+  );
+  expect(listControlUiPluginTabAuthGrants(["operator.write.no-credential-enrollment"])).toEqual([
+    { ...grant("logbook"), scopes: ["operator.read.no-credential-enrollment"] },
+  ]);
+});
+
 it("does not require a cookie grant when gateway auth is disabled", () => {
   activateDescriptors(
     [tab("logbook", { path: "/plugins/logbook/panel" })],

@@ -8,7 +8,7 @@ import type { SystemPresence } from "../infra/system-presence.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { projectHealthSummary } from "./health/presentation.js";
 import type { HealthSummary } from "./health/types.js";
 import { ADMIN_SCOPE, QUESTIONS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
@@ -376,7 +376,7 @@ export function createGatewayBroadcaster(params: {
       }
       if (
         event === "chat.metadata.changed" &&
-        !operatorScopeSatisfied(READ_SCOPE, c.connect.scopes ?? []) &&
+        !operatorScopeSatisfied(operatorActionScope(READ_SCOPE), c.connect.scopes ?? []) &&
         metadataInvalidation === undefined
       ) {
         continue;

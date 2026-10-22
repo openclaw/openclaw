@@ -1,4 +1,4 @@
-import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "../lib/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -10,8 +10,10 @@ type OperatorAuth = {
 } | null;
 type OperatorScope =
   | "operator.read"
+  | "operator.read.no-credential-enrollment"
   | "operator.sessions.read"
   | "operator.write"
+  | "operator.write.no-credential-enrollment"
   | "operator.admin"
   | "operator.pairing"
   | "operator.approvals";
@@ -49,12 +51,12 @@ export function readGatewayOperatorAccess(
   };
 }
 
-export function hasOperatorWriteAccess(auth: OperatorAuth): boolean {
-  return hasOperatorScope(auth, "operator.write", true);
+export function hasOperatorWriteAccess(auth: OperatorAuth, method?: string): boolean {
+  return hasOperatorScope(auth, operatorActionScope("operator.write", method), true);
 }
 
-export function hasOperatorReadAccess(auth: OperatorAuth): boolean {
-  return hasOperatorScope(auth, "operator.read", true);
+export function hasOperatorReadAccess(auth: OperatorAuth, method?: string): boolean {
+  return hasOperatorScope(auth, operatorActionScope("operator.read", method), true);
 }
 
 export function hasOperatorAdminAccess(auth: OperatorAuth): boolean {

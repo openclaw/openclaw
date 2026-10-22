@@ -3,7 +3,7 @@ import type { SessionGitHubPullRequestBinding } from "../config/sessions/types.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitCheckoutContext } from "../infra/git-read-operations.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { TaskPublicationRead } from "../state/github-publication-task-reads.worker.js";
 import { readUserProfileAliasRevision } from "../state/user-profile-events.js";
 import { readResidentUserProfileId } from "../state/user-profile-list.js";
@@ -282,7 +282,11 @@ export function createControlUiSessionPrRead(params: {
         authorizeCurrentOperatorRoleScopes(client, cfg) ||
         !roleScopesAllow({
           role: "operator",
-          requestedScopes: [params.allowOwnImportedPullRequest ? SESSION_READ_SCOPE : READ_SCOPE],
+          requestedScopes: [
+            params.allowOwnImportedPullRequest
+              ? SESSION_READ_SCOPE
+              : operatorActionScope(READ_SCOPE),
+          ],
           allowedScopes: client.connect.scopes ?? [],
         })
       ) {
@@ -330,7 +334,7 @@ export function createControlUiSessionPrRead(params: {
       });
       const sessionOnly = !roleScopesAllow({
         role: "operator",
-        requestedScopes: [READ_SCOPE],
+        requestedScopes: [operatorActionScope(READ_SCOPE)],
         allowedScopes: client.connect.scopes ?? [],
       });
       if (sessionOnly) {

@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
   GitHubPublicationKnownFailure,
   GitHubPublicationWorkflowChangesError,
@@ -17,7 +17,7 @@ export function assertGitHubPublicationWorkflowChangesAllowed(
   if (
     !roleScopesAllow({
       role: "operator",
-      requestedScopes: ["operator.write"],
+      requestedScopes: [operatorActionScope("operator.write")],
       allowedScopes: requester.snapshot.scopes,
     })
   ) {

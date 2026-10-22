@@ -136,7 +136,10 @@ export function authorizationStillOwned(
 
 export async function authorizationStillOwnedAsync(
   getConfig: () => OpenClawConfig,
-  record: GitHubDeviceAuthorizationRecord,
+  record: Pick<
+    GitHubDeviceAuthorizationRecord,
+    "scope" | "agentId" | "agentLifecycleBinding" | "expectedIdentity"
+  >,
 ): Promise<boolean> {
   if (
     record.scope !== "system" &&

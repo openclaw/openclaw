@@ -12,6 +12,7 @@ import {
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
 import {
   GATEWAY_OWNER_PROFILE_ID,
+  GIT_COAUTHOR_PREFERENCE_KEY,
   type UsersSelfResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -352,6 +353,9 @@ test.each([
   roleCase("admin-only without identity grants", "admin-only", NARROW_SCOPES, NARROW_SCOPES, []),
   roleCase("read-only from an admin-only identity grant", "read-only", ["operator.read"], []),
   roleCase("empty", "denied", [], NARROW_SCOPES),
+  roleCase("write without credential enrollment", "non-enrolling", [
+    "operator.write.no-credential-enrollment",
+  ]),
 ])("applies the $label role ceiling after device and identity grants", async (scenario) => {
   await configureGatewayAuth(proxyAuth({ "admin@example.com": scenario.identityScopes }), {
     default: "guest",
@@ -360,6 +364,7 @@ test.each([
       "admin-only": role(["operator.admin"], "write"),
       "read-only": role(["operator.read"]),
       denied: role([], "none", []),
+      "non-enrolling": role(["operator.write.no-credential-enrollment"]),
     },
   });
   const profile = ensureProfileForEmail("admin@example.com");
@@ -372,6 +377,25 @@ test.each([
     try {
       expectScopes(connected, scenario.expectedScopes);
       expect((await rpcReq(ws, "status")).ok).toBe(scenario.expectedScopes.length > 0);
+      if (scenario.assignedRole === "non-enrolling") {
+        expect(
+          (
+            await rpcReq(ws, "users.setDisplayName", {
+              profileId: profile.id,
+              displayName: "Restricted teammate",
+            })
+          ).ok,
+        ).toBe(true);
+        const enrollment = await rpcReq(ws, "users.authConnect.start", {
+          profileId: profile.id,
+          provider: "openai",
+          method: "oauth",
+        });
+        expect(enrollment).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN", message: expect.stringContaining("operator.write") },
+        });
+      }
       if (scenario.assignedRole === "read-only") {
         await expectWriteDenied(ws, "agent:main:denied");
       }
@@ -417,6 +441,39 @@ test.each([
     } finally {
       invalidateOperatorRolePolicy(profile.id);
     }
+  });
+});
+
+test("keeps verified GitHub identity and co-author consent without credential enrollment", async () => {
+  const scopes: OperatorScope[] = ["operator.write.no-credential-enrollment"];
+  await configureTailscale(
+    {},
+    { default: "restricted", definitions: { restricted: role(scopes) } },
+  );
+  stubGitHubUserLookups({ ada: { id: 583231, login: "ada" } });
+  await withIdentityServer(async (connections) => {
+    const withPerson = gitHubTailscalePeople(connections, scopes);
+    await withPerson("ada@github", async (ws, connected) => {
+      expectScopes(connected, scopes);
+      const profileId = await verifiedProfile(ws, connected);
+      expect(profileId).toBeTypeOf("string");
+      expect((await rpcReq(ws, "users.self")).payload).toMatchObject({
+        profile: { githubIdentity: { login: "ada" } },
+      });
+      const preference = await rpcReq(ws, "users.prefs.set", {
+        entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false },
+      });
+      expect(preference.ok, JSON.stringify(preference.error)).toBe(true);
+      for (const method of ["users.github.authorize.start", "users.github.authorize.poll"]) {
+        expect(await rpcReq(ws, method, { requestId: "blocked" })).toMatchObject({
+          ok: false,
+          error: { code: "FORBIDDEN" },
+        });
+      }
+      expect((await rpcReq(ws, "users.self")).payload).toMatchObject({
+        profile: { githubIdentity: { login: "ada" } },
+      });
+    });
   });
 });
 

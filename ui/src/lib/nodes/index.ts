@@ -10,6 +10,10 @@ import {
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
+import {
+  operatorActionScope,
+  operatorScopeSatisfied,
+} from "../../../../src/shared/operator-scope-compat.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { base64ToBytes, bytesToBase64 } from "../bytes-base64.ts";
 import { bytesToHex } from "../bytes-hex.ts";
@@ -151,7 +155,9 @@ export function loadCurrentDeviceAuthToken(gatewayUrl: string): string | null {
     gatewayUrl,
     role: "operator",
   });
-  return entry?.scopes.includes("operator.read") ? entry.token : null;
+  return entry && operatorScopeSatisfied(operatorActionScope("operator.read"), entry.scopes)
+    ? entry.token
+    : null;
 }
 
 export function storeDeviceAuthToken(params: {

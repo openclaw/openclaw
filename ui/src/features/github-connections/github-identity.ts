@@ -446,7 +446,7 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   }
 
   async function disconnect() {
-    if (target?.kind !== "personal" || !authorizable || busy() || deviceAuthorization.active()) {
+    if (target?.kind !== "personal" || !statusReadable || busy() || deviceAuthorization.active()) {
       return;
     }
     const owner = captureRequest();

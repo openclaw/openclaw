@@ -10,7 +10,7 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { profileCatalogPath } from "../state/user-profile-identity.read.js";
 import {
   captureResidentUserProfileAccess,
@@ -275,7 +275,7 @@ export function hasOperatorBoundary(
     }) &&
     !roleScopesAllow({
       role: "operator",
-      requestedScopes: ["operator.read"],
+      requestedScopes: [operatorActionScope("operator.read")],
       allowedScopes: scopes,
     })
   );

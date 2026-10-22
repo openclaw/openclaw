@@ -542,22 +542,25 @@ describe("GatewayChatClient", () => {
     );
   });
 
-  it("derives task suggestion actions from negotiated methods and scopes", () => {
-    const client = createClient();
-    const methods = ["taskSuggestions.accept", "taskSuggestions.dismiss"];
-    client.hello = hello(methods, ["operator.write"]);
+  it.each(["operator.write", "operator.write.no-credential-enrollment"])(
+    "derives task suggestion actions from negotiated methods and %s",
+    (scope) => {
+      const client = createClient();
+      const methods = ["taskSuggestions.accept", "taskSuggestions.dismiss"];
+      client.hello = hello(methods, [scope]);
 
-    expect(client.getTaskSuggestionActionCapabilities()).toEqual({
-      canAccept: false,
-      canDismiss: true,
-    });
+      expect(client.getTaskSuggestionActionCapabilities()).toEqual({
+        canAccept: false,
+        canDismiss: true,
+      });
 
-    client.hello = hello(methods);
-    expect(client.getTaskSuggestionActionCapabilities()).toEqual({
-      canAccept: true,
-      canDismiss: true,
-    });
-  });
+      client.hello = hello(methods);
+      expect(client.getTaskSuggestionActionCapabilities()).toEqual({
+        canAccept: true,
+        canDismiss: true,
+      });
+    },
+  );
 
   it("skips task suggestion refreshes against older gateways", async () => {
     const client = createClient();

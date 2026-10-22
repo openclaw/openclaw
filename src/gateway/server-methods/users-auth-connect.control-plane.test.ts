@@ -125,6 +125,31 @@ describe("users model-account control plane", () => {
     },
   );
 
+  it("allows saved-account maintenance but rejects provider enrollment for restricted writers", async () => {
+    self.connect.scopes = ["operator.write.no-credential-enrollment"];
+    expect(
+      await rpc("users.authConnect.start", {
+        profileId: "profile-1",
+        provider: "openai",
+        method: "oauth",
+      }),
+    ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
+    expect(runAuth).not.toHaveBeenCalled();
+    readUserModelAccountSummary.mockReturnValue({
+      provider: "openai",
+      authProfileId: "personal:profile-1:saved",
+    });
+    expect(
+      (await rpc("users.selectModelAccount", { authProfileId: "personal:profile-1:saved" })).mock
+        .calls[0]?.[0],
+    ).toBe(true);
+    expect(
+      (await rpc("users.unlinkAuthProfile", { profileId: "profile-1", provider: "openai" })).mock
+        .calls[0]?.[0],
+    ).toBe(true);
+    expect(writes).toEqual([]);
+  });
+
   it("selects a retained owned account and cancels an older sign-in without rewriting credentials", async () => {
     const flow = await startFlow();
     expect(

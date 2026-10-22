@@ -194,6 +194,19 @@ it("prepares the new session store after an in-place config publication", async 
   expect(mocks.loadSession).toHaveBeenCalledTimes(2);
 });
 
+it("allows existing personal GitHub publication under a non-enrolling role ceiling", async () => {
+  const request = createRequest();
+  request.client.connect.scopes = ["operator.write.no-credential-enrollment"];
+  mocks.roleScopes = ["operator.write.no-credential-enrollment"];
+  const publication = await preparePersonalGitHubSessionActionV2(request, { sessionKey: "main" });
+  using _ = { [Symbol.dispose]: publication.release };
+  expect(() => publication.action.assertCurrent()).not.toThrow();
+  mocks.roleScopes = ["operator.read"];
+  expect(() => publication.action.assertCurrent()).toThrow(
+    "GitHub requires current operator.write permission.",
+  );
+});
+
 it("keeps origin-free personal reads and publication bound to the live ingress grant", async () => {
   const request = createRequest();
   const grant = new AbortController();

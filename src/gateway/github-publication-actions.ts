@@ -7,7 +7,7 @@ import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attributio
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorActionScope, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { preparePublishingSession, pullRequestState } from "./github-publication-action-target.js";
 import {
   assertExpectedSharedGitHubPublisher,
@@ -102,7 +102,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
       !(params.action === "ready" && params.publishingSessionKey === undefined) &&
       !roleScopesAllow({
         role: "operator",
-        requestedScopes: ["operator.write"],
+        requestedScopes: [operatorActionScope("operator.write")],
         allowedScopes: admitted.requester.snapshot.scopes,
       })
     ) {
@@ -155,7 +155,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   }
   const fullWrite = roleScopesAllow({
     role: "operator",
-    requestedScopes: ["operator.write"],
+    requestedScopes: [operatorActionScope("operator.write")],
     allowedScopes: admitted.requester.snapshot.scopes,
   });
   let inspection: Awaited<ReturnType<typeof inspectOwnGitHubPullRequest>> | undefined;

@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import type { ControlUiLinkReaderDescriptor } from "../shared/control-ui-link-reader.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { resolveControlUiPluginTabPathname } from "./control-ui-contract.js";
 import { controlUiPluginAssetPrefix } from "./control-ui-plugin-assets-contract.js";
 import { isControlUiPluginAllowed } from "./control-ui-plugin-policy.js";
@@ -208,6 +209,9 @@ export function listControlUiPluginTabAuthGrants(
     return [];
   }
   const grants = new Map<string, ControlUiPluginTabAuthGrant>();
+  const readScope = operatorScopeSatisfied(READ_SCOPE, callerScopes)
+    ? READ_SCOPE
+    : operatorActionScope(READ_SCOPE);
   const basePath = getRuntimeConfigSnapshot()?.gateway?.controlUi?.basePath;
   for (const plugin of registry.plugins) {
     if (
@@ -223,7 +227,7 @@ export function listControlUiPluginTabAuthGrants(
       pluginId: plugin.id,
       path: assetPath,
       match: "prefix",
-      scopes: [READ_SCOPE],
+      scopes: [readScope],
     });
   }
   for (const tab of projectControlUiPluginTabs(registry.controlUiDescriptors ?? [], callerScopes)) {
@@ -246,7 +250,7 @@ export function listControlUiPluginTabAuthGrants(
       pluginId: tab.pluginId,
       path: route.path,
       match: route.match,
-      scopes: [READ_SCOPE],
+      scopes: [readScope],
     });
   }
   return [...grants.values()];

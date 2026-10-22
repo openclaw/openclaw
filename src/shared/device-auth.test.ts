@@ -28,6 +28,9 @@ describe("shared/device-auth", () => {
       "operator.read",
       "operator.write",
     ]);
+    expect(normalizeDeviceAuthScopes(["operator.write.no-credential-enrollment"])).toEqual([
+      "operator.write.no-credential-enrollment",
+    ]);
     expect(normalizeDeviceAuthScopes(["operator.admin"])).toEqual([
       "operator.admin",
       "operator.read",

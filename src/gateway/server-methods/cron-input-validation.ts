@@ -42,7 +42,7 @@ import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
@@ -293,7 +293,7 @@ export async function captureCronCreatorSession(
     loaded &&
     creatorSession &&
     operatorAuthority &&
-    operatorScopeSatisfied("operator.write", operatorAuthority.scopes) &&
+    operatorScopeSatisfied(operatorActionScope("operator.write"), operatorAuthority.scopes) &&
     job.payload.kind === "agentTurn" &&
     job.sessionTarget === `session:${loaded.canonicalKey}` &&
     caller.client?.internal?.agentRuntimeIdentity

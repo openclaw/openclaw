@@ -11,6 +11,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { registerGitHubConnectionsEnglish } from "../../i18n/locales/en-github-connections.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectGateway, projectAgentSelection } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
@@ -35,11 +36,14 @@ function access(snapshot: ApplicationGatewaySnapshot) {
   return {
     profileId,
     canRead,
+    canEnroll: canCallGatewayMethod(snapshot, "users.github.authorize.start", "operator.read", {
+      requireAdvertisement: false,
+    }),
     canAdmin: canRead && hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
   };
 }
 
-/** Profile credentials have their own read-scoped lifecycle, independent of users.self edits. */
+/** Credential enrollment is separate from status, sign-in identity, and profile edits. */
 export function GitHubConnections() {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
@@ -50,6 +54,7 @@ export function GitHubConnections() {
   let snapshot: ApplicationGatewaySnapshot | null = null;
   let clientRevision = 0;
   let canRead = false;
+  let canEnroll = false;
   let canAdmin = false;
   // Gateway snapshots may mutate in place; retain the previous profile transition fact.
   let observedProfileId: string | null = null;
@@ -75,7 +80,7 @@ export function GitHubConnections() {
       ...common,
       target: observedProfileId ? { kind: "personal", profileId: observedProfileId } : null,
       statusReadable: canRead && observedProfileId !== null,
-      authorizable: canRead && observedProfileId !== null,
+      authorizable: canEnroll && observedProfileId !== null,
       configurable: false,
     });
     const agentId = context.settingsAgentSelection.state.selectedId;
@@ -118,17 +123,21 @@ export function GitHubConnections() {
         : observedProfileId;
     // Access comes from the authenticated connection, never an error from users.github.status.
     const previousCanRead = canRead;
+    const previousCanEnroll = canEnroll;
     const previousCanAdmin = canAdmin;
     if (next.phase === "connected" || identityChanged) {
-      canRead = Boolean(next.hello?.auth) && hasOperatorReadAccess(next.hello?.auth ?? null);
-      canAdmin = canRead && hasOperatorAdminAccess(next.hello?.auth ?? null);
+      const currentAccess = access(next);
+      canRead = currentAccess.canRead;
+      canEnroll = currentAccess.canEnroll;
+      canAdmin = currentAccess.canAdmin;
     }
     if (changed) {
       clientRevision += 1;
     }
     const readAccessLost = previousCanRead && !canRead;
     const adminAccessLost = previousCanAdmin && !canAdmin;
-    if (identityChanged || readAccessLost || adminAccessLost) {
+    const enrollmentAccessLost = previousCanEnroll && !canEnroll;
+    if (identityChanged || readAccessLost || adminAccessLost || enrollmentAccessLost) {
       setSetupOpen(false);
       setPurpose(observedProfileId ? "personal" : "system");
     }
@@ -168,6 +177,7 @@ export function GitHubConnections() {
       reconnectRequired,
       profileId: observedProfileId,
       canRead,
+      canEnroll,
       canAdmin,
       systemIdentity: systemState.status?.selected.identity ?? personalState.system,
       effective: systemState.status?.effective ?? null,
@@ -199,7 +209,7 @@ export function GitHubConnections() {
     if (
       view().locked ||
       (next === "personal"
-        ? !currentAccess.profileId || !currentAccess.canRead
+        ? !currentAccess.profileId || !currentAccess.canEnroll
         : !currentAccess.canAdmin)
     ) {
       return;
@@ -222,7 +232,9 @@ export function GitHubConnections() {
               <>
                 <button
                   class="btn btn--sm"
-                  disabled={view().locked || (!view().profileId && !systemView().status)}
+                  disabled={
+                    view().locked || (view().profileId ? !view().canEnroll : !systemView().status)
+                  }
                   onClick={() => openSetup(view().profileId ? "personal" : "system")}
                 >
                   {t("githubConnections.manage")}
@@ -260,7 +272,7 @@ export function GitHubConnections() {
                   {view().profileId && view().canRead && view().account ? (
                     <button
                       class="btn btn--sm"
-                      disabled={view().locked}
+                      disabled={view().locked || !view().canEnroll}
                       onClick={() => openSetup("personal")}
                     >
                       {t(
@@ -274,6 +286,12 @@ export function GitHubConnections() {
               }
             />
           </div>
+          {view().profileId && view().canRead && !view().canEnroll ? (
+            <SettingsRow
+              title={t("githubConnections.enrollmentUnavailable")}
+              description={t("githubConnections.enrollmentUnavailableDescription")}
+            />
+          ) : undefined}
           <div data-github-connection="system">
             <SettingsRow
               title={t("githubConnections.system")}

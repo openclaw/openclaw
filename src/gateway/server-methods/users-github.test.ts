@@ -65,6 +65,7 @@ import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
 import { bindPersonalGitHubPublicationSelection } from "../github-personal-publication.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import type { OperatorScope } from "../operator-scopes.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import {
@@ -121,10 +122,10 @@ async function connect(client = alice) {
   }
   return { ...connection, selection: connection.selection };
 }
-function blockAlice() {
+function blockAlice(scopes: OperatorScope[] = []) {
   config.gateway = {
     roles: {
-      definitions: { blocked: { scopes: [], agents: [], sessions: { others: "none" } } },
+      definitions: { blocked: { scopes, agents: [], sessions: { others: "none" } } },
       default: "blocked",
     },
   };
@@ -660,40 +661,48 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     expect(network.start).not.toHaveBeenCalled();
   });
 
-  it.each(["cancel", "disconnect", "replacement", "merge", "role", "expiry"] as const)(
-    "fences installation when %s wins the awaited poll",
-    async (race) => {
-      const started = await start();
-      preparePoll();
-      const waiting = createDeferredCore<{ status: "authorized"; tokens: typeof tokens }>();
-      network.poll.mockReturnValueOnce(waiting.promise);
-      const pending = rpc(alice, "users.github.authorize.poll", { requestId: started.requestId });
-      await vi.waitFor(() => expect(network.poll).toHaveBeenCalledOnce());
-      if (race === "cancel") {
-        await rpc(alice, "users.github.authorize.cancel", { requestId: started.requestId });
-      }
-      if (race === "disconnect") {
-        await rpc(alice, "users.github.disconnect");
-      }
-      if (race === "replacement") {
-        await start();
-      }
-      if (race === "merge") {
-        linkEmail("alice@example.test", owner(bob));
-      }
-      if (race === "role") {
-        blockAlice();
-      }
-      if (race === "expiry") {
-        expireUserGitHubAuthorization(owner());
-      }
-      waiting.resolve({ status: "authorized", tokens });
-      const response = await pending;
-      expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "success" });
-      expect((await readConnection(resolveOwner(owner())!))?.selection.kind).toBe("disconnected");
-      expect(network.command.mock.calls.some(([argv]) => argv[1] === "auth")).toBe(false);
-    },
-  );
+  it.each([
+    "cancel",
+    "disconnect",
+    "replacement",
+    "merge",
+    "role",
+    "enrollment role",
+    "expiry",
+  ] as const)("fences installation when %s wins the awaited poll", async (race) => {
+    const started = await start();
+    preparePoll();
+    const waiting = createDeferredCore<{ status: "authorized"; tokens: typeof tokens }>();
+    network.poll.mockReturnValueOnce(waiting.promise);
+    const pending = rpc(alice, "users.github.authorize.poll", { requestId: started.requestId });
+    await vi.waitFor(() => expect(network.poll).toHaveBeenCalledOnce());
+    if (race === "cancel") {
+      await rpc(alice, "users.github.authorize.cancel", { requestId: started.requestId });
+    }
+    if (race === "disconnect") {
+      await rpc(alice, "users.github.disconnect");
+    }
+    if (race === "replacement") {
+      await start();
+    }
+    if (race === "merge") {
+      linkEmail("alice@example.test", owner(bob));
+    }
+    if (race === "role") {
+      blockAlice();
+    }
+    if (race === "enrollment role") {
+      blockAlice(["operator.write.no-credential-enrollment"]);
+    }
+    if (race === "expiry") {
+      expireUserGitHubAuthorization(owner());
+    }
+    waiting.resolve({ status: "authorized", tokens });
+    const response = await pending;
+    expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "success" });
+    expect((await readConnection(resolveOwner(owner())!))?.selection.kind).toBe("disconnected");
+    expect(network.command.mock.calls.some(([argv]) => argv[1] === "auth")).toBe(false);
+  });
 
   it("does not let an older start overwrite a newer start or disconnected generation", async () => {
     const old = createDeferredCore<Awaited<ReturnType<typeof network.start>>>();

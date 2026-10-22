@@ -70,6 +70,49 @@ afterEach(() => {
 });
 
 describe("method scope resolution and authorization", () => {
+  it("retains ordinary writes without personal credential enrollment", () => {
+    const restricted = "operator.write.no-credential-enrollment";
+    for (const [method, params] of [
+      ["chat.send", { sessionKey: "agent:main:own", message: "hello" }],
+      ["tools.invoke", {}],
+      ["agent", { message: "hello" }],
+      ["node.invoke", { command: "device.info" }],
+      ["users.selectModelAccount", {}],
+      ["users.github.status", {}],
+      ["sessions.github.action", { action: "merge" }],
+    ] as const) {
+      allow(method, [restricted], params);
+    }
+    for (const method of ["users.github.authorize.start", "users.github.authorize.poll"]) {
+      deny("operator.read", method, [restricted]);
+      allow(method, ["operator.read"]);
+      allow(method, [restricted, "operator.read"]);
+      projection({
+        method,
+        requestParams: {},
+        requestedScopes: ["operator.read"],
+        allowedScopes: [restricted],
+      }).toEqual([]);
+    }
+    for (const method of ["users.authConnect.start", "users.authConnect.answer"]) {
+      deny("operator.write", method, [restricted]);
+      allow(method, ["operator.write"]);
+      allow(method, [restricted, "operator.write"]);
+      projection({
+        method,
+        requestParams: {},
+        requestedScopes: ["operator.write"],
+        allowedScopes: [restricted],
+      }).toEqual([]);
+    }
+    projection({
+      method: "tools.invoke",
+      requestParams: {},
+      requestedScopes: ["operator.write", "operator.admin"],
+      allowedScopes: [restricted],
+    }).toEqual([restricted]);
+    deny("operator.admin", "config.patch", [restricted]);
+  });
   it("admits own PR preparation while retaining full-write admission for privileged actions", () => {
     for (const action of [
       "inspect_pr",

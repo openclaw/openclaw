@@ -6,7 +6,11 @@ import {
 } from "../infra/node-commands.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
-import { operatorScopeSatisfied, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import {
+  operatorActionScope,
+  operatorScopeSatisfied,
+  roleScopesAllow,
+} from "../shared/operator-scope-compat.js";
 import {
   resolveSessionMethodScope,
   type SessionOperatorScope,
@@ -187,8 +191,11 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
 function findMissingOperatorScope(
   requiredScopes: readonly OperatorScope[],
   scopes: readonly string[],
+  method: string,
 ): OperatorScope | undefined {
-  return requiredScopes.find((scope) => !operatorScopeSatisfied(scope, scopes));
+  return requiredScopes.find(
+    (scope) => !operatorScopeSatisfied(operatorActionScope(scope, method), scopes),
+  );
 }
 
 export function resolveLeastPrivilegeOperatorScopesForMethod(
@@ -235,6 +242,10 @@ export function projectOperatorScopesForMethod(params: {
     if (!isOperatorScope(requestedScope) || !requiredScopes.includes(requestedScope)) {
       return [];
     }
+    const actionScope = operatorActionScope(requestedScope, params.method);
+    if (operatorScopeSatisfied(actionScope, params.allowedScopes)) {
+      return [actionScope];
+    }
     const authorization = authorizeOperatorScopesForRequiredScope(
       requestedScope,
       params.allowedScopes,
@@ -270,12 +281,17 @@ export function authorizeOperatorScopesForMethod(
             : { allowed: false, missingScope: WRITE_SCOPE };
         }
       }
-      const missingScope = findMissingOperatorScope(registeredScopes ?? [WRITE_SCOPE], scopes);
+      const missingScope = findMissingOperatorScope(
+        registeredScopes ?? [WRITE_SCOPE],
+        scopes,
+        method,
+      );
       return missingScope ? { allowed: false, missingScope } : { allowed: true };
     }
     const missingScope = findMissingOperatorScope(
       resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params),
       scopes,
+      method,
     );
     return missingScope
       ? authorizeOperatorScopesForRequiredScope(
@@ -303,7 +319,7 @@ export function authorizeOperatorScopesForRequiredScope(
 ):
   | { allowed: true; sessionScope?: SessionOperatorScope }
   | { allowed: false; missingScope: OperatorScope } {
-  if (operatorScopeSatisfied(requiredScope, scopes)) {
+  if (operatorScopeSatisfied(operatorActionScope(requiredScope, method), scopes)) {
     return { allowed: true };
   }
   if (

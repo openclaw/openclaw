@@ -5,6 +5,7 @@ import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.j
 import { resolveCommandConversationResolution } from "../channels/conversation-resolution.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { withPluginCommandExecution } from "./command-execution-lock.js";
 import { isReservedCommandName } from "./command-registration.js";
 import {
@@ -204,7 +205,18 @@ export async function executeRegisteredPluginCommand(
       : undefined;
     const hasAdmin = scopes?.has(ADMIN_SCOPE) === true;
     const missingScope = scopes
-      ? requiredScopes.find((scope) => !hasAdmin && !scopes.has(scope))
+      ? requiredScopes.find(
+          (scope) =>
+            !hasAdmin &&
+            !scopes.has(scope) &&
+            !(
+              (scope === "operator.write" ||
+                scope === operatorActionScope("operator.write") ||
+                scope === "operator.read" ||
+                scope === operatorActionScope("operator.read")) &&
+              operatorScopeSatisfied(operatorActionScope(scope), [...scopes])
+            ),
+        )
       : requiredScopes[0];
     if (missingScope && (scopes !== undefined || params.senderIsOwner !== true)) {
       logVerbose(`Plugin command /${command.name} blocked: missing gateway scope ${missingScope}`);

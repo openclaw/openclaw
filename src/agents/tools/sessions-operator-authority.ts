@@ -1,7 +1,7 @@
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { readOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
+import { operatorActionScope, operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -62,7 +62,9 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
 
 /** Availability only; the target guard and underlying Gateway policy still apply. */
 export function hasSessionControlAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
-  return captureSessionControlAuthority(prepared)?.allows("operator.write") ?? false;
+  return (
+    captureSessionControlAuthority(prepared)?.allows(operatorActionScope("operator.write")) ?? false
+  );
 }
 
 /** Create and rename use the existing creator-scoped session write grant, not general controls. */
