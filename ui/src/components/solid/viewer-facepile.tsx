@@ -48,10 +48,12 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
     profileAvatarUrl: props.user?.avatarUrl,
   }));
   const presentation = createIdentityAvatarPresentation(view);
+  const fallbackColor = () => `hsl(${view().fallback.colorSeed % 360} 48% 42%)`;
   return (
     <Show when={props.user}>
       <span
         data-avatar-state={presentation.state()}
+        style={{ "--viewer-avatar-color": fallbackColor() }}
         class={[
           "viewer-avatar",
           `viewer-avatar--${props.variant ?? "session"}`,
@@ -69,7 +71,7 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
         </Show>
         <span
           class={view().imageUrl ? "viewer-avatar__fallback" : undefined}
-          style={{ background: `hsl(${view().fallback.colorSeed % 360} 48% 42%)` }}
+          style={{ background: fallbackColor() }}
         >
           <span class="viewer-avatar__initials">{view().fallback.initials}</span>
         </span>
