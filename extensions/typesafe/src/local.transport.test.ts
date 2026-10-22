@@ -78,7 +78,7 @@ function registeredProvider(endpoint?: string) {
   }));
 }
 
-it("refuses to send the local Kev selection to hosted inference through registered handlers", async () => {
+it("refuses hosted dispatch for local Kev", async () => {
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
   await expect(
@@ -113,7 +113,7 @@ it.each([
   "http://2130706433:8009",
   "http://localhost.:8009",
   null,
-])("rejects non-origin, non-loopback, or ambiguous endpoint %s", (url) => {
+])("rejects unsafe loopback endpoint %s", (url) => {
   expect(() => runtimeConfig({ baseUrl: url })).toThrow("baseUrl");
 });
 
@@ -122,7 +122,7 @@ it.each([-1, "15"])("rejects invalid local latency metadata %s", async (latency_
   await expect(evaluate(input, runtimeConfig({ baseUrl }))).rejects.toThrow("invalid response");
 });
 
-it("ignores a stale hosted key passed directly to the local client", async () => {
+it("never sends a stale hosted key locally", async () => {
   const fetch = mockResponse(localAnswer);
   await expect(
     evaluate(input, { ...runtimeConfig({ baseUrl }), apiKey: "hosted-secret" }),

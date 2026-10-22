@@ -204,37 +204,34 @@ const header = (value: string) => ({
   prefix: "Token ",
 });
 
-it.each([false, true])(
-  "uses models.providers.typesafe for private HTTPS with apiKey=%s",
-  async (auth) => {
-    const registered = provider(settings(auth ? { apiKey: "synthetic-server-key" } : {}));
-    expect(registered.isReady?.()).toBe(true);
-    await expect(registered.evaluate(batch, context())).resolves.toMatchObject({
-      status: "ok",
-      result: {
+it.each([false, true])("uses private HTTPS with apiKey=%s", async (auth) => {
+  const registered = provider(settings(auth ? { apiKey: "synthetic-server-key" } : {}));
+  expect(registered.isReady?.()).toBe(true);
+  await expect(registered.evaluate(batch, context())).resolves.toMatchObject({
+    status: "ok",
+    result: {
+      model: "nemotron-deciffusion",
+      answers: { q: { type: "boolean", probabilityTrue: 0.75 } },
+    },
+  });
+  expect(received).toEqual([
+    {
+      url: "/v1/systemone",
+      host: new URL(baseUrl).host,
+      authorization: auth ? "Bearer synthetic-server-key" : undefined,
+      body: {
+        ...batch,
         model: "nemotron-deciffusion",
-        answers: { q: { type: "boolean", probabilityTrue: 0.75 } },
+        questions: { q: { type: "noul", instructions: null } },
       },
-    });
-    expect(received).toEqual([
-      {
-        url: "/v1/systemone",
-        host: new URL(baseUrl).host,
-        authorization: auth ? "Bearer synthetic-server-key" : undefined,
-        body: {
-          ...batch,
-          model: "nemotron-deciffusion",
-          questions: { q: { type: "noul", instructions: null } },
-        },
-      },
-    ]);
-    expect(lookup).toHaveBeenCalled();
-    expect(lookup.mock.calls.every(([host]) => host === "files.proxy.test")).toBe(true);
-    expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
-  },
-);
+    },
+  ]);
+  expect(lookup).toHaveBeenCalled();
+  expect(lookup.mock.calls.every(([host]) => host === "files.proxy.test")).toBe(true);
+  expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
+});
 
-it("uses the common private-network opt-out and explicit opt-in", async () => {
+it("honors private-network opt-out and opt-in", async () => {
   await expectUnavailable(evaluate({ request: { allowPrivateNetwork: false, tls } }));
   pinnedAddress = "127.0.0.1";
   lookup.mockResolvedValue([{ address: pinnedAddress, family: 4 }]);
@@ -280,7 +277,7 @@ it.each([
 });
 
 it.each(["untrusted certificate", "hostname mismatch", "insecure override"])(
-  "preserves shared TLS verification: %s",
+  "enforces TLS verification: %s",
   async (failure) => {
     const config = settings(
       failure === "hostname mismatch"
@@ -304,7 +301,7 @@ it.each(["https://api.typesafe.ai/v1/systemone", "https://other.proxy.test/sink"
 );
 
 it.each(["origin", "policy", "credential", "credential loss"])(
-  "rechecks current provider %s after DNS before dispatch",
+  "rechecks provider %s after DNS",
   async (change) => {
     let config = settings({ apiKey: "synthetic-server-key" });
     const registered = provider(() => config);
@@ -323,7 +320,7 @@ it.each(["origin", "policy", "credential", "credential loss"])(
   },
 );
 
-it("honors an explicit managed proxy rather than bypassing its refusal", async () => {
+it("never bypasses a managed proxy refusal", async () => {
   const connects: string[] = [];
   const proxy = await listen(createHttpServer());
   proxy.listener.on("connect", (request, socket) => {
@@ -343,7 +340,7 @@ it("honors an explicit managed proxy rather than bypassing its refusal", async (
   }
 });
 
-it("fails cold for unavailable provider secrets and observes rotation and recovery", async () => {
+it("observes provider credential loss, rotation and recovery", async () => {
   let config = settings({ apiKey: endpointRef });
   const registered = provider(() => config);
   for (const key of [
@@ -376,13 +373,13 @@ it.each<ModelProviderConfig>([
     models: [],
     request: { auth: { mode: "authorization-bearer", token: endpointRef } },
   },
-])("fails closed for unresolved configured headers/request auth", async (config) => {
+])("rejects unresolved headers/request auth", async (config) => {
   await expectUnavailable(evaluate({ ...config, baseUrl }), "credentials-unavailable");
   expect(lookup).not.toHaveBeenCalled();
 });
 
 it.each(["127.0.0.1", "169.254.169.254", "0.0.0.0"])(
-  "retains the common unsafe DNS restriction for %s",
+  "rejects unsafe DNS answer %s",
   async (address) => {
     lookup.mockResolvedValue([{ address, family: 4 }]);
     await expectUnavailable(evaluate());
@@ -417,7 +414,7 @@ it.each([
 });
 
 it.each(["authorization-bearer", "header"] as const)(
-  "fails closed instead of sending anonymous requests for empty %s auth",
+  "rejects empty %s auth before DNS",
   async (mode) => {
     const auth =
       mode === "authorization-bearer"

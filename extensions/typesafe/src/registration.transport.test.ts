@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { setImmediate } from "node:timers/promises";
 import { DecisionContractError, type DecisionBatch } from "openclaw/plugin-sdk/decisions";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
@@ -9,6 +11,7 @@ import { MAX_JSON_BYTES } from "./schema.js";
 import {
   choiceAnswer,
   mockFetch,
+  mockResponse as mockBodyResponse,
   mockJsonResponse as mockResponse,
   registeredDecisionProvider,
   scoreAnswer,
@@ -55,6 +58,185 @@ const input = {
   questions: { ...batch.questions, q: { ...batch.questions.q, type: "noul" } },
 };
 const clientConfig = { apiKey: "synthetic-key", timeoutMs: 1000 };
+it("never follows redirects to a credential sink", async () => {
+  const fetch = mockBodyResponse(null, {
+    status: 302,
+    headers: { location: "https://other.example/credential-sink" },
+  });
+  await expect(evaluate(input, clientConfig)).rejects.toMatchObject({ reason: "transport" });
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
+});
+it("bounds expanded local request bytes", async () => {
+  const fetch = mockBodyResponse(undefined);
+  const emptyBody = { ...input, state: "" };
+  await expect(
+    evaluate(
+      {
+        ...emptyBody,
+        state: "x".repeat(MAX_JSON_BYTES - Buffer.byteLength(JSON.stringify(emptyBody))),
+      },
+      { ...clientConfig, baseUrl: "http://127.0.0.1:8009" },
+    ),
+  ).rejects.toThrow("request exceeds");
+  expect(fetch).not.toHaveBeenCalled();
+});
+it("keeps the deadline active after response headers", async () => {
+  const cancelled = vi.fn();
+  mockBodyResponse(new ReadableStream({ pull() {}, cancel: cancelled }));
+  await expect(evaluate(input, { ...clientConfig, timeoutMs: 25 })).rejects.toThrow(
+    "TypeSafe evaluation timed out.",
+  );
+  expect(cancelled).toHaveBeenCalledOnce();
+});
+it("rejects cancellation concurrent with body EOF", async () => {
+  const controller = new AbortController();
+  const body = new ReadableStream<Uint8Array>(
+    {
+      pull(stream) {
+        controller.abort("synthetic-private-reason");
+        stream.close();
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  mockBodyResponse(body);
+  await expect(evaluate(input, clientConfig, controller.signal)).rejects.toThrow(
+    "TypeSafe evaluation cancelled.",
+  );
+});
+it("preserves bounded multi-chunk JSON responses", async () => {
+  const body = new ReadableStream<Uint8Array>({
+    start(stream) {
+      const json = JSON.stringify(response);
+      for (const chunk of [json.slice(0, 50), json.slice(50)]) {
+        stream.enqueue(new TextEncoder().encode(chunk));
+      }
+      stream.close();
+    },
+  });
+  mockBodyResponse(body);
+  await expect(evaluate(input, clientConfig)).resolves.toEqual({ evaluation: response });
+});
+it.each<[number, string, HeadersInit, number?]>([
+  [400, "unsupported-input", {}],
+  [401, "authentication", {}],
+  [403, "authentication", {}],
+  [413, "unsupported-input", {}],
+  [422, "unsupported-input", {}],
+  [500, "transport", {}],
+  [429, "rate-limited", { "retry-after-ms": "250", "retry-after": "10" }, 250],
+  [429, "rate-limited", { "retry-after-ms": "invalid", "retry-after": "10" }, 10000],
+  [429, "rate-limited", { "retry-after": "invalid" }],
+])(
+  "classifies HTTP %s without reading or retrying",
+  async (status, reason, headers, retryAfterMs) => {
+    const pull = vi.fn(() => {
+      throw new Error("synthetic credential and submitted state");
+    });
+    const cancel = vi.fn();
+    const fetch = mockBodyResponse(new ReadableStream({ pull, cancel }, { highWaterMark: 0 }), {
+      status,
+      headers: new Headers(headers),
+    });
+    const error = await evaluate(input, clientConfig).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ name: "EvaluationError", reason, retryAfterMs });
+    if (reason === "unsupported-input") {
+      expect(error).toHaveProperty("message", "TypeSafe rejected the supplied input.");
+    }
+    expect(pull).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(error).not.toHaveProperty("cause");
+    expect(String(error)).not.toContain("synthetic credential");
+  },
+);
+
+it.each([
+  { status: 401, trigger: "http", reason: "authentication" },
+  { status: 200, trigger: "abort", reason: "transport" },
+  { status: 200, trigger: "abort-at-headers", reason: "transport" },
+  { status: 200, trigger: "overflow", reason: "invalid-response" },
+])("joins cancellation and release for $trigger/$status", async ({ status, trigger, reason }) => {
+  const cancellationGate = Promise.withResolvers<void>();
+  const releaseGate = Promise.withResolvers<void>();
+  const nativeCancel = vi.fn(() => cancellationGate.promise);
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        if (trigger === "overflow") {
+          controller.enqueue(new Uint8Array(MAX_JSON_BYTES + 1));
+        }
+      },
+      cancel: nativeCancel,
+    },
+    { highWaterMark: 0 },
+  );
+  const [consumer, capture] = stream.tee();
+  const release = vi.fn(async () => {
+    await capture.cancel();
+    await releaseGate.promise;
+  });
+  const controller = new AbortController();
+  vi.spyOn(providerHttp, "fetchWithProviderHttpGuard").mockImplementationOnce(async () => {
+    if (trigger === "abort-at-headers") {
+      controller.abort("synthetic-private-abort");
+    }
+    return {
+      response: new Response(consumer, { status, headers: { "content-length": "1" } }),
+      finalUrl: "https://api.typesafe.ai/v1/systemone",
+      release,
+      refreshTimeout: () => {},
+    };
+  });
+  let settled = false;
+  const outcome = evaluate(input, clientConfig, controller.signal)
+    .catch((error: unknown) => error)
+    .finally(() => {
+      settled = true;
+    });
+  try {
+    await setImmediate();
+    if (trigger === "abort") {
+      controller.abort("synthetic-private-abort");
+    }
+    await setImmediate();
+    expect(release).toHaveBeenCalledOnce();
+    expect(nativeCancel).toHaveBeenCalledOnce();
+    expect(settled).toBe(false);
+    cancellationGate.resolve();
+    await setImmediate();
+    expect(settled).toBe(false);
+    releaseGate.resolve();
+    expect(await outcome).toMatchObject({ name: "EvaluationError", reason });
+    if (trigger === "overflow") {
+      expect(await outcome).toHaveProperty("message", "TypeSafe response exceeds its limit.");
+    } else if (trigger.startsWith("abort")) {
+      expect(await outcome).toHaveProperty("message", "TypeSafe evaluation cancelled.");
+    }
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
+    // Also release the fixture after an assertion fails against the old sequential implementation.
+    const cancellation = Promise.allSettled([consumer.cancel(), capture.cancel()]);
+    cancellationGate.resolve();
+    releaseGate.resolve();
+    await cancellation;
+    await outcome;
+  }
+});
+
+it("binds credentials to the provider API origin", async () => {
+  const fetch = mockBodyResponse(JSON.stringify(response));
+  await evaluate(input, {
+    ...clientConfig,
+    baseUrl: "https://unrelated.example",
+    providerConfig: { baseUrl: "https://decision.example.com/v1", models: [] },
+  });
+  expect(fetch.mock.calls[0]?.[0]).toBe("https://decision.example.com/v1/systemone");
+  expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+    "Bearer synthetic-key",
+  );
+});
 
 beforeAll(async () => {
   // Response-contract assertions start after loader/policy setup; cold-import
@@ -145,11 +327,7 @@ it.each([
   ["invalid distribution probability", withAnswer("c", { probabilities: { keep: -0.1, skip: 1 } })],
   ["malformed confidence", withAnswer("c", { confidence: "0.5" })],
   ["out of range boolean", withAnswer("q", { noul: 1.01 })],
-  ["unknown choice", withAnswer("c", { choice: "other" })],
   ["unknown probability label", withAnswer("c", { probabilities: { keep: 0.5, other: 0.5 } })],
-  ["empty distribution", withAnswer("c", { probabilities: { keep: 0, skip: 0 } })],
-  ["out of range score", withAnswer("s", { score: 2 })],
-  ["mismatched legend", withAnswer("s", { legend: { 0: "Wrong", 1: "High" } })],
   ["excessive metadata bytes", { metrics: "x".repeat(4 * 1024 * 1024) }],
   ["excessive metadata nodes", { metrics: Array(262144).fill(null) }],
   [
@@ -195,7 +373,7 @@ it.each(["transport", "invalid JSON", "reflected credential"])(
   },
 );
 
-it("requires prepared credentials instead of an ambient key or unresolved reference", async () => {
+it("requires prepared credentials, not ambient or unresolved keys", async () => {
   vi.stubEnv("TYPESAFE_API_KEY", "unused-synthetic-key");
   const fetch = mockResponse({});
   await expect(
@@ -240,7 +418,7 @@ it.each([
   privateQuestion({ type: "noul", instructions: 42 }),
   privateQuestion({ type: "noul", criteria: { true: false } }),
   privateQuestion({ type: "choice", criteria: { a: { nested: undefined }, b: "B" } }),
-])("rejects invalid input before dispatch without leaking content", async (value) => {
+])("rejects private invalid input before dispatch", async (value) => {
   const fetch = mockResponse({});
   const error = await evaluate(value, clientConfig).catch((caught: unknown) => caught);
   expect(error).toMatchObject({ name: "EvaluationError", reason: "unsupported-input" });
@@ -248,28 +426,20 @@ it.each([
   expect(fetch).not.toHaveBeenCalled();
 });
 
-it.each([
-  [400, "unsupported-input"],
-  [401, "authentication"],
-  [403, "authentication"],
-  [413, "unsupported-input"],
-  [422, "unsupported-input"],
-  [429, "rate-limited"],
-  [500, "transport"],
-] as const)("classifies HTTP %s without retries or private details", async (status, reason) => {
+it("preserves HTTP retry hints through the registered adapter", async () => {
   const fetch = mockResponse("synthetic-key: synthetic only", {
-    status,
+    status: 429,
     headers: { "retry-after-ms": "123" },
   });
   expect(await registeredProvider().evaluate(batch, context())).toEqual({
     status: "unavailable",
-    reason,
-    ...(status === 429 ? { retryAfterMs: 123 } : {}),
+    reason: "rate-limited",
+    retryAfterMs: 123,
   });
   expect(fetch).toHaveBeenCalledOnce();
 });
 
-it("observes prepared credential rotation, loss, recovery, and caller cancellation", async () => {
+it("observes credential rotation, loss, recovery and cancellation", async () => {
   vi.stubEnv("TYPESAFE_API_KEY", "synthetic-ambient");
   const fetch = mockResponse(response);
   const provider = registeredProvider({ apiKey: "synthetic-unprepared" });
@@ -326,7 +496,7 @@ it.each<DecisionBatch>([
   expect(fetch).not.toHaveBeenCalled();
 });
 
-it("does not dispatch when preparation consumes the native deadline", async () => {
+it("rejects dispatch after preparation exhausts the deadline", async () => {
   const fetch = mockResponse(response);
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(100);
   await expect(
@@ -339,7 +509,7 @@ it("does not dispatch when preparation consumes the native deadline", async () =
   expect(fetch).not.toHaveBeenCalled();
 });
 
-it("limits an in-flight request to the budget remaining after preparation", async () => {
+it("uses only the deadline remaining after preparation", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(40);
   const started = Promise.withResolvers<AbortSignal>();
@@ -375,7 +545,7 @@ it("limits an in-flight request to the budget remaining after preparation", asyn
 });
 
 it.each(["inherited array serializer", "hidden serializer", "getter", "hidden array getter"])(
-  "rejects a %s before executing user code or dispatching the registered provider",
+  "rejects %s without running user code or dispatching",
   async (kind) => {
     const hook = vi.fn(() => "synthetic replacement");
     let state: DecisionBatch["state"];

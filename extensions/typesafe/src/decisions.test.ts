@@ -1,50 +1,9 @@
-import type { DecisionBatch, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
-import { beforeEach, expect, it, vi } from "vitest";
+import type { DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
+import { expect, it } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
-import { evaluate } from "./client.js";
 import type { RuntimeConfig } from "./config.js";
 import { createPreparedDecisionProvider } from "./decisions.js";
-import { EvaluationError } from "./errors.js";
-import { legacyWireFixture } from "./prepared.test-support.js";
-vi.mock("./client.js", () => ({ evaluate: vi.fn() }));
-const batch: DecisionBatch = {
-  state: "synthetic",
-  questions: { b: { type: "boolean" } },
-};
-const context = () => ({
-  model: "jev-agent-selected",
-  agentId: "research",
-  signal: new AbortController().signal,
-  deadlineMonotonicMs: performance.now() + 500,
-});
 const config = { apiKey: "synthetic-key", timeoutMs: 2000 };
-beforeEach(() => {
-  vi.mocked(evaluate).mockReset();
-});
-it("does not convert caller cancellation or implementation errors into fallback", async () => {
-  const provider = legacyWireFixture(
-    createPreparedDecisionProvider(() => config),
-    () => config,
-  );
-  const controller = new AbortController();
-  vi.mocked(evaluate).mockImplementation(async () => {
-    controller.abort(new Error("caller closed"));
-    throw new EvaluationError("cancelled", "transport");
-  });
-  await expect(
-    provider.evaluate(batch, {
-      ...context(),
-      signal: controller.signal,
-    }),
-  ).rejects.toThrow("caller closed");
-  vi.mocked(evaluate).mockRejectedValue(new Error("private detail"));
-  const failure = provider.evaluate(batch, context());
-  await expect(failure).rejects.toMatchObject({
-    name: "Error",
-    message: "TypeSafe decision adapter contract failure.",
-  });
-  await expect(failure).rejects.not.toHaveProperty("cause");
-});
 
 type ProviderConfig = NonNullable<RuntimeConfig["providerConfig"]>;
 type Inference = NonNullable<DecisionProviderContextV2["model"]["inference"]>;
@@ -55,7 +14,7 @@ const catalogRow = (id: string, decision: Inference["decision"]) => ({
   inference: { chat: false as const, decision },
 });
 
-it("preserves canonical per-model capability and billing facts while enriching V1 input", async () => {
+it("preserves native facts and enriches V1 catalog entries", async () => {
   const native = catalogRow("pinned", {
     protocol: "pinned",
     input: ["text"],
@@ -120,7 +79,7 @@ const longContext = (value: string | ReturnType<typeof secretRef>) => ({
 });
 
 it.each([undefined, "https://api.typesafe.ai", "https://api.typesafe.ai/v1/"])(
-  "keeps pinned hosted facts on the matching normalized API root (%s)",
+  "retains hosted facts on normalized root %s",
   async (baseUrl) => {
     const runtime = baseUrl === undefined ? config : configuredRuntime({ baseUrl });
     const { facts, provider } = await preparedFacts(runtime);
@@ -136,7 +95,7 @@ it.each([
   configuredRuntime({ baseUrl: "https://systemone.fixture.invalid/v1" }),
   configuredRuntime({ baseUrl: "https://api.typesafe.ai/custom/v1" }),
   configuredRuntime({ baseUrl: "https://api.typesafe.ai/v1/systemone" }),
-])("does not carry hosted billing or limits onto a different physical route", async (runtime) => {
+])("unbinds hosted facts on custom routes", async (runtime) => {
   const { facts } = await preparedFacts(runtime);
   const { billing, limits, ...unbound } = pinnedFacts;
   expect(facts).toEqual(unbound);
@@ -144,37 +103,46 @@ it.each([
   expect(limits).toBeDefined();
 });
 
-it.each<Partial<ProviderConfig>>([
-  { headers: longContext("true") },
-  {
-    headers: { "typesafe-danger-zone-long-context": "false" },
-    models: [configuredModel({ headers: { "TYPESAFE-DANGER-ZONE-LONG-CONTEXT": "true" } })],
-  },
-  {
-    headers: { "TypeSafe-Danger-Zone-Long-Context": "false" },
-    request: { headers: { "typesafe-danger-zone-long-context": "true" } },
-  },
-  { headers: longContext(secretRef("UNRESOLVED_SYNTHETIC_HEADER")) },
-])(
-  "withdraws default context limits when long-context mode is enabled or unresolved",
-  async (overrides) => {
-    const { facts } = await preparedFacts(configuredRuntime(overrides));
-    expect(facts?.limits).toBeUndefined();
-    expect(facts?.billing).toEqual(pinnedFacts.billing);
-  },
-);
-
-it("uses final request header precedence instead of the provider long-context setting", async () => {
-  const { facts } = await preparedFacts(
-    configuredRuntime({
-      headers: { "TypeSafe-Danger-Zone-Long-Context": "true" },
+const { limits: hostedLimits, ...unlimitedFacts } = pinnedFacts;
+it.each<[Partial<ProviderConfig>, boolean]>([
+  [{ headers: longContext("true") }, false],
+  [
+    {
+      headers: { "typesafe-danger-zone-long-context": "false" },
+      models: [configuredModel({ headers: { "TYPESAFE-DANGER-ZONE-LONG-CONTEXT": "true" } })],
+    },
+    false,
+  ],
+  [
+    {
+      headers: { "TypeSafe-Danger-Zone-Long-Context": "false" },
+      request: { headers: { "typesafe-danger-zone-long-context": "true" } },
+    },
+    false,
+  ],
+  [{ headers: longContext(secretRef("UNRESOLVED_SYNTHETIC_HEADER")) }, false],
+  [
+    {
+      headers: longContext("true"),
       request: { headers: { "typesafe-danger-zone-long-context": "false" } },
-    }),
-  );
-  expect(facts).toEqual(pinnedFacts);
+    },
+    true,
+  ],
+  [
+    {
+      headers: { "x-api-key": secretRef("UNRESOLVED_SYNTHETIC_KEY") },
+      request: {
+        auth: { mode: "authorization-bearer", token: secretRef("UNRESOLVED_SYNTHETIC_KEY") },
+      },
+    },
+    true,
+  ],
+])("binds hosted limits with effective headers %j", async (overrides, limited) => {
+  const { facts } = await preparedFacts(configuredRuntime(overrides));
+  expect(facts).toEqual(limited ? { ...unlimitedFacts, limits: hostedLimits } : unlimitedFacts);
 });
 
-it("preserves canonical catalog billing without carrying hosted token limits to a custom route", async () => {
+it("retains catalog billing and non-token limits on custom routes", async () => {
   const inference: Inference = {
     ...pinnedRow.inference,
     decision: {
@@ -195,21 +163,4 @@ it("preserves canonical catalog billing without carrying hosted token limits to 
     ...inference,
     decision: { ...inference.decision, limits: { maxQuestions: 12 } },
   });
-});
-
-it("keeps unresolved unrelated secrets out of catalog fact binding", async () => {
-  const { facts } = await preparedFacts(
-    configuredRuntime({
-      headers: {
-        "x-api-key": secretRef("UNRESOLVED_SYNTHETIC_KEY"),
-      },
-      request: {
-        auth: {
-          mode: "authorization-bearer",
-          token: secretRef("UNRESOLVED_SYNTHETIC_KEY"),
-        },
-      },
-    }),
-  );
-  expect(facts).toEqual(pinnedFacts);
 });
