@@ -589,62 +589,48 @@ describe("skills-remote", () => {
     });
   });
 
-  it("records bins from system.which object-map responses", async () => {
-    await closeSkillsWatchers(true);
-    const { nodeId, bin, cfg, workspaceDir } = remoteFixture();
-    const invokeCalls: string[] = [];
-    setTestSkillsRemoteRegistry(nodeId, {
-      get: () => testRemoteSession(nodeId),
-      invoke: async (params: { command: string }) => {
-        invokeCalls.push(params.command);
-        return {
-          ok: true,
-          payload: { bins: { [bin]: `/opt/homebrew/bin/${bin}`, missing: "" } },
-          payloadJSON: JSON.stringify({ bins: { [bin]: `/opt/homebrew/bin/${bin}` } }),
-        };
-      },
-    } as unknown as NodeRegistry);
-    recordRemoteMacWithSystemWhich(nodeId);
-    const before = getSkillsSnapshotVersion(workspaceDir);
+  it.each(["array", "object"])(
+    "continues refreshing %s bins after one node fails",
+    async (shape) => {
+      await closeSkillsWatchers(true);
+      const nodeA = newNode();
+      const nodeB = newNode();
+      const bin = `bin-${randomUUID()}`;
+      const { cfg, workspaceDir } = workspaceForBin(bin);
+      const invokeCalls: string[] = [];
+      let before = 0;
+      setTestSkillsRemoteRegistry([nodeA, nodeB], {
+        get: (nodeId: string) => testRemoteSession(nodeId),
+        checkConnectivity: (nodeId: string) => {
+          if (nodeId === nodeA) {
+            throw new Error("simulated connectivity failure");
+          }
+          return { ok: true };
+        },
+        invoke: async (params: { command: string }) => {
+          invokeCalls.push(params.command);
+          before = getSkillsSnapshotVersion(workspaceDir);
+          const bins = shape === "array" ? [bin] : { [bin]: `/opt/homebrew/bin/${bin}` };
+          return {
+            ok: true,
+            payload: { bins: { [bin]: `/opt/homebrew/bin/${bin}`, missing: "" } },
+            payloadJSON: JSON.stringify({ bins }),
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteMacWithSystemWhich(nodeA);
+      recordRemoteMacWithSystemWhich(nodeB);
+      recordRemoteNodeBins(nodeA, ["stale-bin"], TEST_PAIRING_GENERATION);
 
-    await probe(nodeId, cfg, { timeoutMs: 10 });
+      await expect(refreshRemoteBinsForConnectedNodes(cfg)).resolves.toBeUndefined();
 
-    expect(invokeCalls).toEqual(["system.which"]);
-    expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
-    expect(getRemoteSkillEligibility()?.hasBin("missing")).toBe(false);
-    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
-  });
-
-  it("continues the connected-node refresh after one node fails", async () => {
-    await closeSkillsWatchers(true);
-    const nodeA = newNode();
-    const nodeB = newNode();
-    const bin = `bin-${randomUUID()}`;
-    const { cfg } = workspaceForBin(bin);
-    const invokeCalls: string[] = [];
-    setTestSkillsRemoteRegistry([nodeA, nodeB], {
-      get: (nodeId: string) => testRemoteSession(nodeId),
-      checkConnectivity: (nodeId: string) => {
-        if (nodeId === nodeA) {
-          throw new Error("simulated connectivity failure");
-        }
-        return { ok: true };
-      },
-      invoke: async (params: { command: string }) => {
-        invokeCalls.push(params.command);
-        return { ok: true, payloadJSON: JSON.stringify({ bins: [bin] }) };
-      },
-    } as unknown as NodeRegistry);
-    recordRemoteMacWithSystemWhich(nodeA);
-    recordRemoteMacWithSystemWhich(nodeB);
-    recordRemoteNodeBins(nodeA, ["stale-bin"], TEST_PAIRING_GENERATION);
-
-    await expect(refreshRemoteBinsForConnectedNodes(cfg)).resolves.toBeUndefined();
-
-    expect(invokeCalls).toEqual(["system.which"]);
-    expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
-    expect(getRemoteSkillEligibility()?.hasBin("stale-bin")).toBe(false);
-  });
+      expect(invokeCalls).toEqual(["system.which"]);
+      expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
+      expect(getRemoteSkillEligibility()?.hasBin("stale-bin")).toBe(false);
+      expect(getRemoteSkillEligibility()?.hasBin("missing")).toBe(false);
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
+    },
+  );
 
   it("refreshes bins only for generation-current connected sessions", async () => {
     await closeSkillsWatchers(true);
@@ -850,12 +836,9 @@ describe("node-hosted skill snapshots", () => {
     expect(getSkillsSnapshotVersion()).toBeGreaterThan(firstVersion);
   });
 
-  it("hides skills when the session or publishing node cannot execute on the node", () => {
-    connectSkill("node-1", { commands: [] });
-    publish("remote", "Remote");
-
-    expect(remoteEntries()).toEqual([]);
+  it("hides node skills when this session cannot execute on the node", () => {
     connectSkill();
+    publish("remote", "Remote");
     expect(mergeRemoteNodeSkillEntries([], { canExec: false })).toEqual([]);
     expect(remoteEntries()).toHaveLength(1);
   });

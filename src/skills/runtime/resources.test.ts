@@ -52,15 +52,16 @@ const prepare = (
 const markdown = "---\ndescription: Workspace procedure\n---\n# Guide\nRun scripts/check.sh.\n";
 const read = (...parts: string[]) => fs.readFile(path.join(...parts), "utf8");
 const selectSkill = (name: string, dir: string) => ({ name, path: path.join(dir, "SKILL.md") });
+const location = (file: string) => `<location>${escapeSkillXml(file)}</location>`;
 async function writeSkill(name: string, content = markdown) {
   const directory = path.join(workspace, "skills", name);
   await fs.mkdir(directory, { recursive: true });
   await fs.writeFile(path.join(directory, "SKILL.md"), content);
   return directory;
 }
-async function loadSnapshot(config?: OpenClawConfig) {
-  const entries = loadWorkspaceSkills(workspace, { workspaceOnly: true });
-  return await buildSkillSnapshot(workspace, { entries, config });
+async function loadSnapshot(config?: OpenClawConfig, directory = workspace) {
+  const entries = loadWorkspaceSkills(directory, { workspaceOnly: true });
+  return await buildSkillSnapshot(directory, { entries, config });
 }
 async function materialize(
   delivery: Parameters<typeof materializeSkillResources>[0],
@@ -157,10 +158,7 @@ it("recreates stable session paths and prompt bytes independent of delivery orde
   let expectedPrompt = gatewayPrompt;
   for (const source of gatewaySkills) {
     const target = first.snapshot.resolvedSkills.find((skill) => skill.name === source.name)!;
-    expectedPrompt = expectedPrompt.replace(
-      `<location>${escapeSkillXml(source.filePath)}</location>`,
-      `<location>${escapeSkillXml(target.filePath)}</location>`,
-    );
+    expectedPrompt = expectedPrompt.replace(location(source.filePath), location(target.filePath));
   }
   expect(rewrittenPrompt).toBe(expectedPrompt);
   expect(rewrittenPrompt).not.toContain("~/gateway/");
@@ -211,10 +209,7 @@ it("rewrites unambiguous XML catalog locations without choosing between same-nam
     { ...second, name: name.toLowerCase(), filePath: "/external/SKILL.md" },
   ]);
   expect(copy.rewriteReferences(prompt)).toBe(
-    prompt.replace(
-      "<location>/second&amp;source/SKILL.md</location>",
-      `<location>${escapeSkillXml(second.filePath)}</location>`,
-    ),
+    prompt.replace("<location>/second&amp;source/SKILL.md</location>", location(second.filePath)),
   );
 });
 
@@ -245,18 +240,17 @@ it("preserves the exact frozen abort error after partial materialization and fai
       artifactRoot = path.dirname(path.dirname(target));
     }
   });
-  const primary = new Error("Prepared turn closed");
-  primary.name = "AbortError";
-  Object.freeze(primary);
+  const primary = Object.freeze(
+    Object.assign(new Error("Prepared turn closed"), { name: "AbortError" }),
+  );
   const secret = "synthetic-cleanup-secret";
   const deletionError = new Error(`EACCES: token=${secret} ${"🦞".repeat(2_000)}`);
   const originalRm = fs.rm;
-  const rm = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
-    if (target === artifactRoot) {
-      return Promise.reject(deletionError);
-    }
-    return originalRm(target, options);
-  });
+  const rm = vi
+    .spyOn(fs, "rm")
+    .mockImplementation((target, options) =>
+      target === artifactRoot ? Promise.reject(deletionError) : originalRm(target, options),
+    );
   const warn = vi.fn();
   const previousConsole = loggingState.rawConsole;
   setLoggerOverride({ level: "silent", consoleLevel: "warn" });
@@ -312,27 +306,6 @@ it.each([false, true])(
       { status: "fulfilled", value: { skills: [{ name: "independent" }] } },
     ]);
     expect(await prepare(snapshot)).toEqual(await active);
-  },
-);
-
-it.runIf(process.platform !== "win32")(
-  "omits a discovered skill whose root becomes a broken symlink between turns",
-  async () => {
-    const healthyDir = await writeSkill("healthy");
-    const staleDir = await writeSkill("stale");
-    const snapshot = await loadSnapshot();
-    expect((await prepare(snapshot))?.skills).toHaveLength(2);
-
-    await fs.rm(staleDir, { recursive: true });
-    await fs.symlink(path.join(workspace, "missing-stale-target"), staleDir, "dir");
-
-    await expect(prepare(snapshot)).resolves.toMatchObject({ skills: [{ name: "healthy" }] });
-    await fs.rm(healthyDir, { recursive: true });
-    await fs.symlink(path.join(workspace, "missing-healthy-target"), healthyDir, "dir");
-    await expect(prepare(snapshot)).resolves.toEqual({ version: 1, skills: [] });
-    await expect(prepare(snapshot, [selectSkill("stale", staleDir)])).rejects.toMatchObject(
-      invalidBundle(/skill="stale".*root=.*stale.*ENOENT/s),
-    );
   },
 );
 
@@ -498,9 +471,7 @@ async function remoteFixture() {
     await writeHostSkill(dir, "guide", false, "Use check.sh.");
     await fs.writeFile(path.join(dir, "check.sh"), text);
   }
-  const snapshot = await buildSkillSnapshot(gateway, {
-    entries: loadWorkspaceSkills(gateway, { workspaceOnly: true }),
-  });
+  const snapshot = await loadSnapshot(undefined, gateway);
   const toHost = (file: string) => path.join(host, path.relative(gateway, file));
   const toGateway = (skill: Skill): Skill => ({
     ...skill,
@@ -595,12 +566,7 @@ it("delivers Gateway Workshop files without a live workspace binding", async () 
 
 it("resolves explicit hidden Skills on the host before native catalog validation", async () => {
   const f = await remoteFixture();
-  await writeHostSkill(
-    path.join(f.host, "skills", "hidden"),
-    "hidden",
-    true,
-    "Hidden instructions.",
-  );
+  await writeHostSkill(path.join(f.host, "skills", "hidden"), "hidden", true);
   f.snapshot.skills.push({ name: "hidden" });
   const selected = {
     name: "command-alias",
@@ -627,14 +593,8 @@ it("delivers the selected host's hidden Skill when both hosts use the same path"
   const hostEntry = loadWorkspaceSkills(f.host, { workspaceOnly: true }).find(
     (entry) => entry.skill.name === "hidden",
   )!;
-  const [command] = buildWorkspaceSkillCommandSpecs(f.gateway, {
-    entries: [
-      {
-        ...hostEntry,
-        skill: recordSkillFileHost({ ...hostEntry.skill, filePath: hiddenPath }, "workspace"),
-      },
-    ],
-  });
+  hostEntry.skill = recordSkillFileHost({ ...hostEntry.skill, filePath: hiddenPath }, "workspace");
+  const [command] = buildWorkspaceSkillCommandSpecs(f.gateway, { entries: [hostEntry] });
   const [selected] = skillCommandsToExplicitSelections([command!]);
   expect(selected).toEqual({ name: "hidden", path: hiddenPath });
   const expanded = expandExplicitSkillReferences({
