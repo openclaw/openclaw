@@ -261,31 +261,14 @@ describe("matrix qa e2ee client", () => {
     expect(debug).not.toHaveBeenCalled();
   });
 
-  it("shares one stop promise across concurrent and repeated shutdown requests", async () => {
-    const first = client.stop();
-    const second = client.stop();
-    await Promise.all([first, second]);
-    const third = client.stop();
-
-    expect(second).toBe(first);
-    expect(third).toBe(first);
-    await expect(sendText("must not send")).rejects.toThrow("shutdown has started");
-    expect(runtimeFixture.send).not.toHaveBeenCalled();
-    expect(runtimeFixture.detach.mock.calls.map(([event]) => event)).toEqual([
-      "room.message",
-      "verification.summary",
-    ]);
-    expectCalls({ drain: 1, persist: 1, discard: 0 });
-  });
-
-  it("gives an admitted send a bounded grace period before draining and persisting", async () => {
+  it("shares shutdown while giving admitted sends a grace period before draining and persisting", async () => {
     const calls: string[] = [];
     const finish = createDeferred<string>();
     runtimeFixture.send.mockImplementation(() => {
       calls.push("operation");
       return finish.promise;
     });
-    runtimeFixture.detach.mockImplementation(() => calls.push("detach"));
+    runtimeFixture.detach.mockImplementation((event) => calls.push(`detach:${event}`));
     runtimeFixture.drain.mockImplementation(async () => {
       calls.push("drain");
     });
@@ -296,14 +279,23 @@ describe("matrix qa e2ee client", () => {
     await vi.advanceTimersByTimeAsync(0);
     const stop = client.stop();
     try {
-      expect(calls).toEqual(["operation", "detach", "detach"]);
+      expect(client.stop()).toBe(stop);
+      expect(calls).toEqual(["operation", "detach:room.message", "detach:verification.summary"]);
     } finally {
       finish.resolve("$sent");
     }
     await expect(operation).resolves.toBe("$sent");
     await stop;
-    expect(calls).toEqual(["operation", "detach", "detach", "drain", "stop-and-persist"]);
-    expectCalls({ abort: 0, discard: 0 });
+    expect(client.stop()).toBe(stop);
+    await expect(sendText("must not send")).rejects.toThrow("shutdown has started");
+    expect(calls).toEqual([
+      "operation",
+      "detach:room.message",
+      "detach:verification.summary",
+      "drain",
+      "stop-and-persist",
+    ]);
+    expectCalls({ send: 1, drain: 1, persist: 1, abort: 0, discard: 0 });
     expect(vi.getTimerCount()).toBe(0);
   });
 

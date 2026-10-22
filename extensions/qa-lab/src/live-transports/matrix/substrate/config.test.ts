@@ -3,8 +3,21 @@ import { describe, expect, it } from "vitest";
 import { buildMatrixQaConfig } from "./config.js";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
-function castRecord(value: unknown): Record<string, unknown> {
-  return value as Record<string, unknown>;
+function nest(entries: Array<[string, unknown]>): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  const children = new Map<string, Array<[string, unknown]>>();
+  for (const [path, value] of entries) {
+    const [key = "", ...tail] = path.split("/");
+    if (tail.length === 0) {
+      result[key] = value;
+    } else {
+      children.set(key, [...(children.get(key) ?? []), [tail.join("/"), value]]);
+    }
+  }
+  for (const [key, child] of children) {
+    result[key] = nest(child);
+  }
+  return result;
 }
 
 describe("matrix qa config", () => {
@@ -165,200 +178,115 @@ describe("matrix qa config", () => {
   });
 
   it("restores owned baseline leaves while preserving current Matrix lifecycle and siblings", () => {
-    const adjacent = (current: boolean, key: string) => (current ? { [key]: "current" } : {});
-    const fixture = (current: boolean) => ({
-      ...(current ? { unrelated: { currentOnly: true } } : {}),
-      approvals: {
-        exec: { enabled: current, mode: "session", ...adjacent(current, "reviewer") },
-      },
-      agents: {
-        defaults: {
-          blockStreamingChunk: { maxChars: current ? 8 : 120 },
-          adjacentDefault: current ? "current" : "baseline",
-        },
-      },
-      tools: {
-        profile: current ? "coding" : "messaging",
-        media: {
-          models: [
-            {
-              provider: "openai",
-              model: current ? "previous" : "baseline",
-              ...(!current ? { capabilities: ["audio"] } : {}),
-            },
-          ],
-          audio: {
-            enabled: current,
-            prompt: current ? "previous prompt" : "baseline prompt",
-            ...adjacent(current, "adjacentAudio"),
-            scope: {
-              default: current ? "deny" : "allow",
-              rules: [
-                {
-                  action: current ? "deny" : "allow",
-                  match: { chatType: current ? "group" : "direct" },
-                },
-              ],
-            },
-          },
-        },
-      },
-      messages: {
-        groupChat: {
-          mentionPatterns: [current ? "previous" : "baseline"],
-          ...adjacent(current, "adjacentMessage"),
-        },
-      },
-      channels: {
-        matrix: {
-          unknownRoot: current ? "current" : "baseline",
-          accounts: {
-            ...(current
-              ? {
-                  sibling: { enabled: false, homeserver: "https://sibling.invalid" },
-                  "qa-driver-bot-source": { enabled: false, userId: "@stale:test" },
-                  "qa-observer-bot-source": { enabled: false, userId: "@stale:test" },
-                }
-              : {}),
-            sut: {
-              allowBots: current ? "mentions" : false,
-              autoJoin: "allowlist",
-              autoJoinAllowlist: [
-                current ? "!previous:matrix-qa.test" : "!baseline:matrix-qa.test",
-              ],
-              deviceId: current ? "CURRENT-DEVICE" : "BASELINE-DEVICE",
-              ...adjacent(current, "lifecycleState"),
-              dm: {
-                allowFrom: [current ? "@previous:test" : "@baseline:matrix-qa.test"],
-                ...adjacent(current, "adjacentDm"),
-                enabled: true,
-                policy: "open",
-                sessionScope: current ? "per-user" : "per-room",
-                threadReplies: "always",
-              },
-              execApprovals: {
-                agentFilter: [current ? "previous-agent" : "baseline-agent"],
-                approvers: [current ? "@previous:test" : "@baseline:matrix-qa.test"],
-                enabled: current,
-                sessionFilter: [current ? "previous-session" : "baseline-session"],
-                target: current ? "both" : "dm",
-                ...adjacent(current, "adjacentApproval"),
-              },
-              groups: {
-                "!main:matrix-qa.test": {
-                  allowBots: current ? "mentions" : false,
-                  enabled: current,
-                  requireMention: current,
-                  ...adjacent(current, "adjacentGroup"),
-                  tools: {
-                    allow: [current ? "previous-allow" : "baseline-allow"],
-                    deny: [current ? "previous-deny" : "baseline-deny"],
-                    ...adjacent(current, "adjacentTool"),
-                  },
-                },
-                ...(current
-                  ? {
-                      "!current-only:matrix-qa.test": {
-                        adjacentGroup: "preserved",
-                        enabled: false,
-                      },
-                    }
-                  : {}),
-              },
-              streaming: {
-                ...adjacent(current, "adjacentStreaming"),
-                block: { enabled: true, ...adjacent(current, "adjacentBlock") },
-                chunkMode: "newline",
-                mode: "quiet",
-                preview: { toolProgress: false, ...adjacent(current, "adjacentPreview") },
-              },
-              threadBindings: {
-                enabled: current,
-                idleHours: current ? 1 : 12,
-                ...adjacent(current, "adjacentBinding"),
-              },
-            },
-          },
-        },
-      },
-    });
-    const baselineFixture = fixture(false);
-    const baseline = structuredClone(baselineFixture) as unknown as OpenClawConfig;
-    const baselineSut = baselineFixture.channels.matrix.accounts.sut;
-    const currentFixture = fixture(true);
-    const current = currentFixture as unknown as OpenClawConfig;
-
-    const next = buildMatrixQaConfig(baseline, {
-      currentConfig: current,
-      ...params,
-    });
-
-    expect(castRecord(next).unrelated).toEqual({ currentOnly: true });
-    expect(next.approvals?.exec).toEqual({
-      enabled: false,
-      mode: "session",
-      reviewer: "current",
-    });
-    expect(next.agents?.defaults).toMatchObject({
-      adjacentDefault: "current",
-      blockStreamingChunk: { maxChars: 120 },
-    });
-    expect(next.tools?.profile).toBe("messaging");
-    expect(next.tools?.media).toMatchObject({
-      ...baselineFixture.tools.media,
-      audio: { ...baselineFixture.tools.media.audio, adjacentAudio: "current" },
-    });
-    expect(next.messages?.groupChat).toMatchObject({
-      adjacentMessage: "current",
-      mentionPatterns: ["baseline"],
-      visibleReplies: "automatic",
-    });
-    expect(next.channels?.matrix).toMatchObject({ unknownRoot: "current" });
-    expect(next.channels?.matrix?.accounts?.sibling).toEqual(
-      currentFixture.channels.matrix.accounts.sibling,
-    );
+    const s = "channels/matrix/accounts/sut";
+    const g = s + "/groups/!main:matrix-qa.test";
+    const audio = "tools/media/audio";
+    const baseModels = [{ provider: "openai", model: "baseline", capabilities: ["audio"] }];
+    const baseRules = [{ action: "allow", match: { chatType: "direct" } }];
+    const sibling = { enabled: false, homeserver: "https://sibling.invalid" };
+    const extraGroup = { adjacentGroup: "preserved", enabled: false };
+    // Each row states an input pair and its expected output, independently of the builder.
+    const fields: Array<[string, unknown, unknown, unknown?]> = [
+      ["unrelated", undefined, { currentOnly: true }, { currentOnly: true }],
+      ["approvals/exec/enabled", false, true],
+      ["approvals/exec/mode", "session", "session"],
+      ["approvals/exec/reviewer", undefined, "current", "current"],
+      ["agents/defaults/blockStreamingChunk", { maxChars: 120 }, { maxChars: 8 }],
+      ["agents/defaults/adjacentDefault", "baseline", "current", "current"],
+      ["tools/profile", "messaging", "coding"],
+      ["tools/media/models", baseModels, [{ provider: "openai", model: "previous" }]],
+      [audio + "/enabled", false, true],
+      [audio + "/prompt", "baseline prompt", "previous prompt"],
+      [audio + "/adjacentAudio", undefined, "current", "current"],
+      [audio + "/scope/default", "allow", "deny"],
+      [audio + "/scope/rules", baseRules, [{ action: "deny", match: { chatType: "group" } }]],
+      ["messages/groupChat/mentionPatterns", ["baseline"], ["previous"]],
+      ["messages/groupChat/adjacentMessage", undefined, "current", "current"],
+      ["channels/matrix/unknownRoot", "baseline", "current", "current"],
+      ["channels/matrix/accounts/sibling", undefined, sibling, sibling],
+      [
+        "channels/matrix/accounts/qa-driver-bot-source",
+        undefined,
+        { enabled: false, userId: "@stale:test" },
+      ],
+      [
+        "channels/matrix/accounts/qa-observer-bot-source",
+        undefined,
+        { enabled: false, userId: "@stale:test" },
+      ],
+      [s + "/allowBots", false, "mentions"],
+      [s + "/autoJoin", "allowlist", "allowlist"],
+      [s + "/autoJoinAllowlist", ["!baseline:matrix-qa.test"], ["!previous:matrix-qa.test"]],
+      [s + "/deviceId", "BASELINE-DEVICE", "CURRENT-DEVICE", "CURRENT-DEVICE"],
+      [s + "/lifecycleState", undefined, "current", "current"],
+      [
+        s + "/dm/allowFrom",
+        ["@baseline:matrix-qa.test"],
+        ["@previous:test"],
+        ["@driver:matrix-qa.test"],
+      ],
+      [s + "/dm/enabled", true, true],
+      [s + "/dm/policy", "open", "open", "allowlist"],
+      [s + "/dm/sessionScope", "per-room", "per-user"],
+      [s + "/dm/threadReplies", "always", "always"],
+      [s + "/dm/adjacentDm", undefined, "current", "current"],
+      [s + "/execApprovals/agentFilter", ["baseline-agent"], ["previous-agent"]],
+      [s + "/execApprovals/approvers", ["@baseline:matrix-qa.test"], ["@previous:test"]],
+      [s + "/execApprovals/enabled", false, true],
+      [s + "/execApprovals/sessionFilter", ["baseline-session"], ["previous-session"]],
+      [s + "/execApprovals/target", "dm", "both"],
+      [s + "/execApprovals/adjacentApproval", undefined, "current", "current"],
+      [g + "/allowBots", false, "mentions"],
+      [g + "/enabled", false, true, true],
+      [g + "/requireMention", false, true, true],
+      [g + "/adjacentGroup", undefined, "current", "current"],
+      [g + "/tools/allow", ["baseline-allow"], ["previous-allow"]],
+      [g + "/tools/deny", ["baseline-deny"], ["previous-deny"]],
+      [g + "/tools/adjacentTool", undefined, "current", "current"],
+      [s + "/groups/!current-only:matrix-qa.test", undefined, extraGroup, extraGroup],
+      [s + "/streaming/adjacentStreaming", undefined, "current", "current"],
+      [s + "/streaming/block/enabled", true, true, false],
+      [s + "/streaming/block/adjacentBlock", undefined, "current", "current"],
+      [s + "/streaming/chunkMode", "newline", "newline", "length"],
+      [s + "/streaming/mode", "quiet", "quiet", "off"],
+      [s + "/streaming/preview/toolProgress", false, false, true],
+      [s + "/streaming/preview/adjacentPreview", undefined, "current", "current"],
+      [s + "/threadBindings/enabled", false, true],
+      [s + "/threadBindings/idleHours", 12, 1],
+      [s + "/threadBindings/adjacentBinding", undefined, "current", "current"],
+    ];
+    const expectedValue = (row: (typeof fields)[number]) => (row.length === 4 ? row[3] : row[1]);
+    const fixture = (column: 1 | 2 | 3) =>
+      nest(
+        fields.flatMap((row): Array<[string, unknown]> =>
+          (column === 3 ? expectedValue(row) : row[column]) === undefined
+            ? []
+            : [[row[0], structuredClone(column === 3 ? expectedValue(row) : row[column])]],
+        ),
+      );
+    const baseline = fixture(1);
+    const currentConfig = fixture(2);
+    const next = buildMatrixQaConfig(baseline, { ...params, currentConfig });
+    expect(next).toMatchObject(fixture(3));
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
+    expect(next.channels?.matrix?.accounts?.sut?.textChunkLimit).toBe(4000);
     expect(next.channels?.matrix?.accounts?.["qa-driver-bot-source"]).toBeUndefined();
     expect(next.channels?.matrix?.accounts?.["qa-observer-bot-source"]).toBeUndefined();
-    const sut = castRecord(next.channels?.matrix?.accounts?.sut);
-    expect(sut).toMatchObject({
-      allowBots: false,
-      autoJoin: "allowlist",
-      autoJoinAllowlist: ["!baseline:matrix-qa.test"],
-      deviceId: "CURRENT-DEVICE",
-      lifecycleState: "current",
-      textChunkLimit: 4000,
-      dm: {
-        adjacentDm: "current",
-        allowFrom: ["@driver:matrix-qa.test"],
-        sessionScope: "per-room",
-        threadReplies: "always",
-      },
-      execApprovals: { ...baselineSut.execApprovals, adjacentApproval: "current" },
-      streaming: {
-        adjacentStreaming: "current",
-        block: { adjacentBlock: "current", enabled: false },
-        chunkMode: "length",
-        mode: "off",
-        preview: { adjacentPreview: "current", toolProgress: true },
-      },
-      threadBindings: { ...baselineSut.threadBindings, adjacentBinding: "current" },
-    });
-    const sutGroups = castRecord(sut.groups);
-    expect(sutGroups["!main:matrix-qa.test"]).toEqual({
-      adjacentGroup: "current",
-      allowBots: false,
-      enabled: true,
-      requireMention: true,
-      tools: { ...baselineSut.groups["!main:matrix-qa.test"].tools, adjacentTool: "current" },
-    });
-    expect(sutGroups["!current-only:matrix-qa.test"]).toEqual({
-      adjacentGroup: "preserved",
-      enabled: false,
-    });
-
+    expect(next.approvals?.exec).toEqual({ enabled: false, mode: "session", reviewer: "current" });
+    const expectedGroups = nest(
+      fields
+        .filter(([path]) => path.startsWith(g + "/"))
+        .map((row): [string, unknown] => [row[0].slice(g.length + 1), expectedValue(row)]),
+    );
+    expect(next.channels?.matrix?.accounts?.sut?.groups?.["!main:matrix-qa.test"]).toEqual(
+      expectedGroups,
+    );
+    expect(next.channels?.matrix?.accounts?.sut?.groups?.["!current-only:matrix-qa.test"]).toEqual(
+      extraGroup,
+    );
     const provisioned = buildMatrixQaConfig(baseline, {
-      currentConfig: current,
       ...params,
+      currentConfig,
       sutDeviceId: "PROVISIONED-DEVICE",
     });
     expect(provisioned.channels?.matrix?.accounts?.sut).toMatchObject({
