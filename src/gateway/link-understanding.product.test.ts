@@ -1,12 +1,11 @@
-import fs from "node:fs/promises";
 import { createServer } from "node:http";
-import { text } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
-import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
-import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { createChatFixture, sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 
 vi.mock("../infra/net/fetch-guard.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
@@ -23,129 +22,52 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
   };
 });
 
-async function close(server: ReturnType<typeof createServer> | undefined): Promise<void> {
-  if (!server?.listening) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    server.close(() => resolve());
-  });
-}
-
 it(
   "Gateway link understanding fetches bare URLs but not titled markdown links through chat.send",
   { timeout: 90_000 },
-  async () =>
-    withOpenClawTestState(
-      {
-        label: "link-gateway",
-        env: {
-          OPENCLAW_GATEWAY_TOKEN: "link-understanding-gateway-token",
-          OPENCLAW_TEST_FAST: "0",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    const linkRequests: string[] = [];
+    const linkServer = createServer((request, response) => {
+      const requestPath = request.url ?? "";
+      linkRequests.push(requestPath);
+      response.end(requestPath === "/citation" ? "CITATION_PAGE" : "BARE_PAGE");
+    });
+    const fixture = createChatFixture("link-understanding", {
+      configure: (config) => ({
+        ...config,
+        agents: { ...config.agents, entries: { main: {} } },
+        tools: {
+          links: {
+            enabled: true,
+            models: [{ type: "cli", command: "curl", args: ["{{LinkUrl}}"] }],
+          },
         },
+      }),
+      respond: async () => "OK",
+    });
+    await runQaGatewayFixture(
+      async () => {
+        const linkUrl = new URL(await listenLoopback(linkServer));
+        await fixture.start();
+        const linkBase = `http://loopback.test:${linkUrl.port}`;
+        const runId = await sendChatAndWait(
+          fixture.client,
+          "agent:main:link-understanding-gateway",
+          `[citation](${linkBase}/citation "Citation") ${linkBase}/bare`,
+        );
+        expect(runId).toBeTypeOf("string");
+        expect(linkRequests).toEqual(["/bare"]);
+        expect(fixture.requests.join("\n")).toContain("BARE_PAGE");
+        expect(fixture.requests.join("\n")).not.toContain("CITATION_PAGE");
       },
-      async (state) => {
-        const { workspaceDir, configPath } = state;
-        const bundledPluginsDir = state.path("bundled-plugins");
-        state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-        state.applyEnv();
-        const providerBodies: string[] = [];
-        const linkRequests: string[] = [];
-        let providerServer: ReturnType<typeof createServer> | undefined;
-        let linkServer: ReturnType<typeof createServer> | undefined;
-        let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
-
-        try {
-          await fs.mkdir(bundledPluginsDir, { recursive: true });
-
-          linkServer = createServer((request, response) => {
-            const requestPath = request.url ?? "";
-            linkRequests.push(requestPath);
-            response.end(requestPath === "/citation" ? "CITATION_PAGE" : "BARE_PAGE");
-          });
-          const linkUrl = new URL(await listenLoopback(linkServer));
-
-          providerServer = createServer((request, response) => {
-            void text(request)
-              .then((body) => {
-                providerBodies.push(body);
-                writeOpenAiResponsesText(response, {
-                  text: "OK",
-                  messageId: "msg",
-                  responseId: "resp",
-                });
-              })
-              .catch((error: unknown) => {
-                response.destroy(error instanceof Error ? error : new Error(String(error)));
-              });
-          });
-          const provider = buildMockOpenAiResponsesProvider(
-            `${await listenLoopback(providerServer)}/v1`,
-          );
-          const cfg = {
-            agents: {
-              defaults: {
-                workspace: workspaceDir,
-                skipBootstrap: true,
-                model: { primary: provider.modelRef },
-                models: {
-                  [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
-                },
-              },
-              entries: { main: {} },
-            },
-            models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
-            tools: {
-              links: {
-                enabled: true,
-                models: [{ type: "cli", command: "curl", args: ["{{LinkUrl}}"] }],
-              },
-            },
-            gateway: { auth: { mode: "token", token: "link-understanding-gateway-token" } },
-          };
-          gateway = await startGatewayWithClient({
-            cfg,
-            configPath,
-            token: "link-understanding-gateway-token",
-            clientDisplayName: "link-understanding-gateway",
-          });
-          const linkBase = `http://loopback.test:${linkUrl.port}`;
-          const started = await gateway.client.request<{ runId?: string; status?: string }>(
-            "chat.send",
-            {
-              sessionKey: "agent:main:link-understanding-gateway",
-              message: `[citation](${linkBase}/citation "Citation") ${linkBase}/bare`,
-              deliver: false,
-              idempotencyKey: "link-understanding-gateway-run",
-            },
-          );
-          expect(started).toMatchObject({ status: "started", runId: expect.any(String) });
-          await expect(
-            gateway.client.request(
-              "agent.wait",
-              { runId: started.runId, timeoutMs: 30_000 },
-              { timeoutMs: 35_000 },
-            ),
-          ).resolves.toMatchObject({ status: "ok" });
-
-          expect(linkRequests).toEqual(["/bare"]);
-          expect(providerBodies.join("\n")).toContain("BARE_PAGE");
-          expect(providerBodies.join("\n")).not.toContain("CITATION_PAGE");
-        } finally {
-          if (gateway) {
-            await disconnectGatewayClient(gateway.client).catch(() => undefined);
-            await gateway.server.close().catch(() => undefined);
-          }
-          await close(providerServer);
-          await close(linkServer);
+      () => fixture.close(),
+      async () => {
+        if (linkServer.listening) {
+          await closeHttpServer(linkServer);
         }
       },
-    ),
+      () => vi.unstubAllEnvs(),
+    );
+  },
 );

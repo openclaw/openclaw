@@ -1,27 +1,22 @@
 import { X509Certificate } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
-import { createAnthropicResponse } from "../../packages/ai/src/provider-transport-parity.test-support.js";
 import type { WizardNextResult } from "../../packages/gateway-protocol/src/index.js";
 import {
   GATEWAY_OWNER_PROFILE_ID,
   type UsersSelfResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
+import { anthropicTextTurn } from "../../test/anthropic-text-turn.test-support.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
 import * as catalogRefresh from "../agents/prepared-model-runtime.refresh-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem,
-} from "../infra/device-identity.js";
-import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
-import { requestDevicePairing } from "../infra/device-pairing.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { resetGatewayTestState } from "./gateway.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import * as setupAdmission from "./server-methods/setup-admission.js";
@@ -98,26 +93,9 @@ it(
         return Response.json(responses[endpoint]);
       }
       if (endpoint === "https://api.individual.githubcopilot.com/v1/messages") {
-        const events = [
-          {
-            type: "message_start",
-            message: {
-              id: "synthetic-message",
-              model: "claude-sonnet-5",
-              usage: { input_tokens: 5, output_tokens: 0 },
-            },
-          },
-          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "OK" } },
-          { type: "content_block_stop", index: 0 },
-          {
-            type: "message_delta",
-            delta: { stop_reason: "end_turn" },
-            usage: { output_tokens: 1 },
-          },
-          { type: "message_stop" },
-        ];
-        return createAnthropicResponse(events);
+        return new Response(anthropicTextTurn("claude-sonnet-5", "OK", "synthetic-message", 5, 1), {
+          headers: { "content-type": "text/event-stream", "x-request-id": "req-parity" },
+        });
       }
       throw new Error(`Unexpected setup request: ${endpoint}`);
     });
@@ -191,17 +169,14 @@ it(
         try {
           await server.startupSettled;
           const connectOwner = async (label: string) => {
-            const identity = loadOrCreateDeviceIdentity({
-              path: state.path(label, "client", "credentials.sqlite"),
-            });
-            const device = { deviceId: identity.deviceId, role: "operator", scopes };
-            const pending = await requestDevicePairing({
-              ...device,
-              publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+            const { identity } = await pairDeviceIdentity({
+              name: label,
+              role: "operator",
+              scopes,
               clientId: "test",
               clientMode: "backend",
             });
-            await approveDevicePairing(pending.request.requestId, { callerScopes: scopes });
+            const device = { deviceId: identity.deviceId, role: "operator", scopes };
             const rotated = await rotateDeviceToken(device);
             if (!rotated.ok) {
               throw new Error("Expected setup owner device token");
