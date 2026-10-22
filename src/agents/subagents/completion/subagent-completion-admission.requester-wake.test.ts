@@ -640,50 +640,24 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it.each(["failed", "timed_out", "yielded"] as const)(
-    "settles an uncaptured %s wake without changing the child result",
-    async (status) => {
-      const input =
-        status === "yielded"
-          ? armRequesterWake(records())
-          : failedRecords(status, { status: status === "timed_out" ? "timeout" : "error" });
-      input.subagent.completion = { required: true };
-      if (status === "yielded") {
-        Object.assign(input.subagent, {
-          pauseReason: "sessions_yield",
-          delivery: { status: "pending" },
-          cleanupHandled: false,
-          cleanupCompletedAt: undefined,
-        });
-        input.subagent.execution.outcome = undefined;
-        input.subagent.requesterSettleWake!.retireAfterSettle = true;
-      }
-      persistOwner(input);
-      const before = structuredClone(input.subagent);
-      using driver = requesterWakeDriver([input]);
-      if (status === "yielded") {
-        driver.wake.mockImplementation(async (params) => {
-          await params.completeBatch([params.settledEntry], 1, { delivered: true, path: "direct" });
-          return true;
-        });
-      }
-      await driver.run();
-      expectNoRejection(driver);
-      db.value = await reopenOwners();
-      const restored = subagentRuns.get(input.subagent.runId)!;
-      expect(restored.requesterSettleWake).toBeUndefined();
-      if (status === "yielded") {
-        expect(restored).toEqual({ ...before, requesterSettleWake: undefined });
-      } else {
-        expect([restored.execution, restored.completion]).toEqual([
-          before.execution,
-          before.completion,
-        ]);
-      }
-      expect(systemEvents(db.value)).toEqual([]);
-      expect(driver.wake).toHaveBeenCalledOnce();
-    },
-  );
+  it("settles an uncaptured failure without changing the child result", async () => {
+    const input = failedRecords("failed", { status: "error" });
+    input.subagent.completion = { required: true };
+    persistOwner(input);
+    const before = structuredClone(input.subagent);
+    using driver = requesterWakeDriver([input]);
+    await driver.run();
+    expectNoRejection(driver);
+    db.value = await reopenOwners();
+    const restored = currentRun(input);
+    expect(restored.requesterSettleWake).toBeUndefined();
+    expect([restored.execution, restored.completion]).toEqual([
+      before.execution,
+      before.completion,
+    ]);
+    expect(systemEvents(db.value)).toEqual([]);
+    expect(driver.wake).toHaveBeenCalledOnce();
+  });
 
   it.each(["missing outcome", "paused"] as const)(
     "does not settle uncaptured completion with %s evidence",

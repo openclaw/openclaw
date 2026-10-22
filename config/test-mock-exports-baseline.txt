@@ -2242,7 +2242,6 @@
 ["src/agents/subagents/announce/subagent-announce.test.ts","../registry/subagent-registry.js","f7f340f289d61d7c487c9296a103ae60099d6a5819427fa38392fedbab061abd",1]
 ["src/agents/subagents/announce/subagent-announce.timeout.test.ts","../registry/subagent-registry.js","eaa4f3163c43e7587a5e9c9df86c64bb2a1bc72cafb6d653760428a4d32421ba",1]
 ["src/agents/subagents/completion/subagent-completion-admission.cancel-rollback.test.ts","../registry/subagent-registry.js","3e21cb1ac329bc7aea955fc581c3c4844e57106581418d1ead9de5a7ac6187f0",1]
-["src/agents/subagents/completion/subagent-completion-admission.ended-hook.test.ts","../registry/subagent-registry.js","3e21cb1ac329bc7aea955fc581c3c4844e57106581418d1ead9de5a7ac6187f0",1]
 ["src/agents/subagents/completion/subagent-completion-admission.expired-receipt.test.ts","../registry/subagent-registry.js","3e21cb1ac329bc7aea955fc581c3c4844e57106581418d1ead9de5a7ac6187f0",1]
 ["src/agents/subagents/completion/subagent-completion-admission.requester-wake.test.ts","../registry/subagent-registry.js","3e21cb1ac329bc7aea955fc581c3c4844e57106581418d1ead9de5a7ac6187f0",1]
 ["src/agents/subagents/registry/subagent-announcement-delivery.worker.test.ts","../../../gateway/agent-turn/agent-turn-service.js","fe6cb65ac99d88230a2981bdade74f9d34596bfe4ee9a4b9ce363c7e62d55af3",1]
