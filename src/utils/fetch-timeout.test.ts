@@ -162,17 +162,6 @@ describe("fetch timeouts", () => {
     await assertion;
   });
 
-  it("preserves caller abort reasons before response headers", async () => {
-    const parent = new AbortController();
-    const reason = new Error("caller stopped before headers");
-
-    const result = fetchTimeout({ signal: parent.signal });
-    parent.abort(reason);
-
-    await expect(result).rejects.toBe(reason);
-    expect(warn).not.toHaveBeenCalled();
-  });
-
   it("keeps following caller aborts while the returned body is consumed", async () => {
     const parent = new AbortController();
     const reason = new Error("caller stopped after headers");
@@ -212,18 +201,25 @@ describe("fetch timeouts", () => {
     ]);
   });
 
-  it("preserves the parent reason when a parent signal aborts first", async () => {
-    const parent = new AbortController();
-    const reason = new Error("parent stopped");
-    const { signal } = timeout({ signal: parent.signal });
-
-    parent.abort(reason);
-    await vi.advanceTimersByTimeAsync(25);
-
-    expect(signal?.aborted).toBe(true);
-    expect(signal?.reason).toBe(reason);
-    expect(warn).not.toHaveBeenCalled();
-  });
+  it.each(["fetch", "signal"] as const)(
+    "preserves parent abort reasons in %s",
+    async (boundary) => {
+      const parent = new AbortController();
+      const reason = new Error("parent stopped");
+      const { signal } = boundary === "signal" ? timeout({ signal: parent.signal }) : {};
+      const result = boundary === "fetch" ? fetchTimeout({ signal: parent.signal }) : undefined;
+      parent.abort(reason);
+      if (result) {
+        await expect(result).rejects.toBe(reason);
+      }
+      await vi.advanceTimersByTimeAsync(25);
+      if (!result) {
+        expect(signal?.aborted).toBe(true);
+        expect(signal?.reason).toBe(reason);
+      }
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 
   it("refreshes its timeout when progress is observed", async () => {
     const { signal, refresh } = timeout();

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyQueueDropPolicy,
   countPendingQueueItems,
@@ -43,9 +43,7 @@ describe("queue summary helpers", () => {
     ).toBe(true);
 
     expect(queue).toEqual({
-      items: [],
-      cap: 1,
-      dropPolicy: "summarize",
+      ...createQueue([], 1, "summarize"),
       droppedCount: 3,
       summaryLines: ["new"],
     });
@@ -74,75 +72,44 @@ describe("queue summary helpers", () => {
 });
 
 describe("waitForQueueDebounce", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
   it("resolves and removes the pending timer when cancelled", async () => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-    vi.useFakeTimers();
-    try {
-      const controller = new AbortController();
-      const wait = waitForQueueDebounce(
-        { debounceMs: 1_000, lastEnqueuedAt: Date.now() },
-        controller.signal,
-      );
-      expect(vi.getTimerCount()).toBe(1);
-
-      await vi.advanceTimersByTimeAsync(250);
-      controller.abort(new Error("turn cancelled"));
-
-      await expect(wait).resolves.toBeUndefined();
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllEnvs();
-    }
+    const controller = new AbortController();
+    const wait = waitForQueueDebounce(
+      { debounceMs: 1_000, lastEnqueuedAt: Date.now() },
+      controller.signal,
+    );
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(250);
+    controller.abort(new Error("turn cancelled"));
+    await expect(wait).resolves.toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
   });
-
-  it("waits for a full quiet window after another item is enqueued", async () => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-    vi.useFakeTimers();
-    try {
-      const queue = { debounceMs: 1_000, lastEnqueuedAt: Date.now() };
-      let settled = false;
-      const wait = waitForQueueDebounce(queue).then(() => {
-        settled = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(500);
-      queue.lastEnqueuedAt = Date.now();
-      await vi.advanceTimersByTimeAsync(999);
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(1);
-      await wait;
-      expect(settled).toBe(true);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("settles one debounce window after the system clock moves backward", async () => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-    vi.useFakeTimers();
-    try {
-      const queue = { debounceMs: 1_000, lastEnqueuedAt: Date.now() };
-      let settled = false;
-      const wait = waitForQueueDebounce(queue).then(() => {
-        settled = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(500);
+  it.each([false, true])("waits for the quiet window (clock rollback=%s)", async (rollback) => {
+    const queue = { debounceMs: 1_000, lastEnqueuedAt: Date.now() };
+    let settled = false;
+    const wait = waitForQueueDebounce(queue).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    if (rollback) {
       vi.setSystemTime(Date.now() - 60 * 60_000);
-      await vi.advanceTimersByTimeAsync(499);
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(settled).toBe(true);
-      await wait;
-    } finally {
-      vi.useRealTimers();
-      vi.unstubAllEnvs();
+    } else {
+      queue.lastEnqueuedAt = Date.now();
     }
+    await vi.advanceTimersByTimeAsync(rollback ? 499 : 999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(true);
+    await wait;
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 
@@ -155,19 +122,15 @@ describe("queue overflow protection", () => {
     expect(countPendingQueueItems([active, pending], new Set([active, alreadyRemoved]))).toBe(1);
   });
 
-  it("skips in-flight items when selecting drop victims", () => {
-    const [m1, m2, m3, m4] = [{ id: "m1" }, { id: "m2" }, { id: "m3" }, { id: "m4" }] as const;
-    const queue = createQueue([m1, m2, m3, m4], 2);
-    expect(dropItems(queue, new Set([m1])).dropped).toEqual(["m2", "m3"]);
-    expect(queue.items).toEqual([m1, m4]);
-  });
-
-  it("skips protected items when selecting drop victims", () => {
-    const protectedItem: Item = { id: "priority", protected: true };
-    const [normalA, normalB, normalC] = [{ id: "a" }, { id: "b" }, { id: "c" }] as const;
-    const queue = createQueue([protectedItem, normalA, normalB, normalC], 3);
-    expect(dropItems(queue)).toEqual({ admitted: true, dropped: ["a", "b"] });
-    expect(queue.items).toEqual([protectedItem, normalC]);
+  it.each([false, true])("skips drop victims (in-flight=%s, otherwise protected)", (active) => {
+    const first: Item = { id: "priority", protected: !active };
+    const [a, b, c] = [{ id: "a" }, { id: "b" }, { id: "c" }] as const;
+    const queue = createQueue([first, a, b, c], active ? 2 : 3);
+    expect(dropItems(queue, active ? new Set([first]) : undefined)).toEqual({
+      admitted: true,
+      dropped: ["a", "b"],
+    });
+    expect(queue.items).toEqual([first, c]);
   });
 
   it.each([false, true])(

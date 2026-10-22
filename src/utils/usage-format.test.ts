@@ -71,23 +71,18 @@ describe("usage-format", () => {
     expect([1.234, 0.5, 0.0042].map(formatUsd)).toEqual(["$1.23", "$0.50", "$0.0042"]);
   });
 
-  it("formats the refreshing cache notice", () => {
-    expect(
-      formatCostUsageCachePrefix({
-        status: "refreshing",
-        cachedFiles: 0,
-        pendingFiles: 1,
-        staleFiles: 0,
-      }),
-    ).toBe("Usage totals may be incomplete (refreshing). Run this command again later.\n");
-    expect(
-      formatCostUsageCachePrefix({
-        status: "fresh",
-        cachedFiles: 1,
-        pendingFiles: 0,
-        staleFiles: 0,
-      }),
-    ).toBe("");
+  it.each([
+    [
+      "refreshing",
+      0,
+      1,
+      "Usage totals may be incomplete (refreshing). Run this command again later.\n",
+    ],
+    ["fresh", 1, 0, ""],
+  ] as const)("formats the %s cache notice", (status, cachedFiles, pendingFiles, expected) => {
+    expect(formatCostUsageCachePrefix({ status, cachedFiles, pendingFiles, staleFiles: 0 })).toBe(
+      expected,
+    );
   });
 
   it("uses the sole agent directory from a canonical roster", async () => {
@@ -202,10 +197,7 @@ describe("usage-format", () => {
     ]);
 
     expect(
-      resolveModelCostConfig({
-        provider: "demo-metadata-json",
-        model: "priced-model",
-      })?.input,
+      resolveModelCostConfig({ provider: "demo-metadata-json", model: "priced-model" })?.input,
     ).toBe(5);
   });
 });

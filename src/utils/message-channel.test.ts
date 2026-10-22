@@ -30,15 +30,15 @@ describe("message-channel", () => {
   });
 
   it("normalizes gateway message channels and rejects unknown values", () => {
-    expect(resolveGatewayMessageChannel("discord")).toBe("discord");
-    expect(resolveGatewayMessageChannel(" imsg ")).toBe("imessage");
-    expect(resolveGatewayMessageChannel("webchat")).toBe("webchat");
-    expect(resolveGatewayMessageChannel("web")).toBeUndefined();
-    expect(resolveGatewayMessageChannel("nope")).toBeUndefined();
-    expect(isDeliverableMessageChannel("discord")).toBe(true);
-    expect(isDeliverableMessageChannel("imsg")).toBe(false);
-    expect(isDeliverableMessageChannel("webchat")).toBe(false);
-    expect(isDeliverableMessageChannel("nope")).toBe(false);
+    expect(
+      ["discord", " imsg ", "webchat", "web", "nope"].map(resolveGatewayMessageChannel),
+    ).toEqual(["discord", "imessage", "webchat", undefined, undefined]);
+    expect(["discord", "imsg", "webchat", "nope"].map(isDeliverableMessageChannel)).toEqual([
+      true,
+      false,
+      false,
+      false,
+    ]);
   });
 
   it("classifies ephemeral Gateway client modes", () => {
@@ -77,18 +77,13 @@ describe("message-channel", () => {
   });
 
   it("reads Matrix markdown capability from bundled channel catalog metadata", async () => {
-    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve("extensions");
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
     vi.resetModules();
     try {
       const module = await import("./message-channel.js");
       expect(module.isMarkdownCapableMessageChannel("matrix")).toBe(true);
     } finally {
-      if (previousBundledPluginsDir === undefined) {
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-      } else {
-        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-      }
+      vi.unstubAllEnvs();
       vi.resetModules();
     }
   });
