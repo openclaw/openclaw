@@ -32,18 +32,12 @@ import { SkillLibraryError } from "../skill-library-error.js";
 import { skillLibraryReadOperations } from "./read.kernel.js";
 import {
   assertPreparedSkillLibrarySelection as assertSelection,
-  changeSkillLibrarySelection as changeSelection,
   prepareSkillLibrarySelection as prepareSelection,
   prepareSkillLibrarySession as prepareSession,
   readSelectedSkillLibraryFiles as readFiles,
   seedSkillLibrarySelection as seed,
 } from "./selection.js";
-import {
-  listSkillLibrary as list,
-  mutateSkillLibrary as mutate,
-  resolveSkillLibraryPresentation as presentation,
-  saveSkillLibrary as save,
-} from "./service.js";
+import { resolveSkillLibraryPresentation as presentation } from "./service.js";
 import { draft, useSkillLibraryFixture } from "./service.test-support.js";
 import { projectSkillLibraryList, type SkillLibraryAuthority } from "./store.js";
 
@@ -76,14 +70,14 @@ const writerConfig: ReturnType<SkillLibraryAuthority["getConfig"]> = {
 };
 
 it("reuses library facts until a library or profile writer changes their inputs", async () => {
-  const { options, alice, admin } = fixture();
-  const saved = await save(alice, draft(), options);
+  const { options, admin, lib } = fixture();
+  const saved = await lib.save();
   using reads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
-  const first = await seed(alice, options);
+  const first = await lib.seed();
   expect(first).toHaveLength(1);
   const count = reads.mock.calls.length;
   first[0]!.name = "caller mutation";
-  expect(await seed(alice, options)).toEqual([
+  expect(await lib.seed()).toEqual([
     {
       skillId: saved.entry.skillId,
       revision: saved.entry.revision,
@@ -93,12 +87,8 @@ it("reuses library facts until a library or profile writer changes their inputs"
   ]);
   expect(reads.mock.calls).toHaveLength(count);
 
-  await mutate(
-    alice,
-    { action: "disable", skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
-    options,
-  );
-  expect(await seed(alice, options)).toEqual([]);
+  await lib.change(saved.entry, "disable");
+  expect(await lib.seed()).toEqual([]);
   expect(await presentation(admin, options)).toMatchObject({
     multipleProfiles: false,
     defaultTarget: "workspace",
@@ -111,8 +101,8 @@ it("reuses library facts until a library or profile writer changes their inputs"
 });
 
 it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows", async () => {
-  const { options, alice } = fixture();
-  const saved = await save(alice, draft(), options);
+  const { options, alice, lib } = fixture();
+  const saved = await lib.save();
   const { db } = openDatabase(options);
   expect(setAvatar(alice.profileId!, Buffer.alloc(80 * 1024), "image/png", options).ok).toBe(true);
   const entry = db.prepare(`INSERT INTO skill_library_entries
@@ -266,20 +256,20 @@ it("projects shared-owner catalogs with bounded SQL and skips disabled seed rows
 });
 
 it("keeps solo defaults, counts aliases once, and never creates library tables on discovery", async () => {
-  const { options, admin, alice, actor } = fixture();
-  expect(await list(admin, {}, options)).toMatchObject({
+  const { options, admin, alice, actor, lib } = fixture();
+  expect(await lib.list(admin)).toMatchObject({
     defaultTarget: "workspace",
     multipleProfiles: false,
     entries: [],
   });
-  expect((await list(actor(undefined, true), {}, options)).defaultTarget).toBe("workspace");
-  expect((await list(alice, {}, options)).defaultTarget).toBe("personal");
-  expect(await seed(alice, options)).toEqual([]);
+  expect((await lib.list(actor(undefined, true))).defaultTarget).toBe("workspace");
+  expect((await lib.list()).defaultTarget).toBe("personal");
+  expect(await lib.seed()).toEqual([]);
   expect(tableExists(openDatabase(options).db, "skill_library_entries")).toBe(false);
   linkEmail("alice-alias@example.test", alice.profileId!, options);
-  expect((await list(admin, {}, options)).multipleProfiles).toBe(false);
+  expect((await lib.list(admin)).multipleProfiles).toBe(false);
   ensureProfileForEmail("bob@example.test", options);
-  expect(await list(admin, {}, options)).toMatchObject({
+  expect(await lib.list(admin)).toMatchObject({
     defaultTarget: "personal",
     multipleProfiles: true,
   });
@@ -299,7 +289,7 @@ it("seeds no skills without creating a missing shared store", async () => {
 });
 
 it("skips empty-session SQL and refreshes committed profile and library facts", async () => {
-  const { options, alice, admin } = fixture();
+  const { options, alice, admin, lib } = fixture();
   admin.getConfig = () => ({
     gateway: {
       roles: {
@@ -354,7 +344,7 @@ it("skips empty-session SQL and refreshes committed profile and library facts", 
     canManageWorkspace: false,
   });
   const empty = await prepareSession(alice, options);
-  const saved = await save(alice, draft(), options);
+  const saved = await lib.save();
   expect(() => empty.assertCurrent()).toThrow(SkillLibraryError);
   expect(() => assertSelection(empty.selections)).toThrow(SkillLibraryError);
   const after = await prepareSession(alice, options);
@@ -368,7 +358,7 @@ it("skips empty-session SQL and refreshes committed profile and library facts", 
 it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
   "revokes a prepared seed after %s while committed pins keep working",
   async (change) => {
-    const { alice, actor, options } = fixture();
+    const { actor, options, lib } = fixture();
     const bob: SkillLibraryAuthority = {
       ...actor(ensureProfileForEmail("bob@example.test", options).id),
       getConfig: () => writerConfig,
@@ -379,12 +369,8 @@ it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
       setUserProfileRole(mergeTarget.id, "blocked", options);
     }
     onTestFinished((await prepareUserProfileCatalog(options)).release);
-    const saved = await save(alice, draft(), options);
-    await mutate(
-      alice,
-      { action: "share", skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
-      options,
-    );
+    const saved = await lib.save();
+    await lib.change(saved.entry, "share");
     const prepared = await prepareSession(bob, options);
     const freshSeed = prepared.selections;
     expect(freshSeed).toHaveLength(1);
@@ -394,11 +380,7 @@ it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
     } else if (change === "alias") {
       linkEmail("bob@example.test", mergeTarget!.id, options);
     } else {
-      await mutate(
-        alice,
-        { action: change, skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
-        options,
-      );
+      await lib.change(saved.entry, change);
     }
     withSql((sql) => {
       expect(() => assertSelection(freshSeed)).toThrow(SkillLibraryError);
@@ -414,15 +396,11 @@ it.each(["unshare", "disable", "remove", "role", "alias"] as const)(
 );
 
 it("preserves a prepared seed when worker commit admission rolls back the mutation", async () => {
-  const { alice, options } = fixture();
-  const saved = await save(alice, draft(), options);
-  const pins = await seed(alice, options);
+  const { lib } = fixture();
+  const saved = await lib.save();
+  const pins = await lib.seed();
   await expect(
-    save(
-      alice,
-      { ...draft(), skillId: saved.entry.skillId, expectedRevision: saved.entry.revision },
-      options,
-    ),
+    lib.save({ ...draft(), skillId: saved.entry.skillId, expectedRevision: saved.entry.revision }),
   ).resolves.toMatchObject({ state: "unchanged" });
   expect(() => assertSelection(pins)).not.toThrow();
   const rollback = new Error("rollback library change");
@@ -440,29 +418,19 @@ it("preserves a prepared seed when worker commit admission rolls back the mutati
     );
   });
   try {
-    await expect(
-      mutate(
-        alice,
-        {
-          action: "disable",
-          skillId: saved.entry.skillId,
-          expectedRevision: saved.entry.revision,
-        },
-        options,
-      ),
-    ).rejects.toThrow(rollback);
+    await expect(lib.change(saved.entry, "disable")).rejects.toThrow(rollback);
   } finally {
     refusal.mockRestore();
   }
   expect(checkedCommit).toBe(true);
   expect(() => assertSelection(pins)).not.toThrow();
-  expect(await seed(alice, options)).toEqual(pins);
+  expect(await lib.seed()).toEqual(pins);
 });
 
 it("revokes a prepared seed after a lost worker receipt without replaying the mutation", async () => {
-  const { alice, options } = fixture();
-  const saved = await save(alice, draft(), options);
-  const pins = await seed(alice, options);
+  const { options, lib } = fixture();
+  const saved = await lib.save();
+  const pins = await lib.seed();
   const failed = new SqliteWorkerError("native commit outcome unavailable", "outcome-unknown");
   const original = workerStore.runSqliteWorkerStoreOperation;
   let executed = 0;
@@ -519,17 +487,7 @@ it("revokes a prepared seed after a lost worker receipt without replaying the mu
         ),
     );
   try {
-    await expect(
-      mutate(
-        alice,
-        {
-          action: "disable",
-          skillId: saved.entry.skillId,
-          expectedRevision: saved.entry.revision,
-        },
-        options,
-      ),
-    ).rejects.toThrow(failed);
+    await expect(lib.change(saved.entry, "disable")).rejects.toThrow(failed);
   } finally {
     lostReceipt.resolve();
     receiptFault?.mockRestore();
@@ -537,7 +495,7 @@ it("revokes a prepared seed after a lost worker receipt without replaying the mu
   }
   expect(executed).toBe(1);
   expect(() => assertSelection(pins)).toThrow();
-  expect((await list(alice, {}, options)).entries[0]?.enabled).toBe(false);
+  expect((await lib.list()).entries[0]?.enabled).toBe(false);
   expect(
     openDatabase(options)
       .db.prepare("SELECT COUNT(*) AS count FROM skill_library_events WHERE action = 'disable'")
@@ -548,17 +506,16 @@ it("revokes a prepared seed after a lost worker receipt without replaying the mu
 it.each(["seed", "attach"] as const)(
   "rejects edited %s pins before admission without caller-thread SQL",
   async (source) => {
-    const { alice, options } = fixture();
-    const saved = await save(alice, draft(), options);
+    const { lib } = fixture();
+    const saved = await lib.save();
     const pins =
       source === "seed"
-        ? await seed(alice, options)
-        : await changeSelection(
-            alice,
-            [],
-            { action: "attach", sessionKey: "session", skillId: saved.entry.skillId },
-            options,
-          );
+        ? await lib.seed()
+        : await lib.select([], {
+            action: "attach",
+            sessionKey: "session",
+            skillId: saved.entry.skillId,
+          });
     expect(pins).toHaveLength(1);
     pins[0]!.revision = "0".repeat(64);
     withSql((sql) => {

@@ -26,78 +26,19 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
-import { uploadSkillLibrary } from "./import.js";
-import {
-  changeSkillLibrarySelection,
-  loadSkillLibrarySelection,
-  seedSkillLibrarySelection,
-} from "./selection.js";
-import {
-  listSkillLibrary,
-  mutateSkillLibrary,
-  readSkillLibrary,
-  saveSkillLibrary,
-} from "./service.js";
-import { beginZipUpload, content, draft, useSkillLibraryFixture } from "./service.test-support.js";
+import { loadSkillLibrarySelection } from "./selection.js";
+import { readSkillLibrary } from "./service.js";
+import { content, draft, useSkillLibraryFixture, zipBytes } from "./service.test-support.js";
 
-const { fixture: baseFixture, tempDirs } = useSkillLibraryFixture();
+const { fixture, tempDirs } = useSkillLibraryFixture();
 const contentHash = createHash("sha256").update(content).digest("hex");
 const revisionDirectory = (pin: { skillId: string; revision: string }, env: NodeJS.ProcessEnv) =>
   skillLibraryRevisionDir(pin.skillId, pin.revision, env);
-
-function fixture() {
-  const base = baseFixture();
-  const { alice, options } = base;
-  type Authority = typeof alice;
-  return {
-    ...base,
-    lib: {
-      save: (params: Parameters<typeof saveSkillLibrary>[1] = draft(), who: Authority = alice) =>
-        saveSkillLibrary(who, params, options),
-      read: (id: string, who: Authority = alice, revision?: string) =>
-        readSkillLibrary(who, id, revision, options),
-      list: (who: Authority = alice, params: Parameters<typeof listSkillLibrary>[1] = {}) =>
-        listSkillLibrary(who, params, options),
-      mutate: (params: Parameters<typeof mutateSkillLibrary>[1], who: Authority = alice) =>
-        mutateSkillLibrary(who, params, options),
-      change: (
-        { skillId, revision }: { skillId: string; revision: string },
-        action: Parameters<typeof mutateSkillLibrary>[1]["action"],
-        who: Authority = alice,
-      ) => mutateSkillLibrary(who, { skillId, expectedRevision: revision, action }, options),
-      seed: (who: Authority = alice) => seedSkillLibrarySelection(who, options),
-      select: (
-        pins: Parameters<typeof changeSkillLibrarySelection>[1],
-        params: Parameters<typeof changeSkillLibrarySelection>[2],
-        who: Authority = alice,
-      ) => changeSkillLibrarySelection(who, pins, params, options),
-      chunk: (uploadId: string, bytes: Buffer, who: Authority = alice) =>
-        uploadSkillLibrary(
-          who,
-          { action: "chunk", uploadId, offset: 0, data: bytes.toString("base64") },
-          options,
-        ),
-      commit: (uploadId: string, who: Authority = alice) =>
-        uploadSkillLibrary(who, { action: "commit", uploadId }, options),
-      begin: (bytes: Buffer, slug: string, who: Authority = alice) =>
-        beginZipUpload(who, bytes, slug, options),
-    },
-  };
-}
 
 async function selectedFixture() {
   const context = fixture();
   const saved = await context.lib.save();
   return { ...context, saved, pins: await context.lib.seed() };
-}
-
-async function zipBytes(oversized = false) {
-  const { default: JSZip } = await import("jszip");
-  const zip = new JSZip().file(oversized ? "wrapped/SKILL.md" : "SKILL.md", content);
-  if (oversized) {
-    zip.file("wrapped/oversized.bin", Buffer.alloc(SKILL_LIBRARY_MAX_FILE_BYTES + 1, 97));
-  }
-  return zip.generateAsync({ type: "nodebuffer", compression: oversized ? "DEFLATE" : "STORE" });
 }
 
 it.each([

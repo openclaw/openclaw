@@ -8,55 +8,32 @@ import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.w
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";
-import { uploadSkillLibrary } from "./import.js";
-import {
-  listSkillLibrary,
-  mutateSkillLibrary,
-  readSkillLibrary,
-  saveSkillLibrary,
-} from "./service.js";
-import { beginZipUpload, content, draft, useSkillLibraryFixture } from "./service.test-support.js";
+import { content, draft, useSkillLibraryFixture, zipBytes } from "./service.test-support.js";
 import type { SkillLibraryAuthority } from "./store.js";
 
 const { fixture } = useSkillLibraryFixture();
 
-async function makeUpload(
-  { alice, options }: Pick<ReturnType<typeof fixture>, "alice" | "options">,
-  slug: string,
-) {
-  const { default: JSZip } = await import("jszip");
-  const bytes = await new JSZip().file("SKILL.md", content).generateAsync({ type: "nodebuffer" });
-  const { uploadId } = await beginZipUpload(alice, bytes, slug, options);
-  const data = bytes.toString("base64");
-  return {
-    uploadId,
-    chunk: () => uploadSkillLibrary(alice, { action: "chunk", uploadId, offset: 0, data }, options),
-    commit: () => uploadSkillLibrary(alice, { action: "commit", uploadId }, options),
-  };
-}
-
 it("saves, mutates, and settles an upload without caller-thread SQL", async () => {
-  const { alice, options } = fixture();
+  const { options, lib } = fixture();
   await openOpenClawStateDatabase(options).walMaintenance.stop();
   const sql = observeHostDataSql();
   try {
-    const { skillId, revision } = (await saveSkillLibrary(alice, draft(), options)).entry;
-    await expect(
-      mutateSkillLibrary(
-        alice,
-        { action: "disable", skillId, expectedRevision: revision },
-        options,
-      ),
-    ).resolves.toMatchObject({ entry: { enabled: false } });
-    const upload = await makeUpload({ alice, options }, "uploaded");
-    const chunks = await Promise.allSettled([upload.chunk(), upload.chunk()]);
+    const { skillId, revision } = (await lib.save()).entry;
+    await expect(lib.change({ skillId, revision }, "disable")).resolves.toMatchObject({
+      entry: { enabled: false },
+    });
+    const bytes = await zipBytes();
+    const upload = await lib.begin(bytes, "uploaded");
+    const chunk = () => lib.chunk(upload.uploadId, bytes);
+    const commit = () => lib.commit(upload.uploadId);
+    const chunks = await Promise.allSettled([chunk(), chunk()]);
     expect(chunks.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     const rejected = chunks.find((result) => result.status === "rejected");
     expect(rejected).toMatchObject({ reason: expect.any(SkillLibraryError) });
     expect(rejected).toMatchObject({ reason: { code: "CONFLICT" } });
-    const receipt = await upload.commit();
+    const receipt = await commit();
     expect(receipt).toMatchObject({ state: "published", entry: { slug: "uploaded" } });
-    await expect(upload.commit()).resolves.toMatchObject({ ...receipt, state: "unchanged" });
+    await expect(commit()).resolves.toMatchObject({ ...receipt, state: "unchanged" });
     expect(sql.queries).toEqual([]);
   } finally {
     sql.restore();
@@ -64,8 +41,8 @@ it("saves, mutates, and settles an upload without caller-thread SQL", async () =
 });
 
 it("publishes immutable files before SQL and retains them when the transaction fails", async () => {
-  const { alice, options } = fixture();
-  const { skillId, revision } = (await saveSkillLibrary(alice, draft(), options)).entry;
+  const { options, lib } = fixture();
+  const { skillId, revision } = (await lib.save()).entry;
   const nextContent = `${content}\nUncommitted revision`;
   const next = { ...draft(), content: nextContent, skillId, expectedRevision: revision };
   const bundle = prepareSkillLibraryBundle([
@@ -77,14 +54,12 @@ it("publishes immutable files before SQL and retains them when the transaction f
       CREATE TRIGGER reject_library_revision BEFORE INSERT ON skill_library_revisions
       BEGIN SELECT RAISE(ABORT, 'publication transaction refused'); END;
     `);
-  await expect(saveSkillLibrary(alice, next, options)).rejects.toThrow(
-    "publication transaction refused",
-  );
+  await expect(lib.save(next)).rejects.toThrow("publication transaction refused");
   expect(await fs.readFile(path.join(directory, "SKILL.md"), "utf8")).toBe(nextContent);
   expect(await fs.readdir(path.dirname(directory))).not.toContainEqual(
     expect.stringMatching(/^\.staging-/),
   );
-  expect(await readSkillLibrary(alice, skillId, undefined, options)).toMatchObject({
+  expect(await lib.read(skillId)).toMatchObject({
     content,
     entry: { revision },
     revisions: [{ revision }],
@@ -94,7 +69,7 @@ it("publishes immutable files before SQL and retains them when the transaction f
 it.each(["role", "alias", "upload expiry"])(
   "rejects stale %s after file publication without a SQL pointer",
   async (change) => {
-    const { alice, options } = fixture();
+    const { alice, options, lib } = fixture();
     const blocked = ensureProfileForEmail("blocked@example.test", options);
     setUserProfileRole(blocked.id, "blocked", options);
     const sessions = { others: "none" } as const;
@@ -109,10 +84,10 @@ it.each(["role", "alias", "upload expiry"])(
       ...alice,
       getConfig: () => ({ gateway: { roles } }),
     };
-    const upload =
-      change === "upload expiry" ? await makeUpload({ alice, options }, "expiring") : undefined;
-    if (upload) {
-      await upload.chunk();
+    const bytes = change === "upload expiry" ? await zipBytes() : undefined;
+    const upload = bytes ? await lib.begin(bytes, "expiring") : undefined;
+    if (upload && bytes) {
+      await lib.chunk(upload.uploadId, bytes);
     }
     const rename = fs.rename;
     let changed = false;
@@ -133,7 +108,7 @@ it.each(["role", "alias", "upload expiry"])(
     });
     try {
       await expect(
-        upload ? upload.commit() : saveSkillLibrary(authority, draft(), options),
+        upload ? lib.commit(upload.uploadId) : lib.save(draft(), authority),
       ).rejects.toMatchObject({
         code: upload ? "NOT_FOUND" : expect.stringMatching(/^(AUTHORITY_EXPIRED|FORBIDDEN)$/),
       });
@@ -141,6 +116,6 @@ it.each(["role", "alias", "upload expiry"])(
     } finally {
       barrier.mockRestore();
     }
-    expect((await listSkillLibrary(alice, {}, options)).entries).toEqual([]);
+    expect((await lib.list()).entries).toEqual([]);
   },
 );

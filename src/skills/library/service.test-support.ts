@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { afterEach, expect } from "vitest";
+import { SKILL_LIBRARY_MAX_FILE_BYTES } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -8,6 +9,13 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { uploadSkillLibrary } from "./import.js";
+import { changeSkillLibrarySelection, seedSkillLibrarySelection } from "./selection.js";
+import {
+  listSkillLibrary,
+  mutateSkillLibrary,
+  readSkillLibrary,
+  saveSkillLibrary,
+} from "./service.js";
 import type { SkillLibraryAuthority } from "./store.js";
 
 export const content =
@@ -44,7 +52,51 @@ export function useSkillLibraryFixture() {
       getConfig: () => ({}),
       assertCurrent: () => {},
     });
-    return { options, alice: actor(alice.id), admin: actor(alice.id, true), actor, stateDir };
+    const owner = actor(alice.id);
+    return {
+      options,
+      alice: owner,
+      admin: actor(alice.id, true),
+      actor,
+      stateDir,
+      lib: {
+        save: (
+          params: Parameters<typeof saveSkillLibrary>[1] = draft(),
+          who: SkillLibraryAuthority = owner,
+        ) => saveSkillLibrary(who, params, options),
+        read: (id: string, who: SkillLibraryAuthority = owner, revision?: string) =>
+          readSkillLibrary(who, id, revision, options),
+        list: (
+          who: SkillLibraryAuthority = owner,
+          params: Parameters<typeof listSkillLibrary>[1] = {},
+        ) => listSkillLibrary(who, params, options),
+        mutate: (
+          params: Parameters<typeof mutateSkillLibrary>[1],
+          who: SkillLibraryAuthority = owner,
+        ) => mutateSkillLibrary(who, params, options),
+        change: (
+          { skillId, revision }: { skillId: string; revision: string },
+          action: Parameters<typeof mutateSkillLibrary>[1]["action"],
+          who: SkillLibraryAuthority = owner,
+        ) => mutateSkillLibrary(who, { skillId, expectedRevision: revision, action }, options),
+        seed: (who: SkillLibraryAuthority = owner) => seedSkillLibrarySelection(who, options),
+        select: (
+          pins: Parameters<typeof changeSkillLibrarySelection>[1],
+          params: Parameters<typeof changeSkillLibrarySelection>[2],
+          who: SkillLibraryAuthority = owner,
+        ) => changeSkillLibrarySelection(who, pins, params, options),
+        chunk: (uploadId: string, bytes: Buffer, who: SkillLibraryAuthority = owner) =>
+          uploadSkillLibrary(
+            who,
+            { action: "chunk", uploadId, offset: 0, data: bytes.toString("base64") },
+            options,
+          ),
+        commit: (uploadId: string, who: SkillLibraryAuthority = owner) =>
+          uploadSkillLibrary(who, { action: "commit", uploadId }, options),
+        begin: (bytes: Buffer, slug: string, who: SkillLibraryAuthority = owner) =>
+          beginZipUpload(who, bytes, slug, options),
+      },
+    };
   };
   return { fixture, tempDirs };
 }
@@ -70,4 +122,13 @@ export async function beginZipUpload(
   }
   expect(begun.offset).toBe(0);
   return begun;
+}
+
+export async function zipBytes(oversized = false) {
+  const { default: JSZip } = await import("jszip");
+  const zip = new JSZip().file(oversized ? "wrapped/SKILL.md" : "SKILL.md", content);
+  if (oversized) {
+    zip.file("wrapped/oversized.bin", Buffer.alloc(SKILL_LIBRARY_MAX_FILE_BYTES + 1, 97));
+  }
+  return zip.generateAsync({ type: "nodebuffer", compression: oversized ? "DEFLATE" : "STORE" });
 }
