@@ -568,6 +568,7 @@ const SidebarSectionIdString = Type.String({ minLength: 1, maxLength: 512 });
 export const SessionsGroupsListResultSchema = closedObject({
   groups: Type.Array(SessionGroupSchema),
   sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
+  appendOnly: Type.Optional(Type.Boolean()),
 });
 
 export const SessionsGroupsDefaultsParamsSchema = closedObject({});
@@ -577,10 +578,11 @@ export const SessionsGroupsDefaultsResultSchema = closedObject({
   defaults: Type.Array(SessionGroupDefaultsSchema),
 });
 
-/** Replaces the ordered group catalog; creates listed names, keeps member categories untouched. */
+/** Replaces the ordered group catalog, or atomically appends names when appendOnly is true. */
 export const SessionsGroupsPutParamsSchema = closedObject({
   names: Type.Array(SessionLabelString),
   sectionOrder: Type.Optional(Type.Array(SidebarSectionIdString)),
+  appendOnly: Type.Optional(Type.Boolean()),
 });
 
 /** Renames a group and repoints every member session's category. */

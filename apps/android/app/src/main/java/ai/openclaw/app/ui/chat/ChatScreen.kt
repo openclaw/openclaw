@@ -38,6 +38,7 @@ import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
+import ai.openclaw.app.chat.SIDEBAR_SESSION_ROSTER_LIMIT
 import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.SessionEditorAttachment
 import ai.openclaw.app.chat.VoiceNoteRecorderState
@@ -744,7 +745,7 @@ internal fun ChatScreen(
 
   LaunchedEffect(Unit) {
     viewModel.loadCurrentChat()
-    viewModel.refreshChatSessions(limit = 100)
+    viewModel.refreshChatSessions(limit = SIDEBAR_SESSION_ROSTER_LIMIT)
     viewModel.refreshChatCommands()
   }
 
@@ -872,7 +873,7 @@ internal fun ChatScreen(
   val startNewChat: (Boolean) -> Unit = { worktree ->
     if (newChatEnabled) {
       viewModel.startNewChat(worktree = worktree)
-      viewModel.refreshChatSessions(limit = 100)
+      viewModel.refreshChatSessions(limit = SIDEBAR_SESSION_ROSTER_LIMIT)
       viewModel.refreshChatCommands()
     }
   }
@@ -916,7 +917,7 @@ internal fun ChatScreen(
       },
       onRefresh = {
         viewModel.refreshChat()
-        viewModel.refreshChatSessions(limit = 100)
+        viewModel.refreshChatSessions(limit = SIDEBAR_SESSION_ROSTER_LIMIT)
       },
       onOpenDashboard = {
         dismissDetails()

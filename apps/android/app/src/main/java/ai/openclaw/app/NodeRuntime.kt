@@ -760,6 +760,25 @@ class NodeRuntime internal constructor(
   private val chatTranscriptCache = externalTranscriptCache ?: clientDatabases.transcriptCache()
   private val chatCommandOutbox = clientDatabases.commandOutbox()
 
+  internal fun observeSessionGroupCatalog(gatewayId: String) = clientDatabases.observeSessionGroupCatalog(gatewayId)
+
+  internal suspend fun saveSessionGroupCatalog(
+    lease: GatewaySession.RequestLease,
+    gatewayId: String,
+    names: List<String>,
+    sectionOrder: List<String>,
+  ): Boolean =
+    chat.persistSessionGroupCatalog(lease, gatewayId) {
+      try {
+        clientDatabases.saveSessionGroupCatalog(gatewayId, names, sectionOrder)
+      } catch (error: CancellationException) {
+        throw error
+      } catch (error: Exception) {
+        // Live catalog results remain usable when their disposable offline projection cannot persist.
+        Log.w("OpenClawRuntime", "Failed to cache Gateway session groups", error)
+      }
+    }
+
   // Reentry retains this runtime, so requester data and both capability paths must share its original mode.
   private val screenshotBranchesEnabled = mode == NodeRuntimeMode.ScreenshotFixture && AndroidScreenshotFixture.branchesEnabled
   private val screenshotRequester by lazy {

@@ -8,8 +8,12 @@ import {
 } from "./index.js";
 
 describe("session group result validators", () => {
-  it("accepts legacy gateway payloads without sectionOrder", () => {
+  it("accepts legacy catalog payloads and boolean append capabilities", () => {
     expect(validateSessionsGroupsListResult({ groups: [] })).toBe(true);
+    for (const appendOnly of [false, true]) {
+      expect(validateSessionsGroupsListResult({ groups: [], appendOnly })).toBe(true);
+    }
+    expect(validateSessionsGroupsListResult({ groups: [], appendOnly: "true" })).toBe(false);
     expect(validateSessionsGroupsMutationResult({ ok: true, groups: [] })).toBe(true);
   });
 

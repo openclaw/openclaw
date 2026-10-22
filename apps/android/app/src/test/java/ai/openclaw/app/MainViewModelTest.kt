@@ -1,8 +1,14 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.chat.AndroidClientDatabases
+import ai.openclaw.app.chat.ChatCacheScope
 import ai.openclaw.app.chat.ChatComposerOwner
+import ai.openclaw.app.chat.createChatController
+import ai.openclaw.app.chat.emptyChatGatewayResponse
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.ui.chat.ChatComposerStateStore
 import ai.openclaw.app.ui.chat.PendingAttachment
 import android.content.Context
@@ -10,7 +16,18 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Looper
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -23,15 +40,167 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
+@OptIn(ExperimentalCoroutinesApi::class)
 class MainViewModelTest {
+  private val viewModelStore = ViewModelStore()
+
+  @Test
+  fun membershipCallbackLeaseRejectsOwnerSwitchBeforeDispatch() =
+    runTest {
+      val (viewModel, prefs) = createViewModel()
+      val app = RuntimeEnvironment.getApplication() as NodeApp
+      for (id in listOf("gateway-a", "gateway-b")) {
+        prefs.gatewayRegistry.upsert(GatewayRegistryEntry(stableId = id, kind = GatewayRegistryEntryKind.MANUAL, name = id, host = "$id.test", port = 18789))
+      }
+      prefs.gatewayRegistry.setActive("gateway-a")
+      var generation = 1L
+      var captures = 0
+      val patches = mutableListOf<String?>()
+      val controller =
+        backgroundScope.createChatController(
+          cacheScope = { ChatCacheScope(requireNotNull(prefs.gatewayRegistry.activeStableId.value), generation) },
+          captureRequestLease = { scope ->
+            captures++
+            val id = requireNotNull(scope).gatewayId
+            val capturedGeneration = generation
+
+            fun isCurrent() = prefs.gatewayRegistry.activeStableId.value == id && generation == capturedGeneration
+            GatewaySession.RequestLease(endpointStableId = id, isCurrentImpl = ::isCurrent) { method, params, _, withEnqueue ->
+              if (!isCurrent()) throw GatewayRequestNotEnqueued("retired UI callback lease")
+              withEnqueue { if (method == "sessions.patch") patches += params }
+              emptyChatGatewayResponse(method)
+            }
+          },
+        )
+      val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+      ReflectionHelpers.setField(runtime, "chat", controller)
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
+      try {
+        val allowed = requireNotNull(viewModel.captureChatSessionRequestLease("gateway-a"))
+        viewModel.patchChatSession("agent:main:shared", category = "Folder", requestLease = allowed)
+        assertEquals(1, patches.size)
+
+        val queued = requireNotNull(viewModel.captureChatSessionRequestLease("gateway-a"))
+        launch { viewModel.patchChatSession("agent:main:shared", clearCategory = true, requestLease = queued) }
+        prefs.gatewayRegistry.setActive("gateway-b")
+        advanceUntilIdle()
+        assertEquals("A queued row action must not acquire B's authority", 1, patches.size)
+        val capturesBeforeMismatch = captures
+        assertNull(viewModel.captureChatSessionRequestLease("gateway-a"))
+        assertEquals("Reject the old rendered gateway before lease capture", capturesBeforeMismatch, captures)
+
+        prefs.gatewayRegistry.setActive("gateway-a")
+        val replaced = requireNotNull(viewModel.captureChatSessionRequestLease("gateway-a"))
+        generation++
+        viewModel.patchChatSession("agent:main:shared", clearCategory = true, requestLease = replaced)
+        assertEquals(1, patches.size)
+      } finally {
+        viewModelStore.clear()
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun partialFolderMutationKeepsLegacyVisibleAndMigrationRetryableAcrossPreferenceReload() =
+    runTest {
+      val (viewModel, prefs) = createViewModel()
+      val app = RuntimeEnvironment.getApplication() as NodeApp
+      val gatewayId = "gateway-groups-test"
+      prefs.gatewayRegistry.upsert(GatewayRegistryEntry(stableId = gatewayId, kind = GatewayRegistryEntryKind.MANUAL, name = "Test", host = "gateway.test", port = 18789))
+      prefs.gatewayRegistry.setActive(gatewayId)
+      prefs.setSessionCustomGroups(listOf("Legacy"))
+      prefs.markSessionGroupCatalogMigrated(gatewayId)
+      var names = listOf("Work")
+      var acceptsLegacy = false
+      var rejectNextImport = true
+      val controller =
+        backgroundScope.createChatController(
+          cacheScope = { ChatCacheScope(gatewayId, 1) },
+          requestGateway = { method, params ->
+            when (method) {
+              "sessions.groups.put" -> {
+                if (rejectNextImport) {
+                  rejectNextImport = false
+                  error("simulated rejected legacy import")
+                }
+                names =
+                  (
+                    names +
+                      Json
+                        .parseToJsonElement(requireNotNull(params))
+                        .jsonObject
+                        .getValue("names")
+                        .jsonArray
+                        .map { it.jsonPrimitive.content }
+                        .filter { acceptsLegacy || it != "Legacy" }
+                  ).distinct()
+              }
+
+              "sessions.groups.rename" -> {
+                names = listOf("Renamed")
+              }
+
+              "sessions.groups.delete" -> {
+                names = emptyList()
+              }
+            }
+            if (method.startsWith("sessions.groups.")) names.joinToString(prefix = "{\"appendOnly\":true,\"groups\":[", postfix = "]}") { "{\"name\":\"$it\"}" } else emptyChatGatewayResponse(method)
+          },
+        )
+      val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+      ReflectionHelpers.setField(runtime, "chat", controller)
+      ReflectionHelpers.getField<MutableStateFlow<NodeRuntime?>>(viewModel, "runtimeRef").value = runtime
+      try {
+        fun assertPending() {
+          assertFalse("A partial catalog must not consume legacy", prefs.isSessionGroupLegacyConsumed())
+          assertFalse("A partial catalog must not complete migration", prefs.isSessionGroupCatalogMigrated(gatewayId))
+          assertTrue("Pending legacy remains visible", "Legacy" in viewModel.sessionCustomGroups.value)
+        }
+        assertNull(runtime.observeSessionGroupCatalog(gatewayId).first())
+        viewModel.refreshSessionGroups()
+        assertPending()
+        assertEquals(listOf("Work"), runtime.observeSessionGroupCatalog(gatewayId).first()?.names)
+        assertTrue("Read catalog remains visible after rejected import", "Work" in viewModel.sessionCustomGroups.value)
+        viewModel.refreshSessionGroups()
+        assertPending()
+        viewModel.renameChatSessionGroup("Work", "Renamed", gatewayId)
+        assertPending()
+        viewModel.moveChatSessionSection("category:Renamed", 1, listOf("category:Renamed", "ungrouped"), emptyList(), gatewayId)
+        assertPending()
+        viewModel.deleteChatSessionGroup("Renamed", gatewayId)
+        assertPending()
+        viewModel.addChatSessionGroup("New", gatewayId)
+        assertPending()
+
+        acceptsLegacy = true
+        viewModel.refreshSessionGroups()
+        assertTrue(prefs.isSessionGroupLegacyConsumed())
+        assertTrue(prefs.isSessionGroupCatalogMigrated(gatewayId))
+        assertEquals(listOf("New", "Legacy"), viewModel.sessionCustomGroups.value)
+        val reloaded = SecurePrefs(app, securePrefsOverride = ReflectionHelpers.getField(prefs, "securePrefsOverride"))
+        assertTrue(reloaded.isSessionGroupLegacyConsumed())
+        assertTrue(reloaded.isSessionGroupCatalogMigrated(gatewayId))
+        assertEquals(listOf("New", "Legacy"), runtime.observeSessionGroupCatalog(gatewayId).first()?.names)
+        val databases = ReflectionHelpers.getField<AndroidClientDatabases>(runtime, "clientDatabases")
+        controller.clearGatewayCache(gatewayId) { databases.commitGatewayRemoval(gatewayId, requireCacheRemoval = true) }
+        assertNull(runtime.observeSessionGroupCatalog(gatewayId).first())
+        assertTrue("Retired folders must disappear without switching Gateway", waitUntil(5_000) { viewModel.sessionCustomGroups.value.isEmpty() })
+      } finally {
+        viewModelStore.clear()
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
   @After
   fun resetNodeServiceStartSuppression() {
+    viewModelStore.clear()
     val app = RuntimeEnvironment.getApplication()
     NodeForegroundService.resume(app, startNow = false)
     (app as NodeApp).chatShareDraftQueue.clear()
@@ -468,7 +637,7 @@ class MainViewModelTest {
         savedStateHandle = SavedStateHandle(),
         resolveShareMimeType = resolveShareMimeType,
         shareLaunchCapacity = shareLaunchCapacity,
-      ) to
+      ).also { viewModelStore.put(UUID.randomUUID().toString(), it) } to
         prefs
     )
   }

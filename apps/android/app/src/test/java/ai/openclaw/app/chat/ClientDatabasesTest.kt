@@ -9,6 +9,7 @@ import androidx.room3.withWriteTransaction
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -23,6 +24,23 @@ import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class ClientDatabasesTest {
+  @Test
+  fun retiredGatewayCatalogDoesNotSurviveDatabaseReopen() =
+    runTest {
+      val names = databaseNames()
+      withDatabases(names) { databases ->
+        databases.saveSessionGroupCatalog("gateway-a", listOf("Private folder"), listOf("category:Private folder"))
+        databases.saveSessionGroupCatalog("gateway-b", listOf("Other folder"), emptyList())
+        assertEquals(listOf("Private folder"), databases.observeSessionGroupCatalog("gateway-a").first()?.names)
+        databases.commitGatewayRemoval("gateway-a", requireCacheRemoval = true)
+        assertNull(databases.observeSessionGroupCatalog("gateway-a").first())
+      }
+      withCleanDatabases(names) { reopened ->
+        assertNull(reopened.observeSessionGroupCatalog("gateway-a").first())
+        assertEquals(listOf("Other folder"), reopened.observeSessionGroupCatalog("gateway-b").first()?.names)
+      }
+    }
+
   @Test
   fun retainedStoresRejectOperationsAfterDatabaseOwnerCloses() =
     runTest {
@@ -77,7 +95,7 @@ class ClientDatabasesTest {
       createV2Fixture(context.getDatabasePath(names.legacy).path)
 
       withCleanDatabases(names, setOf("gateway-test")) { databases ->
-        assertEquals(3, databases.gatewayCacheDatabase().userVersion())
+        assertEquals(4, databases.gatewayCacheDatabase().userVersion())
         assertEquals(1, databases.clientStateDatabase().userVersion())
 
         val rows = databases.commandOutbox().load("gateway-test").associateBy { it.id }
