@@ -1,4 +1,4 @@
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 import type { ChannelConfiguredBindingProvider } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -15,17 +15,6 @@ const bindings: ChannelConfiguredBindingProvider = {
   matchInboundConversation: ({ compiledBinding, conversationId }) =>
     compiledBinding.conversationId === conversationId ? { conversationId, matchPriority: 2 } : null,
 };
-beforeEach(() => {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
-        plugin: { ...createChannelTestPluginBase({ id: "discord" }), bindings },
-        source: "test",
-      },
-    ]),
-  );
-});
 
 const cfg: OpenClawConfig = {
   agents: {
@@ -65,6 +54,8 @@ function binding(conversationId: string, cwd?: string) {
 
 // #92015: a sibling binding must not inherit the cwd-bearing turn's decision.
 it("scopes provisioning to the concrete ACP binding", async () => {
+  const plugin = { ...createChannelTestPluginBase({ id: "discord" }), bindings };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
   const mixed = { ...cfg, bindings: [binding("111", "/projects/app"), binding("222")] };
   const key = (conversationId: string) =>
     resolveConfiguredAcpBindingRecord({

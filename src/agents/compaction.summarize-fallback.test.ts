@@ -6,11 +6,6 @@ import { summarizeCompactionHistory } from "./compaction.js";
 
 const { generateSummary } = vi.hoisted(() => ({ generateSummary: vi.fn() }));
 
-vi.mock("openclaw/plugin-sdk/agent-sessions", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-sessions")>()),
-  generateSummary,
-}));
-
 vi.mock("./sessions/index.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./sessions/index.js")>()),
   generateSummary,
