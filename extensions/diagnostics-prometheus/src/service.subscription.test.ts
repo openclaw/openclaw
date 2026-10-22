@@ -24,7 +24,11 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   }),
 }));
 
-function phaseEvent(name: string, durationMs: number, details?: Record<string, unknown>) {
+function phaseEvent(
+  name: string,
+  durationMs: number,
+  details?: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>["details"],
+) {
   return { type: "diagnostic.phase.completed" as const, name, startedAt: 10, durationMs, details };
 }
 

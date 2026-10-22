@@ -83,7 +83,7 @@ const oauthProfile = (enterpriseUrl?: string) => ({
   ...(enterpriseUrl ? { enterpriseUrl } : {}),
 });
 const copilotConfig = <T>(settings: T) => ({ models: { providers: { [ID]: settings } } });
-const domainOf = (config?: Partial<OpenClawConfig> | null) =>
+const domainOf = (config?: Partial<OpenClawConfig> | ProviderAuthResult["configPatch"] | null) =>
   config?.models?.providers?.[ID]?.params?.githubDomain;
 const storedToken = (token: string) => ({
   profileId: PROFILE,

@@ -348,7 +348,7 @@ describe("wrapCopilotAnthropicStream", () => {
       onPayload: expect.any(Function),
     });
     expect(payload.input).toEqual([
-      { type: "message", id: expect.stringMatching(/ ^ msg_ [a - f0 - 9] { 16} $ /) },
+      { type: "message", id: expect.stringMatching(/^msg_[a-f0-9]{16}$/) },
     ]);
   });
 

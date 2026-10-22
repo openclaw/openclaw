@@ -22,7 +22,9 @@ async function openBridge(
   close: RealtimeVoiceBridge["close"],
   overrides: Partial<RealtimeVoiceBridge> = {},
   options: Parameters<typeof createCarrierLifecycleHarness>[1] = {},
-  delegation: boolean | NonNullable<RealtimeVoiceProviderPlugin["capabilities"]> = false,
+  delegation:
+    | boolean
+    | NonNullable<Awaited<ReturnType<ResolveRealtimeCallRegistration>>["capabilities"]> = false,
 ) {
   const ready = createDeferred<RealtimeVoiceBridgeCreateRequest>();
   const createBridgeForCall = vi.fn((request: RealtimeVoiceBridgeCreateRequest) => {
@@ -342,6 +344,48 @@ describe("RealtimeCallHandler lifecycle", () => {
     });
     expect(consult).not.toHaveBeenCalled();
     expect(submitToolResult).toHaveBeenCalledOnce();
+  });
+
+  it("aborts a hung native consult during stream teardown", async () => {
+    let consultSignal: AbortSignal | undefined;
+    const submitToolResult = vi.fn();
+    const { handler, ws, callbacks } = await openBridge(vi.fn(), {
+      supportsToolResultContinuation: true,
+      submitToolResult,
+    });
+    handler.registerToolHandler("openclaw_agent_consult", async (_args, _callId, context) => {
+      consultSignal = context.abortSignal;
+      return await new Promise<unknown>((_resolve, reject) => {
+        context.abortSignal?.addEventListener(
+          "abort",
+          () => reject(new Error("native consult aborted", { cause: context.abortSignal?.reason })),
+          { once: true },
+        );
+      });
+    });
+    callbacks.onToolCall?.({
+      itemId: "item-consult",
+      callId: "tool-consult",
+      name: "openclaw_agent_consult",
+      args: { question: "Check the deployment." },
+    });
+    await vi.waitFor(() => expect(consultSignal).toBeDefined());
+
+    const consults = (
+      handler as unknown as {
+        nativeConsultsInFlightByCallId: Map<string, unknown>;
+      }
+    ).nativeConsultsInFlightByCallId;
+    expect(consults.size).toBe(1);
+
+    const closed = waitForClose(ws);
+    ws.close();
+    await closed;
+    await vi.waitFor(() => expect(consults.size).toBe(0));
+
+    expect(consultSignal?.aborted).toBe(true);
+    await nextImmediate();
+    expect(submitToolResult).toHaveBeenCalledTimes(1);
   });
 
   it("preserves a concurrently admitted bridge when another creation fails", async () => {
