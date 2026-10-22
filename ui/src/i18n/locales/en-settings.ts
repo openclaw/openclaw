@@ -398,6 +398,7 @@ const enSettings = {
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
     defaultValue: en.configForm.defaultValue,
     select: "Select...",
+    required: "Required",
     enumOn: "On",
     enumOff: "Off",
     enumAuto: "Auto",
