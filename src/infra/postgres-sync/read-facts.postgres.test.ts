@@ -30,22 +30,9 @@ import { usePostgresTestHarness } from "./postgres.test-support.js";
 
 const harness = usePostgresTestHarness("read_facts");
 const { connection, prefix, directories } = harness;
-type StoreFixture = {
-  pathname: string;
-  writer: PostgresSqlConnection;
-  open: () => PostgresSqlConnection;
-  close: () => void;
-};
-const stores: StoreFixture[] = [];
-harness.onClose(() =>
-  withEngineStoreAdmission(() => {
-    for (const store of stores) {
-      store.close();
-    }
-  }),
-);
+type StoreFixture = ReturnType<typeof openStore>;
 
-function openStore(schema: StoreSchema): StoreFixture {
+function openStore(schema: StoreSchema) {
   const pathname = path.join(directories.make("pg-read-facts-"), "anchor.sqlite");
   const handles: {
     db: PostgresSqlConnection;
@@ -77,19 +64,15 @@ function openStore(schema: StoreSchema): StoreFixture {
   };
   const writer = open();
   assert(getPostgresPhysicalFacts(writer), "Expected production schema admission");
-  const store = {
-    pathname,
-    writer,
-    open,
-    close() {
+  harness.onClose(() =>
+    withEngineStoreAdmission(() => {
       for (const { db, anchor } of handles) {
         db.close();
         anchor.close();
       }
-    },
-  };
-  stores.push(store);
-  return store;
+    }),
+  );
+  return { pathname, writer, open };
 }
 
 function metadata(runtimeSessionName: string): SessionAcpMeta {
@@ -173,7 +156,7 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
       using query = vi.spyOn(reader, "query");
       const metadataReads = () =>
         query.mock.calls.filter(([sql]) => /\b(?:from|join)\s+"?acp_sessions\b/iu.test(sql));
-      runSqliteReadSnapshotSync(reader, () => {
+      snapshot(() => {
         expectRows(read(), "initial", null);
         expect(published()).toBeUndefined();
       });
@@ -233,12 +216,12 @@ describe.skipIf(!connection)("PostgreSQL admitted read facts", () => {
   it("keeps old ACP snapshots isolated from newer positive and negative postimages", () => {
     withEngineStoreAdmission(() => {
       seedAcp(state.writer, "overlap-positive", "before");
-      const { reader, read, snapshot, published } = acpReader(
+      const { read, snapshot, published } = acpReader(
         state,
         "overlap-positive",
         "overlap-negative",
       );
-      runSqliteReadSnapshotSync(reader, () => {
+      snapshot(() => {
         expectRows(read(), "before", null);
         writeAcp(state.writer, "overlap-positive", null);
         writeAcp(state.writer, "overlap-negative", "after");

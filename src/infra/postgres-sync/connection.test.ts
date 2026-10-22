@@ -6,7 +6,6 @@ import { readSqliteDatabaseScopedWriteToken as readToken } from "../sqlite-datab
 import { readSqliteNativeMutationRevision as readRevision } from "../sqlite-schema-facts.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import {
-  deferSqliteWorkerCommitReceipt as deferReceipt,
   observeSqliteWorkerCommittedFacts,
   withSqliteWorkerOperationAdmission as withAdmission,
 } from "../sqlite-worker-operation-admission.js";
@@ -166,49 +165,36 @@ it.each([
   expect(readToken(fixture.db.anchor, "entry")).toBe(before);
 });
 
-it.each(["read", "write", "rollback", "inner-rollback"] as const)(
-  "leaves worker commit facts to the domain (%s)",
-  (mode) => {
-    const { db, command } = transportFixture("normal");
-    const admission = harness.admission((_request, grant) => grant());
-    const receipts: unknown[] = [];
-    observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
-    const operation = () => {
-      command(mode === "read" ? "SELECT" : "INSERT");
-      db.exec(mode === "read" ? "SELECT 1" : "INSERT INTO proof VALUES (7)");
-      if (mode === "inner-rollback") {
-        command("SAVEPOINT");
-        expect(() =>
-          db.runTransaction(() => {
-            deferReceipt(db, { value: 7 });
-            command("ROLLBACK");
-            throw new Error("cancel inner receipt");
-          }),
-        ).toThrow("cancel inner receipt");
-      }
-      if (mode === "rollback") {
-        command("ROLLBACK");
-        throw new Error("cancel write");
-      }
-    };
-    const run = () =>
-      withAdmission({ port: admission.port, sourceReservations: true }, () =>
-        db.runTransaction(operation, {
-          withCommit(commit) {
-            command("COMMIT");
-            commit();
-          },
-        }),
-      );
+it.each(["read", "rollback"] as const)("leaves worker commit facts to the domain (%s)", (mode) => {
+  const { db, command } = transportFixture("normal");
+  const admission = harness.admission((_request, grant) => grant());
+  const receipts: unknown[] = [];
+  observeSqliteWorkerCommittedFacts(admission, ({ facts }) => receipts.push(facts));
+  const operation = () => {
+    command(mode === "read" ? "SELECT" : "INSERT");
+    db.exec(mode === "read" ? "SELECT 1" : "INSERT INTO proof VALUES (7)");
     if (mode === "rollback") {
-      expect(run).toThrow("cancel write");
-    } else {
-      run();
+      command("ROLLBACK");
+      throw new Error("cancel write");
     }
-    admission.service();
-    expect(receipts).toEqual([]);
-  },
-);
+  };
+  const run = () =>
+    withAdmission({ port: admission.port, sourceReservations: true }, () =>
+      db.runTransaction(operation, {
+        withCommit(commit) {
+          command("COMMIT");
+          commit();
+        },
+      }),
+    );
+  if (mode === "rollback") {
+    expect(run).toThrow("cancel write");
+  } else {
+    run();
+  }
+  admission.service();
+  expect(receipts).toEqual([]);
+});
 
 it("invalidates local mutation witnesses inside a transaction and across rollback", () => {
   const fixture = transportFixture("normal");

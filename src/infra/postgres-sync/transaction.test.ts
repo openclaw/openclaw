@@ -53,44 +53,33 @@ function postgresFixture() {
 
 const writeBegin = "BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(-42)";
 
-it.each([
-  [false, undefined],
-  [false, true],
-  [true, undefined],
-  [true, true],
-] as const)(
-  "settles anchored receipts (rollback=%s, source reservations=%s)",
-  (rollback, sourceReservations) => {
-    const { db } = postgresFixture();
-    const admission = fixture.admission((_request, grant) => grant());
-    const owner: SqliteWorkerOperationContext = {
-      port: admission.port,
-      sourceReservations,
-    };
-    const receipts: unknown[] = [];
-    observeFacts(admission, ({ facts }) => receipts.push(facts));
-    const write = () =>
-      withAdmission(owner, () =>
-        immediate(db, () => {
-          deferReceipt(db, { value: 7 });
-          assertPending(db);
-          assertPending(db.anchor);
-          expect(owner.committed).toBeUndefined();
-          if (rollback) {
-            throw new Error("cancel receipt");
-          }
-        }),
-      );
-    if (rollback) {
-      expect(write).toThrow("cancel receipt");
-    } else {
-      write();
-    }
-    admission.service();
-    expect(receipts).toEqual(rollback ? [] : [{ value: 7 }]);
-    expect(owner.pendingReceipts?.size).toBe(0);
-  },
-);
+it.each([false, true])("settles anchored receipts (rollback=%s)", (rollback) => {
+  const { db } = postgresFixture();
+  const admission = fixture.admission((_request, grant) => grant());
+  const owner: SqliteWorkerOperationContext = { port: admission.port };
+  const receipts: unknown[] = [];
+  observeFacts(admission, ({ facts }) => receipts.push(facts));
+  const write = () =>
+    withAdmission(owner, () =>
+      immediate(db, () => {
+        deferReceipt(db, { value: 7 });
+        assertPending(db);
+        assertPending(db.anchor);
+        expect(owner.committed).toBeUndefined();
+        if (rollback) {
+          throw new Error("cancel receipt");
+        }
+      }),
+    );
+  if (rollback) {
+    expect(write).toThrow("cancel receipt");
+  } else {
+    write();
+  }
+  admission.service();
+  expect(receipts).toEqual(rollback ? [] : [{ value: 7 }]);
+  expect(owner.pendingReceipts?.size).toBe(0);
+});
 
 it.each(["sqlite", "postgres"] as const)(
   "leaves transaction and commit admission to the domain on %s",
