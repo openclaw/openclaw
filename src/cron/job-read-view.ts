@@ -1,6 +1,6 @@
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { toPublicCronJob } from "./public-job.js";
-import { cronJobNeedsCreatorReauthorization } from "./scheduled-tool-policy.js";
+import { cronJobNeedsCreatorReauthorization } from "./tools-allow.js";
 import type { CronDeliveryPreview, CronJob, CronToolsAllowProvenance } from "./types.js";
 
 // Migration provenance stays internal; the result schema exposes only public scratch fields.

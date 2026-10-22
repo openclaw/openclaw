@@ -8,11 +8,11 @@ import {
   resolveCronListSnapshotRevision,
   resolveCronListSnapshotRows,
 } from "../list-snapshot-revision.js";
-import { cronJobNeedsCreatorReauthorization } from "../scheduled-tool-policy.js";
 import { readCronScratchSnapshotByKey } from "../scratch-read.js";
 import { writeCronJobScratchByKey } from "../scratch-store.js";
 import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
 import { CronJobsStoreChangedError } from "../store/save-error.js";
+import { cronJobNeedsCreatorReauthorization } from "../tools-allow.js";
 import type { CronJob } from "../types.js";
 import {
   findJobOrThrow,
