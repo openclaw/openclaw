@@ -23,7 +23,7 @@ import {
 import * as discordMessagingActionRuntime from "../send.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
 import type { DiscordReactOpts } from "../send.types.js";
-import { parseDiscordTarget, resolveDiscordChannelId } from "../targets.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "../target-parsing.js";
 import {
   filterDiscordActiveThreadList,
   readDiscordChannelStringField,

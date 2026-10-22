@@ -13,6 +13,12 @@ import { defaultRuntime } from "../runtime.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
+// This fixture owns a user unit only; the runner's system units are unrelated.
+vi.mock("../daemon/systemd-unit-load-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/systemd-unit-load-paths.js")>()),
+  DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS: [],
+}));
+
 // These diagnostics model unavailable transports, not the runner's real user manager.
 vi.mock("../daemon/systemd-peer-native.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-peer-native.js")>()),
@@ -103,48 +109,32 @@ it.each([
     );
   }
   vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
+    const result = { code: 0, termination: "exit" as const, stdout: "", stderr: "" };
     if (command === "busctl") {
-      return {
-        code: 1,
-        termination: "exit",
-        stdout: "",
-        stderr:
-          "Failed to connect to user scope bus via local transport: No such file or directory",
-      };
-    }
-    if (command === "systemctl") {
-      return {
-        code: 0,
-        termination: "exit",
-        stdout: args.includes("show") ? "ActiveState=active\nMainPID=1234" : "enabled",
-        stderr: "",
-      };
-    }
-    if (command === "launchctl") {
+      result.code = 1;
+      result.stderr =
+        "Failed to connect to user scope bus via local transport: No such file or directory";
+    } else if (command === "systemctl") {
+      result.stdout = args.includes("show") ? "ActiveState=active\nMainPID=1234" : "enabled";
+    } else if (command === "launchctl") {
       const system = args[1]?.startsWith("system/");
       if (system && scenario.reason === "launchd-system-owned") {
-        return { code: 0, termination: "exit", stdout: "state = running\npid = 1234", stderr: "" };
+        result.stdout = "state = running\npid = 1234";
+      } else {
+        result.code = 125;
+        result.stderr = "Could not print domain: 125: Domain does not support specified action";
       }
-      return {
-        code: 125,
-        termination: "exit",
-        stdout: "",
-        stderr: "Could not print domain: 125: Domain does not support specified action",
-      };
+    } else {
+      throw new Error(`Unexpected native command: ${command}`);
     }
-    throw new Error(`Unexpected native command: ${command}`);
+    return result;
   });
   const service = resolveGatewayService();
+  const command = service.readCommand(process.env, { requireEffective: true });
   if (scenario.platform === "linux") {
-    await expect
-      .soft(service.readCommand(process.env, { requireEffective: true }))
-      .rejects.toMatchObject({
-        reason: scenario.reason,
-      });
+    await expect.soft(command).rejects.toMatchObject({ reason: scenario.reason });
   } else {
-    await expect(
-      service.readCommand(process.env, { requireEffective: true }),
-    ).resolves.toMatchObject({
+    await expect(command).resolves.toMatchObject({
       programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
     });
   }
@@ -169,9 +159,7 @@ it.each([
   });
   try {
     expect(maintenance).toBeDefined();
-    expect(maintenance?.warnings).toEqual([
-      expect.stringContaining("Restart the Gateway you launched manually after the update."),
-    ]);
+    expect(maintenance?.warnings).toEqual([expect.stringContaining("openclaw gateway stop")]);
     expect(maintenance?.warnings?.[0]).toContain(scenario.message);
     await maintenance?.finish({});
   } finally {

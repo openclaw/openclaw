@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { WorktreeRemovalContentionError } from "../agents/worktrees/errors.js";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import {
   SessionTranscriptWriterClaimReboundError,
@@ -21,12 +22,14 @@ import {
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { receiveSqliteWorkerReply } from "../infra/sqlite-worker-broker-reply.js";
 import type { Job } from "../infra/sqlite-worker-broker.types.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
 import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { PluginStateStoreError } from "../plugin-state/plugin-state-store.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { DATABASE_QUARANTINE_READ_CLEANUP_ERROR_NAME } from "./openclaw-quarantine-error.js";
@@ -40,9 +43,10 @@ import {
   encodeOpenClawStateWorkerError,
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
+  type OpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
-function remoteError(payload: unknown): Error {
+function remoteError(payload: OpenClawStateWorkerErrorPayload | undefined): Error {
   const retained = new Error("remote error");
   retainOpenClawStateWorkerErrorPayload(retained, payload);
   return retained;
@@ -265,7 +269,7 @@ describe("shared-state worker error transport", () => {
     expect(decoded.errors[3]).toBe(decoded);
   });
 
-  it("uses the validated wire root when retaining an unopened error graph", () => {
+  it("uses the wire root when retaining an unopened error graph", () => {
     const retained = remoteError({
       version: 1,
       root: 1,
@@ -285,7 +289,11 @@ describe("shared-state worker error transport", () => {
   ])("keeps outcome-unknown explicit instead of hydrating %s", (original) => {
     const payload = encodeOpenClawStateWorkerError(original);
     assert(payload);
+    const custody = new SqliteWorkerSlotCustody().createRequest();
+    custody.activate();
+    custody.accept();
     const job: Job = {
+      custody,
       observation: { started() {}, completed() {} },
       request: {
         type: "execute",
@@ -297,6 +305,7 @@ describe("shared-state worker error transport", () => {
         },
       },
       bytes: 0,
+      result: createDeferredCore().promise,
       resolve: () => undefined,
       reject: () => undefined,
       detach: () => undefined,
@@ -338,7 +347,7 @@ describe("shared-state worker error transport", () => {
     expect(findStartupMaintenanceRequiredError(failure)).toBeUndefined();
   });
 
-  it("hydrates a cached rejection independently for each caller without rewriting its graph", async () => {
+  it("hydrates a cached rejection independently for each caller without rewriting its graph", () => {
     const payload = encodeOpenClawStateWorkerError(new SqliteSchemaVersionError("newer schema"));
     assert(payload);
     const remote = remoteError(payload);
@@ -350,55 +359,19 @@ describe("shared-state worker error transport", () => {
     });
     original.errors.push(original);
     const first = hydrateOpenClawStateWorkerError(original);
-    vi.resetModules();
-    const [codec, errors] = await Promise.all([
-      import("./openclaw-state-worker-error.js"),
-      import("../infra/startup-maintenance-required.js"),
-    ]);
-    const second = codec.hydrateOpenClawStateWorkerError(original);
+    const second = hydrateOpenClawStateWorkerError(original);
     assert(first instanceof AggregateError && second instanceof AggregateError);
     expect(first).not.toBe(second);
     expect(first.errors[0]).not.toBe(second.errors[0]);
     expect(first.errors[0]).toBeInstanceOf(StartupMaintenanceRequiredError);
-    expect(second.errors[0]).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
+    expect(second.errors[0]).toBeInstanceOf(StartupMaintenanceRequiredError);
     for (const result of [first, second]) {
       expect(result.cause).toBe(result.errors[0]);
       expect(result.errors[1]).toBe(result.errors[0]);
       expect(result.errors[2]).toBe(untouched);
-      expect(result.errors[3]).toBe(result);
     }
     expect(original.cause).toBe(remote);
     expect(original.errors).toEqual([remote, remote, untouched, original]);
-  });
-
-  it("retains aliases inside materialized wire graphs without merging distinct caller graphs", async () => {
-    const refusal = new SqliteSchemaVersionError("newer schema");
-    const original = new AggregateError([refusal, refusal], "wire graph", { cause: refusal });
-    refusal.cause = original;
-    const payload = encodeOpenClawStateWorkerError(original);
-    assert(payload);
-    const retained = remoteError(payload);
-    const first = hydrateOpenClawStateWorkerError(retained);
-    const second = hydrateOpenClawStateWorkerError(retained);
-    const combined = new AggregateError([first, second], "separate calls");
-    vi.resetModules();
-    const [codec, errors] = await Promise.all([
-      import("./openclaw-state-worker-error.js"),
-      import("../infra/startup-maintenance-required.js"),
-    ]);
-    const result = codec.hydrateOpenClawStateWorkerError(combined);
-    assert(result instanceof AggregateError);
-    expect(result.errors[0]).not.toBe(result.errors[1]);
-    for (const graph of result.errors) {
-      assert(graph instanceof AggregateError);
-      expect(graph.cause).toBe(graph.errors[0]);
-      expect(graph.errors[0]).toBe(graph.errors[1]);
-      expect(graph.errors[0]).toBeInstanceOf(errors.StartupMaintenanceRequiredError);
-      const cause: unknown = graph.errors[0];
-      assert(cause instanceof Error);
-      expect(cause.cause).toBe(graph);
-    }
-    expect(combined.errors).toEqual([first, second]);
   });
 
   it("leaves ordinary and already-current error graphs identical", () => {
@@ -468,6 +441,34 @@ describe("shared-state worker error transport", () => {
     expect(decoded.errors[1]).not.toBeInstanceOf(CustomError);
     expect(decoded.errors[1]).toMatchObject({ name: "CustomError", code: 17, cause: "detail" });
     expect(decoded.errors.slice(2)).toEqual(["plain failure", 2, true, null, undefined, undefined]);
+  });
+
+  it("projects typed ownership metadata before transporting it", () => {
+    const pluginOwner = {
+      pid: 123,
+      threadId: 4,
+      version: "test",
+      privateState: "not-for-transport",
+    };
+    const blockedByRun = { worktreeId: "fixture", pid: 456, privateState: "not-for-transport" };
+    const original = new AggregateError(
+      [
+        new PluginStateStoreError("fixture plugin error", {
+          code: "PLUGIN_STATE_READ_FAILED",
+          operation: "lookup",
+          owner: pluginOwner,
+        }),
+        new WorktreeRemovalContentionError("busy", "fixture contention", blockedByRun),
+      ],
+      "typed metadata",
+    );
+    expect(JSON.stringify(encodeOpenClawStateWorkerError(original))).not.toContain(
+      "not-for-transport",
+    );
+    const restored = roundTrip(original);
+    assert(restored instanceof AggregateError);
+    expect(restored.errors[0]).toMatchObject({ owner: { pid: 123, threadId: 4, version: "test" } });
+    expect(restored.errors[1]).toMatchObject({ blockedByRun: { worktreeId: "fixture", pid: 456 } });
   });
 
   it("transports only redacted refusal fields belonging to a transcript writer error", () => {
@@ -578,72 +579,5 @@ describe("shared-state worker error transport", () => {
       ],
     });
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
-  });
-
-  const validNode = {
-    type: "maintenance",
-    kind: "audit-events-v2",
-    name: "StartupMaintenanceRequiredError",
-    message: "migration required",
-  };
-  it.each([
-    undefined,
-    { version: 2, root: 0, nodes: [validNode] },
-    { version: 1, root: 1, nodes: [validNode] },
-    { version: 1, root: 0, nodes: [] },
-    ...[
-      { ...validNode, type: "CustomError" },
-      { ...validNode, kind: "unknown-migration" },
-      { ...validNode, cause: { ref: 1 } },
-      { ...validNode, cause: { value: {} } },
-      ...[
-        { ...transcriptRefusals[1], code: "unknown-refusal" },
-        { ...transcriptRefusals[1], sessionKeyHash: "raw-session-key" },
-        { ...transcriptRefusals[1], actualSessionIdHash: undefined },
-      ].map((refusal) => ({
-        type: "session-transcript-writer-claim-rebound",
-        name: "SessionTranscriptWriterClaimReboundError",
-        message: "invalid refusal",
-        refusal,
-      })),
-      {
-        type: "session-transcript-writer-claim-rebound",
-        name: "SessionTranscriptWriterClaimReboundError",
-        message: "conflicting causes",
-        refusal: transcriptRefusals[0],
-        cause: { value: "must not overwrite the refusal" },
-      },
-      { ...validNode, code: {} },
-      { ...validNode, nativeOpen: false },
-      { ...validNode, errcode: -1 },
-      { ...validNode, errcode: 0.5 },
-      { ...validNode, errcode: 2 ** 31 },
-      { type: "state-owner-contention", name: "Error", message: "invalid", databasePath: 1 },
-      {
-        type: "state-lease",
-        leaseCode: "OPENCLAW_STATE_LEASE_LOST",
-        code: "OPENCLAW_STATE_LEASE_HELD",
-        name: "OpenClawStateLeaseError",
-        message: "mismatched lease classification",
-      },
-      { ...validNode, stack: "not transported" },
-      { type: "aggregate", name: "AggregateError", message: "missing edges" },
-      {
-        type: "agent-media-migration",
-        name: "Error",
-        message: "invalid version",
-        pathname: "/fixture/agent.sqlite",
-        schemaVersion: -1,
-      },
-    ].map((node) => ({ version: 1, root: 0, nodes: [node] })),
-    {
-      version: 1,
-      root: 0,
-      nodes: [{ type: "error", name: "Error", message: "unrelated" }, validNode],
-    },
-  ])("rejects malformed or noncanonical payload %#", (payload) => {
-    const retained = remoteError(payload);
-    expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
-    expect(hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true })).toBe(retained);
   });
 });

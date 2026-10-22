@@ -5,21 +5,15 @@ import type {
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
-import { estimateTokens, type AgentMessage } from "../runtime/index.js";
+import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
+import { estimateTokens, type Agent, type AgentMessage } from "../runtime/index.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
-import { log } from "./logger.js";
-import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
-import {
-  estimateRenderedLlmBoundaryTokenPressure,
-  shouldPreemptivelyCompactBeforePrompt,
-  type CompactionReplayPressureContext,
-} from "./run/preemptive-compaction.js";
+import { estimateRenderedLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
 import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
-  createMessageCharEstimateCache,
   estimateMessageChars,
   estimateMessageCharsCached,
   getToolResultText,
@@ -27,39 +21,6 @@ import {
 } from "./tool-result-char-estimator.js";
 import { isToolResultTextBlock } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
-
-type GuardableTransformContext = (
-  messages: AgentMessage[],
-  signal: AbortSignal,
-) => AgentMessage[] | Promise<AgentMessage[]>;
-
-type GuardableAgentRecord = {
-  transformContext?: GuardableTransformContext;
-};
-
-type MidTurnPrecheckOptions = {
-  getReplay?: () => CompactionReplayPressureContext;
-  enabled?: boolean;
-  contextTokenBudget: number;
-  reserveTokens: () => number;
-  toolResultMaxChars?: number;
-  getSystemPrompt?: () => string | undefined;
-  getPrePromptMessageCount?: () => number;
-  onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
-};
-
-function projectMessages(
-  messages: AgentMessage[],
-  project: (message: AgentMessage) => AgentMessage,
-): AgentMessage[] {
-  let changed = false;
-  const projected = messages.map((message) => {
-    const next = project(message);
-    changed ||= next !== message;
-    return next;
-  });
-  return changed ? projected : messages;
-}
 
 function replaceToolResultContent(
   msg: AgentMessage,
@@ -176,7 +137,7 @@ function truncateToolResultToChars(
  * attempts retain their eager lifecycle and finalization checkpoint.
  */
 export function installContextEngineLoopHook(params: {
-  agent: object;
+  agent: Pick<Agent, "transformContext">;
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
@@ -200,7 +161,7 @@ export function installContextEngineLoopHook(params: {
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const sessionIdentity = { sessionId, sessionKey };
-  const mutableAgent = params.agent as GuardableAgentRecord;
+  const mutableAgent = params.agent;
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
   let lastAssembledView: AgentMessage[] | null = null;
@@ -340,17 +301,13 @@ export function installContextEngineLoopHook(params: {
 }
 
 export function installToolResultContextGuard(params: {
-  agent: object;
+  agent: Pick<Agent, "transformContext">;
   contextWindowTokens: number;
-  midTurnPrecheck?: MidTurnPrecheckOptions;
 }): () => void {
   const maxSingleToolResultChars = resolveToolResultContextMaxChars(params.contextWindowTokens);
 
-  // Agent.transformContext is private in session runtime, so access it via a
-  // narrow runtime view to keep callsites type-safe while preserving behavior.
-  const mutableAgent = params.agent as GuardableAgentRecord;
+  const mutableAgent = params.agent;
   const originalTransformContext = mutableAgent.transformContext;
-  let lastSeenLength: number | null = null;
 
   mutableAgent.transformContext = async (messages, signal) => {
     const transformed = originalTransformContext
@@ -358,58 +315,10 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const estimateCache = createMessageCharEstimateCache();
-    const contextMessages = projectMessages(sourceMessages, (message) =>
+    const estimateCache = new WeakMap<AgentMessage, number>();
+    return mapArrayIfChanged(sourceMessages, (message) =>
       truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
     );
-    if (params.midTurnPrecheck?.enabled) {
-      const prePromptMessageCount = Math.max(
-        0,
-        Math.min(
-          contextMessages.length,
-          lastSeenLength ??
-            params.midTurnPrecheck.getPrePromptMessageCount?.() ??
-            contextMessages.length,
-        ),
-      );
-      lastSeenLength = prePromptMessageCount;
-      if (contextMessages.slice(prePromptMessageCount).some(isToolResultMessage)) {
-        // Use the same post-truncation view the runtime will send to the next model call.
-        // Recovery re-applies truncation to the persisted session manager, so
-        // this precheck is only a routing signal, not the source of truth.
-        const precheck = shouldPreemptivelyCompactBeforePrompt({
-          replay: params.midTurnPrecheck.getReplay?.(),
-          messages: contextMessages.map((message) => projectRecordedModelPrompt(message)),
-          systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
-          // During a tool loop, the active user prompt is already part of messages.
-          prompt: "",
-          contextTokenBudget: params.midTurnPrecheck.contextTokenBudget,
-          reserveTokens: params.midTurnPrecheck.reserveTokens(),
-          toolResultMaxChars: params.midTurnPrecheck.toolResultMaxChars,
-        });
-        log.debug(
-          `[context-overflow-midturn-precheck] tool-result-guard check route=${precheck.route} ` +
-            `messages=${contextMessages.length} prePromptMessageCount=${prePromptMessageCount} ` +
-            `estimatedPromptTokens=${precheck.estimatedPromptTokens} ` +
-            `promptBudgetBeforeReserve=${precheck.promptBudgetBeforeReserve} ` +
-            `overflowTokens=${precheck.overflowTokens}`,
-        );
-        if (precheck.route !== "fits") {
-          const request: MidTurnPrecheckRequest = {
-            route: precheck.route,
-            estimatedPromptTokens: precheck.estimatedPromptTokens,
-            promptBudgetBeforeReserve: precheck.promptBudgetBeforeReserve,
-            overflowTokens: precheck.overflowTokens,
-            toolResultReducibleChars: precheck.toolResultReducibleChars,
-            effectiveReserveTokens: precheck.effectiveReserveTokens,
-          };
-          params.midTurnPrecheck.onMidTurnPrecheck?.(request);
-          throw new MidTurnPrecheckSignal(request);
-        }
-      }
-      lastSeenLength = contextMessages.length;
-    }
-    return contextMessages;
   };
 
   return () => {

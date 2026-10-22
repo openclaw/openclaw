@@ -2,15 +2,20 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { getDatabaseEngineSelection } from "../../infra/database-engine/context.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { trackSqliteDatabaseAdmissionWorker } from "../../infra/sqlite-database-admission.js";
+import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
+import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
 import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archive-session.js";
 import type {
@@ -38,13 +43,44 @@ import {
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
-export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
+export function createSqliteTranscriptArchiveWorker(
+  workerData: object,
+  nativeLocations: readonly string[] = [],
+): Worker {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
-  return createCpuTrackedWorker(workerUrl, {
-    resourceLimits: { maxOldGenerationSizeMb: 512 },
-    workerData,
-    execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+  let active = true;
+  const admission = createSqliteDatabaseAdmissionRelay(() => {
+    if (!active) {
+      throw new Error("SQLite archive database admission is closed");
+    }
   });
+  const releaseService = retainSqliteWriteAdmissionService(nativeLocations, () =>
+    admission.service(),
+  );
+  const finish = () => {
+    active = false;
+    admission.finish();
+    releaseService();
+  };
+  let worker: Worker;
+  try {
+    worker = createCpuTrackedWorker(workerUrl, {
+      resourceLimits: { maxOldGenerationSizeMb: 512 },
+      workerData: {
+        ...workerData,
+        databaseAdmissionPort: admission.port,
+        databaseEngineSelection: getDatabaseEngineSelection(),
+      },
+      transferList: [admission.port],
+      execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+    });
+  } catch (error) {
+    finish();
+    throw error;
+  }
+  trackSqliteDatabaseAdmissionWorker(worker);
+  worker.once("exit", finish);
+  return worker;
 }
 
 type TranscriptArchiveWorkerOperation<Result> = {
@@ -76,7 +112,12 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
       : input;
   let worker: Worker;
   try {
-    worker = createSqliteTranscriptArchiveWorker(params.workerData);
+    worker = createSqliteTranscriptArchiveWorker(
+      params.workerData,
+      params.expectedMessageType === "reclaimed"
+        ? [params.workerData.plan.databaseOptions.path, params.stateContext.admission.databasePath]
+        : [],
+    );
   } catch (error) {
     return Promise.reject(toStringifiedError(error));
   }
@@ -98,6 +139,19 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
           transport: { kind: "dedicated", channel: worker },
           operationId: 0,
           completion: "exit",
+          databaseAuthority: {
+            databasePath: params.stateContext.admission.databasePath,
+            maintenanceScope: params.stateContext.maintenanceScope,
+            creationPaths: [
+              params.workerData.plan.databaseOptions.path,
+              params.stateContext.admission.databasePath,
+              resolveQuarantineStorePath(params.stateContext.environment),
+            ],
+            assertCurrent() {
+              params.stateContext.admission.assertCurrent();
+              params.assertCurrent?.();
+            },
+          },
           onCommitRequest: params.onCommitRequest,
           withWriteAdmission: params.withWriteAdmission,
           validationOwner: params.validationOwner,
@@ -226,12 +280,7 @@ function runSqliteTranscriptArchiveWorker(
     runExclusiveSqliteTranscriptArchiveWorker,
   );
   if (scoped) {
-    return scoped.then((result) => {
-      if (result.type !== "done") {
-        throw new Error("SQLite archive Worker returned another operation's result");
-      }
-      return result.results;
-    });
+    return scoped.then((result) => result.results);
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchiveWorkerResult>({
     expectedMessageType: "done",
@@ -253,12 +302,7 @@ export function runSqliteTranscriptArchivePublishWorker(
     (run) => runExclusiveSqliteTranscriptArchiveWorker(run, signal),
   );
   if (scoped) {
-    return scoped.then((result) => {
-      if (result.type !== "published") {
-        throw new Error("SQLite archive Worker returned another operation's result");
-      }
-      return result.results;
-    });
+    return scoped.then((result) => result.results);
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
     signal,
@@ -299,9 +343,6 @@ export async function runSqliteTranscriptArchiveReadWorker(
     throw new Error("SQLite archive reads require their captured database scope");
   }
   const result = await scoped;
-  if (result.type !== "final-read") {
-    throw new Error("SQLite archive Worker returned another operation's result");
-  }
   return result.results;
 }
 
@@ -317,9 +358,6 @@ export async function runSqliteTranscriptArchivePageWorker(
     throw new Error("SQLite archive reads require their captured database scope");
   }
   const result = await scoped;
-  if (result.type !== "page-read") {
-    throw new Error("SQLite archive Worker returned another operation's result");
-  }
   return result.results;
 }
 
@@ -330,13 +368,16 @@ export async function materializeSessionStateDeletePlans(
   plans: readonly SessionStateDeletePlan[],
 ): Promise<MaterializedSessionStateDeletePlan[]> {
   const deduped = dedupeSqliteSessionStateDeletePlans(plans);
-  const workerPlans = deduped.filter((plan) => plan.archiveTranscript);
+  // Empty snapshots have no archive bytes; the deletion transaction still rejects later appends.
+  const workerPlans = deduped.filter(
+    (plan) => plan.archiveTranscript && plan.snapshot.lastSeq !== null,
+  );
   const workerResults =
     workerPlans.length > 0 ? await runSqliteTranscriptArchiveWorker(workerPlans) : [];
   const resultBySessionId = new Map(workerResults.map((result) => [result.sessionId, result]));
 
   return deduped.map((plan) => {
-    if (!plan.archiveTranscript) {
+    if (!plan.archiveTranscript || plan.snapshot.lastSeq === null) {
       return Object.assign({}, plan, { archive: null, archivedTranscript: null });
     }
     const result = resultBySessionId.get(plan.sessionId);

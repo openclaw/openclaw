@@ -651,7 +651,9 @@ describe("capture admission generation", () => {
       process.stdout.write(JSON.stringify(released));
     `;
     const child = runRuntimeScript(root, script, ["--expose-gc"]);
-    expect(child.stderr).toBe("");
+    expect(child.stderr.split("\n")[0]?.replace(/\(node:\d+\)/g, "(node:PID)")).toBe(
+      "(node:PID) [DEP_PLUGIN_SDK] DeprecationWarning: Plugin SDK: initializeDebugProxyCapture is deprecated; use await initializeDebugProxyCaptureAsync() instead. The legacy contract remains supported during its deprecation period. Final compatibility day: 2026-12-31. Removal ships in the first January 2027 stable release; no SDK major is required.",
+    );
     expect(child.status).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual([true, true, true]);
   });
@@ -749,7 +751,6 @@ describe("async capture lifecycle", () => {
         payload: ${JSON.stringify(payload)},
       }, settings);
       process.kill(process.pid, ${JSON.stringify(signal)});
-      setTimeout(() => process.exit(99), 10_000);
     `;
       const child = runRuntimeScript(root, script, [], { HOME: root, XDG_CACHE_HOME: root });
       expect(child.error, child.stderr).toBeUndefined();

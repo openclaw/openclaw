@@ -69,26 +69,13 @@ export async function restartRunningChannelAccounts(
       if (!current || !manager.isAccountListed(channelId, accountId)) {
         continue;
       }
-      let startOutcomes = await manager.startChannel(channelId, accountId, {
+      const startOutcomes = await manager.startChannel(channelId, accountId, {
+        reason: "host-thaw",
         preserveManualStop: true,
       });
-      let startOutcome = startOutcomes.get(accountId);
-      let restarted =
+      const startOutcome = startOutcomes.get(accountId);
+      const restarted =
         manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
-      if (
-        startOutcome?.status === "retry" &&
-        restarted?.restartPending === true &&
-        manager.isAccountListed(channelId, accountId)
-      ) {
-        // A timed-out stop uses a two-call recovery contract: the first call
-        // requests replacement and the second discards the stale task.
-        startOutcomes = await manager.startChannel(channelId, accountId, {
-          preserveManualStop: true,
-        });
-        startOutcome = startOutcomes.get(accountId);
-        restarted =
-          manager.getRuntimeSnapshot(snapshotOptions).channelAccounts[channelId]?.[accountId];
-      }
       // The channel manager owns all failures after handoff through its restart
       // supervisor. Intentional configuration skips are complete; only a
       // transient owner conflict remains this thaw's retry.

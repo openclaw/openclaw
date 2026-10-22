@@ -45,24 +45,11 @@ export type CloseParams = SessionEntryCurrentPreparation & {
   /** Gates new cleanup claims, without revoking an already admitted close. */
   isCurrent?: () => boolean;
   closeTab?: CloseTab;
-  closeDurableTab?: (
-    tab: DurableTab,
-    options: { closeIfCurrent: CloseIfCurrent },
-  ) => Promise<CloseTrackedCdpTargetResult>;
   getResolvedBrowserConfig?: () =>
     | ResolvedBrowserConfig
     | null
     | Promise<ResolvedBrowserConfig | null>;
   onWarn?: (message: string) => void;
-  onDebug?: (message: string) => void;
-};
-
-/** Deduplicate deferrals by row generation across Browser plugin bundle instances. */
-type DeferredTabDiagnostic = {
-  reason: string;
-  trackedAt: number;
-  profileFingerprint: string;
-  browserInstanceFingerprint: string;
 };
 
 const deferredTabDiagnosticsSymbol = Symbol.for(
@@ -72,33 +59,19 @@ const deferredTabDiagnosticsSymbol = Symbol.for(
 /** Defensive bound: live deferrals are already forgotten as their rows settle. */
 const MAX_DEFERRED_TAB_DIAGNOSTICS = 512;
 
-function deferredTabDiagnostics(): Map<string, DeferredTabDiagnostic> {
+function deferredTabDiagnostics(): Map<string, string> {
   return resolveGlobalMap(deferredTabDiagnosticsSymbol);
-}
-
-function sameDeferredTabRow(previous: DeferredTabDiagnostic, tab: DurableTab): boolean {
-  return (
-    previous.trackedAt === tab.trackedAt &&
-    previous.profileFingerprint === tab.profileFingerprint &&
-    previous.browserInstanceFingerprint === tab.browserInstanceFingerprint
-  );
 }
 
 /** Records a deferral, returning true when the row has not reported it yet. */
 function recordDeferredTabDiagnostic(tab: DurableTab, reason: string): boolean {
   const diagnostics = deferredTabDiagnostics();
-  const previous = diagnostics.get(tab.storageKey);
-  if (previous?.reason === reason && sameDeferredTabRow(previous, tab)) {
+  if (diagnostics.get(tab.storageKey) === reason) {
     return false;
   }
   // Re-insert so the least recently reported deferral is evicted first.
   diagnostics.delete(tab.storageKey);
-  diagnostics.set(tab.storageKey, {
-    reason,
-    trackedAt: tab.trackedAt,
-    profileFingerprint: tab.profileFingerprint,
-    browserInstanceFingerprint: tab.browserInstanceFingerprint,
-  });
+  diagnostics.set(tab.storageKey, reason);
   if (diagnostics.size > MAX_DEFERRED_TAB_DIAGNOSTICS) {
     const oldest = diagnostics.keys().next();
     if (!oldest.done) {
@@ -111,10 +84,7 @@ function recordDeferredTabDiagnostic(tab: DurableTab, reason: string): boolean {
 /** Lets a settled row report the next outage instead of staying muted forever. */
 function forgetDeferredTabDiagnostic(tab: DurableTab): void {
   const diagnostics = deferredTabDiagnostics();
-  const previous = diagnostics.get(tab.storageKey);
-  if (previous && sameDeferredTabRow(previous, tab)) {
-    diagnostics.delete(tab.storageKey);
-  }
+  diagnostics.delete(tab.storageKey);
 }
 
 /** Warn once per deferral; repeated sweeps remain visible at debug level. */
@@ -122,10 +92,6 @@ function reportDeferredTab(params: CloseParams, tab: DurableTab, reason: string)
   const message = `deferred tracked browser tab ${tab.nativeTargetId}: ${reason}`;
   if (recordDeferredTabDiagnostic(tab, reason)) {
     params.onWarn?.(message);
-    return;
-  }
-  if (params.onDebug) {
-    params.onDebug(message);
     return;
   }
   log.debug(message);
@@ -229,13 +195,17 @@ async function closeCurrentDurableTab(
   getResolvedBrowserConfig?: CloseParams["getResolvedBrowserConfig"],
 ): Promise<DurableCleanupResult> {
   // Empty session cleanup must not initialize Browser control or its CDP graph.
-  const [{ getRuntimeConfig }, { resolveCdpControlPolicy }, { closeTrackedCdpTarget }, config] =
-    await Promise.all([
-      import("openclaw/plugin-sdk/runtime-config-snapshot"),
-      import("./cdp-reachability-policy.js"),
-      import("./cdp.helpers.js"),
-      import("./config.js"),
-    ]);
+  const [
+    { readRuntimeConfig: getRuntimeConfig },
+    { resolveCdpControlPolicy },
+    { closeTrackedCdpTarget },
+    config,
+  ] = await Promise.all([
+    import("openclaw/plugin-sdk/runtime-config-snapshot"),
+    import("./cdp-reachability-policy.js"),
+    import("./cdp.helpers.js"),
+    import("./config.js"),
+  ]);
   let resolved = await getResolvedBrowserConfig?.();
   if (!resolved) {
     const cfg = getRuntimeConfig();
@@ -306,9 +276,7 @@ export async function closeDurableTab(
     )) ?? { status: "cancelled" };
   let outcome: DurableCleanupResult;
   try {
-    if (params.closeDurableTab) {
-      outcome = await params.closeDurableTab(tab, { closeIfCurrent });
-    } else if (params.closeTab) {
+    if (params.closeTab) {
       const closeTab = params.closeTab;
       outcome = await closeIfCurrent(async () => {
         await closeTab({

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, assert, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   getAdmittedRunDelegatedAuthority,
@@ -7,15 +7,11 @@ import {
   type AdmittedRunContext,
 } from "../../agents/admitted-run-context.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  captureAgentRunTerminalWriteContext,
+  captureAgentRunTerminalPersistence,
   type CapturedAgentRunTerminalWriteContext,
 } from "../../infra/agent-run-terminal-writes.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withPluginRuntimePluginScope } from "./gateway-request-scope.js";
 import { runPluginEmbeddedAgent } from "./runtime-embedded-agent.runtime.js";
 
@@ -23,19 +19,15 @@ const core = vi.hoisted(() => vi.fn<typeof runEmbeddedAgent>());
 // mock-isolation: Exercise real plugin admission and terminal custody without starting a model runtime.
 vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: core }));
 
-let state: OpenClawTestState;
-let config: OpenClawConfig;
-beforeAll(async () => {
-  state = await createOpenClawTestState({ scenario: "minimal", label: "plugin-terminal-writes" });
-  config = { agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } } };
-  await state.writeConfig(config);
-});
 afterEach(() => core.mockReset());
-afterAll(async () => state?.cleanup());
 
-it.each([false, true])(
-  "settles terminal writes before normal close while abort stays immediate (abort=%s)",
-  async (abort) => {
+const fixture = { scenario: "minimal", label: "plugin-terminal-writes" } as const;
+it.each([false, true])("drains terminal writes (abort=%s)", async (abort) => {
+  await withOpenClawTestState(fixture, async (state) => {
+    const config = {
+      agents: { defaults: { workspace: state.workspaceDir, skipBootstrap: true } },
+    };
+    await state.writeConfig(config);
     const commit = createDeferred();
     const captured = createDeferred<{
       admitted: AdmittedRunContext;
@@ -44,10 +36,12 @@ it.each([false, true])(
     }>();
     const result = { payloads: [{ text: "Answer" }], meta: { durationMs: 0 } };
     core.mockImplementation(async (params) => {
-      const admitted = await resolvePreparedRunAdmission({ ...params, runtimeKind: "embedded" });
-      // The Gateway captures and tracks the terminal session write while the
-      // run's terminal lifecycle event is dispatched inside the runner.
-      const writeContext = captureAgentRunTerminalWriteContext(params.runId);
+      const admitted = await resolvePreparedRunAdmission({
+        ...params,
+        runtimeKind: "embedded",
+      });
+      // Model the Gateway's terminal-session write during the runner's lifecycle event.
+      const writeContext = captureAgentRunTerminalPersistence(params.runId).writeContext;
       assert(writeContext);
       const persistence = commit.promise.then(() =>
         writeContext.run(() => writeContext.assertCurrent()),
@@ -77,14 +71,10 @@ it.each([false, true])(
         abortSignal: controller.signal,
       }),
     );
-    void run.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const markSettled = () => {
+      settled = true;
+    };
+    void run.then(markSettled, markSettled);
     try {
       const { admitted, writeContext, persistence } = await awaitGateBeforeSettlement(
         captured.promise,
@@ -96,17 +86,10 @@ it.each([false, true])(
       if (abort) {
         controller.abort();
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-        expect(() => writeContext.run(() => writeContext.assertCurrent())).toThrow(
-          "Terminal write owner changed before commit",
-        );
-        commit.resolve();
-        await expect(persistence).rejects.toThrow("Terminal write owner changed before commit");
-      } else {
-        const settledBeforeCommit = settled;
-        commit.resolve();
-        await persistence;
-        expect(settledBeforeCommit).toBe(false);
       }
+      expect(settled).toBe(false);
+      commit.resolve();
+      await persistence;
       await expect(run).resolves.toBe(result);
       expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
       expect(() => writeContext.run(() => writeContext.assertCurrent())).toThrow(
@@ -116,5 +99,5 @@ it.each([false, true])(
       commit.resolve();
       await run.catch(() => undefined);
     }
-  },
-);
+  });
+});

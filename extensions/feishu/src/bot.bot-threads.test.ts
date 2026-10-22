@@ -10,6 +10,7 @@ import {
   createFeishuTestConfig,
   createFeishuTestEvent,
   createFeishuTestRoute,
+  withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
 import { setFeishuRuntime } from "./runtime.js";
 
@@ -36,8 +37,9 @@ vi.mock("./reply-dispatcher.js", () => ({
     ensureNoVisibleReplyFallback: vi.fn(),
   })),
 }));
+// mock-isolation: thread admission keeps previews disabled without reading persisted session reasoning settings.
 vi.mock("./reasoning-preview.js", () => ({
-  resolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
+  resolveFeishuReasoningPreviewEnabled: vi.fn(async () => false),
 }));
 vi.mock("./bot-group-name.js", () => ({ resolveGroupName: vi.fn(async () => undefined) }));
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
@@ -70,7 +72,7 @@ async function dispatchMessage(params: {
   event: FeishuMessageEvent;
   botOpenId?: string;
 }) {
-  currentRuntimeConfig = params.cfg;
+  currentRuntimeConfig = withFeishuRuntimeDefaults(params.cfg);
   await handleFeishuMessage({ ...params, runtime: createRuntimeEnv() });
 }
 
@@ -166,53 +168,40 @@ describe("Feishu bot-owned thread mentions", () => {
   });
 
   it.each([
-    { name: "account disables inherited requirement", accountSetting: false, expected: true },
-    {
-      name: "group disables account requirement",
-      accountSetting: true,
-      groupSetting: false,
-      expected: true,
-    },
-    {
-      name: "group requires mention despite parent allowing all messages",
-      accountSetting: false,
-      groupSetting: true,
-      expected: false,
-    },
-    {
-      name: "explicit mention satisfies strict group setting",
-      accountSetting: false,
-      groupSetting: true,
-      mentioned: true,
-      expected: true,
-    },
-  ])("uses account and group bot-thread mention precedence: $name", async (testCase) => {
-    mockGetMessageFeishu.mockResolvedValue(root);
-    await dispatchMessage({
-      cfg: config({
-        requireMention: !testCase.groupSetting,
-        requireMentionInBotThreads: true,
-        accounts: {
-          default: {
-            requireMentionInBotThreads: testCase.accountSetting,
-            groups: { "oc-group": { requireMentionInBotThreads: testCase.groupSetting } },
+    ["account disables inherited requirement", false, undefined, false, true],
+    ["group disables account requirement", true, false, false, true],
+    ["group requires mention despite parent allowing all messages", false, true, false, false],
+    ["explicit mention satisfies strict group setting", false, true, true, true],
+  ] as const)(
+    "uses account and group bot-thread mention precedence: %s",
+    async (name, accountSetting, groupSetting, mentioned, expected) => {
+      mockGetMessageFeishu.mockResolvedValue(root);
+      await dispatchMessage({
+        cfg: config({
+          requireMention: !groupSetting,
+          requireMentionInBotThreads: true,
+          accounts: {
+            default: {
+              requireMentionInBotThreads: accountSetting,
+              groups: { "oc-group": { requireMentionInBotThreads: groupSetting } },
+            },
           },
-        },
-      }),
-      botOpenId: "ou-bot",
-      event: event(
-        `msg-owned-scope-${testCase.name}`,
-        {
-          root_id: "om_bot_root",
-          ...(testCase.mentioned
-            ? { mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }] }
-            : {}),
-        },
-        "topic_group",
-      ),
-    });
-    expect(mockDispatchReply).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
-  });
+        }),
+        botOpenId: "ou-bot",
+        event: event(
+          `msg-owned-scope-${name}`,
+          {
+            root_id: "om_bot_root",
+            ...(mentioned
+              ? { mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }] }
+              : {}),
+          },
+          "topic_group",
+        ),
+      });
+      expect(mockDispatchReply).toHaveBeenCalledTimes(expected ? 1 : 0);
+    },
+  );
 
   it.each([
     { name: "group admission", update: { groupPolicy: "disabled" as const }, expected: false },

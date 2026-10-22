@@ -1,4 +1,3 @@
-// Codex tests cover attempt results plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -21,27 +20,19 @@ function createResult(overrides: Partial<EmbeddedRunAttemptResult> = {}): Embedd
     messagingToolSentTargets: [],
     messagingToolSourceReplyPayloads: [],
     cloudCodeAssistFormatError: false,
-    replayMetadata: {
-      hadPotentialSideEffects: false,
-      replaySafe: true,
-    },
-    itemLifecycle: {
-      startedCount: 0,
-      completedCount: 0,
-      activeCount: 0,
-    },
+    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
     ...overrides,
   } as EmbeddedRunAttemptResult;
 }
 
+const blockedReason = (overrides: Partial<EmbeddedRunAttemptResult> = {}) =>
+  resolveCodexAppServerReplayBlockedReason(createResult(overrides));
+
 describe("Codex app-server attempt results", () => {
   it("formats terminal assistant text", () => {
     expect(
-      collectTerminalAssistantText(
-        createResult({
-          assistantTexts: [" first ", "second"],
-        }),
-      ),
+      collectTerminalAssistantText(createResult({ assistantTexts: [" first ", "second"] })),
     ).toBe("first \n\nsecond");
   });
 
@@ -71,34 +62,14 @@ describe("Codex app-server attempt results", () => {
   });
 
   it("classifies replay blocked reasons", () => {
-    expect(resolveCodexAppServerReplayBlockedReason(createResult())).toBeUndefined();
+    expect(blockedReason()).toBeUndefined();
     expect(
-      resolveCodexAppServerReplayBlockedReason(
-        createResult({
-          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        }),
-      ),
+      blockedReason({ replayMetadata: { hadPotentialSideEffects: true, replaySafe: false } }),
     ).toBe("potential_side_effect");
+    expect(blockedReason({ assistantTexts: ["visible"] })).toBe("assistant_output");
+    expect(blockedReason({ toolMetas: [{ name: "exec" }] as never })).toBe("tool_activity");
     expect(
-      resolveCodexAppServerReplayBlockedReason(
-        createResult({
-          assistantTexts: ["visible"],
-        }),
-      ),
-    ).toBe("assistant_output");
-    expect(
-      resolveCodexAppServerReplayBlockedReason(
-        createResult({
-          toolMetas: [{ name: "exec" }] as never,
-        }),
-      ),
-    ).toBe("tool_activity");
-    expect(
-      resolveCodexAppServerReplayBlockedReason(
-        createResult({
-          itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
-        }),
-      ),
+      blockedReason({ itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 } }),
     ).toBe("active_item");
   });
 

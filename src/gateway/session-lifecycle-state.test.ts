@@ -1,8 +1,13 @@
 /**
  * Session lifecycle state derivation tests.
  */
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { projectSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
 const persistenceMocks = vi.hoisted(() => ({
@@ -23,8 +28,12 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
 
 // mock-isolation: Exercise lifecycle reducers without native persistence or transcript writes.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryTarget: persistenceMocks.updateSessionEntry,
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
+}));
+
+// mock-isolation: Exercise the lifecycle reducer without opening the session database.
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  applySessionEntryTargetOperation: persistenceMocks.updateSessionEntry,
 }));
 
 // mock-isolation: Controlled entries isolate lifecycle projection from database admission.
@@ -69,15 +78,20 @@ function persistLifecycle(
   entry: SessionEntry,
   event: LifecycleEvent,
   sessionKey = "agent:main:main",
+  clientRunId?: string,
 ): Promise<SessionEntry> {
   return persistLifecycleThroughMockedStore(persistenceMocks, {
     sessionKey,
     entry,
     event: { lifecycleGeneration: getAgentEventLifecycleGeneration(), ...event },
+    clientRunId,
   });
 }
 
 describe("session lifecycle state", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(clearRuntimeConfigSnapshot);
+
   const goalEntry: SessionEntry = {
     sessionId: "goal-session",
     updatedAt: 1_000,
@@ -322,35 +336,45 @@ describe("session lifecycle state", () => {
     });
   });
 
-  it("keeps provider lifecycle ownership while recording the client terminal run", async () => {
-    const started = await persistLifecycle(
-      { sessionId: "session-id", updatedAt: 900 },
-      {
-        ts: 1_000,
-        sessionId: "session-id",
-        runId: "provider-run",
-        clientRunId: "client-run",
-        data: { phase: "start", startedAt: 1_000 },
-      },
-    );
-    expect(started.lifecycleRunId).toBe("provider-run");
-    expect(started.status).toBeUndefined();
-    expect(started.restartRecoveryRuns).toEqual([
-      { runId: "provider-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    ]);
+  it.each([false, true])(
+    "keeps provider ownership while recording the client terminal run (separate fact: %s)",
+    async (separate) => {
+      const started = await persistLifecycle(
+        { sessionId: "session-id", updatedAt: 900 },
+        {
+          ts: 1_000,
+          sessionId: "session-id",
+          runId: "provider-run",
+          ...(!separate ? { clientRunId: "client-run" } : {}),
+          data: { phase: "start", startedAt: 1_000 },
+        },
+        undefined,
+        separate ? "client-run" : undefined,
+      );
+      expect(started.lifecycleRunId).toBe("provider-run");
+      expect(started.status).toBeUndefined();
+      expect(started.restartRecoveryRuns).toEqual([
+        { runId: "provider-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
+      ]);
 
-    const completed = await persistLifecycle(started, {
-      ts: 2_000,
-      sessionId: "session-id",
-      runId: "provider-run",
-      clientRunId: "client-run",
-      data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
-    });
+      const completed = await persistLifecycle(
+        started,
+        {
+          ts: 2_000,
+          sessionId: "session-id",
+          runId: "provider-run",
+          ...(!separate ? { clientRunId: "client-run" } : {}),
+          data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+        },
+        undefined,
+        separate ? "client-run" : undefined,
+      );
 
-    expect(completed.lifecycleRunId).toBeUndefined();
-    expect(completed.lastRunId).toBe("client-run");
-    expect(completed.restartRecoveryRuns).toBeUndefined();
-  });
+      expect(completed.lifecycleRunId).toBeUndefined();
+      expect(completed.lastRunId).toBe("client-run");
+      expect(completed.restartRecoveryRuns).toBeUndefined();
+    },
+  );
 
   it("clears inherited run ownership when a start event has no run id", async () => {
     const started = await persistLifecycle(
@@ -550,10 +574,12 @@ describe("session lifecycle state", () => {
     const resumed = await persistLifecycle(yielded, {
       ts: 2_100,
       sessionId: "session-id",
+      runId: "yielded-recovery-run",
       data: { phase: "start", startedAt: 2_100 },
     });
     expect(resumed.status).toBeUndefined();
     expect(resumed.endedAt).toBeUndefined();
+    expect(resumed.startedAt).toBe(2_100);
   });
 
   it("does not infer pending continuation from end_turn without explicit yield metadata", async () => {
@@ -652,9 +678,12 @@ describe("session lifecycle state", () => {
     });
     persistenceMocks.updateSessionEntry.mockImplementation(
       async (...args: Parameters<UpdateSessionEntry>) => {
-        const [, update, options] = args;
-        const patch = await update(structuredClone(storedEntry), {
-          existingEntry: structuredClone(storedEntry),
+        const [scope, operation, options] = args;
+        const patch = projectSessionEntryPatch({
+          existing: storedEntry,
+          writeBase: storedEntry,
+          sessionKey: scope.target.canonicalKey,
+          operation,
         });
         options?.workerGuard?.source?.();
         if (patch) {

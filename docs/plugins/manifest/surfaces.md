@@ -40,7 +40,16 @@ migration window.
 
 Set `doctorContract.configRepair: true` when the doctor-contract module exports
 non-empty `legacyConfigRules`, a `normalizeCompatibilityConfig` function, or
-both. One declaration covers the complete config-repair artifact.
+`providerRenames`. One declaration covers the complete config-repair artifact.
+
+`providerRenames` declares provider routing migrations as
+`{ from, to, baseUrl }` entries, using `PluginDoctorProviderRename` from
+`openclaw/plugin-sdk/runtime-doctor-migrations`. Both provider IDs must belong
+to the plugin. The host matches the source provider's URL origin, moves its
+catalog, and rewrites model references through the shared Doctor owners.
+Doctor repairs cron and session references before publishing the provider
+rename in config, making interrupted runs retryable from the still-authored
+source entry. This contract does not rename auth profiles or migrate credentials.
 
 The config-repair module can export `historicalWebhookListener` to describe a
 retired default endpoint. The existing compatibility normalizer reports eligible
@@ -179,6 +188,7 @@ execute plugin code or require the Custom plugin UI Labs setting.
       "name": "Xenovessel",
       "description": "Near-black indigo, acid lime, and alien cyan with monospace text.",
       "source": "themes/xenovessel.json",
+      "icons": { "rocket": "assets/theme-art/rocket.svg" },
       "hats": { "beret": "assets/theme-art/beret.svg" },
       "critters": {
         "ferris": {
@@ -186,13 +196,17 @@ execute plugin code or require the Custom plugin UI Labs setting.
           "title": "a crab, allegedly",
           "crossMs": 12000
         }
+      },
+      "backgrounds": {
+        "light": "assets/theme-art/hull-light.webp",
+        "dark": "assets/theme-art/hull-dark.webp"
       }
     }
   ]
 }
 ```
 
-The catalog ID is `starship/xenovessel`. It preserves the plugin's canonical ID,
+The catalog ID is `starship/xenovessel`. It preserves the plugin's primary ID,
 including case, scoped IDs such as `@scope/starship`, and multi-entry IDs such as
 `pack/one`; their theme IDs are `@scope/starship/xenovessel` and
 `pack/one/xenovessel`. The complete catalog ID is limited to 256 characters.
@@ -206,11 +220,11 @@ published package's `files` list. Absolute paths, traversal, and symlinks escapi
 the root are rejected. Each source file can contain at most 16 KiB including
 formatting whitespace. Its normalized definition must fit in 4096 UTF-8 bytes.
 
-Each theme may declare `hats`, a map of artwork IDs to relative `.svg` paths,
+Each theme may declare `icons` and `hats`, maps of artwork IDs to relative `.svg` paths,
 and `critters`, a map of artwork IDs to objects containing `source` and optional
 `title` and `crossMs`. Each map allows at most 8 entries. Artwork IDs must match
 `^[a-z0-9][a-z0-9_-]{0,31}$`; duplicates and collisions with the corresponding
-built-in hat or critter catalog are manifest errors. `title` is untranslated
+built-in brand icon (`claw`, `mark`), hat, or critter catalog are manifest errors. `title` is untranslated
 hover text of at most 60 printable characters. `crossMs` is an integer from
 5000 through 90000, defaulting to 12000 milliseconds.
 
@@ -226,9 +240,24 @@ the element limit. Stylesheets, filters, and embedded images are unsupported.
 Hats overlay the avatar's full square; place the hat near the top of the SVG
 viewBox and leave the lower area transparent.
 
-Include the definition JSON and every declared SVG in the published package's
-`files` list. OpenClaw's bundled metadata copier and runtime package builder
-include these declared paths automatically. An unreadable or invalid SVG omits
+`backgrounds` maps `light` and/or `dark` to a relative PNG, JPEG, or WebP path
+with the same containment rules. Each file must be at most 512 KiB; OpenClaw
+checks its image signature when it captures the theme. When the theme is
+selected and **Appearance → Background** uses theme artwork, the Control UI
+paints the image for the matching color mode instead of the neutral plugin
+artwork. A mode without a declared image keeps the neutral artwork. Background
+placement, presentation, visibility, and the accessibility fallbacks that hide
+artwork stay under the viewer's control. Like a custom upload, the image is
+dimmed under a theme-colored overlay sized from the palette's text contrast, so
+busy or bright images stay readable but faint; quiet, low-contrast artwork keeps
+the most detail. Above the default **Image visibility**, the overlay thins
+toward the fixed cap every background image shares, reaching it at 100%, so a
+dark palette no longer hides a dark image a viewer has asked to see. The
+built-in images are lossless WebP files of about 20–35 KiB.
+
+Include the definition JSON and every declared SVG and background in the published
+package's `files` list. OpenClaw's bundled metadata copier and runtime package builder
+include these declared paths automatically. An unreadable or invalid artwork file omits
 the whole theme from the catalog with a plugin warning diagnostic; other plugin
 capabilities remain available.
 
@@ -245,12 +274,16 @@ diagnostic; other plugin capabilities remain available.
 
 The source JSON also accepts optional presentation fields. They belong in the definition referenced by `themes[].source`, alongside `name`, `description`, and the palettes:
 
-- `mascot`: `"claw"` (the default) or `"none"`; `"none"` uses neutral branding and hides the resident lobster and visiting lobster strangers. Ordinary critters can still cross the composer ledge when Lobster visits is enabled, and the toggle stays unchanged.
+- `mascot`: `"claw"` (the default) or `"none"`; `"none"` defaults to neutral branding and hides the resident lobster and visiting lobster strangers. Ordinary critters can still cross the composer ledge when Lobster visits is enabled, and the toggle stays unchanged.
+- `brandName`: a trimmed display name of 1–80 printable characters; defaults to “OpenClaw.”
+- `brandIcon`: `"claw"`, `"mark"`, or an ID from this theme's declared `icons` map. Omission follows `mascot`: claw for `"claw"`, mark for `"none"`. An ID declared only as a hat or critter is not a brand icon.
+- `workingIndicator`: `"claw"`, `"dots"`, `"brand"` (the selected brand icon), or `"none"`. Omission uses claw for the claw mascot and dots otherwise; it does not change long-wait phrases.
+- `lobsterdex` and `communityLinks`: booleans controlling their respective navigation entries; each defaults to `true` independently of the mascot. These are presentation choices, not deletion or authorization controls.
 - `workingPhrases`: up to 24 literal, untranslated long-wait status phrases. Each phrase is trimmed, must contain 1–24 characters, and cannot contain control characters or duplicate another trimmed phrase. Omit it to keep the default vocabulary; use `[]` to hide long-wait phrases.
 - `critters`: up to 8 unique IDs from the built-in `"penguin"` and `"fedora"` catalog or this theme's declared `critters` map, adding occasional visitors to ordinary composer ledge traffic while Lobster visits is enabled. Omit it or use `[]` for no theme-supplied critters. Unknown IDs and duplicates are rejected.
 - `avatarHat`: `"fedora"`, `"crown"`, `"santa"`, `"party"`, `"pumpkin"`, or an ID from this theme's declared `hats` map adds an occasional decorative hat to agent avatars; omission adds no hat.
 
-These fields count toward the same 4096-byte normalized definition limit and are returned with the catalog descriptor. The [theme definition example](/tools/theme#create-and-apply-a-personal-theme) includes all four fields.
+These fields count toward the same 4096-byte normalized definition limit and are returned with the catalog descriptor. The [theme definition example](/tools/theme#create-and-apply-a-personal-theme) shows these presentation fields.
 Definitions carry IDs only, never SVG markup or URLs. Personal themes imported
 through the agent's `theme` tool remain limited to built-in artwork IDs.
 
@@ -305,7 +338,9 @@ Use `backupResources` to declare plugin-owned durable data that backups must
 include, or generated data that OpenClaw can safely omit and regenerate after
 restore. The backup planner reads this metadata without loading plugin runtime
 or modifying plugin files. Only effectively activated, loadable plugins
-contribute resources; disabled or unloadable plugins cannot exclude data.
+contribute ordinary resources; disabled or unloadable plugins cannot exclude data.
+Declared database resources remain included for retained accounts even when
+the plugin is disabled.
 
 An `include` declaration also asks OpenClaw to manage SQLite backups for that
 resource. SQLite files at or below the declared path receive verified online
@@ -315,13 +350,13 @@ when its required SQLite capabilities are unavailable. Declare every hardlink
 alias within these resources so backup can identify its journal owner.
 
 Other plugin SQLite files remain opaque byte copies, including their sidecars,
-unless they alias a canonical OpenClaw database. Backup reports each opaque
+unless they alias a primary OpenClaw database. Backup reports each opaque
 SQLite file and sidecar in `warnings`; verification and restore preserve its bytes
 without applying SQLite validation or compaction. Merely placing a database
 under the state or agent directory does not opt it into managed snapshots.
 Undeclared SQLite symbolic links that exceed the link-resolution limit (`ELOOP`),
 including loops, are skipped with filename warnings. Declared database links still
-fail closed if they cannot be captured safely.
+reject the backup if they cannot be captured safely.
 
 ```json
 {
@@ -342,11 +377,20 @@ fail closed if they cannot be captured safely.
 
 Each entry is a closed object with exactly these fields:
 
-| Field          | Required | Type                         | What it means                                                                          |
-| -------------- | -------- | ---------------------------- | -------------------------------------------------------------------------------------- |
-| `disposition`  | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
-| `scope`        | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
-| `relativePath` | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+| Field            | Required | Type                         | What it means                                                                          |
+| ---------------- | -------- | ---------------------------- | -------------------------------------------------------------------------------------- |
+| `disposition`    | Yes      | `"include" \| "regenerable"` | Protect durable data from exclusion, or identify data that can be omitted and rebuilt. |
+| `scope`          | Yes      | `"state" \| "agent"`         | Resolve the resource under the state directory or each configured agent directory.     |
+| `relativePath`   | Yes      | `string`                     | Strict relative POSIX path contained by the selected scope's authoritative root.       |
+| `databaseFamily` | No       | `"state"`                    | Associate an included state-scoped resource with the shared-state database family.     |
+
+`databaseFamily` requires `disposition: "include"` and `scope: "state"`.
+Port, backup, update capture, and Doctor discover database files within that
+resource through the declared family. The declaration does not add engine or
+port support to the family: unsupported schemas still refuse the operation.
+For additional shared-state roots, such as account or token-hash directories,
+use `databaseFamily: "state"`. The plugin remains responsible for declaring all
+retained roots; do not depend on active-account configuration alone.
 
 Plugin identity and its trusted root come from manifest discovery; resource
 entries cannot declare or override an owner. `relativePath` must not be empty
@@ -354,7 +398,7 @@ or absolute and must not contain backslashes, NULs, empty path segments, `.`,
 `..`, Windows drive or UNC prefixes, URI-like values, or any path that escapes
 its selected anchor. Invalid entries are rejected rather than normalized.
 
-The planner deduplicates resources deterministically. A narrower `regenerable`
+The planner uses fixed rules to remove duplicate resources. A narrower `regenerable`
 declaration wins over a broad configured state or agent root. Among plugin
 resource declarations, only an explicit nested `include` protects a descendant
 and keeps its excluded ancestors traversable. Explicit config, credentials,
@@ -434,7 +478,9 @@ revision even when browser code is unchanged.
 the Control UI. Paths are relative to the plugin root and must name compiled
 JavaScript and CSS. Assets follow the Gateway's authentication policy, are
 captured as immutable revisions, and refresh only through the explicit UI reload
-flow.
+flow. Bundled plugins and Nix-store plugins in Nix mode can load hardlinked
+assets and reload hardlinked manifests under the shared plugin-file policy.
+Mutable external plugin roots and CLI packing still reject hardlinks.
 
 User-installed native UI requires **Settings → Labs → Custom plugin UI**
 (`gateway.controlUi.experimental.customPlugins`, default `false`). Native UI
@@ -526,7 +572,7 @@ Declare every plugin-owned root command in `cliCommands` so root help and comman
 }
 ```
 
-The manifest row is the canonical help text. Register the same command at runtime with `api.registerCli(..., { descriptors: [...] })`; runtime descriptors may additionally provide `machineOutput`. Nested commands such as `openclaw nodes <feature>` are not root commands and do not belong in `cliCommands`.
+The manifest row is the source of help text. Register the same command at runtime with `api.registerCli(..., { descriptors: [...] })`; runtime descriptors may additionally provide `machineOutput`. Nested commands such as `openclaw nodes <feature>` are not root commands and do not belong in `cliCommands`.
 
 ## commandAliases reference
 

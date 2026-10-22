@@ -1,15 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createWindowsCmdShimFixture, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { withMockedWindowsPlatform, withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
+import { withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
 import * as windowsSpawn from "openclaw/plugin-sdk/windows-spawn";
 import { beforeEach, expect, it, vi } from "vitest";
 
-const { runUtf8CommandWithTimeout } = vi.hoisted(() => ({
-  runUtf8CommandWithTimeout: vi.fn(),
-}));
+const runCommand = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runUtf8CommandWithTimeout }));
+// mock-isolation: auth status fixtures must not execute the host's Claude CLI.
+vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runUtf8CommandWithTimeout: runCommand }));
 
 const { probeClaudeCliAuthStatus } = await import("./cli-auth-api.js");
 const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/process-runtime")>(
@@ -17,50 +16,69 @@ const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/process-
 );
 
 beforeEach(() => {
-  runUtf8CommandWithTimeout.mockReset();
+  runCommand.mockReset();
 });
 
+function mockStatus(payload: unknown, code: number | null = 0) {
+  const termination = code === null ? "timeout" : "exit";
+  const stdout = typeof payload === "string" ? payload : JSON.stringify(payload);
+  runCommand.mockResolvedValue({ code, termination, stdout });
+}
+
 it("asks Claude CLI for its active account and returns only safe display fields", async () => {
-  runUtf8CommandWithTimeout.mockResolvedValue({
-    code: 0,
-    termination: "exit",
-    stdout: JSON.stringify({
-      loggedIn: true,
-      authMethod: "claude.ai",
-      email: " account@example.test ",
-      orgId: "private-organization",
-      accessToken: "synthetic-access-token",
-    }),
+  const account = { authMethod: "claude.ai", email: "account@example.test" };
+  mockStatus({
+    loggedIn: true,
+    ...account,
+    email: " account@example.test ",
+    orgId: "private-organization",
+    accessToken: "synthetic-access-token",
   });
 
   expect(await probeClaudeCliAuthStatus({ command: "/test/claude" })).toEqual({
     status: "available",
-    authMethod: "claude.ai",
-    email: "account@example.test",
+    ...account,
   });
 
-  expect(runUtf8CommandWithTimeout).toHaveBeenCalledWith(
+  expect(runCommand).toHaveBeenCalledWith(
     ["/test/claude", "auth", "status", "--json"],
-    expect.objectContaining({ timeoutMs: 3_000, killProcessTree: true }),
+    expect.objectContaining({ timeoutMs: 10_000, killProcessTree: true }),
   );
 });
 
-it.each(["PATH", "explicit"])("runs a Windows Claude npm shim selected by %s", async (source) => {
-  await withTempDir("anthropic-cli-auth-", async (dir) => {
+it.each(['["CLAUDE_CODE_OAUTH_TOKEN"]', "CLAUDE_CODE_OAUTH_TOKEN, OTHER"])(
+  "keeps the runtime child's preserved login: %s",
+  async (preserve) => {
+    mockStatus({ loggedIn: true, authMethod: "oauth_token" });
+
+    const result = await probeClaudeCliAuthStatus({
+      command: "/test/claude",
+      env: {
+        OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV: preserve,
+        CLAUDE_CODE_OAUTH_TOKEN: "synthetic-preserved-token",
+        ANTHROPIC_API_KEY: "synthetic-cleared-api-key",
+      },
+    });
+    expect(result).toEqual({ status: "available", authMethod: "oauth_token" });
+
+    const baseEnv = runCommand.mock.calls[0]?.[1]?.baseEnv;
+    expect(baseEnv?.CLAUDE_CODE_OAUTH_TOKEN).toBe("synthetic-preserved-token");
+    expect(baseEnv).not.toHaveProperty("ANTHROPIC_API_KEY");
+  },
+);
+
+it("runs a Windows Claude npm shim selected by PATH", () =>
+  withTempDir("anthropic-cli-auth-", async (dir) => {
     const home = await fs.realpath(dir);
     const shimPath = path.join(home, "claude.cmd");
     const scriptPath = path.join(home, "node_modules", "@anthropic-ai", "claude-code", "cli.cjs");
     const configDir = path.join(home, "selected account");
+    const account = { authMethod: "claude.ai", email: "windows@example.test" };
     await createWindowsCmdShimFixture({
       shimPath,
       scriptPath,
       shimLine: [
-        "GOTO start",
-        ":find_dp0",
-        "SET dp0=%~dp0",
-        "EXIT /b",
-        ":start",
-        "CALL :find_dp0",
+        "GOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nCALL :find_dp0",
         `"${process.execPath}" "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.cjs" %*`,
       ].join("\r\n"),
     });
@@ -72,12 +90,10 @@ it.each(["PATH", "explicit"])("runs a Windows Claude npm shim selected by %s", a
         assert.equal(process.env.ANTHROPIC_API_KEY, undefined);
         assert.equal(process.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
         assert.equal(process.env.CLAUDE_CONFIG_DIR, ${JSON.stringify(configDir)});
-        process.stdout.write(JSON.stringify({
-          loggedIn: true, authMethod: "claude.ai", email: "windows@example.test"
-        }));
+        process.stdout.write(${JSON.stringify(JSON.stringify({ loggedIn: true, ...account }))});
       `,
     );
-    runUtf8CommandWithTimeout.mockImplementation(actual.runUtf8CommandWithTimeout);
+    runCommand.mockImplementation(actual.runUtf8CommandWithTimeout);
     const resolveProgram = windowsSpawn.resolveWindowsSpawnProgram;
     const resolver = vi
       .spyOn(windowsSpawn, "resolveWindowsSpawnProgram")
@@ -85,7 +101,6 @@ it.each(["PATH", "explicit"])("runs a Windows Claude npm shim selected by %s", a
     // Resolve the Windows wrapper, then execute its real JS entrypoint on the host platform.
     await withRestoredMocks([resolver], async () => {
       const result = await probeClaudeCliAuthStatus({
-        ...(source === "explicit" ? { command: shimPath } : {}),
         env: {
           PATH: `${home};${path.dirname(process.execPath)}`,
           PATHEXT: ".CMD;.EXE;.BAT",
@@ -97,76 +112,36 @@ it.each(["PATH", "explicit"])("runs a Windows Claude npm shim selected by %s", a
           CLAUDE_CONFIG_DIR: configDir,
         },
       });
-      expect(result).toEqual({
-        status: "available",
-        authMethod: "claude.ai",
-        email: "windows@example.test",
-      });
-      expect(runUtf8CommandWithTimeout).toHaveBeenCalledWith(
+      expect(result).toEqual({ status: "available", ...account });
+      expect(runCommand).toHaveBeenCalledWith(
         [process.execPath, scriptPath, "auth", "status", "--json"],
         expect.any(Object),
       );
     });
-  });
-});
+  }));
 
-it("reports unresolved Windows wrappers as unreadable without spawning", async () => {
-  await withTempDir("anthropic-cli-auth-", async (dir) => {
-    const command = path.join(dir, "claude.cmd");
-    await fs.writeFile(command, "@echo off\r\necho unsupported wrapper\r\n");
-    runUtf8CommandWithTimeout.mockRejectedValue(new Error("not executable"));
-
-    await withMockedWindowsPlatform(async () => {
-      expect(await probeClaudeCliAuthStatus({ command, env: {} })).toEqual({
-        status: "unreadable",
-      });
-      expect(runUtf8CommandWithTimeout).not.toHaveBeenCalled();
-    });
-  });
-});
-
-it.each(["api_key", "unknown-method"])(
-  "does not attribute an account email to %s authentication",
-  async (authMethod) => {
-    runUtf8CommandWithTimeout.mockResolvedValue({
-      code: 0,
-      termination: "exit",
-      stdout: JSON.stringify({ loggedIn: true, authMethod, email: "inactive@example.test" }),
-    });
-
-    expect(await probeClaudeCliAuthStatus()).toEqual({
-      status: "available",
-      ...(authMethod === "unknown-method" ? {} : { authMethod }),
-    });
-  },
-);
-
-it.each([null, " ", "account@example.test\nother", "a".repeat(321)])(
-  "keeps account availability when its email cannot be displayed: %j",
-  async (email) => {
-    runUtf8CommandWithTimeout.mockResolvedValue({
-      code: 0,
-      termination: "exit",
-      stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai", email }),
-    });
-
-    expect(await probeClaudeCliAuthStatus()).toEqual({
-      status: "available",
-      authMethod: "claude.ai",
-    });
-  },
-);
-
-it("does not inspect Claude token storage when the CLI reports logout", async () => {
-  runUtf8CommandWithTimeout.mockResolvedValue({ code: 1, termination: "exit", stdout: "" });
-
-  expect(await probeClaudeCliAuthStatus()).toEqual({ status: "missing" });
+it.each([
+  [
+    { loggedIn: true, authMethod: "unknown-method", email: "inactive@example.test" },
+    0,
+    { status: "available" },
+  ],
+  [{ loggedIn: false }, 0, { status: "missing" }],
+  [{ loggedIn: false }, 1, { status: "missing" }],
+  ["keychain unavailable", 1, { status: "unreadable" }],
+  [{}, 0, { status: "unreadable" }],
+  [{ loggedIn: "false" }, 0, { status: "unreadable" }],
+  [{ loggedIn: true }, 1, { status: "unreadable" }],
+  [{ loggedIn: true }, null, { status: "timeout", timeoutMs: 10_000 }],
+] as const)("auth status %j / %s", async (payload, code, expected) => {
+  mockStatus(payload, code);
+  expect(await probeClaudeCliAuthStatus()).toEqual(expected);
 });
 
 it("does not turn a cancelled probe into a logged-out account", async () => {
   const controller = new AbortController();
   const reason = new Error("native auth cancelled");
-  runUtf8CommandWithTimeout.mockImplementation(async () => {
+  runCommand.mockImplementation(async () => {
     controller.abort(reason);
     return { code: null, termination: "signal", stdout: "" };
   });

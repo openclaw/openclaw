@@ -1,10 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -12,6 +9,11 @@ import {
   startControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  observeTerminalControllers,
+  readTerminalCanvasState,
+} from "./terminal-controller.test-support.ts";
+import { terminalSession } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI terminal runtime isolation",
@@ -20,24 +22,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
-
-type BrowserTerminalController = {
-  terminal: {
-    getSelection: () => string;
-    wasmTerm?: {
-      getLine: (row: number) => Array<{ codepoint: number }> | null;
-    };
-  };
-  dispose: () => void;
-  write: (bytes: Uint8Array) => void;
-};
-
-type BrowserTerminalFactory = (options: {
-  autoFit: boolean;
-  parent: HTMLElement;
-  readOnly: boolean;
-  size: { columns: number; rows: number };
-}) => Promise<BrowserTerminalController>;
 
 async function loadRuntime(page: Page): Promise<void> {
   const moduleUrl = new URL("src/components/terminal/terminal-runtime.ts", suite.server.baseUrl)
@@ -65,6 +49,26 @@ async function loadRuntime(page: Page): Promise<void> {
         .openclawTerminalRuntimeModule,
     ),
   );
+  await page.evaluate(() => {
+    (window as RuntimeWindow).createFixtureTerminal = async (style, signal) => {
+      const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
+      const host = document.body.appendChild(document.createElement("div"));
+      host.style.cssText = style ?? "";
+      try {
+        const controller = await runtime.createIsolatedGhosttyTerminal({
+          parent: host,
+          autoFit: false,
+          readOnly: true,
+          size: { columns: 80, rows: 24 },
+          signal,
+        });
+        return { host, controller };
+      } catch (error) {
+        host.remove();
+        throw error;
+      }
+    };
+  });
 }
 
 suite.define(() => {
@@ -76,11 +80,14 @@ suite.define(() => {
         permissions: ["clipboard-read", "clipboard-write"],
       },
       async ({ page }) => {
+        await observeTerminalControllers(page);
         const gateway = await installMockGateway(page, {
           terminalEnabled: true,
           featureMethods: [...defaultControlUiFeatureMethods, "terminal.open"],
           methodResponses: {
-            "terminal.list": { sessions: [] },
+            "terminal.list": {
+              sessions: [{ ...terminalSession("copy-terminal"), attached: true, createdAtMs: 1 }],
+            },
             "terminal.input": { ok: true },
             "terminal.resize": { ok: true },
             "terminal.attach": {
@@ -92,13 +99,7 @@ suite.define(() => {
               buffer: "$ echo hello\r\nhello\r\n$ ",
               seq: 23,
             },
-            "terminal.open": {
-              agentId: "main",
-              confined: false,
-              cwd: "/workspace",
-              sessionId: "copy-terminal",
-              shell: "/bin/bash",
-            },
+            "terminal.open": terminalSession("copy-terminal"),
           },
         });
         await page.goto(suite.server.baseUrl + "chat");
@@ -108,6 +109,7 @@ suite.define(() => {
         const panel = page
           .locator("openclaw-terminal-panel")
           .filter({ has: page.locator(".tp-host") });
+        await panel.locator(".tp-session.is-current").click();
         const canvas = panel.locator("canvas");
         await canvas.waitFor();
         await gateway.waitForRequest("terminal.open");
@@ -125,46 +127,26 @@ suite.define(() => {
             throw new Error("Terminal canvas is not visible");
           }
           // The real terminal renderer owns cell metrics; use its public dimensions.
-          const metrics = await panel.evaluate((element) => {
-            const renderer = (
-              element as import("../components/terminal/terminal-panel.ts").OpenClawTerminalPanel
-            )["terminalSessions"].tabs[0]?.controller.terminal.renderer;
-            if (!renderer) {
-              throw new Error("Terminal renderer is not ready");
-            }
-            return { width: renderer.charWidth, height: renderer.charHeight };
-          });
-          await page.mouse.move(bounds.x + 1, bounds.y + metrics.height * 1.5);
+          const metrics = await readTerminalCanvasState(canvas);
+          await page.mouse.move(bounds.x + 1, bounds.y + metrics.cellHeight * 1.5);
           await page.mouse.down();
-          await page.mouse.move(bounds.x + metrics.width * 4.5, bounds.y + metrics.height * 1.5, {
-            steps: 5,
-          });
+          await page.mouse.move(
+            bounds.x + metrics.cellWidth * 4.5,
+            bounds.y + metrics.cellHeight * 1.5,
+            {
+              steps: 5,
+            },
+          );
           await page.mouse.up();
         };
         await drag();
         expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("hello");
         await page.clock.runFor(32);
-        const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
-          ? createControlUiE2eArtifactDir("terminal-copy")
-          : undefined;
-        const capture = async (name: string) => {
-          if (!artifactDir) {
-            return;
-          }
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            panel.locator(".tp"),
-            [canvas, toast],
-            {
-              animations: "disabled",
-            },
-          );
-          await writeFile(path.join(artifactDir, name + ".png"), frame.png);
-        };
+
         const toast = page.locator('.app-toast[role="status"]');
         expect(await toast.textContent()).toContain("Copied to clipboard");
         expect(await toast.getAttribute("aria-live")).toBe("polite");
-        await capture("right-copy");
+
         expect(await panel.evaluate((element) => element.contains(document.activeElement))).toBe(
           true,
         );
@@ -191,7 +173,7 @@ suite.define(() => {
         await page.clock.runFor(32);
         await drag();
         expect(await toast.textContent()).toContain("Copied to clipboard");
-        await capture("bottom-copy");
+
         await page.clock.runFor(2_500);
 
         // Retain the real API for the first copy above; control only the transport
@@ -279,7 +261,6 @@ suite.define(() => {
         await drag();
         expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("hello");
         expect(await toast.textContent()).toContain("Copied to clipboard");
-        await capture("focused-narrow-copy");
       },
     );
   });
@@ -287,13 +268,7 @@ suite.define(() => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       await loadRuntime(page);
       const result = await page.evaluate(async () => {
-        const runtime = await (
-          window as unknown as {
-            openclawTerminalRuntimeModule: Promise<
-              typeof import("../components/terminal/terminal-runtime.ts")
-            >;
-          }
-        ).openclawTerminalRuntimeModule;
+        const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
         const host = document.body.appendChild(document.createElement("div"));
         const input: string[] = [];
         const controller = await runtime.createIsolatedGhosttyTerminal({
@@ -347,27 +322,9 @@ suite.define(() => {
       const sentinel = "CLOSE_RESET_SENTINEL";
       const result = await page.evaluate(
         async ({ staleText }) => {
-          const runtimeModule = await (
-            window as unknown as Window & {
-              openclawTerminalRuntimeModule: Promise<{
-                createIsolatedGhosttyTerminal: BrowserTerminalFactory;
-              }>;
-            }
-          ).openclawTerminalRuntimeModule;
-          const createTerminal = async () => {
-            const host = document.createElement("div");
-            host.style.height = "400px";
-            host.style.width = "800px";
-            document.body.append(host);
-            const controller = await runtimeModule.createIsolatedGhosttyTerminal({
-              autoFit: false,
-              parent: host,
-              readOnly: true,
-              size: { columns: 80, rows: 24 },
-            });
-            return { controller, host };
-          };
-          const lineText = (controller: BrowserTerminalController) =>
+          const createTerminal = () =>
+            (window as RuntimeWindow).createFixtureTerminal("width:800px;height:400px");
+          const lineText = (controller: GhosttyTerminalController) =>
             (controller.terminal.wasmTerm?.getLine(0) ?? [])
               .map((cell) =>
                 cell.codepoint > 0 && cell.codepoint <= 0x10ffff
@@ -423,44 +380,33 @@ suite.define(() => {
       let finalDocumentListeners: string[] = [];
       try {
         await page.evaluate(async () => {
-          const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
-          const host = document.body.appendChild(document.createElement("div"));
-          host.style.cssText = "width:800px;height:400px";
-          const controller = await runtime.createIsolatedGhosttyTerminal({
-            parent: host,
-            autoFit: false,
-            readOnly: true,
-            size: { columns: 80, rows: 24 },
-          });
+          const { host, controller } = await (window as RuntimeWindow).createFixtureTerminal(
+            "width:800px;height:400px",
+          );
           controller.write(new TextEncoder().encode("MEMORY_LIFETIME_SENTINEL"));
           (window as RuntimeWindow).liveTerminal = { host, controller };
         });
         const liveDocumentListeners = await documentListeners();
         expect(liveDocumentListeners.length).toBeGreaterThan(emptyDocumentListeners.length);
         await page.evaluate(async () => {
-          const runtime = await (window as RuntimeWindow).openclawTerminalRuntimeModule;
           for (let index = 0; index < 3; index++) {
-            const host = document.body.appendChild(document.createElement("div"));
             const abort = new AbortController();
+            const { host, controller } = await (window as RuntimeWindow).createFixtureTerminal(
+              "",
+              abort.signal,
+            );
             try {
-              const controller = await runtime.createIsolatedGhosttyTerminal({
-                parent: host,
-                autoFit: false,
-                readOnly: true,
-                signal: abort.signal,
-                size: { columns: 80, rows: 24 },
-              });
+              controller.write(new TextEncoder().encode("DISPOSED_TERMINAL"));
+            } finally {
               try {
-                controller.write(new TextEncoder().encode("DISPOSED_TERMINAL"));
-              } finally {
                 if (index === 1) {
                   abort.abort();
                 }
                 controller.dispose();
                 controller.dispose();
+              } finally {
+                host.remove();
               }
-            } finally {
-              host.remove();
             }
           }
           (window as RuntimeWindow).liveTerminal!.controller.write(
@@ -519,5 +465,12 @@ type RuntimeWindow = typeof window & {
   openclawTerminalRuntimeModule: Promise<
     typeof import("../components/terminal/terminal-runtime.ts")
   >;
-  liveTerminal?: { host: HTMLElement; controller: BrowserTerminalController };
+  liveTerminal?: { host: HTMLElement; controller: GhosttyTerminalController };
+  createFixtureTerminal: (
+    style?: string,
+    signal?: AbortSignal,
+  ) => Promise<{
+    host: HTMLElement;
+    controller: GhosttyTerminalController;
+  }>;
 };

@@ -1,5 +1,6 @@
 // Image activation owns unattended retained-volume repair; ordinary CLI startup only admits state.
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -69,51 +70,85 @@ function gatewayInvocation(program) {
   return options && !options.commandOptions.includes("--reset") ? options : undefined;
 }
 
-try {
+// Doctor owns this marker: it skips its full pre-repair capture while the marker
+// exists and creates it only after a capture is sealed. A container keeps its
+// image, environment, and mounts across stop/start, and its writable layer survives
+// them, so a new image or recreated container starts without the marker.
+const ACTIVATION_MARKER_ENV = "OPENCLAW_IMAGE_ACTIVATION_CAPTURE_MARKER";
+
+function activationMarker(rootOptions) {
+  const key = createHash("sha256")
+    .update(JSON.stringify([root, rootOptions]))
+    .digest("hex")
+    .slice(0, 32);
+  return path.join(os.tmpdir(), `openclaw-image-activation-${process.getuid?.() ?? "user"}-${key}`);
+}
+
+async function activate() {
   const program = command[0] && executable(command[0]);
   if (!program) {
     console.error("OpenClaw container activation command was not found");
-    process.exit(127);
+    process.exitCode = 127;
+    return;
   }
   const invocation = gatewayInvocation(program);
   if (invocation) {
     let interrupted;
     let child;
+    const listeners = new Map();
     for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"]) {
-      process.on(signal, () => {
+      const listener = () => {
         interrupted ??= signal;
         // Doctor's maintenance barriers own INT/TERM; HUP/QUIT must use that drain too.
         child?.kill(signal === "SIGHUP" || signal === "SIGQUIT" ? "SIGTERM" : signal);
+      };
+      process.on(signal, listener);
+      listeners.set(signal, listener);
+    }
+    const env = {
+      ...process.env,
+      [ACTIVATION_MARKER_ENV]: activationMarker(invocation.rootOptions),
+    };
+    try {
+      child = spawn(
+        process.execPath,
+        [
+          path.join(root, "openclaw.mjs"),
+          ...invocation.rootOptions,
+          "doctor",
+          "--fix",
+          "--non-interactive",
+        ],
+        { stdio: "inherit", env },
+      );
+      /** @type {Error | undefined} */
+      let failure;
+      child.on("error", (error) => {
+        failure = error;
       });
-    }
-    child = spawn(
-      process.execPath,
-      [
-        path.join(root, "openclaw.mjs"),
-        ...invocation.rootOptions,
-        "doctor",
-        "--fix",
-        "--non-interactive",
-      ],
-      { stdio: "inherit", env: process.env },
-    );
-    let failure;
-    child.on("error", (error) => {
-      failure = error;
-    });
-    const outcome = await new Promise((resolve) =>
-      child.once("close", (code, signal) => resolve({ code, signal })),
-    );
-    if (failure) {
-      throw failure;
-    }
-    const signal = interrupted ?? outcome.signal;
-    if (signal || outcome.code !== 0) {
-      process.exit(signal ? 128 + os.constants.signals[signal] : (outcome.code ?? 1));
+      const outcome = await new Promise((resolve) => {
+        child.once("close", (code, signal) => resolve({ code, signal }));
+      });
+      if (failure) {
+        throw failure;
+      }
+      const signal = interrupted ?? outcome.signal;
+      if (signal || outcome.code !== 0) {
+        process.exitCode = signal ? 128 + os.constants.signals[signal] : (outcome.code ?? 1);
+        return;
+      }
+    } finally {
+      for (const [signal, listener] of listeners) {
+        process.off(signal, listener);
+      }
     }
   }
   // Replace the adapter so tini continues to supervise the original command directly.
   process.execve(program, command, process.env);
+}
+
+try {
+  await activate();
 } catch (error) {
   console.error(
     `OpenClaw container activation failed: ${error instanceof Error ? error.message : String(error)}`,

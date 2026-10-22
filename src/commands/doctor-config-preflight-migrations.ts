@@ -1,7 +1,5 @@
 import path from "node:path";
-import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import {
   DoctorStateMigrationRefusalError,
   throwIfDoctorStateMigrationRefused,
@@ -10,7 +8,6 @@ import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
 } from "../infra/state-migrations.types.js";
-import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   canIsolateAgentDatabase,
   evaluateAgentDatabaseAdmissions,
@@ -18,36 +15,6 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
-import {
-  assertPreflightConfigUnchanged,
-  type ConfigPreflightSnapshotRead,
-} from "./config-preflight-snapshot.js";
-import { runDoctorPluginConvergence } from "./doctor-config-preflight-plugin-verification.js";
-import type { PluginMigrationInspection } from "./doctor/shared/plugin-migration-availability.js";
-
-/** Settle package repairs before state migrations select their plugin owners. */
-export async function prepareDoctorMigrationPlugins(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  retainedPluginIds?: readonly string[];
-  measure?: ConfigSnapshotReadMeasure;
-  snapshotRead: ConfigPreflightSnapshotRead;
-  readRefreshedSnapshot: () => Promise<ConfigPreflightSnapshotRead>;
-  onDeferredPlugins: (
-    pending: readonly DeferredPluginMigration[],
-    inspection?: PluginMigrationInspection,
-  ) => Promise<void>;
-}): Promise<ConfigPreflightSnapshotRead> {
-  const convergence = await runDoctorPluginConvergence(params);
-  setActiveDegradedPlugins(convergence.quarantinedPlugins);
-  await params.onDeferredPlugins(
-    convergence.deferredPlugins ?? [],
-    convergence.migrationInspection,
-  );
-  const refreshed = await params.readRefreshedSnapshot();
-  assertPreflightConfigUnchanged(params.snapshotRead.snapshot, refreshed.snapshot);
-  return refreshed;
-}
 
 export async function assertDoctorPreflightMigrationsComplete(params: {
   cfg: OpenClawConfig;

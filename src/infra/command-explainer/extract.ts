@@ -39,7 +39,6 @@ type MutableExplanation = {
 };
 
 type CommandArgument = {
-  index: number;
   text: string;
   value: string;
   span: SourceSpan;
@@ -117,15 +116,10 @@ function advancePosition(
   let column = position.column;
   for (let index = 0; index < text.length; index += 1) {
     const ch = text[index];
-    if (ch === "\r") {
-      if (text[index + 1] === "\n") {
+    if (ch === "\r" || ch === "\n") {
+      if (ch === "\r" && text[index + 1] === "\n") {
         index += 1;
       }
-      row += 1;
-      column = 0;
-      continue;
-    }
-    if (ch === "\n") {
       row += 1;
       column = 0;
       continue;
@@ -412,7 +406,6 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
 function appendCommandArgument(node: TreeSitterNode, parsed: CommandArgv, state: WalkState): void {
   const value = shellWordValue(node);
   const argument: CommandArgument = {
-    index: parsed.argv.length,
     text: node.text,
     value: value.value,
     span: spanFromNode(node, state.spanBase),
@@ -626,7 +619,6 @@ function recordCommandRisks(
     output.risks.push({
       kind: "dynamic-argument",
       command: normalizedExecutable,
-      argumentIndex: argument.index,
       text: argument.text,
       span: argument.span,
     });
@@ -979,7 +971,6 @@ function resolveOperators(
         text: operator.text,
         span,
         fromCommandId: fromCommand.id,
-        toCommandId: toCommand.id,
       };
       if (parentCommandId) {
         topologyOperator.parentCommandId = parentCommandId;

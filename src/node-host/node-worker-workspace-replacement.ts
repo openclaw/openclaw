@@ -16,8 +16,8 @@ export async function recoverWorkspaceReplacement(workspaceDir: string): Promise
   const parent = path.dirname(workspaceDir);
   const workspaceName = path.basename(workspaceDir);
   await fsp.mkdir(parent, { recursive: true, mode: 0o700 });
-  const entries = (await fsp.readdir(parent, { withFileTypes: true })).filter(
-    (entry) => entry.isDirectory() && !entry.isSymbolicLink(),
+  const entries = (await fsp.readdir(parent, { withFileTypes: true })).filter((entry) =>
+    entry.isDirectory(),
   );
   const stagingPrefix = `.${workspaceName}.workspace-transfer-`;
   const staging = entries.filter((entry) => entry.name.startsWith(stagingPrefix));
@@ -28,7 +28,7 @@ export async function recoverWorkspaceReplacement(workspaceDir: string): Promise
   const workspaceExists = await fsp
     .lstat(workspaceDir)
     .then((stats) => {
-      if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      if (!stats.isDirectory()) {
         throw new Error("workspace transfer target is not an owned directory");
       }
       return true;
@@ -76,13 +76,11 @@ export async function replaceNodeWorkerDirectory(
     signal?.throwIfAborted();
     await fsp.rename(staging, destination);
   } catch (error) {
-    if (movedOld && kind === "bundle") {
-      await fsp.rename(backup, destination).catch(() => undefined);
-    } else if (movedOld) {
+    if (movedOld) {
       try {
         await fsp.rename(backup, destination);
       } catch (rollbackError) {
-        const recoveryError = new Error(`workspace transfer rollback failed; recover ${backup}`, {
+        const recoveryError = new Error(`${kind} transfer rollback failed; recover ${backup}`, {
           cause: error,
         });
         Object.defineProperty(recoveryError, "rollbackError", {

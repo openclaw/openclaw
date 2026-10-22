@@ -1,7 +1,3 @@
-/**
- * Diagnostics, skill telemetry, terminal presentation, and loop outcomes for
- * before_tool_call execution.
- */
 import os from "node:os";
 import path from "node:path";
 import {
@@ -33,9 +29,9 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
-import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 import {
@@ -61,6 +57,7 @@ import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   resolveToolExecutionErrorKind,
@@ -76,8 +73,18 @@ export function startToolExecutionLiveness(
   event: Omit<Extract<DiagnosticEventInput, { type: "tool.execution.started" }>, "type">,
   emitDiagnostics: boolean,
   signal?: AbortSignal,
+  attempt?: SessionControllerWatchdogAttempt,
 ) {
-  const liveness = createDiagnosticToolExecutionLiveness(signal);
+  const liveness = createDiagnosticToolExecutionLiveness(
+    signal,
+    attempt
+      ? {
+          attempt,
+          toolCallId: event.toolCallId ?? event.toolName,
+          toolName: event.toolName,
+        }
+      : undefined,
+  );
   if (emitDiagnostics) {
     emitTrustedDiagnosticEvent(
       markToolExecutionLivenessDiagnosticEvent(
@@ -126,14 +133,13 @@ export function prepareToolTerminalPresentation({
   }
   let project: ToolTerminalPresentationProjector | undefined;
   if (formatter) {
-    // Retain isolated formatter inputs, not the executable tool or its hook context.
+    // Formatters observe post-execution mutations, then stay isolated from later middleware.
+    // The pre-execution custody snapshot intentionally cannot replace this capture.
     const formatterParams = observer ? structuredClone(toolParams) : toolParams;
     project = (result) => {
       try {
         const text = formatter(formatterParams, result)?.text.trim();
-        return text
-          ? truncateUtf16Safe(redactToolDetail(text), MAX_TERMINAL_PRESENTATION_CHARS)
-          : undefined;
+        return text ? truncateUtf16Safe(text, MAX_TERMINAL_PRESENTATION_CHARS) : undefined;
       } catch (err) {
         log.warn(
           `terminal tool presentation failed: tool=${toolName || "tool"} error=${String(err)}`,
@@ -516,30 +522,12 @@ export function emitToolBlockedSecurityEvent(params: {
   trace?: DiagnosticTraceContext;
   paramsSummary?: DiagnosticToolParamsSummary;
 }): void {
-  const control =
-    params.deniedReason === "client-voice-confirmation"
-      ? ({
-          policyId: "talk-client-voice-confirmation",
-          controlId: "talk-client-voice-confirmation",
-          family: "approval",
-        } as const)
-      : params.deniedReason === "tool-loop"
-        ? ({
-            policyId: "tool-loop-detection",
-            controlId: "tool-loop-detection",
-            family: "authorization",
-          } as const)
-        : params.deniedReason === "plugin-approval"
-          ? ({
-              policyId: "plugin-tool-approval",
-              controlId: "plugin-tool-approval",
-              family: "approval",
-            } as const)
-          : ({
-              policyId: "plugin-before-tool-call",
-              controlId: "before-tool-call",
-              family: "approval",
-            } as const);
+  const policyId =
+    params.deniedReason === "tool-loop"
+      ? "tool-loop-detection"
+      : params.deniedReason === "plugin-approval"
+        ? "plugin-tool-approval"
+        : "plugin-before-tool-call";
   emitTrustedSecurityEvent({
     category: "tool",
     action: "tool.execution.blocked",
@@ -556,13 +544,13 @@ export function emitToolBlockedSecurityEvent(params: {
       ...(params.toolIdentity.toolOwner ? { owner: params.toolIdentity.toolOwner } : {}),
     },
     policy: {
-      id: control.policyId,
+      id: policyId,
       decision: "deny",
       reason: params.deniedReason,
     },
     control: {
-      id: control.controlId,
-      family: control.family,
+      id: policyId === "plugin-before-tool-call" ? "before-tool-call" : policyId,
+      family: policyId === "tool-loop-detection" ? "authorization" : "approval",
     },
     attributes: {
       tool_source: params.toolIdentity.toolSource,
@@ -646,24 +634,24 @@ export async function reconcileLoopCallExecutionParams(args: {
       getDiagnosticSessionState,
       markDiagnosticArgumentChurnObservation,
       reconcileToolCallExecutionParams,
-      resolveToolLoopWarningThreshold,
     } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
     });
-    const churn = reconcileToolCallExecutionParams(sessionState, {
+    const active = reconcileToolCallExecutionParams(sessionState, {
       toolName: args.toolName,
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
       runId: args.ctx.runId,
-      warningThreshold: resolveToolLoopWarningThreshold(),
+      warningThreshold: TOOL_LOOP_WARNING_THRESHOLD,
     });
     markDiagnosticArgumentChurnObservation({
+      watchdogAttempt: args.ctx.watchdogAttempt,
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
       runId: args.ctx.runId,
-      active: churn.active,
+      active,
     });
   } catch (err) {
     log.warn(
@@ -714,6 +702,7 @@ export async function recordLoopOutcome(args: {
         record.argsHash,
       ).count > 0;
     markDiagnosticArgumentChurnObservation({
+      watchdogAttempt: args.ctx.watchdogAttempt,
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
       runId: args.ctx.runId,

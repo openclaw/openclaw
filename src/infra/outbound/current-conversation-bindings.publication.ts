@@ -2,13 +2,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { readTrackedStateDatabaseIdentity } from "../../state/openclaw-state-db-handle.js";
+import type { EngineConnection } from "../sql-connection.js";
+import { sqlPublicationAnchor } from "../sql-connection.js";
 import {
   createSqliteCommitReceipt,
-  hasSqliteCommitReceiptCoverage,
+  readSqliteCommitReceipt,
   type SqliteCommitReceipt,
   type SqliteCommitSource,
   type SqliteCommittedFact,
@@ -23,6 +25,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../sqlite-worker-operation-settlement.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
 type CurrentConversationBindingPublication = {
@@ -38,7 +41,7 @@ type CurrentConversationBindingFactChange =
       kind: "pending" | "settled";
       identity: string;
       operation: object;
-      outcome?: "published" | "unknown";
+      outcome?: "published" | "unchanged" | "unknown";
     };
 
 type BindingChange = {
@@ -55,24 +58,24 @@ const state = resolveGlobalSingleton(
     capture: new AsyncLocalStorage<BindingChange[]>(),
     installingFacts: 0,
     facts: new Set<(publication: CurrentConversationBindingFactChange) => void>(),
-    observers: new Set<(publication: CurrentConversationBindingPublication) => void>(),
   }),
 );
 
-function sourceFor(database: DatabaseSync): SqliteCommitSource {
-  let source = state.sources.get(database);
+function sourceFor(database: EngineConnection): SqliteCommitSource {
+  const anchor = sqlPublicationAnchor(database);
+  let source = state.sources.get(anchor);
   if (!source) {
     source = {
       identity:
-        readTrackedStateDatabaseIdentity(database)?.key ?? Symbol("untracked-binding-database"),
+        readTrackedStateDatabaseIdentity(anchor)?.key ?? Symbol("untracked-binding-database"),
       incarnation: randomUUID(),
     };
-    state.sources.set(database, source);
+    state.sources.set(anchor, source);
   }
   return source;
 }
 
-function capturePublication(database: DatabaseSync, changes: readonly BindingChange[]) {
+function capturePublication(database: EngineConnection, changes: readonly BindingChange[]) {
   const current = new Map(changes.map((change) => [change.key, change.current]));
   const receipt = createSqliteCommitReceipt({
     source: sourceFor(database),
@@ -80,7 +83,7 @@ function capturePublication(database: DatabaseSync, changes: readonly BindingCha
     keys: [...current.keys()],
     readFact(key): SqliteCommittedFact<SessionBindingRecord> {
       const record = current.get(key);
-      return record ? { kind: "postimage", value: structuredClone(record) } : { kind: "absent" };
+      return record ? { kind: "postimage", value: record } : { kind: "absent" };
     },
   });
   return {
@@ -131,25 +134,22 @@ function publicationState(publication: CurrentConversationBindingPublication) {
       installed = unknownPublication(publication);
       installFacts(installed);
     },
-    notify: () => notifyListeners(state.observers, installed),
+    notify() {},
   };
 }
 
 /** Owns binding-fact staging and observation; callers retain native/foreign authority guards. */
 export const currentConversationBindingPublication = {
   stage: stageCurrentConversationBindingChanges,
-  /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
+  /** Install/invalidate prepared facts only. */
   subscribeFacts(listener: (publication: CurrentConversationBindingFactChange) => void) {
     return registerListener(state.facts, listener);
-  },
-  subscribe(listener: (publication: CurrentConversationBindingPublication) => void) {
-    return registerListener(state.observers, listener);
   },
 };
 
 /** Called inside the owning write transaction using rows already read by its kernel. */
 function stageCurrentConversationBindingChanges(
-  database: DatabaseSync,
+  database: EngineConnection,
   changes: readonly BindingChange[],
 ): void {
   if (!changes.length) {
@@ -170,7 +170,7 @@ function stageCurrentConversationBindingChanges(
 
 /** One receipt covers every changed row in this worker transaction, including mutating reads. */
 export function withCurrentConversationBindingWorkerReceipt<T>(
-  database: DatabaseSync,
+  database: EngineConnection,
   update: () => T,
 ): T {
   return state.capture.run([], () => {
@@ -191,43 +191,23 @@ export function withCurrentConversationBindingWorkerReceipt<T>(
 }
 
 function readPublication(value: unknown): CurrentConversationBindingPublication {
-  if (
-    !isRecord(value) ||
-    !isRecord(value.receipt) ||
-    !isRecord(value.receipt.source) ||
-    typeof value.receipt.source.identity !== "string" ||
-    typeof value.receipt.source.incarnation !== "string" ||
-    !(value.receipt.facts instanceof Map) ||
-    !Array.isArray(value.sessionKeys) ||
-    !value.sessionKeys.every((key) => typeof key === "string")
-  ) {
+  if (!isRecord(value) || !isStringArray(value.sessionKeys)) {
     throw new Error("Conversation binding receipt is invalid");
   }
-  const source = {
-    identity: value.receipt.source.identity,
-    incarnation: value.receipt.source.incarnation,
-  };
-  if (
-    !hasSqliteCommitReceiptCoverage(value.receipt, {
-      source,
+  return {
+    receipt: readSqliteCommitReceipt<SessionBindingRecord>(value.receipt, {
       domain: "current-conversation-bindings",
-      keys: [...value.receipt.facts.keys()],
-    }) ||
-    ![...value.receipt.facts].every(
-      ([key, fact]) =>
-        typeof key === "string" &&
-        (fact.kind === "absent" ||
-          (fact.kind === "postimage" &&
-            isRecord(fact.value) &&
-            typeof fact.value.bindingId === "string" &&
-            typeof fact.value.targetSessionKey === "string" &&
-            isRecord(fact.value.conversation))),
-    )
-  ) {
-    throw new Error("Conversation binding receipt has incomplete facts");
-  }
-  // SAFETY: The private worker owns this shape; envelope, source, and routing fields were checked above.
-  return value as CurrentConversationBindingPublication;
+      invalidReceiptMessage: "Conversation binding receipt has incomplete facts",
+      isFact: (_key, fact) =>
+        fact.kind === "absent" ||
+        (fact.kind === "postimage" &&
+          isRecord(fact.value) &&
+          typeof fact.value.bindingId === "string" &&
+          typeof fact.value.targetSessionKey === "string" &&
+          isRecord(fact.value.conversation)),
+    }),
+    sessionKeys: value.sessionKeys,
+  };
 }
 
 /** Retain supersession until native settlement, independent of ordinary reply delivery. */
@@ -284,26 +264,23 @@ export function withCurrentConversationBindingPublication(
       }
     });
     let finished = false;
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        if (!finished) {
-          finished = true;
-          unsubscribe();
-          notifyListeners(state.facts, {
-            kind: "settled",
-            identity: identity(),
-            operation,
-            outcome:
-              published && !unknown && owner.admission.settlement?.kind === "completed"
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      if (!finished) {
+        finished = true;
+        unsubscribe();
+        notifyListeners(state.facts, {
+          kind: "settled",
+          identity: identity(),
+          operation,
+          outcome:
+            !unknown && owner.admission.settlement?.kind === "completed"
+              ? published
                 ? "published"
-                : "unknown",
-          });
-        }
+                : "unchanged"
+              : "unknown",
+        });
       }
-    };
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       assertPublicationCurrent();
       if (isRecord(facts) && facts.kind === "unknown" && facts.identity === identity()) {

@@ -37,11 +37,18 @@ With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 long-lived channel loggers. Queued records finish writing to their original file.
 Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
 
+Startup guidance to keep local CLI/SDK and Gateway versions aligned uses `info`;
+it does not indicate that a version mismatch was detected. In-memory auth storage
+initialization does not emit synchronous-storage deprecation warnings. Explicit
+calls to deprecated storage APIs still warn with their replacements.
+
 Subsystem file logs omit call-site metadata (`_meta.path`) for `trace`, `debug`,
 `info`, and `warn` records, including `raw()` lines, to avoid capturing and parsing
-a stack on every routine message. `error` and `fatal` records retain it. All levels
-retain call-site metadata while diagnostics are enabled and an internal log-record
-consumer is subscribed, preserving [OTLP code locations](/gateway/opentelemetry/privacy-and-trace-context).
+a stack on every routine message. `error` and `fatal` records retain it. Other than
+`info`, all levels retain call-site metadata while diagnostics are enabled and an
+internal log-record consumer is subscribed, preserving [OTLP code locations](/gateway/opentelemetry/privacy-and-trace-context).
+`info` records, including `raw()` lines, remain stack-free with diagnostic consumers;
+their severity, message, structured attributes, and trace context are still exported.
 This follows diagnostic enablement and subscriptions on the next record, including
 for existing subsystem loggers. Log messages, structured fields, and error stacks
 supplied by callers are unchanged.
@@ -50,14 +57,27 @@ Talk, realtime voice, and managed-room code paths use the shared file logger for
 
 Discord realtime voice keeps session lifecycle transitions at `info`; audio chunks
 and transcript deltas use `debug`. Model-fetch starts and successful responses
-under one second also use `debug`. Non-2xx responses and responses taking at least
-one second remain at `info`; transport failures remain warnings. The existing
+also use `debug`, regardless of duration. Non-2xx responses remain at `info`;
+transport failures remain warnings. The existing
 [model transport diagnostic flags](/logging#targeted-model-transport-diagnostics)
 promote transport details to `info` when enabled.
 
-Secret egress request audit records remain at `info`, including successful
-forwarding. Their structured fields record the proxy outcome without request
+Successful secret egress forwarding, including credential substitution, uses
+`debug`. Refusals remain at `info`, and certificate failures remain
+warnings. Their structured fields record the proxy outcome without request
 payloads or credentials; see [secret egress proxy](/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
+Code Mode and Tool Search catalog preparation summaries also use `debug`.
+[Prometheus metrics](/gateway/prometheus) count egress outcomes, catalog
+preparations, and model calls independently of log levels.
+
+Per-request GitHub API timing records also use `debug`, including fetches over
+500 ms. Transport failures and rate-limit errors retain their normal handling.
+
+Plugin host cleanup failures during session reset or deletion emit one
+`plugins/cleanup` warning per failure, including the operation, plugin, hook, and
+error. Check the reported cleanup error before retrying. Successful cleanup
+stays quiet, and failures remain best effort. Console diagnostics use the shared
+secret redactor; plain-text console fields are capped at 2,048 characters.
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
@@ -102,7 +122,7 @@ any driver waits, scheduling, and ownership revalidation. When admission uses a
 separate integrity Worker, its lifetime is included. This does not isolate
 native-check or CPU time.
 
-When canonical-index validation completes, `canonicalIndexMs` reports the
+When required-index validation completes, `canonicalIndexMs` reports the
 subsequent synchronous inspection and any repair or rechecks, and
 `repairedIndexCount` counts indexes successfully repaired by that operation.
 A healthy initial integrity check can still require an index-definition repair.
@@ -219,36 +239,70 @@ Tune console verbosity independently:
 
 ## Redaction
 
-OpenClaw masks sensitive tokens before log or transcript output leaves the process. This redaction policy applies at console, file-log, OTLP log-record, and session transcript text sinks. Matching secret values are masked before JSONL lines or messages are written to disk.
+File logs store raw records under the Gateway account with owner-only (`0600`)
+permissions. Redaction runs when logs widen their audience: `logs.tail` (including
+the CLI and Control UI), console output, diagnostic/support bundles, and remote
+or OTLP export. Each output redacts independently; direct reads of the file do
+not. Protect raw log files like the agent/state databases and review them before
+sharing.
 
-The OpenClaw harness masks finalized tool-result text after middleware, before
-it enters live model context, including exec output and tool errors. Media bytes
-and the original execution arguments stay intact; later replay reuses the masked
-result. Model-visible tool-result text preserves ambiguous source assignments such as
-`token = timeObserverToken`. Registered secrets and explicit credential forms,
-including structured fields, authorization headers, URL credentials, and known
-token formats, remain masked. Direct reads of `.env`
-files apply broader assignment masking before their content becomes a tool
-result. Other config and source reads preserve opaque values. Register actual
-secrets instead of relying on key-name matching. Other transcript fields and
-diagnostic sinks retain broad assignment matching.
+Tool arguments, tool results, and session transcripts are not secret-masked.
+This includes source-code output and direct reads of `.env` files. Tool payloads
+still receive size limits, image/base64 handling, and structural normalization.
+Configuration snapshots, audit output, command-line diagnostics, and
+credential-bearing URLs retain their masking.
 
-- Sensitive-value redaction is always enabled.
+- Egress log and diagnostic redaction is always enabled.
 - `logging.redactPatterns`: array of regex strings (replaces the default string list). Built-in structural protections for form bodies, structured authorization headers, and bare AWS secret access keys always apply.
   - Use raw regex strings (auto `gi`), or `/pattern/flags` for custom flags.
   - Matches are masked keeping the first 6 + last 4 chars (values >= 18 chars). Shorter values become `***`.
   - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, popular vendor token prefixes, and payment credential field names (card number, CVC/CVV, shared payment token, payment credential).
 
-File and JSON console records finish masking before final JSON encoding. Rules run in order over decoded values, then serialized record context, with later rules seeing earlier masks. String matches retain their existing token hints so later rules can match those hints. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. File records retain built-in credential patterns when custom patterns are configured.
+JSON console output and log tails preserve valid JSON while masking decoded values and serialized record context. Later rules see earlier masks. Structured credential fields use full masks; matched numbers, booleans, and null become the JSON string `"***"`. Log tails retain built-in credential patterns when custom patterns are configured.
 
-Safety boundaries such as Control UI tool-call events, `sessions_history` output, diagnostics exports, provider errors, exec approval display, and Gateway WebSocket logs always redact. `logging.redactPatterns` adds deployment-specific patterns.
+Formatted health failures, Doctor Gateway connection notes, diagnostics exports, and captured provider/WebSocket console output retain redaction. `logging.redactPatterns` supplies deployment-specific patterns at these egress boundaries. Log IDs, sizes, and outcomes rather than message text, prompts, tool arguments, or tool results. WebSocket agent-event summaries contain character counts instead of assistant text or tool metadata.
 
 ## Gateway WebSocket logs
 
 The gateway prints WebSocket protocol logs in two modes:
 
-- **Normal mode (no `--verbose`)**: only "interesting" RPC results print - errors (`ok=false`), slow calls (default threshold: `>= 50ms`), and parse errors.
+- **Normal mode (no `--verbose`)**: failed RPC results (`ok=false`), slow calls (`>= 1,000ms`), and parse errors remain visible at the default log level. Successful responses below one second, including large session lists, log at `debug`. Set `logging.level: "debug"` to retain them in file logs or `logging.consoleLevel: "debug"` to print them.
 - **Verbose mode (`--verbose`)**: prints all WS request/response traffic.
+
+The validated `connect` handshake also participates in the existing Gateway RPC
+metrics as `method="connect"`, including handler duration, first-response latency,
+response bytes, and delivery failures. Handler time includes completion work after
+the hello write; first-response time ends at the transport's write callback, not
+at browser receipt. These are server wall times, including awaited work. A validated connect rejected
+by restart or suspension admission reports a rejected dispatch and its response;
+it has no handler sample because authentication was never entered.
+
+Connect response logs follow the same slow-response threshold and include `authMs`
+(credentials through authentication), `attachMs` (device authorization, identity,
+scopes, and session attachment), `helloMs` (hello payload preparation), and
+`sendMs` (serialization and transport write callback). Unreached phases are absent.
+Bootstrap redemption or admission work between payload preparation and writing
+can make total response time exceed the sum of these fields. No payload fields
+or credentials are included. Failed connects also record `failurePhase` and the
+existing admission `failureCause` so a rejection before attachment remains attributable.
+
+The attach interval also includes these sub-phase wall times on connect response
+logs: `deviceAuthorizationMs` (pairing policy, lookup and token issuance),
+`nodePreparationMs` (node admission and pairing capture), `identityMs` (profile
+admission), `scopeGrantMs` (scope/role policy and the identity-elevation audit log),
+`operatorDeviceMs` (accepted device credential lookup), and
+`sessionRegistrationMs` (remaining client preparation, access binding and transport
+handoff). Nested fields `deviceLookupMs`, `deviceTokensMs`,
+`profileEnsureMs` and `profileAuthorityMs` isolate pairing and profile operations,
+including cache hits and worker queue/lock waits. Nested times overlap their parent interval;
+do not add them to the total. These are elapsed times, so event-loop stalls during
+awaited work also count. Unused or unreached sub-phases are absent.
+
+The hello interval includes `snapshotMs` (presence, session defaults, update details,
+and cached health) and `helloDescriptorsMs` (method and event descriptors). These
+are nested wall times, not additional phases. Model catalog publication runs after
+hello and is outside these intervals. Hello replies remain uncompressed even when
+the connection negotiates permessage-deflate, because they can contain credentials.
 
 With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
 handlers and `sessions.subscribe` snapshot handlers taking at least one second
@@ -341,6 +395,12 @@ Initial session row-reader waits are included in that interval, rather than time
 separately. `snapshot` measures the agent-run transcript-start reader preparation,
 nested inside `preparation`.
 Startup measurement ends when the agent run starts, or when dispatch exits before starting one.
+Accepted steering instead reports `stage=steer`; a deferred follow-up reports
+`stage=queued`. These records include waits for the active run to commit the input
+at its next boundary, including the steering receipt timeout. They use the same
+one-second threshold and emit at most one post-acknowledgement record per send;
+they are not startup latency. Rejected steering that starts a new run retains
+`stage=startup`.
 These records do not contain message text or session identifiers. Nested phases
 can overlap; their sum is not the request duration. The
 [Prometheus exporter](/gateway/prometheus) records the same fixed phases for fast
@@ -364,7 +424,7 @@ request behavior or diagnostic collection settings.
 - `--compact`: alias for `--ws-log compact`.
 
 ```bash
-# optimized (only errors/slow)
+# optimized (connections, errors, and slow responses)
 openclaw gateway
 
 # show all WS traffic (paired)
@@ -373,6 +433,23 @@ openclaw gateway --verbose --ws-log compact
 # show all WS traffic (full meta)
 openclaw gateway --verbose --ws-log full
 ```
+
+Normal logging emits one `client connected` record per admitted operator or node
+connection, including CLI and backend clients. It includes the connection ID, client ID and
+display name, mode, role, authentication method, version, platform, build, remote
+address, and authenticated user when present. This replaces the separate
+`authenticated user connected` and `webchat connected` records; those records
+overlapped and did not count ephemeral clients. Request content and credentials
+are not included.
+
+Compare these records with the `connect` RPC counter when investigating
+connection churn. The counter includes failed handshakes; `client connected`
+records admission before the hello response is sent. Client metadata is
+caller-declared, so it identifies the claimed client kind, not a verified process.
+For external pollers, reuse an authenticated Gateway connection for repeated
+requests. Gateway-hosted plugins should use `api.runtime.gateway.request` or
+`api.runtime.nodes`, which dispatch in-process; see
+[Gateway and node runtime](/plugins/sdk-runtime/gateway-and-nodes).
 
 ## Console formatting (subsystem logging)
 

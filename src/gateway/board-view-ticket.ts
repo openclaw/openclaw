@@ -6,7 +6,9 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
+import type { RemoteIngressPrincipalSnapshot } from "./server/client-identity-types.js";
 
 export const BOARD_HTTP_PATH_PREFIX = "/__openclaw__/board/";
 // Bounds residual bearer access after the originating client loses its view authority.
@@ -16,9 +18,11 @@ export const BOARD_VIEW_TICKET_TTL_MS = 20 * 60_000;
 const BOARD_VIEW_TICKET_SCOPE = "board-widget-view";
 const BOARD_VIEW_TICKET_MAX_LENGTH = 2_048;
 const ticketSecret = randomBytes(32);
-// Keep one current generation per live Gateway context, never one entry per ticket.
-// Method or plugin generation changes replace the slot and invalidate older tickets.
-const ticketAuthorities = new WeakMap<GatewayRequestContext, BoardViewTicketAuthority>();
+// One generation per live Gateway or ingress handle, never one entry per ticket.
+const ticketAuthorities = new WeakMap<
+  GatewayRequestContext,
+  Map<object, BoardViewTicketAuthority>
+>();
 
 type BoardViewTicket = {
   ticket: string;
@@ -29,6 +33,7 @@ export type BoardViewTicketAuthorityInput = {
   gatewayContext: GatewayRequestContext;
   pluginRegistry?: PluginRegistry;
   resolveGatewayContext: GatewayContextResolver;
+  remoteIngressPrincipal?: RemoteIngressPrincipalSnapshot;
 };
 
 export type BoardViewTicketAuthority = BoardViewTicketAuthorityInput & {
@@ -121,7 +126,10 @@ function captureBoardViewTicketAuthority(
   if (input.pluginRegistry && !pluginRegistryEpoch) {
     throw new BoardGatewayUnavailableError();
   }
-  const existing = ticketAuthorities.get(input.gatewayContext);
+  input.remoteIngressPrincipal?.assertCurrent();
+  const owners = getOrCreateWeakOwnerMap(ticketAuthorities, input.gatewayContext);
+  const owner = input.remoteIngressPrincipal?.assertCurrent ?? input.gatewayContext;
+  const existing = owners.get(owner);
   if (
     existing?.resolveGatewayContext === input.resolveGatewayContext &&
     existing.methodRegistry === methodRegistry &&
@@ -136,7 +144,15 @@ function captureBoardViewTicketAuthority(
     ...(methodRegistry ? { methodRegistry } : {}),
     ...(pluginRegistryEpoch ? { pluginRegistryEpoch } : {}),
   };
-  ticketAuthorities.set(input.gatewayContext, authority);
+  owners.set(owner, authority);
+  if (!existing && input.remoteIngressPrincipal) {
+    const currentOwners = owners;
+    input.remoteIngressPrincipal.signal.addEventListener(
+      "abort",
+      () => currentOwners.delete(owner),
+      { once: true },
+    );
+  }
   return authority;
 }
 
@@ -144,9 +160,14 @@ export function requireBoardViewTicketAuthority(
   claims: BoardViewTicketClaims,
   gatewayContext: GatewayRequestContext | undefined,
 ): BoardViewTicketAuthority {
-  const authority = gatewayContext ? ticketAuthorities.get(gatewayContext) : undefined;
+  const authority = gatewayContext
+    ? [...(ticketAuthorities.get(gatewayContext)?.values() ?? [])].find(
+        (candidate) => candidate.generation === claims.authorityGeneration,
+      )
+    : undefined;
   let currentContext: GatewayRequestContext | undefined;
   try {
+    authority?.remoteIngressPrincipal?.assertCurrent();
     currentContext = authority?.resolveGatewayContext();
   } catch {
     throw new BoardGatewayUnavailableError();

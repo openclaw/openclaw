@@ -3,7 +3,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserSessionTabAuthority } from "./browser-runtime-state.js";
-import type { BrowserTabOwnership } from "./browser/client.types.js";
+import type { BrowserOpenResult, BrowserTabOwnership } from "./browser/client.types.js";
 import { resolveBrowserSessionKey } from "./browser/session-tab-identity.js";
 import type * as sessionTabRegistry from "./browser/session-tab-registry.js";
 import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
@@ -41,12 +41,8 @@ function readOpenedTab(result: unknown): {
   return { targetId, aliases: [...new Set(aliases)], profile, ownership };
 }
 
-export function stripBrowserOpenInternalMetadata(value: unknown): unknown {
-  const record = asNullableRecord(value);
-  if (!record) {
-    return value;
-  }
-  const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = record;
+export function stripBrowserOpenInternalMetadata(value: BrowserOpenResult) {
+  const { ownership: _ownership, resolvedProfile: _resolvedProfile, ...agentVisible } = value;
   return agentVisible;
 }
 

@@ -36,6 +36,7 @@ export type PreparedModelRuntimeCatalogMode = "live" | "static";
 export type PreparedModelCatalogRefreshOptions = {
   refresh?: boolean;
   providerIds?: readonly string[];
+  /** Lifecycle publication renews changed providers; native harnesses wait for demand. */
   changedOnly?: boolean;
   /** Await acquisition instead of returning published rows after the foreground deadline. */
   wait?: boolean;
@@ -96,16 +97,16 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
     refreshExpiredModelCatalog?: () => void;
     /** Rechecks native CLI login availability without refreshing provider inventory. */
-    recheckNativeLogin?: () => void;
+    recheckNativeLogin?: (options?: { force?: boolean }) => void | Promise<void>;
     /** Reads validated executable rows from this owner's accepted provider publication. */
     readPublishedModels?: () => ReadonlyMap<string, readonly Model[]> | undefined;
     /** Builds this generation's full control-plane catalog without replacing turn facts. */
     loadFullModelCatalog?: (
       options?: PreparedModelCatalogRefreshOptions,
     ) => Promise<ModelCatalogSnapshot>;
-    /** Acquires the selected runtime's native facts before host model resolution. */
+    /** Acquires native inventory on demand, or just the runtime selected for execution. */
     loadNativeModelCatalog?: (
-      selection: PreparedNativeModelSelection,
+      selection?: PreparedNativeModelSelection,
     ) => Promise<ModelCatalogSnapshot>;
     /** Full static models for configured refs, resolved once at the lifecycle boundary. */
     configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
@@ -122,7 +123,9 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     }>[];
     /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
     inlineProviderModels: readonly InlineModelEntry[];
-    createStores: () => PreparedModelRuntimeStores;
+    createStores: (
+      publishedModels?: ReadonlyMap<string, readonly Model[]>,
+    ) => PreparedModelRuntimeStores;
     /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
     routeModelResolutionMemo?: Map<string, Promise<Model>>;
   }>;
@@ -185,6 +188,8 @@ export type PreparedModelRuntimePublicationOptions = {
   force?: boolean;
   provenance?: PreparedModelRuntimeOwner["provenance"];
   catalogMode?: PreparedModelRuntimeCatalogMode;
+  /** Discovery deadline for this publication only; omitted publications retain the short default. */
+  providerDiscoveryTimeoutMs?: number;
 };
 
 export type PreparedModelRuntimeRefreshOptions = {
@@ -233,7 +238,9 @@ export type PreparedModelCatalogProviderFacts = {
   expiresAt?: number;
   /** Consecutive failed discoveries; their backed-off retry deadline is `expiresAt`. */
   discoveryFailures?: number;
-  legacyRows?: ReadonlySet<string>;
+  /** Rows carried from another plugin generation; visible until this generation reacquires them. */
+  provisional?: true;
+  legacyAcquired?: boolean;
 };
 
 export type PreparedModelCatalogInventory = {
@@ -243,7 +250,7 @@ export type PreparedModelCatalogInventory = {
   pluginFingerprint: string;
   nativeSource: string;
   providers: ReadonlyMap<string, PreparedModelCatalogProviderFacts>;
-  discoveryOrigins: readonly { provider: string; profileId?: string }[];
+  discoveryOrigins: NonNullable<ModelCatalogSnapshot["acceptedDiscoveryOrigins"]>;
 };
 
 export type PreparedModelCatalogAcquisitionKind = "provider" | "native";
@@ -295,6 +302,7 @@ export type PreparedModelRuntimeOwner = {
 };
 
 export type PreparedModelRuntimeReplacement = {
+  agentIds?: ReadonlySet<string>;
   degraded?: boolean;
   gateId: PreparedModelRuntimeReplacementGateId;
   promise: Promise<void>;

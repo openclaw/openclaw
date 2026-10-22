@@ -1,5 +1,6 @@
 import {
   asNullableRecord,
+  filterStringRecord,
   readNonBlankString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -57,8 +58,8 @@ function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOption
     domain: toStringOrEmpty(cookie.domain) || undefined,
     path: toStringOrEmpty(cookie.path) || undefined,
     expires: readOptionalRouteFiniteNumber(cookie.expires, "cookie.expires"),
-    httpOnly: toBoolean(cookie.httpOnly) ?? undefined,
-    secure: toBoolean(cookie.secure) ?? undefined,
+    httpOnly: toBoolean(cookie.httpOnly),
+    secure: toBoolean(cookie.secure),
     sameSite:
       cookie.sameSite === "Lax" || cookie.sameSite === "None" || cookie.sameSite === "Strict"
         ? cookie.sameSite
@@ -180,12 +181,8 @@ export function registerBrowserAgentStorageRoutes(
     if (!headers) {
       throw new Error("headers is required");
     }
-    const parsed: Record<string, string> = {};
-    for (const [k, v] of Object.entries(headers)) {
-      if (typeof v === "string") {
-        parsed[k] = v;
-      }
-    }
+    const parsed = filterStringRecord(headers) ?? {};
+    Reflect.deleteProperty(parsed, "__proto__");
     return (pw, target) => pw.setExtraHTTPHeadersViaPlaywright({ ...target, headers: parsed });
   });
 

@@ -4,13 +4,19 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
-import { requestSessionUsage } from "./usage.ts";
+import { requestSessionUsage, type SessionUsageQuery } from "./usage.ts";
 
-describe("usage request calendar", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+const dates = { startDate: "2026-07-01", endDate: "2026-07-28" };
+const query = { ...dates, scope: "family", timeZone: "utc" } as const;
+const expected = { ...dates, mode: "utc", groupBy: "family", includeContextWeight: false };
+const gateway = () => {
+  const result = { sessions: [] };
+  const request = createGatewayRequestMock().mockResolvedValue(result);
+  return { request, client: createTestGatewayClient(request), result };
+};
 
+describe("requestSessionUsage", () => {
+  afterEach(() => vi.restoreAllMocks());
   it("sends the browser IANA timezone with the current UTC offset in local mode", async () => {
     const resolvedOptions = new Intl.DateTimeFormat().resolvedOptions();
     vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions").mockReturnValue({
@@ -19,13 +25,8 @@ describe("usage request calendar", () => {
     });
     vi.spyOn(Date.prototype, "getTimezoneOffset").mockReturnValue(-120);
 
-    const request = createGatewayRequestMock().mockResolvedValue({ sessions: [] });
-    await requestSessionUsage(createTestGatewayClient(request), {
-      startDate: "2026-07-01",
-      endDate: "2026-07-28",
-      scope: "family",
-      timeZone: "local",
-    });
+    const { client, request } = gateway();
+    await requestSessionUsage(client, { ...query, timeZone: "local" });
     expect(request).toHaveBeenCalledWith(
       "sessions.usage",
       expect.objectContaining({
@@ -35,33 +36,21 @@ describe("usage request calendar", () => {
       }),
     );
   });
-});
-
-describe("requestSessionUsage", () => {
   it.each([
     { key: "agent:main:detail", agentId: undefined },
     { key: "global", agentId: "research" },
   ])("scopes selected context for $key without an all-agent request", async ({ key, agentId }) => {
-    const request = vi.fn().mockResolvedValue({ sessions: [] });
+    const { client, request } = gateway();
     const signal = new AbortController().signal;
     await requestSessionUsage(
-      { request } as never,
-      {
-        startDate: "2026-07-01",
-        endDate: "2026-07-28",
-        scope: "family",
-        timeZone: "utc",
-        agentId,
-      },
+      client,
+      { ...query, agentId },
       { key, includeContextWeight: true, signal },
     );
     expect(request).toHaveBeenCalledWith(
       "sessions.usage",
       {
-        startDate: "2026-07-01",
-        endDate: "2026-07-28",
-        mode: "utc",
-        groupBy: "family",
+        ...expected,
         key,
         limit: 1,
         includeContextWeight: true,
@@ -71,25 +60,35 @@ describe("requestSessionUsage", () => {
     );
   });
   it("requests canonical family grouping", async () => {
-    const result = { sessions: [] };
-    const request = vi.fn().mockResolvedValue(result);
-
-    await expect(
-      requestSessionUsage({ request } as never, {
-        startDate: "2026-07-01",
-        endDate: "2026-07-28",
-        scope: "family",
-        timeZone: "utc",
-      }),
-    ).resolves.toBe(result);
+    const { client, request, result } = gateway();
+    await expect(requestSessionUsage(client, query)).resolves.toBe(result);
     expect(request).toHaveBeenCalledWith("sessions.usage", {
-      startDate: "2026-07-01",
-      endDate: "2026-07-28",
+      ...expected,
       agentScope: "all",
-      mode: "utc",
-      groupBy: "family",
       limit: 1000,
-      includeContextWeight: false,
+    });
+  });
+
+  it("requests a bounded overview with server filter and page ownership", async () => {
+    const { client, request } = gateway();
+    const filters = {
+      query: "provider:openai",
+      selectedDays: ["2026-07-14"],
+      selectedHours: [12],
+      selectedSessions: ["agent:main:chosen"],
+      recentKeys: ["agent:main:chosen"],
+      offset: 50,
+      sort: "cost",
+      sortDirection: "asc",
+    } satisfies Partial<SessionUsageQuery>;
+    const expectedFilters = structuredClone(filters);
+    await requestSessionUsage(client, { ...query, ...filters }, { projection: "overview" });
+    expect(request).toHaveBeenCalledWith("sessions.usage", {
+      ...expected,
+      ...expectedFilters,
+      agentScope: "all",
+      projection: "overview",
+      limit: 50,
     });
   });
 
@@ -98,15 +97,11 @@ describe("requestSessionUsage", () => {
       code: "INVALID_REQUEST",
       message: "invalid sessions.usage params: at root: unexpected property 'timeZone'",
     });
-    const request = vi.fn().mockRejectedValue(error);
+    const { client, request } = gateway();
+    request.mockRejectedValue(error);
 
     await expect(
-      requestSessionUsage({ request } as never, {
-        startDate: "2026-07-01",
-        endDate: "2026-07-28",
-        scope: "instance",
-        timeZone: "local",
-      }),
+      requestSessionUsage(client, { ...query, scope: "instance", timeZone: "local" }),
     ).rejects.toBe(error);
     expect(request).toHaveBeenCalledOnce();
   });

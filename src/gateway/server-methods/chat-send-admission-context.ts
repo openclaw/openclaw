@@ -1,5 +1,5 @@
 import { resolveChatSendOriginatingRoute } from "./chat-origin-routing.js";
-import { respondChatSendAdmissionError } from "./chat-send-pre-admission.js";
+import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -36,13 +36,14 @@ export function prepareChatSendAdmissionContext(params: {
   };
 }
 
+/** Check the captured target assertion and settle admission failure before responding. */
 export function assertChatSendSessionTargetOrRespond(params: {
-  session: PreparedChatSendSession;
+  assertSessionTargetCurrent: () => void;
   cleanup: () => void;
   respond: GatewayRequestHandlerOptions["respond"];
 }): boolean {
   try {
-    params.session.assertSessionTargetCurrent();
+    params.assertSessionTargetCurrent();
     return true;
   } catch (error) {
     params.cleanup();

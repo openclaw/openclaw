@@ -144,30 +144,13 @@ export function createSignalToolResultConfig(
   const base = config as { channels?: Record<string, unknown> };
   const channels = base.channels ?? {};
   const signal = (channels.signal ?? {}) as Record<string, unknown>;
-  const {
-    autoStart,
-    cliPath,
-    configPath,
-    httpHost,
-    httpPort,
-    startupTimeoutMs,
-    receiveMode,
-    ignoreAttachments,
-    ignoreStories,
-    ...accountOverrides
-  } = overrides;
+  const { autoStart, httpPort, ...accountOverrides } = overrides;
   const transport =
     autoStart === false
       ? { kind: "external-native", url: "http://127.0.0.1:8080" }
       : {
           kind: "managed-native",
-          ...(typeof cliPath === "string" ? { cliPath } : {}),
-          ...(typeof configPath === "string" ? { configPath } : {}),
-          ...(typeof httpHost === "string" ? { httpHost } : {}),
           ...(typeof httpPort === "number" ? { httpPort } : {}),
-          ...(typeof startupTimeoutMs === "number" ? { startupTimeoutMs } : {}),
-          ...(receiveMode === "on-start" || receiveMode === "manual" ? { receiveMode } : {}),
-          ...(typeof ignoreStories === "boolean" ? { ignoreStories } : {}),
         };
   return {
     ...base,
@@ -176,7 +159,6 @@ export function createSignalToolResultConfig(
       signal: {
         ...signal,
         transport,
-        ...(typeof ignoreAttachments === "boolean" ? { ignoreAttachments } : {}),
         dmPolicy: "open",
         allowFrom: ["*"],
         ...accountOverrides,
@@ -207,7 +189,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   >("openclaw/plugin-sdk/runtime-config-snapshot");
   return {
     ...actual,
-    getRuntimeConfig: () => config,
+    captureRuntimeConfigAsyncReader: () => async () => config,
   };
 });
 

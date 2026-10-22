@@ -86,7 +86,7 @@ export const AgentEntryBaseSchema = z.strictObject({
   cwd: z.string().optional(),
   agentDir: z.string().optional(),
   model: AgentModelSchema.optional(),
-  utilityModel: z.string().optional(),
+  utilityModel: AgentModelSchema.optional(),
   decisionModel: DecisionModelSchema.optional(),
   models: AgentModelMapSchema.optional(),
   modelPolicy: AgentModelPolicySchema.optional(),
@@ -110,6 +110,7 @@ export const AgentEntryBaseSchema = z.strictObject({
     .strictObject({
       delegationMode: z.enum(["suggest", "prefer"]).optional(),
       allowAgents: z.array(z.string()).optional(),
+      delegateToolsTo: z.array(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/)).optional(),
       model: AgentModelSchema.optional(),
       thinking: z.string().optional(),
       requireAgentId: z.boolean().optional(),

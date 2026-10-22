@@ -4,13 +4,6 @@ import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway
 import { validateWorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
-import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
-import * as authProfileUsage from "../../agents/auth-profiles/usage.js";
-import * as modelAuth from "../../agents/model-auth.js";
-import * as providerStreamRuntime from "../../agents/provider-stream.js";
-import { AuthStorage } from "../../agents/sessions/auth-storage.js";
-import { ModelRegistry } from "../../agents/sessions/model-registry.js";
-import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -44,6 +37,7 @@ import {
   sessionEntry,
   setup,
   usage,
+  useRealProviderPreparation,
   type Execution,
 } from "./inference-runtime.test-support.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
@@ -58,8 +52,6 @@ const MODEL_ERROR = {
 
 describe("worker inference provider runtime", () => {
   it("constructs only the embedded provider stream when preparing a worker turn", async () => {
-    const prepareModel = simpleCompletionRuntime.prepareSimpleCompletionModel;
-    const registerProviderStream = providerStreamRuntime.registerProviderStreamForModel;
     const stream = vi.fn<StreamFn>(() => providerStream());
     const createStreamFn = vi.fn(() => stream);
     const wrapSimpleCompletionStreamFn = vi.fn(
@@ -78,39 +70,14 @@ describe("worker inference provider runtime", () => {
       },
     });
     const runtime = setup({ sessionId: SESSION_ID, updatedAt: 1 }, { pluginRegistry });
-    const authStorage = AuthStorage.inMemory({});
-    const modelRegistry = ModelRegistry.inMemory(authStorage);
-    vi.spyOn(authProfileStore, "ensureAuthProfileStore").mockReturnValue({
-      version: 1,
-      profiles: {
-        "openai:worker": { type: "api_key", provider: PROVIDER, key: AUTH_MARKER },
-      },
-    });
-    vi.spyOn(authProfileUsage, "reconcileAuthProfileQuotaBlocks").mockResolvedValue(undefined);
-    vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({
-      apiKey: AUTH_MARKER,
-      mode: "api-key",
-      source: "worker provider fixture",
-    });
-    runtime.prepareModel.mockImplementation((modelParams, assertCurrent) =>
-      prepareModel(
-        {
-          ...modelParams,
-          modelResolver: async (_provider, _modelId, _agentDir, cfg) => ({
-            model: {
-              ...logicalModel,
-              api: cfg?.models?.providers?.openai?.api ?? logicalModel.api,
-              baseUrl: cfg?.models?.providers?.openai?.baseUrl ?? logicalModel.baseUrl,
-            },
-            authStorage,
-            modelRegistry,
-          }),
-        },
-        assertCurrent,
-      ),
-    );
-    vi.mocked(providerStreamRuntime.registerProviderStreamForModel).mockImplementation(
-      registerProviderStream,
+    useRealProviderPreparation(
+      runtime,
+      (cfg) => ({
+        ...logicalModel,
+        api: cfg?.models?.providers?.openai?.api ?? logicalModel.api,
+        baseUrl: cfg?.models?.providers?.openai?.baseUrl ?? logicalModel.baseUrl,
+      }),
+      { "openai:worker": { type: "api_key", provider: PROVIDER, key: AUTH_MARKER } },
     );
 
     await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
@@ -218,16 +185,17 @@ describe("worker inference provider runtime", () => {
       error: `Auth lookup failed for provider "anthropic": configure the selected auth profile. Authorization: Bearer ${secret}. ${"diagnostic ".repeat(40)}`,
     });
 
-    const outcome = await runtime.executor(params(request(), vi.fn()));
-
-    expect(outcome).toMatchObject({ type: "error", reason: "provider-error" });
-    if (outcome.type !== "error") {
+    const failure = await runtime
+      .executor(params(request(), vi.fn()))
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    if (!(failure instanceof Error)) {
       throw new Error("expected model preparation to fail");
     }
-    expect(outcome.message).toContain("configure the selected auth profile");
-    expect(outcome.message).not.toContain(secret);
-    expect(outcome.message.length).toBeLessThanOrEqual(256);
-    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+    const message = failure.message;
+    expect(message).toContain("configure the selected auth profile");
+    expect(message).not.toContain(secret);
+    expect(message.length).toBeLessThanOrEqual(256);
     expect(runtime.stream).not.toHaveBeenCalled();
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
@@ -305,6 +273,41 @@ describe("worker inference provider runtime", () => {
     });
     expect(outcome.message).toContain("Provider request rejected");
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
+  it("carries a TPM retry floor independently of bounded worker error text", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      throw Object.assign(new Error("Provider diagnostic ".repeat(80)), {
+        status: 429,
+        code: "rate_limit_exceeded",
+        headers: new Headers({
+          "x-ratelimit-remaining-tokens": "0",
+          "x-ratelimit-reset-tokens": "1m2.5s",
+        }),
+      });
+    });
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+    expect(outcome).toMatchObject({
+      type: "error",
+      reason: "provider-error",
+      retryAfterMs: 62_500,
+    });
+    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+  });
+
+  it("preserves an unrepresentable retry floor through a JSON provider error", async () => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      throw Object.assign(new Error("rate limited"), {
+        status: 429,
+        error: { code: "rate_limit_exceeded", message: "rate limited" },
+        headers: new Headers({ "retry-after": "9".repeat(30) }),
+      });
+    });
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+    expect(outcome).toMatchObject({ type: "error", retryAfterMs: null });
+    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
   });
 
   it("keeps provider construction and execution on the leased generation", async () => {
@@ -399,14 +402,6 @@ describe("worker inference provider runtime", () => {
 
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
 
-    expect(runtime.prepareModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelId: MODEL,
-        profileId: PROFILE,
-        bindAuthOwner: true,
-        cfg: config,
-      }),
-    );
     const prepared = runtime.prepareModel.mock.calls[0]?.[0];
     expect(prepared?.signal).toBe(execution.signal);
     expect(runtime.scope).toEqual({
@@ -486,7 +481,7 @@ describe("worker inference provider runtime", () => {
         authProfileHash: "oe8bkr3r8947",
       };
       Object.assign(message.content[0]!, { type, providerScratch: "text-state" });
-      Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
+      Object.assign(message.content[1]!, { partialJson: "{}", streamIndex: 0 });
       Object.assign(message.usage, { providerScratch: { requestId: "private" } });
       Object.assign(message.providerReplay, { providerScratch: "private" });
       runtime.stream.mockImplementation(() => providerStream(message));
@@ -494,9 +489,9 @@ describe("worker inference provider runtime", () => {
       const outcome = await runtime.executor(params(request(), vi.fn()));
 
       expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
-      expect(JSON.stringify(outcome)).not.toContain("providerScratch");
-      expect(JSON.stringify(outcome)).not.toContain("partialArgs");
-      expect(JSON.stringify(outcome)).not.toContain("streamIndex");
+      for (const privateField of ["providerScratch", "partialJson", "streamIndex"]) {
+        expect(JSON.stringify(outcome)).not.toContain(privateField);
+      }
       if (type === "unsupported") {
         expect(outcome).toMatchObject({
           type: "error",
@@ -887,9 +882,35 @@ describe("worker inference provider runtime", () => {
   it("rejects unknown, unapproved, and profile-qualified refs", async () => {
     const runtime = setup();
     const emit = vi.fn<Execution["emit"]>();
-    for (const ref of ["missing-model", "known-but-unapproved", `${ALIAS}@worker-profile`]) {
-      expect(await runtime.executor(params(request(ref), emit))).toEqual(MODEL_ERROR);
-    }
+    await runtime.withPreparedInference(async () => {
+      for (const ref of ["missing-model", "known-but-unapproved", `${ALIAS}@worker-profile`]) {
+        expect(await runtime.executePrepared(params(request(ref), emit))).toEqual(MODEL_ERROR);
+      }
+    });
+    expect(runtime.stream).not.toHaveBeenCalled();
+  });
+
+  it("reuses the admitted model and auth across provider requests until the turn owner closes", async () => {
+    const runtime = setup();
+    await runtime.withPreparedInference(async () => {
+      for (let index = 0; index < 2; index += 1) {
+        await expect(runtime.executePrepared(params(request(), vi.fn()))).resolves.toMatchObject({
+          type: "done",
+        });
+      }
+      vi.mocked(workerTurnOwners.getWorkerTurnInference).mockReturnValue(undefined);
+      await expect(runtime.executePrepared(params(request(), vi.fn()))).resolves.toMatchObject({
+        type: "error",
+        reason: "session-not-attached",
+      });
+    });
+    expect(runtime.prepareModel).toHaveBeenCalledOnce();
+    expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
+    expect(runtime.stream).toHaveBeenCalledTimes(2);
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.apiKey)).toEqual([
+      AUTH_MARKER,
+      AUTH_MARKER,
+    ]);
   });
 
   it("passes the admitted search capability to the provider and revokes it after prompt policy", async () => {
@@ -937,12 +958,12 @@ describe("worker inference provider runtime", () => {
 
 describe("worker inference session admission", () => {
   it("uses the admitted source when current config routes the session to another store", async () => {
-    const runtime = setup();
     const changedConfig = { ...config, session: { store: "replacement-sessions.json" } };
+    const runtime = setup(sessionEntry, { config: changedConfig });
 
-    await expect(
-      runtime.executor(params(request(), vi.fn(), changedConfig)),
-    ).resolves.toMatchObject({ type: "done" });
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+    });
     expect(runtime.scope.authProfile).toBe(PROFILE);
     expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
     expect(runtime.stream).toHaveBeenCalledOnce();
@@ -954,12 +975,11 @@ describe("worker inference session admission", () => {
       const runtime = setup();
       runtime.readSessionEntry.mockResolvedValue(entry);
 
-      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-        type: "error",
-        reason: "session-not-attached",
-      });
+      await expect(runtime.executor(params(request(), vi.fn()))).rejects.toThrow(
+        "Worker model is not approved for this session",
+      );
       expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
-      expect(runtime.acquireRuntimeLease).not.toHaveBeenCalled();
+      expect(runtime.prepareModel).not.toHaveBeenCalled();
       expect(runtime.stream).not.toHaveBeenCalled();
     },
   );
@@ -977,7 +997,7 @@ describe("worker inference session admission", () => {
 
     await expect(pending).rejects.toThrow("Worker inference source is no longer current");
     expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
-    expect(runtime.acquireRuntimeLease).not.toHaveBeenCalled();
+    expect(runtime.prepareModel).not.toHaveBeenCalled();
     expect(runtime.stream).not.toHaveBeenCalled();
   });
 });

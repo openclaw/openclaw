@@ -109,7 +109,7 @@ struct TailscaleIntegrationSectionTests {
     func `concurrent status checks share one request despite waiter cancellation`(cancelledWaiter: String) async {
         let loader = TailscaleStatusLoader()
         let completion = TailscaleStatusCompletion()
-        let joinBarrier = TailscaleStatusJoinBarrier()
+        let joinBarrier = AsyncTestGate()
         let service = TailscaleService(
             isInstalled: true,
             isRunning: true,
@@ -117,12 +117,13 @@ struct TailscaleIntegrationSectionTests {
             tailscaleIP: "100.66.5.88",
             appInstallationProbe: { true },
             cliInstallationProbe: { false },
-            statusDataLoader: loader.load,
-            statusCheckJoinHandler: { await joinBarrier.signal() })
+            statusDataLoader: loader.load)
 
         let first = Task { await service.checkTailscaleStatus() }
         await loader.waitForRequestStart()
-        let second = Task {
+        let second = Task { @MainActor in
+            // The test cannot resume on MainActor until this waiter suspends in the status check.
+            joinBarrier.open()
             await service.checkTailscaleStatus()
             await completion.markFinished()
         }
@@ -238,23 +239,5 @@ private actor TailscaleStatusCompletion {
 
     func markFinished() {
         self.finishedCount += 1
-    }
-}
-
-private actor TailscaleStatusJoinBarrier {
-    private var joined = false
-    private var continuation: CheckedContinuation<Void, Never>?
-
-    func signal() {
-        self.joined = true
-        self.continuation?.resume()
-        self.continuation = nil
-    }
-
-    func wait() async {
-        guard !self.joined else { return }
-        await withCheckedContinuation { continuation in
-            self.continuation = continuation
-        }
     }
 }

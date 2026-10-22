@@ -5,9 +5,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginHttpRouteHandler } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenBlobStoreOptions,
-  PluginBlobStore,
+  PluginBlobStoreWithReceipts,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginBlobStoreForTests,
@@ -18,12 +20,44 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { registerDiffsPlugin } from "./plugin.js";
 import { DiffArtifactStore } from "./store.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
 
 const execFileAsync = promisify(execFile);
+
+export function registerDiffsHttpRouteForTest(params: {
+  stateDir: string;
+  config?: OpenClawConfig;
+}): OpenClawPluginHttpRouteHandler {
+  const config = params.config ?? {};
+  let handler: OpenClawPluginHttpRouteHandler | undefined;
+  const api = createTestPluginApi({
+    config,
+    runtime: createPluginRuntimeMock({
+      config: { current: () => config },
+      state: {
+        openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) =>
+          createPluginBlobStoreForTests<TMetadata>("diffs", options, {
+            ...process.env,
+            OPENCLAW_STATE_DIR: params.stateDir,
+          }),
+      },
+    }),
+    registerHttpRoute(route) {
+      if (route.path === "/plugins/diffs") {
+        handler = route.handler;
+      }
+    },
+  });
+  registerDiffsPlugin(api);
+  assert.ok(handler, "Diffs plugin must register its viewer route");
+  return handler;
+}
 
 export async function expireDiffArtifactForTest(
   rootDir: string,
@@ -107,10 +141,10 @@ export async function createDiffStoreHarness(
 ): Promise<{
   rootDir: string;
   store: DiffArtifactStore;
-  blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+  blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
   reopen: () => Promise<{
     store: DiffArtifactStore;
-    blobStore: PluginBlobStore<DiffArtifactBlobMetadata>;
+    blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
   }>;
   cleanup: () => Promise<void>;
 }> {

@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -75,6 +76,35 @@ if (anchorCreator === String(process.pid) && anchorFd === "9") {
         // A missing creation FD never grants cleanup authority.
       }
     });
+  }
+}
+const workflowContext = process.env.OPENCLAW_PR_WORKFLOW_CONTEXT;
+if (workflowContext) {
+  // Exec preserves the verified producer PID; only its child receives this FD.
+  // The child validates the repository/PR/source again before loading helpers.
+  try {
+    const held = fstatSync(8);
+    if (
+      !held.isFile() ||
+      held.uid !== process.getuid() ||
+      (held.mode & 0o777) !== 0o400 ||
+      held.nlink !== 0 ||
+      held.size < 1 ||
+      held.size > 4096 ||
+      `${held.dev}:${held.ino}` !== workflowContext
+    ) {
+      throw new Error("Invalid workflow selection descriptor");
+    }
+    const bytes = Buffer.alloc(held.size);
+    if (
+      readSync(8, bytes, 0, bytes.length, 0) !== bytes.length ||
+      JSON.parse(bytes.toString("utf8")).creator !== String(process.pid)
+    ) {
+      throw new Error("Workflow selection does not belong to this supervisor");
+    }
+  } catch (error) {
+    console.error(error.message);
+    process.exit(1);
   }
 }
 // The supervisor must not retain a cwd inside a worktree the operation may
@@ -342,8 +372,13 @@ const child = spawn(script, args, {
     OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
     OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: lockSnapshotDir,
   },
-  stdio: ["inherit", "inherit", "inherit", "pipe"],
+  stdio: workflowContext
+    ? ["inherit", "inherit", "inherit", "pipe", "ignore", "ignore", "ignore", "ignore", 8]
+    : ["inherit", "inherit", "inherit", "pipe"],
 });
+if (workflowContext) {
+  closeSync(8);
+}
 operationGroup.pid = child.pid;
 if (killDeadline) {
   signalProcessGroup("SIGKILL");
@@ -530,6 +565,25 @@ function childResultAllowsLockRelease() {
     !notificationFailure &&
     !hadLingeringGroup;
   return completedCleanly || failedDuringValidation;
+}
+
+// A side-effecting failure that ended on its own leaves the same evidence as a
+// clean exit once the full drain observes the group dead and every inherited
+// notification-pipe holder gone: only an escaped, fd-closing daemonizer stays
+// invisible, the residual a clean exit already accepts (#124583). Signals,
+// lingering group work, open pipes, and controller loss keep the lock sticky.
+function failedOperationDrainAllowsLockRelease() {
+  return (
+    drainResult === "drained" &&
+    operationCompleteReceived &&
+    childResult.code !== null &&
+    childResult.code > 0 &&
+    childResult.code < 128 &&
+    !receivedSignal &&
+    !childResult.signal &&
+    !notificationFailure &&
+    !hadLingeringGroup
+  );
 }
 
 const postExitGroupStatus = child.pid ? processGroupStatus() : "dead";
@@ -734,7 +788,9 @@ for (const [signal, handler] of signalHandlers) {
 
 const retainedLocks = [];
 const releaseFailures = new Set();
-if (drained && childResultAllowsLockRelease()) {
+const releaseAfterDrainedFailure =
+  drained && !childResultAllowsLockRelease() && failedOperationDrainAllowsLockRelease();
+if (drained && (childResultAllowsLockRelease() || releaseAfterDrainedFailure)) {
   for (const lock of locks.values()) {
     try {
       releaseLock(lock);
@@ -750,6 +806,15 @@ if (drained && childResultAllowsLockRelease()) {
 }
 for (const { lock, releaseError } of retainedLocks) {
   reportRetainedLock(lock, releaseError, releaseFailures);
+}
+if (releaseAfterDrainedFailure) {
+  for (const { lockRef } of locks.values()) {
+    if (!retainedLocks.some(({ lock }) => lock.lockRef === lockRef)) {
+      console.error(
+        `Released the operation lock for PR #${lockRef.split("/").at(-1)} after exit code ${childResult.code}; its process group and every notification-pipe holder exited.`,
+      );
+    }
+  }
 }
 
 if (

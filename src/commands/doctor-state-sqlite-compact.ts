@@ -1,4 +1,3 @@
-/** Explicit doctor maintenance for the canonical shared state SQLite database. */
 import fs from "node:fs";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
@@ -27,7 +26,7 @@ export async function runDoctorStateSqliteCompact(options: { env?: NodeJS.Proces
     };
   }
   if (!stat.isFile()) {
-    throw new Error(`Canonical OpenClaw state database is not a regular file: ${sqlitePath}`);
+    throw new Error(`OpenClaw state database is not a regular file: ${sqlitePath}`);
   }
   return await withDoctorSqliteMaintenanceLock({
     env,

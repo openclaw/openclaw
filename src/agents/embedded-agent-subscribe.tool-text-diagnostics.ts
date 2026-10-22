@@ -1,14 +1,36 @@
-/**
- * Warns when assistant text appears to expose raw tool-call syntax.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
+import { detectToolCallShapedText } from "../../packages/tool-call-repair/src/index.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
-import { detectAssistantTranscriptRoleHeaderText } from "../shared/text/assistant-transcript-role-headers.js";
-import { detectToolCallShapedText } from "../shared/text/tool-call-shaped-text.js";
 import { isToolCallBlockType } from "../shared/tool-block-contract.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
+
+type AssistantTranscriptRoleHeaderDetection = {
+  kind: "angle_role_header" | "role_timestamp_bracket" | "timestamp_role_colon";
+  role: "assistant" | "developer" | "system" | "user";
+};
+
+/** Detect transcript-role headers in assistant Markdown through the canonical parser. */
+function detectAssistantTranscriptRoleHeaderText(
+  text: string,
+): AssistantTranscriptRoleHeaderDetection | null {
+  // Parsed headers need a bracket or angle delimiter, written literally or as an entity.
+  if (!text.includes("[") && !text.includes("<") && !text.includes("&")) {
+    return null;
+  }
+  const annotation = markdownToIR(text, {
+    assistantTranscriptRoleHeaders: true,
+    enableSpoilers: true,
+    linkify: false,
+    tableMode: "off",
+  }).annotations?.[0];
+  if (!annotation || annotation.type !== "assistant_transcript_role") {
+    return null;
+  }
+  return { kind: annotation.kind, role: annotation.role };
+}
 
 function isRegisteredToolName(
   toolName: string | undefined,
@@ -32,20 +54,9 @@ export function warnIfAssistantEmittedSuspiciousText(
   assistantMessage: AssistantMessage,
 ) {
   // Detect text pretending to call a tool only when no real invocation was emitted.
-  const structuredToolInvocation =
-    Array.isArray(assistantMessage.content) &&
-    assistantMessage.content.some((block) => {
-      if (!block || typeof block !== "object") {
-        return false;
-      }
-      const rawType = Reflect.get(block, "type");
-      const type = typeof rawType === "string" ? rawType.trim() : "";
-      return (
-        isToolCallBlockType(type) ||
-        Array.isArray(Reflect.get(block, "tool_calls")) ||
-        Array.isArray(Reflect.get(block, "toolCalls"))
-      );
-    });
+  const structuredToolInvocation = assistantMessage.content.some((block) =>
+    isToolCallBlockType(block.type),
+  );
   const text =
     extractTextFromChatContent(assistantMessage.content, {
       joinWith: "\n",

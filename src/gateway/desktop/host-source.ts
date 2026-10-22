@@ -104,7 +104,6 @@ type HostDesktopInspectionParams = {
   config?: DesktopHostConfig;
   platform?: NodeJS.Platform;
   managedDesktop?: ManagedLinuxDesktop;
-  probeRfb?: typeof probeRfbServer;
 };
 
 /** Probes the configured host desktop without reading or exposing password material. */
@@ -146,7 +145,7 @@ async function inspectConfiguredHostDesktop(
 ): Promise<HostDesktopInspection> {
   const port = params.config?.port ?? DEFAULT_HOST_DESKTOP_PORT;
   const platform = params.platform ?? process.platform;
-  const probe = await (params.probeRfb ?? probeRfbServer)({
+  const probe = await probeRfbServer({
     host: "127.0.0.1",
     port,
     timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
@@ -202,11 +201,9 @@ export function createHostDesktopSource(params: {
   config: DesktopHostConfig;
   platform?: NodeJS.Platform;
   managedDesktop?: ManagedLinuxDesktop;
-  probeRfb?: typeof probeRfbServer;
 }) {
   const port = params.config.port ?? DEFAULT_HOST_DESKTOP_PORT;
   const platform = params.platform ?? process.platform;
-  const probeRfb = params.probeRfb ?? probeRfbServer;
   const managedDesktop =
     params.managedDesktop ??
     (params.config.managed === true && platform === "linux"
@@ -261,7 +258,7 @@ export function createHostDesktopSource(params: {
   const acquire = async (assertCurrent?: () => void): Promise<HostDesktopAcquireResult> => {
     assertCurrent?.();
     selectedManagedDesktop = false;
-    const probe = await probeRfb({
+    const probe = await probeRfbServer({
       host: "127.0.0.1",
       port,
       timeoutMs: HOST_DESKTOP_PROBE_TIMEOUT_MS,
@@ -309,7 +306,6 @@ export function createHostDesktopSource(params: {
         config: params.config,
         platform,
         managedDesktop,
-        probeRfb,
       }),
   };
 }
@@ -321,7 +317,6 @@ export function createHostDesktopService(params: {
   getConfig: () => DesktopHostConfig | undefined;
   registry: DesktopSessionRegistry;
   platform?: NodeJS.Platform;
-  managedDesktop?: ManagedLinuxDesktop;
 }) {
   const platform = params.platform ?? process.platform;
   type HostDesktopRuntime = {
@@ -380,14 +375,13 @@ export function createHostDesktopService(params: {
     if (!current) {
       const ownerEpoch = nextOwnerEpoch++;
       const managedDesktop =
-        params.managedDesktop ??
-        (config.managed === true && platform === "linux"
+        config.managed === true && platform === "linux"
           ? createManagedLinuxDesktop({
               onFailed: () => {
                 void params.registry.stop("host", ownerEpoch);
               },
             })
-          : undefined);
+          : undefined;
       const snapshot = { ...config };
       current = {
         config: snapshot,
@@ -503,16 +497,11 @@ export function createHostDesktopService(params: {
       }
     },
     async status() {
-      for (;;) {
-        const runtime = await resolveRuntime();
-        if (!runtime) {
-          return (await inspectHostDesktop({ config: params.getConfig(), platform })).status;
-        }
-        const inspection = await runtime.source.inspect();
-        if (isCurrent(runtime)) {
-          return inspection.status;
-        }
+      const runtime = await resolveRuntime();
+      if (!runtime) {
+        return (await inspectHostDesktop({ config: params.getConfig(), platform })).status;
       }
+      return (await runtime.source.inspect()).status;
     },
     reconcileRuntimePolicy,
   };

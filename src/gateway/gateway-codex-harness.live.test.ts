@@ -38,6 +38,7 @@ import {
   type CapturedAgentEvent,
   type CodexNativeUsageSnapshot,
 } from "../../test/helpers/gateway-codex-harness.js";
+import { storeLiveApiKeyProfile } from "../../test/helpers/live-api-key-profile.js";
 import {
   renderBitmapTextPngBase64,
   renderSolidColorPngBase64,
@@ -1464,6 +1465,15 @@ function randomBitmapTextToken(length = 6): string {
   return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
+function randomSpelledWordsToken(count: number): string {
+  // Models sometimes drop trailing characters when echoing long hex runs; spelled words echo intact.
+  const words = (
+    "ALPHA BRAVO CHARLIE DELTA ECHO FOXTROT GOLF HOTEL INDIA JULIET KILO LIMA MIKE " +
+    "NOVEMBER OSCAR PAPA QUEBEC ROMEO SIERRA TANGO UNIFORM VICTOR WHISKEY XRAY YANKEE ZULU"
+  ).split(" ");
+  return [...randomBytes(count)].map((byte) => words[byte % words.length]).join("-");
+}
+
 function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "denied" | undefined {
   const status = events.findLast((event) => event.data?.phase === "completed" && event.data?.status)
     ?.data?.status;
@@ -1601,11 +1611,21 @@ async function verifyCodexGuardianProbe(params: {
 async function verifyCodexCronMcpProbe(params: {
   client: GatewayClient;
   env: NodeJS.ProcessEnv;
+  modelKey: string;
   port: number;
   sessionKey: string;
   token: string;
 }): Promise<void> {
-  const cronProbe = createLiveCronProbeSpec();
+  const profileId =
+    CODEX_HARNESS_AUTH_MODE === "api-key" && parseModelKey(params.modelKey).provider === "openai"
+      ? await storeLiveApiKeyProfile(
+          { url: `ws://127.0.0.1:${params.port}`, gatewayToken: params.token },
+          { provider: "openai", apiKey: params.env.OPENAI_API_KEY, agentId: "dev" },
+        )
+      : undefined;
+  const cronProbe = createLiveCronProbeSpec({
+    model: profileId ? `${params.modelKey}@${profileId}` : undefined,
+  });
   let createdJob: CronListJob | undefined;
   let lastReply = "";
 
@@ -1957,7 +1977,7 @@ describeLive("gateway live (Codex harness)", () => {
           const sessionKey = `agent:dev:live-codex-steering-${mode}`;
           const runId = `steering-root-${randomUUID()}`;
           const steerRunId = `steering-input-${randomUUID()}`;
-          const marker = `CODEX-STEER-${randomBytes(8).toString("hex").toUpperCase()}`;
+          const marker = `CODEX-STEER-${randomSpelledWordsToken(4)}`;
           const startedPath = path.join(workspace, `${mode}-started`);
           const releasePath = path.join(workspace, `${mode}-release`);
           const commandPath = path.join(workspace, `${mode}-wait.cjs`);
@@ -2053,7 +2073,20 @@ describeLive("gateway live (Codex harness)", () => {
             runId,
             timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
           });
-          expect(finalText.trim()).toBe(marker);
+          // On mismatch, report the transcript answer to separate stream loss from model output.
+          const historyAnswer =
+            finalText.trim() === marker
+              ? undefined
+              : await firstClient
+                  .request<{ messages: unknown[] }>("chat.history", { sessionKey, limit: 100 })
+                  .then((history) =>
+                    history.messages
+                      .map(asOptionalRecord)
+                      .filter((message) => message?.role === "assistant")
+                      .map((message) => extractFirstTextBlock(message))
+                      .at(-1),
+                  );
+          expect(finalText.trim(), `transcript answer: ${historyAnswer}`).toBe(marker);
           const nativeStarts = gatewayEvents.filter((event) => {
             const payload = asOptionalRecord(event.payload);
             return (
@@ -2664,6 +2697,7 @@ describeLive("gateway live (Codex harness)", () => {
               logCodexLiveStep("cron-mcp-probe:start", { sessionKey });
               await verifyCodexCronMcpProbe({
                 client: activeClient,
+                modelKey,
                 sessionKey,
                 port,
                 token,

@@ -7,6 +7,7 @@ export type NodeWorkspaceWorkerOptions = {
   workspaceDir: string;
   remoteRoot: string;
   signal: AbortSignal;
+  assertCurrent?: () => void;
   openDuplex: NonNullable<OpenClawPluginServiceContext["openNodeDuplex"]>;
 };
 
@@ -19,11 +20,13 @@ export async function runNodeWorkspaceWorker(
   beforeStart?: () => Promise<void>,
 ) {
   signal.throwIfAborted();
+  options.assertCurrent?.();
   const channel = await options.openDuplex({
     nodeId: options.nodeId,
     command,
     params: { ...params, workspaceDir: options.remoteRoot },
     signal,
+    assertCurrent: options.assertCurrent,
     // The existing node transport supplies liveness heartbeats for subscriptions.
     timeoutMs: onLine || params.operation === "installDependencies" ? 0 : 60_000,
   });
@@ -31,30 +34,33 @@ export async function runNodeWorkspaceWorker(
   const decoder = new StringDecoder("utf8");
   let text = "";
   let pending = Promise.resolve();
-  const unsubscribe = channel.onMessage((message) => {
-    signal.throwIfAborted();
-    text += decoder.write(Buffer.from(message));
-    if (onLine) {
-      let newline: number;
-      while ((newline = text.indexOf("\n")) >= 0) {
-        const line = text.slice(0, newline);
-        pending = pending.then(() =>
-          onLine(line, async (value) => {
-            signal.throwIfAborted();
-            await channel.send(Buffer.from(`${JSON.stringify(value)}\n`));
-          }),
-        );
-        void pending.catch(() => {
-          channel.close();
-        });
-        text = text.slice(newline + 1);
-      }
-    }
-  });
+  let unsubscribe: (() => void) | undefined;
   try {
+    options.assertCurrent?.();
+    unsubscribe = channel.onMessage((message) => {
+      signal.throwIfAborted();
+      text += decoder.write(Buffer.from(message));
+      if (onLine) {
+        let newline: number;
+        while ((newline = text.indexOf("\n")) >= 0) {
+          const line = text.slice(0, newline);
+          pending = pending.then(() =>
+            onLine(line, async (value) => {
+              signal.throwIfAborted();
+              await channel.send(Buffer.from(`${JSON.stringify(value)}\n`));
+            }),
+          );
+          void pending.catch(() => {
+            channel.close();
+          });
+          text = text.slice(newline + 1);
+        }
+      }
+    });
     // The admitted node owns cleanup before any source bytes are uploaded.
     await beforeStart?.();
     signal.throwIfAborted();
+    options.assertCurrent?.();
     // Wait until the caller has installed its output listener before starting IO.
     await channel.send(Buffer.from("start"));
     const result = asOptionalRecord(await channel.closed);
@@ -66,7 +72,9 @@ export async function runNodeWorkspaceWorker(
     }
     return text + decoder.end();
   } finally {
-    unsubscribe();
+    unsubscribe?.();
     channel.close();
+    // Revocation prevents new IO, but accepted node work still owns its cleanup.
+    await channel.closed.catch(() => {});
   }
 }

@@ -1,18 +1,18 @@
-import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
-import type { renderAgentFiles } from "./panels-files.ts";
-import type { renderAgents } from "./view.ts";
+import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
+import { createInitialCronState } from "../../lib/cron/index.ts";
+import type { AgentFiles } from "./panels-files.tsx";
+import type { Agents } from "./view.tsx";
 
-type AgentsViewProps = Parameters<typeof renderAgents>[0];
-type AgentFilesProps = Parameters<typeof renderAgentFiles>[0];
+type AgentsViewProps = Parameters<typeof Agents>[0];
+type AgentFilesProps = Parameters<typeof AgentFiles>[0];
 
 export function primaryModelPicker(container: ParentNode) {
-  return container.querySelector(
+  return container.querySelector<HTMLElement>(
     'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
   );
 }
 
 export const inertAgentFileControls = {
-  agentFileConflict: null,
   onLoadFiles: () => undefined,
   onSelectFile: () => undefined,
   onFileDraftChange: () => undefined,
@@ -25,7 +25,49 @@ export const inertAgentFileControls = {
 export function createAgentViewTestProps(
   overrides: Partial<AgentsViewProps> = {},
 ): AgentsViewProps {
+  const data: ReturnType<AgentsViewProps["readData"]> = {
+    agentsList: {
+      defaultId: "alpha",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        { id: "alpha", name: "Alpha" },
+        { id: "beta", name: "Beta" },
+      ],
+    },
+    agentsSelectedId: "beta",
+    agentsPanel: "overview",
+    requestGeneration: 0,
+    toolsCatalogLoading: false,
+    toolsCatalogError: null,
+    toolsCatalogResult: null,
+    toolsEffectiveLoading: false,
+    toolsEffectiveError: null,
+    toolsEffectiveResult: null,
+    chatModelCatalogRead: null,
+    agentFilesLoading: false,
+    agentFilesError: null,
+    agentFilesList: null,
+    agentFileActive: null,
+    agentFileEditors: {},
+    agentFileSaving: false,
+    agentFileConflict: null,
+    identityDraft: { name: null, emoji: null, avatar: null },
+    identitySaving: false,
+    identityError: null,
+    agentSkillsRead: null,
+    agentSkillsReport: null,
+    agentSkillsAgentId: null,
+    cron: createInitialCronState(),
+  };
   return {
+    readData: () => data,
+    readChannels: () => ({
+      channelsSnapshot: null,
+      channelsLoading: false,
+      channelsError: null,
+      channelsLastSuccess: null,
+    }),
     access: {
       canCreateAgent: true,
       canPatchConfig: true,
@@ -35,16 +77,12 @@ export function createAgentViewTestProps(
       canRunCron: true,
     },
     basePath: "",
-    loading: false,
-    error: null,
-    agentsList: {
-      defaultId: "alpha",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "alpha", name: "Alpha" } as never, { id: "beta", name: "Beta" } as never],
-    },
+    listRead: null,
     selectedAgentId: "beta",
-    activePanel: "overview",
+    memoryTarget: {
+      read: () => (overrides.selectedAgentId === undefined ? "beta" : overrides.selectedAgentId),
+      subscribe: () => () => {},
+    },
     config: {
       configForm: null,
       configSnapshot: null,
@@ -54,84 +92,58 @@ export function createAgentViewTestProps(
       lastError: null,
     },
     channels: {
-      snapshot: null,
-      loading: false,
-      error: null,
-      lastSuccess: null,
       onRefresh: () => undefined,
     },
     cron: {
-      status: null,
-      jobs: [],
-      jobsTotal: 0,
-      jobsHasMore: false,
-      jobsLoadingMore: false,
-      scopedTotal: null,
-      scopedNextWakeAtMs: null,
-      loading: false,
-      error: null,
+      read: () => ({ summary: null, jobs: null, refresh: null, command: null }),
       onRefresh: () => undefined,
       onLoadMore: () => undefined,
       onRunNow: () => undefined,
     },
     agentFiles: {
-      agentFilesList: null,
-      agentFilesLoading: false,
       agentFilesError: null,
-      agentFileActive: null,
-      agentFileEditors: {},
-      agentFileSaving: false,
+      listRead: null,
       ...inertAgentFileControls,
     },
     agentIdentityById: {},
     overview: {
-      identityDraft: { name: null, emoji: null, avatar: null },
-      identityAvatarLoader: {
-        resolve: (url) => url,
-        imageErrorHandler: () => () => undefined,
-      },
-      identitySaving: false,
-      identityError: null,
       modelCatalog: [],
       decisionModels: [],
       modelCatalogRetired: false,
-      modelCatalogStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
-      onModelChange: () => undefined,
-      onDecisionModelChange: () => undefined,
-      onModelFallbacksChange: () => undefined,
+      modelCatalogHasSnapshot: false,
+      modelCatalogGateway: {
+        client: null,
+        phase: "connected",
+        offlineStable: false,
+        hello: null,
+        canvasPluginSurfaceUrl: null,
+        assistantAgentId: null,
+        sessionKey: "main",
+        lastError: null,
+        lastErrorCode: null,
+      },
+      modelSelectionPolicy: undefined,
+      onModelChange: () => false,
+      onDecisionModelChange: () => false,
+      onModelFallbacksChange: () => false,
       onModelCatalogOpen: () => undefined,
       onIdentityFieldChange: () => undefined,
       onIdentityAvatarSelect: () => undefined,
+      onIdentityAvatarSet: () => undefined,
+      onIdentityAvatarGenerate: async () => ({ name: "", description: "", svg: "" }),
       onIdentitySave: () => undefined,
     },
     agentSkills: {
-      report: null,
-      loading: false,
-      error: null,
-      activeAgentId: null,
       filter: "",
       onFilterChange: () => undefined,
       onRefresh: () => undefined,
-      onToggle: () => undefined,
+      onToggle: () => false,
       onClear: () => undefined,
-      onDisableAll: () => undefined,
+      onDisableAll: () => false,
     },
     tools: {
-      toolsCatalogLoading: false,
-      toolsCatalogError: null,
-      toolsCatalogResult: null,
-      toolsEffectiveLoading: false,
-      toolsEffectiveError: null,
-      toolsEffectiveResult: null,
       onOpenGitHubConnections: () => undefined,
-      githubIdentity: new GitHubIdentityController({
-        requestUpdate: () => undefined,
-        runExternalMutation: async () => ({
-          ok: false,
-          reason: "unavailable",
-          error: "Mutation unavailable in rendering test.",
-        }),
-      }),
+      githubIdentity: githubIdentityViewFixture(),
       runtimeSessionKey: "main",
       runtimeSessionMatchesSelectedAgent: false,
       onProfileChange: () => undefined,
@@ -145,6 +157,8 @@ export function createAgentViewTestProps(
     onConfigSave: () => undefined,
     onSetDefault: () => undefined,
     onTogglePinnedAgent: () => undefined,
+    onOpenMemoryImport: () => undefined,
+    onOpenMemorySettings: () => undefined,
     onOpenAgentDefaults: () => undefined,
     ...overrides,
   };

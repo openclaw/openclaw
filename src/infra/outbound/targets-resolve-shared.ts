@@ -1,6 +1,7 @@
 // Shared target resolution applies plugin defaults, allowlists, prefixes, and
 // fallback errors for direct and loaded-channel send paths.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -10,9 +11,6 @@ import { validateTargetProviderPrefix } from "./channel-target-prefix.js";
 import { missingTargetError, reservedTargetLiteralError } from "./target-errors.js";
 import { resolveReservedTargetLiteral } from "./target-normalization.js";
 
-/**
- * Result of resolving a concrete outbound target for a channel send.
- */
 export type OutboundTargetResolution = { ok: true; to: string } | { ok: false; error: Error };
 
 /**
@@ -30,10 +28,10 @@ export type ResolveOutboundTargetParams = {
 /**
  * Resolves a target through a channel plugin or the generic fallback path.
  */
-export function resolveOutboundTargetWithPlugin(params: {
+export async function resolveOutboundTargetWithPlugin(params: {
   plugin: ChannelPlugin | undefined;
   target: ResolveOutboundTargetParams;
-}): OutboundTargetResolution | undefined {
+}): Promise<OutboundTargetResolution | undefined> {
   if (params.target.channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
@@ -51,8 +49,9 @@ export function resolveOutboundTargetWithPlugin(params: {
   // Plugin defaults and allowlists can be account-scoped; resolve them before target validation.
   const allowFromRaw =
     params.target.allowFrom ??
-    (params.target.cfg && plugin.config.resolveAllowFrom
-      ? plugin.config.resolveAllowFrom({
+    (params.target.cfg
+      ? await resolveChannelAllowFrom({
+          plugin,
           cfg: params.target.cfg,
           accountId: params.target.accountId ?? undefined,
         })

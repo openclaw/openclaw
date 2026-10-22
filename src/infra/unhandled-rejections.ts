@@ -2,6 +2,7 @@ import process from "node:process";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { exitAfterSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { restoreRuntimeTerminalState } from "../runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { registerListener } from "../shared/listeners.js";
@@ -264,15 +265,15 @@ export function isUncaughtExceptionHandled(error: unknown): boolean {
 export function installUnhandledRejectionHandler(): void {
   const exitWithTerminalRestore = (
     reason: string,
-    error?: unknown,
-    hookReason = reason,
+    error: unknown,
+    hookReason: string,
     exitCode = 1,
   ) => {
     for (const message of runFatalErrorHooks({ reason: hookReason, error })) {
       console.error("[openclaw]", message);
     }
     restoreRuntimeTerminalState(reason, { resumeStdinIfPaused: false });
-    process.exit(exitCode);
+    exitAfterSignalExitBarriers(exitCode, reason);
   };
 
   process.on("unhandledRejection", (reason, _promise) => {

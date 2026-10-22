@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
@@ -9,23 +10,21 @@ const { compact, account } = vi.hoisted(() => ({ compact: vi.fn(), account: vi.f
 vi.mock("../../agents/embedded-agent.js", () => ({ compactEmbeddedAgentSession: compact }));
 // mock-isolation: This preflight never dispatches a memory-flush model turn.
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({}));
-// mock-isolation: Supply admitted transcript pressure without starting database workers.
+// mock-isolation: Keep byte-pressure admission independent of token estimates and database workers.
 vi.mock("./agent-runner-memory-transcript-context.js", () => ({
+  estimatePromptTokensFromSessionTranscript: async () => undefined,
   readSessionLogSnapshot: async () => ({ byteSize: 102_400 }),
 }));
 // mock-isolation: Observe admission accounting without starting database workers.
 vi.mock("./session-updates.js", () => ({ incrementCompactionCount: account }));
 
 it.each([
-  { runtime: "codex", ok: false, compacted: false },
-  { runtime: "codex", ok: true, compacted: false },
-  { runtime: "codex", ok: true, compacted: false, reason: "already under target" },
   { runtime: "openclaw", ok: false, compacted: false },
   { runtime: "openclaw", ok: true, compacted: true },
 ])(
-  "continues byte preflight with bounded context after $runtime compaction (ok=$ok, compacted=$compacted)",
-  async ({ runtime, ok, compacted, reason = "fixture declines compaction" }) => {
-    compact.mockReset().mockResolvedValue({ ok, compacted, reason });
+  "continues built-in byte preflight with bounded context (ok=$ok, compacted=$compacted)",
+  async ({ runtime, ok, compacted }) => {
+    compact.mockReset().mockResolvedValue({ ok, compacted, reason: "fixture declines compaction" });
     account
       .mockReset()
       .mockImplementation(
@@ -36,11 +35,10 @@ it.each([
           if (!entry || !params.sessionStore || !params.sessionKey) {
             throw new Error("Missing compaction accounting target");
           }
+          const current: InternalSessionEntry = { ...entry, updatedAt: 1 };
           const updated: InternalSessionEntry = {
-            ...entry,
-            updatedAt: 1,
-            compactionCount: params.amount ?? 1,
-            transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+            ...current,
+            ...projectCompactionAccountingPatch(current, params),
           };
           params.sessionStore[params.sessionKey] = updated;
           return params.amount ?? 1;

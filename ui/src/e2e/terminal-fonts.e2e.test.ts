@@ -1,115 +1,79 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  waitForControlUiGatewayReady,
-  waitForControlUiTerminalReady,
-} from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiTerminalReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  observeTerminalControllers,
+  readTerminalCanvasState,
+} from "./terminal-controller.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "terminal fonts",
   startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 
+const terminalSession = { agentId: "main", confined: false, cwd: "/workspace", shell: "/bin/zsh" };
+function installTerminal(page: Page, sessionId: string, reattach = false) {
+  return installMockGateway(page, {
+    terminalEnabled: true,
+    featureMethods: ["terminal.open"],
+    methodResponses: {
+      "terminal.list": {
+        sessions: reattach
+          ? [{ ...terminalSession, sessionId, attached: true, createdAtMs: 1 }]
+          : [],
+      },
+      "terminal.open": { ...terminalSession, sessionId },
+    },
+  });
+}
+function hasNerdFontStatus(status: "loaded" | "error") {
+  return [...document.fonts].some(
+    (font) => font.family.includes("OpenClaw Nerd Symbols") && font.status === status,
+  );
+}
+const expectFontStatus = (page: Page, status: "loaded" | "error") =>
+  expect.poll(() => page.evaluate(hasNerdFontStatus, status)).toBe(true);
+
 suite.define(() => {
-  it("renders bundled Nerd Font glyphs in a real terminal", async () => {
-    await suite.withPage(
+  it("renders bundled Nerd Font glyphs in a real terminal", () =>
+    suite.withPage(
       { serviceWorkers: "block", viewport: { width: 1180, height: 600 }, deviceScaleFactor: 2 },
       async ({ page, context }) => {
+        await observeTerminalControllers(page);
         const fontDownload = await holdModuleResponse(page, /symbols-nerd-font-mono\.woff2/);
-        const gateway = await installMockGateway(page, {
-          terminalEnabled: true,
-          featureMethods: ["terminal.open"],
-          methodResponses: {
-            "terminal.list": { sessions: [] },
-            "terminal.open": {
-              agentId: "main",
-              confined: false,
-              cwd: "/workspace",
-              sessionId: "font-proof",
-              shell: "/bin/zsh",
-            },
-          },
-        });
+        const gateway = await installTerminal(page, "font-proof");
         await page.goto(suite.server.baseUrl + "activity");
-        await waitForControlUiGatewayReady(page);
         await waitForControlUiTerminalReady(page);
         await page.keyboard.press("Control+Backquote");
         await gateway.waitForRequest("terminal.open");
         const canvas = page.locator(".tp-host canvas");
         await canvas.waitFor();
-        const output =
-          "\x1b[?25l\x1b[1m  OpenClaw · ZSH prompt\x1b[0m\r\n\r\n" +
-          "\x1b[30;46m \uf007 jacob@workstation \x1b[36;44m\ue0b0\x1b[37m \uf07b ~/workspace \x1b[34;42m\ue0b0\x1b[30m \ue0a0 main \x1b[32;49m\ue0b0\x1b[0m\r\n" +
-          "\x1b[32m❯\x1b[0m git status\r\nOn branch main\r\nNothing to commit, working tree clean\r\n\r\n" +
-          "Nerd Font symbols   \uf013  \uf120  \uf17c  \uf121  \udb80\udf44  \ue0b0 \ue0b2\r\n" +
-          "\x1b[1mBold icons          \uf013  \uf120  \uf17c  \uf121  \udb80\udf44\x1b[0m\r\n" +
-          "Text                café  naïve  λ  →  日本語\r\n" +
-          "Operators           !=  ===  =>  ->  <=\r\n";
+        const glyphs =
+          "\uf007 \uf07b \ue0a0 \uf013 \uf120 \uf17c \uf121 \udb80\udf44 \ue0b0 \ue0b2";
+        const output = `\x1b[?25lOpenClaw ${glyphs}\r\n\x1b[1m${glyphs}\x1b[0m café naïve λ → 日本語\r\n`;
         await gateway.emitGatewayEvent("terminal.data", {
           sessionId: "font-proof",
           seq: output.length,
           data: output,
         });
-        await page.waitForFunction(
-          () =>
-            document.querySelector("openclaw-terminal-panel")?.shadowRoot?.querySelector("canvas")
-              ?.width,
-        );
+        await expect
+          .poll(async () => (await readTerminalCanvasState(canvas)).width)
+          .toBeGreaterThan(0);
         await fontDownload.request;
         const fallbackPixels = await canvas.evaluate((element) =>
           (element as HTMLCanvasElement).toDataURL(),
         );
         fontDownload.release();
-        await expect
-          .poll(() =>
-            page.evaluate(() =>
-              [...document.fonts].some(
-                (font) => font.family.includes("OpenClaw Nerd Symbols") && font.status === "loaded",
-              ),
-            ),
-          )
-          .toBe(true);
+        await expectFontStatus(page, "loaded");
         await expect
           .poll(() => canvas.evaluate((element) => (element as HTMLCanvasElement).toDataURL()))
           .not.toBe(fallbackPixels);
-        const frame = await takeControlUiScreenshotFrame(page, canvas, [canvas], {
-          animations: "disabled",
-        });
-        await fs.writeFile(path.join(suite.artifactDir, "terminal.png"), frame.png);
-        const terminalState = () =>
-          page.locator("openclaw-terminal-panel").evaluate((element) => {
-            const panel = element as unknown as {
-              terminalSessions: {
-                tabs: Array<{
-                  controller: {
-                    terminal: {
-                      options: { fontFamily: string };
-                      wasmTerm: { getLine: (row: number) => Array<{ codepoint: number }> };
-                    };
-                  };
-                }>;
-              };
-            };
-            const terminal = panel.terminalSessions.tabs[0]!.controller.terminal;
-            const terminalCanvas = element.shadowRoot!.querySelector("canvas")!;
-            return {
-              family: terminal.options.fontFamily,
-              width: terminalCanvas.width,
-              cssWidth: Number.parseFloat(terminalCanvas.style.width),
-              dpr: devicePixelRatio,
-              text: terminal.wasmTerm
-                .getLine(0)
-                .map((cell) => String.fromCodePoint(cell.codepoint || 32))
-                .join(""),
-            };
-          });
+        const terminalState = () => readTerminalCanvasState(canvas);
         const initial = await terminalState();
         expect(initial.width).toBe(initial.cssWidth * initial.dpr);
         expect(initial.family).toContain('"JetBrains Mono"');
@@ -127,12 +91,6 @@ suite.define(() => {
         expect(changed.text).toBe(initial.text);
         expect(changed.width).toBe(changed.cssWidth * changed.dpr);
         expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
-        const typography = settings.locator("#settings-appearance-typography");
-        const settingsFrame = await takeControlUiScreenshotFrame(settings, typography, [input], {
-          animations: "disabled",
-          scrollTo: typography,
-        });
-        await fs.writeFile(path.join(suite.artifactDir, "settings.png"), settingsFrame.png);
         await settings.reload();
         await input.waitFor();
         expect(await input.inputValue()).toBe("DejaVu Sans Mono");
@@ -155,40 +113,19 @@ suite.define(() => {
         expect(await input.inputValue()).toBe("");
         await settings.close();
       },
-    );
-  });
-  it("keeps the main terminal usable when the bundled font download fails", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+    ));
+  it("keeps the main terminal usable when the bundled font download fails", () =>
+    suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const errors: string[] = [];
       page.on("pageerror", (error) => errors.push(error.message));
       await page.route("**/symbols-nerd-font-mono.woff2*", (route) => route.abort());
-      const gateway = await installMockGateway(page, {
-        terminalEnabled: true,
-        featureMethods: ["terminal.open"],
-        methodResponses: {
-          "terminal.list": { sessions: [] },
-          "terminal.open": {
-            agentId: "main",
-            confined: false,
-            cwd: "/workspace",
-            sessionId: "failed-font",
-            shell: "/bin/zsh",
-          },
-        },
-      });
+      const gateway = await installTerminal(page, "failed-font", true);
       await page.goto(suite.server.baseUrl + "terminal");
       await gateway.waitForRequest("terminal.open");
+      await page.locator(".tp-session.is-current").click();
       const canvas = page.locator(".tp-host canvas");
       await canvas.waitFor();
-      await expect
-        .poll(() =>
-          page.evaluate(() =>
-            [...document.fonts].some(
-              (font) => font.family.includes("OpenClaw Nerd Symbols") && font.status === "error",
-            ),
-          ),
-        )
-        .toBe(true);
+      await expectFontStatus(page, "error");
       await canvas.click();
       await page.keyboard.type("echo still-usable");
       await expect
@@ -196,6 +133,5 @@ suite.define(() => {
         .toBeGreaterThan(0);
       expect(await gateway.getRequests("terminal.open")).toHaveLength(1);
       expect(errors).toEqual([]);
-    });
-  });
+    }));
 });

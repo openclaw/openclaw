@@ -20,11 +20,11 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
       content: [{ type: "text", text: errorJson }],
       ...overrides,
     });
-  const makeStoppedAssistant = () =>
+  const makeStoppedAssistant = (text = "") =>
     makeAssistant({
       stopReason: "stop",
       errorMessage: undefined,
-      content: [],
+      content: text ? [{ type: "text", text }] : [],
     });
 
   function expectSinglePayloadSummary(
@@ -69,7 +69,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   it("does not add tool error fallback when assistant output exists", () => {
     const payloads = buildPayloads({
       assistantTexts: ["All good"],
-      lastAssistant: makeStoppedAssistant(),
+      lastAssistant: makeStoppedAssistant("All good"),
       lastToolError: { toolName: "browser", error: "tab not found" },
     });
 
@@ -141,6 +141,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
           },
         ],
       }),
+      currentAssistant: makeStoppedAssistant("Checked the page and recovered with final answer."),
       lastToolError: { toolName: "browser", error: "connection timeout" },
     });
 
@@ -185,7 +186,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   it("treats a user-facing reply as authoritative after a mutating tool failure", () => {
     const payloads = buildPayloads({
       assistantTexts: ["No issues found. The update is complete."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastAssistant: makeStoppedAssistant("No issues found. The update is complete."),
       lastToolError: { toolName: "edit", error: "file missing" },
     });
 
@@ -253,6 +254,33 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
           verboseLevel,
         }),
         expected,
+      );
+    },
+  );
+
+  it.each([
+    { toolName: "browser", verboseLevel: "off", expected: "⚠️ Browser failed: invalid arguments" },
+    { toolName: "exec", verboseLevel: "on", expected: "⚠️ Exec failed: invalid arguments" },
+    {
+      toolName: "exec",
+      verboseLevel: "full",
+      expected: "⚠️ Exec failed: PRIVATE_VALIDATOR_DETAIL",
+    },
+  ] as const)(
+    "describes $toolName validation errors at $verboseLevel verbosity",
+    ({ toolName, verboseLevel, expected }) => {
+      expectSinglePayloadText(
+        buildPayloads({
+          lastToolError: {
+            toolName,
+            executionStarted: false,
+            validationErrorSummary: `${toolName} tool validation failed: invalid arguments`,
+            error: "PRIVATE_VALIDATOR_DETAIL",
+          },
+          verboseLevel,
+        }),
+        expected,
+        true,
       );
     },
   );

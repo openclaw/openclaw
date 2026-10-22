@@ -11,7 +11,6 @@ import { withInstallActivity } from "../infra/install-progress.js";
 import {
   buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
-  type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
@@ -40,11 +39,9 @@ import {
   listManagedNpmRootPackageNames,
   quarantineManagedNpmProjectRebuildArtifacts,
   resolveManagedNpmInstallPlan,
-  resolveManagedNpmRootDependencySpecForInstall,
   resolveManagedNpmRootPackageDir,
   resolveRequiredPlatformPackageNames,
   type ManagedNpmProjectQuarantine,
-  type ManagedNpmRootDependencySpecPreparation,
 } from "./install-managed-npm-state.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
 import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
@@ -72,7 +69,7 @@ import {
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
 import {
-  findMissingRequiredPluginDependencies,
+  buildManagedPluginDependencyStatus,
   normalizePluginDependencySpecs,
 } from "./status-dependencies-core.js";
 
@@ -122,15 +119,13 @@ export async function installPluginFromManagedNpmRoot(
     "requirePluginManifest" | "allowSourceTypeScriptEntries"
   > & {
     packageName: string;
-    dependencySpec?: string;
-    prepareDependencySpec?: ManagedNpmRootDependencySpecPreparation;
+    prepareDependencySpec: (params: { npmRoot: string }) => Promise<string>;
     displaySpec: string;
     installPolicyRequest: PluginInstallPolicyRequest;
     npmResolution: NpmSpecResolution;
     policyPreflightSourcePath?: string;
     signal?: AbortSignal;
     expectedReplacementPluginId?: string;
-    integrityDrift?: NpmIntegrityDrift;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -194,7 +189,6 @@ export async function installPluginFromManagedNpmRoot(
       targetDir: targetPackageDir,
       extensions: [],
       npmResolution: params.npmResolution,
-      ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
     };
   }
   params.signal?.throwIfAborted();
@@ -207,17 +201,17 @@ export async function installPluginFromManagedNpmRoot(
     | undefined;
   const runManagedNpmInstall = async (npmRoot: string): Promise<InstallPluginResult> => {
     const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
-    const prepared = await resolveManagedNpmRootDependencySpecForInstall({
-      npmRoot,
-      packageName: params.packageName,
-      dependencySpec: params.dependencySpec,
-      prepareDependencySpec: params.prepareDependencySpec,
-    });
-    if (!prepared.ok) {
-      return prepared;
+    let dependencySpec: string;
+    try {
+      dependencySpec = await params.prepareDependencySpec({ npmRoot });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
     logger.info?.(`Installing ${params.displaySpec} into ${npmRoot}…`);
-    if (params.packageName !== "openclaw") {
+    const repairOpenClawPeer = async (phase: "" | " after npm install") => {
+      if (params.packageName === "openclaw") {
+        return;
+      }
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
         timeoutMs,
@@ -226,9 +220,10 @@ export async function installPluginFromManagedNpmRoot(
         logger,
       });
       if (repairedOpenClawPeer) {
-        logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}`);
+        logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot}${phase}`);
       }
-    }
+    };
+    await repairOpenClawPeer("");
     const managedOverrides = await readOpenClawManagedNpmRootOverrides();
     const quarantineForRecovery = async (
       cause: NonNullable<typeof recovery>["cause"],
@@ -270,14 +265,17 @@ export async function installPluginFromManagedNpmRoot(
         };
       }
     };
-    await upsertManagedNpmRootDependency({
-      npmRoot,
-      packageName: params.packageName,
-      dependencySpec: prepared.dependencySpec,
-      managedOverrides,
-      omitNpmAliasOverrides,
-    });
-    const initialPeerSync = await syncManagedPeerDependenciesForInstall();
+    const prepareManagedDependencies = async () => {
+      await upsertManagedNpmRootDependency({
+        npmRoot,
+        packageName: params.packageName,
+        dependencySpec,
+        managedOverrides,
+        omitNpmAliasOverrides,
+      });
+      return await syncManagedPeerDependenciesForInstall();
+    };
+    const initialPeerSync = await prepareManagedDependencies();
     if (!initialPeerSync.ok) {
       return initialPeerSync;
     }
@@ -307,14 +305,7 @@ export async function installPluginFromManagedNpmRoot(
         "npm rejected managed npm overrides; retrying plugin install without npm-incompatible overrides for this npm version.",
       );
       omitNpmAliasOverrides = true;
-      await upsertManagedNpmRootDependency({
-        npmRoot,
-        packageName: params.packageName,
-        dependencySpec: prepared.dependencySpec,
-        managedOverrides,
-        omitNpmAliasOverrides,
-      });
-      const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall();
+      const aliasRetryPeerSync = await prepareManagedDependencies();
       if (!aliasRetryPeerSync.ok) {
         return aliasRetryPeerSync;
       }
@@ -451,18 +442,7 @@ export async function installPluginFromManagedNpmRoot(
         };
       }
     }
-    if (params.packageName !== "openclaw") {
-      const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
-        npmRoot,
-        timeoutMs,
-        workTimeoutMs,
-        signal: params.signal,
-        logger,
-      });
-      if (repairedOpenClawPeer) {
-        logger.info?.(`Repaired stale openclaw peer dependency in ${npmRoot} after npm install`);
-      }
-    }
+    await repairOpenClawPeer(" after npm install");
     try {
       await relinkOpenClawPeerDependenciesInManagedNpmRoot({
         npmRoot,
@@ -521,7 +501,7 @@ export async function installPluginFromManagedNpmRoot(
       };
     }
 
-    const missingRequired = await findMissingRequiredPluginDependencies({
+    const { missing: missingRequired } = buildManagedPluginDependencyStatus({
       rootDir: installRoot,
       dependencyRootDir: npmRoot,
       ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),
@@ -609,7 +589,6 @@ export async function installPluginFromManagedNpmRoot(
     return {
       ...result,
       npmResolution: params.npmResolution,
-      ...(params.integrityDrift ? { integrityDrift: params.integrityDrift } : {}),
     };
   };
 

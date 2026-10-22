@@ -6,6 +6,7 @@ import type { SessionNarrationEvent } from "../../packages/gateway-protocol/src/
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../shared/text/assistant-visible-text.js";
+import { isPlainEventPayload } from "./server-broadcast-scopes.js";
 import type {
   GatewayBroadcastOpts,
   GatewayBroadcastToConnIdsFn,
@@ -29,10 +30,8 @@ type NarrationState = {
   last?: SessionNarrationEvent;
   pending?: PendingNarration;
   timer?: ReturnType<typeof setTimeout>;
-  retirePending?: () => void;
 };
 type ConnectionNarration = {
-  socket: GatewayWsClient["socket"];
   sessions: Map<string, NarrationState>;
   close: () => void;
 };
@@ -51,7 +50,6 @@ export function createGatewayNarrationDelivery(params: {
 }) {
   const connections = new WeakMap<GatewayWsClient, ConnectionNarration>();
   const projections = new WeakMap<object, NarrationProjection>();
-  const groups = new WeakMap<AbortSignal, Set<NarrationState>>();
   const subscribers = params.sessionMessageSubscribers;
 
   const isNarration = (connId: string, keys: readonly string[]) => {
@@ -69,16 +67,13 @@ export function createGatewayNarrationDelivery(params: {
   const cancelPending = (state: NarrationState) => {
     clearTimeout(state.timer);
     state.timer = undefined;
-    state.retirePending?.();
-    state.retirePending = undefined;
     state.pending = undefined;
   };
   const connectionFor = (client: GatewayWsClient) => {
     const existing = connections.get(client);
-    if (existing?.socket === client.socket) {
+    if (existing) {
       return existing;
     }
-    existing?.close();
     const socket = client.socket;
     const sessions = new Map<string, NarrationState>();
     const close = () => {
@@ -89,15 +84,15 @@ export function createGatewayNarrationDelivery(params: {
       socket.off("close", close);
       connections.delete(client);
     };
-    const connection = { socket, sessions, close };
+    const connection = { sessions, close };
     connections.set(client, connection);
     socket.once("close", close);
     return connection;
   };
-  subscribers?.onChange((key, connId) => {
+  subscribers?.onChange((key, connId, baselineOnly) => {
     const client = params.clients.getByConnectionId(connId);
     const connection = client && connections.get(client);
-    if (!connection) {
+    if (baselineOnly || !connection) {
       return;
     }
     // A new intent cannot inherit queued text from the previous subscription.
@@ -157,14 +152,10 @@ export function createGatewayNarrationDelivery(params: {
     projection.digest = digest;
     return digest;
   };
-  const flush = (
-    client: GatewayWsClient,
-    connection: ConnectionNarration,
-    state: NarrationState,
-  ) => {
+  const flush = (client: GatewayWsClient, state: NarrationState) => {
     const pending = state.pending;
     cancelPending(state);
-    if (!pending || client.socket !== connection.socket || !params.clients.has(client)) {
+    if (!pending || !params.clients.has(client)) {
       return;
     }
     const { payload, projection, sessionKeys, opts } = pending;
@@ -197,6 +188,29 @@ export function createGatewayNarrationDelivery(params: {
 
   return {
     isNarration,
+    prepareToolPayload: (event: string, payload: unknown) => {
+      if (
+        (event !== "agent" && event !== "session.tool") ||
+        !isPlainEventPayload(payload) ||
+        payload.stream !== "tool" ||
+        !isPlainEventPayload(payload.data)
+      ) {
+        return undefined;
+      }
+      const toolData = payload.data;
+      // Background narration renders identity and progress. Prepare its body
+      // only when needed; the broadcaster shares its encoding within this publication.
+      return () => {
+        const {
+          args: _args,
+          diff: _diff,
+          partialResult: _partial,
+          result: _result,
+          ...data
+        } = toolData;
+        return { ...payload, data };
+      };
+    },
     consume: (
       client: GatewayWsClient,
       event: string,
@@ -204,6 +218,17 @@ export function createGatewayNarrationDelivery(params: {
       sessionKeys: readonly string[],
       opts?: GatewayBroadcastOpts,
     ): boolean => {
+      if (event === "session.narration") {
+        return !isNarration(client.connId, sessionKeys);
+      }
+      if (
+        event !== "chat" &&
+        event !== "agent" &&
+        event !== "session.tool" &&
+        event !== "session.observer"
+      ) {
+        return false;
+      }
       if (!isRecord(payload) || !isNarration(client.connId, sessionKeys)) {
         return false;
       }
@@ -259,42 +284,18 @@ export function createGatewayNarrationDelivery(params: {
       state.subscriptionKeys = sessionKeys;
       connection.sessions.set(key, state);
       if (isRecord(payload.message)) {
-        state.retirePending?.();
-        state.retirePending = undefined;
         state.pending = { payload, projection, sessionKeys, opts };
-        const signal = opts?.liveText?.group;
-        if (signal) {
-          let states = groups.get(signal);
-          if (!states) {
-            states = new Set();
-            groups.set(signal, states);
-            const pendingStates = states;
-            signal.addEventListener(
-              "abort",
-              () => {
-                for (const pending of pendingStates) {
-                  cancelPending(pending);
-                }
-                groups.delete(signal);
-              },
-              { once: true },
-            );
-          }
-          states.add(state);
-          const pendingStates = states;
-          state.retirePending = () => pendingStates.delete(state);
-        }
       }
       if (terminal) {
         if (state.pending?.payload.runId === payload.runId) {
-          flush(client, connection, state);
+          flush(client, state);
         }
       } else if (state.pending) {
         const delay = NARRATION_INTERVAL_MS - (Date.now() - (state.lastSentAt ?? -Infinity));
         if (delay <= 0) {
-          flush(client, connection, state);
+          flush(client, state);
         } else if (!state.timer) {
-          state.timer = setTimeout(() => flush(client, connection, state), delay);
+          state.timer = setTimeout(() => flush(client, state), delay);
           state.timer.unref?.();
         }
       }

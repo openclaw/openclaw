@@ -28,9 +28,7 @@ export class TerminalOutputController {
   private desiredPaused = false;
   private reassertTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly options: TerminalOutputControllerOptions) {
-    this.options = { ...options };
-  }
+  constructor(private readonly options: TerminalOutputControllerOptions) {}
 
   /** Cumulative UTF-16 end offset across streamed and detached output. */
   get endOffset(): number {
@@ -99,12 +97,8 @@ export class TerminalOutputController {
     }
   }
 
-  dispose(opts?: { flush?: boolean }): void {
-    if (opts?.flush) {
-      this.flush();
-    } else {
-      this.clear();
-    }
+  dispose(): void {
+    this.clear();
     if (this.reassertTimer) {
       clearInterval(this.reassertTimer);
       this.reassertTimer = null;
@@ -120,7 +114,7 @@ export class TerminalOutputController {
     this.bufferedBytes = 0;
   }
 
-  private flush(): void {
+  flush(): void {
     const chunks = this.chunks;
     this.clear();
     if (chunks.length === 0) {

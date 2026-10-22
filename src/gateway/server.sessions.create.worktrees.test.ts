@@ -13,7 +13,9 @@ import {
 } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
-import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -146,7 +148,7 @@ test("sessions.create rolls back failed provisioning before a same-key creator p
     .mockImplementation(async function (this: ManagedWorktreeService, record, withRollback) {
       failedWorktreeId = record.id;
       markRollbackStarted();
-      expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(true);
+      expect(isSessionMutationActive(storePath, [key])).toBe(true);
       await rollbackGate;
       await originalRollback(this, record, withRollback);
     });
@@ -385,7 +387,7 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
   const createSpy = vi
     .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
     .mockImplementation(async function (this: ManagedWorktreeService, params) {
-      expect(isSessionLifecycleMutationActive(storePath, [params.ownerId])).toBe(true);
+      expect(isSessionMutationActive(storePath, [params.ownerId])).toBe(true);
       return await originalCreate(this, params);
     });
   let sessionKey: string | undefined;
@@ -470,7 +472,6 @@ test("sessions.create provisions and reuses a session worktree for later runs", 
     });
     expect(run.ok, JSON.stringify(run)).toBe(true);
     await commandEntered.promise;
-    expect(agentCommandMock).toHaveBeenCalled();
     expect(agentCommandMock.mock.calls.at(-1)?.[0]).toMatchObject({
       cwd: worktree?.path,
       workspaceDir: worktree?.path,
@@ -531,16 +532,48 @@ test("sessions.create runs an existing managed worktree cwd for initial and foll
         },
         defaultRuntime,
       );
+      const terminalPersisted = createDeferredCore();
+      const stopTerminalObserver = sessionChanges.subscribe((change) => {
+        if ("sessionKey" in change && change.sessionKey === sessionKey) {
+          const entry = loadSessionEntry({ agentId: "roboclaw", sessionKey, storePath });
+          if (entry?.status === "done" && entry.lastRunId === prepared.runId) {
+            terminalPersisted.resolve();
+          }
+        }
+      });
       try {
+        opts?.onSessionPrepared?.({
+          sessionKey: prepared.sessionKey,
+          sessionId: prepared.sessionId,
+          storePath: prepared.storePath,
+          lifecycleRevision: prepared.sessionEntry?.lifecycleRevision,
+        });
+        opts?.onAgentRunStart?.(prepared.runId);
+        // Completed mock turns must settle the same recovery custody as the real runtime.
+        const lifecycle = {
+          runId: prepared.runId,
+          sessionKey: prepared.sessionKey,
+          sessionId: prepared.sessionId,
+          agentId: prepared.sessionAgentId,
+        };
+        const startedAt = Date.now();
+        emitAgentEvent({ ...lifecycle, stream: "lifecycle", data: { phase: "start", startedAt } });
         preparedRuntime({ cwd: prepared.cwd, workspaceDir: prepared.workspaceDir });
+        emitAgentEvent({
+          ...lifecycle,
+          stream: "lifecycle",
+          data: { phase: "end", startedAt, endedAt: Date.now() },
+        });
+        await terminalPersisted.promise;
       } finally {
+        stopTerminalObserver();
         await prepared.runLease?.release();
       }
       return { text: "ok" };
     });
   const { ws } = await openClient({
     scopes: ["operator.admin"],
-    deviceIdentityPath: path.join(root, "roboclaw-device.json"),
+    deviceIdentityPath: path.join(root, "roboclaw-device", "client", "credentials.sqlite"),
   });
 
   try {

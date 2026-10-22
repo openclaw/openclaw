@@ -10,6 +10,7 @@ import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { retireSubagentCompletionControllerInput } from "../registry/subagent-controller-inputs.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import {
@@ -21,7 +22,6 @@ import {
   runSubagentRegistryWorkerWrite,
   SubagentRegistryMutationRejectedError,
   SubagentRegistryCommitReceiptError,
-  SubagentRegistryVersionConflictError,
 } from "../registry/subagent-registry-persistence.js";
 import { isCanonicalSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -47,10 +47,8 @@ import type {
 const log = createSubsystemLogger("subagents/completion");
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
 
-type AdmissionReceipt = Exclude<
-  SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"],
-  { conflictRunIds: string[] }
->;
+type AdmissionReceipt =
+  SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
 function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
@@ -63,32 +61,17 @@ function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
     !value.subagent.childSessionKey ||
     typeof value.subagent.requesterSessionKey !== "string" ||
     !value.subagent.requesterSessionKey ||
-    typeof value.version !== "string" ||
-    !value.version ||
     (value.cleanupHandled !== undefined && typeof value.cleanupHandled !== "boolean")
   ) {
     throw new Error("Subagent completion acknowledgment has an invalid native record");
   }
   return {
     subagent: value.subagent,
-    version: value.version,
     cleanupHandled: value.cleanupHandled,
   };
 }
 
-function parseVersionConflict(value: unknown, writeId: string): void {
-  if (
-    isRecord(value) &&
-    value.writeId === writeId &&
-    Array.isArray(value.conflictRunIds) &&
-    value.conflictRunIds.every((id): id is string => typeof id === "string")
-  ) {
-    throw new SubagentRegistryVersionConflictError(value.conflictRunIds);
-  }
-}
-
 function parseAdmissionReceipt(value: unknown, writeId: string, runId: string): AdmissionReceipt {
-  parseVersionConflict(value, writeId);
   if (
     !isRecord(value) ||
     value.writeId !== writeId ||
@@ -109,7 +92,6 @@ function parseMutationReceipt(
   writeId: string,
   runIds: readonly string[],
 ): MutationReceipt {
-  parseVersionConflict(value, writeId);
   if (
     !isRecord(value) ||
     value.writeId !== writeId ||
@@ -225,22 +207,24 @@ export async function admitSubagentCompletionDelivery(params: {
           );
         }
       },
-      async commit(planned, versions, authority) {
-        const input = structuredClone({
+      async commit(planned, authority) {
+        const input = {
           writeId: randomUUID(),
           expected: planned.expected,
           subagent: planned.subagent,
           queueEntry: planned.queueEntry,
-          versions: [...versions].map(([runId, version]) => ({ runId, version })),
-        });
-        const receipt = await runSubagentRegistryWorkerWrite(params.context, () => ({
-          kind: "completion",
-          writeId: input.writeId,
-          assertCurrent: authority.assertCurrent,
-          execute: (scope) =>
-            scope.execute({ type: "sessionDelivery.admitSubagentCompletion", input }),
-          decode: (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
-        }));
+        };
+        const receipt = await runSubagentRegistryWorkerWrite<AdmissionReceipt>(
+          params.context,
+          () => ({
+            kind: "completion",
+            writeId: input.writeId,
+            assertCurrent: authority.assertCurrent,
+            execute: (scope) =>
+              scope.execute({ type: "sessionDelivery.admitSubagentCompletion", input }),
+            decodeCommitted: (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
+          }),
+        );
         const subagent = {
           ...receipt.record.subagent,
           cleanupHandled: planned.expected.cleanupHandled,
@@ -253,7 +237,6 @@ export async function admitSubagentCompletionDelivery(params: {
             subagent,
           },
           postimages: new Map([[params.runId, subagent]]),
-          versions: new Map([[params.runId, receipt.record.version]]),
         };
       },
     },
@@ -309,7 +292,7 @@ async function mutateCompletion(
       receipt: SubagentCompletionMutationResult,
       mutation: SubagentCompletionMutation,
     ) => void;
-    onPublished?: () => void;
+    onPublished?: (applied: boolean | null) => void;
   } = {},
 ): Promise<CompletionMutationPublication> {
   const runIds = entries.map((entry) => entry.runId);
@@ -346,21 +329,20 @@ async function mutateCompletion(
         if (value.receiptRetentionFailure) {
           throw value.receiptRetentionFailure.error;
         }
-        options.onPublished?.();
+        options.onPublished?.(value.applied);
       },
-      async commit(planned, versions, authority) {
-        const input = structuredClone({
+      async commit(planned, authority) {
+        const input = {
           writeId: randomUUID(),
           mutation: planned.mutation,
-          versions: [...versions].map(([runId, version]) => ({ runId, version })),
-        });
-        const receipt = await runSubagentRegistryWorkerWrite(context, () => ({
+        };
+        const receipt = await runSubagentRegistryWorkerWrite<MutationReceipt>(context, () => ({
           kind: "completion",
           writeId: input.writeId,
           assertCurrent: authority.assertCurrent,
           execute: (scope) =>
             scope.execute({ type: "sessionDelivery.mutateSubagentCompletion", input }),
-          decode: (value) => parseMutationReceipt(value, input.writeId, runIds),
+          decodeCommitted: (value) => parseMutationReceipt(value, input.writeId, runIds),
         }));
         const postimages = new Map<string, SubagentRunRecord | null>();
         for (const runId of receipt.retiredRunIds) {
@@ -389,10 +371,6 @@ async function mutateCompletion(
             receiptRetentionFailure,
           },
           postimages,
-          versions: new Map([
-            ...receipt.records.map(({ subagent, version }) => [subagent.runId, version] as const),
-            ...receipt.retiredRunIds.map((runId) => [runId, null] as const),
-          ]),
         };
       },
     },
@@ -470,7 +448,21 @@ export async function blockSubagentCompletionDelivery(
       }
       return { kind: "block", params: { ...request, subagent: current }, now: Date.now() };
     },
-    params,
+    {
+      ...params,
+      onPublished(applied) {
+        if (
+          applied === true &&
+          (params.suspendedReason ||
+            params.operatorAuthorityUnavailable ||
+            params.storeReplaced ||
+            params.disposition === "permanent_failure")
+        ) {
+          // The durable outcome precedes releasing FIFO for its queued failure notice.
+          retireSubagentCompletionControllerInput(params.subagent);
+        }
+      },
+    },
   );
   return result.applied === true;
 }
@@ -553,6 +545,7 @@ export async function mutateRequesterCompletionBatch(
     },
     {
       ...params,
+      onPublished: () => params.onPublished?.(),
       onCommitted(result, mutation) {
         if (
           !params.committed &&

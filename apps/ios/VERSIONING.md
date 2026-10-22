@@ -9,7 +9,7 @@ the active release identity from the repository and App Store Connect.
 - keep the associated gateway version recognizable
 - support multiple public iOS releases per gateway version
 - support multiple candidate builds per App Store version
-- make every release identity deterministic and inspectable before upload
+- calculate every release identity from the current release state and make it inspectable before upload
 - keep Apple bundle fields valid for App Store Connect
 - generate version-specific App Store release notes from changes since the last public build
 
@@ -50,6 +50,13 @@ operation. With the GitHub CLI:
 ```bash
 gh workflow run ios-store-release.yml --ref main
 ```
+
+The same store release runs automatically every **Monday at 11:00 AM Pacific**,
+using `America/Los_Angeles` for daylight saving time. Weekly releases require
+native qualification and use `ios-store-release`; they are independent of the
+daily TestFlight enable switch. Only weekly store runs send Discord results.
+See [weekly mobile releases](https://docs.openclaw.ai/ci/scheduled-workflows#weekly-mobile-store-releases)
+for notification setup and scheduling behavior.
 
 Or use the same release entry point from a clean local `main` checkout that matches
 `origin/main`:
@@ -97,7 +104,7 @@ The same local entry point accepts the destination explicitly:
 OPENCLAW_TESTFLIGHT_GROUP_ID="<EXTERNAL_GROUP_ID>" pnpm ios:release:upload -- --destination testflight
 ```
 
-The scheduled operation runs daily at **7:00 AM America/Los_Angeles**, including
+The TestFlight schedule runs daily at **7:00 AM America/Los_Angeles**, including
 daylight saving time. GitHub may delay scheduled jobs. Both release destinations
 share the `ios-release` concurrency lock. Manual and scheduled TestFlight runs
 skip native release qualification; App Store releases require it to pass.
@@ -160,6 +167,26 @@ An already running simulator stops the command before capture; shut it down
 when it is no longer in use and rerun. This changes only the screenshot
 environment, not the app's rendered states.
 
+Each iPhone or iPad runs its four screenshot tests in one XCTest session. Every
+test launches and terminates the app independently, using its explicit destination
+and screenshot fixtures. The lane requires all four tests to pass exactly once
+and all four fresh PNGs to exist; failures stop capture without retrying. One
+result bundle and one attempt record are retained per device.
+
+Immediately before Watch capture, the shared lane resolves the runtime and creates
+its simulator. CI can repair a missing or unavailable Watch runtime once, including
+when it disappears during the phone or tablet captures. The repair replaces only
+the selected Watch runtime's registered image, or installs it if absent, and logs
+runtime availability, image state, and mounted-path existence without filesystem
+paths. Local runs leave runtime installation to the operator. Boot and capture
+failures still stop the lane without retrying screenshots.
+
+If Apple removes the Watch runtime registration but cannot reclaim its MobileAsset,
+CI follows Apple's recovery instruction once: scan and mount orphaned runtimes,
+resolve the selected Watch image again, and retry its deletion before downloading.
+Other errors or a second deletion failure stop the repair. The replacement must
+report `Ready` with an existing mounted runtime directory before simulator creation.
+
 The screenshot-only job enables `OPENCLAW_SNAPSHOT_DIAGNOSTICS=1`. To collect the
 same diagnostics locally:
 
@@ -167,9 +194,13 @@ same diagnostics locally:
 OPENCLAW_SNAPSHOT_DIAGNOSTICS=1 pnpm ios:screenshots
 ```
 
-Sanitized startup, resource, and crash facts are recorded in
-`apps/ios/build/screenshot-diagnostics.json`. The separate
-`capture-attempts.json` ledger keeps its existing schema for release evidence.
+Phase timings, simulator counts, and sanitized startup and crash facts are recorded in
+`apps/ios/build/screenshot-diagnostics.json`. Resource observations come from the
+separate [background timeline](fastlane/SETUP.md#temporary-resource-investigation),
+without blocking screenshot phases on native resource probes. The separate
+`capture-attempts.json` ledger records device invocations in schema version 2.
+The release evidence manifest uses the same version and includes the exact four
+passing test identities for each iPhone and iPad bundle.
 GitHub retains both files and fixture PNGs in
 `ios-screenshots-<run-id>-<run-attempt>`. Raw Xcode logs and XCTest result bundles
 are excluded from the uploaded diagnostics.
@@ -207,7 +238,7 @@ Before screenshot or archive work, the App Store destination checks App Store Co
 - an unreleased revision present only in build-upload history is retried
 - a distributed version requires the next revision
 - multiple active versions, a different active gateway, and unknown upload
-  states fail closed for human resolution
+  states block the upload until a person resolves them
 
 Only one iOS release uploader may run at a time. The pipeline rechecks the
 exact plan after local archive and Transporter validation, immediately before
@@ -269,10 +300,10 @@ Generated or derived files:
 - `testflight-result.json` for TestFlight outcomes, including skips and pending review
 - temporary Fastlane metadata for screenshots and the App Review attachment
 
-The canonical implementation is split across:
+The implementation is split across:
 
 - `scripts/lib/ios-version.ts`: version validation, encoding, and historical changelog rendering
-- `scripts/lib/ios-release-plan.ts`: deterministic revision/build selection and
+- `scripts/lib/ios-release-plan.ts`: repeatable revision/build selection and
   changelog cutting
 - `scripts/ios-version.ts`: JSON, shell, and single-field queries
 - `scripts/ios-release-plan.ts`: pure planner CLI used by the Fastlane adapter

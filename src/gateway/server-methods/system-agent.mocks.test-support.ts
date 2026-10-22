@@ -25,9 +25,10 @@ const onboardingWelcomeMocks = vi.hoisted(() => ({
   buildOnboardingWelcome: vi.fn(),
 }));
 
-vi.mock("../../system-agent/setup-inference.js", () => ({
+vi.mock("../../system-agent/setup-inference.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../system-agent/setup-inference.js")>()),
   activateSetupInference: setupInferenceMocks.activateSetupInference,
-  detectSetupInference: (_deps: unknown, agentId?: string) =>
+  detectSetupInference: (agentId?: string) =>
     setupInferenceDetectionMocks.detectSetupInferenceIsolated({ agentId }),
   resolvePersistentApplyInference: setupInferenceMocks.resolvePersistentApplyInference,
   verifySetupInference: setupInferenceMocks.verifySetupInference,

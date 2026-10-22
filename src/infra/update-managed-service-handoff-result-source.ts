@@ -1,7 +1,10 @@
+import { MANAGED_HANDOFF_PG_RESULT_SOURCE } from "./update-managed-service-handoff-pg-result-source.js";
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
 
 // Terminal recording runs inside the sealed helper with its captured lifecycle owners.
-export const MANAGED_HANDOFF_RESULT_SOURCE = String.raw`
+export const MANAGED_HANDOFF_RESULT_SOURCE =
+  MANAGED_HANDOFF_PG_RESULT_SOURCE +
+  String.raw`
 let triageFailure;
 let runLedger;
 let runOutcome;
@@ -14,12 +17,17 @@ async function finishManagedUpdateRun() {
   if (!runLedger || !runOutcome) return;
   if (foregroundParked && runOutcome.status === "succeeded") return;
   if (!ownsManagedUpdateLease()) throw new Error("managed update terminal writer lost its current claim");
+  const childFailure = closedUpdateResult?.steps?.find((step) => step.exitCode !== 0 && !step.advisory);
+  const childDetail = childFailure?.failureFacts?.find((fact) => fact.message)?.message ?? childFailure?.diagnostics?.[0];
+  const failureDetail = closedUpdateResult?.reason
+    ? closedUpdateResult.reason + (childDetail ? ": " + childDetail : "")
+    : handoffFailure;
   const terminalResult = {
     ...runOutcome,
     ...(closedUpdateResult ? { reason: closedUpdateResult.reason ?? runOutcome.reason, after: closedUpdateResult.after } : {}),
     diagnostics: {
       steps: closedUpdateResult?.steps,
-      ...(handoffFailure && runOutcome.status === "failed" ? { failure: { step: "managed-service-handoff", detail: handoffFailure, exitCode: 1 } } : {}),
+      ...(handoffFailure && runOutcome.status === "failed" ? { failure: { step: "managed-service-handoff", detail: failureDetail, exitCode: 1 } } : {}),
     },
     ...(serviceDowntimeMs !== undefined ? { downtimeMs: serviceDowntimeMs } : {}),
   };

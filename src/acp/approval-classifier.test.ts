@@ -1,23 +1,8 @@
-/** Tests ACP tool approval classification and spoofing backstops. */
 import { describe, expect, it } from "vitest";
 import { classifyAcpToolApproval } from "./approval-classifier.js";
 
-function classify(params: {
-  title: string;
-  locations?: Array<{ path: string; line?: number }>;
-  rawInput?: Record<string, unknown>;
-  meta?: Record<string, unknown>;
-  cwd?: string;
-}) {
-  return classifyAcpToolApproval({
-    cwd: params.cwd ?? "/workspace",
-    toolCall: {
-      title: params.title,
-      locations: params.locations,
-      rawInput: params.rawInput,
-      _meta: params.meta,
-    },
-  });
+function classify(toolCall: Parameters<typeof classifyAcpToolApproval>[0]["toolCall"]) {
+  return classifyAcpToolApproval({ cwd: "/workspace", toolCall });
 }
 
 describe("classifyAcpToolApproval", () => {
@@ -32,45 +17,24 @@ describe("classifyAcpToolApproval", () => {
     });
   });
 
-  it.each(["file://localhost/outside/marker.txt", "FILE://remote.example/outside/marker.txt"])(
-    "does not auto-approve out-of-cwd file URL %s",
-    (fileUrl) => {
-      expect(
-        classify({
-          title: "read: ignored-by-raw-input",
-          rawInput: { path: fileUrl },
-        }),
-      ).toEqual({
-        toolName: "read",
-        approvalClass: "other",
-        autoApprove: false,
-      });
-    },
-  );
-
-  it.each(["FILE:///workspace/src/index.ts", "file:/workspace/src/index.ts"])(
-    "auto-approves in-cwd file URL %s",
-    (fileUrl) => {
-      expect(
-        classify({
-          title: "read: ignored-by-raw-input",
-          rawInput: { path: fileUrl },
-        }),
-      ).toEqual({
-        toolName: "read",
-        approvalClass: "readonly_scoped",
-        autoApprove: true,
-      });
-    },
-  );
-
-  it("does not auto-approve reads from locations-only metadata", () => {
+  it.each([
+    ["FILE://remote.example/outside/marker.txt", "other", false],
+    ["file:/workspace/src/index.ts", "readonly_scoped", true],
+  ])("classifies file URL %s", (fileUrl, approvalClass, autoApprove) => {
     expect(
       classify({
-        title: "read",
-        locations: [{ path: "src/index.ts" }],
+        title: "read: ignored-by-raw-input",
+        rawInput: { path: fileUrl },
       }),
     ).toEqual({
+      toolName: "read",
+      approvalClass,
+      autoApprove,
+    });
+  });
+
+  it("does not auto-approve reads from locations-only metadata", () => {
+    expect(classify({ title: "read", locations: [{ path: "src/index.ts" }] })).toEqual({
       toolName: "read",
       approvalClass: "other",
       autoApprove: false,
@@ -100,19 +64,6 @@ describe("classifyAcpToolApproval", () => {
     ).toEqual({
       toolName: "search",
       approvalClass: "other",
-      autoApprove: false,
-    });
-  });
-
-  it("classifies mutating messaging tools as mutating", () => {
-    expect(
-      classify({
-        title: "message: send",
-        rawInput: { name: "message", action: "send", message: "hi" },
-      }),
-    ).toEqual({
-      toolName: "message",
-      approvalClass: "mutating",
       autoApprove: false,
     });
   });

@@ -15,8 +15,9 @@ import type { SessionChildLink } from "./session-utils-core.js";
 import {
   buildProjectedSubagentActivity,
   buildSessionListRowMetadataContext,
+  projectSessionRowChildLinks,
 } from "./session-utils-projection.js";
-import { projectSessionRowChildLinks, refreshSessionRowProfiles } from "./session-utils-row.js";
+import { refreshSessionRowProfiles, replaceSessionRowFacts } from "./session-utils-row.js";
 
 /** Registry and display facts have their own lifecycle, independent of stored row acquisition. */
 export function createSessionRowProjectionContext(subagents: SubagentSessionListReadView) {
@@ -121,7 +122,6 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
         ) {
           return true;
         }
-        modelFactsDirty = true;
         return false;
       }
       if (typeof change.scope === "object" && change.scope.topology && !change.factsInvalidated) {
@@ -188,19 +188,25 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
       readChildLinks: (row: records.Row) => SessionChildLink[],
     ) {
       if (row.profileRevision !== profileRevision) {
-        refreshSessionRowProfiles(row.materialized);
+        row.materialized = refreshSessionRowProfiles(row.materialized);
         row.profileRevision = profileRevision;
       }
       if (row.subagentRevision !== subagentRevision) {
-        row.materialized.source.childLinks = projectSessionRowChildLinks(readChildLinks(row));
+        const childLinks = projectSessionRowChildLinks(readChildLinks(row));
         const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,
           row.agentId,
           { includeChildren: true },
         );
-        if (!isDeepStrictEqual(row.materialized.row.swarm, swarm)) {
-          row.materialized.row.swarm = swarm;
+        const swarmChanged = !isDeepStrictEqual(row.materialized.row.swarm, swarm);
+        const childrenChanged = !isDeepStrictEqual(row.materialized.source.childLinks, childLinks);
+        if (swarmChanged || childrenChanged) {
+          row.materialized = replaceSessionRowFacts(
+            row.materialized,
+            swarmChanged ? { swarm } : undefined,
+            childrenChanged ? { childLinks } : undefined,
+          );
         }
         row.subagentRevision = subagentRevision;
       }

@@ -89,7 +89,6 @@ export type TelegramMessageContext = {
   sendTyping: () => Promise<void>;
   sendRecordVoice: () => Promise<void>;
   sendChatActionHandler: BuildTelegramMessageContextParams["sendChatActionHandler"];
-  initialTypingCueSent?: boolean;
   ackReactionPromise: Promise<boolean> | null;
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
@@ -98,6 +97,7 @@ export type TelegramMessageContext = {
 export const buildTelegramMessageContext = async ({
   nativeCommandNames,
   primaryCtx,
+  resolveDirectAvatar,
   allMedia,
   replyMedia = [],
   replyChain = [],
@@ -315,7 +315,7 @@ export const buildTelegramMessageContext = async ({
       mainSessionKey: route.mainSessionKey,
     }),
   };
-  const activationOverride = resolveGroupActivation({
+  const activationOverride = await resolveGroupActivation({
     sessionKey,
     agentId: route.agentId,
     cfg,
@@ -404,22 +404,11 @@ export const buildTelegramMessageContext = async ({
       });
       return null;
     }
-    logVerbose(
-      `telegram: using configured ACP binding for ${bindingMode.binding.record.conversation.conversationId} -> ${bindingMode.sessionKey}`,
-    );
-  }
-
-  // Send the first typing cue before expensive context/session construction,
-  // but only after intake has accepted the message as a non-room-event turn.
-  const initialTypingCueSent = bodyResult.inboundEventKind !== "room_event";
-  if (initialTypingCueSent) {
-    void sendTyping().catch((err: unknown) => {
-      logVerbose(`telegram early typing cue failed for chat ${chatId}: ${String(err)}`);
-    });
   }
 
   const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     ...inboundContext,
+    conversationAvatar: resolveDirectAvatar?.(primaryCtx, cfg),
     replyMedia,
     replyChain,
     promptContext,
@@ -562,7 +551,6 @@ export const buildTelegramMessageContext = async ({
     sendTyping,
     sendRecordVoice,
     sendChatActionHandler,
-    initialTypingCueSent,
     ackReactionPromise,
     statusReactionController,
     accountId: account.accountId,

@@ -12,9 +12,10 @@ import { TranscriptNotContinuableError } from "./errors.js";
 import {
   attachInternalSyncSteeringGetter,
   getInternalBeforeToolBatch,
+  getInternalRepetitionGuard,
   getInternalToolTurnCompletion,
 } from "./internal-hooks.js";
-import { isOpenClawSystemUpdateMessage } from "./operator-messages.js";
+import { PendingMessageQueue } from "./pending-message-queue.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import {
@@ -23,7 +24,6 @@ import {
   isTurnHandoffAbort,
 } from "./turn-interruption.js";
 import type {
-  AgentContext,
   AgentEvent,
   AgentLoopConfig,
   AgentLoopTurnUpdate,
@@ -147,146 +147,6 @@ export interface AgentOptions {
   maxRetryDelayMs?: number;
   /** Default strategy for executing multiple tool calls in one assistant message. */
   toolExecution?: ToolExecutionMode;
-}
-
-class PendingMessageQueue {
-  private messages: AgentMessage[] = [];
-  private readonly listeners = new Set<() => void>();
-  private readonly submitted = new Set<AgentMessage>();
-  // Drained messages stay owned here until message_end commits them.
-  // A failed run restores them ahead of messages accepted later.
-  private inFlight: AgentMessage[] = [];
-  private cancelled = new WeakSet<AgentMessage>();
-  public mode: QueueMode;
-
-  constructor(mode: QueueMode) {
-    this.mode = mode;
-  }
-
-  enqueue(message: AgentMessage): void {
-    this.admit(message)();
-  }
-
-  admit(message: AgentMessage): () => void {
-    this.messages.push(message);
-    return () => {
-      for (const listener of this.listeners) {
-        listener();
-      }
-    };
-  }
-
-  peek(): readonly AgentMessage[] {
-    // A tool checkpoint fixes the next injection batch while the response is live.
-    // Later input must wait for that batch to commit before it can reach the provider.
-    const messages = (this.inFlight.length > 0 ? this.inFlight : this.messages).filter(
-      (message) => !isOpenClawSystemUpdateMessage(message),
-    );
-    return messages.slice(0, this.mode === "all" ? undefined : 1);
-  }
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  reserve(messages: readonly AgentMessage[]): () => void {
-    for (const message of messages) {
-      this.submitted.add(message);
-    }
-    return () => {
-      for (const message of messages) {
-        this.submitted.delete(message);
-      }
-    };
-  }
-
-  hasItems(): boolean {
-    return this.messages.some((message) => !isOpenClawSystemUpdateMessage(message));
-  }
-
-  drain(): AgentMessage[] {
-    const input = this.messages.filter((message) => !isOpenClawSystemUpdateMessage(message));
-    let count = this.mode === "all" ? input.length : 1;
-    // Submitted input already belongs to one provider continuation. Later queued
-    // messages must not rewrite that continuation's context before it completes.
-    const boundary = input.findIndex((message) => !this.submitted.has(message));
-    if (boundary > 0) {
-      count = Math.min(count, boundary);
-    }
-    return this.drainMatching(count, (message) => !isOpenClawSystemUpdateMessage(message));
-  }
-
-  drainContext(): AgentMessage[] {
-    // Operator context accompanies admitted input; it never starts a turn itself.
-    return this.drainMatching(Infinity, isOpenClawSystemUpdateMessage);
-  }
-
-  private drainMatching(
-    count: number,
-    matches: (message: AgentMessage) => boolean,
-  ): AgentMessage[] {
-    const drained: AgentMessage[] = [];
-    this.messages = this.messages.filter((message) => {
-      if (drained.length >= count || !matches(message)) {
-        return true;
-      }
-      drained.push(message);
-      return false;
-    });
-    this.inFlight.push(...drained);
-    return drained;
-  }
-
-  commit(message: AgentMessage): void {
-    this.submitted.delete(message);
-    this.cancelled.delete(message);
-    const index = this.inFlight.indexOf(message);
-    if (index >= 0) {
-      this.inFlight.splice(index, 1);
-    }
-  }
-
-  restore(): void {
-    this.messages = [...this.inFlight, ...this.messages];
-    this.inFlight = [];
-    // Admission fences belong to the closed run. Preserve unsaved input for
-    // recovery without retaining authority over its later cancellation.
-    this.submitted.clear();
-  }
-
-  cancelFirst(predicate: (message: AgentMessage) => boolean): AgentMessage | undefined {
-    const pendingIndex = this.messages.findIndex(predicate);
-    const pendingMessage = this.messages[pendingIndex];
-    if (pendingMessage) {
-      // Provider-admitted input cannot be withdrawn. Retain its local queue
-      // owner until the ordinary transcript boundary commits the same message.
-      if (this.submitted.has(pendingMessage)) {
-        return undefined;
-      }
-      return this.messages.splice(pendingIndex, 1)[0];
-    }
-    const inFlightIndex = this.inFlight.findIndex(predicate);
-    const message = this.inFlight[inFlightIndex];
-    if (!message || this.submitted.has(message)) {
-      return undefined;
-    }
-    this.inFlight.splice(inFlightIndex, 1);
-    // The loop may already hold this object after draining; retain a cancellation
-    // fact until its next injection checkpoint so it cannot outlive queue ownership.
-    this.cancelled.add(message);
-    return message;
-  }
-
-  consumeCancellation(message: AgentMessage): boolean {
-    return this.cancelled.delete(message);
-  }
-
-  clear(): void {
-    this.messages = this.messages.filter((message) => this.submitted.has(message));
-    this.inFlight = this.inFlight.filter((message) => this.submitted.has(message));
-    this.cancelled = new WeakSet<AgentMessage>();
-  }
 }
 
 type ActiveRun = {
@@ -494,7 +354,7 @@ export class Agent {
     await this.runPromptMessages(messages);
   }
 
-  /** Continue from the current transcript. The last message must be a user or tool-result message. */
+  /** Continue from a user, tool result, or failed assistant without rewriting its history. */
   async continue(): Promise<void> {
     if (this.activeRun) {
       throw new Error("Agent is already processing. Wait for completion before continuing.");
@@ -519,7 +379,11 @@ export class Agent {
       }
     }
 
-    if (lastMessage.role === "assistant") {
+    if (
+      lastMessage.role === "assistant" &&
+      lastMessage.stopReason !== "error" &&
+      lastMessage.stopReason !== "aborted"
+    ) {
       throw new TranscriptNotContinuableError(lastMessage.role);
     }
 
@@ -552,7 +416,12 @@ export class Agent {
     await this.runWithLifecycle(async (signal) => {
       await runAgentLoop(
         messages,
-        this.createContextSnapshot(),
+        {
+          systemPrompt: this.mutableState.systemPrompt,
+          // The loop copies messages synchronously before emitting its first event.
+          messages: this.mutableState.messages,
+          tools: this.mutableState.tools.slice(),
+        },
         this.createLoopConfig(options),
         (event) => this.processEvents(event),
         signal,
@@ -561,15 +430,8 @@ export class Agent {
     });
   }
 
-  private createContextSnapshot(): AgentContext {
-    return {
-      systemPrompt: this.mutableState.systemPrompt,
-      messages: this.mutableState.messages.slice(),
-      tools: this.mutableState.tools.slice(),
-    };
-  }
-
   private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
+    const steeringQueue = this.steeringQueue;
     let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
     const drainSteeringMessages = () => {
       if (skipInitialSteeringPoll) {
@@ -583,16 +445,20 @@ export class Agent {
       drainSteeringMessages,
       {
         peek: () => this.steeringQueue.peek(),
+        subscribe: (listener) => this.steeringQueue.subscribe(listener),
         drainContext: () => [
           ...this.steeringQueue.drainContext(),
           ...this.followUpQueue.drainContext(),
         ],
         reserve: (messages) => this.steeringQueue.reserve(messages),
-        subscribe: (listener) => this.steeringQueue.subscribe(listener),
+        set onChange(callback: (() => void) | undefined) {
+          steeringQueue.onChange = callback;
+        },
       },
     );
     return {
       model: this.mutableState.model,
+      repetitionGuard: getInternalRepetitionGuard(this),
       thinkingLevel: this.mutableState.thinkingLevel,
       reasoning: resolveAgentReasoningOption(
         this.mutableState.model,
@@ -762,7 +628,7 @@ export class Agent {
       try {
         await listener(event, signal);
       } finally {
-        // A later redaction policy can replace a frozen, already committed tool result.
+        // Result preparation can replace a frozen, already committed tool result.
         if (
           publishedToolResult &&
           event.type === "message_end" &&

@@ -1,8 +1,8 @@
-import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { spawnOomScoreAdjusted as spawn } from "openclaw/plugin-sdk/process-runtime";
+import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   ensurePortAvailable,
   extractErrorCode,
@@ -10,6 +10,11 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { signalCheck } from "./client-adapter.js";
+import {
+  buildSignalDaemonEnv,
+  formatSignalDaemonDroppedEnvNotice,
+  listSignalDaemonDroppedEnvHints,
+} from "./daemon-env.js";
 import { prepareSignalSocketPath } from "./socket-path.js";
 
 type SignalDaemonOpts = {
@@ -32,6 +37,22 @@ export type SignalDaemonHandle = {
 };
 
 const SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS = 1_500;
+
+// The Gateway environment is process-wide, so the dropped-variable notice is too: once per
+// process, not once per account or daemon restart.
+let droppedEnvNoticeEmitted = false;
+
+function warnSignalDaemonDroppedEnvOnce(): void {
+  if (droppedEnvNoticeEmitted) {
+    return;
+  }
+  const names = listSignalDaemonDroppedEnvHints();
+  if (names.length === 0) {
+    return;
+  }
+  droppedEnvNoticeEmitted = true;
+  createSubsystemLogger("signal/daemon").warn(formatSignalDaemonDroppedEnvNotice(names));
+}
 
 type SignalDaemonExitEvent = {
   source: "process" | "spawn-error";
@@ -213,9 +234,11 @@ function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
 
 export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const args = buildDaemonArgs(opts);
+  warnSignalDaemonDroppedEnvOnce();
   // The executable is operator-selected or setup-discovered signal-cli.
   // Runtime message content only flows through the daemon HTTP API, not argv.
   const child = spawn(opts.cliPath, args, {
+    env: buildSignalDaemonEnv(),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const log = opts.runtime?.log ?? (() => {});
@@ -280,23 +303,19 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
           error(`signal-cli stop error: ${String(err)}`);
         }
       }
-      stopPromise = new Promise<void>((resolve) => {
-        const timeout = setTimeout(() => {
-          if (!exited) {
-            try {
-              child.kill("SIGKILL");
-            } catch (err) {
-              error(`signal-cli force-stop error: ${String(err)}`);
-            }
+      const timeout = setTimeout(() => {
+        if (!exited) {
+          try {
+            child.kill("SIGKILL");
+          } catch (err) {
+            error(`signal-cli force-stop error: ${String(err)}`);
           }
-        }, SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS);
-        timeout.unref?.();
-        // Do not resolve merely because SIGKILL was sent: monitor lifetime prevents the gateway
-        // from starting a replacement before the old daemon releases its port and config lock.
-        void exitedPromise.then(() => {
-          clearTimeout(timeout);
-          resolve();
-        });
+        }
+      }, SIGNAL_DAEMON_STOP_KILL_TIMEOUT_MS);
+      timeout.unref?.();
+      // Wait for actual exit before a replacement can use the port and config lock.
+      stopPromise = exitedPromise.then(() => {
+        clearTimeout(timeout);
       });
       return stopPromise;
     },

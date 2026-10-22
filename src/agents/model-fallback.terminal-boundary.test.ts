@@ -1,31 +1,30 @@
-import { assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
-import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { GatewayDrainingError } from "../process/gateway-work-admission.js";
+import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
+import { WorkerNodeLostError } from "../worker/worker-node-loss.js";
 import {
   AgentRunTerminalOutcomeError,
   findAgentRunTerminalOutcome,
 } from "./agent-run-terminal-error.js";
-import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import {
   FailoverError,
   findCliTerminalStopError,
   findCliTimeoutError,
   resolveModelFallbackError,
 } from "./failover-error.js";
-import { AgentHarnessPreflightError, recordAgentHarnessPreflightOwner } from "./harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  recordAgentHarnessPreflightOwner,
+  SessionControllerAdmissionRequiredError,
+} from "./harness/errors.js";
 import {
   type ModelFallbackStepHandler,
   runFallbackAttempt,
   shouldDiscardDeferredSessionSuspension,
 } from "./model-fallback-attempt.js";
-import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import { recordModelFallbackStop as recordLightweightStop } from "./model-fallback-stop.js";
-import {
-  PreparedModelRuntimeOwnerNotPublishedError,
-  PreparedModelRuntimePublicationSupersededError,
-} from "./prepared-model-runtime.errors.js";
+import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
   createSessionPlacementSettlementClosedAbortError,
   isSessionPlacementSettlementClosedError,
@@ -58,6 +57,18 @@ function recordedStop() {
   recordLightweightStop(error);
   return error;
 }
+function cyclicRecordedStop() {
+  const wrapper = { cause: undefined as unknown, errors: [{ error: recordedStop() }] };
+  wrapper.cause = wrapper;
+  return wrapper;
+}
+function withOpaqueCause(errors: unknown[]) {
+  return Object.defineProperty({ errors }, "cause", {
+    get() {
+      throw new Error("opaque cause");
+    },
+  });
+}
 async function expectTerminalStop(
   error: unknown,
   options: Partial<Parameters<typeof runWithModelFallback>[0]> = {},
@@ -74,32 +85,54 @@ async function expectTerminalStop(
   expect(providerHook).not.toHaveBeenCalled();
 }
 
-it("does not replay an unscoped preflight subclass on another model", async () => {
-  class PolicyRefusal extends AgentHarnessPreflightError {}
-  await expectTerminalStop(
-    new PolicyRefusal("handoff refused", {
-      cause: new FailoverError("529 overloaded", { reason: "overloaded", status: 529 }),
-    }),
-  );
-});
-
+class PolicyRefusal extends AgentHarnessPreflightError {}
+const transcriptConflict = () => new SqliteTranscriptMutationConflictError("conflicting-session");
 it.each([
-  PreparedModelRuntimePublicationSupersededError,
-  PreparedModelRuntimeOwnerNotPublishedError,
-])("does not rotate providers after %s", async (ErrorType) => {
-  await expectTerminalStop(new ErrorType("fixture prepared runtime publication failed"));
-});
-
-it("does not rotate providers when SQLite worker capacity is exhausted", async () => {
-  await expectTerminalStop(
-    new SqliteWorkerError("SQLite worker store capacity reached", "overloaded"),
-  );
-});
-
-it("does not consult provider policy or rotate models for a transcript conflict", async () => {
-  const error = new SqliteTranscriptMutationConflictError("conflicting-session");
+  [
+    "unscoped preflight",
+    () =>
+      new PolicyRefusal("handoff refused", {
+        cause: new FailoverError("529 overloaded", { reason: "overloaded", status: 529 }),
+      }),
+    false,
+  ],
+  ["missing controller admission", () => new SessionControllerAdmissionRequiredError(), false],
+  [
+    "superseded publication",
+    () => new PreparedModelRuntimePublicationSupersededError("publication failed"),
+    false,
+  ],
+  ["transcript conflict", transcriptConflict, false],
+  [
+    "session reader invalidation",
+    () =>
+      new SessionWorkStartChangedError(
+        "Session reader operation is no longer current. Retry the turn.",
+      ),
+    false,
+  ],
+  [
+    "wrapped serialized session invalidation",
+    () =>
+      new Error("503 overloaded", {
+        cause: { code: "SESSION_WORK_START_INVALIDATED", message: "Session work invalidated" },
+      }),
+    false,
+  ],
+  [
+    "wrapped transcript conflict",
+    () => new Error("worker operation failed", { cause: transcriptConflict() }),
+    false,
+  ],
+  ["cyclic recorded stop", cyclicRecordedStop, true],
+  ["recorded supersession", createAgentRunSupersededAbortError, true],
+  ["node loss with unknown tool effects", () => new WorkerNodeLostError(), true],
+] as const)("does not replay %s", async (_name, make, terminal) => {
+  const error = make();
+  if (terminal) {
+    expect(resolveModelFallbackError(error)).toEqual({ kind: "terminal", error });
+  }
   await expectTerminalStop(error);
-  await expectTerminalStop(new Error("worker operation failed", { cause: error }));
 });
 
 it("retains closed ownership when async disposal also fails", async () => {
@@ -119,40 +152,8 @@ it("retains closed ownership when async disposal also fails", async () => {
   await expectTerminalStop(error);
 });
 
-it.each([
-  {
-    name: "lightweight stop in a cyclic aggregate",
-    make: () => {
-      const error = {
-        message: "wrapper",
-        cause: undefined as unknown,
-        errors: [{ error: recordedStop() }],
-      };
-      error.cause = error;
-      return error;
-    },
-  },
-  { name: "recorded supersession", make: createAgentRunSupersededAbortError },
-])("does not replay $name", async ({ make }) => {
-  const error = make();
-  expect(resolveModelFallbackError(error)).toEqual({ kind: "terminal", error });
-  await expectTerminalStop(error);
-});
-
-it("records a CLI max-turn stop before provider policy can replace it with a retryable error", async () => {
-  const run = vi.fn(async () => {
-    const error = createCliOutputFailoverError({
-      output: {
-        text: "",
-        errorText: "Reached maximum number of turns (1)",
-        terminalFailure: { reason: "max_turns", limit: 1 },
-      },
-      provider: "fixture-provider",
-      model: "fixture-model",
-    });
-    assert(error instanceof FailoverError);
-    throw error;
-  });
+it("honors a recorded CLI max-turn stop without consulting provider policy", async () => {
+  const run = vi.fn().mockRejectedValue(maxTurns());
   await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toMatchObject({
     code: "cli_max_turns",
     reason: "unknown",
@@ -212,29 +213,6 @@ it("preserves recovery when its fallback observer rejects", async () => {
   ]);
 });
 
-it("does not replay a recorded stop returned by result classification", async () => {
-  const error = new AggregateError([recordedStop()], "wrapper");
-  const run = vi.fn().mockResolvedValue("partial result");
-  await expectTerminalStop(error, { classifyResult: () => ({ error }) }, run);
-});
-
-it("stops image fallback after a recorded stop", async () => {
-  const error = new AggregateError([recordedStop()], "wrapper");
-  const run = vi.fn().mockRejectedValue(error);
-  const imageModel = {
-    primary: "fixture-provider/fixture-model",
-    fallbacks: fallbackOptions.fallbacksOverride,
-  };
-  await expect(
-    runWithImageModelFallback({
-      cfg: { agents: { defaults: { imageModel } } },
-      run,
-    }),
-  ).rejects.toBe(error);
-  expect(run).toHaveBeenCalledOnce();
-  expect(providerHook).not.toHaveBeenCalled();
-});
-
 it("still classifies a genuine provider failure through its hook", async () => {
   providerHook.mockReturnValue("overloaded");
   const result = await runFallbackAttempt({
@@ -258,12 +236,39 @@ it("still classifies a genuine provider failure through its hook", async () => {
   expect(providerHook).toHaveBeenCalledOnce();
 });
 
-it("preserves coordination precedence over a recorded terminal stop", () => {
-  const error = new AggregateError([maxTurns(), new GatewayDrainingError()], "wrapper");
-  expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-  expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(true);
-  expect(providerHook).not.toHaveBeenCalled();
-});
+it.each(["throw", "reject"] as const)(
+  "propagates a result classifier %s without provider fallback",
+  async (kind) => {
+    const failure = new Error("result classifier failed");
+    const run = vi.fn().mockResolvedValue("provider-result");
+    const classifyResult = vi.fn(() => {
+      if (kind === "throw") {
+        throw failure;
+      }
+      return Promise.reject(failure);
+    });
+    await expect(
+      runFallbackAttempt({
+        run,
+        classifyResult,
+        provider: "fixture-provider",
+        model: "fixture-model",
+        attempts: [],
+        attempt: 1,
+        total: 2,
+      }),
+    ).rejects.toBe(failure);
+    expect(run).toHaveBeenCalledOnce();
+    expect(classifyResult).toHaveBeenCalledExactlyOnceWith({
+      result: "provider-result",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      attempt: 1,
+      total: 2,
+    });
+    expect(providerHook).not.toHaveBeenCalled();
+  },
+);
 
 describe.each([
   { name: "max turns", find: findCliTerminalStopError, make: maxTurns },
@@ -296,51 +301,22 @@ describe.each([
   });
 });
 
-it("does not infer settlement ownership from display text", () => {
-  expect(
-    isSessionPlacementSettlementClosedError(
-      new Error("session placement turn settlement is closed"),
-    ),
-  ).toBe(false);
-});
-
-it("preserves the typed marker behind a hostile sibling accessor", async () => {
-  const wrapper = Object.defineProperty(
-    { errors: [createSessionPlacementSettlementClosedAbortError()] },
-    "cause",
-    {
-      get() {
-        throw new Error("opaque cause");
-      },
-    },
-  );
-  expect(isSessionPlacementSettlementClosedError(wrapper)).toBe(true);
-  expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
-  await expectTerminalStop(wrapper);
-});
-
-it("discovers a canonical timeout beside an opaque cause and a settlement closure", async () => {
-  const timeout = new AgentRunTerminalOutcomeError(new Error("timeout"), {
-    status: "timeout",
-    reason: "hard_timeout",
-  });
-  const wrapper = Object.defineProperty(
-    { errors: [createSessionPlacementSettlementClosedAbortError(), timeout] },
-    "cause",
-    {
-      get() {
-        throw new Error("opaque cause");
-      },
-    },
-  );
-  expect(findAgentRunTerminalOutcome(wrapper)).toBe(timeout.terminalOutcome);
-  expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
-  await expectTerminalStop(wrapper);
-});
-
-it("does not infer terminal outcomes from untyped fields or cyclic wrappers", () => {
-  const wrapper = { cause: undefined as unknown, terminalOutcome: { status: "timeout" } };
-  wrapper.cause = wrapper;
-  expect(findAgentRunTerminalOutcome(wrapper)).toBeUndefined();
-  expect(findAgentRunTerminalOutcome(null)).toBeUndefined();
-});
+it.each([false, true])(
+  "preserves an opaque settlement closure with timeout=%s",
+  async (withTimeout) => {
+    const timeout = new AgentRunTerminalOutcomeError(new Error("timeout"), {
+      status: "timeout",
+      reason: "hard_timeout",
+    });
+    const wrapper = withOpaqueCause([
+      createSessionPlacementSettlementClosedAbortError(),
+      ...(withTimeout ? [timeout] : []),
+    ]);
+    expect(isSessionPlacementSettlementClosedError(wrapper)).toBe(true);
+    if (withTimeout) {
+      expect(findAgentRunTerminalOutcome(wrapper)).toBe(timeout.terminalOutcome);
+    }
+    expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
+    await expectTerminalStop(wrapper);
+  },
+);

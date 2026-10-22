@@ -1,3 +1,4 @@
+import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
@@ -121,15 +122,7 @@ export type CliBackendPreparedExecution = {
   execute?: CliBackendExecute;
 };
 
-export type CliBackendThinkingLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
+export type CliBackendThinkingLevel = ModelThinkingLevel | "adaptive";
 
 export type CliBackendExecutionMode = "agent" | "side-question";
 
@@ -210,6 +203,22 @@ export type CliBackendLiveSessionCapability = {
   remove(handle: CliBackendLiveSessionHandle): void;
 };
 
+/** Plugin-owned input sink for the admitted turn; the host revalidates authority at each effect. */
+export type CliBackendMessageInjection = {
+  isAvailable(): boolean;
+  /**
+   * Ask the host to prepare current authority and invoke the synchronous native write.
+   * Resolve only after the runtime acknowledges consumption, not after the write.
+   */
+  queueMessage(text: string, withCurrent: (submit: () => void) => Promise<void>): Promise<void>;
+};
+
+/** Graceful end of the admitted turn without retiring its reusable native session. */
+export type CliBackendTurnInterrupt = {
+  /** Request the turn end; its execution stream must then finish normally. */
+  interrupt(reason: "yield"): Promise<void>;
+};
+
 /** Turn-only context that must not become an operator-authored native transcript row. */
 export type CliBackendPromptContext = {
   prependContext?: string;
@@ -238,6 +247,10 @@ export type CliBackendExecuteContext = {
   toolAvailability?: CliBackendToolAvailability;
   /** Exact host-owned reusable process lifecycle and current-turn admission. */
   liveSession?: CliBackendLiveSessionCapability;
+  /** Offers same-turn input for this run; the host drops it when the run closes. */
+  registerMessageInjection?: (injection: CliBackendMessageInjection) => void;
+  /** Offers graceful turn interruption; the host drops the registration when this run closes. */
+  registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt) => void;
   /** Closure-bound approval capability; retained copies fail after the run closes. */
   requestToolPermission: (
     request: CliBackendToolPermissionRequest,
@@ -255,11 +268,15 @@ export type CliBackendResolveExecutionArgsContext = Omit<
   CliBackendPrepareExecutionContext,
   "agentDir" | "contextWindow" | "contextTokenBudget" | "env"
 > & {
+  /** Agent identity used to resolve per-agent execution policy. */
+  agentId?: string;
   /** Effective fast mode at spawn, after queue admission and backend preparation. */
   fastMode?: boolean;
   /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
   hostOwnedTools?: readonly string[];
   useResume: boolean;
+  /** The backend process is executing a native control operation. */
+  controlOperation?: "compact";
   baseArgs: readonly string[];
 };
 
@@ -274,7 +291,7 @@ type CliBackendResolveModelIdContext = {
 
 export type CliBackendJsonlUsage = Pick<
   NormalizedUsage,
-  "input" | "output" | "cacheRead" | "cacheWrite" | "total"
+  "input" | "output" | "cacheRead" | "cacheWrite" | "cacheWrite1h" | "total"
 >;
 
 export type CliBackendParsedJsonlEvent =
@@ -444,6 +461,8 @@ type CliBackendPluginBase = {
     modelDisplay: string;
     agentId?: string;
     systemPrompt: string;
+    /** Short IDs of OpenClaw MCP tools exposed to this invocation after policy filtering. */
+    openClawMcpToolNames?: readonly string[];
   }) => string | null | undefined;
   /**
    * Backend-owned bidirectional text replacements.
@@ -514,6 +533,8 @@ type CliBackendPluginBase = {
    * renders them but does not treat them as host tool execution or delivery evidence.
    */
   parseJsonlEvent?: CliBackendParseJsonlEvent;
+  /** Normalize backend-native failures into diagnostic codes without changing retry policy. */
+  classifyErrorCode?: (message: string) => string | undefined;
   /**
    * Optional lifecycle parser kept separate from the legacy JSONL event union.
    * Existing plugins can continue exhaustively matching `parseJsonlEvent` results.

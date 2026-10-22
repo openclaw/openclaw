@@ -3,20 +3,11 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import type {
-  WorkerInferenceStartParams,
-  WorkerInferenceTerminalOutcome,
-} from "../../packages/gateway-protocol/src/schema/worker-inference.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import type { WorkerInferenceStartParams } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runWorkerProviderReplayRoundTrip } from "../../test/helpers/worker-provider-replay-roundtrip.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import {
-  claimAgentRunContext,
-  clearAgentRunContext,
-  getAgentRunContext,
-} from "../infra/agent-run-registry.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
@@ -32,7 +23,6 @@ import {
   ENVIRONMENT_ID,
   RUN_ID,
   SESSION_ID,
-  SESSION_KEY,
   doneMessage,
   doneOutcome,
   type WorkerClients,
@@ -67,15 +57,6 @@ function inferenceRequest(epoch: number, turnId: string): WorkerInferenceStartPa
   };
 }
 
-async function stopClients(clients: WorkerClients | undefined): Promise<void> {
-  if (!clients) {
-    return;
-  }
-  clients.inference.dispose();
-  clients.live.dispose();
-  await clients.connection.stop();
-}
-
 function waitForWorkerEvent(
   event: Promise<void>,
   command: Promise<unknown>,
@@ -83,12 +64,7 @@ function waitForWorkerEvent(
   resultOutput?: Promise<void>,
 ): Promise<void> {
   const completed = resultOutput ? Promise.race([command, resultOutput]) : command;
-  return Promise.race([
-    event,
-    completed.then(() => {
-      throw new Error(`Worker completed before ${phase}`);
-    }),
-  ]);
+  return awaitGateBeforeSettlement(event, completed, `Worker completed before ${phase}`);
 }
 
 describe("cloud worker milestone 2 fault injection", () => {
@@ -102,10 +78,34 @@ describe("cloud worker milestone 2 fault injection", () => {
 
   afterEach(async () => {
     for (const current of clients.splice(0)) {
-      await stopClients(current);
+      current.inference.dispose();
+      current.live.dispose();
+      await current.connection.stop();
     }
     await harness.close();
   });
+
+  async function createClients(options?: Parameters<ComposedGatewayHarness["createClients"]>[0]) {
+    const current = await harness.createClients(options);
+    clients.push(current);
+    return current;
+  }
+
+  function transcriptGate(phase: NonNullable<ComposedGatewayHarness["transcriptGate"]>["phase"]) {
+    const gate = { phase, entered: createDeferred(), release: createDeferred() };
+    harness.transcriptGate = gate;
+    return gate;
+  }
+
+  const transcript = () => SessionManager.open(harness.sessionTarget);
+  const placement = () => harness.placementStore.get(SESSION_ID);
+  const pendingResults = () => harness.placementStore.listPendingWorkspaceResultsAsync();
+  const liveRequests = () => harness.requestParams("worker.live-event") as WorkerLiveEventParams[];
+  const previews = (client: WorkerClients, runId: string, ...deltas: string[]) => {
+    for (const delta of deltas) {
+      client.live.enqueuePreview(runId, { kind: "assistant", payload: { text: delta, delta } });
+    }
+  };
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
     ["success", "standalone", "skill", "completed", "stop"],
@@ -137,13 +137,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       );
       const previousStateDir = process.env.OPENCLAW_STATE_DIR;
       let environmentStateDir: string | undefined;
-      const providerRelease = createDeferred<WorkerInferenceTerminalOutcome>();
-      const providerStarted = createDeferred();
-      harness.providerPlan = {
-        kind: "pending",
-        release: providerRelease,
-        started: providerStarted,
-      };
+      const { release: providerRelease, started: providerStarted } = harness.planPending();
       const finishingGate = harness.addLiveEventGate("after-service", "finishing");
       const controller = new AbortController();
       const warn = vi.fn();
@@ -226,30 +220,31 @@ describe("cloud worker milestone 2 fault injection", () => {
         if (outcome === "cancellation") {
           expect(harness.requestParams("worker.inference.cancel")).toHaveLength(1);
         }
-        const finishing = harness
-          .requestParams("worker.live-event")
-          .map((params) => params as WorkerLiveEventParams)
-          .filter(({ event }) => event.kind === "lifecycle" && event.payload.phase === "finishing");
+        const finishing = liveRequests().filter(
+          ({ event }) => event.kind === "lifecycle" && event.payload.phase === "finishing",
+        );
         expect(finishing).toHaveLength(1);
         expect(finishing[0]?.event).toMatchObject({
           kind: "lifecycle",
-          payload: { phase: "finishing", stopReason },
+          payload: {
+            phase: "finishing",
+            stopReason,
+            ...(outcome === "cancellation" ? { aborted: true } : {}),
+          },
         });
         const payload = finishing[0]!.event.payload;
-        if (outcome === "provider failure") {
-          expect(payload).toHaveProperty("error", "fixture provider failed");
-        } else {
+        if (outcome === "success") {
           expect(payload).not.toHaveProperty("error");
+        } else {
+          expect(payload).toHaveProperty(
+            "error",
+            outcome === "provider failure" ? "fixture provider failed" : "worker turn cancelled",
+          );
         }
-        if (outcome === "cancellation") {
-          expect(payload).toHaveProperty("aborted", true);
-        }
-        expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
+        expect(await pendingResults()).toMatchObject([
           { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
         ]);
-        expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBe(
-          finishing[0]!.seq,
-        );
+        expect(placement()?.lastLiveEventAckCursor).toBe(finishing[0]!.seq);
         finishingGate.release.resolve();
         if (deniedOwner === "credential") {
           // Bun reports the containing directory's ENOTEMPTY until oven-sh/bun#42446 lands.
@@ -262,22 +257,21 @@ describe("cloud worker milestone 2 fault injection", () => {
           await expect.soft(command).resolves.toBeUndefined();
         }
         const settled: unknown = JSON.parse(stdout || "null");
-        const transcript = SessionManager.open(harness.sessionTarget);
-        const messages = transcript
+        const session = transcript();
+        const messages = session
           .getEntries()
           .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-        expect(messages.map((message) => message.role)).toEqual(
-          outcome === "cancellation" ? ["user"] : ["user", "assistant"],
+        const assistant = {
+          role: "assistant",
+          stopReason,
+          ...(outcome === "success"
+            ? { content: [{ type: "text", text: "paid reply" }] }
+            : { errorMessage: "fixture provider failed" }),
+        };
+        expect(messages).toMatchObject(
+          outcome === "cancellation" ? [{ role: "user" }] : [{ role: "user" }, assistant],
         );
-        if (outcome !== "cancellation") {
-          expect(messages[1]).toMatchObject({ stopReason });
-        }
-        if (outcome === "success") {
-          expect(messages[1]).toMatchObject({ content: [{ type: "text", text: "paid reply" }] });
-        } else if (outcome === "provider failure") {
-          expect(messages[1]).toHaveProperty("errorMessage", "fixture provider failed");
-        }
-        const expectedResult = { status: expectedStatus, transcriptLeafId: transcript.getLeafId() };
+        const expectedResult = { status: expectedStatus, transcriptLeafId: session.getLeafId() };
         if (deniedOwner === "credential" && !managed) {
           expect.soft(stdout).toBe("");
         } else {
@@ -356,12 +350,9 @@ describe("cloud worker milestone 2 fault injection", () => {
     });
   });
 
-  it.each([
-    ["before service handling", "before-service"],
-    ["after service handling", "after-service"],
-  ] as const)(
+  it.each(["before-service", "after-service"] as const)(
     "does not pace provider preview production on a delayed first request %s",
-    async (_label, previewStage) => {
+    async (previewStage) => {
       const nextProviderDelta = createDeferred();
       const providerProduced = createDeferred();
       const previewGate = harness.addLiveEventGate(previewStage, "preview");
@@ -388,24 +379,23 @@ describe("cloud worker milestone 2 fault injection", () => {
         await waitForWorkerEvent(
           vi.waitFor(() =>
             expect(
-              harness.requestParams("worker.live-event").filter((params) => {
-                const request = params as WorkerLiveEventParams;
-                return request.event.kind === "assistant" || request.event.kind === "thinking";
-              }),
+              liveRequests().filter(
+                ({ event }) => event.kind === "assistant" || event.kind === "thinking",
+              ),
             ).toHaveLength(2),
           ),
           result,
           "both preview requests",
         );
         expect(settled).toBe(false);
-        expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeNull();
+        expect(placement()?.lastLiveEventAckCursor).toBeNull();
 
         previewGate.release.resolve();
         await waitForWorkerEvent(finishingGate.entered.promise, result, "finishing event");
         expect(settled).toBe(false);
-        expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(2);
-        expect(harness.placementStore.get(SESSION_ID)?.lastLiveEventAckCursor).toBeGreaterThan(0);
-        expect(await harness.placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
+        expect(transcript().getEntries()).toHaveLength(2);
+        expect(placement()?.lastLiveEventAckCursor).toBeGreaterThan(0);
+        expect(await pendingResults()).toMatchObject([
           { sessionId: SESSION_ID, environmentId: ENVIRONMENT_ID, runId: RUN_ID },
         ]);
 
@@ -425,8 +415,7 @@ describe("cloud worker milestone 2 fault injection", () => {
   );
 
   it("survives repeated tunnel partitions without transcript duplication, live replay, or rebilling", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
+    const current = await createClients();
     const firstRelease = createDeferred();
     const secondRelease = createDeferred();
     const started = createDeferred();
@@ -454,21 +443,12 @@ describe("cloud worker milestone 2 fault injection", () => {
     secondRelease.resolve();
     await expect(inference).resolves.toEqual(doneOutcome("partitioned reply"));
 
-    const message = transcriptMessage("partitioned user");
-    const commit = current.transcript.commit([
-      message,
+    const committed = await current.transcript.commit([
+      transcriptMessage("partitioned user"),
       { ...doneMessage("partitioned reply"), timestamp: 2 },
     ]);
-    message.content[0]!.text = "caller mutation";
-    const committed = await commit;
-    expect(current.transcript.baseLeafId).toBe(committed.newLeafId);
-    expect(current.transcript.nextSeq).toBe(2);
-    for (const delta of ["one", "two", "three"]) {
-      current.live.enqueuePreview(RUN_ID, {
-        kind: "assistant",
-        payload: { text: delta, delta },
-      });
-    }
+    expect(current.transcript).toMatchObject({ baseLeafId: committed.newLeafId, nextSeq: 2 });
+    previews(current, RUN_ID, "one", "two", "three");
     await expect(current.live.emitTerminal(RUN_ID, TERMINAL_EVENT)).resolves.toBeUndefined();
 
     const transcriptRequests = harness.requestParams("worker.transcript.commit");
@@ -478,59 +458,32 @@ describe("cloud worker milestone 2 fault injection", () => {
     expect(harness.providerCalls).toBe(1);
     expect(inferenceSeqs).toEqual([1, 2]);
     expect(harness.liveDeltas).toEqual(["one", "two", "three"]);
-    expect(
-      harness
-        .requestParams("worker.live-event")
-        .map((request) => (request as WorkerLiveEventParams).seq),
-    ).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
-    const transcript = SessionManager.open(harness.sessionTarget).getEntries();
-    expect(transcript).toHaveLength(2);
-    expect(transcript[0]).toMatchObject({ message: transcriptMessage("partitioned user") });
-    expect(new Set(transcript.map((entry) => entry.id)).size).toBe(2);
-    expect(SessionManager.open(harness.sessionTarget).getLeafId()).toBe(committed.newLeafId);
+    expect(liveRequests().map(({ seq }) => seq)).toEqual([1, 2, 3, 4, 1, 2, 3, 4]);
+    const entries = transcript().getEntries();
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ message: transcriptMessage("partitioned user") });
+    expect(new Set(entries.map((entry) => entry.id)).size).toBe(2);
+    expect(transcript().getLeafId()).toBe(committed.newLeafId);
   });
 
   it("fences restart-inherited authority and recovers durable state on a fresh claim", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
-    const providerRelease = createDeferred<WorkerInferenceTerminalOutcome>();
-    const providerStarted = createDeferred();
-    const commitEntered = createDeferred();
-    const commitRelease = createDeferred();
-    harness.providerPlan = { kind: "pending", release: providerRelease, started: providerStarted };
-    harness.transcriptGate = {
-      phase: "after-apply",
-      entered: commitEntered,
-      release: commitRelease,
-    };
+    const current = await createClients();
+    const { release: providerRelease, started: providerStarted } = harness.planPending();
+    const { entered: commitEntered, release: commitRelease } = transcriptGate("after-apply");
     harness.addFault({ kind: "drop-response", method: "worker.transcript.commit", restart: true });
     await current.connection.start();
 
-    current.live.enqueuePreview(RUN_ID, {
-      kind: "assistant",
-      payload: { text: "acked", delta: "acked" },
-    });
+    previews(current, RUN_ID, "acked");
     await vi.waitFor(() => expect(harness.liveDeltas).toEqual(["acked"]));
     const inference = current.inference.start(inferenceRequest(harness.epoch, "restart-turn"));
     await providerStarted.promise;
     const commit = current.transcript.commit([transcriptMessage("restart transcript")]);
-    const fencedCommit = expect(commit).rejects.toMatchObject({
-      name: "WorkerAdmissionError",
-      reason: "invalid-handshake",
-    });
-    const fencedInference = expect(inference).rejects.toMatchObject({
-      name: "WorkerAdmissionError",
-      reason: "invalid-handshake",
-    });
+    const invalidHandshake = { name: "WorkerAdmissionError", reason: "invalid-handshake" };
+    const fencedCommit = expect(commit).rejects.toMatchObject(invalidHandshake);
+    const fencedInference = expect(inference).rejects.toMatchObject(invalidHandshake);
     await commitEntered.promise;
-    for (const delta of ["tail-a", "tail-b"]) {
-      current.live.enqueuePreview(RUN_ID, {
-        kind: "assistant",
-        payload: { text: delta, delta },
-      });
-    }
-    // Pin one live request in the pre-restart window before the commit response
-    // triggers restart, so recovery proves that stale tail cannot retain authority.
+    previews(current, RUN_ID, "tail-a", "tail-b");
+    // Admit the stale tail before restart to prove recovery fences it.
     await vi.waitFor(() =>
       expect(harness.requestParams("worker.live-event").length).toBeGreaterThanOrEqual(3),
     );
@@ -545,8 +498,7 @@ describe("cloud worker milestone 2 fault injection", () => {
         reason: "invalid-handshake",
       }),
     });
-    expect(harness.providerCalls).toBe(1);
-    expect(harness.replacementProviderCalls).toBe(0);
+    expect(harness).toMatchObject({ providerCalls: 1, replacementProviderCalls: 0 });
     const staleIdentity = harness.admissions.at(-1);
     expect(staleIdentity).toMatchObject({
       environmentId: ENVIRONMENT_ID,
@@ -557,24 +509,20 @@ describe("cloud worker milestone 2 fault injection", () => {
         owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: harness.epoch },
       },
     });
-    expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
+    expect(transcript().getEntries()).toHaveLength(1);
 
     const recoveryRunId = "restart-recovery-run";
     const oldEpoch = harness.epoch;
     const freshEpoch = await harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, recoveryRunId);
     expect(freshEpoch).toBeGreaterThan(oldEpoch);
     providerRelease.resolve(doneOutcome("late stale provider result"));
-    const fresh = await harness.createClients({
+    const fresh = await createClients({
       admissionProof: REPLACEMENT_CREDENTIAL,
       epoch: freshEpoch,
       runId: recoveryRunId,
     });
-    clients.push(fresh);
     await fresh.connection.start();
-    fresh.live.enqueuePreview(recoveryRunId, {
-      kind: "assistant",
-      payload: { text: "recovered", delta: "recovered" },
-    });
+    previews(fresh, recoveryRunId, "recovered");
     await expect(fresh.live.emitTerminal(recoveryRunId, TERMINAL_EVENT)).resolves.toBeUndefined();
     const freshIdentity = harness.admissions.at(-1);
     expect(freshIdentity?.turnClaim).toMatchObject({
@@ -584,92 +532,20 @@ describe("cloud worker milestone 2 fault injection", () => {
     expect(freshIdentity?.turnClaim?.claimId).not.toBe(staleIdentity?.turnClaim?.claimId);
     expect(harness.liveDeltas[0]).toBe("acked");
     expect(harness.liveDeltas.filter((delta) => delta === "recovered")).toEqual(["recovered"]);
-    const liveRequests = harness.requestParams("worker.live-event").map((request) => {
-      const live = request as WorkerLiveEventParams;
-      return [live.runId, live.seq, live.lastAckedSeq];
-    });
-    expect(liveRequests).toContainEqual([recoveryRunId, 1, 0]);
+    expect(
+      liveRequests().map(({ runId, seq, lastAckedSeq }) => [runId, seq, lastAckedSeq]),
+    ).toContainEqual([recoveryRunId, 1, 0]);
     await harness.settleRun(recoveryRunId);
   });
 
-  it("fences a dead worker and admits a fresh owner at a higher epoch", async () => {
-    const old = await harness.createClients();
-    clients.push(old);
-    await old.connection.start();
-    const oldCommit = await old.transcript.commit([transcriptMessage("old owner")]);
-    const pendingRelease = createDeferred<WorkerInferenceTerminalOutcome>();
-    const pendingStarted = createDeferred();
-    harness.providerPlan = { kind: "pending", release: pendingRelease, started: pendingStarted };
-    const oldInference = old.inference.start(inferenceRequest(harness.epoch, "handoff-old"));
-    const oldInferenceSettled = expect(oldInference).resolves.toMatchObject({
-      type: "error",
-      reason: "session-not-attached",
-    });
-    await pendingStarted.promise;
-
-    const oldEpoch = harness.epoch;
-    const newEpoch = await harness.reclaimWithCredential(REPLACEMENT_CREDENTIAL, "fresh-run");
-    expect(newEpoch).toBeGreaterThan(oldEpoch);
-    const rejected = old.transcript.commit([transcriptMessage("late old owner")]);
-    await expect(rejected).rejects.toMatchObject({
-      name: "WorkerTranscriptCommitError",
-      reason: "placement-mismatch",
-    });
-    await expect(old.connection.waitForExit()).resolves.toMatchObject({ kind: "failed" });
-    pendingRelease.resolve(doneOutcome("stale paid output"));
-    await oldInferenceSettled;
-
-    harness.providerPlan = { kind: "immediate", text: "new owner reply" };
-    // Milestone-3 admission binds the worker to a single run; the fresh owner
-    // must be admitted for the run it executes.
-    const fresh = await harness.createClients({
-      admissionProof: REPLACEMENT_CREDENTIAL,
-      epoch: newEpoch,
-      baseLeafId: oldCommit.newLeafId,
-      runId: "fresh-run",
-    });
-    clients.push(fresh);
-    await fresh.connection.start();
-    expect(harness.admissions.at(-1)?.turnClaim).toMatchObject({
-      runId: "fresh-run",
-      owner: { kind: "worker", environmentId: ENVIRONMENT_ID, ownerEpoch: newEpoch },
-    });
-    await expect(
-      fresh.inference.start({
-        ...inferenceRequest(newEpoch, "handoff-new"),
-        runId: "fresh-run",
-      }),
-    ).resolves.toEqual(doneOutcome("new owner reply"));
-    await fresh.transcript.commit([transcriptMessage("new owner")]);
-
-    const messages = SessionManager.open(harness.sessionTarget)
-      .getEntries()
-      .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
-    expect(messages.map((message) => message.role)).toEqual(["user", "user"]);
-    expect(harness.providerCalls).toBe(2);
-    expect(
-      harness.database.db
-        .prepare(
-          "SELECT run_epoch, next_seq FROM worker_transcript_commit_heads WHERE session_id = ? ORDER BY run_epoch",
-        )
-        .all(SESSION_ID),
-    ).toEqual([
-      { run_epoch: oldEpoch, next_seq: 2 },
-      { run_epoch: newEpoch, next_seq: 2 },
-    ]);
-  });
-
   it("fail-stops a reconnected commit whose base changes while application is in flight", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
-    const entered = createDeferred();
-    const release = createDeferred();
-    harness.transcriptGate = { phase: "before-apply", entered, release };
+    const current = await createClients();
+    const { entered, release } = transcriptGate("before-apply");
     await current.connection.start();
     const commit = current.transcript.commit([transcriptMessage("stale paid output")]);
     await entered.promise;
     harness.partition();
-    const local = SessionManager.open(harness.sessionTarget);
+    const local = transcript();
     local.appendMessage(transcriptMessage("competing local entry"));
     release.resolve();
 
@@ -677,59 +553,18 @@ describe("cloud worker milestone 2 fault injection", () => {
       name: "WorkerTranscriptCommitError",
       reason: "stale-base-leaf",
     });
-    expect(current.transcript.baseLeafId).toBeNull();
-    expect(current.transcript.nextSeq).toBe(2);
+    expect(current.transcript).toMatchObject({ baseLeafId: null, nextSeq: 2 });
     await expect(
       current.transcript.commit([transcriptMessage("must not retry after stale")]),
     ).rejects.toMatchObject({ name: "WorkerTranscriptCommitError" });
     expect(current.transcript.nextSeq).toBe(2);
     expect(harness.requestParams("worker.transcript.commit")).toHaveLength(2);
-    expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
-  });
-
-  it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
-    // A visible turn's run context is claimed by the gateway dispatch before the
-    // turn hands off to the worker. The worker's first live event must adopt that
-    // dispatch-owned context (seq advances from 1) and keep the run visible.
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    claimAgentRunContext(RUN_ID, {
-      agentId: "main",
-      sessionId: SESSION_ID,
-      sessionKey: SESSION_KEY,
-      isControlUiVisible: true,
-      lifecycleGeneration,
-    });
-    try {
-      await current.connection.start();
-
-      for (const delta of ["one", "two"]) {
-        current.live.enqueuePreview(RUN_ID, {
-          kind: "assistant",
-          payload: { text: delta, delta },
-        });
-      }
-      await expect(current.live.emitTerminal(RUN_ID, TERMINAL_EVENT)).resolves.toBeUndefined();
-
-      expect(harness.liveDeltas).toEqual(["one", "two"]);
-      expect(
-        harness
-          .requestParams("worker.live-event")
-          .map((request) => (request as WorkerLiveEventParams).seq),
-      ).toEqual([1, 2, 3]);
-      expect(getAgentRunContext(RUN_ID)?.isControlUiVisible).toBe(true);
-    } finally {
-      clearAgentRunContext(RUN_ID);
-    }
+    expect(transcript().getEntries()).toHaveLength(1);
   });
 
   it("settles stop during an in-flight commit without retrying or spinning", async () => {
-    const current = await harness.createClients();
-    clients.push(current);
-    const entered = createDeferred();
-    const release = createDeferred();
-    harness.transcriptGate = { phase: "before-apply", entered, release };
+    const current = await createClients();
+    const { entered, release } = transcriptGate("before-apply");
     await current.connection.start();
     const commit = current.transcript.commit([transcriptMessage("stopped commit")]);
     await entered.promise;

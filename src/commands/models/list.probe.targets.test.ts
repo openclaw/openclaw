@@ -123,12 +123,13 @@ vi.mock("./shared.js", () => ({
   formatMs: (ms: number) => `${ms}ms`,
 }));
 
+// mock-isolation: Probe planning uses fixture stores and never discovers operator credentials.
 vi.mock("../../agents/auth-profiles.js", () => ({
   externalCliDiscoveryScoped: (params: Record<string, unknown> = {}) => ({
     mode: "scoped",
     ...params,
   }),
-  ensureAuthProfileStore: (agentDir?: string) =>
+  ensureAuthProfileStoreAsync: async (agentDir?: string) =>
     agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     Object.entries(store.profiles)

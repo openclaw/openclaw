@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { Type, type Static } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
@@ -18,11 +19,112 @@ import {
   type FeishuDriveCommentReply,
 } from "./comment-shared.js";
 import { parseFeishuCommentTarget, type CommentFileType } from "./comment-target.js";
-import { FeishuDriveSchema, type FeishuDriveParams } from "./drive-schema.js";
 import { withFeishuMessageDispatch } from "./send-context.js";
-import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
+
+const FileType = Type.Union([
+  Type.Literal("doc"),
+  Type.Literal("docx"),
+  Type.Literal("sheet"),
+  Type.Literal("bitable"),
+  Type.Literal("folder"),
+  Type.Literal("file"),
+  Type.Literal("mindnote"),
+  Type.Literal("shortcut"),
+]);
+
+const DriveCommentFileType = Type.Union([
+  Type.Literal("doc"),
+  Type.Literal("docx"),
+  Type.Literal("sheet"),
+  Type.Literal("file"),
+  Type.Literal("slides"),
+]);
+
+const FeishuDriveSchema = Type.Union([
+  Type.Object({
+    action: Type.Literal("list"),
+    folder_token: Type.Optional(
+      Type.String({ description: "Folder token (optional, omit for root directory)" }),
+    ),
+    page_size: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 200,
+        description: "Items per folder page (1-200; requires folder_token)",
+      }),
+    ),
+    page_token: Type.Optional(
+      Type.String({
+        description: "Continuation token from a prior list result (requires the same folder_token)",
+      }),
+    ),
+  }),
+  Type.Object({
+    action: Type.Literal("info"),
+    file_token: Type.String({ description: "File or folder token" }),
+    type: FileType,
+  }),
+  Type.Object({
+    action: Type.Literal("create_folder"),
+    name: Type.String({ description: "Folder name" }),
+    folder_token: Type.Optional(
+      Type.String({ description: "Parent folder token (optional, omit for root)" }),
+    ),
+  }),
+  Type.Object({
+    action: Type.Literal("move"),
+    file_token: Type.String({ description: "File token to move" }),
+    type: FileType,
+    folder_token: Type.String({ description: "Target folder token" }),
+  }),
+  Type.Object({
+    action: Type.Literal("delete"),
+    file_token: Type.String({ description: "File token to delete" }),
+    type: FileType,
+  }),
+  Type.Object({
+    action: Type.Literal("list_comments"),
+    file_token: Type.String({ description: "Document token" }),
+    file_type: Type.Optional(DriveCommentFileType),
+    page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Page size" })),
+    page_token: Type.Optional(Type.String({ description: "Comment page token" })),
+  }),
+  Type.Object({
+    action: Type.Literal("list_comment_replies"),
+    file_token: Type.String({ description: "Document token" }),
+    file_type: Type.Optional(DriveCommentFileType),
+    comment_id: Type.String({ description: "Comment id" }),
+    page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 100, description: "Page size" })),
+    page_token: Type.Optional(Type.String({ description: "Reply page token" })),
+  }),
+  Type.Object({
+    action: Type.Literal("add_comment"),
+    file_token: Type.String({ description: "Document token" }),
+    file_type: Type.Optional(
+      Type.Union([Type.Literal("doc"), Type.Literal("docx")], {
+        description: "Document type. Defaults to docx when omitted.",
+      }),
+    ),
+    content: Type.String({ description: "Comment text content" }),
+    block_id: Type.Optional(
+      Type.String({
+        description:
+          "Optional docx block id for a local comment. Omit to create a full-document comment.",
+      }),
+    ),
+  }),
+  Type.Object({
+    action: Type.Literal("reply_comment"),
+    file_token: Type.String({ description: "Document token" }),
+    file_type: Type.Optional(DriveCommentFileType),
+    comment_id: Type.String({ description: "Comment id" }),
+    content: Type.String({ description: "Reply text content" }),
+  }),
+]);
+
+type FeishuDriveParams = Static<typeof FeishuDriveSchema>;
 
 type FeishuExplorerRootFolderMetaResponse = {
   code: number;
@@ -482,15 +584,9 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
     description:
       "Feishu cloud storage operations. Actions: list, info, create_folder, move, delete, list_comments, list_comment_replies, add_comment, reply_comment",
     parameters: FeishuDriveSchema,
-    createExecute(ctx, cfg) {
-      const defaultAccountId = ctx.agentAccountId;
+    createExecute(ctx, _cfg, createClient) {
       return async (p) => {
-        const client = createFeishuToolClient({
-          cfg,
-          executeParams: p,
-          defaultAccountId,
-          requiredTool: { family: "drive", label: "Drive" },
-        });
+        const client = createClient(p, "Drive");
         switch (p.action) {
           case "list":
             return jsonResult(await listFolder(client, p));

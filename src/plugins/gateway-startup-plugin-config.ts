@@ -14,7 +14,7 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
-import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
+import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import {
@@ -46,7 +46,7 @@ export function readStartupBundledDiscoveryMode(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): "compat" | "allowlist" | undefined {
-  const stateMode = readBundledDiscoveryMode({ env });
+  const stateMode = readBundledDiscoveryModeMemoized(env);
   if (stateMode) {
     return stateMode;
   }
@@ -346,6 +346,10 @@ export function collectValidationConfiguredRefs(config: OpenClawConfig) {
   }
   const shorthandModelRefs: string[] = [];
   for (const ref of collectConfiguredModelRefs(config)) {
+    // Startup resolves Decision providers through their capability contract instead.
+    if (ref.capability === "decision") {
+      continue;
+    }
     const slashIndex = ref.value.indexOf("/");
     if (slashIndex > 0) {
       pushProviderId(ref.value.slice(0, slashIndex));

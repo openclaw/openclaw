@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -6,20 +7,363 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
+import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
+import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { withSessionTranscriptSourcePublication } from "./transcript-write-context.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("prepares shared-ID input through its transcript owner and retains intervening metadata", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = fixture();
+    const base = { ...f.scope, sessionKey: "agent:main:cron:job" };
+    const run = { ...base, sessionKey: `${base.sessionKey}:run:${base.sessionId}` };
+    replaceSessionEntrySync(base, {
+      sessionId: base.sessionId,
+      updatedAt: 2,
+      lifecycleRevision: "base",
+      label: "base entry",
+    });
+    replaceSessionEntrySync(run, {
+      sessionId: run.sessionId,
+      updatedAt: 3,
+      lifecycleRevision: "run",
+      label: "run entry",
+    });
+    const baseEntry = readExactSessionEntryRow(f.database, base.sessionKey)!.entry;
+    const input = expectDefined(
+      await acquireSessionInputActor(
+        { ...run, target: { canonicalKey: run.sessionKey, storeKeys: [run.sessionKey] } },
+        { assertCurrent() {}, assertReadable() {} },
+      ),
+      "transcript owner actor",
+    );
+    const persist = async (key: string) => {
+      const recorder = createUserTurnTranscriptRecorder({
+        message: { role: "user", content: key, timestamp: 1, idempotencyKey: key },
+        target: { ...base, expectedSessionId: base.sessionId, sessionEntry: baseEntry },
+        updateMode: "none",
+      });
+      bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+      return recorder.persistApproved();
+    };
+    try {
+      await expect(persist("shared-id:first")).resolves.toMatchObject({
+        appended: true,
+        sessionEntry: { lifecycleRevision: "run", label: "run entry" },
+      });
+      await patchSessionEntryCore(run, () => ({ label: "later metadata" }));
+      await expect(persist("shared-id:second")).resolves.toMatchObject({
+        appended: true,
+        sessionEntry: { lifecycleRevision: "run", label: "later metadata" },
+      });
+      expect(readExactSessionEntryRow(f.database, base.sessionKey)?.entry).toEqual(baseEntry);
+      expect(f.events().filter((event) => event.type === "message")).toHaveLength(2);
+    } finally {
+      await input.actor.release();
+    }
+  });
+});
+
+it.each([false, true])(
+  "commits initialized first input from an absent preimage (warm=%s)",
+  async (warm) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const f = fixture();
+      const scope = { ...f.scope, sessionKey: "agent:main:first-input", sessionId: "first-input" };
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { ...scope, target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] } },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "initial input actor",
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        message: {
+          role: "user",
+          content: "Initial lifecycle",
+          timestamp: 1,
+          idempotencyKey: "first-input:user",
+        },
+        target: {
+          ...scope,
+          expectedSessionId: scope.sessionId,
+          sessionEntry: undefined,
+          initialSessionEntry: {
+            sessionId: scope.sessionId,
+            updatedAt: 1,
+            status: "done",
+            abortedLastRun: false,
+          },
+        },
+        updateMode: "none",
+      });
+      try {
+        if (warm) {
+          await input.actor.read({ assertCurrent() {}, authorize() {} });
+        }
+        bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+        await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
+        expect(readExactSessionEntryRow(f.database, scope.sessionKey)?.entry).toMatchObject({
+          sessionId: scope.sessionId,
+          status: "done",
+          abortedLastRun: false,
+        });
+        expect(
+          readTranscriptEventRows(f.database, scope.sessionId)
+            .map((row) => JSON.parse(row.eventJson))
+            .filter((event) => event.type === "message"),
+        ).toHaveLength(1);
+      } finally {
+        await input.actor.release();
+      }
+    });
+  },
+);
+
+it("returns the durable committed message when prepared input arrives after its key", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = fixture();
+    const input = expectDefined(
+      await acquireSessionInputActor(
+        { agentId: f.scope.agentId, storePath: f.scope.storePath, target: f.target },
+        { assertCurrent() {}, assertReadable() {} },
+      ),
+      "durable input actor",
+    );
+    const original = { role: "user", content: "Original", idempotencyKey: "prepared-input" };
+    const accepted = { ...original, content: "Accepted" };
+    const append = (commandId: string, message: unknown) =>
+      input.actor.appendToolResult(
+        {
+          commandId,
+          phaseId: "prepared-input",
+          turn: {
+            agentId: f.scope.agentId,
+            sessionKey: f.scope.sessionKey,
+            options: {
+              expectedSessionId: f.scope.sessionId,
+              sessionFile: "synthetic-session.jsonl",
+              messages: [
+                {
+                  eventId: "accepted-input",
+                  message: original,
+                  preparedMessage: { prepared: true, message },
+                },
+              ],
+            },
+          },
+        },
+        { assertCurrent() {}, authorize() {} },
+      );
+    try {
+      expect(await append("first", accepted)).toMatchObject({ kind: "committed" });
+      const replay = await append("retry", {
+        ...original,
+        content: "Must not replace accepted input",
+      });
+      expect(replay).toMatchObject({
+        kind: "committed",
+        receipt: {
+          transcript: {
+            appendedMessages: [{ appended: false, messageId: "accepted-input", message: accepted }],
+          },
+        },
+      });
+      expect(f.events().filter((event) => event.type === "message")).toEqual([
+        expect.objectContaining({ id: "accepted-input", message: accepted }),
+      ]);
+    } finally {
+      await input.actor.release();
+    }
+  });
+});
+
+it.each([
+  { phase: "acceptInput", change: "metadata" },
+  { phase: "adoptRun", change: "metadata" },
+  { phase: "acceptInput", change: "lifecycle" },
+  { phase: "adoptRun", change: "lifecycle" },
+] as const)(
+  "preserves input custody across a $change write before $phase admission",
+  async ({ phase, change }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const f = fixture();
+      const input = expectDefined(
+        await acquireSessionInputActor(
+          { agentId: f.scope.agentId, storePath: f.scope.storePath, target: f.target },
+          { assertCurrent() {}, assertReadable() {} },
+        ),
+        "durable input actor",
+      );
+      const message = {
+        role: "user" as const,
+        content: "Retain one prepared input.",
+        timestamp: 1,
+        idempotencyKey: "intervening-write:user",
+      };
+      const prepare = vi.fn<
+        NonNullable<Parameters<typeof createUserTurnTranscriptRecorder>[0]["beforeMessageWrite"]>
+      >(({ message: preparedMessage }) => preparedMessage);
+      const recorder = createUserTurnTranscriptRecorder({
+        message,
+        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+        beforeMessageWrite: prepare,
+        updateMode: "none",
+        onPersistenceError() {},
+      });
+      bindUserTurnInputActor(recorder, { phase, acquire: async () => input });
+      let changed = false;
+      const intervene = async () => {
+        if (changed) {
+          return;
+        }
+        changed = true;
+        await patchSessionEntryCore(f.scope, () =>
+          change === "metadata" ? { updatedAt: 2, startedAt: 2 } : { abortedLastRun: true },
+        );
+      };
+      if (phase === "acceptInput") {
+        const execute = input.actor.acceptInput.bind(input.actor);
+        vi.spyOn(input.actor, "acceptInput").mockImplementation(async (...args) => {
+          await intervene();
+          return execute(...args);
+        });
+      } else {
+        const execute = input.actor.adoptRun.bind(input.actor);
+        vi.spyOn(input.actor, "adoptRun").mockImplementation(async (...args) => {
+          await intervene();
+          return execute(...args);
+        });
+      }
+      try {
+        const persistence = recorder.persistApproved();
+        if (change === "metadata") {
+          await expect(persistence).resolves.toMatchObject({ appended: true, message });
+          expect(recorder.hasPersisted()).toBe(true);
+          expect(recorder.getAdmissionReceipt()).toMatchObject({ sessionId: f.scope.sessionId });
+          expect(f.events().filter((event) => event.type === "message")).toEqual([
+            expect.objectContaining({ message }),
+          ]);
+          expect(f.read()).toMatchObject({ startedAt: 2 });
+        } else {
+          await expect(persistence).rejects.toThrow(
+            "Session actor turn was refused by its current owner",
+          );
+          expect(recorder.hasPersisted()).toBe(false);
+          expect(recorder.getAdmissionReceipt()).toBeUndefined();
+          expect(f.events()).toEqual([]);
+          expect(f.read()).toMatchObject({ abortedLastRun: true });
+        }
+        expect(prepare).toHaveBeenCalledOnce();
+      } finally {
+        await input.actor.release();
+      }
+    });
+  },
+);
+
+it("retains actor-bound recorder custody through a durable worker publication failure", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = fixture();
+    const input = await acquireSessionInputActor(
+      { agentId: f.scope.agentId, storePath: f.scope.storePath, target: f.target },
+      { assertCurrent() {}, assertReadable() {} },
+    );
+    if (!input) {
+      throw new Error("Durable input must acquire a session actor");
+    }
+    const failure = new Error("durable input publication failed");
+    const message = {
+      role: "user" as const,
+      content: "Keep the worker's committed input.",
+      timestamp: 1,
+      idempotencyKey: "durable-actor:user",
+    };
+    const recorder = createUserTurnTranscriptRecorder({
+      message,
+      target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
+      updateMode: "none",
+      onPersistenceError() {},
+    });
+    bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+    try {
+      expect(input.actor.target.database.kind).toBe("file");
+      await expect(
+        recorder.stageApproved?.({ runId: "durable-actor", assertCurrent() {} }),
+      ).resolves.toBe(true);
+      expect(
+        readSessionPendingInputByKey(f.database, f.scope, message.idempotencyKey),
+      ).toMatchObject({
+        state: "queued",
+        consumed_event_id: null,
+      });
+      expect(f.events()).toEqual([]);
+      bindUserTurnInputActor(recorder, { phase: "adoptRun", acquire: async () => input });
+      const published = vi.fn<Parameters<typeof withSessionTranscriptSourcePublication>[1]>(() => {
+        expect(recorder.hasPersisted()).toBe(true);
+        expect(recorder.getPersistedMessage?.()).toEqual(message);
+        expect(recorder.getAdmissionReceipt()).toMatchObject({ sessionId: f.scope.sessionId });
+        throw failure;
+      });
+      await expect(
+        withSessionTranscriptSourcePublication(f.scope, published, () =>
+          recorder.persistApproved(),
+        ),
+      ).rejects.toThrow(failure.message);
+      const identity = readOpenClawAgentDatabaseIdentity(f.database);
+      expect(published).toHaveBeenCalledExactlyOnceWith(
+        {
+          agentId: f.scope.agentId,
+          path: f.database.path,
+          databaseIdentity: identity.identity,
+          databaseBirthtime: identity.birthtime,
+        },
+        expect.objectContaining({ sessionId: f.scope.sessionId }),
+      );
+      const receipt = expectDefined(recorder.getAdmissionReceipt(), "committed worker admission");
+      expect(recorder.isPendingInputConsumed?.()).toBe(true);
+      expect(
+        readSessionPendingInputByKey(f.database, f.scope, message.idempotencyKey),
+      ).toBeUndefined();
+      await expect(recorder.persistFallback()).resolves.toMatchObject({
+        appended: true,
+        messageId: receipt.entryId,
+        message,
+      });
+      expect(f.events().filter((event) => event.type === "message")).toEqual([
+        expect.objectContaining({ id: receipt.entryId, message }),
+      ]);
+      expect(published).toHaveBeenCalledOnce();
+    } finally {
+      try {
+        recorder.finishPendingInput?.("interrupted");
+        await recorder.waitForPendingInputSettlement?.();
+      } finally {
+        await input.actor.release();
+      }
+    }
+  });
+});
+
 it.each(["fresh", "replay"])(
   "fences unstaged original input at COMMIT while retaining %s semantics",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
       const f = fixture();
       let live = true;
       const sourceCommitted = vi.fn();
@@ -83,6 +427,7 @@ it.each(["worker", "native"] as const)(
   "retains a new Goal's committed store through a %s postcommit failure",
   async (writer) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:goal-source-custody",

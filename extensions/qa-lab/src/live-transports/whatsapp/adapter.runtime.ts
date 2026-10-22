@@ -7,6 +7,7 @@ import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -52,27 +53,21 @@ export async function createWhatsAppQaTransportAdapter(
     // Unpack sequentially so rollback cannot remove authRoot while another unpack is writing.
     driverAuthDir = await unpackWhatsAppAuthArchive({
       archiveBase64: runtimeEnv.driverAuthArchiveBase64,
-      clearSignalSessions: true,
       label: "driver-auth",
       parentDir: authRoot,
     });
     sutAuthDir = await unpackWhatsAppAuthArchive({
       archiveBase64: runtimeEnv.sutAuthArchiveBase64,
-      clearSignalSessions: true,
       label: "sut-auth",
       parentDir: authRoot,
     });
     driver = await startWhatsAppQaDriverSessionWithRetry({ authDir: driverAuthDir });
   } catch (error) {
     try {
-      await heartbeat.stop();
+      await releaseQaCredentialLease(lease, heartbeat);
     } finally {
-      try {
-        await lease.release();
-      } finally {
-        if (authRoot) {
-          await fs.rm(authRoot, { force: true, recursive: true });
-        }
+      if (authRoot) {
+        await fs.rm(authRoot, { force: true, recursive: true });
       }
     }
     throw error;
@@ -219,13 +214,9 @@ export async function createWhatsAppQaTransportAdapter(
       // The Gateway still uses SUT auth and the shared lease after the driver closes.
       // Release them only after the suite confirms Gateway teardown succeeded.
       try {
-        await heartbeat.stop();
+        await releaseQaCredentialLease(lease, heartbeat);
       } finally {
-        try {
-          await lease.release();
-        } finally {
-          await fs.rm(authRoot, { force: true, recursive: true });
-        }
+        await fs.rm(authRoot, { force: true, recursive: true });
       }
     },
   };

@@ -47,8 +47,10 @@ import {
   type QualificationAdmissionDispatch,
 } from "./lib/full-release-dispatch-request.mts";
 import { execPlainGh } from "./lib/plain-gh.mjs";
+import { validateCandidateChangelog } from "./lib/release-candidate-changelog.mts";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { resolveQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
 import { buildQualificationAdmissionRequest } from "./release-qualification-admission.mjs";
 
@@ -581,7 +583,19 @@ export function verifyTargetRef(
   if (!targetRef) {
     return targetSha;
   }
-  const identity = resolveReleaseContextIdentity(targetRef, targetVersion);
+  let identity: ReturnType<typeof resolveReleaseContextIdentity>;
+  try {
+    identity = resolveReleaseContextIdentity(targetRef, targetVersion);
+  } catch (error) {
+    const context = parseReleaseContextRef(targetRef);
+    const preparation =
+      context?.kind === "release tag"
+        ? `Prepare the candidate from a commit whose package.json version matches ${context.ref}, push that tag, then rerun with its candidate SHA.`
+        : `Update package.json on ${targetRef} to the intended release version, commit and push the release branch, then rerun with the new candidate SHA.`;
+    throw new Error(`${error instanceof Error ? error.message : String(error)} ${preparation}`, {
+      cause: error,
+    });
+  }
   if (!identity) {
     throw new Error("Target ref must be a canonical OpenClaw release branch or tag");
   }
@@ -674,6 +688,37 @@ function preflightTargetShaFetch(targetSha: string) {
   }
 }
 
+// pnpm release:candidate applies these gates after validation finishes; check
+// them first so an unpublishable candidate never spends a validation run.
+// Extended-stable publication does not use that checklist.
+function validatePublishCandidateChangelog(
+  targetSha: string,
+  targetContextRef: string,
+  targetVersion: string,
+) {
+  const packaged = parseReleaseVersion(targetVersion);
+  if (packaged && classifyReleaseTrain(packaged) === "extended-stable") {
+    return;
+  }
+  const releaseTag =
+    resolveReleaseContextIdentity(targetContextRef, targetVersion)?.releaseTag ??
+    `v${targetVersion}`;
+  try {
+    validateCandidateChangelog({
+      rootDir: process.cwd(),
+      repository: REPOSITORY,
+      tag: releaseTag,
+      targetSha,
+    });
+  } catch (error) {
+    throw new Error(
+      `Candidate ${targetSha} would fail the pnpm release:candidate changelog gates for ${releaseTag}: ${error instanceof Error ? error.message : String(error)}. Fix the release notes or contribution record on the release branch (its recorded target must be reachable from the candidate), then validate the new candidate SHA.`,
+      { cause: error },
+    );
+  }
+  console.log(`Release notes and contribution record pass the ${releaseTag} candidate gates`);
+}
+
 function targetVersionForTarget(targetSha: string): string {
   let version: unknown;
   try {
@@ -742,6 +787,31 @@ function resolveTrustedWorkflowSha(requestedSha: string, trustedWorkflowRef: str
   const workflowSha = resolveSha(requestedSha || "origin/main");
   verifyTrustedWorkflowRef(workflowSha, trustedWorkflowRef);
   return workflowSha;
+}
+
+function assertAdmissionContract(admissionWorkflowSha: string) {
+  const workflow = parseYaml(
+    run("git", ["show", `${admissionWorkflowSha}:.github/workflows/${ADMISSION_WORKFLOW}`]),
+  );
+  requireDispatch(
+    workflow?.env?.RELEASE_QUALIFICATION_ADMISSION_CONTRACT === "1",
+    "Selected P lacks qualification admission; update P independently without changing C/Q",
+  );
+}
+
+// Main routinely advances between P selection and the admission POST. A newer
+// tip replaces P only when it is trusted main, descends from the selected P,
+// and still declares the admission contract.
+function verifyMainAdmissionAdvance(previousSha: string, currentSha: string) {
+  requireDispatch(
+    resolveTrustedWorkflowSha(currentSha, "main") === currentSha,
+    `Main tip ${currentSha} did not resolve to itself`,
+  );
+  requireDispatch(
+    runStatus("git", ["merge-base", "--is-ancestor", previousSha, currentSha]).status === 0,
+    `Main tip ${currentSha} does not descend from selected P ${previousSha}`,
+  );
+  assertAdmissionContract(currentSha);
 }
 
 function requireDispatch(condition: unknown, message: string): asserts condition {
@@ -1142,6 +1212,7 @@ const qualificationDispatchClient = {
   readApi: readGhApi,
   postApi: (args: string[]) => runGh(args, { stdio: ["ignore", "pipe", "pipe"] }),
   httpStatus: (response: string) => parseGhHttpResponse(response).status,
+  verifyMainAdvance: verifyMainAdmissionAdvance,
 };
 
 async function reopenDispatch(path: string, args: ReturnType<typeof parseArgs>, argv: string[]) {
@@ -1707,13 +1778,7 @@ async function main() {
     ? resolveTrustedWorkflowSha(args.admissionWorkflowSha, args.admissionWorkflowRef)
     : undefined;
   if (admissionWorkflowSha) {
-    const workflow = parseYaml(
-      run("git", ["show", `${admissionWorkflowSha}:.github/workflows/${ADMISSION_WORKFLOW}`]),
-    );
-    requireDispatch(
-      workflow?.env?.RELEASE_QUALIFICATION_ADMISSION_CONTRACT === "1",
-      "Selected P lacks qualification admission; update P independently without changing C/Q",
-    );
+    assertAdmissionContract(admissionWorkflowSha);
   }
   if (candidateOwned) {
     const baselinePolicy: unknown = JSON.parse(
@@ -1746,6 +1811,9 @@ async function main() {
   validatePackageSourceRef(targetSha, {
     allowUnreleasedChangelog: args.inputs.allow_unreleased_changelog === "true",
   });
+  if (args.inputs.validation_purpose === "publish") {
+    validatePublishCandidateChangelog(targetSha, targetContextRef, targetVersion);
+  }
   if (trustedWorkflowHarness.contract === "1") {
     args.inputs.reuse_evidence = "false";
   }
@@ -2010,7 +2078,8 @@ async function executeFrozenDispatch(options: {
       parentConclusion = "success";
       verifyReleaseEvidence(
         parentRunId,
-        admissionWorkflowSha ?? workflowSha,
+        // Admission may have advanced P with main before its POST.
+        record?.admission?.workflowSha ?? admissionWorkflowSha ?? workflowSha,
         candidateOwned ? args.admissionWorkflowRef : args.trustedWorkflowRef,
       );
       evidenceVerified = true;

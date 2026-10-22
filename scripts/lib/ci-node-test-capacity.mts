@@ -4,6 +4,12 @@ export const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 export const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 export const EXTRA_LARGE_NODE_TEST_RUNNER = "blacksmith-32vcpu-ubuntu-2404";
 export const TOOLING_CONFIG = "test/vitest/vitest.tooling.config.ts";
+const SERIAL_SELECTED_16_CONFIGS = new Set([
+  "test/vitest/vitest.cli.config.ts",
+  "test/vitest/vitest.gateway-client.config.ts",
+  "test/vitest/vitest.gateway-server.config.ts",
+  "test/vitest/vitest.agents-embedded-agent.config.ts",
+]);
 export const TOOLING_LARGE_CAPACITY_TEST_FILES = new Set([
   // Generation-retention cases require eight CPUs / 24 GiB; the two-CPU
   // screen also peaked at 6.05 GiB before those gated cases could run.
@@ -47,5 +53,55 @@ export function resolveCompactNodeTestRunner(
   // The 4/8 classes both deliver two CPUs. Keep the original placement anchors.
   return usesNativeCapacity && job.runner === BUNDLED_NODE_TEST_RUNNER
     ? DEFAULT_NODE_TEST_RUNNER
+    : job.runner;
+}
+
+export function resolveSelectedNodeTestRunner(
+  job: CompactNodeTestShard,
+  runnerBackend: string | undefined,
+) {
+  // Two selected files cannot use the full owner's wider worker allowance.
+  // Apply after packing so the capacity cut does not change process placement.
+  return ["blacksmith", "hybrid"].includes(runnerBackend ?? "blacksmith") &&
+    job.runner === EXTRA_LARGE_NODE_TEST_RUNNER &&
+    job.planConcurrency === 1 &&
+    !job.requiresDist &&
+    !job.pretestBuildMode &&
+    job.groups.length > 0 &&
+    job.groups.every((group) => {
+      const isQualifiedBoardStore =
+        job.groups.length === 1 &&
+        group.configs[0] === "test/vitest/vitest.gateway-database-workers.config.ts" &&
+        group.includePatterns?.length === 1 &&
+        group.includePatterns[0] === "src/gateway/board-store.test.ts" &&
+        group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" &&
+        group.fallbackMaxWorkers === 2 &&
+        group.minTotalMemoryBytes === 28 * 1024 ** 3;
+      return (
+        group.configs.length === 1 &&
+        (isQualifiedBoardStore ||
+          SERIAL_SELECTED_16_CONFIGS.has(group.configs[0]!) ||
+          (group.configs[0] === "test/vitest/vitest.unit-fast-isolated.config.ts" &&
+            group.includePatterns?.length === 1 &&
+            group.includePatterns[0] ===
+              "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts") ||
+          (group.includePatterns?.length === 1 &&
+            ((group.configs[0] === "test/vitest/vitest.gateway-core.config.ts" &&
+              group.includePatterns[0] === "src/gateway/mcp-app-extension-runtime.test.ts") ||
+              (group.configs[0] === "test/vitest/vitest.agents-core.config.ts" &&
+                group.includePatterns[0] === "src/agents/cli-runner.helpers.test.ts")))) &&
+        [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER].includes(group.runner) &&
+        (group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" ||
+          (group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&
+            group.fallbackMaxWorkers === 2)) &&
+        (group.minTotalMemoryBytes === undefined || isQualifiedBoardStore) &&
+        !group.requiresDist &&
+        !group.pretestBuildMode &&
+        group.includePatterns !== undefined &&
+        group.includePatterns.length > 0 &&
+        group.includePatterns.length <= 2
+      );
+    })
+    ? "blacksmith-16vcpu-ubuntu-2404"
     : job.runner;
 }

@@ -1,5 +1,13 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  observeSqliteWorkerCommittedFacts,
+  type SqliteWorkerAdmissionFactory,
+} from "../../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../../infra/sqlite-worker-operation-settlement.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { authProfileCredentialPublication } from "../../state/user-model-account-authority.js";
+import { fenceAuthProfileAuthorizationWrite } from "./authorization-observation.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import { publishInlineAuthFailure } from "./inline-usage-publication.js";
@@ -8,7 +16,6 @@ import {
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
-import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
   createEmptyAuthProfileStore,
@@ -34,8 +41,70 @@ import {
 } from "./sqlite-read.js";
 import { resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import type { watchAuthProfileNativeCommits } from "./store-update-commit.js";
-import type { AuthStoreUpdateCommitted } from "./store-update-kernel.js";
+import type { AuthStoreUpdateCommitted } from "./store-update.worker.js";
 import type { PreparedAuthProfileStoreOwner } from "./types.js";
+
+/** Native receipt settlement owns credential publication, independently of result delivery. */
+export function createAuthProfileStoreUpdatePublication(params: {
+  databasePath: string;
+  collectCommitted: () => AuthStoreUpdateCommitted | undefined;
+  committedIsCurrent: () => boolean;
+  assertCurrent: () => void;
+}): (
+  createAdmission: (collect: () => void) => SqliteWorkerAdmissionFactory,
+) => SqliteWorkerAdmissionFactory {
+  let settleAuthorization: ReturnType<typeof fenceAuthProfileAuthorizationWrite> | undefined;
+  let authorizationPostimage: unknown;
+  return (createAdmission) => (operation) => {
+    let publication: ReturnType<typeof authProfileCredentialPublication.begin> | undefined;
+    let authorizationCommitted = false;
+    const retained = createAdmission(() => {
+      const committed = params.collectCommitted();
+      if (committed?.publication.credentialsChanged) {
+        authorizationPostimage = {
+          profiles: committed.store.profiles,
+          authorizationLifetimes: committed.authorizationLifetimes,
+        };
+        settleAuthorization = fenceAuthProfileAuthorizationWrite(params.databasePath);
+      }
+      const credentialOwner = committed?.credentialOwner;
+      if (credentialOwner) {
+        publication = authProfileCredentialPublication.begin({
+          ...credentialOwner,
+          assertCurrent: params.assertCurrent,
+        });
+      }
+    })(operation);
+    const { admission } = retained;
+    observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
+      const credentials = isRecord(facts) ? facts.authCredentials : undefined;
+      publication?.committed(credentials);
+      authorizationCommitted =
+        publication !== undefined && !(isRecord(credentials) && credentials.kind === "unknown");
+    });
+    const finishAuthorization = (known: boolean) => {
+      // Native settlement, not delivery of the operation result, owns this projection.
+      const receipt = admission.committed;
+      settleAuthorization?.(
+        known && (!receipt || authorizationCommitted),
+        authorizationCommitted && params.committedIsCurrent() ? authorizationPostimage : undefined,
+      );
+    };
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      if (admission.settlement) {
+        const confirmed = admission.settlement.kind === "completed";
+        publication?.finish(confirmed, confirmed && !admission.committed);
+        finishAuthorization(confirmed);
+      }
+    });
+    void operation.settled.then((outcome) => {
+      const known = outcome.kind !== "unknown";
+      publication?.finish(known, known && !admission.committed);
+      finishAuthorization(known);
+    });
+    return retained;
+  };
+}
 
 /** Publish affected owners from committed facts, rereading only an overtaken result. */
 export async function publishAuthProfileStoreUpdate(
@@ -78,13 +147,7 @@ export async function publishAuthProfileStoreUpdate(
     currentStore =
       loadPersistedAuthProfileStoreFromRows(rows, owner.databasePath) ??
       createEmptyAuthProfileStore();
-    mutation = {
-      ...committed.publication,
-      oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
-        currentStore.profiles,
-        committed.publication.profileIds,
-      ),
-    };
+    mutation = committed.publication;
     isCommittedCurrent =
       getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(owner.databasePath) === revision
         ? current
@@ -134,7 +197,13 @@ export async function publishAuthProfileStoreUpdate(
   let recordedRevision = installed?.revision;
   if (!installed) {
     observeCanonicalAuthProfileCredentials(owner.databasePath, currentStore.profiles);
-    recordedRevision = noteRuntimeAuthProfileStorePersistedMutation(undefined, mutation, owner);
+    recordedRevision = noteRuntimeAuthProfileStorePersistedMutation(
+      undefined,
+      mutation,
+      owner,
+      undefined,
+      { store: currentStore, env: owner.env },
+    );
   }
   const sharedRevision = recordedRevision;
   const revisions =

@@ -1,3 +1,4 @@
+import { listen } from "../../../lib/reactive/listener.ts";
 import type { buildCachedChatItems } from "../chat-thread.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-thread.ts";
 
@@ -105,8 +106,8 @@ export class ChatMessageEntryAnimations {
         return;
       }
       this.active.delete(element);
-      element.removeEventListener("animationend", settled);
-      element.removeEventListener("animationcancel", settled);
+      stopEnd();
+      stopCancel();
       // A completed class otherwise replays when the retained bubble is reparented.
       element.classList.remove("chat-bubble--enter");
     };
@@ -116,8 +117,8 @@ export class ChatMessageEntryAnimations {
       }
     };
     this.active.set(element, finish);
-    element.addEventListener("animationend", settled);
-    element.addEventListener("animationcancel", settled);
+    const stopEnd = listen(element, "animationend", settled);
+    const stopCancel = listen(element, "animationcancel", settled);
     element.classList.add("chat-bubble--enter");
   }
 

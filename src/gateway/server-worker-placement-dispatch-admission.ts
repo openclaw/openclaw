@@ -1,6 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/config.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { projectSessionEntryPredicateChange } from "../config/sessions/session-accessor.sqlite-sharing-acquisition.js";
+import {
+  acquireSessionActorStorage,
+  captureSessionActorStorageOwner,
+  runWithSessionActorStorage,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import {
@@ -15,8 +22,8 @@ import { captureSessionTranscriptTargetBinding } from "../config/sessions/transc
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
+import { sessionChanges, type SessionRowFacts } from "../sessions/session-row-changes.js";
 import {
   prepareSessionRowPublicationScope,
   sessionChangeAffectsStoredRow,
@@ -24,6 +31,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
+import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import {
   loadWorkerPlacementSessionRuntimeModule,
   resolveWorkerPlacementSessionStoreTarget,
@@ -60,6 +68,99 @@ export async function withGatewayWorkerSessionAdmission<T>(
 ): Promise<T> {
   const getConfig = params.getConfig ?? getRuntimeConfig;
   const scope = params.identity;
+  const assertCallerCurrent = () => {
+    params.signal?.throwIfAborted();
+    params.authorize?.();
+  };
+  const authority = { assertCurrent: assertCallerCurrent, authorize: assertCallerCurrent };
+  const namespace = captureSessionActorStorageOwner(scope, authority);
+  const memory =
+    namespace &&
+    (await acquireSessionActorStorage(scope, {
+      authority,
+      lifetime: { assertCurrent: assertCallerCurrent, assertReadable: assertCallerCurrent },
+    }));
+  if (namespace && !memory) {
+    throw new WorkerPlacementAdmissionTargetError("Worker session source is unavailable; retry.");
+  }
+  if (memory) {
+    try {
+      const entry = memory.actor.snapshot(memory.authority)?.entry;
+      if (
+        !entry ||
+        entry.sessionId !== scope.sessionId ||
+        entry.archivedAt !== undefined ||
+        (params.expectedEntry && entry.lifecycleRevision !== params.expectedEntry.lifecycleRevision)
+      ) {
+        throw new WorkerPlacementAdmissionTargetError(
+          "Worker session source is unavailable; retry.",
+        );
+      }
+      const fields = [
+        ...new Set<keyof SessionEntry>([
+          "sessionId",
+          "lifecycleRevision",
+          "archivedAt",
+          ...(params.retainEntryFields ?? []),
+        ]),
+      ];
+      const controller = new AbortController();
+      const signal = params.signal
+        ? AbortSignal.any([params.signal, controller.signal])
+        : controller.signal;
+      let active = true;
+      const assertCurrent = () => {
+        if (!active) {
+          throw new WorkerPlacementAdmissionTargetError(
+            "Worker session admission scope was released.",
+          );
+        }
+        params.signal?.throwIfAborted();
+        params.authorize?.();
+        const current = memory.actor.snapshot(memory.authority)?.entry;
+        if (!current || fields.some((field) => !isDeepStrictEqual(current[field], entry[field]))) {
+          throw new WorkerPlacementAdmissionTargetError(
+            "Session changed during worker admission; retry.",
+          );
+        }
+        return current;
+      };
+      let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
+      try {
+        admission = await beginSessionEffect({
+          agentId: scope.agentId,
+          scope: memory.path,
+          identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
+          onInterrupt: (reason) => controller.abort(reason),
+          signal,
+          assertAllowed: () => {
+            assertCurrent();
+          },
+        });
+        return await admission.run(() =>
+          runWithSessionActorStorage(memory, () =>
+            run({
+              target: {
+                agentId: memory.agentId,
+                canonicalKey: scope.sessionKey,
+                storePath: memory.path,
+                storeKeys: params.target?.storeKeys ?? [scope.sessionKey],
+              },
+              entry,
+              assertCurrent,
+              signal,
+              onCommitted: () => {},
+            }),
+          ),
+        );
+      } finally {
+        active = false;
+        admission?.release();
+      }
+    } finally {
+      await memory.actor.release();
+    }
+  }
   const configuredRoute = resolveSessionStorePathForScope(scope, getConfig());
   const configuredPath = params.target?.storePath ?? configuredRoute;
   const binding = captureSessionTranscriptTargetBinding({ ...scope, storePath: configuredPath });
@@ -70,6 +171,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
     ? AbortSignal.any([params.signal, controller.signal])
     : controller.signal;
   let changed = false;
+  const acquiringChanges: Array<{ entry?: SessionEntry; facts?: SessionRowFacts }> = [];
   let acceptOwnPublication = false;
   const stopPublication = sessionChanges.subscribeFacts((change) => {
     if (
@@ -80,6 +182,10 @@ export async function withGatewayWorkerSessionAdmission<T>(
         ignoreStoreTopology: true,
       })
     ) {
+      const facts = "facts" in change ? change.facts : undefined;
+      if ("sessionKey" in change && change.scope === "transcript" && facts?.kind === "unchanged") {
+        return;
+      }
       if (retained) {
         if (!retained.isCurrent()) {
           controller.abort(
@@ -92,6 +198,18 @@ export async function withGatewayWorkerSessionAdmission<T>(
         acceptOwnPublication = false;
       } else {
         changed = true;
+        const prepared = readPreparedSessionEntryChange(change, scope.sessionKey);
+        const lifecycleChanged =
+          (facts?.kind === "replacement" || facts?.kind === "entry") && facts.lifecycleChanged;
+        acquiringChanges.push(
+          lifecycleChanged
+            ? {}
+            : {
+                entry: prepared?.entry,
+                // A withheld complete postimage is not a partial publication.
+                facts: prepared ? undefined : facts,
+              },
+        );
       }
     }
   });
@@ -109,13 +227,14 @@ export async function withGatewayWorkerSessionAdmission<T>(
     params.authorize?.();
     assertRouteCurrent();
   };
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   const acquiring = new AbortController();
   const abortAcquisition = () => acquiring.abort(signal.reason);
   signal.addEventListener("abort", abortAcquisition, { once: true });
   try {
     // Reserve before asynchronous source acquisition so Stop can retire queued ingress.
-    admission = await beginSessionWorkAdmission({
+    admission = await beginSessionEffect({
+      agentId: scope.agentId,
       scope: configuredPath,
       identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
       onInterrupt: (reason) => controller.abort(reason),
@@ -147,8 +266,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
               entry.archivedAt !== undefined ||
               (params.expectedEntry &&
                 (entry.sessionId !== params.expectedEntry.sessionId ||
-                  entry.lifecycleRevision !== params.expectedEntry.lifecycleRevision)) ||
-              changed
+                  entry.lifecycleRevision !== params.expectedEntry.lifecycleRevision))
             ) {
               throw new WorkerPlacementAdmissionTargetError(
                 "Worker session source is unavailable or changed during admission; retry.",
@@ -175,6 +293,26 @@ export async function withGatewayWorkerSessionAdmission<T>(
             const matches = (current: SessionEntry | undefined) =>
               current !== undefined &&
               fields.every((field) => isDeepStrictEqual(current[field], expected[field]));
+            // UI navigation can publish title/participant metadata while the initial read
+            // is in flight. Reconcile its committed postimages against the same fields we
+            // retain after acquisition; an unknown change or changed authority still refuses.
+            if (
+              acquiringChanges.some(
+                (change) =>
+                  !matches(
+                    change.entry ??
+                      (change.facts
+                        ? projectSessionEntryPredicateChange({ entry }, change.facts)
+                        : undefined),
+                  ),
+              )
+            ) {
+              throw new WorkerPlacementAdmissionTargetError(
+                "Worker session source is unavailable or changed during admission; retry.",
+              );
+            }
+            changed = false;
+            acquiringChanges.length = 0;
             retained =
               source.kind === "file"
                 ? retainPreparedSessionEntryPredicate({
@@ -192,7 +330,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
             const completed = createDeferredCore();
             const unregister = registerOpenClawAgentDatabaseAsyncResource({
               agentId: owner.scope?.databaseAgentId ?? scope.agentId,
-              path: owner.scope?.storePath ?? owner.incognito?.actor.path ?? configuredPath,
+              path: owner.scope?.storePath ?? configuredPath,
               revoke: () => controller.abort(new Error("Worker session source was revoked")),
               close: () => completed.promise,
             });
@@ -216,11 +354,11 @@ export async function withGatewayWorkerSessionAdmission<T>(
               }
             };
             const rowAuthority: SessionSourceAssertion = Object.assign(assertLocalCurrent, {
-              nativeSource: source.kind !== "file",
+              nativeSource: source.kind === "native" || source.kind === "missing",
               async prepareSessionSource(): Promise<PreparedSessionSourceAuthority> {
                 assertLocalCurrent();
                 return {
-                  nativeSource: source.kind !== "file",
+                  nativeSource: source.kind === "native" || source.kind === "missing",
                   assertCurrent: assertLocalCurrent,
                   // The enclosing admission already retains this exact read and its lifetime.
                   checks:
@@ -273,7 +411,7 @@ export async function withGatewayWorkerSessionAdmission<T>(
             const target = {
               agentId: scope.agentId,
               canonicalKey: scope.sessionKey,
-              storePath: owner.scope?.storePath ?? owner.incognito?.actor.path ?? configuredPath,
+              storePath: owner.scope?.storePath ?? configuredPath,
               storeKeys: params.target?.storeKeys ?? [scope.sessionKey],
             };
             try {
@@ -310,32 +448,56 @@ export function createGatewayWorkerDispatchAdmission(
   loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime> = loadWorkerPlacementSessionRuntimeModule,
 ): WorkerPlacementDispatchAdmission {
   return async (identity, run, authorize, signal) => {
-    // v2026.9.8 Gateway contexts accept opaque dispatch/move authorization callbacks.
-    const sourceAuthorize = captureExternalSessionCommitGuard(authorize);
-    signal?.throwIfAborted();
-    sourceAuthorize?.();
-    const runtime = await loadSessionRuntime();
-    const target = resolveWorkerPlacementSessionStoreTarget(runtime, getRuntimeConfig(), identity);
-    const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
-    if (
-      !entry ||
-      target.agentId !== identity.agentId ||
-      target.canonicalKey !== identity.sessionKey
-    ) {
-      throw new WorkerPlacementAdmissionTargetError(
-        "Worker dispatch lost its canonical session target; retry.",
-      );
+    // The requested acknowledgment can release the RPC while dispatch still owns setup.
+    const releaseCaller = retainGatewayDeviceRevocation(authorize);
+    try {
+      using sourceRetention = new DisposableStack();
+      const releaseSource = authorize?.retain?.();
+      if (releaseSource) {
+        sourceRetention.defer(releaseSource);
+      }
+      const admit = async () => {
+        // v2026.9.8 Gateway contexts accept opaque dispatch/move authorization callbacks.
+        const sourceAuthorize = captureExternalSessionCommitGuard(authorize);
+        signal?.throwIfAborted();
+        sourceAuthorize?.();
+        const runtime = await loadSessionRuntime();
+        const target = await resolveWorkerPlacementSessionStoreTarget(
+          runtime,
+          getRuntimeConfig(),
+          identity,
+        );
+        const entry = runtime.resolveCanonicalSessionEntryFromStoreKeys(
+          target.store,
+          target.storeKeys,
+        );
+        if (
+          !entry ||
+          target.agentId !== identity.agentId ||
+          target.canonicalKey !== identity.sessionKey
+        ) {
+          throw new WorkerPlacementAdmissionTargetError(
+            "Worker dispatch lost its canonical session target; retry.",
+          );
+        }
+        return await withGatewayWorkerSessionAdmission(
+          {
+            identity,
+            target,
+            expectedEntry: {
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+            },
+            authorize: sourceAuthorize,
+            signal,
+            retainEntryFields: ["agentRuntimeOverride", "execNode"],
+          },
+          (source) => run(source.signal, source.assertCurrent),
+        );
+      };
+      return await admit();
+    } finally {
+      releaseCaller?.();
     }
-    return await withGatewayWorkerSessionAdmission(
-      {
-        identity,
-        target,
-        expectedEntry: { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
-        authorize: sourceAuthorize,
-        signal,
-        retainEntryFields: ["agentRuntimeOverride", "execNode"],
-      },
-      (source) => run(source.signal, source.assertCurrent),
-    );
   };
 }

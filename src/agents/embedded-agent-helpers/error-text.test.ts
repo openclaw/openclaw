@@ -1,13 +1,10 @@
-// Covers assistant error formatting for streaming, sandbox, and context errors.
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { formatAssistantErrorText, formatUserFacingAssistantErrorText } from "./error-text.js";
 
-const { toolPolicyAuditInfo } = vi.hoisted(() => ({
-  toolPolicyAuditInfo: vi.fn(),
-}));
+const { toolPolicyAuditInfo } = vi.hoisted(() => ({ toolPolicyAuditInfo: vi.fn() }));
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
@@ -23,50 +20,33 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     toolPolicyAuditInfo.mockClear();
   });
 
-  const makeAssistantError = (errorMessage: string): AssistantMessage =>
-    makeAssistantMessageFixture({
-      errorMessage,
-      content: [{ type: "text", text: errorMessage }],
-    });
-
-  it("does not suppress unclassified JSON.parse text", () => {
-    const msg = makeAssistantError(
-      "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)",
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
-      "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)",
-    );
+  const repeatedToolError =
+    "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool arguments or switch to a model with native tool calling before retrying.";
+  it.each([
+    ["private tool diagnostics", "openclaw_repeated_tool_error", repeatedToolError],
+    ["HTTP 503 temporary failure", "openclaw_repeated_tool_error", repeatedToolError],
+    [
+      "HTTP 503 temporary failure",
+      "openclaw_repetitive_output",
+      "Repetitive output stopped. Try a larger model or shorten your request before retrying.",
+    ],
+    ["request timed out", undefined, "LLM request timed out."],
+    ["LLM request timed out.", undefined, "LLM request timed out."],
+  ])("preserves safe user-facing copy for %s (%s)", (errorMessage, errorCode, expected) => {
+    const message = makeAssistantMessageFixture({ errorMessage, errorCode });
+    expect(formatUserFacingAssistantErrorText(message)).toBe(expected);
   });
 
-  it.each(["private tool diagnostics", "HTTP 503 temporary failure"])(
-    "preserves safe tool-loop recovery guidance instead of %s",
-    (errorMessage) => {
-      const message = {
-        ...makeAssistantError(errorMessage),
-        errorCode: "openclaw_repeated_tool_error",
-      };
-      expect(formatUserFacingAssistantErrorText(message)).toBe(
-        "OpenClaw stopped this turn after 3 consecutive identical tool failures. Check the tool arguments or switch to a model with native tool calling before retrying.",
-      );
-    },
-  );
-
-  it.each(["request timed out", "LLM request timed out."])(
-    "preserves safe user-facing timeout copy for provider error %j",
-    (errorMessage) => {
-      expect(formatUserFacingAssistantErrorText(makeAssistantError(errorMessage))).toBe(
-        "LLM request timed out.",
-      );
-    },
-  );
-
-  it("keeps non-streaming provider request-validation syntax diagnostics", () => {
-    const msg = makeAssistantError(
+  const parseError =
+    "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)";
+  it.each([
+    [parseError, parseError],
+    [
       '{"type":"error","error":{"type":"invalid_request_error","message":"Expected value in JSON at position 12 for messages.0.content"}}',
-    );
-    expect(formatAssistantErrorText(msg)).toBe(
       "LLM request rejected: Expected value in JSON at position 12 for messages.0.content",
-    );
+    ],
+  ])("preserves non-streaming syntax diagnostics for %s", (errorMessage, expected) => {
+    expect(formatAssistantErrorText(makeAssistantMessageFixture({ errorMessage }))).toBe(expected);
   });
 
   it.each([
@@ -75,29 +55,24 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
   ])(
     "audits a sandbox tool-policy block once per assistant error for $sessionKey",
     ({ sessionKey, agentId, mode }) => {
-      // Formatting may be called multiple times for the same error; audit logs
-      // should stay deduplicated per blocked assistant error.
       const cfg: OpenClawConfig = {
         agents: {
-          defaults: {
-            sandbox: { mode, scope: "agent" },
-          },
+          defaults: { sandbox: { mode, scope: "agent" } },
           entries: { main: {}, worker: {} },
         },
-        tools: {
-          sandbox: {
-            tools: {
-              deny: ["browser"],
-            },
-          },
-        },
+        tools: { sandbox: { tools: { deny: ["browser"] } } },
       };
-      const msg = makeAssistantError("unknown tool: browser");
+      const msg = makeAssistantMessageFixture({ errorMessage: "unknown tool: browser" });
+      const sandboxRuntime = resolvePreparedSandboxRuntimeStatus({
+        cfg,
+        sessionKey,
+        agentId,
+        preparedSessionEntry: null,
+      });
+      const options = { cfg, sessionKey, agentId, sandboxRuntime };
 
-      expect(formatAssistantErrorText(msg, { cfg, sessionKey, agentId })).toContain(
-        `--agent ${agentId}`,
-      );
-      expect(formatAssistantErrorText(msg, { cfg, sessionKey, agentId })).toContain(
+      expect(formatAssistantErrorText(msg, options)).toContain(`--agent ${agentId}`);
+      expect(formatAssistantErrorText(msg, options)).toContain(
         'Tool "browser" blocked by sandbox tool policy',
       );
 

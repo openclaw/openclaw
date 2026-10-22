@@ -18,11 +18,27 @@ import {
   resolvePluginVersionDriftUpdateCommand,
 } from "../plugins/plugin-version-drift.js";
 import { VERSION } from "../version.js";
-import {
-  POST_UPGRADE_PROBE_CODES,
-  type PostUpgradeFinding,
-  type PostUpgradeReport,
-} from "./doctor-post-upgrade.types.js";
+
+type PostUpgradeFinding = {
+  level: "ok" | "warn" | "error";
+  code: string;
+  message: string;
+  plugin?: string;
+  entry?: string;
+};
+
+type PostUpgradeReport = {
+  probesRun: string[];
+  findings: PostUpgradeFinding[];
+};
+
+const POST_UPGRADE_PROBE_CODES = [
+  "plugin.index_unavailable",
+  "plugin.entry_unresolved",
+  "plugin.manifest_unavailable",
+  "plugin.manifest_drift",
+  "plugin.version_drift",
+] as const;
 
 function buildReport(findings: PostUpgradeFinding[]): PostUpgradeReport {
   return { probesRun: [...POST_UPGRADE_PROBE_CODES], findings };

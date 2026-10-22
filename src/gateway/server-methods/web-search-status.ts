@@ -2,7 +2,9 @@ import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { buildAuthHealthSummary } from "../../agents/auth-health.js";
 import { AUTH_STORE_VERSION } from "../../agents/auth-profiles/constants.js";
+import { buildOAuthRefreshFailureLoginCommand } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "../../agents/harness/builtin-openclaw-metadata.js";
@@ -15,11 +17,12 @@ import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveNativeWebSearchRoute } from "../../agents/native-web-search.js";
 import { hasAuthProfileForProvider } from "../../agents/tools/model-config.helpers.js";
 import { resolveWebSearchToolPolicy } from "../../agents/web-search-tool-policy.js";
+import { resolveConfigWidePluginMetadataSnapshotAsync } from "../../config/io.plugin-metadata.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSecretInputRef } from "../../config/types.secrets.js";
 import { listSearchProviderOptions } from "../../flows/search-setup.js";
+import { prepareBundledDiscoveryMode } from "../../plugins/bundled-discovery-state.js";
 import { resolvePluginCredentialDescriptors } from "../../plugins/credential-descriptors.js";
-import { resolveManagedPluginMetadata } from "../../plugins/management-service.js";
 import type { PluginWebSearchProviderEntry } from "../../plugins/web-provider-types.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
 import {
@@ -64,6 +67,28 @@ function credentialSource(
     : "missing";
 }
 
+// Auth-profile search shares model-auth health, so a dead sign-in is reported where search is.
+// Expired OAuth may still refresh on use; only a failed test or search proves it is dead.
+function authProfileIssue(
+  provider: PluginWebSearchProviderEntry | undefined,
+  config: ReturnType<GatewayRequestContext["getRuntimeConfig"]>,
+  authStore: AuthProfileStore,
+): string | undefined {
+  if (!provider?.authProviderId) {
+    return undefined;
+  }
+  const health = buildAuthHealthSummary({
+    store: authStore,
+    cfg: config,
+    providers: [provider.authProviderId],
+  }).providers[0];
+  if (health?.status !== "expired" && health?.status !== "missing") {
+    return undefined;
+  }
+  const chatLogin = buildOAuthRefreshFailureLoginCommand(health.provider, { surface: "chat" });
+  return `The ${health.provider} sign-in this provider uses is ${health.status}. If a test search fails, send \`${chatLogin}\` from a private chat or Control UI session, or run \`${buildOAuthRefreshFailureLoginCommand(health.provider)}\`.`;
+}
+
 export async function prepareWebSearchStatus(
   context: GatewayRequestContext,
   request: WebSearchStatusParams,
@@ -84,7 +109,9 @@ export async function prepareWebSearchStatus(
     provider: request.modelProvider?.trim() || defaultModel.provider,
     model: request.modelId?.trim() || defaultModel.model,
   };
-  const metadata = resolveManagedPluginMetadata(config, process.env);
+  const activateDiscovery = await prepareBundledDiscoveryMode();
+  const metadata = await resolveConfigWidePluginMetadataSnapshotAsync({ config });
+  activateDiscovery();
   const sourceConfig = getRuntimeConfigSourceSnapshot() ?? config;
   const available = listConfiguredWebSearchProviders({ config });
   const availableIds = new Set(available.map((entry) => entry.id));
@@ -143,6 +170,10 @@ export async function prepareWebSearchStatus(
     authStore,
   });
   const selected = providers.find((entry) => entry.id === selectedId && entry.available);
+  const selectedAuthIssue =
+    selected?.credentialSource === "auth-profile"
+      ? authProfileIssue(entries.get(selected.id), config, authStore)
+      : undefined;
   const status: WebSearchStatusResult = {
     enabled,
     provider,
@@ -231,6 +262,8 @@ export async function prepareWebSearchStatus(
         authStore: catalog.authStore,
         modelApi: evaluation.selectedRoute?.api ?? entry.api,
         modelBaseUrl: evaluation.selectedRoute?.baseUrl ?? entry.baseUrl,
+        modelParams: entry.params,
+        pluginMetadataSnapshot: catalog.metadataSnapshot,
       });
       if (status.model.runtime === "openclaw" && native.kind === "native") {
         status.route = {
@@ -261,8 +294,12 @@ export async function prepareWebSearchStatus(
       kind: "unavailable",
       label: "Model search route is not ready",
       testable: false,
-      reason:
+      reason: [
         "The selected model is not in the prepared model catalog. Refresh Models, then try again. An explicitly configured search provider can still be tested separately.",
+        selectedAuthIssue,
+      ]
+        .filter(Boolean)
+        .join(" "),
     };
     return { status, config, agentDir: scope.agentDir };
   }
@@ -272,12 +309,14 @@ export async function prepareWebSearchStatus(
         provider: selected.id,
         label: selected.label,
         testable: true,
-        ...(selected.configured
-          ? {}
-          : {
+        ...(!selected.configured
+          ? {
               reason:
                 "Provider credentials are missing or unresolved. Configure them before testing.",
-            }),
+            }
+          : selectedAuthIssue
+            ? { reason: selectedAuthIssue }
+            : {}),
       }
     : {
         kind: "unavailable",

@@ -19,8 +19,8 @@ import {
   type OpenClawConfig,
   type MSTeamsReplyStyle,
   type ReplyPayload,
-  type RuntimeEnv,
 } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -31,16 +31,14 @@ import {
   formatUnknownError,
 } from "./errors.js";
 import {
-  buildConversationReference,
   type MSTeamsRenderedMessage,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
 } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
+import { resolveMSTeamsReplyPresentation } from "./presentation.js";
 import { createTeamsReplyStreamController } from "./reply-stream-controller.js";
-import { withRevokedProxyFallback } from "./revoked-context.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
 
@@ -49,7 +47,6 @@ export function createMSTeamsReplyDispatcher(params: {
   agentId: string;
   sessionKey: string;
   accountId?: string;
-  runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   app: MSTeamsApp;
   conversationRef: StoredConversationReference;
@@ -61,40 +58,28 @@ export function createMSTeamsReplyDispatcher(params: {
   sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
-  const msteamsCfg = params.cfg.channels?.msteams;
+  const msteamsCfg = resolveMSTeamsAccountConfig(params.cfg, params.accountId);
+  const mediaMaxBytes = resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: () => msteamsCfg.mediaMaxMb,
+  });
+  const feedbackLoopEnabled = msteamsCfg.feedbackEnabled !== false;
   const conversationType = normalizeOptionalLowercaseString(
     params.conversationRef.conversation?.conversationType,
   );
   const isTypingSupported = conversationType === "personal" || conversationType === "groupchat";
 
-  // Bot Framework turn proxies expire after ~30s idle; keep them alive through tool calls.
   const TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 
   // Teams tool chains can exceed the shared typing callback's 60s default (#59731).
   const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 
   const sendTypingIndicator = async () => {
-    // Stream previews and Stop suppress typing; between segments, typing keeps
-    // the Bot Framework turn context alive for later tool replies.
+    // Stream previews and Stop suppress typing.
     if (!isTypingSupported || streamController.isStreamActive() || streamController.wasCanceled()) {
       return;
     }
-    await withRevokedProxyFallback({
-      run: async () => {
-        await params.context.sendActivity({ type: "typing" });
-      },
-      onRevoked: async () => {
-        await sendMSTeamsActivityWithReference(
-          params.app,
-          buildConversationReference(params.conversationRef),
-          { type: "typing" },
-          { serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg) },
-        );
-      },
-      onRevokedLog: () => {
-        params.log.debug?.("turn context revoked, sending typing via proactive messaging");
-      },
-    });
+    await params.context.sendActivity({ type: "typing" });
   };
 
   const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -117,16 +102,12 @@ export function createMSTeamsReplyDispatcher(params: {
     },
   });
 
-  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams");
+  const chunkMode = core.channel.text.resolveChunkMode(params.cfg, "msteams", params.accountId);
   const tableMode = core.channel.text.resolveMarkdownTableMode({
     cfg: params.cfg,
     channel: "msteams",
+    accountId: params.accountId,
   });
-  const mediaMaxBytes = resolveChannelMediaMaxBytes({
-    cfg: params.cfg,
-    resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
-  });
-  const feedbackLoopEnabled = params.cfg.channels?.msteams?.feedbackEnabled !== false;
   // Teams native streams are provider-visible before outbound modifiers run. Keep them off
   // whenever a hook can rewrite or cancel so the original payload cannot escape the final gate.
   const hookRunner = getGlobalHookRunner();
@@ -278,6 +259,7 @@ export function createMSTeamsReplyDispatcher(params: {
       for (const msg of toSend) {
         try {
           const msgIds = await sendMSTeamsMessages({
+            accountId: params.accountId,
             replyStyle: params.replyStyle,
             app: params.app,
             conversationRef: params.conversationRef,
@@ -311,9 +293,14 @@ export function createMSTeamsReplyDispatcher(params: {
         }
       }
       if (failed > 0) {
+        const classification = classifyMSTeamsSendError(lastFailedError);
+        const hint = formatMSTeamsSendErrorHint(classification);
         params.log.warn?.(`failed to deliver ${failed} of ${total} message blocks`, {
           failed,
           total,
+          error: formatUnknownError(lastFailedError),
+          classification,
+          ...(hint ? { hint } : {}),
         });
         queueDeliveryFailureSystemEvent({
           failed,
@@ -352,7 +339,10 @@ export function createMSTeamsReplyDispatcher(params: {
       if (pendingSettlement) {
         await pendingSettlement;
       }
-      const preparedPayload = streamController.preparePayload(payload);
+      const resolvedPayload = payload.presentation
+        ? await resolveMSTeamsReplyPresentation(payload)
+        : payload;
+      const preparedPayload = streamController.preparePayload(resolvedPayload);
       const native = streamController.claimNativeDelivery();
       if (preparedPayload && !native && findPendingNativeDelivery()) {
         // Close the earlier native segment before later blocks can overtake
@@ -397,9 +387,6 @@ export function createMSTeamsReplyDispatcher(params: {
       const errMsg = formatUnknownError(err);
       const classification = classifyMSTeamsSendError(err);
       const hint = formatMSTeamsSendErrorHint(classification);
-      params.runtime.error?.(
-        `msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`,
-      );
       params.log.error("reply failed", {
         kind: info.kind,
         error: errMsg,

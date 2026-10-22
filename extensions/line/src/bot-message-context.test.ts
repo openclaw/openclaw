@@ -267,44 +267,21 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker]");
   });
 
-  it("keeps inbound log previews UTF-16 well-formed at the limit", async () => {
-    const timestamp = 1_700_000_000_000;
-    await buildMessageContext(
-      createMessageEvent({ type: "user", userId: "user-1" }, {
-        timestamp,
-        message: { id: "baseline", type: "text", text: "BODY_MARKER" },
-      } as Partial<MessageEvent>),
-      {
-        cfg,
-      },
-    );
-    // Identity lookups log their own misses, so select the preview line by shape
-    // rather than by call order.
-    const baselineLog =
-      logVerboseMock.mock.calls
-        .map((call) => String(call[0]))
-        .find((line) => line.includes('preview="')) ?? "";
-    const baselinePreview = baselineLog.match(/preview="(.*)"$/)?.[1] ?? "";
-    const markerIndex = baselinePreview.indexOf("BODY_MARKER");
-    expect(markerIndex).toBeGreaterThanOrEqual(0);
-    const rawBody = `${"x".repeat(199 - markerIndex)}🚀tail`;
-    logVerboseMock.mockClear();
+  it.each(["message", "postback"])("preserves %s content without logging it", async (kind) => {
+    const rawBody = "private-line-message\n🚀";
+    const source = { type: "user", userId: "user-1" } as const;
+    const context =
+      kind === "message"
+        ? await buildMessageContext(
+            createMessageEvent(source, {
+              message: { id: "1", type: "text", text: rawBody },
+            } as Partial<MessageEvent>),
+          )
+        : await buildPostbackContext(createPostbackEvent(source, { postback: { data: rawBody } }));
 
-    await buildMessageContext(
-      createMessageEvent({ type: "user", userId: "user-1" }, {
-        timestamp,
-        message: { id: "1", type: "text", text: rawBody },
-      } as Partial<MessageEvent>),
-      {
-        cfg,
-      },
-    );
-    const expectedPreview = `${baselinePreview.slice(0, markerIndex)}${"x".repeat(199 - markerIndex)}`;
-    const formattedBodyLength = markerIndex + rawBody.length;
-
-    expect(logVerboseMock).toHaveBeenCalledWith(
-      `line inbound: from=line:user-1 len=${formattedBodyLength} preview="${expectedPreview}"`,
-    );
+    expect(context?.ctxPayload.RawBody).toBe(rawBody);
+    expect(context?.ctxPayload.BodyForAgent).toBe(rawBody);
+    expect(logVerboseMock.mock.calls.flat().join("\n")).not.toContain("private-line-message");
   });
 
   it("keeps failed media-only command text empty and preserves its native media fact", async () => {

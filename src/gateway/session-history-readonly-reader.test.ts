@@ -1,37 +1,53 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { isSessionNodePayloadSelect } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  isSessionNodePayloadSelect,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
   readLatestSessionTranscriptMessageEvent,
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { captureDurableSessionActor } from "../config/sessions/session-actor-durable.js";
+import { readSessionActorProjectionReceipt } from "../config/sessions/session-actor-replica.js";
 import {
   markCanonicalSessionValidationPending,
   setCanonicalSqliteSessionMainKey,
 } from "../config/sessions/session-canonical-key.js";
+import { withSessionTranscriptProjectionReceipt } from "../config/sessions/session-transcript-projection-facts-scope.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import {
   OpenClawAgentDatabaseReadOnlyScope,
   withScopedOpenClawAgentDatabaseReadOnly,
 } from "../state/openclaw-agent-db-readonly-scope.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectMessageIds, messageEvent } from "./session-history-events.test-support.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
-import { readChatHistoryMessageId } from "./session-history-tail.js";
 import { readSessionHistoryRequest } from "./session-history-worker-reader.js";
+
+type HistoryTarget = PreparedSessionHistoryReadTarget & { transcript: { sessionKey: string } };
+type HistoryReader = ReturnType<typeof createReadonlySessionHistoryReader>;
+type RecentOptions = Parameters<HistoryReader["readRecentSessionMessagesWithStatsAsync"]>[1];
 
 async function withHistory(
   read: (fixture: {
-    target: PreparedSessionHistoryReadTarget & { transcript: { sessionKey: string } };
+    target: HistoryTarget;
     database: ReturnType<typeof openOpenClawAgentDatabase>;
+    reader: HistoryReader;
+    readRecent: (
+      options?: Partial<RecentOptions>,
+    ) => ReturnType<HistoryReader["readRecentSessionMessagesWithStatsAsync"]>;
   }) => Promise<void>,
   options: { sharedStore?: boolean } = {},
 ) {
@@ -46,12 +62,7 @@ async function withHistory(
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: scope.sessionId },
-      {
-        type: "message",
-        id: "requested-message",
-        parentId: null,
-        message: { role: "user", content: "Requested history" },
-      },
+      messageEvent("requested-message", { role: "user", content: "Requested history" }),
     ]);
     await waitForSessionTranscriptProjection(scope);
     const database = openOpenClawAgentDatabase({
@@ -59,16 +70,90 @@ async function withHistory(
       env: state.env,
       ...(databasePath ? { path: databasePath } : {}),
     });
+    const target: HistoryTarget = {
+      transcript: { ...scope, sessionFile: scope.sessionKey },
+      database: { agentId: database.agentId, path: database.path },
+      entryValidationKey: scope.sessionKey,
+    };
+    const reader = createReadonlySessionHistoryReader(target);
     await read({
       database,
-      target: {
-        transcript: { ...scope, sessionFile: scope.sessionKey },
-        database: { agentId: database.agentId, path: database.path },
-        entryValidationKey: scope.sessionKey,
-      },
+      target,
+      reader,
+      readRecent: (readOptions) =>
+        reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+          maxMessages: 10,
+          ...readOptions,
+        }),
     });
   });
 }
+
+it("reuses complete accounting facts and reloads them after a transcript write", async () => {
+  await withHistory(async ({ target, database, reader }) => {
+    const identity = readOpenClawAgentDatabaseIdentity(database);
+    if (typeof identity.identity !== "string") {
+      throw new Error("Accounting receipt proof requires a physical database");
+    }
+    const actorTarget = {
+      sessionKey: target.transcript.sessionKey,
+      database: {
+        kind: "file" as const,
+        physicalIdentity: identity.identity,
+        birthtime: identity.birthtime,
+        nativeLocation: database.path,
+      },
+    };
+    const authority = { assertCurrent() {}, assertReadable() {}, authorize() {} };
+    const actor = captureDurableSessionActor({
+      database: target.database,
+      target: actorTarget,
+      lifetime: authority,
+    });
+    const owner = new OpenClawAgentDatabaseReadOnlyScope();
+
+    const options = { includeByteSize: true, includeUsage: false };
+    const read = () => owner.run(target.database, () => reader.readTranscriptAccounting(options));
+    try {
+      const before = read();
+      await actor.read(authority);
+      const receipt = readSessionActorProjectionReceipt({
+        path: database.path,
+        sessionKey: actorTarget.sessionKey,
+        sessionId: target.transcript.sessionId,
+      });
+      expect(receipt).toBeDefined();
+      const observed = observeSqliteReadSql(Object.getPrototypeOf(database.db.prepare("SELECT 1")));
+      const redundant = () =>
+        observed.queries.filter(
+          (sql) =>
+            sql.includes('from "session_nodes"') ||
+            sql.includes('from "session_participants"') ||
+            sql.includes('"reset_active_position"'),
+        );
+      try {
+        expect(withSessionTranscriptProjectionReceipt(receipt, read)).toEqual(before);
+        expect(redundant()).toEqual([]);
+        await appendTranscriptMessage(target.transcript, {
+          eventId: "accounting-next",
+          parentId: "requested-message",
+          message: { role: "user", content: "Updated accounting" },
+        });
+        await waitForSessionTranscriptProjection(target.transcript);
+        observed.queries.length = 0;
+        expect(withSessionTranscriptProjectionReceipt(receipt, read).eventCount).toBe(
+          before.eventCount! + 1,
+        );
+        expect(redundant().length).toBeGreaterThan(0);
+      } finally {
+        observed.restore();
+      }
+    } finally {
+      await actor.release();
+      owner.close();
+    }
+  });
+});
 
 it("reuses artifact summaries without payload reads and invalidates after transcript writes", async () => {
   await withHistory(async ({ target, database }) => {
@@ -104,7 +189,7 @@ it("reuses artifact summaries without payload reads and invalidates after transc
     const replace = async (title: string) => {
       await replaceTranscriptEvents(transcript, [
         { type: "session", version: 3, id: transcript.sessionId },
-        { type: "message", id: "artifact", parentId: null, message: message(title) },
+        messageEvent("artifact", message(title)),
       ]);
       await waitForSessionTranscriptProjection(transcript);
     };
@@ -166,7 +251,7 @@ it("reuses artifact summaries without payload reads and invalidates after transc
 it.each(["cold", "warm", "policy", "receipt"] as const)(
   "keeps canonical admission and history materialization on one retained snapshot (%s)",
   async (admission) => {
-    await withHistory(async ({ target, database }) => {
+    await withHistory(async ({ target, database, readRecent }) => {
       const scope = new OpenClawAgentDatabaseReadOnlyScope();
       const retained = scope.run(target.database, () =>
         withScopedOpenClawAgentDatabaseReadOnly(({ db }) => db, target.database),
@@ -174,18 +259,15 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
       if (!retained.found) {
         throw new Error("expected retained history reader");
       }
-      const connection = retained.value;
-      const reader = createReadonlySessionHistoryReader(target);
-      const read = () =>
-        scope.run(target.database, () =>
-          reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-        );
+      const connection = requireNativeSqliteDatabase(retained.value);
+      const read = () => scope.run(target.database, () => readRecent());
       const external = new DatabaseSync(target.database.path);
       try {
-        if (admission !== "cold") {
-          expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
-            "requested-message",
-          ]);
+        if (admission === "cold") {
+          // The host fixture writer can already have published canonical admission.
+          markCanonicalSessionValidationPending(database);
+        } else {
+          expectMessageIds((await read()).messages, ["requested-message"]);
           // The race must reach SQLite while canonical admission stays warm.
           const missingEntryReader = createReadonlySessionHistoryReader({
             ...target,
@@ -225,12 +307,12 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
                     "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = 1",
                   )
                   .run(
-                    JSON.stringify({
-                      type: "message",
-                      id: "requested-message",
-                      parentId: null,
-                      message: { role: "user", content: "Changed history" },
-                    }),
+                    JSON.stringify(
+                      messageEvent("requested-message", {
+                        role: "user",
+                        content: "Changed history",
+                      }),
+                    ),
                     target.transcript.sessionId,
                   ).changes,
               ).toBe(1);
@@ -243,7 +325,7 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
             await expect(read()).rejects.toThrow("openclaw doctor --fix");
           } else {
             const page = await read();
-            expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
+            expectMessageIds(page.messages, ["requested-message"]);
             expect(page.messages[0]).toMatchObject({ content: "Requested history" });
           }
           expect(selectedInTransaction).toBe(admission !== "warm");
@@ -263,16 +345,13 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
 );
 
 it("revalidates the retained handle between paged and anchored reader invocations", async () => {
-  await withHistory(async ({ target, database }) => {
+  await withHistory(async ({ target, database, reader, readRecent }) => {
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
-    const reader = createReadonlySessionHistoryReader(target);
+
     try {
       await scope.run(target.database, async () => {
-        const first = await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
-          maxMessages: 10,
-          captureReadWindow: true,
-        });
-        expect(first.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
+        const first = await readRecent({ captureReadWindow: true });
+        expectMessageIds(first.messages, ["requested-message"]);
         database.db
           .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
           .run("{", target.entryValidationKey!);
@@ -306,7 +385,7 @@ it("retains the matching-entry and blank-key validation bypass", async () => {
     const page = await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
       maxMessages: 10,
     });
-    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
+    expectMessageIds(page.messages, ["requested-message"]);
   });
 });
 
@@ -330,24 +409,20 @@ it.each(["missing", "successor", "retained"] as const)(
           .prepare("UPDATE session_nodes SET entry_valid = -1 WHERE session_key = ?")
           .run(target.entryValidationKey!);
       }
-      const reader = createReadonlySessionHistoryReader(target);
-      const page = await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
-        maxMessages: 10,
-      });
-      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
+      const page = await createReadonlySessionHistoryReader(
+        target,
+      ).readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
+      expectMessageIds(page.messages, ["requested-message"]);
       expect(target.transcript.sessionId).toBe("requested-history");
     });
   },
 );
 
 it("revalidates canonical keys when repair publishes pending rows", async () => {
-  await withHistory(async ({ target, database }) => {
-    const reader = createReadonlySessionHistoryReader(target);
+  await withHistory(async ({ target, database, readRecent }) => {
     const firstScope = new OpenClawAgentDatabaseReadOnlyScope();
     try {
-      await firstScope.run(target.database, () =>
-        reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-      );
+      await firstScope.run(target.database, () => readRecent());
     } finally {
       firstScope.close();
     }
@@ -360,55 +435,44 @@ it("revalidates canonical keys when repair publishes pending rows", async () => 
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run("Agent:main:readonly-history");
     markCanonicalSessionValidationPending(database, ["Agent:main:readonly-history"]);
-    await expect(
-      reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-    ).rejects.toThrow("openclaw doctor --fix");
+    await expect(readRecent()).rejects.toThrow("openclaw doctor --fix");
   });
 });
 
 it("revalidates unrelated lineage after a committed main-key policy change", async () => {
-  await withHistory(async ({ target, database }) => {
+  await withHistory(async ({ target, database, readRecent }) => {
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:main",
       storePath: target.database.path,
     };
     await replaceSessionEntry(scope, { sessionId: "main-window", updatedAt: 1 });
-    const reader = createReadonlySessionHistoryReader(target);
-    await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
+    await readRecent();
     setCanonicalSqliteSessionMainKey(database, "work");
     database.db
       .prepare("UPDATE session_nodes SET parent_session_key = ? WHERE session_key = ?")
       .run("agent:main:unrecorded-parent", scope.sessionKey);
-    await expect(
-      reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-    ).rejects.toThrow("openclaw doctor --fix");
+    await expect(readRecent()).rejects.toThrow("openclaw doctor --fix");
   });
 });
 
 it("validates participant projection on the current reader handle", async () => {
-  await withHistory(async ({ target, database }) => {
-    const reader = createReadonlySessionHistoryReader(target);
-    await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
+  await withHistory(async ({ target, database, readRecent }) => {
+    await readRecent();
     database.db
       .prepare(
         "INSERT INTO session_participants (session_key, identity_namespace, actor_id, contribution_count) VALUES (?, ?, ?, ?)",
       )
       .run(target.entryValidationKey!, "{}", "invalid-participant", 1);
-    await expect(
-      reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-    ).rejects.toThrow("Session participant identity is invalid");
+    await expect(readRecent()).rejects.toThrow("Session participant identity is invalid");
   });
 });
 
 it("admits history without creating a missing additive participant table", async () => {
-  await withHistory(async ({ target, database }) => {
+  await withHistory(async ({ database, readRecent }) => {
     database.db.exec("DROP TABLE session_participants");
-    const reader = createReadonlySessionHistoryReader(target);
-    const page = await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
-      maxMessages: 10,
-    });
-    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
+    const page = await readRecent();
+    expectMessageIds(page.messages, ["requested-message"]);
     expect(
       database.db
         .prepare("SELECT name FROM sqlite_schema WHERE name = 'session_participants'")
@@ -429,12 +493,7 @@ it("keeps logical transcript identity separate from the physical schema owner", 
       await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await replaceTranscriptEvents(scope, [
         { type: "session", version: 3, id: scope.sessionId },
-        {
-          type: "message",
-          id: "shared-message",
-          parentId: null,
-          message: { role: "user", content: "Shared physical store" },
-        },
+        messageEvent("shared-message", { role: "user", content: "Shared physical store" }),
       ]);
       await waitForSessionTranscriptProjection(scope);
       const reader = createReadonlySessionHistoryReader({
@@ -443,7 +502,7 @@ it("keeps logical transcript identity separate from the physical schema owner", 
         entryValidationKey: scope.sessionKey,
       });
       const page = await reader.readRecentSessionMessagesWithStatsAsync(scope, { maxMessages: 10 });
-      expect(page.messages.map(readChatHistoryMessageId)).toEqual(["shared-message"]);
+      expectMessageIds(page.messages, ["shared-message"]);
       expect(database.agentId).toBe("main");
     },
     { sharedStore: true },
@@ -451,7 +510,7 @@ it("keeps logical transcript identity separate from the physical schema owner", 
 });
 
 it("keeps display history separate from the current-turn context cutoff", async () => {
-  await withHistory(async ({ target }) => {
+  await withHistory(async ({ target, readRecent }) => {
     const anchor = readActiveTranscriptEntryAnchor({
       ...target.transcript,
       storePath: target.database.path,
@@ -463,10 +522,7 @@ it("keeps display history separate from the current-turn context cutoff", async 
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
     try {
       await retained.run(target.database, async () => {
-        const reader = createReadonlySessionHistoryReader(target);
-        await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
-          maxMessages: 10,
-        });
+        await readRecent();
         const admission = { ...anchor, logicalTurnId: "read-fence", role: "user" as const };
         const page = await runWithSessionTranscriptReadFence(admission, () => {
           // Context excludes the admitted turn; display history retains it and validates its identity.
@@ -476,19 +532,14 @@ it("keeps display history separate from the current-turn context cutoff", async 
               storePath: target.database.path,
             }),
           ).toBeUndefined();
-          return reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
-            maxMessages: 10,
-          });
+          return readRecent();
         });
-        expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
+        expectMessageIds(page.messages, ["requested-message"]);
         expect(page.totalMessages).toBe(1);
         await expect(
           runWithSessionTranscriptReadFence(
             { ...admission, storePath: `${target.database.path}.other` },
-            () =>
-              reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
-                maxMessages: 10,
-              }),
+            () => readRecent(),
           ),
         ).rejects.toThrow("different transcript store");
       });

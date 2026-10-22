@@ -488,7 +488,7 @@ export class VisitorAccessService {
       }
       if (input.profileId && !profile) {
         throw new VisitorAccessError(
-          "Profile not found. Use the current canonical profileId from visitor_list.",
+          "Profile not found. Use the current profileId from visitor_list.",
         );
       }
       const access =
@@ -580,16 +580,16 @@ export class VisitorAccessService {
       const policy = await this.policy.read(assertCurrent);
       const policyTargets = policy?.targets ?? [];
       const targetKeys = new Set(policyTargets.map(visitorTargetKey));
-      const entries = await this.store.entries();
+      const entries = (await this.store.entries()).toSorted((left, right) =>
+        left.key.localeCompare(right.key),
+      );
       assertCurrent();
       const managed = new Set(entries.map((entry) => entry.key));
       const unmanaged = policyTargets
         .filter((target) => !managed.has(visitorTargetKey(target)))
         .toSorted((left, right) => visitorTargetKey(left).localeCompare(visitorTargetKey(right)));
       const displayedTargets = [
-        ...entries
-          .toSorted((left, right) => left.key.localeCompare(right.key))
-          .map(({ value }) => visitorGrantTarget(value)),
+        ...entries.map(({ value }) => visitorGrantTarget(value)),
         ...unmanaged,
       ].slice(0, this.config.maxVisitors);
       const access = await this.readAccess([
@@ -613,35 +613,33 @@ export class VisitorAccessService {
       const rows: Array<
         | { line: string; grant: VisitorListDetails["grants"][number] }
         | { line: string; unmanaged: VisitorListDetails["unmanaged"][number] }
-      > = entries
-        .toSorted((a, b) => a.key.localeCompare(b.key))
-        .map(({ value: grant }) => {
-          const target = visitorGrantTarget(grant);
-          const profileId = access.profileId(target);
-          const missingFromPolicy = !targetKeys.has(visitorTargetKey(target));
-          const expired = grant.expiresAt !== null && grant.expiresAt <= Date.now();
-          const state = missingFromPolicy
-            ? "MISSING FROM POLICY"
-            : expired
-              ? "EXPIRED; provider cleanup pending"
-              : "managed";
-          const gatewayAccess = access.describe(target);
-          const githubLogin = access.githubLogin(target);
-          const github = `Verified GitHub: ${githubLogin ? `@${githubLogin}` : "unavailable"}`;
-          return {
-            line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${gatewayAccess}`,
-            grant: {
-              ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
-              ...(grant.grantId ? { grantId: grant.grantId } : {}),
-              ...(profileId ? { profileId } : {}),
-              ...(githubLogin ? { githubLogin } : {}),
-              invitedAt: new Date(grant.createdAt).toISOString(),
-              expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
-              state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",
-              gatewayAccess,
-            },
-          };
-        });
+      > = entries.map(({ value: grant }) => {
+        const target = visitorGrantTarget(grant);
+        const profileId = access.profileId(target);
+        const missingFromPolicy = !targetKeys.has(visitorTargetKey(target));
+        const expired = grant.expiresAt !== null && grant.expiresAt <= Date.now();
+        const state = missingFromPolicy
+          ? "MISSING FROM POLICY"
+          : expired
+            ? "EXPIRED; provider cleanup pending"
+            : "managed";
+        const gatewayAccess = access.describe(target);
+        const githubLogin = access.githubLogin(target);
+        const github = `Verified GitHub: ${githubLogin ? `@${githubLogin}` : "unavailable"}`;
+        return {
+          line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${gatewayAccess}`,
+          grant: {
+            ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
+            ...(grant.grantId ? { grantId: grant.grantId } : {}),
+            ...(profileId ? { profileId } : {}),
+            ...(githubLogin ? { githubLogin } : {}),
+            invitedAt: new Date(grant.createdAt).toISOString(),
+            expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
+            state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",
+            gatewayAccess,
+          },
+        };
+      });
       rows.push(
         ...unmanaged.map((target) => {
           const gatewayAccess = access.describe(target);

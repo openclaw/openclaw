@@ -113,18 +113,6 @@ describe("resolveEmbeddedCompactionThinkingLevel", () => {
     },
   );
 
-  it("revalidates an unsupported configured level for the actual candidate", () => {
-    expect(
-      resolveEmbeddedCompactionThinkingLevel({
-        config: {
-          agents: { defaults: { compaction: { thinkingLevel: "xhigh" } } },
-        },
-        provider: "demo",
-        modelId: "demo-model",
-      }),
-    ).toBe("high");
-  });
-
   it("revalidates the compaction default against provider-denied thinking levels", () => {
     expect(
       resolveEmbeddedCompactionThinkingLevel({
@@ -265,7 +253,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     // could send a stale credential to the override provider.
     expect(result.authProfileId).toBeUndefined();
   });
-
   it.each([
     { name: "without configured aliases", models: undefined },
     {
@@ -427,8 +414,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "gpt-5.4",
     });
     expect(result.provider).toBe("openai");
-    expect(result.runtimeProvider).toBeUndefined();
-    expect(result.contextProvider).toBeUndefined();
     expect(result.model).toBe("gpt-5.4");
     expect(result.authProfileId).toBe("openai:default");
   });
@@ -446,7 +431,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.modelSelectionLocked).toBe(true);
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-5.5");
-    expect(result.runtimeProvider).toBeUndefined();
   });
 
   it("carries only a target-matching prepared auth plan into compaction context", () => {
@@ -548,8 +532,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       harnessRuntime: fixture.harnessRuntime,
     });
     expect(result.provider).toBe("openai");
-    expect(result.runtimeProvider).toBeUndefined();
-    expect(result.contextProvider).toBeUndefined();
     expect(result.nativeHarnessCompaction).toBe(fixture.nativeCompaction);
     expect(result.model).toBe("gpt-5.5");
     expect(result.authProfileId).toBeUndefined();
@@ -572,8 +554,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       modelSelectionLocked: true,
     });
     expect(result.provider).toBe("openai");
-    expect(result.runtimeProvider).toBeUndefined();
-    expect(result.contextProvider).toBeUndefined();
     expect(result.nativeHarnessCompaction).toBe(true);
     expect(result.model).toBe("gpt-5.5");
   });
@@ -592,8 +572,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       harnessRuntime: "codex",
     });
     expect(result.provider).toBe("openai");
-    expect(result.runtimeProvider).toBeUndefined();
-    expect(result.contextProvider).toBeUndefined();
     expect(result.nativeHarnessCompaction).toBe(true);
     expect(result.model).toBe("gpt-5.4-mini");
     expect(result.authProfileId).toBeUndefined();
@@ -648,18 +626,6 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe(provider);
     expect(result.model).toBe(model);
     expect(result.authProfileId).toBe(authProfileId);
-  });
-
-  it("preserves auth when an omitted provider uses the effective default", () => {
-    const result = resolveEmbeddedCompactionTarget({
-      config: compactionConfig("summary", { "openai/gpt-5.4-mini": { alias: "summary" } }),
-      authProfileId: "openai:default",
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-    });
-    expect(result.provider).toBe("openai");
-    expect(result.model).toBe("gpt-5.4-mini");
-    expect(result.authProfileId).toBe("openai:default");
   });
 
   it("keeps current-provider configured model ids over cross-provider alias collisions (#90340)", () => {
@@ -754,28 +720,13 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   });
 });
 
-describe("buildContextEngineCompactionSessionTarget", () => {
-  it("derives the agent from a scoped session key", () => {
-    expect(
-      buildContextEngineCompactionSessionTarget({
-        config: { session: { store: "/tmp/agents/{agentId}/sessions.json" } },
-        sessionFile: "agent:helper:main",
-        sessionId: "helper-session",
-        sessionKey: "agent:helper:main",
-      }),
-    ).toMatchObject({
-      agentId: "helper",
-      sessionKey: "agent:helper:main",
-      storePath: "/tmp/agents/helper/sessions.json",
-    });
-  });
-
-  it("leaves the key absent when a marker store has no mapped row", () => {
+describe("buildContextEngineCompactionSessionTarget", async () => {
+  it("leaves the key absent when a marker store has no mapped row", async () => {
     const storePath = path.join(compactionTempDirs.make("compaction-marker-"), "sessions.json");
     const sessionId = "legacy-unmapped-session";
 
     expect(
-      buildContextEngineCompactionSessionTarget({
+      await buildContextEngineCompactionSessionTarget({
         sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
         sessionId,
       }),

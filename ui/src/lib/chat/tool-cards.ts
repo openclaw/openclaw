@@ -24,7 +24,6 @@ import {
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
 import { readBrowserTabTarget } from "../../components/browser/browser-target.ts";
-import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome, ToolOutputMetadata } from "./chat-types.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
 import { readLiveDiffStat } from "./tool-call-diff.ts";
@@ -232,11 +231,7 @@ function serializeToolInput(args: unknown): string | undefined {
   if (typeof args === "string") {
     return args;
   }
-  try {
-    return JSON.stringify(args, null, 2);
-  } catch {
-    return typeof args === "bigint" ? String(args) : Object.prototype.toString.call(args);
-  }
+  return JSON.stringify(args, null, 2);
 }
 
 /** Rendering only: extraction and result retrieval retain the original card. */
@@ -300,18 +295,7 @@ export function resolveCollapsedToolArgumentPreview(args: unknown): string | und
     if (typeof value !== "string") {
       continue;
     }
-    const firstContent = value.search(/\S/);
-    let firstLine: string | undefined;
-    if (firstContent >= 0) {
-      const start =
-        Math.max(value.lastIndexOf("\r", firstContent), value.lastIndexOf("\n", firstContent)) + 1;
-      const lineEnd = /[\r\n]/g;
-      lineEnd.lastIndex = firstContent;
-      firstLine = value.slice(start, lineEnd.exec(value)?.index ?? value.length);
-    }
-    const preview = formatCollapsedToolPreviewText(
-      firstLine ? redactToolPayloadText(firstLine) : undefined,
-    );
+    const preview = formatCollapsedToolPreviewText(value.trimStart().split(/[\r\n]/, 1)[0]);
     if (preview) {
       return preview;
     }

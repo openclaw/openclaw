@@ -381,7 +381,8 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
       });
       deliverReplies.mockImplementation(actualDelivery.deliverReplies);
       editMessageTelegram.mockImplementation(actualEdit.editMessageTelegram);
-      loadSessionStore.mockReturnValue({ s1: {} });
+      const sessionKey = "agent:ops:telegram:group:-100123:topic:88";
+      loadSessionStore.mockReturnValue({ [sessionKey]: {} });
       const bot = createBot();
       const visible = new Map<number, string>();
       const sends: Array<{ chatId: string | number; threadId?: number }> = [];
@@ -470,7 +471,7 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
       await dispatchWithContext({
         bot,
         context: createContext({
-          ctxPayload: { SessionKey: "s1" } as TelegramMessageContext["ctxPayload"],
+          ctxPayload: { SessionKey: sessionKey } as TelegramMessageContext["ctxPayload"],
           route: { agentId: "ops", accountId: "default" } as TelegramMessageContext["route"],
           msg: {
             chat: { id: -100123, type: "supergroup", is_forum: true },
@@ -546,13 +547,14 @@ describeTelegramDispatch("dispatchTelegramMessage reasoning-room-events", () => 
   });
 
   it("routes prepared typed reasoning-only finals to durable delivery when reasoning is persistent", async () => {
+    const sessionKey = "agent:default:telegram:direct:123";
     loadSessionStore.mockReturnValue({
-      s1: { reasoningLevel: "on" },
+      [sessionKey]: { reasoningLevel: "on" },
     });
     mockTurn(createReasoningFinalDelivery());
     await dispatchWithContext({
       context: createContext({
-        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+        ctxPayload: { SessionKey: sessionKey } as unknown as TelegramMessageContext["ctxPayload"],
       }),
     });
     expectDeliveredReply(0, { text: "🧠 _hidden_" });

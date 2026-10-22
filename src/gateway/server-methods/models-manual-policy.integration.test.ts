@@ -39,7 +39,11 @@ it.each([true, false])(
             auth: "api-key",
             apiKey: authenticated ? "synthetic-policy-key" : undefined,
             baseUrl: "https://policy.example.invalid/v1",
-            models: ["manual", "automatic", "fallback"].map((id) => ({ id, name: id })),
+            models: ["manual", "automatic", "fallback"].map((id) => ({
+              id,
+              name: id,
+              contextWindow: 32_768,
+            })),
           },
         },
       },
@@ -55,11 +59,10 @@ it.each([true, false])(
       });
       try {
         await server.startupSettled;
-        const legacy = await client.request<ModelsListResult>("models.list", {
-          agentId: "main",
-          view: "configured",
-        });
+        const configured = { agentId: "main", view: "configured" };
+        const legacy = await client.request<ModelsListResult>("models.list", configured);
         expect(legacy.models.map((model) => model.id)).toEqual(["automatic", "fallback", "manual"]);
+        expect(legacy.models.map((model) => model.contextWindow)).toEqual([32_768, 32_768, 32_768]);
         expect(
           legacy.models.every((model) => !Object.hasOwn(model, "manualSelectionAllowed")),
         ).toBe(true);
@@ -70,35 +73,28 @@ it.each([true, false])(
           caps: ["model-selection-policy"],
         });
         try {
-          const negotiated = await modern.request<ModelsListResult>("models.list", {
-            agentId: "main",
-            view: "configured",
-          });
+          const negotiated = await modern.request<ModelsListResult>("models.list", configured);
           expect(negotiated.models.find((model) => model.id === "manual")?.available).toBe(
             authenticated,
           );
-          expect(
-            negotiated.models.map(({ id, manualSelectionAllowed }) => ({
-              id,
-              manualSelectionAllowed,
-            })),
-          ).toEqual([
-            { id: "automatic", manualSelectionAllowed: false },
-            { id: "fallback", manualSelectionAllowed: false },
-            { id: "manual", manualSelectionAllowed: true },
-          ]);
-          expect(
-            negotiated.models.map(({ manualSelectionAllowed: _permission, ...row }) => row),
-          ).toEqual(legacy.models);
+          expect(negotiated.models).toEqual(
+            legacy.models.map((row) =>
+              Object.assign({}, row, { manualSelectionAllowed: row.id === "manual" }),
+            ),
+          );
         } finally {
           await disconnectGatewayClient(modern);
         }
-        const catalog = await client.request<ModelsListResult>("models.list", { agentId: "main" });
-        expect
-          .soft(catalog.models.map(({ provider, id }) => `${provider}/${id}`))
-          .toEqual(["fixture/manual"]);
+        const catalog = await client.request<ModelsListResult>("models.list", {
+          agentId: "main",
+        });
+        expect.soft(catalog.models).toMatchObject([{ provider: "fixture", id: "manual" }]);
         const key = "agent:main:manual-policy";
-        await client.request("sessions.create", { key, agentId: "main", model: "fixture/manual" });
+        await client.request("sessions.create", {
+          key,
+          agentId: "main",
+          model: "fixture/manual",
+        });
         for (const model of ["fixture/automatic", "fixture/fallback"]) {
           await expect
             .soft(client.request("sessions.patch", { key, model }))
@@ -113,10 +109,9 @@ it.each([true, false])(
         await expect(client.request("agent.wait", { runId: started.runId })).resolves.toMatchObject(
           { status: "ok" },
         );
-        const history = await client.request<{ sessionInfo: { model: string } }>("chat.history", {
-          sessionKey: key,
+        await expect(client.request("chat.history", { sessionKey: key })).resolves.toMatchObject({
+          sessionInfo: { model: "automatic" },
         });
-        expect(history.sessionInfo.model).toBe("automatic");
         await client.request("sessions.patch", { key, model: "fixture/manual" });
         await expect(client.request("sessions.patch", { key, model: null })).resolves.toBeDefined();
       } finally {

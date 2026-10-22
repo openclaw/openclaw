@@ -18,15 +18,18 @@ import {
   usesCandidateUpdateAdmission,
   type UpdateCommandOptions,
 } from "./shared.js";
+import { reportUnreportedUpdateAdmissionOutcome } from "./update-command-admission-report.js";
 import { withPrivateStagedPackageInstall } from "./update-command-artifact.js";
 import {
   applyUpdateCandidateAdmission,
-  assertUpdateAdmissionConfigUnchanged,
   createUpdateCandidateAdmissionReport,
   inspectStagedUpdateCandidateAdmission,
 } from "./update-command-candidate-admission.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
-import type { UpdateCommandExecutorOptions } from "./update-command-executor-options.js";
+import type {
+  UpdateCommandExecutor,
+  UpdateCommandExecutorOptions,
+} from "./update-command-executor-options.js";
 import {
   captureUpdateCommandExecutorAuthority,
   withUpdateCommandExecutor,
@@ -41,6 +44,7 @@ import {
 } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
 import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
+import { withUpdatePreviewSignals } from "./update-command-preview-signals.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
@@ -51,10 +55,7 @@ import {
 } from "./update-command-service-env.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service-maintenance.js";
 import { resolveFreshUpdateMetadata, resolveUpdateCommandTarget } from "./update-command-target.js";
-import {
-  reportUnreportedUpdateAdmissionOutcome,
-  withUpdateCommandTerminalResult,
-} from "./update-command-terminal.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { prepareUpdateCommandFailureTriage } from "./update-command-triage.js";
 
 export async function initializeAndRunUpdate(
@@ -71,13 +72,22 @@ export async function initializeAndRunUpdate(
   const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
   let disposePresentation: (() => void) | undefined;
+  let admissionAttempted = false;
   try {
     await withUpdateCommandTerminalResult(
       (registerRun) =>
         withUpdateInProgressEnv(invocationCwd, () =>
           withUpdateCommandExecutor(
             runId,
-            async (executor) => {
+            async (originalExecutor) => {
+              const executor: UpdateCommandExecutor = {
+                enter: (...args) => {
+                  // enter can acquire ownership before failing. Once attempted, an
+                  // unregistered refusal cannot borrow shared state after settlement.
+                  admissionAttempted = true;
+                  return originalExecutor.enter(...args);
+                },
+              };
               const selection: UpdateTargetSelection | undefined = await withOwnedManagedUpdateEnv(
                 targetEnv,
                 () =>
@@ -122,7 +132,7 @@ export async function initializeAndRunUpdate(
               const { root, serviceRoot } = selection.refusal
                 ? selection.refusal.report
                 : { root: selection.target.root, serviceRoot: selection.target.managedServiceRoot };
-              const packageAdmission = { serviceRoot };
+              const packageAdmission = { serviceRoot, dryRun: opts.dryRun };
               const originalCaptureWarnings: string[] = [];
               const initialization: InitializedUpdate = {
                 ...selection,
@@ -215,6 +225,7 @@ export async function initializeAndRunUpdate(
                     assertCurrent,
                     nodeRunner: selectedTarget?.packageUpdateNodeRunner,
                     timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                    fullIntegrityCheck: opts.fullIntegrityCheck,
                   });
                   assertCurrent();
                   initialization.originalRecoveryCapture = captured.ref;
@@ -229,7 +240,11 @@ export async function initializeAndRunUpdate(
                   if (hasCommandProcessCleanupError(error)) {
                     throw error;
                   }
-                  warn(`Original state capture is unavailable: ${formatErrorMessage(error)}`);
+                  // Capture is best effort. Lead with continuation guidance because the
+                  // warning is length-bounded and the nested cause can be long.
+                  warn(
+                    `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
+                  );
                 }
                 assertCurrent();
                 if (resolveDebugProxySettings(env).enabled) {
@@ -247,14 +262,16 @@ export async function initializeAndRunUpdate(
               }
               const target = initialization.target;
               if (opts.dryRun) {
-                return await previewUpdateCommand({
-                  target,
-                  prepared,
-                  opts,
-                  runId,
-                  invocationCwd,
-                  updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-                });
+                return await withUpdatePreviewSignals(opts, () =>
+                  previewUpdateCommand({
+                    target,
+                    prepared,
+                    opts,
+                    runId,
+                    invocationCwd,
+                    updateStepTimeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                  }),
+                );
               }
               const artifact =
                 target.updateInstallKind === "package" &&
@@ -311,7 +328,7 @@ export async function initializeAndRunUpdate(
                           applyUpdateCandidateAdmission({
                             target,
                             opts,
-                            result: initialization.candidateAdmission.result,
+                            result: initialization.candidateAdmission,
                           });
                         } catch (error) {
                           if (!(error instanceof UpdatePreMutationError)) {
@@ -339,31 +356,18 @@ export async function initializeAndRunUpdate(
                   return await runCapturedInitialization();
                 }
                 const timeoutMs = prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
-                const selectedStoredChannel = target.storedChannel;
                 const candidateAdmissionChecks =
-                  initialization.candidateAdmission?.result.verdict?.verdict === "admit"
-                    ? initialization.candidateAdmission.result.verdict.facts.checks.map(
+                  initialization.candidateAdmission?.verdict?.verdict === "admit"
+                    ? initialization.candidateAdmission.verdict.facts.checks.map(
                         (check) => check.name,
                       )
                     : undefined;
-                const checkSchemas = async (phase?: "before" | "after") => {
+                const checkSchemas = async () => {
                   const config = await withOwnedManagedUpdateEnv(env, () =>
                     readUpdateChannelConfig(Boolean(opts.channel), {
                       tolerateReadFailure: candidateAdmissionChecks?.includes("config"),
                     }),
                   );
-                  if (candidateAdmissionChecks?.includes("config") && phase !== "after") {
-                    assertUpdateAdmissionConfigUnchanged(
-                      target.configSnapshot,
-                      config.configSnapshot,
-                    );
-                  }
-                  if (!opts.channel && config.storedChannel !== selectedStoredChannel) {
-                    await target.refuseUpdate(
-                      "update-channel-changed",
-                      "Stored update channel changed after target selection. Rerun the update, or specify --channel explicitly.",
-                    );
-                  }
                   Object.assign(target, config);
                   return await preflightUpdateCommandSchemas({
                     ...target,
@@ -451,7 +455,7 @@ export async function initializeAndRunUpdate(
                           invocationCwd,
                           progress: presentation.progress,
                           assertCurrent,
-                          checkSchemas: async (phase) => void (await checkSchemas(phase)),
+                          checkSchemas: async () => void (await checkSchemas()),
                         });
                       } finally {
                         presentation.dispose();
@@ -510,7 +514,7 @@ export async function initializeAndRunUpdate(
     );
   } catch (error) {
     if (!handleFailure) {
-      return await reportUnreportedUpdateAdmissionOutcome(error);
+      return await reportUnreportedUpdateAdmissionOutcome(error, { detached: admissionAttempted });
     }
     // The admitted run's prepared handler outlives both staged cleanup and the
     // executor, so no failure is reported while either mutation owner remains live.

@@ -18,12 +18,9 @@ function parseProfileContent(event: Event | undefined): Record<string, unknown> 
 function resolveProfileTags(event: Event | undefined, authTag: string[] | undefined): string[][] {
   const existingTags = event?.tags ?? [];
   if (!authTag) {
-    return existingTags.map((tag) => tag.slice());
+    return existingTags;
   }
-  return [
-    ...existingTags.filter((tag) => tag[0] !== "auth").map((tag) => tag.slice()),
-    [...authTag],
-  ];
+  return [...existingTags.filter((tag) => tag[0] !== "auth"), authTag];
 }
 
 function hasConfiguredAuthTag(event: Event | undefined, authTag: string[] | undefined): boolean {
@@ -142,7 +139,7 @@ export async function syncBuzzProfile(params: {
         kind: AGENT_PROFILE_KIND,
         content: agentContent,
         current: currentAgentProfile,
-        tags: currentAgentProfile?.tags.map((tag) => tag.slice()) ?? [],
+        tags: currentAgentProfile?.tags ?? [],
         secretKey: params.secretKey,
       }),
     );

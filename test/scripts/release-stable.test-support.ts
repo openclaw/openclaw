@@ -48,14 +48,40 @@ export type FakeStep = {
 };
 type FakeCall = { bin: string; args: string[] };
 
-export function step(
+export const step = (
   bin: FakeStep["bin"],
   match: string[],
   stdout = "",
   extra: Partial<Omit<FakeStep, "bin" | "match" | "stdout">> = {},
-): FakeStep {
-  return { bin, match, stdout, ...extra };
-}
+): FakeStep => ({ bin, match, stdout, ...extra });
+
+export const fields = (...values: string[]) => values.flatMap((value) => ["-f", value]);
+export const jsonStep = (bin: FakeStep["bin"], match: string[], value: unknown) =>
+  step(bin, match, JSON.stringify(value));
+export const gitShow = (path: string, stdout = "", exit = 0) =>
+  step("git", ["show", path], stdout, { exit });
+export const dispatchWorkflow = (workflow: string, repo: string, ref = "main") =>
+  step("gh", ["workflow", "run", workflow, "--repo", repo, "--ref", ref]);
+export const fetchMain = () => step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]);
+export const workflowRun = (
+  workflow: string,
+  id: number,
+  displayTitle = `Release v${RELEASE}`,
+) => ({
+  id,
+  path: `.github/workflows/${workflow}`,
+  event: "workflow_dispatch",
+  actor: { login: "release-test" },
+  head_branch: "main",
+  display_title: displayTitle,
+  created_at: new Date().toISOString(),
+});
+export const workflowRuns = (workflow: string, repo: string, runs: object[]) =>
+  step(
+    "gh",
+    ["api", `repos/${repo}/actions/workflows/${workflow}/runs?event=workflow_dispatch&per_page=10`],
+    JSON.stringify({ workflow_runs: runs }),
+  );
 
 export function phaseState(phase: ReleasePhase): ReleaseState {
   const date = "2026-09-06T12:00:00.000Z";
@@ -120,80 +146,48 @@ export function postState(phase: ReleasePhase): ReleaseState {
   return state;
 }
 
-export function actionRun(repo: string, id: number, conclusion = "success", attempt = 1): FakeStep {
-  return step(
-    "gh",
-    ["api", `repos/${repo}/actions/runs/${id}`],
-    JSON.stringify({ status: "completed", conclusion, run_attempt: attempt }),
-  );
-}
+export const actionRun = (repo: string, id: number, conclusion = "success", attempt = 1) =>
+  jsonStep("gh", ["api", `repos/${repo}/actions/runs/${id}`], {
+    status: "completed",
+    conclusion,
+    run_attempt: attempt,
+  });
 
-export function workflowDispatch(
+export const workflowDispatch = (
   workflow: string,
   repo: string,
   id: number,
   displayTitle = `Release v${RELEASE}`,
-): FakeStep[] {
-  return [
-    step("gh", ["workflow", "run", workflow, "--repo", repo, "--ref", "main"]),
-    step(
-      "gh",
-      [
-        "api",
-        `repos/${repo}/actions/workflows/${workflow}/runs?event=workflow_dispatch&per_page=10`,
-      ],
-      JSON.stringify({
-        workflow_runs: [
-          {
-            id,
-            path: `.github/workflows/${workflow}`,
-            event: "workflow_dispatch",
-            actor: { login: "release-test" },
-            head_branch: "main",
-            display_title: displayTitle,
-            created_at: new Date().toISOString(),
-          },
-        ],
-      }),
-    ),
-  ];
-}
+): FakeStep[] => [
+  dispatchWorkflow(workflow, repo),
+  workflowRuns(workflow, repo, [workflowRun(workflow, id, displayTitle)]),
+];
 
-export function githubRelease(draft: boolean): FakeStep {
-  return step(
-    "gh",
-    ["release", "view", `v${RELEASE}`, "--repo", REPOSITORY],
-    JSON.stringify({ isDraft: draft, tagName: `v${RELEASE}` }),
-  );
-}
+export const githubRelease = (draft: boolean) =>
+  jsonStep("gh", ["release", "view", `v${RELEASE}`, "--repo", REPOSITORY], {
+    isDraft: draft,
+    tagName: `v${RELEASE}`,
+  });
 
-export function macosWait(id: number, conclusion = "success", attempt = 1): FakeStep[] {
-  return [
-    step("gh", ["api", `repos/openclaw/releases/actions/runs/${id}/pending_deployments`], "[]"),
-    actionRun("openclaw/releases", id, conclusion, attempt),
-  ];
-}
+export const macosWait = (id: number, conclusion = "success", attempt = 1): FakeStep[] => [
+  pendingGates(id, [], "openclaw/releases"),
+  actionRun("openclaw/releases", id, conclusion, attempt),
+];
 
-export function compatibilityInventory(version = RELEASE): FakeStep[] {
-  return [
-    step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]),
-    step(
-      "git",
-      ["show", "origin/main:scripts/lib/update-compat-inventory.json"],
-      JSON.stringify({ releases: [{ version }] }),
-    ),
-  ];
-}
+export const compatibilityInventory = (version = RELEASE): FakeStep[] => [
+  fetchMain(),
+  jsonStep("git", ["show", "origin/main:scripts/lib/update-compat-inventory.json"], {
+    releases: [{ version }],
+  }),
+];
 
-export function closeoutMain(version = RELEASE, notes = `## ${RELEASE}\n`): FakeStep[] {
-  return [
-    actionRun(REPOSITORY, 301),
-    step("git", ["fetch", "origin", "main:refs/remotes/origin/main"]),
-    step("git", ["show", "origin/main:package.json"], JSON.stringify({ version })),
-    step("git", ["show", `origin/main:CHANGELOG/${RELEASE}.md`], notes),
-    step("git", ["show", `v${RELEASE}:CHANGELOG/${RELEASE}.md`], `## ${RELEASE}\n`),
-  ];
-}
+export const closeoutMain = (version = RELEASE, notes = `## ${RELEASE}\n`): FakeStep[] => [
+  actionRun(REPOSITORY, 301),
+  fetchMain(),
+  jsonStep("git", ["show", "origin/main:package.json"], { version }),
+  gitShow(`origin/main:CHANGELOG/${RELEASE}.md`, notes),
+  gitShow(`v${RELEASE}:CHANGELOG/${RELEASE}.md`, `## ${RELEASE}\n`),
+];
 
 export const CANDIDATE_COMMAND =
   String.raw`gh workflow run openclaw-release-publish.yml --repo openclaw/openclaw --ref release-publish/bbbbbbbbbbbb-123 \
@@ -207,13 +201,8 @@ export const CANDIDATE_COMMAND =
   -f wait_for_clawhub=true`.replaceAll("\\`", "`");
 
 export const publishParentRun = () => ({
-  id: 301,
-  path: ".github/workflows/openclaw-release-publish.yml",
-  event: "workflow_dispatch",
-  actor: { login: "release-test" },
+  ...workflowRun("openclaw-release-publish.yml", 301, `Publish v${RELEASE}`),
   head_branch: "release-publish/bbbbbbbbbbbb-123",
-  display_title: `Publish v${RELEASE}`,
-  created_at: new Date().toISOString(),
 });
 
 export const publishChild = (
@@ -242,59 +231,52 @@ export function publishState(npmPublishEnvironment = false): ReleaseState {
   return state;
 }
 
-export function publishPreparation(createTag = false): FakeStep[] {
-  return [
-    step("pnpm", ["release:candidate", "--", "--tag", `v${RELEASE}`]),
-    step(
-      "git",
-      ["ls-remote", "--tags", "origin", `v${RELEASE}`, `v${RELEASE}^{}`],
-      createTag
-        ? ""
-        : `${"d".repeat(40)}\trefs/tags/v${RELEASE}\n${CUT_SHA}\trefs/tags/v${RELEASE}^{}\n`,
-    ),
-    ...(createTag
-      ? [
-          step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
-          step("git", ["push", "origin", `refs/tags/v${RELEASE}`]),
-        ]
-      : []),
-  ];
-}
+export const publishPreparation = (createTag = false): FakeStep[] => [
+  step("pnpm", ["release:candidate", "--", "--tag", `v${RELEASE}`]),
+  step(
+    "git",
+    ["ls-remote", "--tags", "origin", `v${RELEASE}`, `v${RELEASE}^{}`],
+    createTag
+      ? ""
+      : `${"d".repeat(40)}\trefs/tags/v${RELEASE}\n${CUT_SHA}\trefs/tags/v${RELEASE}^{}\n`,
+  ),
+  ...(createTag
+    ? [
+        step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
+        step("git", ["push", "origin", `refs/tags/v${RELEASE}`]),
+      ]
+    : []),
+];
 
-export function pendingGates(
+export const pendingGates = (
   id: number,
   environments: { id: number; name: string }[] = [],
-): FakeStep {
-  return step(
+  repo = REPOSITORY,
+): FakeStep =>
+  jsonStep(
     "gh",
-    ["api", `repos/${REPOSITORY}/actions/runs/${id}/pending_deployments`],
-    JSON.stringify(environments.map((environment) => ({ environment }))),
+    ["api", `repos/${repo}/actions/runs/${id}/pending_deployments`],
+    environments.map((environment) => ({ environment })),
   );
-}
 
-export function gateApproval(id: number, environment: number): FakeStep {
-  return step("gh", [
+export const gateApproval = (id: number, environment: number, repo = REPOSITORY): FakeStep =>
+  step("gh", [
     "api",
     "-X",
     "POST",
-    `repos/${REPOSITORY}/actions/runs/${id}/pending_deployments`,
-    "-f",
-    "state=approved",
-    "-f",
-    `comment=${RELEASE} stable publish approved by release-test`,
+    `repos/${repo}/actions/runs/${id}/pending_deployments`,
+    ...fields("state=approved", `comment=${RELEASE} stable publish approved by release-test`),
     "-F",
     `environment_ids[]=${environment}`,
   ]);
-}
 
-export function npmVisibility(visible = true): FakeStep {
-  return step(
+export const npmVisibility = (visible = true): FakeStep =>
+  step(
     "npm",
     ["view", `openclaw@${RELEASE}`, "version", "--json", "--prefer-online"],
     visible ? JSON.stringify(RELEASE) : "",
     visible ? {} : { exit: 1, stderr: "E404 not published yet" },
   );
-}
 
 export function releaseFixture(root: string) {
   const node = resolveTestNodeExecPath();

@@ -2,9 +2,8 @@ import { createHash } from "node:crypto";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readResponseWithLimit } from "../infra/http-body.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { createStaleWhileRevalidateCache } from "../infra/stale-while-revalidate-cache.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
 import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
@@ -22,31 +21,25 @@ const GITHUB_OAUTH_STRING_MAX_CHARS = 2 * 1024;
 const GITHUB_OAUTH_SCOPE_MAX_CHARS = 4 * 1024;
 const GITHUB_OAUTH_SCOPE_MAX_COUNT = 32;
 const GITHUB_OAUTH_SCOPE_MAX_LENGTH = 64;
-const GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS = 2 * 1024;
 const GITHUB_OAUTH_MAX_DURATION_SECONDS = 366 * 24 * 60 * 60;
 const GITHUB_OAUTH_MAX_INTERVAL_SECONDS = 60 * 60;
 
-// TTL bounds only remote revocation staleness. Rotation changes the token key;
-// disconnected or retired profiles provide no token before any cache lookup.
+// Writes wait for expired verification. Display reads may reuse account facts while
+// the bounded probe refreshes; token rotation and profile retirement stay live.
 const GITHUB_CREDENTIAL_VERIFICATION_TTL_MS = 60_000;
 const GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES = 32;
 type GitHubCredentialVerificationResult =
-  | { status: "available"; account: GitHubToolAccount; scopes: string[] }
+  | { status: "available"; account: GitHubToolAccount; scopes: string[]; stale?: true }
   | { status: "unavailable" | "rate_limited" | "unverified" };
-let verifiedCredentials = new Map<
-  string,
-  {
-    result: Extract<GitHubCredentialVerificationResult, { status: "available" }>;
-    expiresAt: number;
-  }
->();
-const pending = new Map<string, Promise<GitHubCredentialVerificationResult>>();
+const verifiedCredentials = createStaleWhileRevalidateCache<GitHubCredentialVerificationResult>({
+  maxEntries: GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES,
+  ttlMs: GITHUB_CREDENTIAL_VERIFICATION_TTL_MS,
+  cacheable: (result) => result.status === "available",
+});
 
 export function clearGitHubCredentialVerificationCache(): void {
   clearNativeGitHubTokenCache();
-  // Pending probes retain the old map, so clearing cannot be undone by their completion.
-  verifiedCredentials = new Map();
-  pending.clear();
+  verifiedCredentials.clear();
 }
 
 type GitHubOAuthRequestOptions = {
@@ -88,28 +81,23 @@ const GITHUB_OAUTH_ERROR_CODES = [
 type GitHubOAuthErrorCode = (typeof GITHUB_OAUTH_ERROR_CODES)[number];
 const GITHUB_OAUTH_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITHUB_OAUTH_ERROR_CODES);
 
-type GitHubOAuthErrorDetails = {
-  errorDescription?: string;
-  errorUri?: string;
-};
-
 type GitHubOAuthDevicePollResult =
   | { status: "authorized"; tokens: GitHubOAuthTokenPair }
-  | ({ status: "authorization_pending" } & GitHubOAuthErrorDetails)
-  | ({ status: "slow_down"; intervalSeconds?: number } & GitHubOAuthErrorDetails)
-  | ({ status: "expired_token" } & GitHubOAuthErrorDetails)
-  | ({ status: "access_denied" } & GitHubOAuthErrorDetails)
-  | ({
+  | { status: "authorization_pending" }
+  | { status: "slow_down"; intervalSeconds?: number }
+  | { status: "expired_token" }
+  | { status: "access_denied" }
+  | {
       status: "error";
       code: Exclude<
         GitHubOAuthErrorCode,
         "authorization_pending" | "slow_down" | "expired_token" | "access_denied"
       >;
-    } & GitHubOAuthErrorDetails);
+    };
 
 type GitHubOAuthRefreshResult =
   | { status: "refreshed"; tokens: GitHubOAuthTokenPair }
-  | ({ status: "error"; code: GitHubOAuthErrorCode } & GitHubOAuthErrorDetails);
+  | { status: "error"; code: GitHubOAuthErrorCode };
 
 function githubOAuthProtocolError(surface: string): Error {
   return new Error(`GitHub OAuth ${surface} response was invalid`);
@@ -131,34 +119,11 @@ function readBoundedString(
   return value;
 }
 
-function readOptionalBoundedString(
-  value: unknown,
-  surface: string,
-  maxChars: number,
-): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return readBoundedString(value, surface, maxChars);
-}
-
 function readPositiveInteger(value: unknown, surface: string, max: number): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0 || value > max) {
     throw githubOAuthProtocolError(surface);
   }
   return value;
-}
-
-function readOptionalErrorUri(value: unknown, surface: string): string | undefined {
-  const raw = readOptionalBoundedString(value, surface, GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS);
-  if (raw === undefined) {
-    return undefined;
-  }
-  const parsed = URL.parse(raw);
-  if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
-    throw githubOAuthProtocolError(surface);
-  }
-  return raw;
 }
 
 function normalizeGitHubScopes(value: unknown, surface: string): string[] {
@@ -221,7 +186,7 @@ function isGitHubOAuthErrorCode(value: unknown): value is GitHubOAuthErrorCode {
 function parseGitHubOAuthError(
   record: Record<string, unknown>,
   surface: string,
-): { code: GitHubOAuthErrorCode; intervalSeconds?: number } & GitHubOAuthErrorDetails {
+): { code: GitHubOAuthErrorCode; intervalSeconds?: number } {
   const code = record.error;
   if (!isGitHubOAuthErrorCode(code)) {
     throw githubOAuthProtocolError(surface);
@@ -230,16 +195,8 @@ function parseGitHubOAuthError(
     record.interval === undefined
       ? undefined
       : readPositiveInteger(record.interval, surface, GITHUB_OAUTH_MAX_INTERVAL_SECONDS);
-  const errorDescription = readOptionalBoundedString(
-    record.error_description,
-    surface,
-    GITHUB_OAUTH_ERROR_TEXT_MAX_CHARS,
-  );
-  const errorUri = readOptionalErrorUri(record.error_uri, surface);
   return {
     code,
-    ...(errorDescription !== undefined ? { errorDescription } : {}),
-    ...(errorUri !== undefined ? { errorUri } : {}),
     ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
   };
 }
@@ -294,7 +251,7 @@ async function readGitHubResponse(response: Response, surface: string, timeoutMs
 /** Public credentials use their fixed issuer; other issuers require an explicit endpoint. */
 export async function verifyGitHubCredential(
   token: string,
-  options: GitHubOAuthRequestOptions = {},
+  options: GitHubOAuthRequestOptions & { allowStale?: boolean } = {},
 ): Promise<GitHubCredentialVerificationResult> {
   registerSecretValueForRedaction(token);
   try {
@@ -304,12 +261,6 @@ export async function verifyGitHubCredential(
     }
     const apiBaseUrl = options.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl();
     const key = createHash("sha256").update(`${apiBaseUrl}\0${token}`).digest("hex");
-    const cache = verifiedCredentials;
-    const cached = cache.get(key);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.result;
-    }
-    cache.delete(key);
     const create = async (): Promise<GitHubCredentialVerificationResult> => {
       const timeoutMs = resolveTimerTimeoutMs(
         options.timeoutMs,
@@ -349,13 +300,16 @@ export async function verifyGitHubCredential(
       Object.freeze(result.account);
       Object.freeze(result.scopes);
       Object.freeze(result);
-      cache.set(key, { result, expiresAt: Date.now() + GITHUB_CREDENTIAL_VERIFICATION_TTL_MS });
-      pruneMapToMaxSize(cache, GITHUB_CREDENTIAL_VERIFICATION_MAX_ENTRIES);
       return result;
     };
-    return await (options.signal || options.timeoutMs !== undefined
-      ? create()
-      : getOrCreatePromise(pending, key, create, { evictOnSettled: true }));
+    // Caller-owned deadlines cannot cancel another reader's shared verification.
+    if (options.signal || options.timeoutMs !== undefined) {
+      return await create();
+    }
+    const { value, stale } = await verifiedCredentials.read(key, create, {
+      allowStale: options.allowStale === true,
+    });
+    return stale && value.status === "available" ? { ...value, stale: true } : value;
   } catch {
     // Network errors, response bodies, and abort reasons can contain credentials.
     return { status: "unverified" };
@@ -447,20 +401,19 @@ export async function pollGitHubOAuthDeviceToken(
     params,
   );
   if (result.error) {
-    const { code, intervalSeconds, ...details } = result.error;
+    const { code, intervalSeconds } = result.error;
     switch (code) {
       case "authorization_pending":
       case "expired_token":
       case "access_denied":
-        return { status: code, ...details };
+        return { status: code };
       case "slow_down":
         return {
           status: code,
-          ...details,
           ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
         };
       default:
-        return { status: "error", code, ...details };
+        return { status: "error", code };
     }
   }
   return { status: "authorized", tokens: result.tokens };
@@ -481,8 +434,7 @@ export async function refreshGitHubOAuthToken(
     params,
   );
   if (result.error) {
-    const { intervalSeconds: _intervalSeconds, ...details } = result.error;
-    return { status: "error", ...details };
+    return { status: "error", code: result.error.code };
   }
   return { status: "refreshed", tokens: result.tokens };
 }

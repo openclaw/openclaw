@@ -1,10 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { buildStatusCommandOverviewRows } from "../commands/status-overview-rows.ts";
 import { collectStatusLocalSnapshot } from "../commands/status.agent-local.js";
 import { createStatusCommandOverviewRowsParams } from "../commands/status.test-support.ts";
+import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -15,12 +18,17 @@ import {
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
+import type { SessionAcpMeta } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDefaultProactiveJob } from "../cron/default-proactive-job.js";
+import { saveProactiveJobsForTest } from "../cron/proactive-job.test-support.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
 import { getStatusSummary } from "../status/summary.js";
+import { statusSummaryRuntime } from "../status/summary.runtime.js";
 import {
   createDirectOutboundTestAdapter,
   createOutboundTestPlugin,
@@ -73,38 +81,78 @@ describe("getStatusSummary read-only session access", () => {
     }
   });
 
-  it("does not create the heartbeat session database while checking its route", async () => {
-    const tempDir = tempDirs.make();
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
+  it("refreshes batched status metadata after ACP updates and removal", async () => {
+    await withOpenClawTestState(
+      { scenario: "minimal", label: "status-acp-batch" },
+      async (state) => {
+        const cfg: OpenClawConfig = {
+          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+        };
+        await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
+        const meta: SessionAcpMeta = {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "first",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 100,
+        };
+        const scopes = ["main", "research"].map((agentId) => ({
+          cfg,
+          agentId,
+          sessionKey: `agent:${agentId}:acp:status`,
+          skipMaintenance: true,
+        }));
+        const candidates = [];
+        for (const scope of scopes) {
+          const entry = expectDefined(
+            await upsertAcpSessionMeta({ ...scope, mutate: () => meta }),
+            "seeded ACP session",
+          );
+          candidates.push({ sessionKey: scope.sessionKey, entry });
+        }
+        const before = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
+        expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
 
-    const summary = await getStatusSummary({
-      includeChannelSummary: false,
-      config: { session: { store: databasePath } },
-    });
+        await upsertAcpSessionMeta({
+          ...scopes[0]!,
+          mutate: () => ({ ...meta, runtimeSessionName: "updated" }),
+        });
+        await upsertAcpSessionMeta({ ...scopes[1]!, mutate: () => null });
 
-    expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(true);
-    expect(fs.existsSync(databasePath)).toBe(false);
+        const after = await statusSummaryRuntime.readSessionRuntimeMetadata(cfg, candidates);
+        expect(after.map((entry) => entry?.runtimeSessionName ?? null)).toEqual(["updated", null]);
+        expect(before.map((entry) => entry?.runtimeSessionName)).toEqual(["first", "first"]);
+      },
+    );
   });
 
-  it.each([undefined, "owner"])(
-    "resolves the configured owner DM without writing session state for target %s",
-    async (target) => {
-      registerTelegramFixture();
-      const tempDir = tempDirs.make();
-      const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-
-      const summary = await getStatusSummary({
-        includeChannelSummary: false,
-        config: {
-          ...(target ? { agents: { defaults: { heartbeat: { target } } } } : {}),
-          commands: { ownerAllowFrom: ["telegram:123"] },
-          channels: { telegram: { allowFrom: ["123"] } },
+  it.each([false, true])(
+    "checks the automation route without writing sessions (owner DM: %s)",
+    async (ownerDm) => {
+      await withOpenClawTestState({ label: "status-automation-route" }, async (state) => {
+        if (ownerDm) {
+          registerTelegramFixture();
+        }
+        const databasePath = state.statePath("route", "openclaw-agent.sqlite");
+        const config: OpenClawConfig = {
+          agents: { entries: { main: {} } },
+          ...(ownerDm
+            ? {
+                commands: { ownerAllowFrom: ["telegram:123"] },
+                channels: { telegram: { allowFrom: ["123"] } },
+              }
+            : {}),
           session: { store: databasePath },
-        },
+        };
+        await saveProactiveJobsForTest(state.statePath("cron", "jobs.json"), [
+          createDefaultProactiveJob(config, "main", 1),
+        ]);
+        const summary = await getStatusSummary({ includeChannelSummary: false, config });
+        expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(!ownerDm);
+        expect(fs.existsSync(databasePath)).toBe(false);
       });
-
-      expect(summary.heartbeat.agents[0]?.waitingForRoute).toBe(false);
-      expect(fs.existsSync(databasePath)).toBe(false);
     },
   );
 
@@ -158,7 +206,7 @@ describe("getStatusSummary read-only session access", () => {
           expect(readSummary).toHaveBeenCalledTimes(uniquePaths.length);
 
           readSummary.mockClear();
-          const { agentStatus: local } = await collectStatusLocalSnapshot(config);
+          const local = (await collectStatusLocalSnapshot(config)).publish();
           expect(local.totalSessions).toBe(2);
           expect(
             local.agents.map((agent) => [
@@ -215,7 +263,7 @@ describe("getStatusSummary read-only session access", () => {
   it("shares one local session snapshot across the complete status scan", async () => {
     await withOpenClawTestState({ prefix: "openclaw-status-scan-snapshot-" }, async (state) => {
       const config = {
-        agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
+        agents: { entries: { main: {} } },
         gateway: { mode: "remote" as const, remote: { url: "ws://127.0.0.1:1", token: "fixture" } },
         plugins: { enabled: false },
       };
@@ -344,7 +392,6 @@ describe("getStatusSummary read-only session access", () => {
         const storePath = state.path("shared.sqlite");
         const config = {
           agents: {
-            defaults: { heartbeat: { every: "0m" } },
             entries: { main: {}, ops: {} },
           },
           session: { store: storePath },
@@ -396,7 +443,7 @@ describe("getStatusSummary read-only session access", () => {
   it("keeps session payload hydration off the status caller", async () => {
     await withOpenClawTestState({ prefix: "openclaw-status-recent-window-" }, async (state) => {
       const config = {
-        agents: { defaults: { heartbeat: { every: "0m" } }, entries: { main: {} } },
+        agents: { entries: { main: {} } },
       };
       const storePath = resolveSessionStorePathCore(undefined, {
         agentId: "main",

@@ -24,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Snapshot } from "quickjs-wasi";
+import type { QuickJsWorkerPayload } from "./worker-types.js";
 
 const getQuickJsModules = createLazyRuntimeModule(async () => {
   const resolve = createRequire(import.meta.url).resolve;
@@ -45,11 +46,9 @@ const getQuickJsModules = createLazyRuntimeModule(async () => {
   };
 });
 
-type QuickJsWorkerPayload = CodeModeWorkerPayload<Snapshot> &
-  Awaited<ReturnType<typeof getQuickJsModules>>;
 type QuickJsWorkerPool = WorkerTaskPool<QuickJsWorkerPayload, CodeModeWorkerThreadResult<Snapshot>>;
 
-let sharedPool: { url: string; pool: QuickJsWorkerPool } | undefined;
+let sharedPool: QuickJsWorkerPool | undefined;
 
 function codeModeWorkerUrl(): URL {
   return resolveRuntimeWorkerUrl({
@@ -61,19 +60,14 @@ function codeModeWorkerUrl(): URL {
 }
 
 function getCodeModePool(): QuickJsWorkerPool {
-  const workerUrl = codeModeWorkerUrl();
-  if (sharedPool?.url !== workerUrl.href) {
-    void sharedPool?.pool.close();
-    sharedPool = {
-      url: workerUrl.href,
-      pool: new WorkerTaskPool<QuickJsWorkerPayload, CodeModeWorkerThreadResult<Snapshot>>({
-        workerUrl,
-        workerClass: "compute",
-        sharedCompute: true,
-      }),
-    };
-  }
-  return sharedPool.pool;
+  return (sharedPool ??= new WorkerTaskPool<
+    QuickJsWorkerPayload,
+    CodeModeWorkerThreadResult<Snapshot>
+  >({
+    workerUrl: codeModeWorkerUrl(),
+    workerClass: "compute",
+    sharedCompute: true,
+  }));
 }
 
 function failedResult(
@@ -117,6 +111,7 @@ async function runQuickJsWorker(
   { timeoutMs, signal, inlineHost }: CodeModeExecutorRunOptions,
 ): Promise<CodeModeWorkerResult> {
   const startedAt = performance.now();
+  let workerId: string | undefined;
   let admittedTimeoutMs: number | undefined;
   try {
     const message = await getCodeModePool().run(
@@ -137,6 +132,27 @@ async function runQuickJsWorker(
         timeoutMs,
         hostTimeout: "owner",
         signal,
+        onNotification: inlineHost
+          ? (value) => {
+              if (!isRecord(value)) {
+                return;
+              }
+              if (value.status === "worker" && typeof value.workerId === "string") {
+                workerId = value.workerId;
+                inlineHost?.onWorkerAssigned?.(workerId);
+              } else if (value.status === "failure") {
+                inlineHost?.onFailure?.(
+                  value.error,
+                  value.failurePhase === "bridge" ||
+                    value.failurePhase === "guest" ||
+                    value.failurePhase === "input"
+                    ? value.failurePhase
+                    : "host",
+                  workerId,
+                );
+              }
+            }
+          : undefined,
         inputBytes:
           workerData.kind === "resume"
             ? workerData.continuation.memory.byteLength
@@ -181,9 +197,6 @@ async function runQuickJsWorker(
         },
       },
     );
-    if (!isRecord(message)) {
-      return failedResult("invalid code mode worker response", "internal_error");
-    }
     if (message.networkContentObserved === true) {
       inlineHost?.onNetworkContent?.();
     }
@@ -192,6 +205,7 @@ async function runQuickJsWorker(
       ? { ...result, continuation: retainSnapshot(result.continuation) }
       : result;
   } catch (error) {
+    inlineHost?.onFailure?.(error, "host", workerId);
     if (signal?.aborted) {
       return failedResult(
         signal.reason instanceof CodeModeHeadlessTimeoutError

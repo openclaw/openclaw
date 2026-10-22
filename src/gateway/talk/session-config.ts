@@ -1,4 +1,3 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -16,13 +15,13 @@ import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcr
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
-import type { RealtimeVoiceProviderConfig } from "../../talk/provider-types.js";
 import {
   getVoiceProviderConfig,
   providerMatchesId,
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../tts/voice-models.js";
+import { resolveTalkFileTranscriptionConfig } from "./file-transcription.js";
 
 export async function resolveTalkRealtimeProviderInstructions(params: {
   config: OpenClawConfig;
@@ -34,16 +33,6 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
   return [params.configuredInstructions, await resolveRealtimeVoiceAgentContextInstructions(params)]
     .filter((entry): entry is string => Boolean(entry?.trim()))
     .join("\n\n");
-}
-
-function normalizeRealtimeTransport(value: unknown): TalkRealtimeConfig["transport"] {
-  const transport = normalizeOptionalLowercaseString(value);
-  return transport === "webrtc" ||
-    transport === "provider-websocket" ||
-    transport === "gateway-relay" ||
-    transport === "managed-room"
-    ? transport
-    : undefined;
 }
 
 function getVoiceCallStreamingConfig(config: OpenClawConfig): {
@@ -94,16 +83,20 @@ export function listTalkTranscriptionProviders(
 
 type RealtimeProviderWithConfig<TConfig extends Record<string, unknown>> = VoiceModelProvider & {
   resolveConfig?: (ctx: { cfg: OpenClawConfig; rawConfig: TConfig }) => TConfig;
-  isConfigured: (ctx: { cfg: OpenClawConfig; providerConfig: TConfig }) => boolean;
+  isConfigured?: (ctx: { cfg: OpenClawConfig; providerConfig: TConfig }) => boolean;
+  isConfiguredAsync?: (ctx: { cfg: OpenClawConfig; providerConfig: TConfig }) => Promise<boolean>;
+  resolveConfigAsync?: (ctx: { cfg: OpenClawConfig; rawConfig: TConfig }) => Promise<TConfig>;
 };
 
-function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, unknown>>(params: {
+async function resolveConfiguredVoiceModelDefaultRef<
+  TConfig extends Record<string, unknown>,
+>(params: {
   config: OpenClawConfig;
   provider: string | undefined;
   providerConfigs: Record<string, TConfig>;
   providers: readonly RealtimeProviderWithConfig<TConfig>[];
   requestedModel?: string;
-}): { provider: string; model: string } | undefined {
+}): Promise<{ provider: string; model: string } | undefined> {
   const configuredProvider = normalizeOptionalString(params.provider);
   const refs = resolveSupportedVoiceModelRefs({
     config: params.config.agents?.defaults?.voiceModel,
@@ -126,11 +119,17 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
           params.requestedModel ?? (rawConfig.model === undefined ? ref.model : rawConfig.model),
       };
       const providerConfig =
-        provider.resolveConfig?.({
-          cfg: params.config,
-          rawConfig: rawConfigWithModel,
-        }) ?? rawConfigWithModel;
-      if (!configuredOrFalse(() => provider.isConfigured({ cfg: params.config, providerConfig }))) {
+        (provider.resolveConfigAsync
+          ? await provider.resolveConfigAsync({ cfg: params.config, rawConfig: rawConfigWithModel })
+          : provider.resolveConfig?.({ cfg: params.config, rawConfig: rawConfigWithModel })) ??
+        rawConfigWithModel;
+      if (
+        !(await configuredOrFalseAsync(() =>
+          provider.isConfiguredAsync
+            ? provider.isConfiguredAsync({ cfg: params.config, providerConfig })
+            : (provider.isConfigured?.({ cfg: params.config, providerConfig }) ?? false),
+        ))
+      ) {
         continue;
       }
     }
@@ -139,15 +138,13 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
   return undefined;
 }
 
-export function buildTalkRealtimeConfig(
+export async function buildTalkRealtimeConfig(
   config: OpenClawConfig,
   requestedProvider?: string,
   requestedModel?: string,
 ) {
-  const talkRealtime = asOptionalRecord(config.talk?.realtime);
-  const talkRealtimeProviderConfigs = talkRealtime?.providers as
-    | Record<string, RealtimeVoiceProviderConfig>
-    | undefined;
+  const talkRealtime = config.talk?.realtime;
+  const talkRealtimeProviderConfigs = talkRealtime?.providers;
   const explicitProvider =
     normalizeOptionalString(requestedProvider) ?? normalizeOptionalString(talkRealtime?.provider);
   const configuredProviderIds = Object.keys(talkRealtimeProviderConfigs ?? {});
@@ -156,7 +153,7 @@ export function buildTalkRealtimeConfig(
   );
   const selectedProvider = explicitProvider ?? singleConfiguredProvider;
   const providerConfigs = talkRealtimeProviderConfigs ?? {};
-  const voiceModelDefault = resolveConfiguredVoiceModelDefaultRef({
+  const voiceModelDefault = await resolveConfiguredVoiceModelDefaultRef({
     config,
     provider: selectedProvider,
     providerConfigs,
@@ -176,49 +173,60 @@ export function buildTalkRealtimeConfig(
       normalizeOptionalString(talkRealtime?.speakerVoice) ??
       normalizeOptionalString(talkRealtime?.speakerVoiceId),
     instructions: normalizeOptionalString(talkRealtime?.instructions),
-    mode: normalizeOptionalLowercaseString(talkRealtime?.mode),
-    transport: normalizeRealtimeTransport(talkRealtime?.transport),
-    vadThreshold: asFiniteNumber(talkRealtime?.vadThreshold),
-    silenceDurationMs: asFiniteNumber(talkRealtime?.silenceDurationMs),
-    prefixPaddingMs: asFiniteNumber(talkRealtime?.prefixPaddingMs),
+    mode: talkRealtime?.mode,
+    transport: talkRealtime?.transport,
+    vadThreshold: talkRealtime?.vadThreshold,
+    silenceDurationMs: talkRealtime?.silenceDurationMs,
+    prefixPaddingMs: talkRealtime?.prefixPaddingMs,
     reasoningEffort: normalizeOptionalString(talkRealtime?.reasoningEffort),
-    brain: normalizeOptionalLowercaseString(talkRealtime?.brain),
-    consultRouting: normalizeOptionalLowercaseString(talkRealtime?.consultRouting),
+    brain: talkRealtime?.brain,
+    consultRouting: talkRealtime?.consultRouting,
   };
 }
 
-export function buildTalkTranscriptionConfig(
+export async function buildTalkTranscriptionConfig(
   config: OpenClawConfig,
   requestedProvider?: string,
   requestedModel?: string,
+  agentId?: string,
 ) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
   const providerConfigs = streamingConfig.providers ?? {};
   const configuredProviderIds = [provider, ...Object.keys(providerConfigs)];
-  const voiceModelDefault = resolveConfiguredVoiceModelDefaultRef({
+  const voiceModelDefault = await resolveConfiguredVoiceModelDefaultRef({
     config,
     provider,
     providerConfigs,
     providers: listTalkTranscriptionProviders(config, configuredProviderIds),
     requestedModel: normalizeOptionalString(requestedModel),
   });
+  const file =
+    !provider &&
+    !voiceModelDefault &&
+    !normalizeOptionalString(requestedModel) &&
+    Object.keys(providerConfigs).length === 0
+      ? await resolveTalkFileTranscriptionConfig(config, agentId)
+      : undefined;
   return {
     provider: provider ?? voiceModelDefault?.provider,
     providers: providerConfigs,
     model: voiceModelDefault?.model,
+    file,
   };
 }
 
-export function configuredOrFalse(callback: () => boolean): boolean {
+async function configuredOrFalseAsync(
+  callback: () => boolean | Promise<boolean>,
+): Promise<boolean> {
   try {
-    return callback();
+    return await callback();
   } catch {
     return false;
   }
 }
 
-export function resolveConfiguredRealtimeTranscriptionProvider(params: {
+export async function resolveConfiguredRealtimeTranscriptionProvider(params: {
   config: OpenClawConfig;
   configuredProviderId?: string;
   providerConfigs: Record<string, RealtimeTranscriptionProviderConfig>;
@@ -248,7 +256,13 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
     const providerConfig =
       provider.resolveConfig?.({ cfg: params.config, rawConfig: rawConfigWithModel }) ??
       rawConfigWithModel;
-    if (configuredOrFalse(() => provider.isConfigured({ cfg: params.config, providerConfig }))) {
+    if (
+      await configuredOrFalseAsync(() =>
+        provider.isConfiguredAsync
+          ? provider.isConfiguredAsync({ cfg: params.config, providerConfig })
+          : (provider.isConfigured?.({ cfg: params.config, providerConfig }) ?? false),
+      )
+    ) {
       return { provider, providerConfig };
     }
   }

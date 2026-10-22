@@ -30,32 +30,23 @@ type StableMSTeamsTeamIdMode = "bot-framework" | "graph";
 
 const MSTEAMS_GROUP_CONVERSATION_ID = /^19:.+@thread\.(?:tacv2|skype|v2)$/i;
 
-function uniqueItemsById<T extends { id?: string }>(items: T[]): T[] {
-  const byId = new Map<string, T>();
-  for (const item of items) {
-    const id = item.id?.trim();
-    if (id && !byId.has(id)) {
-      byId.set(id, item);
-    }
-  }
-  return [...byId.values()];
-}
-
 function findExactMatches<T extends GraphUser>(
   items: T[],
   query: string,
   fields: readonly ("displayName" | "mail" | "userPrincipalName")[] = ["displayName"],
 ): T[] {
   const normalized = normalizeLowercaseStringOrEmpty(query);
-  return uniqueItemsById(
-    items.filter((item) =>
-      fields.some((field) => normalizeLowercaseStringOrEmpty(item[field]) === normalized),
-    ),
-  );
-}
-
-function isStableMSTeamsUserId(raw: string): boolean {
-  return /^[0-9a-fA-F-]{16,}$/.test(normalizeMSTeamsUserInput(raw));
+  const byId = new Map<string, T>();
+  for (const item of items) {
+    if (!fields.some((field) => normalizeLowercaseStringOrEmpty(item[field]) === normalized)) {
+      continue;
+    }
+    const id = item.id?.trim();
+    if (id && !byId.has(id)) {
+      byId.set(id, item);
+    }
+  }
+  return [...byId.values()];
 }
 
 function normalizeStaticMSTeamsAllowEntry(raw: string): string | undefined {
@@ -67,7 +58,7 @@ function normalizeStaticMSTeamsAllowEntry(raw: string): string | undefined {
     return trimmed;
   }
   const id = normalizeMSTeamsUserInput(trimmed);
-  return isStableMSTeamsUserId(id) ? id : undefined;
+  return /^[0-9a-fA-F-]{16,}$/.test(normalizeMSTeamsUserInput(id)) ? id : undefined;
 }
 
 function projectStableMSTeamsAllowlist(
@@ -276,12 +267,13 @@ export function parseMSTeamsTeamEntry(
 
 export async function resolveMSTeamsChannelAllowlist(params: {
   cfg: unknown;
+  accountId?: string | null;
   entries: string[];
   teamIdMode?: StableMSTeamsTeamIdMode;
 }): Promise<MSTeamsChannelResolution[]> {
   let tokenPromise: Promise<string> | undefined;
   const getToken = () => {
-    tokenPromise ??= resolveGraphToken(params.cfg);
+    tokenPromise ??= resolveGraphToken(params.cfg, { accountId: params.accountId });
     return tokenPromise;
   };
   return await mapAllowlistResolutionInputs({
@@ -409,6 +401,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
 
 export async function resolveMSTeamsTeamsConfig(params: {
   cfg: unknown;
+  accountId?: string | null;
   teamIdMode: StableMSTeamsTeamIdMode;
   teams: NonNullable<MSTeamsConfig["teams"]>;
 }): Promise<{
@@ -450,6 +443,7 @@ export async function resolveMSTeamsTeamsConfig(params: {
 
   const resolved = await resolveMSTeamsChannelAllowlist({
     cfg: params.cfg,
+    accountId: params.accountId,
     entries: entries.map((entry) => entry.input),
     teamIdMode: params.teamIdMode,
   });
@@ -502,11 +496,12 @@ export async function resolveMSTeamsTeamsConfig(params: {
 
 export async function resolveMSTeamsUserAllowlist(params: {
   cfg: unknown;
+  accountId?: string | null;
   entries: string[];
 }): Promise<BasicAllowlistResolutionEntry[]> {
   let tokenPromise: Promise<string> | undefined;
   const getToken = () => {
-    tokenPromise ??= resolveGraphToken(params.cfg);
+    tokenPromise ??= resolveGraphToken(params.cfg, { accountId: params.accountId });
     return tokenPromise;
   };
   return await mapAllowlistResolutionInputs({
@@ -542,7 +537,7 @@ export async function resolveMSTeamsUserAllowlist(params: {
         input,
         resolved: true,
         id: match.id,
-        name: match.displayName ?? undefined,
+        name: match.displayName,
       };
     },
   });

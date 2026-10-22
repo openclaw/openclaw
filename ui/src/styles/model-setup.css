@@ -12,7 +12,8 @@
 }
 
 .model-setup__intro h1,
-.model-setup-wizard h2 {
+.model-setup-wizard h2,
+.model-setup-success__copy h2 {
   margin: 0;
   font-size: 20px;
 }
@@ -202,11 +203,6 @@
   color: var(--danger);
 }
 
-.model-setup__failure-icon svg {
-  width: 18px;
-  height: 18px;
-}
-
 .model-setup__failure span:last-child {
   overflow-wrap: anywhere;
 }
@@ -240,16 +236,13 @@
   width: 100%;
 }
 
-.model-setup-provider-select::part(menu) {
+.model-setup-provider-select > .model-setup-provider-select__menu {
+  --oc-overlay-distance: 0px;
   width: min(620px, calc(100vw - 32px));
   max-height: min(420px, 58dvh);
-  overflow-y: auto;
-  padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
-  color: var(--text);
 }
 
 .model-setup-provider-select__trigger {
@@ -265,12 +258,18 @@
   color: var(--text);
   font: inherit;
   outline: none;
-  text-align: left;
+  text-align: start;
   cursor: var(--cursor-action);
 }
 
 :root[data-theme-mode="light"] .model-setup-provider-select__trigger {
   background: var(--bg-elevated);
+}
+
+.model-setup-provider-select__trigger > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .model-setup-provider-select__trigger:focus-visible {
@@ -316,6 +315,7 @@
 
 .model-setup-provider-select__chevron svg,
 .model-setup-provider-select__placeholder-icon svg,
+.model-setup__failure-icon svg,
 .model-setup__manual-help svg,
 .model-setup-success__icon svg,
 .model-setup-success__actions svg {
@@ -323,10 +323,8 @@
   height: 18px;
 }
 
-.model-setup-provider-select__option {
+.model-setup-provider-select__menu .model-setup-provider-select__option {
   padding: 6px 8px;
-  border-radius: var(--menu-item-radius);
-  color: var(--text);
   font: inherit;
   font-size: 13px;
 }
@@ -335,8 +333,7 @@
   background: var(--menu-selected);
 }
 
-.model-setup-provider-select__option::part(label) {
-  min-width: 0;
+.model-setup-provider-select__option > .oc-menu-item__label {
   width: 100%;
 }
 
@@ -422,11 +419,6 @@
   height: 28px;
 }
 
-.model-setup-success__copy h2 {
-  margin: 0;
-  font-size: 20px;
-}
-
 .model-setup-success__copy p {
   margin: 8px 0 0;
   color: var(--muted);
@@ -461,9 +453,6 @@
 }
 
 .model-setup-success__actions {
-  display: flex;
-  justify-content: center;
-  gap: 10px;
   width: 100%;
 }
 
@@ -480,6 +469,61 @@
   border-radius: var(--radius-lg);
   background: var(--panel);
   box-shadow: var(--shadow-lg);
+}
+
+.model-setup-wizard--auth,
+.model-setup-wizard--done {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: min(420px, calc(100dvh - 48px));
+}
+
+.model-setup-wizard--done {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.model-setup-wizard--auth .model-setup-wizard__body {
+  display: flex;
+  flex-direction: column;
+}
+
+.model-setup-wizard--auth .model-setup-wizard__body > .wizard-step__actions:last-child {
+  margin-top: auto;
+}
+
+.model-setup-wizard__success {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 12px;
+  min-height: 96px;
+  text-align: center;
+}
+
+.model-setup-wizard__success-icon {
+  display: grid;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ok-subtle);
+  color: var(--ok);
+}
+
+.model-setup-wizard__success-title {
+  margin: 4px 0 0;
+  font-size: 22px;
+  line-height: 1.3;
+}
+
+.model-setup-wizard__success-description {
+  max-width: 360px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .model-setup-wizard__header,
@@ -523,9 +567,14 @@
 }
 
 .model-setup-wizard__footer {
-  display: flex;
-  justify-content: flex-end;
   border-top: 1px solid var(--border);
+}
+
+.model-setup-wizard--done .model-setup-wizard__footer {
+  flex-direction: column;
+  align-items: center;
+  padding: 0 24px 24px;
+  border-top: 0;
 }
 
 @media (max-width: 640px) {
@@ -548,14 +597,6 @@
   .model-setup-success {
     width: calc(100vw - 24px);
     padding: 22px 18px;
-  }
-
-  .model-setup-success__actions {
-    flex-direction: column-reverse;
-  }
-
-  .model-setup-success__actions .btn {
-    width: 100%;
   }
 }
 

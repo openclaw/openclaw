@@ -19,19 +19,22 @@ Referral link for MiniMax Coding Plan (10% off): [MiniMax Coding Plan](https://p
 
 ## Built-in catalog
 
-| Model                    | Type             | Description                              |
-| ------------------------ | ---------------- | ---------------------------------------- |
-| `MiniMax-M3`             | Chat (reasoning) | Default hosted reasoning model           |
-| `MiniMax-M2.7`           | Chat (reasoning) | Previous hosted reasoning model          |
-| `MiniMax-M2.7-highspeed` | Chat (reasoning) | Faster M2.7 reasoning tier               |
-| `MiniMax-VL-01`          | Vision           | Image understanding model                |
-| `image-01`               | Image generation | Text-to-image and image-to-image editing |
-| `music-2.6`              | Music generation | Default music model                      |
-| `MiniMax-Hailuo-2.3`     | Video generation | Text-to-video and image-to-video flows   |
+| Model                        | Type             | Description                               |
+| ---------------------------- | ---------------- | ----------------------------------------- |
+| `MiniMax-M3`                 | Chat (reasoning) | Default hosted reasoning model            |
+| `MiniMax-M3.1-Flash-Preview` | Chat (reasoning) | Token Plan preview with adjustable effort |
+| `MiniMax-M2.7`               | Chat (reasoning) | Previous hosted reasoning model           |
+| `MiniMax-M2.7-highspeed`     | Chat (reasoning) | Faster M2.7 reasoning tier                |
+| `MiniMax-VL-01`              | Vision           | Image understanding model                 |
+| `image-01`                   | Image generation | Text-to-image and image-to-image editing  |
+| `music-2.6`                  | Music generation | Default music model                       |
+| `MiniMax-Hailuo-2.3`         | Video generation | Text-to-video and image-to-video flows    |
 
 Model refs follow the auth path: `minimax/<model>` for API-key setups, `minimax-portal/<model>` for OAuth setups.
 
-MiniMax M3 is a preferred [Code Mode](/tools/code-mode) model on both API-key and OAuth routes. With no global Code Mode setting, the automatic tier can engage it; explicit agent or model settings still take precedence.
+`MiniMax-M3.1-Flash-Preview` supports text and image input with a 1,000,000-token context window. MiniMax currently offers it only through Token Plan and MiniMax Code; availability depends on your account. Its bundled cost fields are zero because MiniMax has not published per-token pricing for the preview, not because the service is free. `MiniMax-M3` remains the default model.
+
+MiniMax M3 and M3.1 Flash Preview are preferred [Code Mode](/tools/code-mode) models on both API-key and OAuth routes. With no global Code Mode setting, the automatic tier can engage it; explicit agent or model settings still take precedence.
 
 ## Getting started
 
@@ -77,6 +80,8 @@ MiniMax M3 is a preferred [Code Mode](/tools/code-mode) model on both API-key an
     <Note>
     OAuth setups use the `minimax-portal` provider id. Model refs follow the form `minimax-portal/MiniMax-M3`.
     </Note>
+
+    OpenClaw refreshes expired OAuth access tokens at the regional MiniMax account endpoint that issued them. It refuses the refresh, and asks you to run `openclaw models auth login --provider minimax-portal` again, when the saved sign-in predates refresh support (it does not record its region) or when `models.providers.minimax-portal.baseUrl` now points to the other region.
 
   </Tab>
 
@@ -253,6 +258,8 @@ The bundled `minimax` plugin registers MiniMax T2A v2 as a speech provider for `
 
 The bundled MiniMax plugin registers music generation through the shared `music_generate` tool for both `minimax` and `minimax-portal`.
 
+Music and video generation use the origin of the selected provider's `baseUrl`, dropping chat path suffixes such as `/anthropic`. An omitted or blank URL uses `https://api.minimax.io`; an invalid nonempty URL fails before a request is sent instead of silently switching hosts.
+
 - Default music model: `minimax/music-2.6` (OAuth: `minimax-portal/music-2.6`)
 - Also supports `music-2.6-free`, `music-cover`, and `music-cover-free`
 - Prompt controls: `lyrics`, `instrumental`
@@ -343,13 +350,16 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
   <Accordion title="Thinking defaults">
     On `api: "anthropic-messages"`, OpenClaw injects `thinking: { type: "disabled" }` for MiniMax M2.x models unless an earlier wrapper already set the `thinking` field in the payload. This prevents M2.x's streaming endpoint from emitting `reasoning_content` in OpenAI-style delta chunks, which would leak internal reasoning into visible output.
 
-    MiniMax-M3 (and M3.x) is exempt: M3 returns an empty `content` array with `stop_reason: "end_turn"` when thinking is disabled, so OpenClaw removes the implicit disabled default for M3 and, when a thinking level is set, forces `thinking: { type: "adaptive" }` instead.
+    MiniMax-M3 is exempt: M3 returns an empty `content` array with `stop_reason: "end_turn"` when thinking is disabled, so OpenClaw removes the implicit disabled default for M3 and, when a thinking level is set, forces `thinking: { type: "adaptive" }` instead.
+
+    `MiniMax-M3.1-Flash-Preview` requires adaptive thinking. OpenClaw sends the selected level as `output_config.effort`; `/think low` through `/think max` select its five supported efforts. The default is `max`, and `off` is not offered because MiniMax rejects disabled thinking with HTTP 400. See [MiniMax's Anthropic API contract](https://platform.minimax.io/docs/api-reference/text-anthropic-api).
 
     Available thinking levels per model family:
 
     | Model family   | Levels                                   | Default    |
     | -------------- | ----------------------------------------- | ---------- |
     | `MiniMax-M3`   | `off`, `adaptive`                        | `adaptive` |
+    | `MiniMax-M3.1-Flash-Preview` | `low`, `medium`, `high`, `xhigh`, `max` | `max` |
     | `MiniMax-M2.x` | `off`, `minimal`, `low`, `medium`, `high` | `off`      |
 
   </Accordion>
@@ -393,7 +403,7 @@ See [MiniMax Search](/tools/minimax-search) for full web search configuration an
 
 ## Notes
 
-- Default chat model: `MiniMax-M3`. Alternate chat models: `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`
+- Default chat model: `MiniMax-M3`. Alternate chat models: `MiniMax-M3.1-Flash-Preview`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`
 - Onboarding and direct API-key setup write model definitions for M3 and both M2.7 variants
 - Image understanding uses the plugin-owned `MiniMax-VL-01` media provider
 - Update pricing values in `models.json` if you need exact cost tracking

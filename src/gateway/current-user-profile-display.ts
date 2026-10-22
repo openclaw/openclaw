@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { getUserProfileDisplay } from "../state/user-profile-list.js";
+import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import type { UserProfileDisplay } from "../state/user-profiles.types.js";
 import { buildControlUiUserAvatarPath } from "./control-ui-contract.js";
 
@@ -17,7 +17,7 @@ export type CurrentUserProfileDisplayResolver = (senderId: string) => CurrentUse
 
 export function resolveCurrentUserProfileDisplay(
   senderId: string,
-  readDisplay: (id: string) => UserProfileDisplay | undefined = getUserProfileDisplay,
+  readDisplay: (id: string) => UserProfileDisplay | undefined = getResidentUserProfileDisplay,
 ): CurrentUserProfileDisplay {
   try {
     const profile = readDisplay(senderId);

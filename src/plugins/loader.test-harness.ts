@@ -24,6 +24,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import { clearActivePluginRegistry } from "./runtime.js";
 
 export const getEmbeddingProvider = (id: string) => getRegisteredEmbeddingProvider(id)?.adapter;
 
@@ -305,12 +306,12 @@ export function loadBundledMemoryPluginRegistry(options?: {
 export function setupBundledTelegramPlugin() {
   if (!cachedBundledTelegramDir) {
     cachedBundledTelegramDir = makePluginLoaderTempDir();
-    writePlugin({
+    const plugin = writePlugin({
       id: "telegram",
       body: BUNDLED_TELEGRAM_PLUGIN_BODY,
       dir: cachedBundledTelegramDir,
-      filename: "telegram.cjs",
     });
+    updatePluginManifest(plugin, { channels: ["telegram"] });
   }
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = cachedBundledTelegramDir;
 }
@@ -325,7 +326,10 @@ export function loadRegistryFromSinglePlugin(params: {
   plugin: TempPlugin;
   pluginConfig?: Record<string, unknown>;
   includeWorkspaceDir?: boolean;
-  options?: Omit<Parameters<typeof loadOpenClawPlugins>[0], "cache" | "workspaceDir" | "config">;
+  options?: Omit<
+    NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>,
+    "cache" | "workspaceDir" | "config"
+  >;
 }) {
   const pluginConfig = params.pluginConfig ?? {};
   return loadOpenClawPlugins({
@@ -343,7 +347,7 @@ export function loadRegistryFromSinglePlugin(params: {
 
 export function loadRegistryFromAllowedPlugins(
   plugins: TempPlugin[],
-  options?: Omit<Parameters<typeof loadOpenClawPlugins>[0], "cache" | "config">,
+  options?: Omit<NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>, "cache" | "config">,
 ) {
   return loadOpenClawPlugins({
     cache: false,
@@ -940,7 +944,8 @@ export function collectStartupTraceMetrics(
   return metrics;
 }
 
-export const globalAfterEach0 = () => {
+export const globalAfterEach0 = async () => {
+  await clearActivePluginRegistry();
   resetDiagnosticEventsForTest();
   clearRuntimeConfigSnapshot();
   resetPluginLoaderTestStateForTest();

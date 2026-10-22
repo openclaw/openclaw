@@ -81,7 +81,7 @@ try {
   await publishFileExclusive({
     sourcePath: source.realPath,
     targetPath: await packageFs.resolve(relativePath),
-    expectedSourceIdentity: source.stat,
+    expectedSourceIdentity: source.exactIdentity,
     strategy: "rename-noreplace",
   });
   process.stdout.write("moved");
@@ -484,11 +484,10 @@ export async function applyLocalPackageOverrides(params: {
         rollbackEntries.push({ path: change.path, backupPath, backupMode });
       } else {
         const content = await fs.readFile(change.savedPath);
-        const stats = await fs.stat(change.savedPath);
         const appliedEntry: PackageDistContentInventoryEntry = {
           path: change.path,
           sha256: createHash("sha256").update(content).digest("hex"),
-          mode: change.mode ?? normalizeFileMode(stats.mode),
+          mode: change.mode,
           size: content.length,
         };
         const cleanupPaths = await mutations.replace({

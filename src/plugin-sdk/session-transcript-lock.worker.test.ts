@@ -9,7 +9,9 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createNativeSessionBindingAuthority } from "../agents/harness/native-session/binding-authority.js";
 import { recordChannelFeedbackEvent } from "../channels/feedback-reflection.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   replaceSessionEntry,
@@ -99,6 +101,7 @@ it.each([false, true])(
   "preserves custom JSON across locked worker writes (prepared=%s)",
   async (prepared) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const scope = await seed(env);
       const message = {
         role: "assistant",
@@ -138,6 +141,7 @@ it.each([false, true])(
 
 it("rechecks the Codex prepared guard at the worker commit grant", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const scope = await seed(env);
     let current = true;
     let inCommit = false;
@@ -157,12 +161,26 @@ it("rechecks the Codex prepared guard at the worker commit grant", async () => {
         inCommit = false;
       }
     });
-    const guard = composeSessionTranscriptWriteAssertion([], () => {
-      checkedCommit ||= inCommit;
-      if (!current) {
-        throw new Error("Codex write authority revoked");
-      }
-    });
+    const source = createNativeSessionBindingAuthority(
+      [
+        {
+          read: scope,
+          sessionId: scope.sessionId,
+          createSupersededError: () => new Error("Codex lineage superseded"),
+        },
+      ],
+      () => {},
+    );
+    const guard = composeSessionTranscriptWriteAssertion(
+      [source.assertLegacyCurrent],
+      (assertSources) => {
+        assertSources();
+        checkedCommit ||= inCommit;
+        if (!current) {
+          throw new Error("Codex write authority revoked");
+        }
+      },
+    );
     const sql = observeHostDataSql();
     try {
       await expect(
@@ -186,6 +204,7 @@ it.each(["physical", "logical"] as const)(
   "retains the prepared owner's %s target binding for writes and facts queries",
   async (locator) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const scope = await seed(env, locator);
       const other = { ...scope, sessionId: "other-session", sessionKey: "agent:main:other" };
       await replaceSessionEntry(other, { sessionId: other.sessionId, updatedAt: 1 });
@@ -228,6 +247,17 @@ it.each(["physical", "logical"] as const)(
           sessionKey: scope.sessionKey,
         });
       });
+      let retainedFacts: SessionTranscriptWriteLockContext["readMessageFacts"] | undefined;
+      await withSessionTranscriptWrite(scope, async (transcript) => {
+        retainedFacts = transcript.readMessageFacts;
+        const facts = await transcript.readMessageFacts(query);
+        expect([...facts.existingIdempotencyKeys]).toEqual(["captured"]);
+        expect(facts.messagesByIdempotencyKey.get("captured")).toMatchObject({
+          content: "captured target",
+        });
+      });
+      assert(retainedFacts);
+      await expect(retainedFacts(query)).rejects.toThrow("Transcript write context is closed");
     });
   },
 );
@@ -236,6 +266,7 @@ it.each(["locked", "mirror"] as const)(
   "persists %s through its real entry without MAIN SQL",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const scope = await seed(env);
       const request = { ...scope, read: async () => [] };
       const sql = observeHostDataSql();
@@ -276,6 +307,7 @@ it.each([
   "retains the $locator owner through the native $adapter adapter",
   async ({ locator, adapter }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const scope = await seed(env, locator);
       const databasePath = openOpenClawAgentDatabase(scope).path;
       const assertCurrent = () => {};
@@ -322,6 +354,7 @@ it.each([
   "uses prepared grant facts for $path (stale=$stale, replay=$replay)",
   async ({ stale, replay }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const scope = await seed(env);
       const prepared = await withSessionEntryReadOnlyInWorker(
         scope,
@@ -406,6 +439,7 @@ it.each(["owned", "fresh"] as const)(
   "accepts worker conversation matches before checking %s locked authority",
   async (authorityKind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const scope = await seed(env);
       const conversationRef = buildConversationRef({
         channel: "reef",
@@ -524,6 +558,7 @@ it.each(["owned", "fresh"] as const)(
 
 it("refuses a read-only locked result after its database owner is revoked", async ({ signal }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const scope = await seed(env);
     await appendSessionTranscriptMessageByIdentity({
       ...scope,
@@ -562,6 +597,7 @@ it("joins accepted appends in FIFO order before admitting feedback after the cal
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const scope = await seed(env);
     const entered = createDeferred();
     const release = createDeferred();
@@ -619,6 +655,7 @@ it.each(["physical", "logical"] as const)(
   "refuses an append when its retained %s writer authority is revoked during preparation",
   async (locator) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const scope = await seed(env, locator);
       let current = true;
       await expect(
@@ -651,6 +688,7 @@ it.each(["worker", "released sync callback"] as const)(
   "refreshes its own %s append snapshot without accepting an external byte rewrite",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const scope = await seed(env);
       const prepare = mode === "released sync callback" ? (message: unknown) => message : undefined;
       await withTranscriptWriteLock(scope, async (locked) => {
@@ -701,6 +739,7 @@ it.each(["worker", "released sync callback"] as const)(
 
 it("retains a committed append but suppresses queued publication when its callback fails", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    setRuntimeConfigSnapshot({});
     const scope = await seed(env);
     const updates: unknown[] = [];
     const off = onInternalSessionTranscriptUpdate((update) => updates.push(update));
@@ -853,6 +892,7 @@ it.each(["live", "revoked", "foreign"] as const)(
   "retains logical mirror writer binding (%s)",
   async (mode) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      setRuntimeConfigSnapshot({});
       const physical = await seed(env);
       const scope = {
         ...physical,
@@ -899,6 +939,7 @@ it.each(["live", "revoked", "foreign"] as const)(
 
 it("cannot retarget owned authority by mutating a logical selector after dispatch", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
     const physical = await seed(state.env);
     const requested = {
       ...physical,

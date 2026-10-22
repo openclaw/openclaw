@@ -1,7 +1,7 @@
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
-import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
+import { resolveManifestActivationPluginIds } from "../../plugins/activation-planner.js";
 import { normalizePluginsConfigWithResolverCore } from "../../plugins/config-normalization-shared.js";
 import {
   isTestDefaultMemorySlotDisabled,
@@ -73,6 +73,7 @@ function resolveSelectedMemoryPluginIds(params: {
   }
   return resolveEffectivePluginActivationState({
     id: plugin.pluginId,
+    channelIds: params.metadataSnapshot.byPluginId.get(plugin.pluginId)?.channels,
     origin: plugin.origin,
     config: plugins,
     rootConfig: params.config,
@@ -237,13 +238,13 @@ export function resolveAgentHarnessOwnerPluginIds(params: {
   providerOwnerPluginIds?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot;
 }): string[] {
-  const harnessPluginIds = resolveManifestActivationPlan({
+  const harnessPluginIds = resolveManifestActivationPluginIds({
     trigger: { kind: "agentHarness", runtime: params.runtime },
     config: params.config,
     workspaceDir: params.workspaceDir,
     requireExplicitManifestOwnerTrust: true,
     manifestRecords: params.metadataSnapshot?.plugins,
-  }).entries.map((entry) => entry.pluginId);
+  });
   if (
     harnessPluginIds.length === 0 ||
     params.runtime !== "codex" ||
@@ -390,21 +391,7 @@ export function resolveAgentRuntimePluginLoadPlan(params: {
   );
   const pluginIds = [...basePluginIds, ...memoryPluginIds, ...contextEnginePluginIds];
   const forceActivatedPluginIds = [...memoryPluginIds, ...contextEnginePluginIds];
-  if (params.purpose === "model-catalog") {
-    for (const plugin of params.metadataSnapshot.plugins) {
-      for (const runtime of plugin.activation?.onAgentHarnesses ?? []) {
-        const owners = resolveAgentHarnessOwnerPluginIds({
-          runtime,
-          provider: "",
-          config,
-          workspaceDir: params.workspaceDir,
-          metadataSnapshot: params.metadataSnapshot,
-        });
-        pluginIds.push(...owners);
-        forceActivatedPluginIds.push(...owners);
-      }
-    }
-  } else {
+  if (params.purpose !== "model-catalog") {
     const selection = resolveAgentRuntimePluginSelectionOwners(params);
     pluginIds.push(...selection.pluginIds);
     forceActivatedPluginIds.push(...selection.forceActivatedPluginIds);

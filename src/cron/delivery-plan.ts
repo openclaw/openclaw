@@ -8,17 +8,14 @@ import {
 import type { CronFailureDestinationConfig } from "../config/types.cron.js";
 import { resolveTargetPrefixedChannel } from "../infra/outbound/channel-target-prefix.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
-import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
-import {
-  assertCanonicalCronDeliveryMode,
-  hasCanonicalCronDeliveryMode,
-} from "./store/delivery-codec.js";
+import { resolveCronDeliveryMode } from "./delivery-defaults.js";
+import { hasCanonicalCronDeliveryMode } from "./store/delivery-codec.js";
 import type { CronDelivery, CronJob, CronMessageChannel } from "./types.js";
 
 /** Normalized routing plan for a cron job's primary delivery behavior. */
 export type CronDeliveryPlan = Pick<
   CronDelivery,
-  "mode" | "channel" | "to" | "threadId" | "accountId"
+  "mode" | "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
 > & {
   source: "delivery";
   requested: boolean;
@@ -41,20 +38,21 @@ export function resolveCronDeliveryPlan(
   job: Pick<CronJob, "delivery"> & Partial<Pick<CronJob, "payload" | "sessionTarget">>,
 ): CronDeliveryPlan {
   const delivery = job.delivery;
-  assertCanonicalCronDeliveryMode(delivery);
+  const resolvedMode = resolveCronDeliveryMode(job);
 
   const deliveryChannel = normalizeMessageChannel(delivery?.channel);
   const to = normalizeOptionalString(delivery?.to);
   const deliveryThreadId = normalizeOptionalThreadValue(delivery?.threadId);
   const deliveryAccountId = normalizeOptionalString(delivery?.accountId);
   if (delivery) {
-    const resolvedMode = delivery.mode;
     const channel =
       resolvedMode === "announce"
         ? resolveAnnounceChannel({ channel: deliveryChannel, to })
         : deliveryChannel;
     return {
       mode: resolvedMode,
+      target: delivery.target,
+      directPolicy: delivery.directPolicy,
       channel: resolvedMode === "webhook" ? undefined : channel,
       to,
       threadId: resolvedMode === "webhook" ? undefined : deliveryThreadId,
@@ -67,16 +65,6 @@ export function resolveCronDeliveryPlan(
   // Isolated/current/session output jobs default to announce delivery so their
   // result reaches the initiating session unless the job opts out. Keep this
   // aligned with create-time normalization and direct service callers.
-  const resolvedMode =
-    job.payload &&
-    job.sessionTarget &&
-    shouldDefaultCronDeliveryToAnnounce({
-      payloadKind: job.payload.kind,
-      sessionTarget: job.sessionTarget,
-    })
-      ? "announce"
-      : "none";
-
   return {
     mode: resolvedMode,
     channel: resolvedMode === "announce" ? "last" : undefined,

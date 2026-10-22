@@ -1,6 +1,6 @@
 import {
   buildChannelInboundEventContext,
-  type BuildChannelInboundEventContextParams,
+  type BuildChannelInboundEventContextParams as ContextParams,
 } from "../channels/inbound-event/context.js";
 import {
   consumeChannelAdmissionEvidence,
@@ -9,11 +9,11 @@ import {
 } from "../channels/message-access/admission-evidence.js";
 import type { ResolvedChannelMessageIngress } from "../channels/message-access/runtime-types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   GatewayContextResolver,
   GatewayRequestContext,
 } from "../gateway/server-methods/types.js";
+import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { markPluginRegistryActive } from "./registry-lifecycle.js";
@@ -22,6 +22,9 @@ import { bindGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 import type { OpenClawPluginApi } from "./types.js";
+
+type IngressParams = Parameters<PluginRuntime["channel"]["inbound"]["ingress"]["resolveStable"]>[0];
+const sessionKey = "agent:main:channel-owner:dm:dm-1";
 
 export function createRuntimeBuilder(params: {
   origin: PluginOrigin;
@@ -37,7 +40,7 @@ export function createRuntimeBuilder(params: {
     getRuntimeConfig: () => ({}),
   } as GatewayRequestContext;
   bindGatewayContextResolver(subagent, params.gatewayContextResolver ?? (() => context));
-  const registryBuilder = createPluginRegistry({
+  const builder = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     runtime: {
       channel: { inbound: { buildContext: buildChannelInboundEventContext } },
@@ -50,48 +53,33 @@ export function createRuntimeBuilder(params: {
     origin: params.origin,
     trustedOfficialInstall: params.trustedOfficialInstall,
   });
-  const api = registryBuilder.createApi(record, {
-    config: {} as OpenClawConfig,
-    registrationMode: "full",
-  });
+  const api = builder.createApi(record, { config: {}, registrationMode: "full" });
   const instance = getPluginInstance(record);
   if (params.prepare && !instance) {
     throw new Error("Registered API must retain its plugin instance");
   }
-  const register = () => {
-    const gateway = params.prepare?.(api);
+  const register = () =>
     api.registerChannel({
       plugin: {
-        id: record.id,
-        meta: {
+        ...createChannelTestPluginBase({
           id: record.id,
-          label: record.id,
-          selectionLabel: record.id,
-          docsPath: `/channels/${record.id}`,
-          blurb: "test channel",
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
-        },
+          config: { listAccountIds: () => [], resolveAccount: () => ({ accountId: "default" }) },
+        }),
         outbound: { deliveryMode: "direct" },
-        gateway,
+        gateway: params.prepare?.(api),
       },
     });
-  };
   if (params.prepare && instance) {
     instance.run(register);
   } else {
     register();
   }
-  registryBuilder.registry.plugins.push(record);
-  markPluginRegistryActive(registryBuilder.registry);
+  builder.registry.plugins.push(record);
+  markPluginRegistryActive(builder.registry);
   const resolveChannelRuntime = () => {
-    const registration = registryBuilder.registry.channels.find(
-      (candidate) => candidate.plugin.id === record.id,
-    );
-    const runtime = registration?.resolveChannelRuntime?.();
+    const runtime = builder.registry.channels
+      .find((candidate) => candidate.plugin.id === record.id)
+      ?.resolveChannelRuntime?.();
     if (!runtime) {
       throw new Error(`missing registered channel runtime for ${record.id}`);
     }
@@ -108,7 +96,7 @@ export function createRuntimeBuilder(params: {
       overrides?: Parameters<typeof resolveIngressForRuntime>[2],
     ) => resolveIngressForRuntime(runtime, participantId, overrides),
     record,
-    registryBuilder,
+    registryBuilder: builder,
     resolveBuildContext: () => resolveChannelRuntime().inbound.buildContext,
   };
 }
@@ -116,19 +104,9 @@ export function createRuntimeBuilder(params: {
 export async function resolveIngressForRuntime(
   runtime: PluginRuntime["channel"],
   participantId: string,
-  params: {
-    channelId?: string;
-    conversation?: {
-      kind: "direct" | "group" | "channel";
-      id: string;
-      parentId?: string;
-      threadId?: string;
-    };
-    contextBinding?: {
-      agentId: string;
-      sessionKey: string;
+  params: Partial<Pick<IngressParams, "channelId" | "conversation">> & {
+    contextBinding?: IngressParams["contextBinding"] & {
       messageId: string;
-      nativeChannelId?: string;
       inboundEventKind: "user_request" | "room_event";
     };
   } = {},
@@ -142,33 +120,28 @@ export async function resolveIngressForRuntime(
     allowFrom: [participantId],
     contextBinding: params.contextBinding ?? {
       agentId: "main",
-      sessionKey: "agent:main:channel-owner:dm:dm-1",
+      sessionKey,
       messageId: "message-1",
       inboundEventKind: "user_request",
     },
   });
 }
 
-export function contextParams(params: {
-  ingress: ResolvedChannelMessageIngress | readonly ResolvedChannelMessageIngress[];
-  channelId?: string;
-  conversation?: BuildChannelInboundEventContextParams["conversation"];
-  route?: BuildChannelInboundEventContextParams["route"];
-  reply?: BuildChannelInboundEventContextParams["reply"];
-  senderId?: string;
-  messageId?: string;
-  inboundEventKind?: BuildChannelInboundEventContextParams["message"]["inboundEventKind"];
-}): BuildChannelInboundEventContextParams {
+export function contextParams(
+  params: Partial<Pick<ContextParams, "conversation" | "route" | "reply" | "messageId">> & {
+    ingress: ResolvedChannelMessageIngress | readonly ResolvedChannelMessageIngress[];
+    channelId?: string;
+    senderId?: string;
+    inboundEventKind?: ContextParams["message"]["inboundEventKind"];
+  },
+): ContextParams {
   return {
     channel: params.channelId ?? "channel-owner",
     accountId: "default",
     from: "test:dm-1",
     sender: { id: params.senderId ?? "person-a" },
     conversation: params.conversation ?? { kind: "direct", id: "dm-1" },
-    route: params.route ?? {
-      agentId: "main",
-      routeSessionKey: "agent:main:channel-owner:dm:dm-1",
-    },
+    route: params.route ?? { agentId: "main", routeSessionKey: sessionKey },
     reply: params.reply ?? { to: "channel-owner:dm-1" },
     messageId: params.messageId ?? "message-1",
     message: {

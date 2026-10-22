@@ -6,6 +6,7 @@ import {
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import {
   configIncludeOwnsAgentRoster,
   hasResolvedRosterBeforeMigrations,
@@ -21,7 +22,20 @@ import { isRecord, shortenHomePath } from "../utils.js";
 export async function setupCommand(
   opts?: { workspace?: string; skipBootstrap?: boolean; json?: boolean },
   runtime: RuntimeEnv = defaultRuntime,
-) {
+): Promise<void> {
+  return await runWithLocalStateOwner({
+    method: "setup",
+    params: {},
+    target: "agent roster and workspace",
+    onForeignOwner: "refuse",
+    runLocal: () => setupUnderOwner(opts, runtime),
+  });
+}
+
+async function setupUnderOwner(
+  opts: Parameters<typeof setupCommand>[0],
+  runtime: RuntimeEnv,
+): Promise<void> {
   const desiredWorkspace =
     typeof opts?.workspace === "string" && opts.workspace.trim()
       ? opts.workspace.trim()
@@ -123,17 +137,16 @@ export async function setupCommand(
     };
   }
   if (shouldWriteWorkspace && !writeInheritedWorkspaceOverride) {
-    const roster = structuredClone(listAgentEntries(next));
-    if (snapshot.exists && defaultEntryWorkspace) {
-      for (const entry of roster) {
-        if (normalizeAgentId(entry.id) === selectedAgentId) {
-          // An explicit workspace follows the resolved setup owner. Fresh and inherited
-          // workspaces stay in defaults so setup does not duplicate them into the roster.
+    const roster = listAgentEntries(next);
+    const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
+    if (snapshot.exists && defaultEntryWorkspace && entries) {
+      for (const [id, entry] of Object.entries(entries)) {
+        if (normalizeAgentId(id) === selectedAgentId) {
+          // The converter owns this row; fresh and inherited workspaces stay in defaults.
           entry.workspace = workspace;
         }
       }
     }
-    const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
     next = {
       ...next,
       agents: {
@@ -253,6 +266,11 @@ export async function setupCommand(
   const { resolveSessionTranscriptsDirForAgent } = await import("../config/sessions.js");
   const sessionsDir = resolveSessionTranscriptsDirForAgent(selectedAgentId);
   await fs.mkdir(sessionsDir, { recursive: true });
+  const { provisionDefaultProactiveJob } = await import("../cron/default-proactive-job.js");
+  await provisionDefaultProactiveJob(next, selectedAgentId);
+  const { initializeFreshDaemonRuntimePinMigration } =
+    await import("../infra/state-migrations.daemon-runtime-pins.js");
+  initializeFreshDaemonRuntimePinMigration(process.env);
   if (opts?.json) {
     writeRuntimeJson(runtime, {
       ok: true,

@@ -1,16 +1,34 @@
 import assert from "node:assert/strict";
-import { IncomingMessage, ServerResponse } from "node:http";
-import { Socket } from "node:net";
 import { expect, vi } from "vitest";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
+import {
+  reloadFailure,
+  heldWork,
+  probeHttpRoute,
+  rejectWith,
+} from "./server-plugin-reload.fixture-tools.test-support.js";
 import {
   createRecoveryChannelManager,
+  registerReloadChannel,
+  expectSiblingUnchanged,
+  waitForChannelAbort,
   type RecoveryFixtureFactory,
 } from "./server-plugin-reload.recovery.test-support.js";
 import { createReadinessChecker } from "./server/readiness.js";
+
+function resumingSidecars(
+  fixture: Awaited<ReturnType<RecoveryFixtureFactory>>,
+  resume: (index: number) => void,
+) {
+  fixture.lifetime.publish(
+    ...[0, 1].map((index) => ({
+      stop: async () => {},
+      preparePluginReload: () => ({ drain: async () => {}, resume: () => resume(index) }),
+    })),
+  );
+}
 
 export async function verifyPreparedSidecarRecovery(
   createFixture: RecoveryFixtureFactory,
@@ -23,28 +41,20 @@ export async function verifyPreparedSidecarRecovery(
   const finishTask = createDeferredCore();
   const fixture = await createFixture({
     abortOnCandidateStart: false,
-    register(api, owner) {
-      if (owner === "first") {
-        api.on("gateway_start", start);
-        api.on("gateway_stop", stop);
-        api.registerChannel({
-          plugin: {
-            ...createChannelTestPluginBase({ id: channelId }),
-            gateway: {
-              startAccount: async ({ accountId, abortSignal, setStatus }) => {
-                signals.push(abortSignal);
-                setStatus({ accountId, running: true, connected: true, lifecycle: "ready" });
-                await new Promise<void>((resolve) => {
-                  abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                });
-                if (mode === "aborted-predecessor") {
-                  await finishTask.promise;
-                }
-              },
-            },
-          },
-        });
-      }
+    registerFirst(api) {
+      api.on("gateway_start", start);
+      api.on("gateway_stop", stop);
+      registerReloadChannel(api, {
+        id: channelId,
+        startAccount: async ({ accountId, abortSignal, setStatus }) => {
+          signals.push(abortSignal);
+          setStatus({ accountId, running: true, connected: true, lifecycle: "ready" });
+          await waitForChannelAbort(abortSignal);
+          if (mode === "aborted-predecessor") {
+            await finishTask.promise;
+          }
+        },
+      });
     },
   });
   let paused = false;
@@ -74,7 +84,6 @@ export async function verifyPreparedSidecarRecovery(
   let stopping: Promise<void> | undefined;
   try {
     await manager.startChannel(channelId);
-    expect(signals).toHaveLength(1);
     if (mode === "aborted-predecessor") {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       stopping = manager.stopChannel(channelId);
@@ -87,17 +96,11 @@ export async function verifyPreparedSidecarRecovery(
     expect(result).toMatchObject({ details: { committed: false } });
     expect(paused).toBe(false);
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-    expect(stop).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.aborted).toBe(mode === "aborted-predecessor");
+    expect([stop.mock.calls, start.mock.calls]).toEqual([[], []]);
+    expect(signals).toMatchObject([{ aborted: mode === "aborted-predecessor" }]);
     expect(
       manager.getRuntimeSnapshot({ channelId, inspectAccounts: false }).channels[channelId],
-    ).toMatchObject({
-      running: true,
-      connected: true,
-      lifecycle: "ready",
-    });
+    ).toMatchObject({ running: true, connected: true, lifecycle: "ready" });
     if (mode === "live") {
       expect(result).toMatchObject({ cause: preparationError });
     } else {
@@ -123,13 +126,9 @@ export async function verifyPreparedSidecarRecovery(
 export async function verifyServiceCleanupRecovery(createFixture: RecoveryFixtureFactory) {
   const fixture = await createFixture({
     abortOnCandidateStart: false,
-    initialStop: async () => {
-      throw new Error("fixture service could not close");
-    },
+    initialStop: rejectWith(new Error("fixture service could not close")),
   });
-  await expect(fixture.reload()).rejects.toMatchObject({
-    details: { phase: "drain", committed: false },
-  });
+  await expect(fixture.reload()).rejects.toMatchObject(reloadFailure("drain"));
   expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();
   const disabled = await fixture.reload({
     plugins: { allow: ["first", "sibling"], entries: { first: { enabled: false } } },
@@ -149,8 +148,7 @@ export async function verifyServiceCleanupRecovery(createFixture: RecoveryFixtur
   expect(new Set(fixture.registryOwner.registry.plugins.map((plugin) => plugin.id))).toEqual(
     new Set(["first", "sibling"]),
   );
-  expect(fixture.siblingStart).toHaveBeenCalledOnce();
-  expect(fixture.siblingStop).not.toHaveBeenCalled();
+  expectSiblingUnchanged(fixture);
 }
 
 export async function verifyIndependentPostCommitActivation(
@@ -222,61 +220,45 @@ export async function verifyIndependentPostCommitActivation(
         "healthy-channel",
         ...(current === 1 ? ["removed-channel"] : []),
       ]) {
-        api.registerChannel({
-          plugin: {
-            ...createChannelTestPluginBase({
-              id,
-              config: {
-                listAccountIds: () => {
-                  if (boundary === "hook-and-channel" && current > 1 && id === "first-channel") {
-                    throw channelFailure;
-                  }
-                  return ["default"];
-                },
-              },
-            }),
-            gateway: {
-              startAccount: async ({ abortSignal }) => {
-                starts.push(`${id}:${current}`);
-                const unregister = registerPluginHttpRoute({
-                  path: `/${id}`,
-                  auth: "plugin",
-                  pluginId: "first",
-                  source: "account",
-                  throwOnFailure: true,
-                  handler: (_req, res) => {
-                    res.end(`generation ${current}`);
-                  },
-                });
-                try {
-                  await new Promise<void>((resolve) => {
-                    abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                  });
-                } finally {
-                  unregister();
-                }
-              },
+        registerReloadChannel(api, {
+          id,
+          config: {
+            listAccountIds: () => {
+              if (boundary === "hook-and-channel" && current > 1 && id === "first-channel") {
+                throw channelFailure;
+              }
+              return ["default"];
             },
+          },
+          startAccount: async ({ abortSignal }) => {
+            starts.push(`${id}:${current}`);
+            const unregister = registerPluginHttpRoute({
+              path: `/${id}`,
+              auth: "plugin",
+              pluginId: "first",
+              source: "account",
+              throwOnFailure: true,
+              handler: (_req, res) => {
+                res.end(`generation ${current}`);
+              },
+            });
+            try {
+              await waitForChannelAbort(abortSignal);
+            } finally {
+              unregister();
+            }
           },
         });
       }
     },
   });
   const resumed = vi.fn();
-  fixture.runtime.runtimeState.gatewayLifetimeSidecars.publish(
-    ...[0, 1].map((index) => ({
-      stop: async () => {},
-      preparePluginReload: () => ({
-        drain: async () => {},
-        resume: () => {
-          if (boundary === "sidecar" && index === 0) {
-            throw failure;
-          }
-          resumed(index);
-        },
-      }),
-    })),
-  );
+  resumingSidecars(fixture, (index) => {
+    if (boundary === "sidecar" && index === 0) {
+      throw failure;
+    }
+    resumed(index);
+  });
   if (boundary === "notification") {
     fixture.runtime.broadcast = () => {
       throw failure;
@@ -290,7 +272,7 @@ export async function verifyIndependentPostCommitActivation(
       await manager.startChannel(id);
     }
     const result = await fixture.reload().catch((error: unknown) => error);
-    expect(result).toMatchObject({ details: { committed: true, phase: "activate" } });
+    expect(result).toMatchObject(reloadFailure("activate", true));
     const readiness = createReadinessChecker({
       channelManager: manager,
       startedAt: Date.now(),
@@ -319,23 +301,15 @@ export async function verifyIndependentPostCommitActivation(
     expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
     expect(starts).toContain("healthy-channel:2");
     expect(resumed).toHaveBeenCalledWith(1);
-    expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).toHaveBeenCalledTimes(boundary === "memory" ? 1 : 0);
+    fixture.expectServices({ siblingStart: 1, siblingStop: boundary === "memory" ? 1 : 0 });
     const routes = fixture.registryOwner.registry.httpRoutes;
     expect(routes.some((route) => route.handoff)).toBe(false);
     expect(routes.some((route) => route.path === "/removed-channel")).toBe(false);
     const route = routes.find((entry) => entry.path === "/healthy-channel");
     assert(route);
-    const request = new IncomingMessage(new Socket());
-    const response = new ServerResponse(request);
-    const end = vi.spyOn(response, "end").mockReturnValue(response);
-    try {
-      await route.handler(request, response);
+    await probeHttpRoute(route.handler, (_response, end) => {
       expect(end).toHaveBeenCalledWith("generation 2");
-    } finally {
-      request.destroy();
-      response.destroy();
-    }
+    });
     expect(getPluginInstance(fixture.previousRegistry.plugins[0]!)?.lifecycle.signal.aborted).toBe(
       true,
     );
@@ -350,39 +324,26 @@ export async function verifyLifecycleHookSettlement(
   createFixture: RecoveryFixtureFactory,
   phase: "start" | "stop",
 ) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const hookGate = heldWork();
   const failure = new Error("lifecycle hook refused");
   const starts: number[] = [];
   let generation = 0;
   const fixture = await createFixture({
     abortOnCandidateStart: false,
-    register(api, owner) {
-      if (owner !== "first") {
-        return;
-      }
+    registerFirst(api) {
       const current = ++generation;
       if ((phase === "start" && current > 1) || (phase === "stop" && current === 1)) {
         const hook = phase === "start" ? "gateway_start" : "gateway_stop";
         api.on(hook, () => {
           throw failure;
         });
-        api.on(hook, async () => {
-          entered.resolve();
-          await release.promise;
-        });
+        api.on(hook, hookGate.run);
       }
-      api.registerChannel({
-        plugin: {
-          ...createChannelTestPluginBase({ id: "hook-dependent" }),
-          gateway: {
-            startAccount: async ({ abortSignal }) => {
-              starts.push(current);
-              await new Promise<void>((resolve) => {
-                abortSignal.addEventListener("abort", () => resolve(), { once: true });
-              });
-            },
-          },
+      registerReloadChannel(api, {
+        id: "hook-dependent",
+        startAccount: async ({ abortSignal }) => {
+          starts.push(current);
+          await waitForChannelAbort(abortSignal);
         },
       });
     },
@@ -393,7 +354,7 @@ export async function verifyLifecycleHookSettlement(
   const reloading = fixture.reload().catch((error: unknown) => error);
   try {
     await Promise.race([
-      entered.promise,
+      hookGate.entered,
       reloading.then(() => {
         throw new Error("hook never entered");
       }),
@@ -405,7 +366,7 @@ export async function verifyLifecycleHookSettlement(
     if (phase === "stop") {
       expect(fixture.firstStop).toHaveBeenCalledOnce();
     }
-    release.resolve();
+    hookGate.release();
     const result = await reloading;
     if (phase === "start") {
       expect(result).toMatchObject({ details: { committed: true }, cause: { cause: failure } });
@@ -420,7 +381,7 @@ export async function verifyLifecycleHookSettlement(
     }
     expect(starts).toEqual(phase === "start" ? [1, 2] : [1]);
   } finally {
-    release.resolve();
+    hookGate.release();
     await reloading;
     await manager.stopChannel("hook-dependent");
   }
@@ -442,51 +403,32 @@ export async function verifyIndependentRollbackRestoration(
         throw failure;
       }
     },
-    register(api, owner) {
-      if (owner !== "first") {
-        return;
-      }
+    registerFirst(api) {
       for (const id of ["first-restore", "healthy-restore"]) {
-        api.registerChannel({
-          plugin: {
-            ...createChannelTestPluginBase({
-              id,
-              config: {
-                listAccountIds: () => {
-                  if (restoring && boundary === "channel" && id === "first-restore") {
-                    throw failure;
-                  }
-                  return ["default"];
-                },
-              },
-            }),
-            gateway: {
-              startAccount: async ({ abortSignal }) => {
-                starts.push(id);
-                await new Promise<void>((resolve) => {
-                  abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                });
-              },
+        registerReloadChannel(api, {
+          id,
+          config: {
+            listAccountIds: () => {
+              if (restoring && boundary === "channel" && id === "first-restore") {
+                throw failure;
+              }
+              return ["default"];
             },
+          },
+          startAccount: async ({ abortSignal }) => {
+            starts.push(id);
+            await waitForChannelAbort(abortSignal);
           },
         });
       }
     },
   });
-  fixture.runtime.runtimeState.gatewayLifetimeSidecars.publish(
-    ...[0, 1].map((index) => ({
-      stop: async () => {},
-      preparePluginReload: () => ({
-        drain: async () => {},
-        resume: () => {
-          resumed.push(index);
-          if (boundary === "services" && index === 0) {
-            throw sidecarFailure;
-          }
-        },
-      }),
-    })),
-  );
+  resumingSidecars(fixture, (index) => {
+    resumed.push(index);
+    if (boundary === "services" && index === 0) {
+      throw sidecarFailure;
+    }
+  });
   const manager = createRecoveryChannelManager(fixture);
   fixture.runtime.channelManager = manager;
   try {
@@ -505,20 +447,8 @@ export async function verifyIndependentRollbackRestoration(
     expect(resumed).toEqual([0, 1]);
     if (boundary === "services") {
       expect(result).toMatchObject({
-        cause: {
-          errors: [
-            expect.any(Error),
-            {
-              errors: [{ errors: [failure] }, sidecarFailure],
-            },
-          ],
-        },
+        cause: { errors: [expect.any(Error), { errors: [{ errors: [failure] }, sidecarFailure] }] },
       });
-      expect(
-        manager
-          .getRuntimeSnapshot({ channelId: "healthy-restore", inspectAccounts: false })
-          .reloadingChannels?.has("healthy-restore"),
-      ).toBe(false);
       expect(starts).toEqual(["first-restore", "healthy-restore"]);
       await manager.startChannel("healthy-restore");
       await vi.waitFor(() =>
@@ -532,8 +462,7 @@ export async function verifyIndependentRollbackRestoration(
           .reloadingChannels?.size ?? 0,
       ).toBe(0);
     }
-    expect(fixture.siblingStart).toHaveBeenCalledOnce();
-    expect(fixture.siblingStop).not.toHaveBeenCalled();
+    expectSiblingUnchanged(fixture);
     expect(fixture.owner.currentServices()).not.toBeNull();
     if (boundary === "channel") {
       await fixture.reload(fixture.getConfig(), ["sibling"]);

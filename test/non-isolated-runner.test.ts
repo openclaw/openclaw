@@ -6,41 +6,60 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
 import { createVitestWorkerRun } from "../scripts/lib/vitest-worker-run.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
 import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
+import { authOwnershipFixtureFiles } from "./non-isolated-runner.auth-fixtures.ts";
+import { controllerStorageFixtureFiles } from "./non-isolated-runner.controller-fixtures.ts";
+import { domResourceFixtureFiles } from "./non-isolated-runner.dom-fixtures.ts";
+import {
+  createRunnerFixtureEnv,
+  withRunnerFixture,
+} from "./non-isolated-runner.fixture-support.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mcpManagerFixtureFiles } from "./non-isolated-runner.mcp-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
-import { skillsWatcherFixtureFiles } from "./non-isolated-runner.skills-watcher-fixtures.ts";
+import { solidFixtureFiles } from "./non-isolated-runner.solid-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
+const sequencerSource = `import { BaseSequencer } from "vitest/node";
+class AlphabeticalSequencer extends BaseSequencer {
+  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
+    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
+  }
+}`;
+const gatewayProjects = [
+  ["threads", "gateway-worker-lifetimes", "vitest.gateway-core.config.ts", "threads"],
+  [
+    "provenance",
+    "gateway-provenance-lifetimes",
+    "vitest.gateway-database-workers.config.ts",
+    "forks",
+  ],
+] as const;
 
 function childEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    // Drop parent Vitest state so the child run resolves its own config, and
-    // drop GITHUB_ACTIONS so the child's reporter cannot annotate the parent.
-    if (
-      key.startsWith("VITEST") ||
-      key.startsWith("OPENCLAW_VITEST") ||
-      key === "GITHUB_ACTIONS" ||
-      key === "FORCE_COLOR"
-    ) {
-      continue;
-    }
-    env[key] = value;
-  }
+  const env = createRunnerFixtureEnv();
+  delete env.FORCE_COLOR;
   env.NO_COLOR = "1";
   delete env.OPENCLAW_SKIP_CHANNELS;
   delete env.OPENCLAW_SKIP_CRON;
   return env;
+}
+
+const fixtureWorkers = createVitestWorkerRun(childEnv());
+afterAll(() => fixtureWorkers.dispose());
+try {
+  await fixtureWorkers.prepare();
+} catch (error) {
+  await fixtureWorkers.dispose();
+  throw error;
 }
 
 function documentFocusFixtureFiles(): Record<string, string> {
@@ -117,11 +136,9 @@ import { expect, vi, type RunnerTestFile } from "vitest";
 const resetModules = vi.resetModules;
 export default class FixtureRunner extends Runner {
   override async onAfterRunFiles(files: RunnerTestFile[]) {
-    const generation = files.some(file => file.filepath.endsWith("12-a-skills-watcher-leak.test.ts"))
-      ? "?skills-watcher-generation"
-      : files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
-        ? "?mcp-retirement-generation"
-        : undefined;
+    const generation = files.some(file => file.filepath.endsWith("99-mcp-b-retained-owner.test.ts"))
+      ? "?mcp-retirement-generation"
+      : undefined;
     const cleanup = generation
       ? (await import(${JSON.stringify(path.join(repoRoot, "test", "non-isolated-runner.ts"))} + generation)).default.prototype.onAfterRunFiles
       : Runner.prototype.onAfterRunFiles;
@@ -270,13 +287,15 @@ it("retires gateway admission before the next file", async () => {
 import { getAgentRunContext, registerAgentRunContext } from ${sourcePath("infra/agent-run-registry.ts")};
 import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
 import { listActiveSessionsForShutdown, noteActiveSessionForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
-import { createReplyOperation, replyRunRegistry } from ${sourcePath("auto-reply/reply/reply-run-registry.ts")};
+import { createReplyOperation } from ${sourcePath("sessions/session-controller.operation.ts")};
+import { waitForSessionRunIdle } from ${sourcePath("sessions/session-controller.wait.ts")};
+import ${sourcePath("sessions/session-controller.stop.ts")};
 import { expect, it } from "vitest";
 it("seeds process-global run contexts", async () => {
   expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();
   expect(getActiveGatewayRootWorkCount()).toBe(1);
   markGatewayRestartDraining();
-  noteActiveSessionForShutdown({ cfg: {}, sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });
+  noteActiveSessionForShutdown({ sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });
   expect(listActiveSessionsForShutdown()).toHaveLength(1);
   registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });
   registerAgentRunContext("unrelated-run-b", { sessionKey: "session-b" });
@@ -289,10 +308,10 @@ it("seeds process-global run contexts", async () => {
   expect(getAgentRunContext("unrelated-run-b")).toBeDefined();
   expect(sequence).toBe(1);
   const operation = createReplyOperation({ sessionKey: "agent:main:runner-waiter", sessionId: "runner-waiter", resetTriggered: false });
-  operation.attachBackend({ kind: "embedded", cancel() {}, isAbortable: () => false });
+  operation.attachBackend({ kind: "embedded", cancel() { operation.complete(); } });
   operation.setPhase("running");
   const outcomes: boolean[] = [];
-  void replyRunRegistry.waitForIdle(operation.key, null).then(ended => outcomes.push(ended));
+  void waitForSessionRunIdle(operation.key, null).then(ended => outcomes.push(ended));
   Reflect.set(globalThis, Symbol.for("fixture.replyRunWaiter"), { operation, outcomes });
   await Promise.resolve();
   expect(outcomes).toEqual([]);
@@ -302,14 +321,14 @@ it("seeds process-global run contexts", async () => {
 import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${sourcePath("infra/agent-run-registry.ts")};
 import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
 import { listActiveSessionsForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
-import { replyRunRegistry } from ${sourcePath("auto-reply/reply/reply-run-registry.ts")};
+import { isSessionRunActiveForKey } from ${sourcePath("sessions/session-controller.queries.ts")};
 import { expect, it } from "vitest";
 it("clears agent run registry state", () => {
   const key = Symbol.for("fixture.replyRunWaiter");
   const prior = Reflect.get(globalThis, key);
   try {
-    expect(prior?.outcomes).toEqual([false]);
-    expect(replyRunRegistry.isActive("agent:main:runner-waiter")).toBe(false);
+    expect(prior?.outcomes).toEqual([true]);
+    expect(isSessionRunActiveForKey("agent:main:runner-waiter")).toBe(false);
   } finally {
     prior?.operation.complete();
     Reflect.deleteProperty(globalThis, key);
@@ -339,8 +358,7 @@ it("latches console capture and stderr routing", () => {
   const warningListeners = process.listeners("warning");
   routeLogsToStderr();
   enableConsoleCapture();
-  expect(loggingState.forceConsoleToStderr).toBe(true);
-  expect(loggingState.consolePatched).toBe(true);
+  expect(loggingState).toMatchObject({ forceConsoleToStderr: true, consolePatched: true });
   expect(console.error).not.toBe(native);
   expect(process.listeners("warning")).toEqual(warningListeners);
 });
@@ -353,9 +371,7 @@ import { loggingState } from ${sourcePath("logging/state.ts")};
 import { expect, it, vi } from "vitest";
 it("starts from unrouted, unpatched console state", () => {
   const warningListeners = process.listeners("warning");
-  expect(loggingState.forceConsoleToStderr).toBe(false);
-  expect(loggingState.consolePatched).toBe(false);
-  expect(loggingState.rawConsole).toBeNull();
+  expect(loggingState).toMatchObject({ forceConsoleToStderr: false, consolePatched: false, rawConsole: null });
   const spy = vi.spyOn(console, "error").mockImplementation(() => {});
   enableConsoleCapture();
   expect(process.listeners("warning")).toEqual(warningListeners);
@@ -440,32 +456,33 @@ it("releases the previous file automock payload", async () => {
 `,
     "09-redirect-dep.ts": 'export const flavor = "real";\n',
     "__mocks__/09-redirect-dep.ts": 'export const flavor = "redirected";\n',
-    "09-a-redirect.test.ts": `import { expect, it, vi } from "vitest";
-vi.mock("./09-redirect-dep.js");
+    ...Object.fromEntries(
+      (
+        [
+          ["09-a-redirect", "loads the redirected mock", true],
+          ["09-b-redirect-real", "restores the real module after a redirect", false],
+          ["09-c-redirect-remock", "reloads the redirected mock after a real import", true],
+        ] as const
+      ).map(([name, title, mocked]) => [
+        `${name}.test.ts`,
+        `import { expect, it${mocked ? ", vi" : ""} } from "vitest";
+${mocked ? 'vi.mock("./09-redirect-dep.js");' : ""}
 import { flavor } from "./09-redirect-dep.js";
-it("loads the redirected mock", () => {
-  expect(flavor).toBe("redirected");
+it(${JSON.stringify(title)}, () => {
+  expect(flavor).toBe(${JSON.stringify(mocked ? "redirected" : "real")});
 });
 `,
-    "09-b-redirect-real.test.ts": `import { expect, it } from "vitest";
-import { flavor } from "./09-redirect-dep.js";
-it("restores the real module after a redirect", () => {
-  expect(flavor).toBe("real");
-});
-`,
-    "09-c-redirect-remock.test.ts": `import { expect, it, vi } from "vitest";
-vi.mock("./09-redirect-dep.js");
-import { flavor } from "./09-redirect-dep.js";
-it("reloads the redirected mock after a real import", () => {
-  expect(flavor).toBe("redirected");
-});
-`,
+      ]),
+    ),
     ...mockResolutionFixtureFiles,
     ...mcpManagerFixtureFiles(repoRoot),
+    ...controllerStorageFixtureFiles(repoRoot),
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
+    ...domResourceFixtureFiles,
     ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
-    ...skillsWatcherFixtureFiles(repoRoot, fixtureRoot),
+    ...authOwnershipFixtureFiles(repoRoot, fixtureRoot),
+    ...solidFixtureFiles(repoRoot),
   };
 }
 
@@ -474,14 +491,52 @@ type ChildCompletion = Pick<ChildProcess, "exitCode" | "signalCode" | "killed"> 
   output: string;
 };
 
+const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
+
+async function runFixture(root: string, signal: AbortSignal, env = childEnv()) {
+  const reportPath = path.join(root, "report.json");
+  let child!: ChildProcess;
+  const result = await runVitestShutdownCommand({
+    bin: resolveTestNodeExecPath(),
+    args: [
+      path.join(vitestPackageDir, "vitest.mjs"),
+      "run",
+      "--root",
+      root,
+      "--config",
+      path.join(root, "vitest.config.ts"),
+      "--configLoader",
+      "runner",
+      "--reporter=verbose",
+      "--reporter=json",
+      `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
+      `--outputFile.json=${reportPath}`,
+    ],
+    cwd: repoRoot,
+    env,
+    workerRun: fixtureWorkers,
+    maxBytes: 16 * 1024 * 1024,
+    signal,
+    onReady(owned) {
+      child = owned;
+    },
+  });
+  const completion: ChildCompletion = {
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+    killed: child.killed,
+    code: result.code,
+    output: `${result.stdout}\n${result.stderr}`,
+  };
+  const canonicalRoot = (await fs.realpath(root)).replaceAll(path.sep, "/");
+  return { child, completion, canonicalRoot, reportPath };
+}
+
 async function assertCompletion(
   child: ChildCompletion,
   expected: { root: string; pid: number | undefined; files: string[]; reportPath: string },
 ) {
-  expect(child.code).toBe(1);
-  expect(child.exitCode).toBe(1);
-  expect(child.signalCode).toBeNull();
-  expect(child.killed).toBe(false);
+  expect(child).toMatchObject({ code: 1, exitCode: 1, signalCode: null, killed: false });
 
   // JSON success/suite totals are not completion evidence: skips look like passed
   // files, and unhandled errors or process teardown timeouts need native hooks.
@@ -522,8 +577,8 @@ async function assertCompletion(
 
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 68,
-    numPassedTests: 67,
+    numTotalTests: 80,
+    numPassedTests: 79,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -531,32 +586,32 @@ async function assertCompletion(
   for (const file of report.testResults) {
     const name = path.basename(file.name);
     const crashed = name === "01-a-crash.test.ts";
-    const leakedWatchers = name === "12-a-skills-watcher-leak.test.ts";
     const uncertainMcp =
       name === "99-mcp-a-uncertain-owner.test.ts" || name === "98-mcp-c-prior-failure.test.ts";
     const mockedMcpDisposer = name === "98-mcp-a-direct-disposer.test.ts";
     const failedRunCancellation = name === "97-mcp-a-cancel-failure.test.ts";
+    const failedControllerWrite = name === "96-a-controller-write-failure.test.ts";
     const skipped = name === "09-f-test-api-skipped.test.ts";
     const lifecycle = ["09-d-test-api-producer.test.ts", "09-e-test-api-observer.test.ts"].includes(
       name,
     );
     const count = crashed ? 0 : lifecycle ? 2 : 1;
     expect(file.status, name).toBe(
-      crashed || leakedWatchers || uncertainMcp || mockedMcpDisposer || failedRunCancellation
+      crashed || uncertainMcp || mockedMcpDisposer || failedRunCancellation || failedControllerWrite
         ? "failed"
         : "passed",
     );
-    if (leakedWatchers) {
-      expect(file.message, name).toMatch(
-        /^12-a-skills-watcher-leak\.test\.ts: skills watchers failed\nError: left skills watchers open /u,
-      );
-    } else if (uncertainMcp || mockedMcpDisposer) {
+    if (uncertainMcp || mockedMcpDisposer) {
       expect(file.message).toContain("MCP runtime custody failed");
       expect(file.message).toContain(
         uncertainMcp
           ? "MCP test teardown could not confirm cleanup"
           : "MCP test teardown cannot use a mocked disposer",
       );
+    } else if (failedControllerWrite) {
+      expect(file.message).toContain("run state failed");
+      expect(file.message).toContain("Session-controller cleanup failed");
+      expect(file.message).toContain("readonly");
     } else if (failedRunCancellation) {
       expect(file.message).toContain("run state failed");
       expect(file.message).toContain("Synthetic run cancellation failed");
@@ -578,32 +633,22 @@ async function assertCompletion(
     expect(child.output).toContain(`test API lifecycle: ${generation} resource teardown passed`);
   }
   expect(child.output).not.toContain("first-file");
+  expect(child.output).not.toContain("multiple instances of Solid");
 }
 
 async function verifyRunnerCleanup(signal: AbortSignal) {
-  // Outside the enclosing Vitest TMPDIR: outer cleanup must not erase unjoined writers.
-  const fixtureRoots = path.join(repoRoot, ".artifacts", "non-isolated-runner");
-  await fs.mkdir(fixtureRoots, { recursive: true });
-  const root = await fs.mkdtemp(path.join(fixtureRoots, "run-"));
-  try {
-    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
+  await withRunnerFixture("non-isolated-runner", async ({ root }) => {
     const files = fixtureFiles(root);
     for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");
     }
-    // This real source uses only type imports; Node can retain its native generation.
+    // External source imports retain their native generation across file cleanup.
     await fs.writeFile(
       path.join(root, "vitest.config.ts"),
       `import { sharedVitestConfig } from ${JSON.stringify(path.join(repoRoot, "test", "vitest", "vitest.shared.config.ts"))};
 import { defineConfig } from "vitest/config";
-import { BaseSequencer } from "vitest/node";
-class AlphabeticalSequencer extends BaseSequencer {
-  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
-    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
-  }
-}
+${sequencerSource}
 export default defineConfig({
   cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
   plugins: sharedVitestConfig.plugins,
@@ -613,6 +658,7 @@ export default defineConfig({
     isolate: false,
     fileParallelism: false,
     maxWorkers: 1,
+    execArgv: sharedVitestConfig.test.execArgv,
     server: { deps: { external: [new RegExp(${JSON.stringify(
       `^${path
         .join(repoRoot, "src/cron/service/active-run-cancellation.ts")
@@ -627,49 +673,7 @@ export default defineConfig({
       "utf8",
     );
 
-    const reportPath = path.join(root, "report.json");
-    let child!: ChildProcess;
-    const env = childEnv();
-    const workers = createVitestWorkerRun(env);
-    const command = runVitestShutdownCommand({
-      bin: resolveTestNodeExecPath(),
-      args: [
-        path.join(vitestPackageDir, "vitest.mjs"),
-        "run",
-        "--root",
-        root,
-        "--config",
-        path.join(root, "vitest.config.ts"),
-        "--configLoader",
-        "runner",
-        "--reporter=verbose",
-        "--reporter=json",
-        `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
-        `--outputFile.json=${reportPath}`,
-      ],
-      cwd: repoRoot,
-      env,
-      workerRun: workers,
-      maxBytes: 16 * 1024 * 1024,
-      signal,
-      onReady(owned) {
-        child = owned;
-      },
-    });
-    let result: Awaited<typeof command>;
-    try {
-      result = await command;
-    } finally {
-      await workers.dispose();
-    }
-    const completion: ChildCompletion = {
-      exitCode: child.exitCode,
-      signalCode: child.signalCode,
-      killed: child.killed,
-      code: result.code,
-      output: `${result.stdout}\n${result.stderr}`,
-    };
-    const canonicalRoot = (await fs.realpath(root)).replaceAll(path.sep, "/");
+    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, signal);
     const expected = {
       root: canonicalRoot,
       pid: child.pid,
@@ -708,143 +712,32 @@ export default defineConfig({
       }
     }
     type Replay = { child: ChildCompletion; report: JsonTestResults; capture: VitestReportCapture };
+    const passedFile = ({ report }: Replay) =>
+      report.testResults.find((file) => file.status === "passed")!;
+    // Native report-owner tests cover malformed reports and process outcomes.
+    // Keep controls for this fixture's identity, completion, and exact-case proof.
     const faults: [string, (replay: Replay) => void][] = [
-      ["missing project", ({ capture }) => capture.projects.pop()],
       [
         "wrong module project",
         ({ capture }) => Object.assign(capture.modules[0]!, { name: "other" }),
       ],
-      ["omitted module", ({ capture }) => capture.modules.pop()],
-      ["duplicated module", ({ capture }) => capture.modules.splice(1, 1, capture.modules[0]!)],
-      ["unexpected module", ({ capture }) => Object.assign(capture.modules[0]!, { file: "other" })],
-      ["omitted file", ({ report }) => report.testResults.pop()],
-      ["duplicated file", ({ report }) => report.testResults.splice(1, 1, report.testResults[0]!)],
-      ["unexpected file", ({ report }) => Object.assign(report.testResults[0]!, { name: "other" })],
+      ["missing native completion", ({ capture }) => Object.assign(capture, { ended: undefined })],
+      ["wrong native process", ({ capture }) => Object.assign(capture, { pid: child.pid! + 1 })],
       [
-        "extra collection error",
-        ({ report }) =>
-          Object.assign(
-            report.testResults.find((file) => file.status === "passed")!,
-            {
-              message: "other",
-            },
-          ),
+        "skipped assertion",
+        (replay) => Object.assign(passedFile(replay).assertionResults[0]!, { status: "skipped" }),
       ],
+      ["omitted assertion", (replay) => passedFile(replay).assertionResults.pop()],
       [
-        "extra failed file",
-        ({ report }) =>
-          Object.assign(
-            report.testResults.find((file) => file.status === "passed")!,
-            {
-              status: "failed",
-            },
-          ),
+        "duplicated lifecycle assertion",
+        ({ report }) => {
+          const tests = report.testResults.find(
+            (file) => file.assertionResults.length > 1,
+          )!.assertionResults;
+          tests[1] = tests[0]!;
+        },
       ],
-      [
-        "wrong collection error",
-        ({ report }) =>
-          Object.assign(
-            report.testResults.find((file) => file.name.endsWith("/01-a-crash.test.ts"))!,
-            { message: "other" },
-          ),
-      ],
-      [
-        "unattributed skills watcher leak",
-        ({ report }) =>
-          Object.assign(
-            report.testResults.find((file) =>
-              file.name.endsWith("/12-a-skills-watcher-leak.test.ts"),
-            )!,
-            { status: "passed", message: "" },
-          ),
-      ],
-      ["inconsistent totals", ({ report }) => Object.assign(report, { numPassedTests: 44 })],
     ];
-    for (const patch of [
-      { ended: undefined },
-      { processTimedOut: true },
-      { pid: child.pid! + 1 },
-      { root: "other" },
-    ]) {
-      faults.push([
-        `invalid native capture: ${JSON.stringify(patch)}`,
-        ({ capture }) => Object.assign(capture, patch),
-      ]);
-    }
-    for (const patch of [
-      { reason: "interrupted" },
-      { reason: "passed" },
-      { unhandledErrors: 1 },
-      { failedModules: 5 },
-      { failedModules: 7 },
-      { suiteErrors: 5 },
-      { suiteErrors: 7 },
-    ]) {
-      faults.push([
-        `invalid native end: ${JSON.stringify(patch)}`,
-        ({ capture }) => Object.assign(capture.ended!, patch),
-      ]);
-    }
-    for (const patch of [
-      { code: 0 },
-      { code: 2 },
-      { code: 143 },
-      { exitCode: 0 },
-      { exitCode: 2 },
-      { exitCode: null },
-      { signalCode: "SIGTERM" },
-      { killed: true },
-    ] satisfies Partial<ChildCompletion>[]) {
-      faults.push([
-        `abnormal child completion: ${JSON.stringify(patch)}`,
-        ({ child: replayChild }) => Object.assign(replayChild, patch),
-      ]);
-    }
-    const nativeReport: JsonTestResults = JSON.parse(originals[0]!);
-    for (const [index, file] of nativeReport.testResults.entries()) {
-      if (!file.assertionResults.length) {
-        continue;
-      }
-      const name = path.basename(file.name);
-      for (const status of ["pending", "skipped", "todo", "failed", "passed"] as const) {
-        if (status === file.assertionResults[0]!.status) {
-          continue;
-        }
-        faults.push([
-          `${name}: unexpected ${status} assertion`,
-          ({ report }) => {
-            report.testResults[index]!.assertionResults.at(-1)!.status = status;
-          },
-        ]);
-      }
-      faults.push(
-        [
-          `${name}: omitted assertion`,
-          ({ report }) => report.testResults[index]!.assertionResults.pop(),
-        ],
-        [
-          `${name}: extra assertion`,
-          ({ report }) =>
-            report.testResults[index]!.assertionResults.push(file.assertionResults[0]!),
-        ],
-        [
-          `${name}: failure messages`,
-          ({ report }) =>
-            Object.assign(report.testResults[index]!.assertionResults[0]!, {
-              failureMessages: ["unexpected failure"],
-            }),
-        ],
-      );
-      if (file.assertionResults.length > 1) {
-        faults.push([
-          `${name}: duplicated assertion replacing its sibling`,
-          ({ report }) => {
-            report.testResults[index]!.assertionResults[1] =
-              report.testResults[index]!.assertionResults[0]!;
-          },
-        ]);
-      }
-    }
     for (const generation of ["producer", "observer"]) {
       for (const phase of ["afterAll", "resource teardown"]) {
         faults.push([
@@ -869,14 +762,7 @@ export default defineConfig({
       await fs.writeFile(capturePath, JSON.stringify(replay.capture));
       await expect(assertCompletion(replay.child, expected), label).rejects.toThrow();
     }
-    // Release only after the managed child/group/output join and native proof.
-    await fs.rm(root, { recursive: true, force: true });
-  } catch (error) {
-    if (error instanceof Error) {
-      error.message += `; retained fixture ${root}`;
-    }
-    throw error;
-  }
+  });
 }
 
 it("cleans every shared runner surface between files", (context) => {
@@ -888,77 +774,66 @@ it("cleans every shared runner surface between files", (context) => {
 });
 
 async function verifyGatewayWorkerLifetimes(signal: AbortSignal) {
-  const fixtureRoots = path.join(repoRoot, ".artifacts", "gateway-worker-lifetimes");
-  await fs.mkdir(fixtureRoots, { recursive: true });
-  const root = await fs.mkdtemp(path.join(fixtureRoots, "run-"));
-  try {
-    const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
-    await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
-    await fs.writeFile(path.join(root, "events.log"), "");
-    const files = gatewayWorkerLifetimeFixtureFiles(repoRoot);
+  await withRunnerFixture("gateway-worker-lifetimes", async ({ root }) => {
+    await fs.writeFile(path.join(root, "threads-events.log"), "");
+    await fs.writeFile(path.join(root, "provenance-events.log"), "");
+    const files = {
+      ...gatewayWorkerLifetimeFixtureFiles(repoRoot, "threads"),
+      ...gatewayWorkerLifetimeFixtureFiles(repoRoot, "provenance"),
+    };
     for (const [name, content] of Object.entries(files)) {
       await fs.writeFile(path.join(root, name), content);
     }
-    await fs.writeFile(
-      path.join(root, "vitest.config.ts"),
-      `
-import gateway from ${JSON.stringify(path.join(repoRoot, "test/vitest/vitest.gateway-core.config.ts"))};
+    for (const [mode, name, config] of gatewayProjects) {
+      await fs.writeFile(
+        path.join(root, `vitest.${mode}.config.ts`),
+        `
+import gateway from ${JSON.stringify(path.join(repoRoot, "test/vitest", config))};
 import { defineConfig } from "vitest/config";
-import { BaseSequencer } from "vitest/node";
-class AlphabeticalSequencer extends BaseSequencer {
-  override async sort(files: Parameters<BaseSequencer["sort"]>[0]) {
-    return [...files].sort((a, b) => a.moduleId.localeCompare(b.moduleId));
-  }
-}
 // Use the actual Gateway execution policy, with fixture-only membership and no
 // ordinary setup hooks that could close A's database before runner cleanup.
 export default defineConfig({
-  cacheDir: ${JSON.stringify(path.join(root, ".vite"))},
+  cacheDir: ${JSON.stringify(path.join(root, `.vite-${mode}`))},
+  plugins: gateway.plugins,
   resolve: gateway.resolve,
   test: {
-    name: "gateway-worker-lifetimes",
+    name: "${name}",
     pool: gateway.test.pool,
     isolate: gateway.test.isolate,
     runner: gateway.test.runner,
+    execArgv: gateway.test.execArgv,
     maxWorkers: gateway.test.maxWorkers,
     fileParallelism: gateway.test.fileParallelism,
-    include: ["a-producer.test.ts", "b-observer.test.ts"],
+    include: ["${mode}-a-producer.test.ts", "${mode}-b-observer.test.ts"],
+  },
+});
+`,
+      );
+    }
+    await fs.writeFile(
+      path.join(root, "vitest.config.ts"),
+      `import { defineConfig } from "vitest/config";
+${sequencerSource}
+export default defineConfig({
+  test: {
+    projects: ["./vitest.threads.config.ts", "./vitest.provenance.config.ts"],
     sequence: { sequencer: AlphabeticalSequencer },
   },
 });
 `,
     );
-    const reportPath = path.join(root, "report.json");
-    let child!: ChildProcess;
-    const result = await runVitestShutdownCommand({
-      bin: resolveTestNodeExecPath(),
-      args: [
-        path.join(vitestPackageDir, "vitest.mjs"),
-        "run",
-        "--root",
-        root,
-        "--config",
-        path.join(root, "vitest.config.ts"),
-        "--configLoader",
-        "runner",
-        "--reporter=verbose",
-        "--reporter=json",
-        `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
-        `--outputFile.json=${reportPath}`,
-      ],
-      cwd: repoRoot,
-      env: { ...childEnv(), OPENCLAW_VITEST_MAX_WORKERS: "1", GATEWAY_LIFETIME_PROBE_ROOT: root },
-      maxBytes: 16 * 1024 * 1024,
-      signal,
-      onReady(owned) {
-        child = owned;
-      },
+    const env = {
+      ...childEnv(),
+      OPENCLAW_VITEST_MAX_WORKERS: "1",
+      GATEWAY_LIFETIME_PROBE_ROOT: root,
+    };
+    const { child, completion, canonicalRoot, reportPath } = await runFixture(root, signal, env);
+    expect(completion, completion.output).toMatchObject({
+      code: 0,
+      exitCode: 0,
+      signalCode: null,
+      killed: false,
     });
-    expect(result.code, result.stdout + result.stderr).toBe(0);
-    expect(child.exitCode).toBe(0);
-    expect(child.signalCode).toBeNull();
-    expect(child.killed).toBe(false);
-    const canonicalRoot = (await fs.realpath(root)).replaceAll(path.sep, "/");
     const expected = Object.keys(files)
       .map((name) => `${canonicalRoot}/${name}`)
       .toSorted();
@@ -972,37 +847,32 @@ export default defineConfig({
       ended: { reason: "passed", unhandledErrors: 0, failedModules: 0, suiteErrors: 0 },
     });
     expect(capture.modules.map((module) => module.file).toSorted()).toEqual(expected);
-    expect(capture.projects).toEqual([
-      {
-        name: "gateway-worker-lifetimes",
+    expect(capture.projects.toSorted((left, right) => left.name.localeCompare(right.name))).toEqual(
+      gatewayProjects.toReversed().map(([mode, name, _config, pool]) => ({
+        name,
         namePrefix: "",
         root: canonicalRoot,
-        config: `${canonicalRoot}/vitest.config.ts`,
-        pool: "threads",
-      },
-    ]);
+        config: `${canonicalRoot}/vitest.${mode}.config.ts`,
+        pool,
+      })),
+    );
     const report: JsonTestResults = JSON.parse(await fs.readFile(reportPath, "utf8"));
     expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected);
     expect(report).toMatchObject({
-      numTotalTests: 2,
-      numPassedTests: 2,
+      numTotalTests: 4,
+      numPassedTests: 4,
       numFailedTests: 0,
       numPendingTests: 0,
       numTodoTests: 0,
     });
     for (const file of report.testResults) {
-      expect(file.status).toBe("passed");
-      expect(file.message).toBe("");
-      expect(file.assertionResults).toHaveLength(1);
-      expect(file.assertionResults[0]).toMatchObject({ status: "passed", failureMessages: [] });
+      expect(file).toMatchObject({
+        status: "passed",
+        message: "",
+        assertionResults: [{ status: "passed", failureMessages: [] }],
+      });
     }
-    await fs.rm(root, { recursive: true, force: true });
-  } catch (error) {
-    if (error instanceof Error) {
-      error.message += `; retained fixture ${root}`;
-    }
-    throw error;
-  }
+  });
 }
 
 it("gives Gateway files separate workers after their resource drains", (context) => {

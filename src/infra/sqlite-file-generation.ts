@@ -64,7 +64,8 @@ function readOptionalFile(pathname: string): SqliteFileFingerprint | undefined {
   }
 }
 
-function readGeneration(pathname: string): SqliteFileGeneration {
+/** Provisional family observation; callers must verify it against a later stable read. */
+export function readSqliteFileGeneration(pathname: string): SqliteFileGeneration {
   const database = fingerprintFile(pathname);
   const journal = readOptionalFile(`${pathname}-journal`);
   const wal = readOptionalFile(`${pathname}-wal`);
@@ -75,9 +76,10 @@ function readGeneration(pathname: string): SqliteFileGeneration {
   };
 }
 
+/** Raw source reads require an isolated process or a drained database owner. */
 export function readStableSqliteFileGeneration(pathname: string): SqliteFileGeneration {
-  const first = readGeneration(pathname);
-  const second = readGeneration(pathname);
+  const first = readSqliteFileGeneration(pathname);
+  const second = readSqliteFileGeneration(pathname);
   if (!sameSqliteFileGeneration(first, second)) {
     throw new Error(`SQLite file generation changed while reading: ${pathname}`);
   }

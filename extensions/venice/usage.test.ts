@@ -1,7 +1,27 @@
+import type { ProviderFetchUsageSnapshotContext } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import { fetchVeniceUsage } from "./usage.js";
+
+const provider = await registerSingleProviderPlugin(plugin);
+
+async function fetchVeniceUsage(
+  params: Pick<ProviderFetchUsageSnapshotContext, "token" | "timeoutMs" | "fetchFn">,
+) {
+  if (!provider.fetchUsageSnapshot) {
+    throw new Error("Venice usage provider is not registered");
+  }
+  const snapshot = await provider.fetchUsageSnapshot({
+    config: {},
+    env: {},
+    provider: "venice",
+    ...params,
+  });
+  if (!snapshot) {
+    throw new Error("Venice usage provider returned no snapshot");
+  }
+  return snapshot;
+}
 
 describe("Venice usage", () => {
   it("maps balances and DIEM epoch allocation", async () => {
@@ -14,11 +34,7 @@ describe("Venice usage", () => {
       }),
     );
 
-    const provider = await registerSingleProviderPlugin(plugin);
-    const snapshot = await provider.fetchUsageSnapshot!({
-      config: {},
-      env: {},
-      provider: "venice",
+    const snapshot = await fetchVeniceUsage({
       token: "venice-key",
       timeoutMs: 5000,
       fetchFn: fetchFn as unknown as typeof fetch,

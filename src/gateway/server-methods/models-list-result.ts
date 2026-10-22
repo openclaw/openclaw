@@ -36,7 +36,6 @@ import {
 } from "../../agents/model-visibility-policy.js";
 import {
   createModelCatalogIdentityKeyResolver,
-  openAIModelCatalogRoutePolicy,
   resolveModelCatalogIdentityKey,
 } from "../../agents/openai-model-routes.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
@@ -108,9 +107,7 @@ async function prepareOwnedModelsListResult({
   authority,
   sessionEntry,
   useRequesterDefaults,
-  currentConfig,
   publishedOwner,
-  requestConfig,
   profiles,
   view,
   refresh,
@@ -127,11 +124,9 @@ async function prepareOwnedModelsListResult({
   preparedPluginRegistry,
 }: ModelsListOwner): Promise<PreparedModelsListResult> {
   const preparedOwnerIsCurrent = preparedProjectionOwner?.isCurrent;
-  // Native readiness belongs to the prepared generation, even across config publication.
+  // Mid-read config changes are best effort; prepared catalog and account authority still apply.
   const isCurrent = () =>
-    currentConfig() === requestConfig &&
-    preparedOwnerIsCurrent?.() === true &&
-    publicationScope?.isCurrent?.() !== false;
+    preparedOwnerIsCurrent?.() === true && publicationScope?.isCurrent?.() !== false;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
@@ -228,13 +223,8 @@ async function prepareOwnedModelsListResult({
   const catalog = dedupeModelCatalogEntries([
     ...preparedCatalog.catalog,
     ...projector.snapshot.entries,
-  ]);
-  const evaluateNative: typeof projector.evaluateNative = (entry, host, runtimeId) => {
-    const native = projector.evaluateNative(entry, host, runtimeId);
-    return native !== host && currentConfig() !== requestConfig
-      ? { ...native, availability: false }
-      : native;
-  };
+  ]).filter((entry) => entry.inference?.chat !== false);
+  const { evaluateNative } = projector;
   const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
     config: cfg,
     metadataSnapshot,
@@ -407,6 +397,14 @@ async function prepareOwnedModelsListResult({
         });
         preparedEntry = {
           ...buildPublicModelProjection(publicEntry, { includeDetails }),
+          ...(manualSelectionAllowed
+            ? {
+                manualSelectionAllowed: manualSelectionAllowed({
+                  provider: entry.provider,
+                  model: entry.id,
+                }),
+              }
+            : {}),
           ...(configuredEntry?.tags.size ? { tags: [...configuredEntry.tags] } : {}),
           ...(agentRuntime ? { agentRuntime } : {}),
           ...thinkingProfile,
@@ -422,10 +420,10 @@ async function prepareOwnedModelsListResult({
         entries.set(runtimeKey, preparedEntry);
         prepared.set(entry, entries);
       }
-      // Legacy views require a boolean; inventory consumers preserve unknown state.
-      const projectedAvailability = preserveUnknownAvailability
-        ? evaluation.availability
-        : (evaluation.availability ?? false);
+      const projectedAvailability =
+        preserveUnknownAvailability || evaluation.runtimeAuth?.source === "native"
+          ? evaluation.availability
+          : (evaluation.availability ?? false);
       const speedPolicy = fastMode(entry, evaluation, preparedEntry.agentRuntime?.id);
       const supportsFastMode = speedPolicy.supportsFastMode;
       const serviceTiers = projectModelServiceTiers({
@@ -441,14 +439,14 @@ async function prepareOwnedModelsListResult({
       });
       const credential = evaluation.selectedCredential;
       const route = evaluation.selectedRoute;
-      const serviceTierObservation =
+      const serviceTierObservations =
         projectionIsCurrent() &&
         evaluation.availability === true &&
         speedPolicy.supportsServiceTierRecovery &&
         credential &&
         credential.source !== "harness" &&
         route
-          ? accountCatalog?.readServiceTierObservation({
+          ? accountCatalog?.readServiceTierObservations({
               identityKey: credential.identityKey,
               modelId: entry.id,
               runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
@@ -456,33 +454,31 @@ async function prepareOwnedModelsListResult({
               baseUrl: route.baseUrl,
             })
           : undefined;
-      return Object.assign(
-        {},
-        preparedEntry,
-        manualSelectionAllowed
-          ? {
-              manualSelectionAllowed: manualSelectionAllowed({
-                provider: entry.provider,
-                model: entry.id,
-              }),
-            }
-          : {},
-        supportsFastMode === undefined ? {} : { supportsFastMode },
-        speedPolicy.supportsServiceTierRecovery === true
+      return {
+        ...preparedEntry,
+        ...(supportsFastMode === undefined ? {} : { supportsFastMode }),
+        ...(speedPolicy.supportsServiceTierRecovery === true
           ? { supportsServiceTierRecovery: true }
-          : {},
-        serviceTiers === undefined ? {} : { serviceTiers },
-        serviceTierObservation ? { serviceTierObservation } : {},
-        projectedAvailability === undefined ? {} : { available: projectedAvailability },
-        projectedAvailability === false && evaluation.unavailableReason
+          : {}),
+        ...(serviceTiers === undefined ? {} : { serviceTiers }),
+        ...(serviceTierObservations?.length
+          ? {
+              serviceTierObservation: serviceTierObservations.at(-1),
+              serviceTierObservations: serviceTierObservations.toSorted((a, b) =>
+                a.requestedTier.localeCompare(b.requestedTier),
+              ),
+            }
+          : {}),
+        ...(projectedAvailability === undefined ? {} : { available: projectedAvailability }),
+        ...(projectedAvailability === false && evaluation.unavailableReason
           ? {
               unavailableReason: evaluation.unavailableReason,
               ...(evaluation.unavailableUntil !== undefined
                 ? { unavailableUntil: evaluation.unavailableUntil }
                 : {}),
             }
-          : {},
-      );
+          : {}),
+      };
     };
   };
 
@@ -550,7 +546,6 @@ async function prepareOwnedModelsListResult({
       policy: visibilityPolicy,
       retainedModel,
       selectedModel,
-      routePolicy: openAIModelCatalogRoutePolicy,
       routeVariants,
       prepareEntry: (entry, variants) => {
         const key = resolveModelCatalogIdentityKey(entry);
@@ -611,7 +606,6 @@ async function prepareOwnedModelsListResult({
           return resolveLogicalModelCatalogEntryState({
             evaluation,
             authBacked: evaluation.availability === true || syntheticLocal,
-            routePolicy: openAIModelCatalogRoutePolicy,
           });
         };
       },

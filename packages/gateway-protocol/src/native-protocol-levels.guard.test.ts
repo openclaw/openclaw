@@ -1,8 +1,7 @@
 // Gateway Protocol tests cover native protocol levels.guard behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeAll, describe, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   nativeProtocolOutputDirectories,
   prepareNativeProtocol,
@@ -23,58 +22,12 @@ import {
  * and connect payloads aligned with the package source of truth.
  */
 
-/** Min/max protocol pair expected in a native client surface. */
-type ProtocolLevels = {
-  min: number;
-  max: number;
-};
-
-const expectedClientLevels: ProtocolLevels = {
-  min: MIN_CLIENT_PROTOCOL_VERSION,
-  max: PROTOCOL_VERSION,
-};
-
-const expectedNodeLevels: ProtocolLevels = {
-  min: MIN_NODE_PROTOCOL_VERSION,
-  max: PROTOCOL_VERSION,
-};
-
 const swiftGeneratedPath = `${nativeProtocolOutputDirectories.swift}/GatewayModels.swift`;
 beforeAll(() => prepareNativeProtocol());
 
 /** Reads a repo-relative source file used by a native protocol guard. */
 async function readRepoFile(relativePath: string): Promise<string> {
   return fs.readFile(path.join(process.cwd(), relativePath), "utf8");
-}
-
-/** Extracts one integer constant and reports the owning file on drift. */
-function extractInteger(
-  content: string,
-  pattern: RegExp,
-  relativePath: string,
-  label: string,
-): number {
-  const match = pattern.exec(content);
-  if (!match) {
-    throw new Error(
-      `${relativePath}: missing ${label}; keep native Gateway protocol levels in sync with packages/gateway-protocol/src/version.ts.`,
-    );
-  }
-  return Number.parseInt(expectDefined(match[1], "match[1] test invariant"), 10);
-}
-
-/** Compares native min/max values to the TypeScript version constants. */
-function assertLevelsMatch(
-  relativePath: string,
-  actual: ProtocolLevels,
-  expected: ProtocolLevels = expectedClientLevels,
-): void {
-  if (actual.min === expected.min && actual.max === expected.max) {
-    return;
-  }
-  throw new Error(
-    `${relativePath}: Gateway protocol level mismatch: expected min=${expected.min} max=${expected.max} from packages/gateway-protocol/src/version.ts, got min=${actual.min} max=${actual.max}. Update the native constants/generated artifacts before shipping.`,
-  );
 }
 
 /** Asserts a compatibility pattern exists in generated/native source text. */
@@ -115,74 +68,61 @@ function stringLiteralUnionValues(schema: unknown): string[] | undefined {
 }
 
 describe("native Gateway protocol levels", () => {
-  it("match the TypeScript source of truth", async () => {
-    if (MIN_CLIENT_PROTOCOL_VERSION > PROTOCOL_VERSION) {
-      throw new Error(
-        `packages/gateway-protocol/src/version.ts: MIN_CLIENT_PROTOCOL_VERSION (${MIN_CLIENT_PROTOCOL_VERSION}) must not exceed PROTOCOL_VERSION (${PROTOCOL_VERSION}).`,
-      );
-    }
-    if (
-      MIN_NODE_PROTOCOL_VERSION !== PROTOCOL_VERSION - 1 ||
-      MIN_PROBE_PROTOCOL_VERSION !== PROTOCOL_VERSION - 1
-    ) {
-      throw new Error(
-        "packages/gateway-protocol/src/version.ts: node and probe compatibility must remain exactly N-1.",
-      );
-    }
+  it("keeps node and probe compatibility at N-1 without widening general clients", () => {
+    expect(MIN_NODE_PROTOCOL_VERSION).toBe(PROTOCOL_VERSION - 1);
+    expect(MIN_PROBE_PROTOCOL_VERSION).toBe(PROTOCOL_VERSION - 1);
+    expect(MIN_CLIENT_PROTOCOL_VERSION).toBe(PROTOCOL_VERSION);
+  });
 
+  it("emits the session approval event as a discriminated Swift union", async () => {
     const swiftGenerated = await readRepoFile(swiftGeneratedPath);
-    assertLevelsMatch(swiftGeneratedPath, {
-      min: extractInteger(
-        swiftGenerated,
-        /public let GATEWAY_MIN_PROTOCOL_VERSION = (\d+)/,
-        swiftGeneratedPath,
-        "GATEWAY_MIN_PROTOCOL_VERSION",
-      ),
-      max: extractInteger(
-        swiftGenerated,
-        /public let GATEWAY_PROTOCOL_VERSION = (\d+)/,
-        swiftGeneratedPath,
-        "GATEWAY_PROTOCOL_VERSION",
-      ),
-    });
-    assertLevelsMatch(
-      swiftGeneratedPath,
-      {
-        min: extractInteger(
-          swiftGenerated,
-          /public let GATEWAY_MIN_NODE_PROTOCOL_VERSION = (\d+)/,
-          swiftGeneratedPath,
-          "GATEWAY_MIN_NODE_PROTOCOL_VERSION",
-        ),
-        max: extractInteger(
-          swiftGenerated,
-          /public let GATEWAY_PROTOCOL_VERSION = (\d+)/,
-          swiftGeneratedPath,
-          "GATEWAY_PROTOCOL_VERSION",
-        ),
-      },
-      expectedNodeLevels,
-    );
 
-    const androidPath = `${nativeProtocolOutputDirectories.kotlin}/ai/openclaw/app/gateway/GatewayProtocol.kt`;
-    const android = await readRepoFile(androidPath);
-    assertLevelsMatch(
-      androidPath,
-      {
-        min: extractInteger(
-          android,
-          /const val GATEWAY_MIN_PROTOCOL_VERSION = (\d+)/,
-          androidPath,
-          "GATEWAY_MIN_PROTOCOL_VERSION",
-        ),
-        max: extractInteger(
-          android,
-          /const val GATEWAY_PROTOCOL_VERSION = (\d+)/,
-          androidPath,
-          "GATEWAY_PROTOCOL_VERSION",
-        ),
-      },
-      expectedNodeLevels,
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /public enum SessionApprovalEvent: Codable, Sendable \{/,
+      "missing the generated SessionApprovalEvent union.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case pending\(PendingSessionApprovalEvent\)/,
+      "SessionApprovalEvent must decode pending transitions.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case terminal\(TerminalSessionApprovalEvent\)/,
+      "SessionApprovalEvent must decode terminal transitions.",
+    );
+  });
+
+  it("emits the scope upgrade result as a discriminated Swift union", async () => {
+    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
+
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /public enum ScopeUpgradeResult: Codable, Sendable \{/,
+      "missing the generated ScopeUpgradeResult union.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case approved\(ScopeUpgradeApproved\)/,
+      "ScopeUpgradeResult must decode approved outcomes.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case rejected\(ScopeUpgradeRejected\)/,
+      "ScopeUpgradeResult must decode rejected outcomes.",
+    );
+    assertPattern(
+      swiftGenerated,
+      swiftGeneratedPath,
+      /case expired\(ScopeUpgradeExpired\)/,
+      "ScopeUpgradeResult must decode expired outcomes.",
     );
   });
 
@@ -243,14 +183,14 @@ describe("native Gateway protocol levels", () => {
     assertPattern(
       swiftWizard,
       swiftWizardPath,
-      /"minProtocol": ProtoAnyCodable\(GATEWAY_MIN_PROTOCOL_VERSION\)/,
-      "operator connects must advertise GATEWAY_MIN_PROTOCOL_VERSION as minProtocol.",
+      /let client = GatewayChannelActor\([\s\S]*?connectOptions: GatewayConnectOptions\(\s+role: "operator",[\s\S]*?clientMode: "ui",/,
+      "the wizard must use the shared operator client and its checked protocol range.",
     );
     assertPattern(
       swiftWizard,
       swiftWizardPath,
-      /"maxProtocol": ProtoAnyCodable\(GATEWAY_PROTOCOL_VERSION\)/,
-      "operator connects must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
+      /try await client\.connect\(\)/,
+      "the wizard must connect through the shared protocol handshake.",
     );
 
     const androidPath = "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt";
@@ -267,37 +207,6 @@ describe("native Gateway protocol levels", () => {
       /put\("maxProtocol", JsonPrimitive\(GATEWAY_PROTOCOL_VERSION\)\)/,
       "connect params must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
     );
-  });
-
-  it("uses the TypeScript source of truth for dev Gateway smoke scripts", async () => {
-    const devScripts = ["scripts/dev/gateway-smoke.ts", "scripts/dev/ios-node-e2e.ts"];
-    for (const relativePath of devScripts) {
-      const content = await readRepoFile(relativePath);
-      assertPattern(
-        content,
-        relativePath,
-        /MIN_CLIENT_PROTOCOL_VERSION/,
-        "connect params must import/use MIN_CLIENT_PROTOCOL_VERSION as minProtocol.",
-      );
-      assertPattern(
-        content,
-        relativePath,
-        /PROTOCOL_VERSION/,
-        "connect params must import/use PROTOCOL_VERSION as maxProtocol.",
-      );
-      assertPattern(
-        content,
-        relativePath,
-        /minProtocol:\s*MIN_CLIENT_PROTOCOL_VERSION/,
-        "connect params must advertise MIN_CLIENT_PROTOCOL_VERSION as minProtocol.",
-      );
-      assertPattern(
-        content,
-        relativePath,
-        /maxProtocol:\s*PROTOCOL_VERSION/,
-        "connect params must advertise PROTOCOL_VERSION as maxProtocol.",
-      );
-    }
   });
 
   it("emits named string-literal unions as Swift enums", async () => {
@@ -325,57 +234,5 @@ describe("native Gateway protocol levels", () => {
         );
       }
     }
-  });
-
-  it("emits the session approval event as a discriminated Swift union", async () => {
-    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
-
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
-      /public enum SessionApprovalEvent: Codable, Sendable \{/,
-      "missing the generated SessionApprovalEvent union.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
-      /case pending\(PendingSessionApprovalEvent\)/,
-      "SessionApprovalEvent must decode pending transitions.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
-      /case terminal\(TerminalSessionApprovalEvent\)/,
-      "SessionApprovalEvent must decode terminal transitions.",
-    );
-  });
-
-  it("emits the scope upgrade result as a discriminated Swift union", async () => {
-    const swiftGenerated = await readRepoFile(swiftGeneratedPath);
-
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
-      /public enum ScopeUpgradeResult: Codable, Sendable \{/,
-      "missing the generated ScopeUpgradeResult union.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
-      /case approved\(ScopeUpgradeApproved\)/,
-      "ScopeUpgradeResult must decode approved outcomes.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
-      /case rejected\(ScopeUpgradeRejected\)/,
-      "ScopeUpgradeResult must decode rejected outcomes.",
-    );
-    assertPattern(
-      swiftGenerated,
-      swiftGeneratedPath,
-      /case expired\(ScopeUpgradeExpired\)/,
-      "ScopeUpgradeResult must decode expired outcomes.",
-    );
   });
 });

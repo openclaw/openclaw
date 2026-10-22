@@ -1,5 +1,5 @@
 import type { EventEmitter } from "node:events";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import {
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase,
@@ -19,9 +19,10 @@ vi.mock("../infra/sqlite-worker-identity.js", async () => ({
   readDatabasePathIdentitySync: (canonicalPath: string) => ({ key: "file:12:34", canonicalPath }),
 }));
 
-vi.mock("node:worker_threads", async () => {
+vi.mock("node:worker_threads", async (importOriginal) => {
   const { EventEmitter } = await import("node:events");
   return {
+    ...(await importOriginal<typeof import("node:worker_threads")>()),
     isMainThread: true,
     Worker: class extends EventEmitter {
       shared: BigInt64Array;
@@ -47,52 +48,39 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
-function start(
-  remainingMs = 120_000,
-  renewal?: { leaseMs: number; heartbeatMs: number; renewDuringStartup: () => number },
-) {
+it.each(["deadline", "expiry", "lost"] as const)("fails startup at %s", async (ending) => {
+  const delayed = ending !== "lost";
   const onLost = vi.fn();
+  const renewDuringStartup = vi.fn(() => Date.now() + 1_000);
   const heartbeat = startOpenClawStateLeaseHeartbeat({
     path: "/synthetic-private-state/lease.sqlite",
     identity: { scope: "test:startup", key: "delayed", owner: "private-owner" },
-    leaseMs: 60_000,
-    heartbeatMs: 20_000,
+    leaseMs: delayed ? 1_000 : 60_000,
+    heartbeatMs: delayed ? 333 : 20_000,
     acquiredAt: Date.now(),
-    expiresAt: Date.now() + remainingMs,
-    ...renewal,
+    expiresAt: Date.now() + (delayed ? 1_000 : 60_000),
+    renewDuringStartup: delayed ? renewDuringStartup : undefined,
     onLost,
   });
-  const outcome = heartbeat.ready.then(
-    () => "ready",
-    (error: unknown) => error,
-  );
+  const settled = vi.fn();
+  const outcome = heartbeat.ready.catch((error: unknown) => error);
+  void outcome.then(settled);
   const worker = workers[0];
   assert(worker);
-  return { heartbeat, outcome, worker, onLost };
-}
-
-describe("state lease heartbeat startup diagnostics", () => {
-  it.each(["deadline", "expiry"] as const)("settles delayed startup at %s", async (ending) => {
-    const renewDuringStartup = vi.fn(() => Date.now() + 1_000);
-    const { heartbeat, outcome, worker, onLost } = start(1_000, {
-      leaseMs: 1_000,
-      heartbeatMs: 333,
-      renewDuringStartup,
-    });
-    try {
+  const read = (index: number) => Atomics.load(worker.shared, index);
+  const initialPhase = leaseHeartbeatStartupPhase["entry-not-observed"];
+  let elapsedMs = 25;
+  try {
+    if (delayed) {
       worker.emit("online");
       await vi.advanceTimersByTimeAsync(38_000);
       expect(onLost).not.toHaveBeenCalled();
       expect(renewDuringStartup).toHaveBeenCalled();
-      expect(Atomics.load(worker.shared, state.status)).toBe(state.starting);
-      expect(Atomics.load(worker.shared, state.startupPhase)).toBe(
-        leaseHeartbeatStartupPhase["entry-not-observed"],
-      );
-      const expiresAt = Number(Atomics.load(worker.shared, state.expiresAt));
+      expect(read(state.status)).toBe(state.starting);
+      expect(read(state.startupPhase)).toBe(initialPhase);
+      const expiresAt = Number(read(state.expiresAt));
       expect(expiresAt).toBeGreaterThan(Date.now());
       if (ending === "expiry") {
         renewDuringStartup.mockReturnValue(expiresAt);
@@ -102,53 +90,30 @@ describe("state lease heartbeat startup diagnostics", () => {
       await vi.advanceTimersByTimeAsync(remainingMs - 1);
       expect(onLost).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
-      const elapsedMs = 38_000 + remainingMs;
-      const error = await outcome;
-      expect(error).toEqual(
-        new Error(
-          `state lease heartbeat did not become ready (phase=startup, trigger=timeout, status=starting, elapsedMs=${elapsedMs}, timeoutMs=${elapsedMs}, onlineObserved=true, startupPhase=entry-not-observed)`,
-        ),
-      );
-      expect(onLost).toHaveBeenCalledExactlyOnceWith(error);
-      expect(Atomics.load(worker.shared, state.status)).toBe(state.lost);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await heartbeat.stop();
-    }
-  });
-
-  it("reports lost startup without granting readiness", async () => {
-    const status = "lost";
-    const trigger = "message";
-    const remainingMs = 60_000;
-    const elapsedMs = 25;
-    const online = false;
-    const phase = "entry-not-observed";
-    const { heartbeat, outcome, worker, onLost } = start(remainingMs);
-    let settled = false;
-    void outcome.then(() => {
-      settled = true;
-    });
-    try {
-      Atomics.store(worker.shared, state.status, state[status]);
-      Atomics.store(worker.shared, state.startupPhase, leaseHeartbeatStartupPhase[phase]);
-      await vi.advanceTimersByTimeAsync(elapsedMs - 1);
-      expect(settled).toBe(false);
+      elapsedMs = 38_000 + remainingMs;
+    } else {
+      Atomics.store(worker.shared, state.status, state.lost);
+      Atomics.store(worker.shared, state.startupPhase, initialPhase);
+      await vi.advanceTimersByTimeAsync(24);
+      expect(settled).not.toHaveBeenCalled();
       expect(onLost).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       worker.emit("message", null);
-      const error = await outcome;
-      expect(error).toEqual(
-        new Error(
-          `state lease heartbeat did not become ready (phase=startup, trigger=${trigger}, status=${status}, elapsedMs=${elapsedMs}, timeoutMs=${Math.min(LEASE_HEARTBEAT_START_TIMEOUT_MS, remainingMs)}, onlineObserved=${online}, startupPhase=${phase})`,
-        ),
-      );
-      expect(onLost).toHaveBeenCalledExactlyOnceWith(error);
-      expect(Atomics.load(worker.shared, state.status)).toBe(state.lost);
-      expect(String(error)).not.toMatch(/synthetic-private-state|test:startup|private-owner/);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      await heartbeat.stop();
     }
-  });
+    const error = await outcome;
+    const trigger = delayed ? "timeout" : "message";
+    const status = delayed ? "starting" : "lost";
+    const timeoutMs = delayed ? elapsedMs : Math.min(LEASE_HEARTBEAT_START_TIMEOUT_MS, 60_000);
+    expect(error).toEqual(
+      new Error(
+        `state lease heartbeat did not become ready (phase=startup, trigger=${trigger}, status=${status}, elapsedMs=${elapsedMs}, timeoutMs=${timeoutMs}, onlineObserved=${delayed}, startupPhase=entry-not-observed)`,
+      ),
+    );
+    expect(onLost).toHaveBeenCalledExactlyOnceWith(error);
+    expect(read(state.status)).toBe(state.lost);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(String(error)).not.toMatch(/synthetic-private-state|test:startup|private-owner/);
+  } finally {
+    await heartbeat.stop();
+  }
 });

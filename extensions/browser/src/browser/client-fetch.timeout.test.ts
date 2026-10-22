@@ -14,7 +14,7 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   const actual = await vi.importActual<
     typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
   >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return { ...actual, getRuntimeConfig: authMocks.loadConfig, loadConfig: authMocks.loadConfig };
+  return { ...actual, readRuntimeConfig: authMocks.loadConfig, loadConfig: authMocks.loadConfig };
 });
 vi.mock("./control-auth.js", () => ({
   resolveBrowserControlAuth: authMocks.resolveBrowserControlAuth,
@@ -36,7 +36,7 @@ describe("fetchBrowserJson timeout forwarding", () => {
   beforeEach(() => fetchWithSsrFGuardMock.mockReset());
 
   it("forwards the caller-provided timeout to the guarded fetch", async () => {
-    const init = { timeoutMs: 1_500 };
+    const init = { timeoutMs: 1_500, signal: new AbortController().signal };
     const expectedTimeoutMs = 1_500;
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ ok: true }), {
@@ -54,7 +54,7 @@ describe("fetchBrowserJson timeout forwarding", () => {
       expect.objectContaining({
         url: browserControlUrl,
         timeoutMs: expectedTimeoutMs,
-        signal: expect.any(AbortSignal),
+        init: expect.objectContaining({ signal: init.signal }),
         auditContext: "browser-control-client",
         policy: { allowPrivateNetwork: true },
       }),

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import {
   getAdmittedRunDelegatedAuthority,
   type AdmittedRunContext,
@@ -9,16 +10,22 @@ import {
   type SkillLibraryAuthoringCapability,
 } from "../skills/library/authoring.js";
 import {
+  prepareSkillLibrarySession,
+  type PreparedSkillLibrarySession,
+} from "../skills/library/selection.js";
+import {
   listSkillLibrary,
   resolveSkillLibraryPresentation,
   readSkillLibrary,
   saveSkillLibrary,
   mutateSkillLibrary,
 } from "../skills/library/service.js";
-import { resolveSkillLibraryActor } from "../skills/library/store.js";
+import { resolveSkillLibraryActorFromProfile } from "../skills/library/store.js";
 import { SkillLibraryError } from "../skills/skill-library-error.js";
-import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { selectResolvedUserProfileMetadataById } from "../state/user-profiles-internal.js";
+import {
+  captureResidentUserProfileAccess,
+  readResidentUserProfileId,
+} from "../state/user-profile-list.js";
 import {
   activateLibrarySelection,
   libraryAuthority,
@@ -34,16 +41,68 @@ export function invalidateSkillAuthoringForOtherRequester(
 ): void {
   for (const grant of active.get(sessionKey) ?? []) {
     if (grant.profileId !== profileId) {
-      const db = openOpenClawStateDatabase().db;
-      if (
-        !profileId ||
-        selectResolvedUserProfileMetadataById(db, grant.profileId)?.id !==
-          selectResolvedUserProfileMetadataById(db, profileId)?.id
-      ) {
+      const canonical = readResidentUserProfileId(grant.profileId);
+      if (!profileId || !canonical || canonical !== readResidentUserProfileId(profileId)) {
         grant.revoke();
       }
     }
   }
+}
+
+function canPrepareSkillAuthoring(options: SkillLibraryRequestOwner, isHumanTurn: boolean) {
+  const client = options.client;
+  return Boolean(
+    isHumanTurn &&
+    client?.authenticatedUserProfile &&
+    !client.internal?.syntheticClient &&
+    !client.internal?.agentRuntimeIdentity &&
+    !client.internal?.senderAttribution &&
+    !client.internal?.pluginRuntimeOwnerId &&
+    !client.internal?.approvalRuntime &&
+    !client.internal?.cronRunContinuation &&
+    !client.internal?.delegatedToolPolicyHandoffId,
+  );
+}
+
+async function prepareGatewaySkillLibrarySession(
+  options: SkillLibraryRequestOwner,
+  isHumanTurn: boolean,
+): Promise<PreparedSkillLibrarySession | undefined> {
+  if (!canPrepareSkillAuthoring(options, isHumanTurn)) {
+    return undefined;
+  }
+  const client = options.client;
+  const authority = libraryAuthority(options);
+  const scopes = [...authority.scopes];
+  return prepareSkillLibrarySession({
+    ...authority,
+    assertCurrent() {
+      authority.assertCurrent();
+      if (
+        options.client !== client ||
+        client?.authenticatedUserProfile?.profileId !== authority.profileId ||
+        !isDeepStrictEqual(client?.connect.scopes ?? [], scopes)
+      ) {
+        throw new SkillLibraryError("AUTHORITY_EXPIRED", "Skill library requester changed. Retry.");
+      }
+    },
+  });
+}
+
+export async function prepareGatewaySkillLibraryTurn(
+  request: { owner: SkillLibraryRequestOwner; isHumanTurn: boolean; sessionKey: string },
+  prepareSessionCreation: (prepared?: PreparedSkillLibrarySession) => Promise<void>,
+  onAuthoring: () => void,
+): Promise<SkillLibraryAuthoringCapability | undefined> {
+  const prepared = await prepareGatewaySkillLibrarySession(request.owner, request.isHumanTurn);
+  await prepareSessionCreation(prepared);
+  onAuthoring();
+  return prepareGatewaySkillAuthoring(
+    request.owner,
+    request.sessionKey,
+    request.isHumanTurn,
+    prepared,
+  );
 }
 
 /** Only ordinary attributed human ingress may mint a namespace; actions remain normal tool policy. */
@@ -51,23 +110,15 @@ export async function prepareGatewaySkillAuthoring(
   options: SkillLibraryRequestOwner,
   sessionKey: string,
   isHumanTurn: boolean,
+  prepared?: PreparedSkillLibrarySession,
 ): Promise<SkillLibraryAuthoringCapability | undefined> {
-  const client = options.client;
-  if (
-    !isHumanTurn ||
-    !client?.authenticatedUserProfile ||
-    client.internal?.syntheticClient ||
-    client.internal?.agentRuntimeIdentity ||
-    client.internal?.senderAttribution ||
-    client.internal?.pluginRuntimeOwnerId ||
-    client.internal?.approvalRuntime ||
-    client.internal?.cronRunContinuation ||
-    client.internal?.delegatedToolPolicyHandoffId
-  ) {
+  if (!canPrepareSkillAuthoring(options, isHumanTurn)) {
     return undefined;
   }
   const authority = libraryAuthority(options);
-  const library = await resolveSkillLibraryPresentation(authority);
+  const library = prepared?.presentation ?? (await resolveSkillLibraryPresentation(authority));
+  prepared?.assertCurrent();
+  authority.assertCurrent();
   if (!library.profileId || library.defaultTarget === "unavailable") {
     return undefined;
   }
@@ -140,7 +191,14 @@ export async function prepareGatewaySkillAuthoring(
     },
     assertWorkspaceCurrent() {
       assertCurrent();
-      if (!resolveSkillLibraryActor(openOpenClawStateDatabase().db, authority).admin) {
+      const profile = captureResidentUserProfileAccess(profileId).readCurrentFacts();
+      if (
+        !resolveSkillLibraryActorFromProfile(authority, authority.getConfig(), {
+          id: profile.profileId,
+          role: profile.assignedRole,
+          githubLogin: profile.githubLogin,
+        }).admin
+      ) {
         throw new SkillLibraryError(
           "FORBIDDEN",
           "Workspace authoring requires current administrator authority.",

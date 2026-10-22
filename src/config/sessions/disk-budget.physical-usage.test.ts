@@ -13,7 +13,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "../../infra/runtime-worker-generation.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -179,11 +178,7 @@ describe("physical session disk usage", () => {
       return result;
     });
     let retirement: MockInstance<Worker["terminate"]> | undefined;
-    const diskWorkerUrl = resolveRuntimeWorkerUrl({
-      currentModuleUrl: import.meta.url,
-      sourceWorkerName: "disk-budget.worker",
-      distWorkerPath: "config/sessions/disk-budget.worker.js",
-    });
+    const diskWorkerUrl = resolveRuntimeProcessEntrypointUrl("sessionDiskBudget");
     const stateReadUrl = resolveRuntimeProcessEntrypointUrl("stateRead");
     const ownedStateReadPath = state.path("sdk-drainage-state-read.mjs");
     await fs.writeFile(ownedStateReadPath, `export * from ${JSON.stringify(stateReadUrl.href)};\n`);
@@ -414,9 +409,7 @@ describe("physical session disk usage", () => {
         expect(retiredWorkers).toBeGreaterThan(0);
         expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
         const usage = {
-          databaseMainBytes: 321,
           databaseWalBytes: 0,
-          sessionFilesBytes: 100,
           totalBytes: 421,
         };
         expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => usage));
@@ -451,9 +444,7 @@ describe("physical session disk usage", () => {
       const storePath = databasePath;
 
       await expect(measureSessionPhysicalDiskUsage(storePath)).resolves.toEqual({
-        databaseMainBytes: 321,
         databaseWalBytes: 654,
-        sessionFilesBytes: 118,
         totalBytes: 1_093,
       });
       await expect(hasRetainedSessionTranscriptArchives(storePath)).resolves.toBe(true);
@@ -463,7 +454,7 @@ describe("physical session disk usage", () => {
       });
       expect(pruned).toMatchObject({
         removedFiles: 1,
-        usage: { sessionFilesBytes: 18, totalBytes: 993 },
+        usage: { totalBytes: 993 },
       });
       await expect(fs.stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(hasRetainedSessionTranscriptArchives(storePath)).resolves.toBe(false);
@@ -487,9 +478,7 @@ describe("physical session disk usage", () => {
         const initial = await measureSessionPhysicalDiskUsage(storePath);
         const initialSyncCalls = fixtureSyncCalls();
         expect(initial).toEqual({
-          databaseMainBytes: 321,
           databaseWalBytes: 654,
-          sessionFilesBytes: 18,
           totalBytes: 993,
         });
         for (let index = 1; index <= 32; index += 1) {
@@ -501,9 +490,7 @@ describe("physical session disk usage", () => {
         const expandedSyncCalls = fixtureSyncCalls();
 
         expect(expanded).toEqual({
-          databaseMainBytes: 321,
           databaseWalBytes: 654,
-          sessionFilesBytes: 33 * 18,
           totalBytes: 975 + 33 * 18,
         });
         // Filesystem work that grows with the directory must not block the event loop.

@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isCompleteAgentPreamble } from "../../../../src/agents/agent-activity-presentation.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../../../src/utils/directive-tags.js";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
+import { observedRunInputSendId } from "./stream-causal-boundary.ts";
 import type { AgentEventPayload, ToolStreamHost } from "./tool-stream-contract.ts";
 import { acceptsToolStreamSession } from "./tool-stream-status.ts";
 
@@ -13,11 +14,14 @@ function normalizePreambleProgressText(value: unknown): string {
   const stripped = stripInlineDirectiveTagsForDelivery(value)
     .text.replace(/^(?:[ \t]*\r?\n)+/u, "")
     .trimEnd();
-  const normalized = stripped.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
-  return /^NO_REPLY$/iu.test(normalized) ? "" : stripped;
+  return stripped;
 }
 
-export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+export function handlePreambleProgress(
+  host: ToolStreamHost,
+  payload: AgentEventPayload,
+  source: "live" | "history" = "live",
+): boolean {
   if (payload.stream !== "item") {
     return false;
   }
@@ -81,6 +85,8 @@ export function handlePreambleProgress(host: ToolStreamHost, payload: AgentEvent
       ts: payload.ts,
       runId: payload.runId,
       itemId,
+      afterUserSendId:
+        source === "live" ? observedRunInputSendId(host.chatMessages, payload.runId) : undefined,
     },
   ];
   return true;

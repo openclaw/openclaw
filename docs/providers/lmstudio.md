@@ -73,6 +73,17 @@ command below and looking at the `key` field:
 curl http://localhost:1234/api/v1/models
 ```
 
+After installing another model in LM Studio, refresh OpenClaw's model list:
+
+```bash
+openclaw models list --provider lmstudio --refresh
+```
+
+In the default merge mode, refresh adds discovered models while preserving your
+configured rows and their authored metadata, including names and context limits.
+An empty configured `models` array also supports discovery on an unauthenticated
+server. `models.mode: "replace"` keeps only explicitly configured models.
+
 ## Non-interactive onboarding
 
 ```bash
@@ -138,7 +149,7 @@ binary shape to the six-level scale before sending requests, including for older
 still has `off`/`on` reasoning maps.
 
 For graded options, fresh discovery maps `max` (and Ultra's provider effort) to the highest
-advertised canonical effort, regardless of option order. For example, `off`, `low`, `medium`
+advertised standard effort level, regardless of option order. For example, `off`, `low`, `medium`
 maps `max` to `medium`. Existing saved graded `reasoningEffortMap` values remain explicit
 configuration; rerun LM Studio setup to regenerate them from current server metadata.
 
@@ -171,15 +182,25 @@ configuration; rerun LM Studio setup to regenerate them from current server meta
 
 ### Model instances and context
 
+Native discovery and preload support the same credentials as inference, including
+store-backed SecretRefs and explicit `Authorization` headers. You do not need to
+copy a store-backed API key into an auth profile to enable preload.
+
 With preload enabled, OpenClaw routes chat requests to a loaded instance with
 enough context for the selected model budget. A newly loaded instance is addressed by the
 identifier returned by LM Studio. Your configured model reference and conversation model identity
-keep the canonical model key.
+keep the configured model key.
+
+Model loads use the configured provider `timeoutSeconds` (or the request timeout override),
+with a two-minute default matching embedding loads. Increase `models.providers.lmstudio.timeoutSeconds`
+for slow cold loads. If a load fails while every known loaded instance is too small, OpenClaw
+reports the model and requested context instead of sending the prompt to a smaller instance.
+Wait for loading to finish in LM Studio and retry, or lower the model's `contextTokens`.
 
 With preload enabled, embedding requests also check that their model is loaded and route to the
 instance prepared for the configured context length. This avoids truncating input through a smaller
 loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT
-loading is disabled. Embedding model and cache identity keep the canonical model key.
+loading is disabled. Embedding model and cache identity keep the configured model key.
 
 ### Disabling preload
 
@@ -231,6 +252,15 @@ require `models.providers.<id>.request.allowPrivateNetwork: true`; set it to `fa
 the default trust.
 
 ## Troubleshooting
+
+### Context overflow
+
+When LM Studio rejects a prompt because it exceeds the loaded context, OpenClaw attempts
+[compaction and retry](/concepts/compaction), including for older servers that report
+`Trying to keep the first N tokens` and `the model is loaded with context length of only M tokens, which is not enough`.
+If a single message is too large, shorten it or load the model with a larger context; compacting
+earlier history cannot shrink that message. Server-side truncation without an overflow error
+does not trigger this recovery.
 
 ### Model discovery failures
 

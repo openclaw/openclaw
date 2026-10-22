@@ -1,5 +1,5 @@
-import { existsSync, globSync, readdirSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { globSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import { expect } from "vitest";
 import type { CompactNodeTestShard } from "../../scripts/lib/ci-node-test-plan.mts";
 import {
@@ -7,17 +7,11 @@ import {
   RELEASE_ONLY_RUNTIME_TEST_FILES,
 } from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
-import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
+import { listGitTrackedFiles, toRepoPath } from "../../src/test-utils/repo-files.js";
 import { createCliVitestConfig } from "../vitest/vitest.cli.config.ts";
 
-type VitestTestConfig = {
-  dir?: string;
-  exclude?: string[];
-  include?: string[];
-};
-
 type VitestConfig = {
-  test?: VitestTestConfig;
+  test?: { dir?: string; exclude?: string[]; include?: string[] };
 };
 
 export function isNumberedToolingGroup(group: { shard_name: string }) {
@@ -30,17 +24,10 @@ export function nonToolingPlacement(plan: CompactNodeTestShard[]) {
         .filter((group) => !isNumberedToolingGroup(group))
         .map((group) => group.shard_name)
         .toSorted();
-      return groups.length === 0
-        ? []
-        : [
-            {
-              groups,
-              planConcurrency: job.planConcurrency,
-              pretestBuildMode: job.pretestBuildMode,
-              requiresDist: job.requiresDist,
-              runner: job.runner,
-            },
-          ];
+      const { planConcurrency, pretestBuildMode, requiresDist, runner } = job;
+      return groups.length
+        ? [{ groups, planConcurrency, pretestBuildMode, requiresDist, runner }]
+        : [];
     })
     .toSorted((a, b) => a.groups.join("\0").localeCompare(b.groups.join("\0")));
 }
@@ -48,28 +35,7 @@ export function nonToolingPlacement(plan: CompactNodeTestShard[]) {
 export function listTestFiles(rootDir: string): string[] {
   const gitFiles = listGitTrackedFiles({ pathspecs: rootDir });
   expect(gitFiles).not.toBeNull();
-  if (gitFiles) {
-    return gitFiles.filter((line) => line.endsWith(".test.ts"));
-  }
-
-  if (!existsSync(rootDir)) {
-    return [];
-  }
-
-  const files: string[] = [];
-  const visit = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        visit(path);
-      } else if (entry.isFile() && entry.name.endsWith(".test.ts")) {
-        files.push(toRepoPath(path));
-      }
-    }
-  };
-
-  visit(rootDir);
-  return sortRepoPaths(files);
+  return gitFiles!.filter((line) => line.endsWith(".test.ts"));
 }
 
 export function listMatchedTestFiles(config: VitestConfig): string[] {
@@ -78,8 +44,7 @@ export function listMatchedTestFiles(config: VitestConfig): string[] {
   const exclude = (testConfig.exclude ?? []).map((pattern) =>
     isAbsolute(pattern) ? toRepoPath(relative(cwd, pattern)) : toRepoPath(pattern),
   );
-  // Unit-fast ownership contributes hundreds of literal file exclusions.
-  // Compare those exactly after discovery; keep directory/glob pruning native.
+  // Prune globs during discovery; compare literal unit-fast exclusions afterward.
   const exactFiles = new Set(exclude.filter((pattern) => /^[\w/.-]+\.test\.ts$/u.test(pattern)));
   return globSync(testConfig.include ?? [], {
     cwd,
@@ -104,30 +69,25 @@ export function expectRuntimeReleaseInventory({
   const cliFiles = listMatchedTestFiles(createCliVitestConfig({}));
   const groupFiles = (group: CompactNodeTestShard["groups"][number]) =>
     group.includePatterns ?? (group.shard_name === "agentic-cli" ? cliFiles : []);
-  const files = (plan: CompactNodeTestShard[]) =>
-    plan.flatMap((shard) => shard.groups.flatMap(groupFiles));
-  const beforeFiles = files(before);
-  const afterFiles = files(after);
-  const timingLineage = (key: string) => {
-    const lineage = [key];
-    for (let split = parseCompactSplitTimingKey(key); split;) {
-      const parent = split.parentShardName;
-      lineage.push(parent);
-      split = parseCompactSplitTimingKey(parent);
-    }
-    return lineage;
+  const beforeGroups = before.flatMap((shard) => shard.groups);
+  const afterGroups = after.flatMap((shard) => shard.groups);
+  const beforeFiles = beforeGroups.flatMap(groupFiles);
+  const afterFiles = afterGroups.flatMap(groupFiles);
+  const timingLineage = (key: string): string[] => {
+    const parent = parseCompactSplitTimingKey(key)?.parentShardName;
+    return [key, ...(parent ? timingLineage(parent) : [])];
   };
   const fullTimingParents = new Set(
-    before
-      .flatMap((shard) =>
-        shard.groups.flatMap((group) => timingLineage(group.timing_key ?? group.shard_name)),
-      )
-      // The comparison plan can already omit tooling from mixed owners.
+    beforeGroups
+      .flatMap((group) => timingLineage(group.timing_key ?? group.shard_name))
       .filter((parent) => !parent.startsWith("changed-")),
   );
   expect(beforeFiles.filter((file) => !afterFiles.includes(file)).toSorted()).toEqual(
     RELEASE_ONLY_RUNTIME_TEST_FILES.filter(
-      (file) => compactMode === "pull-request" || !file.startsWith("test/scripts/"),
+      // Bundled extensions retain their separate canonical extension plans.
+      (file) =>
+        !file.startsWith("extensions/") &&
+        (compactMode === "pull-request" || !file.startsWith("test/scripts/")),
     ).toSorted(),
   );
   expect(afterFiles.filter((file) => !beforeFiles.includes(file))).toEqual([]);
@@ -135,9 +95,8 @@ export function expectRuntimeReleaseInventory({
   for (const owner of reducedOwners) {
     const owns = (group: { shard_name: string }) =>
       group.shard_name === owner || group.shard_name.startsWith(`${owner}-hosted-`);
-    const reduced = after.flatMap((shard) => shard.groups).filter(owns);
-    const retainedFiles = before
-      .flatMap((shard) => shard.groups)
+    const reduced = afterGroups.filter(owns);
+    const retainedFiles = beforeGroups
       .filter(owns)
       .flatMap(groupFiles)
       .filter((file) => !isReleaseOnlyRuntimeTestFile(file));
@@ -148,7 +107,7 @@ export function expectRuntimeReleaseInventory({
       expect(reduced, owner).toEqual([]);
     }
     if (owner === "agentic-cli") {
-      const full = before.flatMap((shard) => shard.groups).find(owns);
+      const full = beforeGroups.find(owns);
       expect(full, "full CLI owner").toBeDefined();
       for (const group of reduced) {
         expect(group.shard_name).toMatch(/^agentic-cli(?:-hosted-\d+)?$/u);
@@ -160,18 +119,17 @@ export function expectRuntimeReleaseInventory({
     }
     for (const group of reduced) {
       expect(group.timing_key, "reduced runtime timing identity").toBeTypeOf("string");
-      const timingKey = group.timing_key!;
-      const lineage = timingLineage(timingKey);
+      const lineage = timingLineage(group.timing_key!);
       for (const parent of lineage) {
         expect(fullTimingParents.has(parent), `${owner}: ${parent}`).toBe(false);
       }
-      const timingParent = lineage.at(-1)!;
-      expect(
-        timingParent.replace(
+      const timingOwner = lineage
+        .at(-1)!
+        .replace(
           /(?:#workers-4|#file-parallel-(?:2|8)|-parallel(?:-2)?(?:-native-serial)?(?:-stripes)?)$/u,
           "",
-        ),
-      ).toBe(`changed-${owner}`);
+        );
+      expect(timingOwner).toBe(`changed-${owner}`);
     }
   }
 }

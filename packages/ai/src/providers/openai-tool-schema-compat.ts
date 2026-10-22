@@ -1,11 +1,49 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import { SCHEMA_MAP_KEYS, SCHEMA_NESTED_KEYS } from "./schema-walk.js";
+import { truncateToolSchemaDepth, wasToolSchemaTruncated } from "./tool-schema-depth.js";
 import { normalizeToolSchema } from "./tool-schema-normalization.js";
 
 /** Repairs recoverable OpenAI tool-schema shapes before canonical normalization. */
-export function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
-  return normalizeToolSchema(schema, "compat") as TSchema;
+export function normalizeOpenAIStrictCompatSchema(schema: unknown, toolName?: string): TSchema {
+  return normalizeToolSchema(schema, "compat", toolName) as TSchema;
+}
+
+/** Finds nested open dictionaries whose keys compatibility normalization closes. */
+export function findCompatClosedObjectPaths(schema: unknown, path: string): string[] {
+  return collectCompatClosedObjectPaths(truncateToolSchemaDepth(schema), path);
+}
+
+function collectCompatClosedObjectPaths(schema: unknown, path: string, nested = false): string[] {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((entry, index) =>
+      collectCompatClosedObjectPaths(entry, `${path}[${index}]`, true),
+    );
+  }
+  if (!isRecord(schema)) {
+    return [];
+  }
+  const violations =
+    nested &&
+    schema.type === "object" &&
+    !("additionalProperties" in schema) &&
+    (!isRecord(schema.patternProperties) || Object.keys(schema.patternProperties).length === 0) &&
+    (!("properties" in schema) ||
+      (isRecord(schema.properties) && Object.keys(schema.properties).length === 0))
+      ? [path]
+      : [];
+  for (const key of SCHEMA_MAP_KEYS) {
+    const map = schema[key];
+    if (isRecord(map)) {
+      for (const [name, child] of Object.entries(map)) {
+        violations.push(...collectCompatClosedObjectPaths(child, `${path}.${key}.${name}`, true));
+      }
+    }
+  }
+  for (const key of SCHEMA_NESTED_KEYS) {
+    violations.push(...collectCompatClosedObjectPaths(schema[key], `${path}.${key}`, true));
+  }
+  return violations;
 }
 
 /**
@@ -35,12 +73,23 @@ export function findOpenAIStrictSchemaViolations(
   path: string,
   options?: { requireObjectRoot?: boolean },
 ): string[] {
+  const bounded = truncateToolSchemaDepth(schema);
+  return wasToolSchemaTruncated(bounded)
+    ? [`${path}.depth`]
+    : collectStrictSchemaViolations(bounded, path, options);
+}
+
+function collectStrictSchemaViolations(
+  schema: unknown,
+  path: string,
+  options?: { requireObjectRoot?: boolean },
+): string[] {
   if (Array.isArray(schema)) {
     if (options?.requireObjectRoot) {
       return [`${path}.type`];
     }
     return schema.flatMap((item, index) =>
-      findOpenAIStrictSchemaViolations(item, `${path}[${index}]`),
+      collectStrictSchemaViolations(item, `${path}[${index}]`),
     );
   }
   if (!schema || typeof schema !== "object") {
@@ -90,7 +139,7 @@ export function findOpenAIStrictSchemaViolations(
       continue;
     }
     for (const [entryKey, value] of Object.entries(schemaMap)) {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
+      violations.push(...collectStrictSchemaViolations(value, `${path}.${key}.${entryKey}`));
     }
   }
   // Only recurse through JSON Schema applicators. Annotation payloads such as
@@ -98,7 +147,7 @@ export function findOpenAIStrictSchemaViolations(
   for (const key of SCHEMA_NESTED_KEYS) {
     const value = record[key];
     if (value && typeof value === "object") {
-      violations.push(...findOpenAIStrictSchemaViolations(value, `${path}.${key}`));
+      violations.push(...collectStrictSchemaViolations(value, `${path}.${key}`));
     }
   }
 

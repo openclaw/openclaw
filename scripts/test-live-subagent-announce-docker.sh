@@ -71,15 +71,11 @@ if [ -n "${OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY:-}" ]; then
   export GOOGLE_API_KEY="$OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY"
   unset OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY
 fi
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
-export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
-export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
-export npm_config_cache="$NPM_CONFIG_CACHE"
+trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
+source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 mkdir -p "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 tmp_dir="$(mktemp -d)"
-trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
-source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_workspace "$tmp_dir"
 cd "$tmp_dir"
 announce_relative="$(

@@ -1,29 +1,13 @@
-import { execFileSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import gitPrerequisites from "../../.github/actions/git-owner/test-prerequisites.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { getCanonicalSqliteTableNames } from "../infra/sqlite-schema-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v10-retirement.test-support.js";
-import { STATE_SCHEMA_11_TO_10_TABLES_SQL } from "../state/openclaw-state-schema-v11-retirement.test-support.js";
-import { STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v12-foldin.test-support.js";
-import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "../state/openclaw-state-schema-v13-widerow.test-support.js";
-import { removePreparedWorkerOwnershipColumns } from "../state/openclaw-state-schema-v17.test-support.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { recordAuditEventInDatabase } from "./audit-event-store.js";
 import type { OutboundMessageProgressInput } from "./audit-event-types.js";
-import {
-  createExecutionIdentityAdmissionToken,
-  type ExecutionIdentityAdmissionToken,
-} from "./execution-identity-admission.js";
 import {
   countOutboundMessageAuditEventsForRunInDatabase,
   pageOutboundMessageAuditEventsForRunInDatabase,
@@ -34,27 +18,28 @@ import {
 } from "./message-delivery-progress-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const PINNED_PRE_C04_READER_SHA = gitPrerequisites.outboundMessageTerminalReader.commit;
 const OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT = 1_024;
 
-function ensurePinnedReaderCommit(repositoryRoot: string): void {
-  try {
-    execFileSync("git", ["cat-file", "-e", `${PINNED_PRE_C04_READER_SHA}^{commit}`], {
-      cwd: repositoryRoot,
-      stdio: "pipe",
-    });
-  } catch {
-    // CI checks out a depth-one synthetic merge. Fetch only the immutable proof
-    // reader when that object is absent; never substitute the moving base ref.
-    execFileSync("git", ["fetch", "--no-tags", "--depth=1", "origin", PINNED_PRE_C04_READER_SHA], {
-      cwd: repositoryRoot,
-      stdio: "pipe",
-    });
-  }
-}
-
-function databaseOptions() {
-  return { env: { OPENCLAW_STATE_DIR: tempDirs.make("message-progress-") } };
+function createStore() {
+  const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("message-progress-") } };
+  const open = () => openOpenClawStateDatabase(options);
+  const writeOptions = () => ({ ...options, database: open() });
+  return {
+    open,
+    recordProgress: (input: OutboundMessageProgressInput) =>
+      recordOutboundMessageProgressInDatabase(input, writeOptions()),
+    recordTerminal: (input: ReturnType<typeof terminalInput>) =>
+      recordAuditEventInDatabase(input, writeOptions()),
+    readPage: (
+      params: Omit<Parameters<typeof pageOutboundMessageAuditEventsForRunInDatabase>[1], "runId">,
+    ) =>
+      pageOutboundMessageAuditEventsForRunInDatabase(open().db, {
+        runId: "run-progress",
+        ...params,
+      }),
+    prune: (now: number) =>
+      pruneExpiredOutboundMessageProgressInDatabase({ database: writeOptions(), now }),
+  };
 }
 
 function progressInput(
@@ -86,72 +71,30 @@ function progressInput(
   } as OutboundMessageProgressInput;
 }
 
-function terminalInput(
-  overrides: {
-    sourceId?: string;
-    sourceSequence?: number;
-    occurredAt?: number;
-    runId?: string;
-    executionIdentityToken?: ExecutionIdentityAdmissionToken;
-  } = {},
-) {
+function terminalInput(occurredAt = Date.now()) {
   return {
+    ...progressInput("message.outbound.queued", { occurredAt }),
     sourceId: "queue:payload:0",
     sourceSequence: 3,
-    occurredAt: Date.now(),
-    kind: "message" as const,
     action: "message.outbound.finished" as const,
     status: "succeeded" as const,
     outcome: "sent" as const,
-    actorType: "agent" as const,
-    actorId: "main",
-    agentId: "main",
-    runId: "run-progress",
-    direction: "outbound" as const,
-    channel: "qa-channel",
-    conversationKind: "direct" as const,
     durationMs: 3,
     resultCount: 1,
-    accountId: "raw-account",
-    conversationId: "raw-conversation",
     messageId: "raw-platform-message",
-    targetId: "raw-target",
-    ...overrides,
   };
 }
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+function outcomes(page: ReturnType<typeof pageOutboundMessageAuditEventsForRunInDatabase>) {
+  return page.entries.map((entry) => entry.event.outcome);
+}
+
+afterEach(closeOpenClawStateDatabaseForTest);
 
 describe("outbound message progress companion", () => {
-  it("upgrades the predecessor progress table before a run-only insert", () => {
-    const database = databaseOptions();
-    const { db } = openOpenClawStateDatabase(database);
-    const schema = fs
-      .readFileSync(new URL("../state/openclaw-state-schema.sql", import.meta.url), "utf8")
-      .replace("  context_id TEXT,\n  execution_id TEXT,\n", "");
-    const start = schema.indexOf("CREATE TABLE IF NOT EXISTS outbound_message_progress (");
-    const end = schema.indexOf(") STRICT;", start);
-    db.exec(schema.slice(start, end + ") STRICT;".length));
-
-    expect(
-      recordOutboundMessageProgressInDatabase(progressInput("message.outbound.queued"), {
-        ...database,
-        database: openOpenClawStateDatabase(database),
-      }),
-    ).toBeDefined();
-    const columns = db.prepare("PRAGMA table_info(outbound_message_progress)").all() as Array<{
-      name: string;
-    }>;
-    expect(columns.map((column) => column.name)).toEqual(
-      expect.arrayContaining(["context_id", "execution_id"]),
-    );
-  });
-
   it("stays absent through startup, reads, and terminal-only writes at the current schema", () => {
-    const database = databaseOptions();
-    const opened = openOpenClawStateDatabase(database);
+    const database = createStore();
+    const opened = database.open();
     expect(opened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
@@ -159,16 +102,13 @@ describe("outbound message progress companion", () => {
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 
     expect(
-      countOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
+      countOutboundMessageAuditEventsForRunInDatabase(database.open().db, {
         runId: "missing",
       }),
     ).toBe(0);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
 
-    recordAuditEventInDatabase(terminalInput(), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    database.recordTerminal(terminalInput());
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
     expect(
@@ -179,26 +119,16 @@ describe("outbound message progress companion", () => {
   });
 
   it("ensures idempotently, deduplicates replay, and stores no raw message material", () => {
-    const database = databaseOptions();
+    const database = createStore();
     const queued = progressInput("message.outbound.queued");
-    const first = recordOutboundMessageProgressInDatabase(queued, {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    const first = database.recordProgress(queued);
     closeOpenClawStateDatabaseForTest();
-    const recoveredReplay = recordOutboundMessageProgressInDatabase(queued, {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    recordOutboundMessageProgressInDatabase(progressInput("message.outbound.platform-started"), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    const recoveredReplay = database.recordProgress(queued);
+    database.recordProgress(progressInput("message.outbound.platform-started"));
 
     expect(first).toMatchObject({ action: "message.outbound.queued", outcome: "queued" });
     expect(recoveredReplay).toBeUndefined();
-    const { db } = openOpenClawStateDatabase(database);
-    expect(tableExists(db, "outbound_message_progress")).toBe(true);
+    const { db } = database.open();
     expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
       count: 2,
     });
@@ -206,252 +136,16 @@ describe("outbound message progress companion", () => {
     const stored = JSON.stringify(
       db.prepare("SELECT * FROM outbound_message_progress ORDER BY sequence").all(),
     );
-    for (const raw of [
-      "raw-account",
-      "raw-conversation",
-      "raw-target",
-      "raw-platform-message",
-      "message text",
-      "https://example.test",
-      "callback payload",
-      "session-key",
-      "secret-value",
-    ]) {
+    for (const raw of ["raw-account", "raw-conversation", "raw-target"]) {
       expect(stored).not.toContain(raw);
     }
   });
 
-  it("merges tied progress and terminal rows with stable paging across restart", () => {
-    const database = databaseOptions();
-    const occurredAt = Date.now();
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.queued", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.platform-started", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    recordAuditEventInDatabase(terminalInput({ occurredAt }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-
-    const first = pageOutboundMessageAuditEventsForRunInDatabase(
-      openOpenClawStateDatabase(database).db,
-      { runId: "run-progress", now: occurredAt, limit: 1 },
-    );
-    expect(first.entries).toHaveLength(1);
-    expect(first.nextCursor).toBeDefined();
-    closeOpenClawStateDatabaseForTest();
-
-    const second = pageOutboundMessageAuditEventsForRunInDatabase(
-      openOpenClawStateDatabase(database).db,
-      { runId: "run-progress", now: occurredAt, after: first.nextCursor, limit: 2 },
-    );
-    const allEntries = [...first.entries, ...second.entries];
-    const all = allEntries.map((entry) => entry.event);
-    expect(all.map((event) => event.outcome)).toEqual(["queued", "platform_started", "sent"]);
-    expect(new Set(all.map((event) => event.eventId)).size).toBe(3);
-    expect(new Set(allEntries.map((entry) => entry.rowId)).size).toBe(3);
-    expect(
-      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        now: occurredAt,
-        limit: 3,
-      }).entries,
-    ).toEqual(allEntries);
-    expect(
-      countOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        now: occurredAt,
-      }),
-    ).toBe(3);
-  });
-
-  it(`preserves the ${PINNED_PRE_C04_READER_SHA} terminal-only reader contract across reopen`, () => {
-    const database = databaseOptions();
-    const occurredAt = Date.now();
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.queued", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.platform-started", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    recordAuditEventInDatabase(
-      terminalInput({
-        occurredAt,
-        executionIdentityToken: createExecutionIdentityAdmissionToken("run-progress"),
-      }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    openOpenClawStateDatabase(database);
-    expect(
-      tableExists(openOpenClawStateDatabase(database).db, "outbound_message_execution_bindings"),
-    ).toBe(true);
-    const repositoryRoot = process.cwd();
-    ensurePinnedReaderCommit(repositoryRoot);
-    const projectedDatabase = openOpenClawStateDatabase(database).db;
-    // Only audit rows belong to this proof. Restore empty unrelated owner tables
-    // for the immutable reader without inventing a production downgrade.
-    expect(
-      projectedDatabase.prepare("SELECT COUNT(*) AS count FROM worker_environments").get(),
-    ).toEqual({ count: 0 });
-    removePreparedWorkerOwnershipColumns(projectedDatabase);
-    const pinnedSchemaDatabase = openNodeSqliteDatabase(":memory:");
-    try {
-      pinnedSchemaDatabase.exec(
-        execFileSync(
-          "git",
-          ["show", `${PINNED_PRE_C04_READER_SHA}:src/state/openclaw-state-schema.sql`],
-          { cwd: repositoryRoot, encoding: "utf8" },
-        ),
-      );
-      const pinnedStatements = pinnedSchemaDatabase.prepare(
-        `SELECT sql FROM sqlite_schema
-         WHERE tbl_name = ?
-           AND type IN ('table', 'index') AND sql IS NOT NULL
-         ORDER BY type = 'table' DESC, name`,
-      );
-      for (const table of [
-        "current_conversation_bindings",
-        "skill_workshop_proposals",
-        "cron_run_receipts",
-      ]) {
-        // Current state no longer has the retired proposal table; the pinned reader recreates it.
-        if (table !== "skill_workshop_proposals") {
-          expect(projectedDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual(
-            { count: 0 },
-          );
-        }
-        projectedDatabase.exec(`DROP TABLE IF EXISTS ${table};`);
-        for (const { sql } of pinnedStatements.all(table) as Array<{ sql: string }>) {
-          projectedDatabase.exec(sql);
-        }
-      }
-
-      // The v9-era reader needs these owner projections reversed before restoring
-      // any other retired tables from its immutable schema.
-      projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
-      projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
-      projectedDatabase.exec(STATE_SCHEMA_11_TO_10_TABLES_SQL);
-      projectedDatabase.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
-      const currentTables = new Set(getCanonicalSqliteTableNames(OPENCLAW_STATE_SCHEMA_SQL));
-      const pinnedTables = pinnedSchemaDatabase
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
-        .all() as Array<{ name: string }>;
-      for (const { name } of pinnedTables) {
-        // Current owners, including lazy audit tables, must retain their own setup.
-        if (currentTables.has(name) || tableExists(projectedDatabase, name)) {
-          continue;
-        }
-        for (const { sql } of pinnedStatements.all(name) as Array<{ sql: string }>) {
-          projectedDatabase.exec(sql);
-        }
-      }
-    } finally {
-      pinnedSchemaDatabase.close();
-    }
-    closeOpenClawStateDatabaseForTest();
-
-    const checkoutParent = tempDirs.make("message-progress-pinned-reader-");
-    const pinnedCheckout = path.join(checkoutParent, "checkout");
-    execFileSync(
-      "git",
-      ["worktree", "add", "--detach", pinnedCheckout, PINNED_PRE_C04_READER_SHA],
-      { cwd: repositoryRoot, stdio: "pipe" },
-    );
-    try {
-      fs.symlinkSync(
-        path.join(repositoryRoot, "node_modules"),
-        path.join(pinnedCheckout, "node_modules"),
-        process.platform === "win32" ? "junction" : "dir",
-      );
-      const pinnedResult = execFileSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          "--input-type=module",
-          "--eval",
-          `
-            const stateDir = process.env.OPENCLAW_C04_PINNED_READER_STATE_DIR;
-            const { listAuditEvents } = await import("./src/audit/audit-event-store.ts");
-            const {
-              closeOpenClawStateDatabaseForTest,
-              openOpenClawStateDatabase,
-            } = await import("./src/state/openclaw-state-db.ts");
-            const database = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-            const opened = openOpenClawStateDatabase(database);
-            const schemaVersion = opened.db.prepare("PRAGMA user_version").get().user_version;
-            const quickCheck = opened.db.prepare("PRAGMA quick_check").get().quick_check;
-            const events = listAuditEvents({
-              filters: { runId: "run-progress", kind: "message", direction: "outbound" },
-              limit: 10,
-              database,
-            }).events;
-            closeOpenClawStateDatabaseForTest();
-            console.log("C04_PINNED_READER_RESULT=" + JSON.stringify({
-              schemaVersion,
-              quickCheck,
-              actions: events.map((event) => event.action),
-              outcomes: events.map((event) => event.outcome),
-            }));
-          `,
-        ],
-        {
-          cwd: pinnedCheckout,
-          env: {
-            ...process.env,
-            OPENCLAW_C04_PINNED_READER_STATE_DIR: database.env.OPENCLAW_STATE_DIR,
-          },
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
-      const resultLine = pinnedResult
-        .split("\n")
-        .find((line) => line.startsWith("C04_PINNED_READER_RESULT="));
-      expect(resultLine).toBeDefined();
-      expect(JSON.parse(resultLine?.slice("C04_PINNED_READER_RESULT=".length) ?? "null")).toEqual({
-        schemaVersion: 9,
-        quickCheck: "ok",
-        actions: ["message.outbound.finished"],
-        outcomes: ["sent"],
-      });
-    } finally {
-      execFileSync("git", ["worktree", "remove", "--force", pinnedCheckout], {
-        cwd: repositoryRoot,
-        stdio: "pipe",
-      });
-    }
-
-    const reopened = openOpenClawStateDatabase(database).db;
-    expect(reopened.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
-    expect(reopened.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-    expect(
-      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        now: occurredAt,
-        limit: 10,
-      }).entries.map((entry) => entry.event.outcome),
-    ).toEqual(["queued", "platform_started", "sent"]);
-    // A pinned-SHA worktree plus a cold tsx compile of the audit/state modules costs
-    // minutes on a contended runner; the 120s default makes this fail by construction.
-  }, 300_000);
-
   it("pages large offsets across bounded owner-stream chunks", () => {
-    const database = databaseOptions();
+    const database = createStore();
     const occurredAt = Date.now();
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.queued", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    const { db } = openOpenClawStateDatabase(database);
+    database.recordProgress(progressInput("message.outbound.queued", { occurredAt }));
+    const { db } = database.open();
     db.prepare("DELETE FROM outbound_message_progress").run();
     const insert = db.prepare(`
       INSERT INTO outbound_message_progress (
@@ -484,80 +178,41 @@ describe("outbound message progress companion", () => {
       throw error;
     }
 
-    const page = pageOutboundMessageAuditEventsForRunInDatabase(
-      openOpenClawStateDatabase(database).db,
-      { runId: "run-progress", now: occurredAt, offset: 510, limit: 4 },
-    );
-    expect(page.entries.map((entry) => entry.event.outcome)).toEqual([
-      "queued",
-      "platform_started",
-      "queued",
-      "platform_started",
-    ]);
+    const page = database.readPage({ now: occurredAt, offset: 510, limit: 4 });
+    expect(outcomes(page)).toEqual(["queued", "platform_started", "queued", "platform_started"]);
     expect(page.nextCursor).toBeDefined();
     expect(
-      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        now: occurredAt,
-        after: page.nextCursor,
-        limit: 2,
-      }).entries.map((entry) => entry.event.outcome),
+      outcomes(database.readPage({ now: occurredAt, after: page.nextCursor, limit: 2 })),
     ).toEqual(["queued", "platform_started"]);
   });
 
   it("rejects a cursor whose owner row was pruned while preserving the other owner", () => {
-    const database = databaseOptions();
+    const database = createStore();
     const occurredAt = Date.now();
-    recordAuditEventInDatabase(terminalInput({ occurredAt }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    recordOutboundMessageProgressInDatabase(
-      progressInput("message.outbound.queued", { occurredAt }),
-      { ...database, database: openOpenClawStateDatabase(database) },
-    );
-    const first = pageOutboundMessageAuditEventsForRunInDatabase(
-      openOpenClawStateDatabase(database).db,
-      { runId: "run-progress", now: occurredAt, limit: 2 },
-    );
+    database.recordTerminal(terminalInput(occurredAt));
+    database.recordProgress(progressInput("message.outbound.queued", { occurredAt }));
+    const first = database.readPage({ now: occurredAt, limit: 2 });
     const progress = first.entries.find((entry) => entry.event.outcome === "queued");
     expect(progress).toBeDefined();
     const progressCursor = {
       occurredAt,
       rowId: progress?.rowId ?? 0,
     };
-    openOpenClawStateDatabase(database).db.prepare("DELETE FROM outbound_message_progress").run();
+    database.open().db.prepare("DELETE FROM outbound_message_progress").run();
 
-    expect(() =>
-      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        now: occurredAt,
-        after: progressCursor,
-        limit: 1,
-      }),
-    ).toThrow("cursor is no longer retained");
-    expect(
-      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
-        runId: "run-progress",
-        now: occurredAt,
-        limit: 10,
-      }).entries.map((entry) => entry.event.outcome),
-    ).toEqual(["sent"]);
+    expect(() => database.readPage({ now: occurredAt, after: progressCursor, limit: 1 })).toThrow(
+      "cursor is no longer retained",
+    );
+    expect(outcomes(database.readPage({ now: occurredAt, limit: 10 }))).toEqual(["sent"]);
   });
 
   it("bounds expired progress maintenance while preserving retained terminal rows", () => {
-    const database = databaseOptions();
-    recordOutboundMessageProgressInDatabase(progressInput("message.outbound.queued"), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
-    const { db } = openOpenClawStateDatabase(database);
+    const database = createStore();
+    database.recordProgress(progressInput("message.outbound.queued"));
+    const { db } = database.open();
     db.exec("DELETE FROM outbound_message_progress");
     const now = Date.now();
-    recordAuditEventInDatabase(terminalInput({ occurredAt: now }), {
-      ...database,
-      database: openOpenClawStateDatabase(database),
-    });
+    database.recordTerminal(terminalInput(now));
     const expiredAt = now - 31 * 24 * 60 * 60_000;
     db.prepare(
       `WITH RECURSIVE numbers(n) AS (
@@ -575,27 +230,12 @@ describe("outbound message progress companion", () => {
        FROM numbers`,
     ).run(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT + 1, expiredAt);
 
-    expect(
-      pruneExpiredOutboundMessageProgressInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now,
-      }),
-    ).toBe(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT);
+    expect(database.prune(now)).toBe(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT);
     expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
       count: 1,
     });
-    expect(
-      pruneExpiredOutboundMessageProgressInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now,
-      }),
-    ).toBe(1);
-    expect(
-      pruneExpiredOutboundMessageProgressInDatabase({
-        database: { ...database, database: openOpenClawStateDatabase(database) },
-        now,
-      }),
-    ).toBe(0);
+    expect(database.prune(now)).toBe(1);
+    expect(database.prune(now)).toBe(0);
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
   });
 });

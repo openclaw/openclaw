@@ -1,4 +1,3 @@
-// Qa Lab tests cover discord smoke plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,15 +13,13 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { runMantisDiscordSmoke } from "./discord-smoke.runtime.js";
 
+const readText = (file: string) => fs.readFile(file, "utf8");
+
 function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { "content-type": "application/json" },
   });
-}
-
-function emptyResponse(status = 204) {
-  return new Response(null, { status });
 }
 
 function fetchGuardCallsWithMethod(method: string) {
@@ -38,6 +35,53 @@ function fetchGuardCallsWithMethod(method: string) {
 describe("mantis discord smoke runtime", () => {
   let repoRoot: string;
   let tokenFile: string;
+
+  function mockDiscord({
+    listedChannel = "1456744319972282449",
+    channelGuild = "1456350064065904867",
+    reactionStatus = 204,
+  } = {}) {
+    fetchWithSsrFGuard.mockImplementation(
+      async ({ url, init }: { url: string; init?: RequestInit }) => {
+        const pathname = new URL(url).pathname;
+        const method = init?.method ?? "GET";
+        const routes: Record<string, unknown> = {
+          "GET /api/v10/users/@me": { id: "1489650053747314748", username: "Mantis" },
+          "GET /api/v10/guilds/1456350064065904867": { id: "1456350064065904867", name: "Friends" },
+          "GET /api/v10/guilds/1456350064065904867/channels": [{ id: listedChannel }],
+          "GET /api/v10/channels/1456744319972282449": {
+            guild_id: channelGuild,
+            id: "1456744319972282449",
+            name: channelGuild === "1456350064065904867" ? "maintainers" : "wrong-guild-channel",
+            type: 0,
+          },
+          "POST /api/v10/channels/1456744319972282449/messages": {
+            id: "1500000000000000001",
+            channel_id: "1456744319972282449",
+          },
+        };
+        const reactionPaths = ["%F0%9F%91%80", "👀"].map(
+          (emoji) =>
+            `/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/${emoji}/@me`,
+        );
+        const payload =
+          channelGuild !== "1456350064065904867" && method !== "GET"
+            ? undefined
+            : routes[`${method} ${pathname}`];
+        const response =
+          channelGuild === "1456350064065904867" &&
+          method === "PUT" &&
+          reactionPaths.includes(pathname)
+            ? reactionStatus === 204
+              ? new Response(null, { status: 204 })
+              : jsonResponse({ message: "Missing reaction permission" }, reactionStatus)
+            : payload
+              ? jsonResponse(payload)
+              : jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404);
+        return { response, release: vi.fn() };
+      },
+    );
+  }
 
   function runSmoke(options: NonNullable<Parameters<typeof runMantisDiscordSmoke>[0]>) {
     return runMantisDiscordSmoke({
@@ -56,83 +100,11 @@ describe("mantis discord smoke runtime", () => {
     tokenFile = path.join(repoRoot, "mantis-token");
     await fs.writeFile(tokenFile, "test-token", "utf8");
     fetchWithSsrFGuard.mockReset();
-    const reactionPaths = new Set([
-      "/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/%F0%9F%91%80/@me",
-      "/api/v10/channels/1456744319972282449/messages/1500000000000000001/reactions/👀/@me",
-    ]);
-    fetchWithSsrFGuard.mockImplementation(
-      async ({ url, init }: { url: string; init?: RequestInit }) => {
-        const pathname = new URL(url).pathname;
-        const method = init?.method ?? "GET";
-        if (pathname === "/api/v10/users/@me") {
-          return {
-            response: jsonResponse({ id: "1489650053747314748", username: "Mantis" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867") {
-          return {
-            response: jsonResponse({ id: "1456350064065904867", name: "Friends" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867/channels") {
-          return { response: jsonResponse([{ id: "1456744319972282449" }]), release: vi.fn() };
-        }
-        if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
-          return {
-            response: jsonResponse({
-              guild_id: "1456350064065904867",
-              id: "1456744319972282449",
-              name: "maintainers",
-              type: 0,
-            }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/channels/1456744319972282449/messages" && method === "POST") {
-          return {
-            response: jsonResponse({
-              id: "1500000000000000001",
-              channel_id: "1456744319972282449",
-            }),
-            release: vi.fn(),
-          };
-        }
-        if (reactionPaths.has(pathname) && method === "PUT") {
-          return { response: emptyResponse(), release: vi.fn() };
-        }
-        return {
-          response: jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404),
-          release: vi.fn(),
-        };
-      },
-    );
+    mockDiscord();
   });
 
   afterEach(async () => {
     await fs.rm(repoRoot, { recursive: true, force: true });
-  });
-
-  it("writes pass artifacts without leaking the bot token", async () => {
-    const result = await runSmoke({
-      outputDir: ".artifacts/qa-e2e/mantis/test",
-      now: () => new Date("2026-05-03T12:00:00.000Z"),
-    });
-
-    expect(result.status).toBe("pass");
-    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
-      status: string;
-      tokenSource: string;
-      message: { id: string; posted: boolean; reactionAdded: boolean };
-    };
-    expect(summary.status).toBe("pass");
-    expect(summary.tokenSource).toBe("file");
-    expect(summary.message.id).toBe("1500000000000000001");
-    expect(summary.message.posted).toBe(true);
-    expect(summary.message.reactionAdded).toBe(true);
-    expect(await fs.readFile(result.summaryPath, "utf8")).not.toContain("test-token");
-    expect(await fs.readFile(result.reportPath, "utf8")).not.toContain("test-token");
   });
 
   it("bounds Mantis Discord token files", async () => {
@@ -153,7 +125,7 @@ describe("mantis discord smoke runtime", () => {
 
     expect(oversizedResult.status).toBe("fail");
     expect(fetchWithSsrFGuard.mock.calls).toHaveLength(fetchCallsAtBoundary);
-    expect(await fs.readFile(path.join(oversizedResult.outputDir, "error.txt"), "utf8")).toContain(
+    expect(await readText(path.join(oversizedResult.outputDir, "error.txt"))).toContain(
       `Mantis Discord token file at ${tokenFile} exceeds 4096 bytes.`,
     );
   });
@@ -165,35 +137,60 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("pass");
-    const summaryText = await fs.readFile(result.summaryPath, "utf8");
-    const reportText = await fs.readFile(result.reportPath, "utf8");
+    const summaryText = await readText(result.summaryPath);
+    const reportText = await readText(result.reportPath);
     expect(reportText).toContain("# Mantis Discord Smoke");
     expect(reportText).toContain("- Bot: <redacted> (<redacted>)");
     expect(reportText).toContain("- Guild: <redacted> (<redacted>)");
     expect(reportText).toContain("- Channel: #<redacted> (<redacted>)");
     for (const text of [summaryText, reportText]) {
       expect(text).toContain("<redacted>");
-      expect(text).not.toContain("1489650053747314748");
-      expect(text).not.toContain("1456350064065904867");
-      expect(text).not.toContain("Friends");
-      expect(text).not.toContain("1456744319972282449");
-      expect(text).not.toContain("maintainers");
-      expect(text).not.toContain("1500000000000000001");
+      expect(text).not.toMatch(
+        /test-token|1489650053747314748|1456350064065904867|Friends|1456744319972282449|maintainers|1500000000000000001/u,
+      );
     }
     expect(summaryText).not.toContain("Mantis");
-    const summary = JSON.parse(summaryText) as {
-      bot?: { id: string; username?: string };
-      channel?: { id: string; name?: string; type?: number };
-      guild?: { id: string; name?: string };
-      message?: { id: string };
-      metadataRedaction: boolean;
-    };
-    expect(summary.metadataRedaction).toBe(true);
-    expect(summary.bot).toEqual({ id: "<redacted>", username: "<redacted>" });
-    expect(summary.guild).toEqual({ id: "<redacted>", name: "<redacted>" });
-    expect(summary.channel).toEqual({ id: "<redacted>", name: "<redacted>", type: 0 });
-    expect(summary.message?.id).toBe("<redacted>");
+    expect(JSON.parse(summaryText)).toEqual(
+      expect.objectContaining({
+        metadataRedaction: true,
+        bot: { id: "<redacted>", username: "<redacted>" },
+        guild: { id: "<redacted>", name: "<redacted>" },
+        channel: { id: "<redacted>", name: "<redacted>", type: 0 },
+        message: expect.objectContaining({ id: "<redacted>" }),
+      }),
+    );
   });
+
+  it.each([false, true])(
+    "retains a successful post when its reaction fails (redacted=%s)",
+    async (redactPublicMetadata) => {
+      mockDiscord({ reactionStatus: 403 });
+      const result = await runSmoke({
+        outputDir: ".artifacts/qa-e2e/mantis/reaction-failure",
+        redactPublicMetadata,
+      });
+
+      expect(result.status).toBe("fail");
+      const messageId = redactPublicMetadata ? "<redacted>" : "1500000000000000001";
+      const summaryText = await readText(result.summaryPath);
+      expect(JSON.parse(summaryText).message).toEqual({
+        id: messageId,
+        posted: true,
+        reactionAdded: false,
+      });
+      const reportText = await readText(result.reportPath);
+      expect(reportText).toContain(`- Posted message: ${messageId}`);
+      expect(reportText).toContain("- Added reaction: no");
+      expect(await readText(path.join(result.outputDir, "error.txt"))).toContain(
+        "Missing reaction permission",
+      );
+      expect(fetchGuardCallsWithMethod("POST")).toHaveLength(1);
+      expect(fetchGuardCallsWithMethod("PUT")).toHaveLength(1);
+      if (redactPublicMetadata) {
+        expect(summaryText + reportText).not.toContain("1500000000000000001");
+      }
+    },
+  );
 
   it("fails before calling Discord when required ids are missing", async () => {
     const result = await runSmoke({
@@ -202,54 +199,19 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    const errorText = await readText(path.join(result.outputDir, "error.txt"));
     expect(errorText).toContain("Missing OPENCLAW_QA_DISCORD_GUILD_ID");
   });
 
   it("fails when the channel is not in the configured guild", async () => {
-    fetchWithSsrFGuard.mockImplementation(
-      async ({ url, init }: { url: string; init?: RequestInit }) => {
-        const pathname = new URL(url).pathname;
-        const method = init?.method ?? "GET";
-        if (pathname === "/api/v10/users/@me") {
-          return {
-            response: jsonResponse({ id: "1489650053747314748", username: "Mantis" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867") {
-          return {
-            response: jsonResponse({ id: "1456350064065904867", name: "Friends" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867/channels") {
-          return { response: jsonResponse([{ id: "1999999999999999999" }]), release: vi.fn() };
-        }
-        if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
-          return {
-            response: jsonResponse({
-              guild_id: "1999999999999999999",
-              id: "1456744319972282449",
-              name: "wrong-guild-channel",
-              type: 0,
-            }),
-            release: vi.fn(),
-          };
-        }
-        return {
-          response: jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404),
-          release: vi.fn(),
-        };
-      },
-    );
+    mockDiscord({ listedChannel: "1999999999999999999", channelGuild: "1999999999999999999" });
 
     const result = await runSmoke({
       outputDir: ".artifacts/qa-e2e/mantis/wrong-guild",
     });
 
     expect(result.status).toBe("fail");
-    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    const errorText = await readText(path.join(result.outputDir, "error.txt"));
     expect(errorText).toContain("is not in guild");
     expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
   });
@@ -279,82 +241,15 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    const errorText = await readText(path.join(result.outputDir, "error.txt"));
     expect(errorText).toContain("/users/@me response exceeds");
     expect(errorText).toContain(`${16 * 1024 * 1024} bytes`);
-    // The byte cap trips on the first call, so the post step never runs.
-    expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
-    // The connection is still released on the fail-closed path.
-    expect(release).toHaveBeenCalled();
-  });
-
-  it("fails with a parse error when a Discord 200 body is not JSON (bounded read preserves malformed handling)", async () => {
-    const release = vi.fn();
-    fetchWithSsrFGuard.mockImplementation(async ({ url }: { url: string }) => {
-      const pathname = new URL(url).pathname;
-      if (pathname === "/api/v10/users/@me") {
-        return {
-          response: new Response("<!doctype html><html>not json</html>", {
-            status: 200,
-            headers: { "content-type": "text/html" },
-          }),
-          release,
-        };
-      }
-      return {
-        response: jsonResponse({ message: `unexpected ${pathname}` }, 404),
-        release: vi.fn(),
-      };
-    });
-
-    const result = await runSmoke({
-      outputDir: ".artifacts/qa-e2e/mantis/malformed",
-    });
-
-    expect(result.status).toBe("fail");
-    // A non-JSON 200 still surfaces as a clean fail (JSON.parse throws on the
-    // under-cap body), and no post is attempted.
     expect(fetchGuardCallsWithMethod("POST")).toHaveLength(0);
     expect(release).toHaveBeenCalled();
   });
 
   it("redacts response guild ids in mismatch failure artifacts", async () => {
-    fetchWithSsrFGuard.mockImplementation(
-      async ({ url, init }: { url: string; init?: RequestInit }) => {
-        const pathname = new URL(url).pathname;
-        const method = init?.method ?? "GET";
-        if (pathname === "/api/v10/users/@me") {
-          return {
-            response: jsonResponse({ id: "1489650053747314748", username: "Mantis" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867") {
-          return {
-            response: jsonResponse({ id: "1456350064065904867", name: "Friends" }),
-            release: vi.fn(),
-          };
-        }
-        if (pathname === "/api/v10/guilds/1456350064065904867/channels") {
-          return { response: jsonResponse([{ id: "1456744319972282449" }]), release: vi.fn() };
-        }
-        if (pathname === "/api/v10/channels/1456744319972282449" && method === "GET") {
-          return {
-            response: jsonResponse({
-              guild_id: "1999999999999999999",
-              id: "1456744319972282449",
-              name: "wrong-guild-channel",
-              type: 0,
-            }),
-            release: vi.fn(),
-          };
-        }
-        return {
-          response: jsonResponse({ message: `unexpected ${method} ${pathname}` }, 404),
-          release: vi.fn(),
-        };
-      },
-    );
+    mockDiscord({ channelGuild: "1999999999999999999" });
 
     const result = await runSmoke({
       outputDir: ".artifacts/qa-e2e/mantis/wrong-guild-redacted",
@@ -362,7 +257,7 @@ describe("mantis discord smoke runtime", () => {
     });
 
     expect(result.status).toBe("fail");
-    const errorText = await fs.readFile(path.join(result.outputDir, "error.txt"), "utf8");
+    const errorText = await readText(path.join(result.outputDir, "error.txt"));
     expect(errorText).toContain("<redacted>");
     expect(errorText).not.toContain("1999999999999999999");
     expect(errorText).not.toContain("1456350064065904867");

@@ -61,21 +61,36 @@
       "class": "plugin-runtime",
       "risk": ["mdns", "network"]
     },
+    "@modelcontextprotocol/client": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-client", "network"]
+    },
+    "@modelcontextprotocol/core": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
+    },
+    "@modelcontextprotocol/node": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-server", "network"]
+    },
     "@modelcontextprotocol/sdk": {
       "owner": "core:mcp",
       "class": "core-runtime",
       "risk": ["protocol-client", "network"]
+    },
+    "@modelcontextprotocol/server": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["protocol-server", "network"]
     },
     "@mozilla/readability": {
       "owner": "plugin:web-readability",
       "class": "plugin-runtime",
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
-    },
-    "@mistralai/mistralai": {
-      "owner": "provider:mistral",
-      "class": "default-runtime-initially",
-      "risk": ["provider-sdk", "network"]
     },
     "@openclaw/ai": {
       "owner": "core:ai-runtime",
@@ -85,7 +100,17 @@
     "@openclaw/fs-safe": {
       "owner": "core:filesystem-safety",
       "class": "core-runtime",
-      "risk": ["filesystem", "path-safety"]
+      "risk": ["native", "filesystem", "path-safety", "secret-input"]
+    },
+    "@openclaw/proc-safe": {
+      "owner": "core:process-execution",
+      "class": "core-runtime",
+      "risk": ["native", "process-execution", "service-manager"]
+    },
+    "@opentelemetry/semantic-conventions": {
+      "owner": "provider:mistral",
+      "class": "default-runtime-initially",
+      "risk": ["telemetry"]
     },
     "@silvia-odwyer/photon-node": {
       "owner": "core:media",
@@ -154,6 +179,11 @@
       "class": "default-runtime-initially",
       "risk": ["http-server", "large-transitive-cone"]
     },
+    "fast-uri": {
+      "owner": "core:mcp",
+      "class": "core-runtime",
+      "risk": ["schema-validation"]
+    },
     "file-type": {
       "owner": "core:media-admission",
       "class": "core-runtime",
@@ -208,11 +238,6 @@
       "owner": "core:archive-handling",
       "class": "core-runtime",
       "risk": ["archive-parser", "untrusted-files"]
-    },
-    "koffi": {
-      "owner": "core:process-execution",
-      "class": "core-runtime",
-      "risk": ["native", "ffi", "process-execution", "secret-input"]
     },
     "kysely": {
       "owner": "core:sqlite-storage",
@@ -340,6 +365,11 @@
     "zod": {
       "owner": "core:config-and-plugin-sdk-validation",
       "class": "core-runtime",
+      "risk": ["schema-validation"]
+    },
+    "zod-to-json-schema": {
+      "owner": "provider:mistral",
+      "class": "default-runtime-initially",
       "risk": ["schema-validation"]
     }
   }

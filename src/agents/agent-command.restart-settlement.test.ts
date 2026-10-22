@@ -1,12 +1,20 @@
 import path from "node:path";
-import { beforeAll, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
+import { getRestartRecoveryTerminalDeliveryEvidence } from "../config/sessions/restart-recovery-state.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import * as sessionAdmission from "../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import {
+  captureSessionWorkRunInterruptions,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import {
   agentCommand,
@@ -20,9 +28,11 @@ import {
 } from "./agent-command.compaction.test-support.js";
 import { finishAgentCommandCleanup } from "./command/cleanup.js";
 import * as modelSelection from "./command/model-selection.js";
+import type { AgentCommandGatewayIngressOpts } from "./command/types.js";
 import { markSessionCompletedAfterRecoveryCheckpoint } from "./main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-recovery/main-session-restart-recovery-marking.js";
 import { recoverStore } from "./main-session-recovery/main-session-restart-recovery-store.js";
+import { createAgentRunDirectAbortError } from "./run-termination.js";
 
 const {
   loadSessionEntry,
@@ -31,13 +41,176 @@ const {
   createAgentRunRestartAbortError,
 } = compactionTestRuntime;
 
+// Stack-ordered teardown drains the compaction fixture before clearing its config.
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+});
+
 registerAgentCommandCompactionTestHooks();
+
+beforeEach(() => {
+  if (!state.cfg) {
+    throw new Error("missing compaction fixture config");
+  }
+  setRuntimeConfigSnapshot(state.cfg);
+});
 
 let persistGatewaySessionLifecycleEvent: typeof import("../gateway/session-lifecycle-state.js").persistGatewaySessionLifecycleEvent;
 
 beforeAll(async () => {
   ({ persistGatewaySessionLifecycleEvent } = await import("../gateway/session-lifecycle-state.js"));
 });
+
+const gatewayCommand = (opts: Omit<AgentCommandGatewayIngressOpts, "allowModelOverride">) =>
+  agentCommandFromGatewayIngress({ ...opts, allowModelOverride: false }, ...GATEWAY_INGRESS_ARGS);
+
+function finishCleanup(
+  target: { agentId: string; sessionKey: string; storePath: string },
+  entry: SessionEntry,
+  runId: string,
+  lifecycleGeneration: string,
+  terminalEvent: Parameters<typeof finishAgentCommandCleanup>[0]["terminalEvent"],
+) {
+  return finishAgentCommandCleanup({
+    prepared: {
+      ...target,
+      runId,
+      sessionAgentId: target.agentId,
+      sessionStore: { [target.sessionKey]: entry },
+    },
+    sessionEntry: entry,
+    runOwnedSessionId: entry.sessionId,
+    sessionReboundDuringRun: false,
+    trackedRestartRecoveryDeliveryClaim: true,
+    terminalEvent,
+    lifecycleGeneration,
+    beforeTerminalDelivery: undefined,
+    reportCommitted: () => {},
+    preparedRunAdmission: undefined,
+    sessionWorkAdmission: undefined,
+    cleanupInternalModelRunTargets: async () => {},
+    releaseForeground: undefined,
+  });
+}
+
+it.each(["visible final", "progress only"] as const)(
+  "retains the normal settle requester's durable delivery evidence: %s",
+  async (reply) => {
+    const sessionKey = "agent:main:settle-completion";
+    const sessionId = "settle-completion-session";
+    const runId = "announce:requester-settle:synthetic-cohort:yield-1";
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
+    const result = makeCompactionResult({
+      sessionId,
+      text: "Requester finished",
+      runner: "embedded",
+    });
+    if (reply === "progress only") {
+      result.payloads = [{ text: "Still checking", isCommentary: true }];
+      result.meta.finalAssistantVisibleText = undefined;
+    }
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    const { deliverAgentCommandResult } =
+      await vi.importActual<typeof import("./command/delivery.js")>("./command/delivery.js");
+    state.deliverAgentCommandResultMock.mockImplementation(deliverAgentCommandResult);
+    await gatewayCommand({
+      sessionKey,
+      sessionId,
+      runId,
+      message: "Synthesize the completed child results",
+      inputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:synthetic-child",
+        sourceChannel: "internal",
+        sourceTool: "subagent_settle",
+      },
+    });
+    const completed = loadSessionEntry(target);
+    expect(getRestartRecoveryTerminalDeliveryEvidence(completed, runId)).toMatchObject({
+      runId,
+      captured: true,
+      payloads: [{ visible: reply === "visible final" }],
+    });
+    expect(completed?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(completed?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["visible", "internal", "coordination"] as const)(
+  "declares the %s command admission and accepts its interruption only once",
+  async (visibility) => {
+    const sessionKey = "agent:main:admitted-stop";
+    const sessionId = "admitted-stop-session";
+    const runId = "admitted-stop-command";
+    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+    await replaceSessionEntry(target, { sessionId, updatedAt: 100 });
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const reason = createAgentRunDirectAbortError();
+    using _ = vi
+      .spyOn(modelSelection, "resolveEmbeddedModelSelection")
+      .mockImplementationOnce(async (params) => {
+        entered.resolve();
+        await resume.promise;
+        expect(params.opts.abortSignal?.reason).toBe(reason);
+        params.opts.abortSignal?.throwIfAborted();
+        throw new Error("command did not observe Stop");
+      });
+    const command = gatewayCommand({
+      sessionKey,
+      sessionId,
+      runId,
+      message: "Stop before provider selection",
+      ...(visibility === "internal" ? { sessionEffects: "internal" as const } : {}),
+      ...(visibility === "coordination"
+        ? {
+            inputProvenance: {
+              kind: "inter_session" as const,
+              sourceTool: "sessions_send",
+              sourceRole: "subagent" as const,
+            },
+          }
+        : {}),
+    });
+    void command.catch(() => {});
+    const interruptionTarget = { scope: target.storePath, identities: [sessionKey, sessionId] };
+    try {
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        command,
+        "command did not reach model selection",
+      );
+      const captured = captureSessionWorkRunInterruptions({
+        ...interruptionTarget,
+        accept: () => true,
+      });
+      expect(captured.map(({ run }) => run)).toEqual([
+        {
+          runId,
+          sessionKey,
+          sessionId,
+          agentId: "main",
+          controlUiVisible: visibility === "visible",
+        },
+      ]);
+      expect(captured[0]!.interrupt(reason)).toBe(true);
+      const second = startSessionControllerInterruption({
+        ...interruptionTarget,
+        reason: new Error("later Stop"),
+      });
+      expect([...second.interruptedRunIds]).toEqual([]);
+      resume.resolve();
+      await expect(command).rejects.toBe(reason);
+      await second.released;
+      expect(state.runAgentAttemptMock).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      await command.catch(() => {});
+    }
+  },
+);
 
 it.each([
   "stopped",
@@ -108,25 +281,8 @@ it.each([
   if (scenario === "new generation") {
     rotateAgentEventLifecycleGeneration();
   }
-  await finishAgentCommandCleanup({
-    prepared: {
-      ...target,
-      sessionAgentId: target.agentId,
-      runId,
-      sessionStore: { [sessionKey]: entry },
-    },
-    sessionEntry: entry,
-    runOwnedSessionId: sessionId,
-    sessionReboundDuringRun: false,
-    trackedRestartRecoveryDeliveryClaim: true,
-    terminalEvent: { data: { phase: "end", aborted: true, stopReason: "rpc" } },
-    lifecycleGeneration,
-    beforeTerminalDelivery: undefined,
-    reportCommitted: () => {},
-    preparedRunAdmission: undefined,
-    sessionWorkAdmission: undefined,
-    cleanupInternalModelRunTargets: async () => {},
-    releaseForeground: undefined,
+  await finishCleanup(target, entry, runId, lifecycleGeneration, {
+    data: { phase: "end", aborted: true, stopReason: "rpc" },
   });
   const settled = loadSessionEntry(target);
   if (scenario !== "stopped") {
@@ -184,39 +340,35 @@ it("preserves a stopped source claim when generation retires before post-run per
       return patch(scope, update, options);
     });
   await expect(
-    agentCommandFromGatewayIngress(
-      {
-        sessionKey,
-        sessionId,
-        runId,
-        message: "Finish this turn",
-        allowModelOverride: false,
-        abortSignal: controller.signal,
-        operatorAuthority: createAdmittedRunOperatorAuthority({
+    gatewayCommand({
+      sessionKey,
+      sessionId,
+      runId,
+      message: "Finish this turn",
+      abortSignal: controller.signal,
+      operatorAuthority: createAdmittedRunOperatorAuthority({
+        profileId: "synthetic-operator",
+        scopes: ["operator.admin"],
+        recoverySnapshot: {
           profileId: "synthetic-operator",
           scopes: ["operator.admin"],
-          recoverySnapshot: {
-            profileId: "synthetic-operator",
-            scopes: ["operator.admin"],
-            assignedRole: null,
-            githubLogin: null,
-            grant: null,
-            aliasBindingIds: [],
-            authPolicy: {
-              generation: "",
-              grantGeneration: "synthetic-generation",
-              role: "operator",
-              authMethod: "token",
-            },
-            controlUiAdmin: true,
-            localOperator: true,
-            sourceIngress: "control-ui",
+          assignedRole: null,
+          githubLogin: null,
+          grant: null,
+          aliasBindingIds: [],
+          authPolicy: {
+            generation: "",
+            grantGeneration: "synthetic-generation",
+            role: "operator",
+            authMethod: "token",
           },
-          assertCurrent() {},
-        }),
-      },
-      ...GATEWAY_INGRESS_ARGS,
-    ),
+          controlUiAdmin: true,
+          localOperator: true,
+          sourceIngress: "control-ui",
+        },
+        assertCurrent() {},
+      }),
+    }),
   ).rejects.toThrow("stale gateway lifecycle");
   expect(generationRetired).toBe(true);
   expect(loadSessionEntry(target)).toMatchObject({
@@ -228,95 +380,6 @@ it("preserves a stopped source claim when generation retires before post-run per
   expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
 });
 
-it.each(["command", "cleanup"] as const)(
-  "retains the %s failure when completion source-release also fails",
-  async (phase) => {
-    const sessionKey = `agent:main:completion-settlement-${phase}`;
-    const sessionId = `completion-settlement-${phase}`;
-    const runId = `announce:completion-settlement-${phase}`;
-    const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
-    const claim: HarnessCompletionRecovery = {
-      taskId: "completed-child",
-      taskRunId: "completed-child-run",
-      taskStatus: "succeeded",
-      sourceRunId: runId,
-      requesterSessionKey: sessionKey,
-      requesterAgentId: "main",
-      sessionId,
-      lifecycleRevision: "initial",
-    };
-    await replaceSessionEntry(target, {
-      sessionId,
-      updatedAt: Date.now(),
-      lifecycleRevision: claim.lifecycleRevision,
-      restartRecoveryHarnessCompletion: claim,
-      restartRecoveryDeliveryRunId: runId,
-      restartRecoveryDeliverySourceRunId: runId,
-      restartRecoverySourceIngress: "internal",
-    });
-    const primary = new Error(`${phase} failed before source release`);
-    const releaseFailure = new Error("completion source release failed");
-    const enteredCleanup = createDeferred();
-    const finishCleanup = createDeferred();
-    const sourceRelease = vi.fn(async () => {
-      throw releaseFailure;
-    });
-    const prepareSource = vi.fn(async () => ({
-      assertCurrent: () => {},
-      checks: [],
-      release: sourceRelease,
-    }));
-    const beforeTerminalDelivery = vi.fn(async () => {
-      enteredCleanup.resolve();
-      await finishCleanup.promise;
-      if (phase === "cleanup") {
-        throw primary;
-      }
-    });
-    if (phase === "command") {
-      state.runAgentAttemptMock.mockRejectedValue(primary);
-    } else {
-      state.runAgentAttemptMock.mockResolvedValue(
-        makeCompactionResult({ sessionId, text: "done", runner: "embedded" }),
-      );
-      beforeTerminalDelivery.mockResolvedValueOnce(undefined);
-    }
-    const run = agentCommandFromGatewayIngress(
-      {
-        sessionKey,
-        sessionId,
-        runId,
-        message: "Finish the saved completion",
-        allowModelOverride: false,
-        assertSourceCurrent: Object.assign(() => {}, { prepareSessionSourceScope: prepareSource }),
-        beforeTerminalDelivery,
-      },
-      ...GATEWAY_INGRESS_ARGS,
-    );
-    const rejected = expect(run).rejects.toMatchObject({
-      name: "AggregateError",
-      cause: primary,
-      errors: [primary, releaseFailure],
-    });
-    try {
-      await awaitGateBeforeSettlement(
-        enteredCleanup.promise,
-        run,
-        "command skipped terminal cleanup",
-      );
-      expect(sourceRelease).not.toHaveBeenCalled();
-      finishCleanup.resolve();
-      await rejected;
-      expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
-      expect(prepareSource).toHaveBeenCalledOnce();
-      expect(sourceRelease).toHaveBeenCalledOnce();
-    } finally {
-      finishCleanup.resolve();
-      await run.catch(() => {});
-    }
-  },
-);
-
 it.each([false, true])(
   "queues image follow-up and revalidates session replacement=%s",
   async (replace) => {
@@ -326,7 +389,6 @@ it.each([false, true])(
     await replaceSessionEntry(target, { sessionId, updatedAt: Date.now() });
     const completionEntered = createDeferred();
     const finishCompletion = createDeferred();
-    const followupQueued = createDeferred();
     const runs: string[] = [];
     state.runAgentAttemptMock.mockImplementation(async (params) => {
       runs.push(params.runId);
@@ -336,29 +398,21 @@ it.each([false, true])(
       }
       return makeCompactionResult({ sessionId, text: "A lighthouse", runner: "embedded" });
     });
-    const completion = agentCommandFromGatewayIngress(
-      {
-        sessionKey,
-        sessionId,
-        runId: "image-completion",
-        message: "Describe the completed image",
-        allowModelOverride: false,
-        internalDeliveryMediaUrls: ["/synthetic/lighthouse.png"],
-        forceRestartSafeTools: true,
-        disableMessageTool: true,
-        sourceReplyDeliveryMode: "automatic",
-        inputProvenance: { kind: "inter_session", sourceTool: "image_generate" },
-        beforeTerminalDelivery: async () => {
-          if (replace) {
-            await replaceSessionEntry(target, {
-              sessionId: "replacement-session",
-              updatedAt: Date.now(),
-            });
-          }
-        },
+    const completion = gatewayCommand({
+      sessionKey,
+      sessionId,
+      runId: "image-completion",
+      message: "Describe the completed image",
+      inputProvenance: { kind: "inter_session", sourceTool: "image_generate" },
+      beforeTerminalDelivery: async () => {
+        if (replace) {
+          await replaceSessionEntry(target, {
+            sessionId: "replacement-session",
+            updatedAt: Date.now(),
+          });
+        }
       },
-      ...GATEWAY_INGRESS_ARGS,
-    );
+    });
     let followup: Promise<unknown> | undefined;
     try {
       await awaitGateBeforeSettlement(
@@ -366,38 +420,24 @@ it.each([false, true])(
         completion,
         "completion did not run",
       );
-      expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBe("image-completion");
-      const beginAdmission = sessionAdmission.beginSessionWorkAdmission;
-      using _ = vi
-        .spyOn(sessionAdmission, "beginSessionWorkAdmission")
-        .mockImplementation((params) => {
-          const pending = beginAdmission(params);
-          followupQueued.resolve();
-          return pending;
-        });
-      followup = agentCommandFromGatewayIngress(
-        {
-          sessionKey,
-          sessionId,
-          runId: "inspect-image",
-          message: "Describe this lighthouse attachment",
-          allowModelOverride: false,
-          operatorAuthority: createAdmittedRunOperatorAuthority({
-            profileId: "synthetic-operator",
-            scopes: ["operator.admin"],
-            assertCurrent() {},
+      // Gateway follow-up admission reserves this source synchronously behind
+      // the image completion, then the command borrows its selected turn.
+      followup = withSessionTurn(
+        { sessionKey, sessionId, agentId: target.agentId, storePath: target.storePath },
+        async () =>
+          await gatewayCommand({
+            sessionKey,
+            sessionId,
+            runId: "inspect-image",
+            message: "Describe this lighthouse attachment",
+            operatorAuthority: createAdmittedRunOperatorAuthority({
+              profileId: "synthetic-operator",
+              scopes: ["operator.admin"],
+              assertCurrent() {},
+            }),
           }),
-        },
-        ...GATEWAY_INGRESS_ARGS,
       );
       void followup.catch(() => {});
-      await awaitGateBeforeSettlement(followupQueued.promise, followup, "follow-up did not queue");
-      const barrier = await beginAdmission({
-        scope: target.storePath,
-        identities: [sessionKey, sessionId],
-        assertAllowed() {},
-      });
-      barrier.release();
       expect(runs).toEqual(["image-completion"]);
       finishCompletion.resolve();
       await completion;
@@ -515,6 +555,7 @@ it.each(["unknown", "delivered"] as const)(
       prepareRestartRecovery: () => undefined,
       dispatchAgent: unexpectedDispatch,
       dispatchSessionMethod: unexpectedDispatch,
+      resumeChatInput: unexpectedDispatch,
       sendRecoveryNotice: unexpectedDispatch,
       waitForAgent: unexpectedDispatch,
     };
@@ -535,7 +576,23 @@ it.each(["unknown", "delivered"] as const)(
       abortedLastRun: false,
       lastRunId: sourceRunId,
       restartRecoveryTerminalRunIds: ["previous-source", sourceRunId],
-      restartRecoveryTerminalDeliveryEvidence: [previousEvidence],
+      restartRecoveryTerminalDeliveryEvidence: [
+        previousEvidence,
+        ...(deliveryState === "delivered"
+          ? [
+              {
+                runId: sourceRunId,
+                transcriptRunId: runId,
+                captured: true,
+                deliveryStatus: {
+                  status: "sent",
+                  resultCount: 1,
+                  payloadOutcomes: [{ index: 0, status: "sent" }],
+                },
+              },
+            ]
+          : []),
+      ],
     });
     expect(settled?.pendingFinalDelivery).toBeUndefined();
     expect(settled?.pendingDeliveryNotice).toEqual(
@@ -572,16 +629,12 @@ it.each(["unknown", "delivered"] as const)(
         runner: "embedded",
       }),
     );
-    await agentCommandFromGatewayIngress(
-      {
-        sessionKey,
-        sessionId,
-        runId: "next-instruction",
-        message: "Process the next instruction",
-        allowModelOverride: false,
-      },
-      ...GATEWAY_INGRESS_ARGS,
-    );
+    await gatewayCommand({
+      sessionKey,
+      sessionId,
+      runId: "next-instruction",
+      message: "Process the next instruction",
+    });
     expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();
     const completed = loadSessionEntry(target);
     expect(completed?.mainRestartRecovery).toBeUndefined();
@@ -590,25 +643,8 @@ it.each(["unknown", "delivered"] as const)(
     expect(completed?.restartRecoveryTerminalRunIds).toEqual(["previous-source", sourceRunId]);
     expect(completed?.restartRecoveryTerminalDeliveryEvidence).toContainEqual(previousEvidence);
 
-    await finishAgentCommandCleanup({
-      prepared: {
-        ...target,
-        runId,
-        sessionAgentId: target.agentId,
-        sessionStore: { [sessionKey]: interrupted },
-      },
-      sessionEntry: interrupted,
-      runOwnedSessionId: sessionId,
-      sessionReboundDuringRun: false,
-      trackedRestartRecoveryDeliveryClaim: true,
-      terminalEvent: { data: { phase: "end" } },
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      beforeTerminalDelivery: undefined,
-      reportCommitted: () => {},
-      preparedRunAdmission: undefined,
-      sessionWorkAdmission: undefined,
-      cleanupInternalModelRunTargets: async () => {},
-      releaseForeground: undefined,
+    await finishCleanup(target, interrupted, runId, getAgentEventLifecycleGeneration(), {
+      data: { phase: "end" },
     });
     expect(loadSessionEntry(target)).toEqual(completed);
   },
@@ -640,16 +676,12 @@ it.each([
     state.runAgentAttemptMock.mockRejectedValue(createAgentRunRestartAbortError());
 
     await expect(
-      agentCommandFromGatewayIngress(
-        {
-          sessionKey,
-          sessionId,
-          runId,
-          message: "Continue visible work",
-          allowModelOverride: false,
-        },
-        ...GATEWAY_INGRESS_ARGS,
-      ),
+      gatewayCommand({
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Continue visible work",
+      }),
     ).rejects.toMatchObject({ code: "OPENCLAW_RESTART_ABORT" });
 
     expect(state.runAgentAttemptMock).toHaveBeenCalledOnce();

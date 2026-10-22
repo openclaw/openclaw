@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
-  openOpenClawAgentSqliteWorkerStore,
-  runOpenClawAgentWriteAdmission,
-  withOpenClawAgentDatabaseRuntime,
+  openOpenClawAgentSqliteWorkerStoreV2,
+  runQueuedStoreWrite,
+  type SqliteWorkerCommand,
+  type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { captureMemoryAgentDatabaseOptions } from "./memory-agent-database.js";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
@@ -15,9 +17,15 @@ import {
   prepareStandingIntentMatch,
   type StandingIntent,
   type StandingIntentOperations,
+  type StandingIntentWorkerOperations,
   type StandingIntentRow,
   type StandingIntentStatus,
 } from "./standing-intents-model.js";
+
+type DatabaseOptions = ReturnType<typeof captureMemoryAgentDatabaseOptions>;
+let scheduleMaintenance: ((path: string, nextDueAt: number | null) => void) | undefined;
+const lifecycleFacts = new Map<string, { empty: boolean }>();
+const operationQueues = new Map<string, StoreWriterQueue>();
 
 export {
   DEFAULT_INTENT_COOLDOWN_SECONDS,
@@ -33,45 +41,114 @@ export {
   type StandingIntentStatus,
 } from "./standing-intents-model.js";
 
-async function executeStandingIntent<Key extends keyof StandingIntentOperations>(
+function executeStandingIntent<Key extends keyof StandingIntentOperations>(
   params: { agentId: string; assertCurrent?: () => void },
   command: { type: Key; input: StandingIntentOperations[Key]["input"] },
-): Promise<StandingIntentOperations[Key]["output"]> {
+  options?: DatabaseOptions,
+): Promise<StandingIntentOperations[Key]["output"]>;
+async function executeStandingIntent(
+  params: { agentId: string; assertCurrent?: () => void },
+  command: SqliteWorkerCommand<StandingIntentOperations>,
+  options: DatabaseOptions = captureMemoryAgentDatabaseOptions(params.agentId),
+): Promise<StandingIntentOperations[keyof StandingIntentOperations]["output"]> {
   const assertCurrent = params.assertCurrent;
-  assertCurrent?.();
-  const options = captureMemoryAgentDatabaseOptions(params.agentId);
-  return runOpenClawAgentWriteAdmission(
-    options,
-    async (_identity, assertAdmission) =>
-      // Caller expiry refuses its operation, never a coalesced physical open.
-      withOpenClawAgentDatabaseRuntime(
+  return runQueuedStoreWrite({
+    queues: operationQueues,
+    storePath: options.path,
+    label: "Standing intent",
+    async fn() {
+      assertCurrent?.();
+      const facts = lifecycleFacts.get(options.path);
+      if (command.type === "match" && facts?.empty) {
+        return [];
+      }
+      // Keep committed absence in owner order with creates and lifecycle transitions.
+      if (facts) {
+        facts.empty = false;
+      }
+      const worker = await openOpenClawAgentSqliteWorkerStoreV2<StandingIntentWorkerOperations>(
         options,
-        async ({ db }) => {
-          assertCurrent?.();
-          const worker = await openOpenClawAgentSqliteWorkerStore<StandingIntentOperations>(
-            options,
-            db,
-            {
-              moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents),
-              input: undefined,
-            },
-          );
+        { version: 2, assertCurrent: () => assertCurrent?.() },
+        {
+          moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.standingIntents),
+          input: undefined,
+        },
+      );
+      try {
+        await worker.prepare();
+        const result = await worker.execute(command, () => assertCurrent?.());
+        if (facts) {
+          facts.empty = result.nextDueAt === Infinity;
+        }
+        scheduleMaintenance?.(options.path, result.nextDueAt);
+        return result.value;
+      } finally {
+        await worker.close();
+      }
+    },
+  });
+}
+
+export function startStandingIntentMaintenance(params: {
+  agentIds: string[];
+  scheduler: PluginServiceSchedulerV1;
+  warn: (message: string) => void;
+}): () => void {
+  const { scheduler } = params;
+  const targets = new Map(
+    params.agentIds.map((agentId) => {
+      const options = captureMemoryAgentDatabaseOptions(agentId);
+      return [options.path, { agentId, options }] as const;
+    }),
+  );
+  const jobs = new Map<string, ReturnType<PluginServiceSchedulerV1["schedule"]>>();
+  const schedule = (path: string, nextDueAt: number | null) => {
+    const target = targets.get(path);
+    if (!target || scheduler.signal.aborted) {
+      return;
+    }
+    jobs.get(path)?.cancel();
+    jobs.delete(path);
+    if (nextDueAt === Infinity) {
+      return;
+    }
+    jobs.set(
+      path,
+      scheduler.schedule({
+        id: path,
+        atMs: nextDueAt ?? scheduler.now(),
+        async run() {
           try {
-            return await worker.run(
-              (scope) => scope.execute(command),
-              () => {
-                assertAdmission();
-                assertCurrent?.();
-              },
+            await executeStandingIntent(
+              { agentId: target.agentId, assertCurrent: () => scheduler.signal.throwIfAborted() },
+              { type: "sweep", input: { nowMs: scheduler.now() } },
+              target.options,
             );
-          } finally {
-            await worker.close();
+          } catch (error) {
+            if (!scheduler.signal.aborted) {
+              params.warn(`memory-core: standing intent maintenance failed: ${String(error)}`);
+              schedule(path, scheduler.now() + 30_000);
+            }
           }
         },
-        assertAdmission,
-      ),
-    true,
-  );
+      }),
+    );
+  };
+  scheduleMaintenance = schedule;
+  // Restart must process overdue expiry/cooldown before trusting a retained deadline.
+  for (const path of targets.keys()) {
+    lifecycleFacts.set(path, { empty: false });
+    schedule(path, null);
+  }
+  return () => {
+    scheduleMaintenance = undefined;
+    for (const job of jobs.values()) {
+      job.cancel();
+    }
+    for (const path of targets.keys()) {
+      lifecycleFacts.delete(path);
+    }
+  };
 }
 
 export async function createStandingIntent(params: {
@@ -119,13 +196,6 @@ export async function listStandingIntents(params: {
     type: "list",
     input: { status: params.status, nowMs: params.nowMs },
   });
-}
-
-export async function sweepStandingIntents(params: {
-  agentId: string;
-  nowMs?: number;
-}): Promise<void> {
-  return executeStandingIntent(params, { type: "sweep", input: { nowMs: params.nowMs } });
 }
 
 export async function cancelStandingIntent(params: {

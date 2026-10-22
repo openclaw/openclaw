@@ -331,6 +331,44 @@ export function dropPreSessionStartAnnouncePairs(
   return createPreSessionStartAnnouncePairFilter(sessionStartedAt)(messages);
 }
 
+export function readPluginSteeringId(message: unknown): string | undefined {
+  const record = readRecord(message);
+  if (record?.role !== "user") {
+    return undefined;
+  }
+  const provenance = normalizeInputProvenance(record.provenance);
+  const sourceTool = provenance?.sourceTool;
+  return provenance?.kind === "internal_system" && sourceTool?.startsWith("plugin:")
+    ? sourceTool.slice("plugin:".length).trim() || undefined
+    : undefined;
+}
+
+/** Plugin input stays canonical and hidden; only the Control UI requests this display copy. */
+export function projectPluginSteeringMessage(message: Record<string, unknown>) {
+  const pluginId = readPluginSteeringId(message);
+  if (!pluginId) {
+    return message;
+  }
+  const metadata = readRecord(message["__openclaw"]);
+  const steering = readRecord(metadata?.pluginSteering);
+  const displayText = typeof steering?.displayText === "string" ? steering.displayText : undefined;
+  return {
+    ...message,
+    display: true,
+    ...(displayText === undefined
+      ? {}
+      : { content: [{ type: "text", text: displayText }], text: displayText }),
+    __openclaw: {
+      ...metadata,
+      // The body belongs in capped content, not duplicated in uncapped metadata.
+      pluginSteering: {
+        pluginId,
+        ...(typeof steering?.pluginName === "string" ? { pluginName: steering.pluginName } : {}),
+      },
+    },
+  };
+}
+
 function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): boolean {
   if (message.display === false) {
     return true;
@@ -351,6 +389,16 @@ function shouldHideProjectedHistoryMessage(
   }
   if (!roleContent) {
     return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  if (
+    roleContent.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    (provenance.sourceTool === "exec" || provenance.sourceTool === "cron_failure_repair")
+  ) {
+    // Internal repair instructions belong to the model transcript, not the chat feed.
+    // Keep the agent's authored outcome visible, including requests for user help.
+    return true;
   }
   if (roleContent.role === "user" && isCompletionReportInputProvenance(message.provenance)) {
     return true;
@@ -481,6 +529,7 @@ export function filterVisibleProjectedHistoryMessages(
   let pendingTurnBoundary = turnBoundaryPending;
   let changed = false;
   const visible: Array<Record<string, unknown>> = [];
+  const assistantSources = new Map<string, Record<string, unknown>>();
   for (let i = 0; i < messages.length; i++) {
     const current = messages[i];
     if (!current) {
@@ -495,7 +544,14 @@ export function filterVisibleProjectedHistoryMessages(
     if (
       next &&
       nextRoleContent &&
-      isHeartbeatOkResponse(nextRoleContent) &&
+      isHeartbeatOkResponse(
+        nextRoleContent,
+        undefined,
+        Boolean(
+          currentRoleContent &&
+          isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT, { heartbeatOnly: true }),
+        ),
+      ) &&
       !isProjectedForwardedMessage(next)
     ) {
       changed = true;
@@ -508,7 +564,10 @@ export function filterVisibleProjectedHistoryMessages(
       pendingTurnBoundary ||= heartbeatUser && !isForwardedUserMessage(current);
       continue;
     }
-    if (isDuplicateAssistantDelivery(current, messages[i - 1])) {
+    const mirrorSourceId = readRecord(current.openclawDeliveryMirror)?.sourceAssistantMessageId;
+    const source =
+      typeof mirrorSourceId === "string" ? assistantSources.get(mirrorSourceId) : messages[i - 1];
+    if (isDuplicateAssistantDelivery(current, source)) {
       changed = true;
       continue;
     }
@@ -518,6 +577,10 @@ export function filterVisibleProjectedHistoryMessages(
       changed = true;
     } else {
       visible.push(current);
+    }
+    const sourceId = readRecord(current["__openclaw"])?.id;
+    if (currentRoleContent?.role === "assistant" && typeof sourceId === "string") {
+      assistantSources.set(sourceId, current);
     }
   }
   return {

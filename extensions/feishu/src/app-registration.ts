@@ -1,8 +1,8 @@
 import { renderQrTerminal } from "openclaw/plugin-sdk/media-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { readFeishuJsonResponse } from "./json-response.js";
 import type { FeishuDomain } from "./types.js";
 
 const FEISHU_ACCOUNTS_URL = "https://accounts.feishu.cn";
@@ -24,14 +24,11 @@ export interface AppRegistrationResult {
 }
 
 interface InitResponse {
-  nonce: string;
   supported_auth_methods: string[];
 }
 
 interface RawBeginResponse {
   device_code: string;
-  verification_uri: string;
-  user_code: string;
   verification_uri_complete: string;
   interval: number;
   expire_in: number;
@@ -85,7 +82,7 @@ async function fetchFeishuJson<T>(params: {
   });
   try {
     // Registration poll returns 4xx for pending/error states with a JSON body.
-    return await readFeishuJsonResponse<T>(response);
+    return await readProviderJsonResponse<T>(response, "feishu.api");
   } finally {
     await release();
   }
@@ -120,7 +117,6 @@ export async function beginAppRegistration(domain: FeishuDomain = "feishu") {
   return {
     deviceCode: res.device_code,
     qrUrl: qrUrl.toString(),
-    userCode: res.user_code,
     interval:
       finiteSecondsToTimerSafeMilliseconds(res.interval) === undefined
         ? DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS

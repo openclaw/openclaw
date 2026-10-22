@@ -27,28 +27,49 @@ function fixture() {
     ],
     options: { stdio: ["ignore", "pipe", "pipe"], shell: false, env: process.env },
   });
-  return { staging, dist, invocation };
+  const publish = (
+    invocations: NonNullable<Parameters<typeof publishStagedDeclarations>[0]>["invocations"],
+    required = ["plugin-sdk/core.d.ts"],
+    sources: Parameters<typeof publishStagedDeclarations>[1] = [],
+    seal?: () => void,
+    concurrency: 1 | 2 = 1,
+    previous = ["plugin-sdk/obsolete.d.ts"],
+  ) =>
+    publishStagedDeclarations(
+      { env: process.env, maxOldSpaceMb: 8192, heapShortfall: null, invocations },
+      sources,
+      staging,
+      dist,
+      required,
+      previous,
+      seal,
+      concurrency,
+    );
+  const read = (file: string) => fs.readFileSync(path.join(dist, file), "utf8");
+  const publishGroups = (groups: Record<string, string>[]) => {
+    const sources = groups.map((_files, index) => ({
+      output: path.join(root, `group-${index}`),
+      required: [index === 0 ? "plugin-sdk/public.d.ts" : "plugin-sdk/private.d.ts"],
+    }));
+    return publish(
+      groups.map((files, index) => invocation(files, 0, sources[index]!.output)),
+      sources.flatMap((source) => source.required),
+      sources,
+    );
+  };
+  return { staging, dist, invocation, publish, publishGroups, read };
 }
 
 describe("canonical declaration stage", () => {
   it("retains a sibling failure and stops queued work when another compiler cannot start", async () => {
-    const { staging, dist, invocation } = fixture();
+    const { staging, invocation, publish, read } = fixture();
     const missing = invocation({});
     missing.command = path.join(staging, "missing-compiler");
-    const failed = invocation({}, 17);
     const seal = vi.fn();
-    const result = await publishStagedDeclarations(
-      {
-        env: process.env,
-        maxOldSpaceMb: 8192,
-        heapShortfall: null,
-        invocations: [missing, failed, invocation({ "queued.d.ts": "export {};" })],
-      },
-      [],
-      staging,
-      dist,
+    const result = await publish(
+      [missing, invocation({}, 17), invocation({ "queued.d.ts": "export {};" })],
       ["plugin-sdk/core.d.ts"],
-      ["plugin-sdk/obsolete.d.ts"],
+      [],
       seal,
       2,
     ).catch((error: unknown) => error);
@@ -59,7 +80,7 @@ describe("canonical declaration stage", () => {
         expect.objectContaining({ exitCode: 17 }),
       ]),
     });
-    expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+    expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
     expect(fs.existsSync(path.join(staging, "queued.d.ts"))).toBe(false);
     expect(seal).not.toHaveBeenCalled();
   });
@@ -67,7 +88,7 @@ describe("canonical declaration stage", () => {
   it.each(["success", "diagnostic"])(
     "joins every private compiler stage before %s publication",
     async (outcome) => {
-      const { staging, dist, invocation } = fixture();
+      const { staging, dist, invocation, publish, read } = fixture();
       const root = path.dirname(staging);
       const names = outcome === "success" ? ["public", "private", "queued"] : ["public", "private"];
       const sources = names.map((name) => ({
@@ -84,27 +105,23 @@ describe("canonical declaration stage", () => {
           const root = ${JSON.stringify(root)}, index = ${index};
           fs.writeFileSync(path.join(root, index + '.started'), 'started');
           const deadline = Date.now() + 3000;
-          const wait = setInterval(() => {
-            if (!fs.existsSync(path.join(root, (1 - index) + '.started'))) {
-              if (Date.now() > deadline) { clearInterval(wait); process.exitCode = 73; }
-              return;
-            }
-            clearInterval(wait);
+          function waitFor(file, exitCode, ready) {
+            const timer = setInterval(() => {
+              if (fs.existsSync(path.join(root, file))) { clearInterval(timer); ready(); }
+              else if (Date.now() > deadline) { clearInterval(timer); process.exitCode = exitCode; }
+            }, 10);
+          }
+          waitFor((1 - index) + '.started', 73, () => {
             { ${child.args[1]} }
             if (index === 0) {
               if (${JSON.stringify(outcome)} === 'diagnostic') console.error('[INEFFECTIVE_DYNAMIC_IMPORT]');
               fs.writeFileSync(path.join(root, 'first.finished'), 'finished');
             } else {
-              const drain = setInterval(() => {
-                if (!fs.existsSync(path.join(root, 'first.finished'))) {
-                  if (Date.now() > deadline) { clearInterval(drain); process.exitCode = 74; }
-                  return;
-                }
-                clearInterval(drain);
+              waitFor('first.finished', 74, () => {
                 fs.writeFileSync(path.join(root, 'second.finished'), 'finished');
-              }, 10);
+              });
             }
-          }, 10);
+          });
         `;
         return child;
       });
@@ -113,28 +130,20 @@ describe("canonical declaration stage", () => {
         for (const source of sources) {
           expect(fs.existsSync(path.join(source.output, source.required[0]!))).toBe(true);
         }
-        expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+        expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
       });
-      const publication = publishStagedDeclarations(
-        { env: process.env, maxOldSpaceMb: 8192, heapShortfall: null, invocations },
-        sources,
-        staging,
-        dist,
-        sources.flatMap((source) => source.required),
-        ["plugin-sdk/obsolete.d.ts"],
-        seal,
-        2,
-      );
+      const required = sources.flatMap((source) => source.required);
+      const publication = publish(invocations, required, sources, seal, 2);
       if (outcome === "success") {
         await publication;
         expect(seal).toHaveBeenCalledOnce();
         for (const source of sources) {
-          expect(fs.readFileSync(path.join(dist, source.required[0]!), "utf8")).toBe("export {};");
+          expect(read(source.required[0]!)).toBe("export {};");
         }
       } else {
         await expect(publication).rejects.toThrow("Declaration build failed with exit 1");
         expect(seal).not.toHaveBeenCalled();
-        expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+        expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
         for (const source of sources) {
           expect(fs.existsSync(path.join(dist, source.required[0]!))).toBe(false);
         }
@@ -143,116 +152,48 @@ describe("canonical declaration stage", () => {
     },
   );
 
-  it.each([".d.ts"])(
-    "strips undeclared __exportAll from staged %s declaration exports",
-    async (extension) => {
-      const { staging, dist, invocation } = fixture();
-      await publishStagedDeclarations(
-        {
-          env: process.env,
-          maxOldSpaceMb: 8192,
-          heapShortfall: null,
-          invocations: [
-            invocation({
-              [`plugin-sdk/core${extension}`]:
-                "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
-            }),
-          ],
-        },
-        [],
-        staging,
-        dist,
-        [`plugin-sdk/core${extension}`],
-        ["plugin-sdk/obsolete.d.ts"],
-      );
-      const published = fs.readFileSync(path.join(dist, `plugin-sdk/core${extension}`), "utf8");
-      expect(published).toContain("keep as k");
-      expect(published).not.toContain("__exportAll");
-    },
-  );
-
-  it.each([".d.ts"])(
-    "also strips undeclared __exportAll left in live dist outside staging (%s)",
-    async (extension) => {
-      const { staging, dist, invocation } = fixture();
-      fs.writeFileSync(
-        path.join(dist, `leftover-chunk${extension}`),
-        "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
-      );
-      await publishStagedDeclarations(
-        {
-          env: process.env,
-          maxOldSpaceMb: 8192,
-          heapShortfall: null,
-          invocations: [
-            invocation({
-              "plugin-sdk/core.d.ts": "export declare const ok: true;\n",
-            }),
-          ],
-        },
-        [],
-        staging,
-        dist,
-        ["plugin-sdk/core.d.ts"],
-        ["plugin-sdk/obsolete.d.ts"],
-      );
-      const leftover = fs.readFileSync(path.join(dist, `leftover-chunk${extension}`), "utf8");
-      expect(leftover).toContain("keep as k");
-      expect(leftover).not.toContain("__exportAll");
-    },
-  );
-
-  it("rejects absolute reference paths even when a staged relative namesake exists", async () => {
-    const { staging, dist, invocation } = fixture();
-    await expect(
-      publishStagedDeclarations(
-        {
-          env: process.env,
-          maxOldSpaceMb: 8192,
-          heapShortfall: null,
-          invocations: [
-            invocation({
-              "plugin-sdk/core.d.ts": '/// <reference path="/shared.d.ts" />\nexport {};',
-              "plugin-sdk/shared.d.ts": "export {};",
-            }),
-          ],
-        },
-        [],
-        staging,
-        dist,
-        ["plugin-sdk/core.d.ts"],
-        ["plugin-sdk/obsolete.d.ts"],
-      ),
-    ).rejects.toThrow("Incomplete declaration closure");
-    expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+  it.each(["staging", "dist"])("strips undeclared __exportAll from %s", async (location) => {
+    const { dist, invocation, publish, read } = fixture();
+    const source = "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n";
+    const staged = location === "staging";
+    const file = staged ? "plugin-sdk/core.d.ts" : "leftover-chunk.d.ts";
+    if (!staged) {
+      fs.writeFileSync(path.join(dist, file), source);
+    }
+    await publish([
+      invocation({
+        "plugin-sdk/core.d.ts": staged ? source : "export declare const ok: true;\n",
+      }),
+    ]);
+    const published = read(file);
+    expect(published).toContain("keep as k");
+    expect(published).not.toContain("__exportAll");
   });
-  it.each(['import Type = require("./missing.cjs"); export { Type };'])(
-    "rejects a missing relative dependency in %s",
-    async (declaration) => {
-      const { staging, dist, invocation } = fixture();
-      await expect(
-        publishStagedDeclarations(
-          {
-            env: process.env,
-            maxOldSpaceMb: 8192,
-            heapShortfall: null,
-            invocations: [invocation({ "plugin-sdk/core.d.ts": declaration })],
-          },
-          [],
-          staging,
-          dist,
-          ["plugin-sdk/core.d.ts"],
-          ["plugin-sdk/obsolete.d.ts"],
-        ),
-      ).rejects.toThrow("Incomplete declaration closure");
-      expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
-    },
-  );
+
+  it.each<[string, Record<string, string>]>([
+    [
+      "absolute reference with a relative namesake",
+      {
+        "plugin-sdk/core.d.ts": '/// <reference path="/shared.d.ts" />\nexport {};',
+        "plugin-sdk/shared.d.ts": "export {};",
+      },
+    ],
+    [
+      "missing import-equals dependency",
+      {
+        "plugin-sdk/core.d.ts": 'import Type = require("./missing.cjs"); export { Type };',
+      },
+    ],
+  ])("rejects %s", async (_name, files) => {
+    const { invocation, publish, read } = fixture();
+    await expect(publish([invocation(files)])).rejects.toThrow("Incomplete declaration closure");
+    expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
+  });
 
   it.skipIf(process.platform === "win32")(
     "does not mask a timeout when the child exits zero on SIGTERM",
     async () => {
-      const { staging, dist, invocation } = fixture();
+      const { staging, invocation, publish, read } = fixture();
       vi.stubEnv("OPENCLAW_TSDOWN_TIMEOUT_MS", "1500");
       vi.stubEnv("OPENCLAW_TSDOWN_HEARTBEAT_MS", "0");
       const first = invocation({});
@@ -261,75 +202,33 @@ describe("canonical declaration stage", () => {
         `const fs=require('node:fs');process.on('SIGTERM',()=>process.exit(0));fs.mkdirSync(${JSON.stringify(staging)},{recursive:true});fs.writeFileSync(${JSON.stringify(path.join(staging, "ready"))},'ready');setInterval(()=>{},1000);`,
       ];
       await expect(
-        publishStagedDeclarations(
-          {
-            env: process.env,
-            maxOldSpaceMb: 8192,
-            heapShortfall: null,
-            invocations: [first, invocation({ "later.d.ts": "export {};" })],
-          },
-          [],
-          staging,
-          dist,
-          [],
-          ["plugin-sdk/obsolete.d.ts"],
-        ),
+        publish([first, invocation({ "later.d.ts": "export {};" })], []),
       ).rejects.toMatchObject({ exitCode: 124 });
       expect(fs.existsSync(path.join(staging, "ready"))).toBe(true);
       expect(fs.existsSync(path.join(staging, "later.d.ts"))).toBe(false);
-      expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+      expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
     },
   );
   it("does not publish on missing entry", async () => {
-    const { staging, dist, invocation } = fixture();
-    const plan = {
-      env: process.env,
-      maxOldSpaceMb: 8192,
-      heapShortfall: null,
-      invocations: [
-        invocation({ "plugin-sdk/public.d.ts": 'export type { Shared } from "../shared.js";' }),
-        invocation({ "shared.d.ts": "export type Shared = string;" }),
-      ],
-    };
+    const { dist, invocation, publish, read } = fixture();
+    const invocations = [
+      invocation({ "plugin-sdk/public.d.ts": 'export type { Shared } from "../shared.js";' }),
+      invocation({ "shared.d.ts": "export type Shared = string;" }),
+    ];
     const before = fs.readdirSync(dist, { recursive: true }).map(String).toSorted();
     await expect(
-      publishStagedDeclarations(
-        plan,
-        [],
-        staging,
-        dist,
-        ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-        ["plugin-sdk/obsolete.d.ts"],
-      ),
+      publish(invocations, ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"]),
     ).rejects.toThrow();
     expect(fs.readdirSync(dist, { recursive: true }).map(String).toSorted()).toEqual(before);
-    expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+    expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
   });
 
   it("publishes both groups with root chunks, preserves unrelated files, and prunes only owned entries", async () => {
-    const { staging, dist, invocation } = fixture();
-    const first = path.join(staging, "..", "first");
-    const second = path.join(staging, "..", "second");
+    const { staging, dist, invocation, publish, publishGroups, read } = fixture();
     const publicFile = {
       "plugin-sdk/public.d.ts": 'export type { Shared } from "../shared.js";',
       "shared.d.ts": 'export type Shared = import("./z-leaf.js").Leaf;',
       "z-leaf.d.ts": "export type Leaf = string;",
-    };
-    const plan = {
-      env: process.env,
-      maxOldSpaceMb: 8192,
-      heapShortfall: null,
-      invocations: [
-        invocation(publicFile, 0, first),
-        invocation(
-          {
-            "plugin-sdk/private.d.ts": 'export type { Shared } from "../shared.js";',
-            "shared.d.ts": publicFile["shared.d.ts"],
-          },
-          0,
-          second,
-        ),
-      ],
     };
     const rename = fs.renameSync;
     const observed: string[] = [];
@@ -350,17 +249,13 @@ describe("canonical declaration stage", () => {
       rename(source, target);
     });
     try {
-      await publishStagedDeclarations(
-        plan,
-        [
-          { output: first, required: ["plugin-sdk/public.d.ts"] },
-          { output: second, required: ["plugin-sdk/private.d.ts"] },
-        ],
-        staging,
-        dist,
-        ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-        ["plugin-sdk/obsolete.d.ts"],
-      );
+      await publishGroups([
+        publicFile,
+        {
+          "plugin-sdk/private.d.ts": 'export type { Shared } from "../shared.js";',
+          "shared.d.ts": publicFile["shared.d.ts"],
+        },
+      ]);
     } finally {
       publication.mockRestore();
     }
@@ -372,18 +267,14 @@ describe("canonical declaration stage", () => {
       "shared-old.d.ts": "unattributed",
       "runtime.js": "runtime",
     })) {
-      expect(fs.readFileSync(path.join(dist, file), "utf8")).toBe(bytes);
+      expect(read(file)).toBe(bytes);
     }
     const unchanged = fs.statSync(path.join(dist, "plugin-sdk/public.d.ts")).mtimeMs;
     fs.rmSync(staging, { recursive: true });
-    await publishStagedDeclarations(
-      { ...plan, invocations: [invocation(publicFile)] },
-      [],
-      staging,
-      dist,
-      ["plugin-sdk/public.d.ts"],
-      ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-    );
+    await publish([invocation(publicFile)], ["plugin-sdk/public.d.ts"], [], undefined, 1, [
+      "plugin-sdk/public.d.ts",
+      "plugin-sdk/private.d.ts",
+    ]);
     expect(fs.existsSync(path.join(dist, "plugin-sdk/private.d.ts"))).toBe(false);
     expect(fs.statSync(path.join(dist, "plugin-sdk/public.d.ts")).mtimeMs).toBe(unchanged);
   });
@@ -391,54 +282,29 @@ describe("canonical declaration stage", () => {
   it.each(["conflicting shared bytes", "misassigned entry"])(
     "rejects canonical group ownership with %s before publishing",
     async (failure) => {
-      const { staging, dist, invocation } = fixture();
-      const first = path.join(staging, "..", "first");
-      const second = path.join(staging, "..", "second");
+      const { dist, publishGroups, read } = fixture();
       const publicFile = { "plugin-sdk/public.d.ts": "export {};" };
       await expect(
-        publishStagedDeclarations(
+        publishGroups([
           {
-            env: process.env,
-            maxOldSpaceMb: 8192,
-            heapShortfall: null,
-            invocations: [
-              invocation(
-                {
-                  ...(failure === "misassigned entry" ? {} : publicFile),
-                  "shared.d.ts": "export type Shared = string;",
-                },
-                0,
-                first,
-              ),
-              invocation(
-                {
-                  ...(failure === "misassigned entry" ? publicFile : {}),
-                  "plugin-sdk/private.d.ts": "export {};",
-                  "shared.d.ts":
-                    failure === "conflicting shared bytes"
-                      ? "export type Shared = number;"
-                      : "export type Shared = string;",
-                },
-                0,
-                second,
-              ),
-            ],
+            ...(failure === "misassigned entry" ? {} : publicFile),
+            "shared.d.ts": "export type Shared = string;",
           },
-          [
-            { output: first, required: ["plugin-sdk/public.d.ts"] },
-            { output: second, required: ["plugin-sdk/private.d.ts"] },
-          ],
-          staging,
-          dist,
-          ["plugin-sdk/public.d.ts", "plugin-sdk/private.d.ts"],
-          ["plugin-sdk/obsolete.d.ts"],
-        ),
+          {
+            ...(failure === "misassigned entry" ? publicFile : {}),
+            "plugin-sdk/private.d.ts": "export {};",
+            "shared.d.ts":
+              failure === "conflicting shared bytes"
+                ? "export type Shared = number;"
+                : "export type Shared = string;",
+          },
+        ]),
       ).rejects.toThrow(
         failure === "conflicting shared bytes"
           ? "Conflicting canonical declaration owners"
           : "Missing canonical declaration",
       );
-      expect(fs.readFileSync(path.join(dist, "plugin-sdk/obsolete.d.ts"), "utf8")).toBe("old");
+      expect(read("plugin-sdk/obsolete.d.ts")).toBe("old");
       expect(fs.existsSync(path.join(dist, "plugin-sdk/public.d.ts"))).toBe(false);
       expect(fs.existsSync(path.join(dist, "plugin-sdk/private.d.ts"))).toBe(false);
     },

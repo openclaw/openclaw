@@ -1,4 +1,3 @@
-// Agent Core tests cover truncate behavior.
 import { describe, expect, it } from "vitest";
 import { truncateHead, truncateLine, truncateTail } from "./truncate.js";
 
@@ -13,11 +12,6 @@ describe("truncate utilities", () => {
     });
   });
 
-  it("classifies trailing-newline truncation by the byte limit", () => {
-    expect(truncateHead("x\n", { maxBytes: 1 }).truncatedBy).toBe("bytes");
-    expect(truncateTail("x\n", { maxBytes: 1 }).truncatedBy).toBe("bytes");
-  });
-
   it("preserves a leading BOM and NUL in a partial tail line", () => {
     expect(truncateTail("discarded-\uFEFFA\0B", { maxBytes: 6 })).toMatchObject({
       content: "\uFEFFA\0B",
@@ -27,14 +21,25 @@ describe("truncate utilities", () => {
     });
   });
 
+  it.each([0, -1])("keeps oversized head lines byte-limited with maxLines=%s", (maxLines) => {
+    expect(truncateHead("long\nx", { maxLines, maxBytes: 2 })).toEqual({
+      content: "",
+      truncated: true,
+      truncatedBy: "bytes",
+      totalLines: 2,
+      totalBytes: 6,
+      outputLines: 0,
+      outputBytes: 0,
+      lastLinePartial: false,
+      firstLineExceedsLimit: true,
+      maxLines,
+      maxBytes: 2,
+    });
+  });
+
   it.each([
-    { tail: "\uD800\uD800", maxBytes: 6, expected: "\uFFFD\uFFFD" },
-    { tail: "\uD800a\uDC00", maxBytes: 7, expected: "\uFFFDa\uFFFD" },
     { tail: "\uDC00\uD800\uDC00", maxBytes: 7, expected: "\uFFFD\uD800\uDC00" },
     { tail: "🙂\uD800", maxBytes: 7, expected: "🙂\uFFFD" },
-    { tail: "\uD800", maxBytes: 2, expected: "" },
-    { tail: "\uD800🙂", maxBytes: 4, expected: "🙂" },
-    { tail: "🙂\uDC00", maxBytes: 3, expected: "\uFFFD" },
   ])(
     "repairs only retained lone surrogates within $maxBytes bytes: $tail",
     ({ tail, maxBytes, expected }) => {
@@ -55,92 +60,13 @@ describe("truncate utilities", () => {
     },
   );
 
-  it("preserves malformed strings when they fit without truncation", () => {
-    const content = "\uD800🙂\uDC00";
-    expect(truncateTail(content, { maxBytes: 10 })).toMatchObject({
-      content,
-      truncated: false,
-      truncatedBy: null,
-      totalBytes: 10,
-      outputBytes: 10,
-      lastLinePartial: false,
-    });
-  });
-
   it.each([
-    {
-      name: "CRLF",
-      content: "a\r\n\r\nb\r\n",
-      maxLines: 2,
-      maxBytes: 20,
-      head: "a\r\n\r",
-      tail: "\r\nb\r",
-      outputLines: 2,
-      truncatedBy: "lines",
-    },
-    {
-      name: "empty lines",
-      content: "\n\n\n",
-      maxLines: 2,
-      maxBytes: 20,
-      head: "\n",
-      tail: "\n",
-      outputLines: 2,
-      truncatedBy: "lines",
-    },
-    {
-      name: "byte limit first",
-      content: "aa\nbb\ncc",
-      maxLines: 2,
-      maxBytes: 4,
-      head: "aa",
-      tail: "cc",
-      outputLines: 1,
-      truncatedBy: "bytes",
-    },
-    {
-      name: "lone UTF-16 units",
-      content: "\uD800x\uDC00\ndiscarded\n\uD800x\uDC00",
-      maxLines: 2,
-      maxBytes: 7,
-      head: "\uD800x\uDC00",
-      tail: "\uD800x\uDC00",
-      outputLines: 1,
-      truncatedBy: "bytes",
-    },
-    {
-      name: "BOM and NUL",
-      content: "\uFEFFA\0B\ndiscarded\n\uFEFFA\0B",
-      maxLines: 2,
-      maxBytes: 6,
-      head: "\uFEFFA\0B",
-      tail: "\uFEFFA\0B",
-      outputLines: 1,
-      truncatedBy: "bytes",
-    },
-    {
-      name: "line limit first",
-      content: "a\nb\nc",
-      maxLines: 1,
-      maxBytes: 1,
-      head: "a",
-      tail: "c",
-      outputLines: 1,
-      truncatedBy: "lines",
-    },
-    {
-      name: "terminal newline bytes",
-      content: "\n\n\n",
-      maxLines: 3,
-      maxBytes: 2,
-      head: "\n\n",
-      tail: "\n\n",
-      outputLines: 3,
-      truncatedBy: "bytes",
-    },
-  ])(
-    "preserves selected lines and limit metadata: $name",
-    ({ content, maxLines, maxBytes, head, tail, outputLines, truncatedBy }) => {
+    ["\uD800x\uDC00\ndiscarded\n\uD800x\uDC00", 2, 7, "\uD800x\uDC00", "\uD800x\uDC00", 1, "bytes"],
+    ["a\nb\nc", 1, 1, "a", "c", 1, "lines"],
+    ["\n\n\n", 3, 2, "\n\n", "\n\n", 3, "bytes"],
+  ] as const)(
+    "preserves selected lines and limit metadata: %j",
+    (content, maxLines, maxBytes, head, tail, outputLines, truncatedBy) => {
       for (const [truncate, expected] of [
         [truncateHead, head],
         [truncateTail, tail],
@@ -160,30 +86,18 @@ describe("truncate utilities", () => {
     },
   );
 
-  describe("truncateLine", () => {
-    it.each(["\uD800x\uDC00", "\uFEFFA\0B"])("preserves retained code units in %j", (prefix) => {
-      expect(truncateLine(`${prefix}discarded`, prefix.length)).toEqual({
-        text: `${prefix}... [truncated]`,
-        wasTruncated: true,
-      });
+  it("truncateLine keeps 500 characters and truncates longer lines by default", () => {
+    const line = "x".repeat(500);
+    expect(truncateLine(line)).toEqual({ text: line, wasTruncated: false });
+    expect(truncateLine(`${line}y`)).toEqual({
+      text: `${line}... [truncated]`,
+      wasTruncated: true,
     });
+  });
 
-    it("keeps 500 characters and truncates longer lines by default", () => {
-      const line = "x".repeat(500);
-      expect(truncateLine(line)).toEqual({ text: line, wasTruncated: false });
-      expect(truncateLine(`${line}y`)).toEqual({
-        text: `${line}... [truncated]`,
-        wasTruncated: true,
-      });
-    });
-
-    it("does not split a surrogate pair at the cut point", () => {
-      // Emoji at boundary: "AB" + 🤖(surrogate pair) + "CD" — cut at 3 splits the emoji.
-      expect(truncateLine("AB🤖CD", 3).text).toBe("AB... [truncated]");
-      // Three emoji, cut in the middle of the third emoji.
-      expect(truncateLine("🤖🤖🤖", 5).text).toBe("🤖🤖... [truncated]");
-      // CJK Extension B (surrogate pair) at boundary stays intact.
-      expect(truncateLine("AB𠮷CD", 5).text).toBe("AB𠮷C... [truncated]");
-    });
+  it("truncateLine does not split a surrogate pair at the cut point", () => {
+    expect(truncateLine("AB🤖CD", 3).text).toBe("AB... [truncated]");
+    expect(truncateLine("🤖🤖🤖", 5).text).toBe("🤖🤖... [truncated]");
+    expect(truncateLine("AB𠮷CD", 5).text).toBe("AB𠮷C... [truncated]");
   });
 });

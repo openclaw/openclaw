@@ -27,7 +27,11 @@ describe("the media send core routes around the payload owner", () => {
     mediaSend.mockResolvedValue({
       messageId: "m-media",
       chatId: "Coutbound",
-      receipt: createLineSendReceipt({ messageId: "m-media", chatId: "Coutbound", kind: "text" }),
+      receipt: createLineSendReceipt({
+        messageIds: ["m-media"],
+        chatId: "Coutbound",
+        kind: "text",
+      }),
     });
     recordLineQuoteToken({
       accountId: "default",

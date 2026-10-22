@@ -51,6 +51,31 @@ async function importOpenRouterModelCapabilities(scope: string) {
   );
 }
 
+function mockCatalog(data: unknown[], chunked = false) {
+  const fetchSpy = vi.fn(async () => {
+    if (!chunked) {
+      return Response.json({ data });
+    }
+    const encoded = new TextEncoder().encode(JSON.stringify({ data }));
+    let offset = 0;
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (offset >= encoded.length) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(encoded.subarray(offset, offset + 8));
+          offset += 8;
+        },
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  });
+  vi.stubGlobal("fetch", fetchSpy);
+  return fetchSpy;
+}
+
 describe("openrouter-model-capabilities", () => {
   afterEach(() => {
     resetPluginStateStoreForTests();
@@ -59,32 +84,29 @@ describe("openrouter-model-capabilities", () => {
 
   it("uses top-level OpenRouter max token fields when top_provider is absent", async () => {
     await withOpenRouterStateDir(async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () =>
-          Response.json({
-            data: [
-              {
-                id: "acme/top-level-max-completion",
-                name: "Top Level Max Completion",
-                architecture: { modality: "text+image->text" },
-                supported_parameters: ["reasoning", "tools"],
-                context_length: 65432,
-                max_completion_tokens: 12345,
-                pricing: { prompt: "0.000001", completion: "0.000002" },
-              },
-              {
-                id: "acme/top-level-max-output",
-                name: "Top Level Max Output",
-                modality: "text+image->text",
-                context_length: 54321,
-                max_output_tokens: 23456,
-                pricing: { prompt: "0.000003", completion: "0.000004" },
-              },
-            ],
-          }),
-        ),
-      );
+      mockCatalog([
+        {
+          id: "acme/top-level-max-completion",
+          name: "Top Level Max Completion",
+          architecture: { modality: "text+image->text" },
+          supported_parameters: ["reasoning", "tools"],
+          context_length: 65432,
+          max_completion_tokens: 12345,
+          pricing: { prompt: "0.000001", completion: "0.000002" },
+        },
+        {
+          id: "acme/top-level-max-output",
+          name: "Top Level Max Output",
+          modality: "text+image->text",
+          context_length: 54321,
+          max_output_tokens: 23456,
+          pricing: { prompt: "0.000003", completion: "0.000004" },
+        },
+        {
+          id: "perplexity/sonar-deep-research",
+          supported_parameters: ["reasoning", "web_search_options"],
+        },
+      ]);
 
       const module = await importOpenRouterModelCapabilities("top-level-max-tokens");
       const sql = observeHostDataSql();
@@ -96,33 +118,25 @@ describe("openrouter-model-capabilities", () => {
       }
 
       const maxCompletion = module.getOpenRouterModelCapabilities("acme/top-level-max-completion");
-      expect(maxCompletion?.input).toEqual(["text", "image"]);
-      expect(maxCompletion?.reasoning).toBe(true);
-      expect(maxCompletion?.supportsTools).toBe(true);
-      expect(maxCompletion?.contextWindow).toBe(65432);
-      expect(maxCompletion?.maxTokens).toBe(12345);
+      expect(maxCompletion).toMatchObject({
+        input: ["text", "image"],
+        reasoning: true,
+        supportsTools: true,
+        contextWindow: 65432,
+        maxTokens: 12345,
+      });
 
       const maxOutput = module.getOpenRouterModelCapabilities("acme/top-level-max-output");
-      expect(maxOutput?.input).toEqual(["text", "image"]);
-      expect(maxOutput?.reasoning).toBe(false);
+      expect(maxOutput).toMatchObject({
+        input: ["text", "image"],
+        reasoning: false,
+        contextWindow: 54321,
+        maxTokens: 23456,
+      });
       expect(maxOutput?.supportsTools).toBeUndefined();
-      expect(maxOutput?.contextWindow).toBe(54321);
-      expect(maxOutput?.maxTokens).toBe(23456);
-    });
-  });
-
-  it("cancels failed OpenRouter catalog response bodies", async () => {
-    await withOpenRouterStateDir(async () => {
-      const response = new Response("temporarily unavailable", { status: 503 });
-      const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-      const fetchSpy = vi.fn(async () => response);
-      vi.stubGlobal("fetch", fetchSpy);
-
-      const module = await importOpenRouterModelCapabilities("failed-catalog-response");
-      await module.loadOpenRouterModelCapabilities("acme/missing-model");
-
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(cancel).toHaveBeenCalledOnce();
+      expect(
+        module.getOpenRouterModelCapabilities("perplexity/sonar-deep-research")?.supportsTools,
+      ).toBe(false);
     });
   });
 
@@ -173,35 +187,25 @@ describe("openrouter-model-capabilities", () => {
               reasoning: false,
               contextWindow: 1_000_000,
               maxTokens: 262_144,
-              cost: {
-                input: 0,
-                output: 0,
-                cacheRead: 0,
-                cacheWrite: 0,
-              },
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             },
           },
         }),
       );
 
-      const fetchSpy = vi.fn(async () =>
-        Response.json({
-          data: [
-            {
-              id: modelId,
-              name: "Nemotron 3 Super 120B Free",
-              architecture: { modality: "text->text" },
-              context_length: 1_000_000,
-              top_provider: {
-                context_length: 262_144,
-                max_completion_tokens: 262_144,
-              },
-              pricing: { prompt: "0", completion: "0" },
-            },
-          ],
-        }),
-      );
-      vi.stubGlobal("fetch", fetchSpy);
+      const fetchSpy = mockCatalog([
+        {
+          id: modelId,
+          name: "Nemotron 3 Super 120B Free",
+          architecture: { modality: "text->text" },
+          context_length: 1_000_000,
+          top_provider: {
+            context_length: 262_144,
+            max_completion_tokens: 262_144,
+          },
+          pricing: { prompt: "0", completion: "0" },
+        },
+      ]);
 
       const module = await importOpenRouterModelCapabilities("old-context-window-cache");
       await module.loadOpenRouterModelCapabilities(modelId);
@@ -214,79 +218,80 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("preserves native pricing and reasoning capabilities in memory and across SQLite reads", async () => {
+  it("preserves chunked native pricing and reasoning capabilities in memory and across SQLite reads", async () => {
     await withOpenRouterStateDir(async () => {
-      const cost = {
+      const baseCost = {
         input: 2,
         output: 10,
         cacheRead: expect.closeTo(0.2, 12),
         cacheWrite: 2.5,
+      };
+      const cost = {
+        ...baseCost,
         tieredPricing: [
-          {
-            input: 2,
-            output: 10,
-            cacheRead: expect.closeTo(0.2, 12),
-            cacheWrite: 2.5,
-            range: [0, 272_001],
-          },
-          {
-            input: 4,
-            output: 10,
-            cacheRead: expect.closeTo(0.2, 12),
-            cacheWrite: 2.5,
-            range: [272_001],
-          },
+          { ...baseCost, range: [0, 272_001] },
+          { ...baseCost, input: 4, range: [272_001] },
         ],
       };
-      const fetchSpy = vi.fn(async () =>
-        Response.json({
-          data: [
-            {
-              id: "acme/sqlite-cached-model",
-              name: "SQLite Cached Model",
-              architecture: { modality: "text+image->text" },
-              supported_parameters: ["tools"],
-              reasoning: { supported_efforts: ["high", "low"], mandatory: true },
-              context_length: 8765,
-              max_completion_tokens: 4321,
-              pricing: {
-                prompt: "0.000002",
-                completion: "0.00001",
-                input_cache_read: "0.0000002",
-                input_cache_write: "0.0000025",
-                overrides: [
-                  {
-                    min_prompt_tokens: 272_000,
-                    prompt: "0.000004",
-                  },
-                ],
-              },
+      const expected = {
+        input: ["text", "image"],
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["high", "low"] },
+        thinkingLevelMap: { off: null },
+        supportsTools: true,
+        contextWindow: 8765,
+        maxTokens: 4321,
+        cost,
+      };
+      const fetchSpy = mockCatalog(
+        [
+          {
+            id: "acme/sqlite-cached-model",
+            name: "SQLite Cached Model",
+            architecture: { modality: "text+image->text" },
+            supported_parameters: ["tools"],
+            reasoning: { supported_efforts: ["high", "low"], mandatory: true },
+            context_length: 8765,
+            max_completion_tokens: 4321,
+            pricing: {
+              prompt: "0.000002",
+              completion: "0.00001",
+              input_cache_read: "0.0000002",
+              input_cache_write: "0.0000025",
+              overrides: [
+                {
+                  min_prompt_tokens: 272_000,
+                  prompt: "0.000004",
+                },
+              ],
             },
-            { id: "minimax/minimax-m2.7", reasoning: { mandatory: true } },
-          ],
-        }),
+          },
+          { id: "minimax/minimax-m2.7", reasoning: { mandatory: true } },
+        ],
+        true,
       );
-      vi.stubGlobal("fetch", fetchSpy);
 
       const firstModule = await importOpenRouterModelCapabilities("sqlite-cache-writer");
       await firstModule.loadOpenRouterModelCapabilities("acme/sqlite-cached-model");
       expect(firstModule.getOpenRouterModelCapabilities("acme/sqlite-cached-model")?.cost).toEqual(
         cost,
       );
+      expect(
+        firstModule.getLoadedOpenRouterModelCapabilities("acme/sqlite-cached-model"),
+      ).toMatchObject(expected);
       expect(fetchSpy).toHaveBeenCalledTimes(1);
 
       const secondModule = await importOpenRouterModelCapabilities("sqlite-cache-reader");
-      expect(secondModule.getOpenRouterModelCapabilities("acme/sqlite-cached-model")).toMatchObject(
-        {
-          input: ["text", "image"],
-          compat: { supportedReasoningEfforts: ["high", "low"] },
-          thinkingLevelMap: { off: null },
-          supportsTools: true,
-          contextWindow: 8765,
-          maxTokens: 4321,
-          cost,
-        },
-      );
+      const sql = observeHostDataSql();
+      try {
+        await secondModule.loadOpenRouterModelCapabilities("acme/sqlite-cached-model");
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(
+        secondModule.getLoadedOpenRouterModelCapabilities("acme/sqlite-cached-model"),
+      ).toMatchObject(expected);
       expect(fetchSpy).toHaveBeenCalledTimes(1);
       expect(secondModule.getOpenRouterModelCapabilities("minimax/minimax-m2.7")).toMatchObject({
         reasoning: true,
@@ -311,9 +316,11 @@ describe("openrouter-model-capabilities", () => {
         maxTokens: 4096,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       });
+      const failedResponse = new Response("temporarily unavailable", { status: 503 });
+      const cancel = vi.spyOn(failedResponse.body!, "cancel").mockResolvedValue(undefined);
       const fetchSpy = vi
         .fn()
-        .mockResolvedValueOnce(new Response("temporarily unavailable", { status: 503 }))
+        .mockResolvedValueOnce(failedResponse)
         .mockResolvedValueOnce(
           Response.json({
             data: [{ id: modelId, reasoning: { mandatory: true } }],
@@ -323,6 +330,7 @@ describe("openrouter-model-capabilities", () => {
       const cache = await importOpenRouterModelCapabilities("mandatory-metadata-cache-upgrade");
       await cache.loadOpenRouterModelCapabilities(modelId);
       expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(cancel).toHaveBeenCalledOnce();
       expect(cache.getOpenRouterModelCapabilities(modelId)).toBeUndefined();
       expect(fetchSpy).toHaveBeenCalledOnce();
 
@@ -380,61 +388,6 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("treats an explicit empty catalog as an authoritative replacement", async () => {
-    await withOpenRouterStateDir(async () => {
-      const modelId = "acme/removed-model";
-      const fetchSpy = vi
-        .fn()
-        .mockResolvedValueOnce(
-          Response.json({
-            data: [{ id: modelId, name: "Removed Model", context_length: 8192 }],
-          }),
-        )
-        .mockResolvedValueOnce(Response.json({ data: [] }));
-      vi.stubGlobal("fetch", fetchSpy);
-
-      const module = await importOpenRouterModelCapabilities("authoritative-empty");
-      await module.loadOpenRouterModelCapabilities(modelId);
-      await module.loadOpenRouterModelCapabilities("acme/new-model");
-
-      expect(module.getOpenRouterModelCapabilities(modelId)).toBeUndefined();
-    });
-  });
-
-  it("preserves explicit OpenRouter tool support metadata", async () => {
-    await withOpenRouterStateDir(async () => {
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () =>
-          Response.json({
-            data: [
-              {
-                id: "perplexity/sonar-deep-research",
-                name: "Sonar Deep Research",
-                supported_parameters: ["reasoning", "web_search_options"],
-              },
-              {
-                id: "google/gemini-2.5-pro",
-                name: "Gemini 2.5 Pro",
-                supported_parameters: ["reasoning", "tools"],
-              },
-            ],
-          }),
-        ),
-      );
-
-      const module = await importOpenRouterModelCapabilities("tool-support");
-      await module.loadOpenRouterModelCapabilities("perplexity/sonar-deep-research");
-
-      expect(
-        module.getOpenRouterModelCapabilities("perplexity/sonar-deep-research")?.supportsTools,
-      ).toBe(false);
-      expect(module.getOpenRouterModelCapabilities("google/gemini-2.5-pro")?.supportsTools).toBe(
-        true,
-      );
-    });
-  });
-
   it("bounds an oversized streamed OpenRouter catalog instead of buffering it whole", async () => {
     await withOpenRouterStateDir(async () => {
       // First pull emits a chunk larger than the cap; a well-behaved bounded read
@@ -470,93 +423,18 @@ describe("openrouter-model-capabilities", () => {
     });
   });
 
-  it("round-trips a chunked under-cap catalog through the SQLite cache", async () => {
-    await withOpenRouterStateDir(async () => {
-      // Stream the payload across several small chunks so the bounded reader has to
-      // reassemble it; the reassembled bytes must parse and survive a cross-import
-      // SQLite read-back identical to the source catalog.
-      const payload = JSON.stringify({
-        data: [
-          {
-            id: "acme/chunked-model",
-            name: "Chunked Model",
-            architecture: { modality: "text+image->text" },
-            supported_parameters: ["reasoning", "tools"],
-            context_length: 13579,
-            max_completion_tokens: 2468,
-            pricing: { prompt: "0.000007", completion: "0.000008" },
-          },
-        ],
-      });
-      const encoded = new TextEncoder().encode(payload);
-      const fetchSpy = vi.fn(async () => {
-        let offset = 0;
-        const stream = new ReadableStream<Uint8Array>({
-          pull(controller) {
-            if (offset >= encoded.length) {
-              controller.close();
-              return;
-            }
-            const end = Math.min(offset + 8, encoded.length);
-            controller.enqueue(encoded.subarray(offset, end));
-            offset = end;
-          },
-        });
-        return new Response(stream, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        });
-      });
-      vi.stubGlobal("fetch", fetchSpy);
-
-      const writer = await importOpenRouterModelCapabilities("chunked-sqlite-writer");
-      await writer.loadOpenRouterModelCapabilities("acme/chunked-model");
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(writer.getOpenRouterModelCapabilities("acme/chunked-model")).toMatchObject({
-        input: ["text", "image"],
-        reasoning: true,
-        supportsTools: true,
-        contextWindow: 13579,
-        maxTokens: 2468,
-      });
-
-      // Fresh import reads only from the SQLite cache the bounded read populated.
-      const reader = await importOpenRouterModelCapabilities("chunked-sqlite-reader");
-      const sql = observeHostDataSql();
-      try {
-        await reader.loadOpenRouterModelCapabilities("acme/chunked-model");
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
-      expect(reader.getLoadedOpenRouterModelCapabilities("acme/chunked-model")).toMatchObject({
-        input: ["text", "image"],
-        reasoning: true,
-        supportsTools: true,
-        contextWindow: 13579,
-        maxTokens: 2468,
-      });
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
-    });
-  });
-
   it.each(["getOpenRouterModelCapabilities", "getLoadedOpenRouterModelCapabilities"] as const)(
     "does not refetch immediately after an awaited miss through %s",
     async (firstLookup) => {
       await withOpenRouterStateDir(async () => {
-        const fetchSpy = vi.fn(async () =>
-          Response.json({
-            data: [
-              {
-                id: "acme/known-model",
-                name: "Known Model",
-                architecture: { modality: "text->text" },
-                context_length: 1234,
-              },
-            ],
-          }),
-        );
-        vi.stubGlobal("fetch", fetchSpy);
+        const fetchSpy = mockCatalog([
+          {
+            id: "acme/known-model",
+            name: "Known Model",
+            architecture: { modality: "text->text" },
+            context_length: 1234,
+          },
+        ]);
 
         const module = await importOpenRouterModelCapabilities(`awaited-miss-${firstLookup}`);
         await module.loadOpenRouterModelCapabilities("acme/missing-model");

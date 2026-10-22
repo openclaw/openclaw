@@ -5,6 +5,7 @@ import type {
   LeaseHeartbeatParentMessage,
   LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
+import type { StateLeaseRenewal } from "./openclaw-state-lease-renewal.worker.js";
 
 const fixture = vi.hoisted(() => ({
   worker: undefined as EventEmitter | undefined,
@@ -14,9 +15,11 @@ const fixture = vi.hoisted(() => ({
   receive: undefined as ((message: LeaseHeartbeatParentMessage) => void) | undefined,
 }));
 
-vi.mock("node:worker_threads", async () => {
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
   const { EventEmitter } = await import("node:events");
   return {
+    ...actual,
     isMainThread: false,
     get workerData() {
       return fixture.data;
@@ -24,6 +27,11 @@ vi.mock("node:worker_threads", async () => {
     parentPort: {
       on(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
         fixture.receive = listener;
+      },
+      off(_event: "message", listener: (message: LeaseHeartbeatParentMessage) => void) {
+        if (fixture.receive === listener) {
+          fixture.receive = undefined;
+        }
       },
       postMessage: (message: unknown) => fixture.worker?.emit("message", structuredClone(message)),
       close: () => queueMicrotask(() => fixture.worker?.emit("exit", 0)),
@@ -59,8 +67,12 @@ vi.mock("../infra/sqlite-worker-identity.js", async () => ({
 vi.mock("../infra/sqlite-busy-timeout.js", () => ({
   runWithSqliteBusyTimeout: (_db: unknown, _ms: number, run: () => unknown) => run(),
 }));
+// mock-isolation: The heartbeat diagnostic fixture has no native database or transaction custody.
 vi.mock("../infra/sqlite-transaction.js", () => ({
   runSqliteImmediateTransactionSync: (_db: unknown, run: () => unknown) => run(),
+  runSqliteDeferredTransactionSync: (_db: unknown, run: () => unknown) => run(),
+  runSqliteReadSnapshotSync: (_db: unknown, run: () => unknown) => run(),
+  retainSqliteWriteAdmissionService: () => () => {},
 }));
 vi.mock("./openclaw-state-db-handle.js", () => ({
   openTrackedStateDatabase: () => ({}),
@@ -69,6 +81,35 @@ vi.mock("./openclaw-state-db-handle.js", () => ({
 vi.mock("./openclaw-state-lease-store.js", () => ({
   renewOpenClawStateLeaseInTransaction: fixture.renew,
   readOpenClawStateLeaseExpiry: fixture.readExpiry,
+}));
+// mock-isolation: Diagnostics inject storage outcomes; scheduler tests cover native SQLite.
+vi.mock("./openclaw-state-lease-renewal.worker.js", () => ({
+  createStateLeaseRenewalScheduler: () => {
+    const pending = new Map<StateLeaseRenewal, ReturnType<typeof setTimeout>>();
+    return {
+      schedule(entry: StateLeaseRenewal, expiresAt: number) {
+        clearTimeout(pending.get(entry));
+        pending.set(
+          entry,
+          setTimeout(
+            () => {
+              pending.delete(entry);
+              try {
+                entry.complete({ expiresAt: fixture.renew() });
+              } catch (error) {
+                entry.complete({ error });
+              }
+            },
+            expiresAt - entry.leaseMs + entry.intervalMs - Date.now(),
+          ),
+        );
+      },
+      cancel(entry: StateLeaseRenewal) {
+        clearTimeout(pending.get(entry));
+        pending.delete(entry);
+      },
+    };
+  },
 }));
 
 const acquiredAt = 1_800_000_000_000;

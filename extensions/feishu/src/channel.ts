@@ -24,7 +24,6 @@ import {
   createConditionalWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
-import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
@@ -59,6 +58,7 @@ import {
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
 } from "./accounts.js";
+import { buildFeishuMessageToolHints } from "./agent-prompt.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
 import { FEISHU_CARD_INTERACTION_VERSION } from "./card-interaction.js";
 import { normalizeFeishuChatType, resolveFeishuChatType } from "./chat-type.js";
@@ -116,6 +116,7 @@ import { feishuSetupContract } from "./setup-core.js";
 import { feishuSetupWizard, runFeishuLogin } from "./setup-surface.js";
 import { resolveFeishuStickerSet, searchFeishuStickerSet } from "./sticker-catalog.js";
 import { looksLikeFeishuId, normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
+import { getFeishuThreadBindingManager } from "./thread-bindings.js";
 import type { FeishuConfig, FeishuProbeResult, ResolvedFeishuAccount } from "./types.js";
 
 function resolveFeishuSendAttachmentMedia(params: Record<string, unknown>): string | undefined {
@@ -610,18 +611,10 @@ function resolveFeishuSenderScopedCommandConversation(params: {
   if (!params.sessionKey?.trim()) {
     return undefined;
   }
-  const boundConversation = getSessionBindingService()
-    .listBySession(params.sessionKey)
-    .find((binding) => {
-      if (
-        binding.conversation.channel !== "feishu" ||
-        binding.conversation.accountId !== params.accountId
-      ) {
-        return false;
-      }
-      return binding.conversation.conversationId === senderScopedConversationId;
-    });
-  return boundConversation?.conversation.conversationId;
+  const boundConversation = getFeishuThreadBindingManager(params.accountId)
+    ?.listBySessionKey(params.sessionKey)
+    .find((binding) => binding.conversationId === senderScopedConversationId);
+  return boundConversation?.conversationId;
 }
 
 function resolveFeishuCommandConversation(params: {
@@ -985,27 +978,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         reply: true,
       },
       agentPrompt: {
-        messageToolHints: ({ cfg, accountId }) => {
-          const actions = describeFeishuMessageTool({
-            cfg,
-            accountId: accountId ?? undefined,
-          }).actions;
-          return [
-            "- Feishu targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `user:open_id` or `chat:chat_id`.",
-            "- Feishu supports interactive cards plus native image, file, audio, and video/media delivery.",
-            "- Feishu supports `send`, `read`, `edit`, `thread-reply`, pins, and channel/member lookup, plus reactions when enabled.",
-            ...(actions?.includes("sticker")
-              ? [
-                  "- Feishu stickers: use `action=sticker` with `fileId` (or the first `stickerId`) from a sticker this bot previously received. Sticker upload is not supported.",
-                ]
-              : []),
-            ...(actions?.includes("sticker-search")
-              ? [
-                  "- Feishu `action=sticker-search`: configured keyword lookup only, not store search or learned/visual matching. Supply `query` (1–128 characters) and optional `limit` (1–10, default 5); send a returned `fileId` with `action=sticker` on the same account. If `truncated` is true, narrow the query.",
-                ]
-              : []),
-          ];
-        },
+        customInlineButtonHint: true,
+        messageToolHints: ({ cfg, accountId }) =>
+          buildFeishuMessageToolHints(describeFeishuMessageTool({ cfg, accountId }).actions),
       },
       groups: {
         resolveToolPolicy: resolveFeishuGroupToolPolicy,
@@ -1082,7 +1057,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           const { assertDirectAdapterHandoff } = ctx;
           const account = resolveFeishuAccount({
             cfg: ctx.cfg,
-            accountId: ctx.accountId ?? undefined,
+            accountId: ctx.accountId,
           });
           if (
             (ctx.action === "react" || ctx.action === "reactions") &&
@@ -1197,7 +1172,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               cfg: ctx.cfg,
               to,
               text: text ?? "",
-              accountId: ctx.accountId ?? undefined,
+              accountId: ctx.accountId,
               ...(ctx.mediaAccess ? { mediaAccess: ctx.mediaAccess } : {}),
               mediaLocalRoots: ctx.mediaLocalRoots,
               ...(ctx.mediaReadFile ? { mediaReadFile: ctx.mediaReadFile } : {}),
@@ -1461,7 +1436,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               cfg: ctx.cfg,
               query,
               limit,
-              accountId: ctx.accountId ?? undefined,
+              accountId: ctx.accountId,
               fallbackToStatic: false,
             };
             const groupDirectoryParams = {

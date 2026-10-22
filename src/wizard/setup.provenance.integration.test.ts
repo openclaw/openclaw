@@ -8,7 +8,8 @@ import { resetConfigRuntimeState } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import type { WizardSelectParams } from "./prompts.js";
+import { t } from "./i18n/index.js";
+import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore: () => ({ plugins: [], diagnostics: [] }),
@@ -81,7 +82,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it("preserves consent and authored values after rebasing the agent roster", async () => {
+it.each([true, false])("preserves rebased provenance with consent %s", async (acceptRisk) => {
   await withTempHome(async (home) => {
     const stateDir = path.join(home, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -94,11 +95,22 @@ it("preserves consent and authored values after rebasing the agent roster", asyn
       agents: { defaults: { workspace }, entries: { main: {} } },
       gateway: { mode: "local", port: 18789 },
       messages: { responsePrefix: "${CLASSIC_RESPONSE_PREFIX}" },
+      memory: { search: { enabled: false, query: { maxResults: 7 } } },
       plugins: { enabled: false },
     };
     await fs.writeFile(configPath, JSON.stringify(config));
     resetConfigRuntimeState();
-    const confirm = vi.fn(async () => true);
+    const securityConfirm = vi.fn<WizardPrompter["confirm"]>(async () => acceptRisk);
+    const memoryConfirm = vi.fn<WizardPrompter["confirm"]>(async () => false);
+    const confirm: WizardPrompter["confirm"] = async (params) => {
+      if (params.message === t("wizard.security.confirm")) {
+        return securityConfirm(params);
+      }
+      if (params.message === "Set up memory embeddings?") {
+        return memoryConfirm(params);
+      }
+      throw new Error(`Unexpected confirmation: ${params.message}`);
+    };
     const prompter = createWizardPrompter({
       confirm,
       select: async <T>(params: WizardSelectParams<T>): Promise<T> => {
@@ -109,7 +121,7 @@ it("preserves consent and authored values after rebasing the agent roster", asyn
         return choice.value;
       },
     });
-    await runSetupWizard(
+    const setup = runSetupWizard(
       {
         flow: "quickstart",
         mode: "local",
@@ -128,6 +140,20 @@ it("preserves consent and authored values after rebasing the agent roster", asyn
       runtime,
       prompter,
     );
+    if (!acceptRisk) {
+      await expect(setup).rejects.toBeInstanceOf(WizardCancelledError);
+      expect(securityConfirm).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: t("wizard.security.confirm"),
+          initialValue: true,
+          layout: "vertical",
+        }),
+      );
+      expect(memoryConfirm).not.toHaveBeenCalled();
+      expect(JSON.parse(await fs.readFile(configPath, "utf8"))).toEqual(config);
+      return;
+    }
+    await setup;
 
     const saved = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
     expect.soft(saved.wizard?.securityAcknowledgedAt).toEqual(expect.any(String));
@@ -136,8 +162,21 @@ it("preserves consent and authored values after rebasing the agent roster", asyn
     expect.soft(saved.agents?.defaults?.workspace).toBe(workspace);
     expect.soft(saved.agents?.entries).toHaveProperty("main");
     expect.soft(saved.messages?.responsePrefix).toBe("${CLASSIC_RESPONSE_PREFIX}");
+    expect.soft(saved.memory).toEqual(config.memory);
     expect.soft(saved.agents?.defaults).not.toHaveProperty("maxConcurrent");
     expect.soft(saved.agents?.defaults).not.toHaveProperty("compaction");
-    expect(confirm).toHaveBeenCalledOnce();
+    expect(securityConfirm).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: t("wizard.security.confirm"),
+        initialValue: true,
+        layout: "vertical",
+      }),
+    );
+    expect(memoryConfirm).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: "Set up memory embeddings?",
+        initialValue: false,
+      }),
+    );
   });
 });

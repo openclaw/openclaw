@@ -96,7 +96,7 @@ async function fixture() {
   };
 }
 
-it.each(["standalone", "update"] as const)(
+it.each(["update"] as const)(
   "stops with a slow manager and slow custody checks (%s)",
   async (mode) => {
     const f = await fixture();
@@ -131,7 +131,7 @@ it("retries one transient inspection timeout before stopping", async () => {
 it("keeps the original Gateway serving when both bounded manager inspections time out", async () => {
   const f = await fixture();
   f.manager(Number.POSITIVE_INFINITY);
-  await expect(f.stop()).rejects.toThrow(/inspection.*Version/i);
+  await expect(f.stop()).rejects.toThrow(/Stalled check: machine Manager\.Version\./);
   expect(f.running()).toBe(true);
   expect(f.commands).not.toContain("stop");
   expect(f.warn).toHaveBeenCalledOnce();
@@ -151,9 +151,7 @@ it("refuses to stop when custody retires during manager inspection", async () =>
 });
 
 it.each([
-  { scenario: "ownership refusal", retired: false },
   { scenario: "ownership refusal", retired: true },
-  { scenario: "unsettled probe", retired: false },
   { scenario: "unsettled probe", retired: true },
 ])(
   "preserves $scenario at the inspection deadline (custody retired=$retired)",

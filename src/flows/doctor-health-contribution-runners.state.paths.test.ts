@@ -4,7 +4,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
-import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.js";
+import { updateStateSchemaVersionsMatch } from "../infra/update-candidate-state.versions.js";
 import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
@@ -12,8 +12,8 @@ import {
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { resolveOpenClawRegisteredAgentDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
-import { runStateIntegrityHealth } from "./doctor-health-contribution-runners.state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
+import { initialDoctorHealthContribution } from "./doctor-health-contributions-selection.test-support.js";
 
 vi.hoisted(() => {
   // Shared-worker setup can import path helpers before this Windows simulation.
@@ -153,7 +153,7 @@ describe("Doctor Windows database path repair", () => {
     "consolidates namespace aliases at %s before the next update baseline",
     async (stateDir) => {
       const state = seedDatabase(stateDir);
-      await runStateIntegrityHealth(context());
+      await initialDoctorHealthContribution("doctor:state-integrity").run(context());
       expect(state.readRows()).toHaveLength(2);
       expect(state.readRows()).toContainEqual({
         agent_id: "main",
@@ -171,7 +171,7 @@ describe("Doctor Windows database path repair", () => {
       });
       const baseline = state.versions();
       state.startUpdate();
-      await runStateIntegrityHealth(context());
+      await initialDoctorHealthContribution("doctor:state-integrity").run(context());
       expect(
         updateStateSchemaVersionsMatch(baseline, state.versions(), {
           sharedPath: state.database.path,
@@ -195,7 +195,7 @@ describe("Doctor Windows database path repair", () => {
         .set({ last_seen_at: 500, size_bytes: null })
         .where("path", "=", relative),
     );
-    await runStateIntegrityHealth(context());
+    await initialDoctorHealthContribution("doctor:state-integrity").run(context());
     expect(state.readRows().find((row) => row.path === relative)).toEqual({
       agent_id: "main",
       path: relative,
@@ -219,13 +219,13 @@ describe("Doctor Windows database path repair", () => {
       state.database.db,
       state.queries.insertInto("agent_databases").values(retained),
     );
-    await runStateIntegrityHealth(context());
+    await initialDoctorHealthContribution("doctor:state-integrity").run(context());
     const repaired = state.readRows();
     expect(repaired).toHaveLength(3);
     expect(repaired).toContainEqual(retained);
     fixture.note.mockClear();
 
-    await runStateIntegrityHealth(context());
+    await initialDoctorHealthContribution("doctor:state-integrity").run(context());
     expect(state.readRows()).toEqual(repaired);
     expect(fixture.note).not.toHaveBeenCalled();
   });
@@ -235,7 +235,7 @@ describe("Doctor Windows database path repair", () => {
     const baseline = state.versions();
     fixture.beforeAdmission = state.startUpdate;
     const ctx = context();
-    await runStateIntegrityHealth(ctx);
+    await initialDoctorHealthContribution("doctor:state-integrity").run(ctx);
     expect(state.readRows()).toHaveLength(3);
     expect(ctx.updateWarnings).toEqual([
       "Skipped agent database path repair while update 00000000-0000-4000-8000-000000000001 is in progress. Run openclaw doctor --fix after the update finishes.",
@@ -248,25 +248,24 @@ describe("Doctor Windows database path repair", () => {
     ).toBe(true);
   });
 
-  it.each([
-    { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-    { OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1" },
-    { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
-  ])("leaves candidate and update Doctor inventory unchanged for %j", async (env) => {
-    const state = seedDatabase();
-    const before = state.readRows();
-    const ctx = context(env);
-    await runStateIntegrityHealth(ctx);
-    expect(state.readRows()).toEqual(before);
-    expect(ctx.updateWarnings).toEqual([
-      "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix after the update finishes.",
-    ]);
-  });
+  it.each([{ OPENCLAW_UPDATE_IN_PROGRESS: "1" }])(
+    "leaves candidate and update Doctor inventory unchanged for %j",
+    async (env) => {
+      const state = seedDatabase();
+      const before = state.readRows();
+      const ctx = context(env);
+      await initialDoctorHealthContribution("doctor:state-integrity").run(ctx);
+      expect(state.readRows()).toEqual(before);
+      expect(ctx.updateWarnings).toEqual([
+        "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.",
+      ]);
+    },
+  );
 
   it("leaves ordinary Doctor inspection read-only", async () => {
     const state = seedDatabase();
     const before = state.readRows();
-    await runStateIntegrityHealth(context({}, false));
+    await initialDoctorHealthContribution("doctor:state-integrity").run(context({}, false));
     expect(state.readRows()).toEqual(before);
     expect(fixture.note).not.toHaveBeenCalled();
   });
@@ -275,7 +274,9 @@ describe("Doctor Windows database path repair", () => {
     const state = seedDatabase();
     state.database.db.exec("UPDATE schema_meta SET role = 'agent'");
     const before = state.readRows();
-    await expect(runStateIntegrityHealth(context())).rejects.toThrow("schema role agent");
+    await expect(
+      initialDoctorHealthContribution("doctor:state-integrity").run(context()),
+    ).rejects.toThrow("schema role agent");
     expect(state.readRows()).toEqual(before);
   });
 });

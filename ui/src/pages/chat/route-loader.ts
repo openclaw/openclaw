@@ -14,7 +14,6 @@ import { prepareSessionNavigationHandoff } from "../../lib/sessions/navigation-h
 import {
   findUiSessionRow,
   resolveSessionPreferredFace,
-  SESSION_DASHBOARD_EXPANDED_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
@@ -25,7 +24,8 @@ import {
   resolveAgentIdFromSessionKey,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { draftRouteDataFromLocation, draftSearchFromLocation } from "./route-draft.ts";
+import { PendingSessionCreate } from "./pending-session-create-lazy.ts";
+import { draftSearchFromLocation, sessionRouteHints } from "./route-draft.ts";
 import { loadCatalogShareRouteFromLocation } from "./route-loader-catalog-share.ts";
 import type { SessionRouteContext as ApplicationContext } from "./route-loader-context.ts";
 import {
@@ -46,19 +46,6 @@ import {
 import type { ChatRouteData } from "./session-route-data.ts";
 
 export type { ChatRouteData, SessionChatRouteData } from "./session-route-data.ts";
-
-function sessionRouteHints(location: RouteLocation) {
-  return {
-    ...draftRouteDataFromLocation(location),
-    ...(new URLSearchParams(location.search).get(SESSION_DASHBOARD_EXPANDED_PARAM) === "expanded"
-      ? { dashboardExpanded: true as const }
-      : {}),
-  };
-}
-
-function isPreferenceDerivedFace(location: RouteLocation): boolean {
-  return new URLSearchParams(location.search).get(SESSION_FACE_PREFERENCE_PARAM) === "1";
-}
 
 function locationWithoutSearchParam(location: RouteLocation, key: string): RouteLocation {
   const params = new URLSearchParams(location.search);
@@ -283,8 +270,18 @@ export async function loadChatRoute(
     return notFound({ routeId: face });
   }
   const { target } = resolvedTarget;
+  if (
+    target.kind === "literal" &&
+    context.sessions.cachedRoutingDefaults &&
+    (!target.slugCandidate || context.sessions.cachedRoutingDefaults.scope === "per-sender")
+  ) {
+    // Literal keys and display-name links share the scoped roster used by short links.
+    await context.sessions.whenCachedRosterSettled();
+    signal.throwIfAborted();
+  }
   const routeLocation = resolvedTarget.location;
-  const preferenceDerived = isPreferenceDerivedFace(routeLocation);
+  const preferenceDerived =
+    new URLSearchParams(routeLocation.search).get(SESSION_FACE_PREFERENCE_PARAM) === "1";
   const presentation = {
     context,
     isResolutionSourceCurrent,
@@ -376,6 +373,7 @@ export async function loadChatRoute(
   if (target.kind === "literal") {
     let defaultsKnown =
       defaultsUsable ||
+      context.sessions.cachedRoutingDefaults?.scope === "per-sender" ||
       (context.gateway.snapshot.phase === "connected" && hasConfiguredMainKey(context));
     const needsGatewayResolution = preferenceDerived || Boolean(target.slugCandidate);
     if (!defaultsKnown && needsGatewayResolution) {
@@ -386,13 +384,17 @@ export async function loadChatRoute(
       }
     }
     if (needsGatewayResolution) {
-      // Any single non-short-id segment is a slug candidate, so a plain literal route
-      // would otherwise pay a resolution round-trip on every open. A cached row is
-      // already proof the segment is a real key, which settles the exact lookup for
-      // free; only genuinely unknown references reach the gateway.
+      // Exact keys win over names; warm names use the same scoped lookup as short links.
       const cachedRow =
         defaultsKnown && !revalidation
-          ? findUiSessionRow(context, target.sessionKey, target.agentId)
+          ? (findUiSessionRow(context, target.sessionKey, target.agentId) ??
+            (context.sessions.state.resultCached && !preferenceDerived
+              ? findLocalSessionReference(
+                  context.sessions.state.result?.sessions ?? [],
+                  target,
+                  configuredMainKey(context),
+                )
+              : undefined))
           : undefined;
       const resolution =
         revalidatedResolution ??
@@ -434,9 +436,7 @@ export async function loadChatRoute(
             .then(() => canonicalMainLocation(context, routeLocation, face, target.sessionKey))
             .catch(() => null)
         : undefined;
-    const preferenceLocation = preferenceDerived
-      ? locationWithoutNavigationHints(routeLocation)
-      : null;
+    const navigationLocation = locationWithoutNavigationHints(routeLocation);
     return {
       kind: "session",
       sessionKey: target.sessionKey,
@@ -444,8 +444,8 @@ export async function loadChatRoute(
       face,
       ...(canonicalLocation
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
-        : preferenceLocation && preferenceLocation.search !== routeLocation.search
-          ? { canonicalLocation: preferenceLocation, canonicalLocationSource: routeLocation }
+        : navigationLocation.search !== routeLocation.search
+          ? { canonicalLocation: navigationLocation, canonicalLocationSource: routeLocation }
           : {}),
       ...(canonicalLocationReady
         ? { canonicalLocationReady, canonicalLocationSource: routeLocation }
@@ -601,8 +601,7 @@ export async function loadSessionPage(
       result.creation = creation;
     }
     if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {
-      // Startup owns a display-only view even if an interrupted temporary session is cleaned up.
-      await import("./pending-session-create.ts");
+      await PendingSessionCreate.preload();
       signal.throwIfAborted();
     }
   }

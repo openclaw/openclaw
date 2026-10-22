@@ -8,7 +8,10 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import * as gatewayCallRuntime from "../gateway/call.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -311,6 +314,78 @@ describe("waitForAgentRun", () => {
     expect(result.sourceReplyDelivered).toBe(entry.expected);
   });
 
+  it.each(["gateway-restarting", "gateway-suspending", undefined])(
+    "keeps a %s observation refusal retryable without reclassifying terminal run text",
+    async (reason) => {
+      const message = "agent.wait unavailable during gateway maintenance";
+      callGatewayMock.mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "UNAVAILABLE",
+          message,
+          retryable: true,
+          ...(reason ? { details: { reason } } : {}),
+        }),
+      );
+      expect(await waitForAgentRun({ runId: "running-child", timeoutMs: 500 })).toEqual({
+        status: "error",
+        error: message,
+        retryableTransportError: true,
+      });
+      callGatewayMock.mockResolvedValueOnce({
+        status: "error",
+        error: message,
+        startedAt: 100,
+        endedAt: 200,
+      });
+      const terminal = await waitForAgentRun({ runId: "failed-child", timeoutMs: 500 });
+      expect(terminal).toMatchObject({
+        status: "error",
+        error: message,
+        endedAt: 200,
+      });
+      expect(terminal.retryableTransportError).toBeUndefined();
+    },
+  );
+
+  it.each([
+    {
+      name: "a protocol observation refusal",
+      draining: false,
+      cause: new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "agent.wait unavailable during gateway suspension",
+        retryable: true,
+      }),
+      retryable: true,
+    },
+    {
+      name: "a closed instance's refusal during restart drain",
+      draining: true,
+      cause: new GatewayDispatchUnavailableError("agent.wait", false),
+      retryable: true,
+    },
+    {
+      name: "a closed instance's refusal outside restart drain",
+      draining: false,
+      cause: new GatewayDispatchUnavailableError("agent.wait", false),
+      retryable: false,
+    },
+  ])("classifies $name without inferring a terminal run", async (entry) => {
+    resetGatewayWorkAdmission();
+    if (entry.draining) {
+      markGatewayRestartDraining("stop (SIGTERM)");
+    }
+    try {
+      callGatewayMock.mockRejectedValueOnce(entry.cause);
+      const result = await waitForAgentRun({ runId: "run-observed", timeoutMs: 500 });
+      expect(result.status).toBe("error");
+      expect(result.error).toBe(entry.cause.message);
+      expect(result.retryableTransportError).toBe(entry.retryable ? true : undefined);
+    } finally {
+      resetGatewayWorkAdmission();
+    }
+  });
+
   it("normalizes blocked ok waits to errors", async () => {
     callGatewayMock.mockResolvedValue({
       status: "ok",
@@ -487,13 +562,13 @@ describe("waitForAgentRunsToDrain", () => {
         activeRunIds = [];
       }, 0);
       try {
-        const result = await waitForAgentRunsToDrain({
+        await waitForAgentRunsToDrain({
           timeoutMs: 200,
           getPendingRunIds: async () => activeRunIds,
         });
 
-        expect(result.timedOut).toBe(false);
-        expect(result.pendingRunIds).toEqual([]);
+        expect(activeRunIds).toEqual([]);
+        expect(callGatewayMock).toHaveBeenCalled();
         expect(callGatewayMock.mock.calls.length).toBeLessThanOrEqual(4);
       } finally {
         clearTimeout(completion);
@@ -505,12 +580,12 @@ describe("waitForAgentRunsToDrain", () => {
     callGatewayMock.mockResolvedValue({ status: "pending" });
     const deadlineAtMs = Date.now() + 150;
 
-    const result = await waitForAgentRunsToDrain({
+    await waitForAgentRunsToDrain({
       deadlineAtMs,
       getPendingRunIds: async () => ["run-1"],
     });
 
-    expect(result).toEqual({ timedOut: true, pendingRunIds: ["run-1"], deadlineAtMs });
+    expect(Date.now()).toBeGreaterThanOrEqual(deadlineAtMs);
     expect(callGatewayMock.mock.calls.length).toBeLessThanOrEqual(4);
     expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 150);
   });
@@ -519,7 +594,7 @@ describe("waitForAgentRunsToDrain", () => {
     callGatewayMock.mockResolvedValue({ status: "ok" });
     let activeRunIds = ["run-2"];
 
-    const result = await waitForAgentRunsToDrain({
+    await waitForAgentRunsToDrain({
       timeoutMs: 1_000,
       initialPendingRunIds: ["run-1"],
       getPendingRunIds: async () => {
@@ -529,7 +604,7 @@ describe("waitForAgentRunsToDrain", () => {
       },
     });
 
-    expect(result.timedOut).toBe(false);
+    expect(activeRunIds).toEqual([]);
     const requests = gatewayWaitRequests();
     expect(requests).toHaveLength(2);
     expectAgentWaitRequest(requireRequestAt(requests, 0), "run-1", 1_000);
@@ -543,7 +618,7 @@ describe("waitForAgentRunsToDrain", () => {
     let activeRunIds = ["run-1"];
 
     try {
-      const result = await waitForAgentRunsToDrain({
+      await waitForAgentRunsToDrain({
         timeoutMs: Number.NaN,
         getPendingRunIds: async () => {
           const current = activeRunIds;
@@ -552,8 +627,7 @@ describe("waitForAgentRunsToDrain", () => {
         },
       });
 
-      expect(result.timedOut).toBe(false);
-      expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
+      expect(activeRunIds).toEqual([]);
       expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 1);
     } finally {
       vi.useRealTimers();
@@ -564,16 +638,11 @@ describe("waitForAgentRunsToDrain", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
     try {
-      const result = await waitForAgentRunsToDrain({
+      await waitForAgentRunsToDrain({
         timeoutMs: 1,
         getPendingRunIds: async () => ["run-1"],
       });
 
-      expect(result).toEqual({
-        timedOut: true,
-        pendingRunIds: ["run-1"],
-        deadlineAtMs: MAX_DATE_TIMESTAMP_MS,
-      });
       expect(callGatewayMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -584,14 +653,11 @@ describe("waitForAgentRunsToDrain", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-30T00:00:00Z"));
     try {
-      const result = await waitForAgentRunsToDrain({
+      await waitForAgentRunsToDrain({
         deadlineAtMs: Number.POSITIVE_INFINITY,
         getPendingRunIds: async () => ["run-1"],
       });
 
-      expect(result.timedOut).toBe(true);
-      expect(result.pendingRunIds).toStrictEqual(["run-1"]);
-      expect(result.deadlineAtMs).toBe(Date.now());
       expect(callGatewayMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();

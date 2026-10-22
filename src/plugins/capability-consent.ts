@@ -138,6 +138,8 @@ export async function resolvePluginCapabilityConsent(params: {
   env?: NodeJS.ProcessEnv;
   acknowledge?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
+  /** Record explicit acceptance even when official provenance permits activation. */
+  recordOfficialCapabilities?: boolean;
   beforePersistentEffect?: () => void | Promise<void>;
   beforePersistentApply?: () => void;
   metadata?: PluginMetadataSnapshot;
@@ -176,7 +178,7 @@ export async function resolvePluginCapabilityConsent(params: {
     if (!manifest) {
       throw new ManagedPluginLifecycleError(`Plugin "${pluginId}" has no installed manifest.`);
     }
-    if (manifest.trustedOfficialInstall) {
+    if (manifest.trustedOfficialInstall && !params.recordOfficialCapabilities) {
       pendingPluginCapabilityReviews.delete(pluginId);
       return;
     }
@@ -237,94 +239,6 @@ export async function resolvePluginCapabilityConsent(params: {
   });
 }
 
-async function resolvePluginArtifactCapabilityConsent(params: {
-  config: OpenClawConfig;
-  pluginId: string;
-  record: PluginInstallRecord;
-  sourceRecord?: PluginInstallRecord;
-  artifactDir: string;
-  currentArtifactDir?: string;
-  env?: NodeJS.ProcessEnv;
-  acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
-  onCapabilityConsent?: PluginCapabilityConsentHandler;
-  beforePersistentEffect?: () => void | Promise<void>;
-  previousDeclared?: PluginAcceptedDeclaredSurface;
-  previousRecord?: PluginInstallRecord;
-  mode?: "install" | "update";
-  enabled: boolean;
-}): Promise<PluginAcceptedDeclaredSurface | undefined> {
-  const artifactContext = { config: params.config, currentArtifactDir: params.currentArtifactDir };
-  const { declared, manifest } = inspectPluginCapabilityArtifact(
-    params.artifactDir,
-    params.env,
-    artifactContext,
-  );
-  const isOfficialArtifact = (artifactManifest: typeof manifest) =>
-    params.sourceRecord !== undefined &&
-    isTrustedOfficialPluginInstallRecord({
-      pluginId: params.pluginId,
-      packageName: artifactManifest?.packageName,
-      record: params.sourceRecord,
-    });
-  const official = isOfficialArtifact(manifest);
-  const reviewArtifact = (
-    artifactDeclared: PluginAcceptedDeclaredSurface,
-    artifactManifest: typeof manifest,
-  ) =>
-    buildPluginCapabilityConsentReview({
-      pluginId: params.pluginId,
-      manifest: artifactManifest ?? { name: params.pluginId },
-      record: params.sourceRecord ?? params.record,
-      config: params.config,
-      declared: artifactDeclared,
-      ...(params.previousDeclared ? { previousDeclared: params.previousDeclared } : {}),
-    });
-  const review = reviewArtifact(declared, manifest);
-  let acceptanceCurrent = false;
-  if (params.mode === "update" && params.previousDeclared) {
-    const { hasWidening } = diffDeclaredSurfaceWidening(params.previousDeclared, declared);
-    const priorAcceptanceCurrent =
-      params.previousRecord !== undefined &&
-      resolveAcceptedSurfaceCurrent(params.previousRecord, params.previousDeclared) &&
-      resolvePluginInstallRecordIntegrity(params.previousRecord) !== undefined;
-    acceptanceCurrent = !hasWidening && priorAcceptanceCurrent;
-    // Reinstalls preserve authored disablement; required consent still precedes commit.
-    // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
-  }
-  const acknowledgment =
-    official || !params.enabled || acceptanceCurrent
-      ? { reviewToken: review.reviewToken }
-      : (params.acknowledgeCapabilities ?? (await params.onCapabilityConsent?.(review)));
-  // Review and staged-package rollback remain cancellable. Lock only when
-  // accepting this artifact, then recheck its bytes after the callback yields.
-  if (acknowledgment) {
-    await params.beforePersistentEffect?.();
-  }
-  // Interactive consent yields; re-read the final stage so a replaced artifact cannot inherit it.
-  const { declared: finalDeclared, manifest: finalManifest } = inspectPluginCapabilityArtifact(
-    params.artifactDir,
-    params.env,
-    artifactContext,
-  );
-  const finalToken = computeDeclaredSurfaceHash(finalDeclared);
-  if (
-    !acknowledgment ||
-    acknowledgment.reviewToken !== finalToken ||
-    (official && !isOfficialArtifact(finalManifest))
-  ) {
-    const finalReview =
-      finalToken === review.reviewToken ? review : reviewArtifact(finalDeclared, finalManifest);
-    const outcome = params.currentArtifactDir ? "updated" : "installed";
-    return throwManagedPluginCapabilityConsentRequired(
-      finalReview,
-      `The plugin was not ${outcome}. Re-run the same "openclaw plugins install" or "openclaw plugins update" command with --accept-capabilities, keeping its source and other options. For Doctor or setup, complete the plugin command first, then retry Doctor or setup.`,
-    );
-  }
-  pendingPluginCapabilityReviews.delete(params.pluginId);
-  // Provenance alone is not operator acceptance; an explicit review is.
-  return !official && (params.enabled || acceptanceCurrent) ? finalDeclared : undefined;
-}
-
 /** Bind artifact consent to verified staged bytes and carry acceptance into the record commit. */
 export function createManagedPluginArtifactConsentHandler(params: {
   config: OpenClawConfig;
@@ -334,7 +248,10 @@ export function createManagedPluginArtifactConsentHandler(params: {
   expectedIntegrity?: string;
   acknowledgeCapabilities?: PluginCapabilityConsentAcknowledgment;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
-  beforePersistentEffect?: () => void | Promise<void>;
+  requireCapabilityConsent?: boolean;
+  /** Preserve official provenance while recording an explicit setup acceptance. */
+  recordOfficialCapabilities?: boolean;
+  beforePersistentEffect?: (artifact: PluginInstallArtifactConsentRequest) => void | Promise<void>;
   previousRecords?: Record<string, PluginInstallRecord>;
   previousPluginOwners?: ReadonlyMap<string, string>;
   /** Update-only flows may defer consent while every known package entry is disabled. */
@@ -384,38 +301,113 @@ export function createManagedPluginArtifactConsentHandler(params: {
       }
       const [installOwner, previousRecord] = matchingOwners[0] ?? [];
       const previousDeclared = installOwner ? previousDeclaredByOwner.get(installOwner) : undefined;
-      const declared = await resolvePluginArtifactCapabilityConsent({
-        config: params.config,
-        env: params.env,
-        pluginId: artifact.pluginId,
-        artifactDir: artifact.stagedArtifactDir,
-        currentArtifactDir: previousRecord?.installPath ?? artifact.currentArtifactDir,
-        record: {
-          source: params.source,
-          installPath: artifact.stagedArtifactDir,
-          ...(params.spec ? { spec: params.spec } : {}),
-          ...(params.expectedIntegrity ? { integrity: params.expectedIntegrity } : {}),
-        },
-        sourceRecord: artifact.sourceRecord,
-        acknowledgeCapabilities: params.acknowledgeCapabilities,
-        onCapabilityConsent: params.onCapabilityConsent,
-        beforePersistentEffect: params.beforePersistentEffect,
-        ...(previousRecord ? { previousRecord } : {}),
-        ...(previousDeclared ? { previousDeclared } : {}),
-        mode: artifact.mode,
-        enabled:
-          !params.updatingPluginIds?.length ||
-          params.updatingPluginIds.some(
-            (id) =>
-              resolveEffectiveEnableState({
-                id,
-                origin: "global",
-                config: normalizePluginsConfig(params.config.plugins),
-                rootConfig: params.config,
-              }).enabled,
-          ),
-      });
-      pendingAcceptedSurfaces.set(artifact.pluginId, declared);
+      const { config, env } = params;
+      const pluginId = artifact.pluginId;
+      const artifactDir = artifact.stagedArtifactDir;
+      const currentArtifactDir = previousRecord?.installPath ?? artifact.currentArtifactDir;
+      const record: PluginInstallRecord = {
+        source: params.source,
+        installPath: artifact.stagedArtifactDir,
+        ...(params.spec ? { spec: params.spec } : {}),
+        ...(params.expectedIntegrity ? { integrity: params.expectedIntegrity } : {}),
+      };
+      const sourceRecord = artifact.sourceRecord;
+      const {
+        acknowledgeCapabilities,
+        onCapabilityConsent,
+        requireCapabilityConsent,
+        recordOfficialCapabilities,
+      } = params;
+      const beforePersistentEffect = params.beforePersistentEffect
+        ? () => params.beforePersistentEffect?.(artifact)
+        : undefined;
+      const mode = artifact.mode;
+      const enabled =
+        !params.updatingPluginIds?.length ||
+        params.updatingPluginIds.some(
+          (id) =>
+            resolveEffectiveEnableState({
+              id,
+              origin: "global",
+              config: normalizePluginsConfig(params.config.plugins),
+              rootConfig: params.config,
+            }).enabled,
+        );
+      const artifactContext = { config, currentArtifactDir };
+      const { declared, manifest } = inspectPluginCapabilityArtifact(
+        artifactDir,
+        env,
+        artifactContext,
+      );
+      const isOfficialArtifact = (artifactManifest: typeof manifest) =>
+        sourceRecord !== undefined &&
+        isTrustedOfficialPluginInstallRecord({
+          pluginId,
+          packageName: artifactManifest?.packageName,
+          record: sourceRecord,
+        });
+      const official = isOfficialArtifact(manifest);
+      const reviewArtifact = (
+        artifactDeclared: PluginAcceptedDeclaredSurface,
+        artifactManifest: typeof manifest,
+      ) =>
+        buildPluginCapabilityConsentReview({
+          pluginId,
+          manifest: artifactManifest ?? { name: pluginId },
+          record: sourceRecord ?? record,
+          config,
+          declared: artifactDeclared,
+          ...(previousDeclared ? { previousDeclared } : {}),
+        });
+      const review = reviewArtifact(declared, manifest);
+      let acceptanceCurrent = false;
+      if (mode === "update" && previousDeclared) {
+        const { hasWidening } = diffDeclaredSurfaceWidening(previousDeclared, declared);
+        const priorAcceptanceCurrent =
+          previousRecord !== undefined &&
+          resolveAcceptedSurfaceCurrent(previousRecord, previousDeclared) &&
+          resolvePluginInstallRecordIntegrity(previousRecord) !== undefined;
+        acceptanceCurrent = !hasWidening && priorAcceptanceCurrent;
+        // Reinstalls preserve authored disablement; required consent still precedes commit.
+        // Only update-only flows defer it in preparePluginUpdateCapabilityConsent.
+      }
+      const acknowledgment = requireCapabilityConsent
+        ? await onCapabilityConsent?.(review)
+        : (official && !recordOfficialCapabilities) || !enabled || acceptanceCurrent
+          ? { reviewToken: review.reviewToken }
+          : (acknowledgeCapabilities ?? (await onCapabilityConsent?.(review)));
+      // Review and staged-package rollback remain cancellable. Lock only when
+      // accepting this artifact, then recheck its bytes after the callback yields.
+      if (acknowledgment) {
+        await beforePersistentEffect?.();
+      }
+      // Interactive consent yields; re-read the final stage so a replaced artifact cannot inherit it.
+      const { declared: finalDeclared, manifest: finalManifest } = inspectPluginCapabilityArtifact(
+        artifactDir,
+        env,
+        artifactContext,
+      );
+      const finalToken = computeDeclaredSurfaceHash(finalDeclared);
+      if (
+        !acknowledgment ||
+        acknowledgment.reviewToken !== finalToken ||
+        (official && !isOfficialArtifact(finalManifest))
+      ) {
+        const finalReview =
+          finalToken === review.reviewToken ? review : reviewArtifact(finalDeclared, finalManifest);
+        const outcome = currentArtifactDir ? "updated" : "installed";
+        throwManagedPluginCapabilityConsentRequired(
+          finalReview,
+          `The plugin was not ${outcome}. Re-run the same "openclaw plugins install" or "openclaw plugins update" command with --accept-capabilities, keeping its source and other options. For Doctor or setup, complete the plugin command first, then retry Doctor or setup.`,
+        );
+      }
+      pendingPluginCapabilityReviews.delete(pluginId);
+      // Provenance alone is not operator acceptance; an explicit review is.
+      const acceptedSurface =
+        (!official || recordOfficialCapabilities) && (enabled || acceptanceCurrent)
+          ? finalDeclared
+          : undefined;
+      pendingAcceptedSurfaces.set(artifact.pluginId, acceptedSurface);
     },
     applyAcceptedSurface: (pluginId, record) => {
       const declared = pendingAcceptedSurfaces.get(pluginId);

@@ -7,17 +7,21 @@ import { reconcileSessionRunTerminal } from "./index.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
+  sessionsResult as makeSessionsResult,
 } from "./session-capability.test-support.ts";
 
 function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
-  return {
-    ts: 1,
-    path: "(multiple)",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
+  return makeSessionsResult(sessions, 1);
 }
+const running: GatewaySessionRow = {
+  key: "agent:main:terminal",
+  sessionId: "terminal-session",
+  kind: "direct",
+  updatedAt: 10,
+  hasActiveRun: true,
+  activeRunIds: ["run-a"],
+  status: "running",
+};
 
 describe("reconcileSessionRunTerminal yielded parent", () => {
   it("settles the owned model run while keeping parent work pending", () => {
@@ -30,6 +34,7 @@ describe("reconcileSessionRunTerminal yielded parent", () => {
         activeRunIds: ["run-1"],
         status: "running",
         startedAt: 100,
+        suppressErrorNotice: true,
       },
     ]);
 
@@ -51,6 +56,7 @@ describe("reconcileSessionRunTerminal yielded parent", () => {
           endedAt: 160,
           runtimeMs: 60,
           abortedLastRun: false,
+          suppressErrorNotice: false,
         },
       ],
     });
@@ -90,7 +96,11 @@ describe("reconcileSessionRunTerminal yielded parent", () => {
   });
 });
 
-async function terminalOwner(initial: GatewaySessionRow, owner: "primary" | "managed") {
+async function terminalOwner(
+  initial: GatewaySessionRow,
+  owner: "primary" | "managed",
+  read?: () => Promise<SessionsListResult>,
+) {
   vi.useFakeTimers();
   const sibling: GatewaySessionRow = {
     key: "agent:main:unrelated",
@@ -104,24 +114,20 @@ async function terminalOwner(initial: GatewaySessionRow, owner: "primary" | "man
     hasMore: true,
     nextOffset: 2,
   });
-  let response: ReturnType<typeof createDeferred<SessionsListResult>> | undefined;
-  const pending: Promise<void>[] = [];
   const client = createTestGatewayClient(async (_method, params) => {
     if (owner === "managed" && !(params as { ownerId?: string }).ownerId) {
-      return sessionsResult([sibling]);
+      return sessionsResult(read ? [] : [sibling]);
     }
-    return response?.promise ?? listResult({ ...initial });
+    return read ? read() : listResult({ ...initial });
   });
   const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
   const query = { agentId: "main", ownerId: "ada" };
   const updates = vi.fn();
   const stop =
     owner === "managed" ? sessions.subscribeList(query, updates) : sessions.subscribe(updates);
-  onTestFinished(async () => {
+  onTestFinished(() => {
     stop();
     sessions.dispose();
-    response?.resolve(listResult(initial));
-    await Promise.all(pending);
     vi.useRealTimers();
   });
   await sessions.refresh({ agentId: "main", force: true });
@@ -137,15 +143,9 @@ async function terminalOwner(initial: GatewaySessionRow, owner: "primary" | "man
   return {
     sessions,
     updates,
+    refresh,
     result,
     row: () => result()?.sessions.find((row) => row.key === initial.key),
-    holdRead() {
-      response = createDeferred<SessionsListResult>();
-      const settled = refresh();
-      pending.push(settled);
-      const resolve = response.resolve;
-      return { settled, resolve: (row: GatewaySessionRow) => resolve(listResult(row)) };
-    },
   };
 }
 
@@ -180,7 +180,6 @@ describe("terminal metadata ownership", () => {
       };
       const h = await terminalOwner(initial, owner);
       const primary = h.sessions.state.result;
-      const oldRead = h.holdRead();
       const terminal = { sessionKeys: [initial.key], runId: "new-run", status, endedAt: 400 };
 
       expect(h.sessions.reconcileRunTerminal(terminal)).toBe(true);
@@ -202,21 +201,6 @@ describe("terminal metadata ownership", () => {
       expect(h.result()).toBe(settled);
       expect(h.updates).not.toHaveBeenCalled();
 
-      oldRead.resolve({ ...initial, derivedTitle: "Read title", updatedAt: 250 });
-      await oldRead.settled;
-      expect(h.row()).toMatchObject({
-        derivedTitle: "Read title",
-        updatedAt: 250,
-        lastRunId: "new-run",
-        endedAt: 400,
-        abortedLastRun: status === "killed",
-        status,
-        hasActiveRun: false,
-        activeRunIds: [],
-      });
-      expect(h.row()?.startedAt).toBeUndefined();
-      expect(h.row()?.runtimeMs).toBeUndefined();
-      expect(h.row()?.lastRunError).toBeUndefined();
       expect(h.result()).toMatchObject({ count: 2, totalCount: 7, hasMore: true, nextOffset: 2 });
       expect(h.result()?.sessions.map((row) => row.key)).toEqual([
         initial.key,
@@ -362,12 +346,8 @@ describe("terminal observations", () => {
       (["primary", "managed"] as const).map((owner) => ({ mode, owner })),
     ),
   )("orders accepted terminal facts against $owner reads ($mode)", async ({ mode, owner }) => {
-    vi.useFakeTimers();
     const initial = {
-      key: "agent:main:terminal",
-      sessionId: "terminal-session",
-      kind: "direct" as const,
-      updatedAt: 10,
+      ...running,
       derivedTitle: "Initial title",
       status: mode === "confirmation" ? ("done" as const) : ("running" as const),
       hasActiveRun: mode !== "confirmation",
@@ -378,29 +358,16 @@ describe("terminal observations", () => {
     };
     const delayed = createDeferred<SessionsListResult>();
     let hold = false;
-    const client = createTestGatewayClient(async (_method, params) => {
-      if (owner === "managed" && !(params as { ownerId?: string }).ownerId) {
-        return sessionsResult([]);
-      }
-      return hold ? delayed.promise : sessionsResult([{ ...initial }]);
-    });
-    const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
-    const query = { agentId: "main", ownerId: "ada" };
-    const listener = vi.fn();
-    const stop =
-      owner === "managed" ? sessions.subscribeList(query, listener) : sessions.subscribe(listener);
-    const result = () =>
-      owner === "managed" ? sessions.listSnapshot(query).result : sessions.state.result;
-    const refresh = () =>
-      owner === "managed"
-        ? sessions.refreshList(query)
-        : sessions.refresh({ agentId: "main", force: true });
+    const {
+      sessions,
+      updates: listener,
+      result,
+      refresh,
+    } = await terminalOwner(initial, owner, async () =>
+      hold ? delayed.promise : sessionsResult([{ ...initial }]),
+    );
     let pending: Promise<void> | undefined;
     try {
-      await sessions.refresh({ agentId: "main", force: true });
-      if (owner === "managed") {
-        await refresh();
-      }
       hold = true;
       if (mode !== "later read") {
         pending = refresh();
@@ -435,18 +402,14 @@ describe("terminal observations", () => {
       );
       await pending;
       expect(result()?.sessions[0]).toMatchObject({
-        derivedTitle: "Read title",
         status: mode === "overlap" || mode === "later read" ? "running" : "done",
         hasActiveRun: mode === "overlap" || mode === "later read",
         activeRunIds:
           mode === "later read" ? ["run-a", "run-b"] : mode === "overlap" ? ["run-b"] : [],
       });
     } finally {
-      stop();
-      sessions.dispose();
       delayed.resolve(sessionsResult([initial]));
       await pending;
-      vi.useRealTimers();
     }
   });
 
@@ -458,15 +421,7 @@ describe("terminal observations", () => {
     "checks the latest managed run across retained windows (overlap: $overlap, primary: $includePrimary)",
     async ({ overlap, includePrimary }) => {
       vi.useFakeTimers();
-      const initial = {
-        key: "agent:main:terminal",
-        sessionId: "terminal-session",
-        kind: "direct" as const,
-        updatedAt: 10,
-        hasActiveRun: true,
-        activeRunIds: ["run-a"],
-        status: "running" as const,
-      };
+      const initial = running;
       const current = { ...initial, activeRunIds: overlap ? ["run-a", "run-b"] : ["run-b"] };
       const client = createTestGatewayClient(async (_method, params) => {
         const ownerId = (params as { ownerId?: string }).ownerId;

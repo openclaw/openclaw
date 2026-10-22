@@ -59,8 +59,9 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
+  "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
-  "mentions.changed": [READ_SCOPE],
+  "mentions.changed": [SESSION_READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
   "plugins.install.progress": [ADMIN_SCOPE],
@@ -78,7 +79,8 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   [GATEWAY_EVENT_NODE_RUNNER_INVENTORY_CHANGED]: [READ_SCOPE],
   "sessions.catalog.host": [READ_SCOPE],
   "sessions.changed": [SESSION_READ_SCOPE],
-  "controlUi.sessionPullRequests.changed": [READ_SCOPE],
+  "sessions.processes.changed": [SESSION_READ_SCOPE],
+  "controlUi.sessionPullRequests.changed": [SESSION_READ_SCOPE],
   "plugins.controlUi.changed": [READ_SCOPE],
   "mcp.app.resourceUpdated": [READ_SCOPE],
   "mcp.app.hostContextChanged": [READ_SCOPE],
@@ -93,6 +95,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "session.reaction": [SESSION_READ_SCOPE],
   "session.typing": [SESSION_READ_SCOPE],
   "session.tool": [SESSION_READ_SCOPE],
+  "socket.drain": [SESSION_READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
   // methods; also targeted to the owning connection at broadcast time.
   "terminal.data": [ADMIN_SCOPE],

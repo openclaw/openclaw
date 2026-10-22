@@ -1,39 +1,47 @@
-import { html, nothing } from "lit";
+import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
+import { activeElement, tabbableElements } from "../components/focus-navigation.ts";
+import { containsComposed } from "../components/overlay-registry.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
-import type { ApplicationContext } from "./context.ts";
+import type { RouteElements } from "./route-elements.ts";
 
-const NAV_DRAWER_FOCUSABLE_SELECTOR =
-  "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+export const NAVIGATION_RAIL_WIDTH = 52;
+export const NAV_DRAWER_TOGGLE_REGISTRATION = "nav-drawer-toggle";
 
-type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
-type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
+export type ShellNavigationElements = {
+  shellElement?: HTMLElement;
+  navDrawerElement?: HTMLElement;
+  navBackdropElement?: HTMLElement;
+  contentElement?: HTMLElement;
+  toastElement?: HTMLElement;
+};
+
+export type ShellNavigationSurfaces = {
+  readonly element: HTMLElement;
+  readonly navigationSidebar: HTMLElement &
+    Partial<Pick<AppSidebarElement, "dismissTransientMenus" | "activeNavigationViewElement">>;
+  readonly queryRenderedElements: RouteElements["renderedElements"];
+};
 
 export function navDrawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
-  return [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
-    (candidate) => candidate.checkVisibility(),
-  );
+  return [...tabbableElements(drawer.children)];
 }
 
-export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
-  // Unupgraded elements cannot own transient UI; navigation must not wait for their imports.
-  const dismissedPanel = [
-    ...host.querySelectorAll<SidebarAttentionElement>("openclaw-sidebar-attention:defined"),
-  ]
+export function dismissNavigationTransientSurfaces(host: ShellNavigationSurfaces): boolean {
+  const dismissedPanel = host
+    .queryRenderedElements("openclaw-sidebar-attention")
     .map((attention) => attention.dismissPanel())
     .some((dismissed) => dismissed);
-  const dismissedMenu = host
-    .querySelector<AppSidebarElement>("openclaw-app-sidebar:defined")
-    ?.dismissTransientMenus();
+  const sidebar = host.navigationSidebar;
+  const dismissedMenu = host.element.contains(sidebar) && sidebar.dismissTransientMenus?.();
   return dismissedMenu === true || dismissedPanel;
 }
 
-function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
-  const drawer = host.querySelector<HTMLElement>(".shell-nav");
+function trapNavDrawerFocus(drawer: HTMLElement | undefined, event: KeyboardEvent): void {
   if (!drawer) {
     return;
   }
@@ -50,12 +58,14 @@ function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
     return;
   }
   const focusable = navDrawerFocusableElements(drawer);
+  const active = activeElement(drawer);
   const target = event.shiftKey ? focusable.at(-1) : focusable[0];
   const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
   if (
-    !drawer.contains(document.activeElement) ||
-    document.activeElement === boundary ||
-    (event.shiftKey && document.activeElement === drawer)
+    !active ||
+    !containsComposed(drawer, active) ||
+    active === boundary ||
+    (event.shiftKey && active === drawer)
   ) {
     event.preventDefault();
     (target ?? drawer).focus({ preventScroll: true });
@@ -63,7 +73,9 @@ function trapNavDrawerFocus(host: HTMLElement, event: KeyboardEvent): void {
 }
 
 export function handleNavDrawerKeydown(
-  host: HTMLElement & { closeNavDrawer(options?: { restoreFocus?: boolean }): void },
+  host: Pick<ShellNavigationElements, "navDrawerElement"> & {
+    closeNavDrawer(options?: { restoreFocus?: boolean }): void;
+  },
   event: KeyboardEvent,
 ): void {
   if (event.defaultPrevented) {
@@ -76,7 +88,7 @@ export function handleNavDrawerKeydown(
     event.preventDefault();
     host.closeNavDrawer({ restoreFocus: true });
   } else if (event.key === "Tab") {
-    trapNavDrawerFocus(host, event);
+    trapNavDrawerFocus(host.navDrawerElement, event);
   } else if (
     isCommandPaletteShortcut(event) ||
     isTerminalPanelShortcut(event) ||
@@ -88,26 +100,24 @@ export function handleNavDrawerKeydown(
   }
 }
 
-export function moveToastToNavDrawer(host: HTMLElement): void {
-  const drawer = host.querySelector<HTMLElement>(".shell-nav");
-  const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
-  if (drawer && toastHost && toastHost.parentElement !== drawer) {
-    drawer.append(toastHost);
+export function setToastInNavDrawer(host: ShellNavigationElements, inDrawer: boolean): void {
+  const toast = host.toastElement;
+  const source = toast?.parentElement;
+  const target = inDrawer ? host.navDrawerElement : host.shellElement;
+  if (toast && target && source !== target && (inDrawer || source === host.navDrawerElement)) {
+    target.append(toast);
   }
 }
 
-export function restoreToastFromNavDrawer(host: HTMLElement): void {
-  const shell = host.querySelector<HTMLElement>(".shell");
-  const toastHost = host.querySelector<HTMLElement>("openclaw-toast-host");
-  if (shell && toastHost?.parentElement?.classList.contains("shell-nav")) {
-    shell.append(toastHost);
-  }
-}
-
-export function visibleNavDrawerToggle(host: HTMLElement): HTMLElement | undefined {
-  return [...host.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle")].find(
-    (candidate) => candidate.checkVisibility(),
-  );
+export function visibleNavDrawerToggle(
+  host: Pick<ShellNavigationSurfaces, "queryRenderedElements">,
+): HTMLElement | undefined {
+  return host
+    .queryRenderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)
+    .toSorted((left, right) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    )
+    .find((candidate) => candidate.checkVisibility());
 }
 
 export function navigationSurfaceIsHidden(params: {
@@ -115,9 +125,11 @@ export function navigationSurfaceIsHidden(params: {
   navCollapsed: boolean;
   navDrawerOpen: boolean;
   mobileNavLayout: boolean;
+  railAvailable?: boolean;
 }): boolean {
   return (
-    params.onboarding || (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed)
+    params.onboarding ||
+    (params.mobileNavLayout ? !params.navDrawerOpen : params.navCollapsed && !params.railAvailable)
   );
 }
 
@@ -130,40 +142,4 @@ export function floatingSidebarAttentionVisible(params: {
   const attentionNeedsFloating =
     params.navigationSurfaceHidden && !params.mobileNavLayout && !params.onboarding;
   return attentionNeedsFloating && !params.compact;
-}
-
-export function renderFloatingUpdateCard(params: {
-  navigationSurfaceHidden: boolean;
-  mobileNavLayout: boolean;
-  onboarding: boolean;
-  compact?: boolean;
-  updateRun?: ApplicationContext["overlays"]["snapshot"]["updateRun"];
-  statusBanner?: ApplicationContext["overlays"]["snapshot"]["updateStatusBanner"];
-  refreshRequired: boolean;
-  onRefresh: () => Promise<boolean>;
-  onNavigate?: ApplicationContext["navigate"];
-}) {
-  const showAttention = floatingSidebarAttentionVisible(params);
-  const showUpdateCard = !params.compact && params.refreshRequired;
-  if (!showAttention && !showUpdateCard) {
-    return nothing;
-  }
-  return html`${
-    showAttention
-      ? html`<openclaw-sidebar-attention
-          class="sidebar-attention--floating"
-          .onNavigate=${params.onNavigate}
-        ></openclaw-sidebar-attention>`
-      : nothing
-  }${
-    showUpdateCard
-      ? html`<openclaw-sidebar-update-card
-          class="sidebar-update-card--floating"
-          .updateRun=${params.updateRun ?? null}
-          .statusBanner=${params.statusBanner ?? null}
-          .refreshRequired=${params.refreshRequired}
-          .onRefresh=${params.onRefresh}
-        ></openclaw-sidebar-update-card>`
-      : nothing
-  }`;
 }

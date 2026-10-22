@@ -10,7 +10,7 @@ import type {
 } from "../process/command-process-custody.types.js";
 import type { CommandProcessOutcome } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV } from "./update-doctor-result.js";
 import {
@@ -73,9 +73,7 @@ export async function retainUpdateDoctorProcesses(
   try {
     raw = fs.readFileSync(file, "utf8");
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     // Shipped parents do not join this channel, but the candidate still retains
     // its writer inventory if killed. Only the reserving owner may remove it.
     ownedByDoctor = true;
@@ -174,21 +172,20 @@ export async function retainUpdateDoctorProcesses(
         writeReceipt(file, receipt);
       } catch (error) {
         retained.settled();
+        receipt.slots.splice(receipt.slots.indexOf(slot), 1);
         throw error;
       }
       return {
         spawned(identity: CommandProcessIdentity) {
-          retained.spawned(identity);
+          // Publish the owned PID before binding so a failed bind cannot leave anonymous custody.
           slot.identity = identity;
           writeReceipt(file, receipt);
+          retained.spawned(identity);
         },
         settled() {
           retained.settled();
-          const index = receipt.slots.indexOf(slot);
-          if (index >= 0) {
-            receipt.slots.splice(index, 1);
-            writeReceipt(file, receipt);
-          }
+          receipt.slots.splice(receipt.slots.indexOf(slot), 1);
+          writeReceipt(file, receipt);
         },
       };
     },

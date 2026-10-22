@@ -5,8 +5,16 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
+import * as containerEnvironment from "../infra/container-environment.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import * as processArgv from "../infra/gateway-process-argv.js";
 import type { inspectOtherOpenClawProcesses } from "../infra/openclaw-process-census.js";
+import {
+  resolvePackageActivationAnchor,
+  resolvePackageActivationJournalPath,
+} from "../infra/package-update-activation-paths.js";
+import * as processGroups from "../process/supervisor/service-child-group-ownership.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   createDoctorHealthFlowContext,
   resolveDoctorHealthContributions,
@@ -169,6 +177,78 @@ it("Doctor does not search unrelated checkout ancestors", async () => {
   const output = await runDoctor(true);
   expect(fs.existsSync(directory)).toBe(true);
   expect(output).not.toContain(directory);
+});
+
+it("Doctor scopes holders to each runtime and reports unknown custody once", async () => {
+  const held = projection("Held01");
+  const free = projection("Free01");
+  const warning = "Could not verify runtime custody for PID 4242: working directory is unavailable";
+  mocks.census.mockReturnValue({ pids: [4242], warnings: [warning] });
+  expect((await runDoctor(true)).split(warning)).toHaveLength(2);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(fs.existsSync(free)).toBe(true);
+  mocks.note.mockClear();
+  mocks.census.mockImplementation((directory) => ({ pids: directory === held ? [4243] : [] }));
+  const output = await runDoctor(true);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(fs.existsSync(free)).toBe(false);
+  expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
+});
+
+it("Doctor reclaims an abandoned runtime despite unrelated helpers with unreadable cwd", async () => {
+  const held = projection("Held01");
+  const free = projection("Free01");
+  const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
+    "../infra/openclaw-process-census.js",
+  );
+  mocks.census.mockImplementation(actual.inspectOtherOpenClawProcesses);
+  mockProcessPlatform("linux");
+  vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
+  vi.spyOn(processGroups, "readProcessGroupMembers").mockImplementation(function* () {
+    for (const [pid, argv] of [
+      [process.pid, ["openclaw-doctor"]],
+      [4242, ["/usr/bin/gpg-agent", "--supervised"]],
+      [4243, ["/usr/bin/fusermount3", "-o", "subtype=portal"]],
+      [4244, ["/bin/sleep", "600"]],
+    ] as const) {
+      yield { pid, pgid: process.pid, state: "S", command: { ppid: 0, argv: [...argv] } };
+    }
+  });
+  vi.spyOn(processArgv, "readProcessWorkingDirectories").mockReturnValue(
+    new Map([
+      [process.pid, parent],
+      [4244, held],
+    ]),
+  );
+  const output = await runDoctor(true);
+  expect(fs.existsSync(free)).toBe(false);
+  expect(fs.existsSync(held)).toBe(true);
+  expect(output).toContain(`Removed abandoned updater runtime: ${free}`);
+  expect(output).toContain("PIDs: 4244");
+  expect(output).not.toContain("4242");
+  expect(output).not.toContain("4243");
+});
+
+it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {
+  const installed = path.join(parent, "prefix/lib/node_modules/openclaw");
+  fs.mkdirSync(path.dirname(installed), { recursive: true });
+  fs.renameSync(packageRoot, installed);
+  packageRoot = installed;
+  mocks.packageRoots.mockReturnValue([packageRoot]);
+  const abandoned = projection("Npm001", path.join(parent, "prefix/lib"));
+  const journal = resolvePackageActivationJournalPath(resolvePackageActivationAnchor(packageRoot));
+  fs.mkdirSync(path.dirname(journal), { mode: 0o700 });
+  fs.writeFileSync(journal, "activation recovery evidence", { mode: 0o600 });
+  const retainedJournal = projectedPath(abandoned, journal);
+  fs.mkdirSync(path.dirname(retainedJournal), { recursive: true });
+  fs.linkSync(journal, retainedJournal);
+  expect(fs.statSync(journal).nlink).toBe(2);
+  expect(await runDoctor(false)).toContain(`Runtime retained at ${abandoned}:`);
+  expect(fs.statSync(journal).nlink).toBe(2);
+  expect(await runDoctor(true)).toContain(`Removed abandoned updater runtime: ${abandoned}`);
+  expect(fs.existsSync(abandoned)).toBe(false);
+  expect(fs.statSync(journal).nlink).toBe(1);
+  expect(fs.readFileSync(journal, "utf8")).toBe("activation recovery evidence");
 });
 
 it.each([

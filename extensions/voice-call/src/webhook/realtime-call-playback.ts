@@ -14,7 +14,6 @@ import {
   REALTIME_MEDIA_INACTIVITY_TIMEOUT_MS,
   REALTIME_DISCONNECT_HANGUP_GRACE_MS,
 } from "./realtime-call-session-control.js";
-import { createRealtimeHostSpeechController } from "./realtime-host-speech.js";
 import type { StreamFrameAdapter } from "./stream-frame-adapter.js";
 
 const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
@@ -88,22 +87,69 @@ export function createRealtimeCallPlayback(params: {
       });
     },
   });
-  const interruptModelOutput = () => {
-    params.getSession()?.handleBargeIn({ audioPlaybackActive: true, force: true });
-    audioController.cancelOutputAudioForBargeIn("local");
-  };
-  const hostSpeech = createRealtimeHostSpeechController({
-    interrupt: () => {
-      interruptModelOutput();
-    },
-    trigger: (instructions) => {
-      const session = params.getSession();
-      if (!session) {
-        throw new Error("No active realtime bridge for call");
+  // One host-requested utterance, completed by audible output rather than model receipts.
+  const hostSpeech = (() => {
+    let closed = false;
+    let pending: { resolve: () => void; reject: (error: Error) => void } | undefined;
+    let quietTimer: ReturnType<typeof setTimeout> | undefined;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      const current = pending;
+      pending = undefined;
+      clearTimeout(quietTimer);
+      clearTimeout(deadline);
+      if (error) {
+        current?.reject(error);
+      } else {
+        current?.resolve();
       }
-      session.triggerGreeting(instructions);
-    },
-  });
+    };
+    return {
+      isActive: () => Boolean(pending),
+      speak(instructions: string): Promise<void> {
+        if (closed) {
+          return Promise.reject(new Error("Realtime bridge is closed"));
+        }
+        finish(new Error("Host speech replaced"));
+        return new Promise<void>((resolve, reject) => {
+          try {
+            params.getSession()?.handleBargeIn({ audioPlaybackActive: true, force: true });
+            audioController.cancelOutputAudioForBargeIn("local");
+            if (closed) {
+              throw new Error("Realtime bridge is closed");
+            }
+            pending = { resolve, reject };
+            deadline = setTimeout(
+              () => finish(new Error("Realtime speech did not finish within 45 seconds")),
+              45_000,
+            );
+            deadline.unref?.();
+            const session = params.getSession();
+            if (!session) {
+              throw new Error("No active realtime bridge for call");
+            }
+            session.triggerGreeting(instructions);
+          } catch (error) {
+            const rejection = error instanceof Error ? error : new Error(String(error));
+            finish(rejection);
+            reject(rejection);
+          }
+        });
+      },
+      noteAudibleOutput() {
+        if (!pending) {
+          return;
+        }
+        clearTimeout(quietTimer);
+        quietTimer = setTimeout(() => finish(), 1_500);
+        quietTimer.unref?.();
+      },
+      close() {
+        closed = true;
+        finish(new Error("Realtime bridge closed during host speech"));
+      },
+    };
+  })();
   const audioController = createRealtimeCallAudioController({
     audioPacer,
     callId,

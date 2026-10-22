@@ -4,6 +4,8 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -23,24 +25,13 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import * as agentDatabase from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { createSessionMutationContext } from "./sessions-mutations.native-consent.test-support.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
-
-const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
-
-vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/openclaw-agent-db.js")>();
-  const runOpenClawAgentWriteTransaction: typeof actual.runOpenClawAgentWriteTransaction = (
-    operation,
-    options,
-    transactionOptions,
-  ) => {
-    sqliteTransactionLabels.push(transactionOptions?.operationLabel ?? "agent.write");
-    return actual.runOpenClawAgentWriteTransaction(operation, options, transactionOptions);
-  };
-  return { ...actual, runOpenClawAgentWriteTransaction };
-});
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -48,22 +39,47 @@ afterEach(async () => {
 });
 
 function humanClient(): GatewayClient {
-  return {
-    authenticatedUserId: "perf-reviewer@example.com",
-    authenticatedUserProfile: {
-      profileId: "perf-reviewer",
-      displayName: "Performance Reviewer",
-      hasAvatar: false,
-      updatedAt: 1,
+  const client = createSessionMutationTestClient("perf-reviewer");
+  client.authenticatedUserProfile!.displayName = "Performance Reviewer";
+  client.connect.scopes = ["operator.read", "operator.write", "operator.admin"];
+  return client;
+}
+
+function mutationContext(
+  cron?: Pick<
+    GatewayRequestContext["cron"],
+    "list" | "updateWithPrecondition" | "getDefaultAgentId"
+  >,
+): GatewayRequestContext {
+  return createSessionMutationContext({}, undefined, cron);
+}
+
+const archivedBy = { type: "human", id: "perf-reviewer", label: "Performance Reviewer" };
+const normalizeSql = (sql: string) => sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
+const sessionScope = (sessionKey: string) => ({ agentId: "main", sessionKey });
+const seedSession = (key: string, sessionId: string, entry: Partial<SessionEntry>) =>
+  upsertSessionEntryCore(sessionScope(key), { sessionId, ...entry });
+
+function trackReads(database: ReturnType<typeof openOpenClawAgentDatabase>) {
+  return trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(database.db),
+    ["whole-store-projection", "transcript-full-hydration"] as const,
+    (sql) => {
+      const normalized = normalizeSql(sql);
+      if (isWholeSessionStoreProjection(normalized)) {
+        return "whole-store-projection";
+      }
+      const fromIndex = normalized.indexOf(" from ");
+      const columns = fromIndex > 0 ? normalized.slice("select ".length, fromIndex) : "";
+      return normalized.startsWith("select ") &&
+        /\b(?:from|join) "transcript_events"(?: |$)/.test(normalized) &&
+        (columns.includes("event_json") || /(?:^|, )(?:(?:"[^"]+"\.)?\*)/.test(columns)) &&
+        !normalized.includes(" limit ") &&
+        !/(?:"[^"]+"\.)?"(?:event_id|seq)" = (?:\?|\$\d+)/.test(normalized)
+        ? "transcript-full-hydration"
+        : null;
     },
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read", "operator.write", "operator.admin"],
-    },
-  };
+  );
 }
 
 function isWholeSessionStoreProjection(normalizedSql: string): boolean {
@@ -84,6 +100,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
   "sessions.patch %j avoids transcript-worker startup, unrelated hydration, and host ACP reads",
   async (patch) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await captureRuntimeConfigAsyncReader()();
       const targetKey = "agent:main:single-patch-target";
       const snapshots = {
         skillsSnapshot: { prompt: "synthetic skill instructions ".repeat(1_000), skills: [] },
@@ -96,10 +113,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
           tools: { listChars: 0, schemaChars: 0, entries: [] },
         },
       };
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: targetKey },
-        { sessionId: "session-single-patch-target", updatedAt: 1, ...snapshots },
-      );
+      await seedSession(targetKey, "session-single-patch-target", { updatedAt: 1, ...snapshots });
       await upsertAcpSessionMeta({
         cfg: {},
         agentId: "main",
@@ -114,49 +128,28 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         }),
       });
       for (let index = 0; index < 20; index += 1) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:single-patch-unrelated-${index}` },
-          {
-            sessionId: `session-single-patch-unrelated-${index}`,
-            updatedAt: index + 2,
-            ...(index === 0 ? { label: "Taken" } : {}),
-          },
-        );
+        const id = `single-patch-unrelated-${index}`;
+        await seedSession(`agent:main:${id}`, `session-${id}`, {
+          updatedAt: index + 2,
+          ...(index === 0 ? { label: "Taken" } : {}),
+        });
       }
 
       await rotateDatabaseWorkers(historyLane);
-      const historySequence = historyLane.nativeSequence;
-      expect(historySequence).toBe(historyLane.retiredSequence);
+      const historyWorkers = historyLane.pool.getSnapshot();
+      expect(historyWorkers.workers).toBe(0);
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      const statements = trackSqliteStatementExecutions(
-        database.db,
-        ["whole-store-projection"] as const,
-        (sql) => {
-          const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
-          return isWholeSessionStoreProjection(normalized) ? "whole-store-projection" : null;
-        },
-      );
+      const statements = trackReads(database);
       const respond = vi.fn();
       const hostSql = observeHostDataSql();
       try {
         await sessionMutationHandlers["sessions.patch"]!({
           params: { key: targetKey, ...patch },
           respond,
-          context: {
-            getRuntimeConfig: () => ({}),
-            loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
-              entries: [],
-              routeVariants: [],
-            })),
-            broadcastToConnIds: vi.fn(),
-            getSessionEventSubscriberConnIds: () => new Set(),
-            chatAbortControllers: new Map(),
-            chatQueuedTurns: new Map(),
-            dedupe: new Map(),
-          } as unknown as GatewayRequestContext,
+          context: mutationContext(),
           client: humanClient(),
         } as never);
-        expect(historyLane.nativeSequence).toBe(historySequence);
+        expect(historyLane.pool.getSnapshot().workersCreated).toBe(historyWorkers.workersCreated);
       } finally {
         hostSql.restore();
         statements.restore();
@@ -166,7 +159,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       expect(respond.mock.calls[0]?.[0]).toBe(!labelConflict);
       expect(statements.counts["whole-store-projection"]).toBe(0);
       expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
-      const target = loadSessionEntry({ agentId: "main", sessionKey: targetKey });
+      const target = loadSessionEntry(sessionScope(targetKey));
       expect(target).toMatchObject(snapshots);
       if (labelConflict) {
         expect(respond.mock.calls[0]?.[2]).toHaveProperty("message", "label already in use: Taken");
@@ -181,7 +174,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         expect(target).toHaveProperty("label" in patch ? "label" : "pinnedAt");
       }
       expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:single-patch-unrelated-0" }),
+        loadSessionEntry(sessionScope("agent:main:single-patch-unrelated-0")),
       ).not.toHaveProperty("pinnedAt");
     });
   },
@@ -189,74 +182,39 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
 
 test("sessions.patchMany archives 30 human sessions without transcript hydration", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
     const targets = Array.from({ length: 30 }, (_, index) => ({
       key: `agent:main:archive-perf-${index}`,
       expectedSessionId: `session-archive-perf-${index}`,
     }));
+    const scopeFor = (target: (typeof targets)[number]) => ({
+      agentId: "main",
+      sessionId: target.expectedSessionId,
+      sessionKey: target.key,
+    });
     for (const [index, target] of targets.entries()) {
-      const sessionId = `session-archive-perf-${index}`;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: target.key },
-        { sessionId, updatedAt: index + 1 },
-      );
-      const root = await appendTranscriptMessage(
-        { agentId: "main", sessionId, sessionKey: target.key },
-        {
-          message: {
-            role: "user",
-            content: `history root ${index}`,
-            timestamp: 1,
-          },
-          now: 1,
-        },
-      );
-      await appendTranscriptMessage(
-        { agentId: "main", sessionId, sessionKey: target.key },
-        {
-          message: {
-            role: "assistant",
-            content: `history tail ${index}`,
-            timestamp: 2,
-          },
-          now: 2,
-          parentId: root.messageId,
-        },
-      );
+      const scope = scopeFor(target);
+      await seedSession(target.key, target.expectedSessionId, { updatedAt: index + 1 });
+      const root = await appendTranscriptMessage(scope, {
+        message: { role: "user", content: `history root ${index}`, timestamp: 1 },
+        now: 1,
+      });
+      await appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: `history tail ${index}`, timestamp: 2 },
+        now: 2,
+        parentId: root.messageId,
+      });
     }
 
     const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const statements = trackSqliteStatementExecutions(
-      database.db,
-      ["whole-store-projection", "transcript-full-hydration"] as const,
-      (sql) => {
-        const normalized = sql.toLowerCase().replaceAll(/\s+/g, " ").trim();
-        if (isWholeSessionStoreProjection(normalized)) {
-          return "whole-store-projection";
-        }
-        const fromIndex = normalized.indexOf(" from ");
-        const selectedColumns = fromIndex > 0 ? normalized.slice("select ".length, fromIndex) : "";
-        const readsTranscriptPayload =
-          normalized.startsWith("select ") &&
-          /\b(?:from|join) "transcript_events"(?: |$)/.test(normalized) &&
-          (selectedColumns.includes("event_json") ||
-            /(?:^|, )(?:(?:"[^"]+"\.)?\*)/.test(selectedColumns));
-        const boundedPayloadLookup =
-          normalized.includes(" limit ") ||
-          /(?:"[^"]+"\.)?"(?:event_id|seq)" = (?:\?|\$\d+)/.test(normalized);
-        return readsTranscriptPayload && !boundedPayloadLookup ? "transcript-full-hydration" : null;
-      },
-    );
+    const statements = trackReads(database);
     // Calibrate the host SQL observer through the synchronous compatibility reader.
-    loadTranscriptEventsSync({
-      agentId: "main",
-      sessionId: "session-archive-perf-0",
-      sessionKey: targets[0]!.key,
-    });
+    loadTranscriptEventsSync(scopeFor(targets[0]!));
     expect(statements.counts["transcript-full-hydration"]).toBe(1);
     statements.counts["transcript-full-hydration"] = 0;
-    sqliteTransactionLabels.length = 0;
+    const writeSpy = vi.spyOn(agentDatabase, "runOpenClawAgentWriteTransaction");
     const originalExec = database.db.exec.bind(database.db);
-    const transactionCounts = { begin: 0, commit: 0 };
+    const hostTransactions: string[] = [];
     const workerGrants: string[] = [];
     const admissionSpy = probe.admission(admission, (request, grant, callback) => {
       callback(request, () => {
@@ -269,46 +227,26 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
     });
     const execSpy = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
       const normalized = sql.trim().toUpperCase();
-      if (normalized === "BEGIN IMMEDIATE") {
-        transactionCounts.begin += 1;
-      } else if (normalized === "COMMIT") {
-        transactionCounts.commit += 1;
+      if (["BEGIN IMMEDIATE", "COMMIT"].includes(normalized)) {
+        hostTransactions.push(normalized);
       }
       return originalExec(sql);
     });
     try {
       const respond = vi.fn();
-      const job = (partial: Partial<CronJob> & Pick<CronJob, "id">): CronJob =>
-        ({ enabled: true, sessionTarget: "isolated", ...partial }) as CronJob;
+      const job = (id: string, sessionTarget: string, partial: Partial<CronJob> = {}): CronJob =>
+        ({ enabled: true, id, sessionTarget, ...partial }) as CronJob;
       const cronJobs = new Map(
         [
-          job({
-            id: "unrelated",
-            sessionTarget: "session:agent:main:not-archived",
-          }),
-          job({
-            id: "bound-first",
-            sessionTarget: `session:${targets[0]!.key}`,
-          }),
-          job({
-            id: "bound-shared",
-            sessionKey: targets[2]!.key,
-            sessionTarget: `session:${targets[1]!.key}`,
-          }),
-          job({
-            id: "bound-last",
-            sessionTarget: `session:${targets.at(-1)!.key}`,
-          }),
-          job({
-            enabled: false,
-            id: "already-disabled",
-            sessionTarget: `session:${targets[3]!.key}`,
-          }),
+          job("unrelated", "session:agent:main:not-archived"),
+          job("bound-first", `session:${targets[0]!.key}`),
+          job("bound-shared", `session:${targets[1]!.key}`, { sessionKey: targets[2]!.key }),
+          job("bound-last", `session:${targets.at(-1)!.key}`),
+          job("already-disabled", `session:${targets[3]!.key}`, { enabled: false }),
         ].map((cronJob) => [cronJob.id, cronJob] as const),
       );
       const cronList = vi.fn(async () => [...cronJobs.values()]);
       type CronPrecondition = (job: CronJob, nowMs: number) => void | Promise<void>;
-      const cronUpdateResults: Array<{ enabled: boolean; id: string }> = [];
       const cronUpdate = vi.fn(
         async (id: string, patch: Partial<CronJob>, precondition: CronPrecondition) => {
           const current = cronJobs.get(id);
@@ -319,97 +257,63 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
           if (patch.enabled !== undefined) {
             current.enabled = patch.enabled;
           }
-          const result = { enabled: current.enabled, id };
-          cronUpdateResults.push(result);
           return current;
         },
       );
-      const context = {
-        getRuntimeConfig: () => ({}),
-        loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
-        broadcastToConnIds: vi.fn(),
-        getSessionEventSubscriberConnIds: () => new Set(),
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
-        dedupe: new Map(),
-        cron: {
-          list: cronList,
-          updateWithPrecondition: cronUpdate,
-          getDefaultAgentId: () => "main",
-        },
-      } as unknown as GatewayRequestContext;
-
       await sessionMutationHandlers["sessions.patchMany"]!({
         params: { targets, patch: { archived: true } },
         respond,
-        context,
+        context: mutationContext({
+          list: cronList,
+          updateWithPrecondition: cronUpdate,
+          getDefaultAgentId: () => "main",
+        }),
         client: humanClient(),
       } as never);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: targets.map((target) => ({ ok: true, key: target.key })),
-        },
-        undefined,
-      );
-      // Guard batch cost with operation counts, independent of shared-runner contention.
-      expect(statements.counts["whole-store-projection"]).toBe(0);
-      expect(statements.counts["transcript-full-hydration"]).toBe(0);
+      const outcomes = targets.map(({ key }) => ({ ok: true, key }));
+      expect(respond).toHaveBeenCalledWith(true, { outcomes }, undefined);
+      expect(statements.counts).toEqual({
+        "whole-store-projection": 0,
+        "transcript-full-hydration": 0,
+      });
       // One admitted worker transaction owns the batch; the caller never waits in SQLite.
-      expect(transactionCounts).toEqual({ begin: 0, commit: 0 });
+      expect(hostTransactions).toEqual([]);
       expect(workerGrants).toEqual(["transaction", "commit"]);
       expect(
-        sqliteTransactionLabels.filter((label) => label === "session.entry-replacements"),
-      ).toHaveLength(0);
-      expect(sqliteTransactionLabels.filter((label) => label === "agent.write")).toHaveLength(0);
+        writeSpy.mock.calls.some((args) =>
+          ["session.entry-replacements", "agent.write"].includes(
+            args[2]?.operationLabel ?? "agent.write",
+          ),
+        ),
+      ).toBe(false);
       expect(cronList).toHaveBeenCalledOnce();
-      expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual([
-        ["bound-first", { enabled: false }],
-        ["bound-shared", { enabled: false }],
-        ["bound-last", { enabled: false }],
-      ]);
-      expect(cronUpdateResults).toEqual([
-        { enabled: false, id: "bound-first" },
-        { enabled: false, id: "bound-shared" },
-        { enabled: false, id: "bound-last" },
-      ]);
+      const disabledIds = ["bound-first", "bound-shared", "bound-last"];
+      const disabledJobs = disabledIds.map((id) => ({ id, enabled: false }));
+      expect(cronUpdate.mock.calls.map(([id, patch]) => [id, patch])).toEqual(
+        disabledIds.map((id) => [id, { enabled: false }]),
+      );
       expect([...cronJobs.values()].map(({ enabled, id }) => ({ enabled, id }))).toEqual([
         { enabled: true, id: "unrelated" },
-        { enabled: false, id: "bound-first" },
-        { enabled: false, id: "bound-shared" },
-        { enabled: false, id: "bound-last" },
+        ...disabledJobs,
         { enabled: false, id: "already-disabled" },
       ]);
     } finally {
       admissionSpy.mockRestore();
       execSpy.mockRestore();
+      writeSpy.mockRestore();
       statements.restore();
     }
-    for (const [index, target] of targets.entries()) {
-      const sessionId = `session-archive-perf-${index}`;
-      expect(loadSessionEntry({ agentId: "main", sessionKey: target.key })).toMatchObject({
+    for (const target of targets) {
+      const scope = scopeFor(target);
+      expect(loadSessionEntry(sessionScope(target.key))).toMatchObject({
         archivedAt: expect.any(Number),
-        archivedBy: { type: "human", id: "perf-reviewer", label: "Performance Reviewer" },
+        archivedBy,
       });
-      const auditNotes = (
-        await loadTranscriptEvents({
-          agentId: "main",
-          sessionId,
-          sessionKey: target.key,
-        })
-      ).filter((event) => {
-        if (!event || typeof event !== "object" || !("message" in event)) {
-          return false;
-        }
-        const message = event.message;
-        return (
-          message !== null &&
-          typeof message === "object" &&
-          "customType" in message &&
-          message.customType === "openclaw.system-note"
-        );
-      });
-      expect(auditNotes).toEqual([]);
+      expect(await loadTranscriptEvents(scope)).not.toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({ customType: "openclaw.system-note" }),
+        }),
+      );
     }
   });
 });

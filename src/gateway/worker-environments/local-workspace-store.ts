@@ -1,16 +1,19 @@
-import { randomUUID } from "node:crypto";
 import {
   captureWorktreeRunEndContext,
   retainWorktreeRunEndFailure,
   withWorktreeRunEnd,
 } from "../../agents/worktrees/run-end-lifecycle.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
-import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  observeSqliteWorkerCommittedFacts,
+  type SqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawStateLeasesWorkerAdmission } from "../../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../../state/openclaw-state-lease.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceMutation,
   LocalWorkspaceProjection,
@@ -24,13 +27,7 @@ export async function hasLocalWorkspaceProjection(id: string, env?: NodeJS.Proce
     { type: "localWorkspace.exists", input: { id } },
     { current: true, live: true },
   );
-  if (!reply) {
-    return false;
-  }
-  if (!reply.ok || reply.type !== "localWorkspace.exists") {
-    throw new Error("Unexpected local workspace result");
-  }
-  return reply.exists;
+  return reply?.exists ?? false;
 }
 
 export type LocalWorkspaceStore = {
@@ -55,6 +52,7 @@ export function withLocalWorkspaceStore<T>(
   params: {
     worktreeId: string;
     env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
     assertCurrent?: () => void;
     workerAuthority?: WorktreeWorkerAuthority;
     requireAbsent?: boolean;
@@ -76,6 +74,7 @@ export function withLocalWorkspaceStore<T>(
         key: params.worktreeId,
         leaseMs: 60_000,
         waitMs: 600_000,
+        signal: params.signal,
         leaseLabel: "local sandbox workspace",
         operationLabel: "workspace.local-reconciliation",
       },
@@ -84,7 +83,6 @@ export function withLocalWorkspaceStore<T>(
         const leases = [...(inherited?.leases ?? []), lease];
         return withOpenClawStateLeasesWorkerAdmission(leases, context, async (authority) => {
           let active = true;
-          let pending = false;
           const assertHost = () => {
             captured.admission.assertCurrent();
             authority.assertCurrent();
@@ -97,9 +95,6 @@ export function withLocalWorkspaceStore<T>(
           };
           const assertCurrent = () => {
             assertHost();
-            if (pending) {
-              throw new Error("Local workspace publication has not settled");
-            }
             params.assertCurrent?.();
           };
           try {
@@ -114,14 +109,6 @@ export function withLocalWorkspaceStore<T>(
                   },
                   { context, current: true, live: true },
                 );
-                if (
-                  reply &&
-                  (!reply.ok ||
-                    reply.type !==
-                      (params.requireAbsent ? "localWorkspace.exists" : "localWorkspace.get"))
-                ) {
-                  throw new Error("Unexpected local workspace result");
-                }
                 assertCurrent();
                 if (reply?.type === "localWorkspace.exists" && reply.exists) {
                   throw new Error(
@@ -134,13 +121,10 @@ export function withLocalWorkspaceStore<T>(
                     : undefined;
                 const mutate = async (
                   mutation: LocalWorkspaceMutation,
-                  next: LocalWorkspaceProjection | undefined,
                   guard: WorktreeWorkerAuthority = params.workerAuthority ?? {},
                 ) => {
                   assertCurrent();
                   const capturedMutation = structuredClone(mutation);
-                  const postimage = next && Object.freeze(structuredClone(next));
-                  const receipt = randomUUID();
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
                   const predicates = structuredClone(guard.predicates);
@@ -148,7 +132,6 @@ export function withLocalWorkspaceStore<T>(
                     assertHost();
                     guard.assertCurrent?.();
                   };
-                  pending = true;
                   try {
                     const acknowledged = await withOpenClawStateLeasesWorkerAdmission(
                       leases,
@@ -164,7 +147,6 @@ export function withLocalWorkspaceStore<T>(
                                 mutation: capturedMutation,
                                 predicates,
                                 leases: write.identities,
-                                receipt,
                               },
                             }),
                           {
@@ -173,6 +155,15 @@ export function withLocalWorkspaceStore<T>(
                               settled = operation.settled;
                               const result = write.createAdmission(operation);
                               admission = result.admission;
+                              observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
+                                (
+                                  context.assertPublicationCurrent ??
+                                  context.admission.assertCurrent
+                                )();
+                                if (facts !== undefined) {
+                                  readLocalWorkspaceCommit(facts, params.worktreeId);
+                                }
+                              });
                               return result;
                             },
                           },
@@ -182,15 +173,22 @@ export function withLocalWorkspaceStore<T>(
                     row = acknowledged && Object.freeze(acknowledged);
                   } catch (error) {
                     const outcome = await settled;
-                    if (outcome?.kind === "completed" && admission?.committed?.facts === receipt) {
-                      row = postimage;
+                    if (outcome?.kind === "completed" && admission?.committed) {
+                      try {
+                        row = readLocalWorkspaceCommit(
+                          admission.committed.facts,
+                          params.worktreeId,
+                        );
+                      } catch (receiptError) {
+                        active = false;
+                        retainWorktreeRunEndFailure(receiptError);
+                        throw receiptError;
+                      }
                     } else {
                       active = false;
                       retainWorktreeRunEndFailure(error);
                       throw error;
                     }
-                  } finally {
-                    pending = false;
                   }
                 };
                 return await run({
@@ -207,37 +205,24 @@ export function withLocalWorkspaceStore<T>(
                   },
                   get: () => {
                     assertHost();
-                    if (pending) {
-                      throw new Error("Local workspace publication has not settled");
-                    }
                     return row;
                   },
                   create: async (value, guard) => {
-                    const next = { ...value, revision: 0 };
-                    await mutate({ kind: "create", row: value }, next, guard);
+                    await mutate({ kind: "create", row: value }, guard);
                     return row!;
                   },
                   update: async (previous, patch, guard) => {
                     if (previous.worktree_id !== params.worktreeId) {
                       throw new Error("Local workspace binding changed");
                     }
-                    await mutate(
-                      { kind: "update", revision: previous.revision, patch },
-                      {
-                        ...previous,
-                        ...patch,
-                        worktree_id: params.worktreeId,
-                        revision: previous.revision + 1,
-                      },
-                      guard,
-                    );
+                    await mutate({ kind: "update", revision: previous.revision, patch }, guard);
                     return row!;
                   },
                   delete: async (previous, guard) => {
                     if (previous.worktree_id !== params.worktreeId) {
                       throw new Error("Local workspace binding changed");
                     }
-                    await mutate({ kind: "delete", revision: previous.revision }, undefined, guard);
+                    await mutate({ kind: "delete", revision: previous.revision }, guard);
                   },
                 });
               },

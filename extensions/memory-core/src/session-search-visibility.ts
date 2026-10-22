@@ -13,7 +13,7 @@ import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
-  loadCombinedSessionStoreForGateway,
+  loadCombinedSessionStoreForGatewayAsync,
   resolveTranscriptStemToSessionKeys,
 } from "openclaw/plugin-sdk/session-transcript-hit";
 import {
@@ -26,6 +26,7 @@ import {
   normalizeOptionalLowercaseString as normalizeAgentIdForCompare,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isActiveMemoryRecallSessionKey } from "./active-memory-recall-session.js";
 import {
   readSessionArchiveReasonFromHitPath,
   type SessionResetRecallCutoff,
@@ -37,7 +38,7 @@ function isGlobalSessionKeyForSharedScope(cfg: OpenClawConfig, key: string): boo
 
 type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
 
-type SessionStore = ReturnType<typeof loadCombinedSessionStoreForGateway>["store"];
+type SessionStore = Awaited<ReturnType<typeof loadCombinedSessionStoreForGatewayAsync>>["store"];
 
 function isSameStoredTranscript(
   // Keep the existing file-alias privacy check even though the public store type omits locators.
@@ -69,7 +70,7 @@ function isPrivateConversation(params: {
   );
   if (
     chatTypes.some((chatType) => chatType === "group" || chatType === "channel") ||
-    /:active-memory:[a-f0-9]{12}$/i.test(key)
+    isActiveMemoryRecallSessionKey(key)
   ) {
     return false;
   }
@@ -215,7 +216,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : null;
 
-  const { store: combinedSessionStore, storePath } = loadCombinedSessionStoreForGateway(
+  const { store: combinedSessionStore, storePath } = await loadCombinedSessionStoreForGatewayAsync(
     params.cfg,
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );

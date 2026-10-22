@@ -1,6 +1,7 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
+import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../board/settings.ts";
@@ -19,12 +20,6 @@ export const SESSION_FACE_PREFERENCE_PARAM = "__openclawSessionFacePreference";
 export const SESSION_NAVIGATION_KEY_PARAM = "__openclawSessionKey";
 export const SESSION_COMPOSER_FOCUS_PARAM = "__openclawComposerFocus";
 export const SESSION_DASHBOARD_EXPANDED_PARAM = "dashboard";
-
-export function composerDraftSearch(draft: string): string {
-  return `?${new URLSearchParams({ draft, [SESSION_COMPOSER_FOCUS_PARAM]: "1" }).toString()}`;
-}
-const SESSION_KEY_UUID_SUFFIX_RE =
-  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 type SessionNavigationContext<TRouteId extends string> = Pick<
   ApplicationContext<TRouteId>,
@@ -199,7 +194,10 @@ export function sessionNavigationTarget<TRouteId extends string>(
     navigationParams.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
   const navigationKey = params.navigationKey?.trim() || row?.key;
-  if (navigationKey && SESSION_KEY_UUID_SUFFIX_RE.test(navigationKey)) {
+  if (
+    navigationKey &&
+    sessionRefFromPath(pathname, basePath, mainKey ?? undefined)?.kind === "short"
+  ) {
     // Sidebar navigation already owns the full row. Carry its key only through the
     // in-app location so the short route never has to rediscover it from sessions.list.
     navigationParams.set(SESSION_NAVIGATION_KEY_PARAM, navigationKey);

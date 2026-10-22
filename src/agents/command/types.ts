@@ -1,7 +1,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
-import type { PromptMode } from "../../agents/system-prompt.types.js";
+import type { PromptMode, SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -27,6 +27,8 @@ import type { CliSessionBindingFacts } from "../cli-runner/session-binding.types
 import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
+import type { ReplyExpectation } from "../reply-completion.js";
+import type { RequesterOrigin } from "../requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type {
@@ -117,6 +119,8 @@ export type AgentCommandOpts = {
   execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
   senderIsOwner?: boolean;
+  /** Host-verified current requester for Git credit only; never accepted from public ingress. */
+  gitContributorProfileId?: string;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
@@ -146,6 +150,8 @@ export type AgentCommandOpts = {
   assertSourceCurrent?: import("../../auto-reply/command-owner-authority.js").CommandOwnerAssertion;
   /** Original operator restriction; host-only and never accepted from public ingress. */
   operatorAuthority?: import("../admitted-run-context.js").AdmittedRunOperatorAuthority;
+  /** Host-captured requester identity for policy resolution across internal continuations. */
+  requesterOrigin?: RequesterOrigin;
   lane?: string;
   swarmExecutionLane?: CommandLaneConfiguration;
   runId?: string;
@@ -154,6 +160,8 @@ export type AgentCommandOpts = {
   /** Startup awaits returned work; incidental synchronous return values are ignored. */
   onExecutionStarted?: () => unknown;
   extraSystemPrompt?: string;
+  /** Conversation preparation owns silence guidance; required-reply enforcement is separate. */
+  silentReplyPromptMode?: SilentReplyPromptMode;
   bootstrapContextMode?: "full" | "lightweight";
   bootstrapContextRunKind?: BootstrapContextRunKind;
   internalEvents?: AgentInternalEvent[];
@@ -163,8 +171,10 @@ export type AgentCommandOpts = {
   sessionEffects?: "visible" | "internal";
   /** Internal handoffs can write transcript turns without changing user-facing model/usage state. */
   preserveUserFacingSessionModelState?: boolean;
-  /** Admitted private completion owes an internal result regardless of its channel origin. */
+  /** Admitted private completion owns a hidden input and its processing receipt. */
   privateCompletion?: true;
+  /** Input-owner obligation, captured by trusted ingress; never supplied by model output. */
+  replyExpectation?: ReplyExpectation;
   /** Visible source replies must be sent through the message tool when set. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
@@ -178,9 +188,6 @@ export type AgentCommandOpts = {
   forceCodeModeTools?: boolean;
   /** Invocation-owned Code Mode activation; limits still come from config. */
   codeModeOverride?: boolean | "auto";
-  /** Host-owned exact media set for a scoped automatic recovery delivery. */
-  internalDeliveryMediaUrls?: string[];
-  internalDeliverySuppressText?: boolean;
   /** Host-owned: deliver only authored output; runtime error payloads stay out of the chat. */
   internalDeliverySuppressErrors?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
@@ -260,13 +267,14 @@ export type AgentCommandOpts = {
 };
 
 /** Public ingress clears the same host-owned fields its option type excludes. */
-export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
+export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   clientCaps: undefined,
   gatewayUiCommandTarget: undefined,
   toolBindings: undefined,
   taskSuggestionDeliveryMode: undefined,
   runtimeContextFragments: undefined,
   senderIsOwner: false,
+  gitContributorProfileId: undefined,
   mainRestartRecoveryOwnerLease: undefined,
   mainRestartRecoveryAdmitted: undefined,
   mainRestartRecoveryAttempt: undefined,
@@ -275,7 +283,9 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
   operationalRunInstance: undefined,
   assertSourceCurrent: undefined,
   operatorAuthority: undefined,
+  requesterOrigin: undefined,
   privateCompletion: undefined,
+  replyExpectation: undefined,
   skillLibraryAuthoring: undefined,
   cronCreatorAuthorityCapability: undefined,
   onAdmittedRunContext: undefined,
@@ -284,7 +294,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
   isTerminalOutcomeObserved: undefined,
   prepareAssistantTranscriptMessage: undefined,
   internalDeliverySuppressErrors: undefined,
-} satisfies Partial<AgentCommandOpts>);
+} as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<
   keyof typeof AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS,

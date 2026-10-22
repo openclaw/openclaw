@@ -2,11 +2,37 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
 import {
   isPairedDeviceTokenIdentityCurrent,
+  hasEffectivePairedDeviceRole,
+  listEffectivePairedDeviceRoles,
   resolveNodePairingState,
-  resolvePairedDeviceTokenIdentity,
   resolveAuthenticatedDeviceTokenIdentity,
 } from "./device-pairing-identity.js";
-import type { PairedDevice } from "./device-pairing.types.js";
+import type { DeviceAuthToken, PairedDevice } from "./device-pairing.types.js";
+
+const makeToken = (role: string, scopes: string[] = []): DeviceAuthToken => ({
+  token: `synthetic-${role}-token`,
+  role,
+  scopes,
+  createdAtMs: 1,
+});
+const operatorToken = (device: PairedDevice) =>
+  expectDefined(device.tokens?.operator, "operator token");
+const authenticate = (device: PairedDevice) => ({
+  role: "operator",
+  publicKey: device.publicKey,
+  token: operatorToken(device).token,
+  scopes: ["operator.admin"],
+});
+const operatorIdentity = (device: PairedDevice) =>
+  expectDefined(
+    resolveAuthenticatedDeviceTokenIdentity(device, authenticate(device)),
+    "operator identity",
+  );
+const isCurrent = (
+  device: PairedDevice | null,
+  identity: ReturnType<typeof operatorIdentity>,
+  scope = "operator.admin",
+) => isPairedDeviceTokenIdentityCurrent(device, "operator", identity, [scope]);
 
 function createPairedOperator(): PairedDevice {
   return {
@@ -15,13 +41,8 @@ function createPairedOperator(): PairedDevice {
     roles: ["operator", "node"],
     approvedScopes: ["operator.admin"],
     tokens: {
-      operator: {
-        token: "synthetic-operator-token",
-        role: "operator",
-        scopes: ["operator.admin"],
-        createdAtMs: 1,
-      },
-      node: { token: "synthetic-node-token", role: "node", scopes: [], createdAtMs: 1 },
+      operator: makeToken("operator", ["operator.admin"]),
+      node: makeToken("node"),
     },
     createdAtMs: 1,
     approvedAtMs: 1,
@@ -30,12 +51,7 @@ function createPairedOperator(): PairedDevice {
 
 test("captures only the device key and token actually accepted at handshake", () => {
   const device = createPairedOperator();
-  const authenticated = {
-    role: "operator",
-    publicKey: device.publicKey,
-    token: device.tokens!.operator!.token,
-    scopes: ["operator.write"],
-  };
+  const authenticated = { ...authenticate(device), scopes: ["operator.write"] };
   const original = resolveAuthenticatedDeviceTokenIdentity(device, authenticated);
   expect(original).not.toBeNull();
   expect(Object.isFrozen(original)).toBe(true);
@@ -48,109 +64,68 @@ test("captures only the device key and token actually accepted at handshake", ()
 
 test("keeps original operator scopes without exporting bearer credentials or unrelated approval changes", () => {
   const device = createPairedOperator();
-  const identity = expectDefined(
-    resolvePairedDeviceTokenIdentity(device, "operator"),
-    "operator identity",
-  );
+  const identity = operatorIdentity(device);
   const node = resolveNodePairingState(device);
   expect(identity).toEqual({
     deviceId: "paired-device",
     key: expect.stringMatching(/^[a-f0-9]{64}$/),
   });
-  expect(isPairedDeviceTokenIdentityCurrent(device, "operator", identity, ["operator.write"])).toBe(
-    true,
-  );
+  expect(isCurrent(device, identity, "operator.write")).toBe(true);
   device.displayName = "Renamed device";
   device.approvedAtMs = 2;
   device.tokens = {
     ...device.tokens,
     node: { token: "replacement-node-token", role: "node", scopes: [], createdAtMs: 2 },
   };
-  expect(isPairedDeviceTokenIdentityCurrent(device, "operator", identity, ["operator.admin"])).toBe(
-    true,
-  );
+  expect(isCurrent(device, identity)).toBe(true);
   expect(resolveNodePairingState(device)).not.toEqual(node);
 });
 
-test.each([
-  "removed device",
-  "different device",
-  "replaced key",
-  "recreated device",
-  "removed approved role",
-  "removed token",
-  "revoked token",
-  "rotated token",
-  "recreated token",
-  "mismatched token role",
-] as const)("rejects an original operator source after %s", (change) => {
+test.each<
+  [string, { device?: Partial<PairedDevice> | null; token?: Partial<DeviceAuthToken> | null }]
+>([
+  ["removed device", { device: null }],
+  ["different device", { device: { deviceId: "other-device" } }],
+  ["replaced key", { device: { publicKey: "replacement-key" } }],
+  ["recreated device", { device: { createdAtMs: 2 } }],
+  ["removed approved role", { device: { roles: ["node"] } }],
+  ["removed token", { token: null }],
+  ["revoked token", { token: { revokedAtMs: 2 } }],
+  ["rotated token", { token: { token: "replacement-token", rotatedAtMs: 2 } }],
+  ["recreated token", { token: { createdAtMs: 2 } }],
+  ["mismatched token role", { token: { role: "node" } }],
+])("rejects an original operator source after %s", (_name, change) => {
   let device: PairedDevice | null = createPairedOperator();
-  const identity = expectDefined(
-    resolvePairedDeviceTokenIdentity(device, "operator"),
-    "operator identity",
-  );
-  const token = expectDefined(device.tokens?.operator, "operator token");
-  switch (change) {
-    case "removed device":
-      device = null;
-      break;
-    case "different device":
-      device.deviceId = "other-device";
-      break;
-    case "replaced key":
-      device.publicKey = "replacement-key";
-      break;
-    case "recreated device":
-      device.createdAtMs = 2;
-      break;
-    case "removed approved role":
-      device.roles = ["node"];
-      break;
-    case "removed token":
+  const identity = operatorIdentity(device);
+  if (change.device === null) {
+    device = null;
+  } else {
+    Object.assign(device, change.device);
+    if (change.token === null) {
       delete device.tokens?.operator;
-      break;
-    case "revoked token":
-      token.revokedAtMs = 2;
-      break;
-    case "rotated token":
-      token.token = "replacement-token";
-      token.rotatedAtMs = 2;
-      break;
-    case "recreated token":
-      token.createdAtMs = 2;
-      break;
-    case "mismatched token role":
-      token.role = "node";
-      break;
+    } else if (change.token) {
+      Object.assign(operatorToken(device), change.token);
+    }
   }
-  expect(isPairedDeviceTokenIdentityCurrent(device, "operator", identity, ["operator.admin"])).toBe(
-    false,
-  );
+  expect(isCurrent(device, identity)).toBe(false);
 });
 
 test.each(["token scopes", "approval baseline", "missing approval baseline"] as const)(
   "rejects scope re-admission after narrowing %s even when the token identity is unchanged",
   (change) => {
     const device = createPairedOperator();
-    const identity = expectDefined(
-      resolvePairedDeviceTokenIdentity(device, "operator"),
-      "operator identity",
-    );
+    const identity = operatorIdentity(device);
     if (change === "token scopes") {
-      expectDefined(device.tokens?.operator, "operator token").scopes = ["operator.read"];
+      operatorToken(device).scopes = ["operator.read"];
     } else if (change === "approval baseline") {
       device.approvedScopes = ["operator.read"];
     } else {
       delete device.approvedScopes;
     }
-    expect(
-      isPairedDeviceTokenIdentityCurrent(device, "operator", identity, ["operator.admin"]),
-    ).toBe(false);
+    expect(isCurrent(device, identity)).toBe(false);
     if (change !== "token scopes") {
       // Live verification rejects an over-scoped token even for a narrower request.
-      expect(
-        isPairedDeviceTokenIdentityCurrent(device, "operator", identity, ["operator.read"]),
-      ).toBe(false);
+      expect(isCurrent(device, identity, "operator.read")).toBe(false);
     }
   },
 );
@@ -159,7 +134,17 @@ test("node connection identity is unaffected by an unrelated operator-token upgr
   const device = createPairedOperator();
   const original = resolveNodePairingState(device);
   expect(original).not.toBeNull();
-  expectDefined(device.tokens?.operator, "operator token").token = "replacement-operator-token";
+  operatorToken(device).token = "replacement-operator-token";
   device.approvedAtMs = 2;
   expect(resolveNodePairingState(device)).toEqual(original);
+});
+
+test("filters active token roles to the approved pairing role set", () => {
+  const device = createPairedOperator();
+  device.role = "operator";
+  device.roles = ["operator"];
+  device.tokens = { node: makeToken("node"), operator: makeToken("operator", ["operator.read"]) };
+
+  expect(listEffectivePairedDeviceRoles(device)).toEqual(["operator"]);
+  expect(hasEffectivePairedDeviceRole(device, "node")).toBe(false);
 });

@@ -1,10 +1,20 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { resetClientVoiceConfirmationStateForTest } from "./client-voice-confirmation.test-support.js";
 import { prepareClientVoiceSessionClose } from "./client-voice-session-lifecycle.js";
+import {
+  createCompletedMutationSession,
+  seedSession,
+} from "./client-voice-session.fixture.test-support.js";
+import { closeClientVoiceSession, closeStaleClientVoiceSessions } from "./client-voice-session.js";
 import { clientVoiceSessionTesting } from "./client-voice-session.test-support.js";
 
 const { sendDurableMessageBatch } = vi.hoisted(() => ({
@@ -20,11 +30,8 @@ vi.mock("./client-voice-session-lifecycle.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.captureClientVoiceSessionSettlement>
     ) {
       const accepted = actual.captureClientVoiceSessionSettlement(...args);
-      let finish!: () => void;
-      const completed = new Promise<void>((resolve) => {
-        finish = resolve;
-      });
-      acceptedDigestWork.add(completed);
+      const completed = createDeferred();
+      acceptedDigestWork.add(completed.promise);
       return {
         run<T>(run: () => T): T {
           return accepted.run(run);
@@ -33,8 +40,8 @@ vi.mock("./client-voice-session-lifecycle.js", async (importOriginal) => {
           try {
             accepted.release();
           } finally {
-            acceptedDigestWork.delete(completed);
-            finish();
+            acceptedDigestWork.delete(completed.promise);
+            completed.resolve();
           }
         },
       };
@@ -63,7 +70,6 @@ export function useClientVoiceDigestHarness() {
     afterEach(async () => {
       await settleDigestAttempts();
       clientVoiceSessionTesting.reset();
-      resetClientVoiceConfirmationStateForTest();
       try {
         await cleanupSessionStateForTest({ stateDir });
       } finally {
@@ -73,15 +79,61 @@ export function useClientVoiceDigestHarness() {
     });
   });
 
-  beforeEach(async () => {
+  beforeEach(async ({ onTestFinished }) => {
     stateDir = await fs.realpath(tempDirs.make("openclaw-voice-digest-retry-"));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     sendDurableMessageBatch.mockReset().mockResolvedValue({ status: "sent" });
+    setRuntimeConfigSnapshot({});
+    onTestFinished(clearRuntimeConfigSnapshot);
   });
 
   return {
     sendDurableMessageBatch,
     settleDigestAttempts,
+    async seedDigest(this: void, to = "channel:voice-updates") {
+      await seedSession("agent:main:main", { channel: "discord", to });
+      return createCompletedMutationSession();
+    },
+    holdSend(this: void) {
+      const sending = createDeferred();
+      const finishSend = createDeferred();
+      sendDurableMessageBatch.mockImplementationOnce(async () => {
+        sending.resolve();
+        await finishSend.promise;
+        return { status: "sent" };
+      });
+      return { sending, finishSend };
+    },
+    readRecord: (id: string) => clientVoiceSessionTesting.readRecord("main", id),
+    closeVoice: (
+      voiceSessionId: string,
+      params: Partial<Parameters<typeof closeClientVoiceSession>[0]> = {},
+    ) =>
+      closeClientVoiceSession({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        config: {},
+        ...params,
+        voiceSessionId,
+      }),
+    recoverStale: (params: Partial<Parameters<typeof closeStaleClientVoiceSessions>[0]> = {}) =>
+      closeStaleClientVoiceSessions({ agentId: "main", config: {}, ...params }),
+    recordEffect(this: void, runId: string, toolCallId: string) {
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        runId,
+        toolCallId,
+        toolName: "message",
+        mutatingAction: true,
+      });
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.completed",
+        runId,
+        toolCallId,
+        toolName: "message",
+        durationMs: 5,
+      });
+    },
     get stateDir() {
       return stateDir;
     },

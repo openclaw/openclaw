@@ -97,7 +97,9 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
     };
   }
   const sessionTarget =
-    params.job.payload.kind === "agentTurn" ? params.job.sessionTarget : undefined;
+    params.job.sourceConversation || params.job.payload.kind === "agentTurn"
+      ? params.job.sessionTarget
+      : undefined;
   const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
   const sourceConversation = plan.mode === "announce" ? params.job.sourceConversation : undefined;
   return { plan, requestedChannel, agentId, sessionTarget, deliverySessionKey, sourceConversation };
@@ -140,7 +142,7 @@ async function resolvePreparedCronDeliveryPreview(
   }
   if (!resolved.ok) {
     if (
-      (sessionTarget === "current" || (sessionTarget === "isolated" && sourceConversation)) &&
+      (sessionTarget === "current" || sourceConversation !== undefined) &&
       plan.mode === "announce" &&
       !resolved.sourceConversationUnavailable &&
       !requiresExternalCronDelivery(plan, resolved)
@@ -153,7 +155,7 @@ async function resolvePreparedCronDeliveryPreview(
     const detail =
       plan.mode === "none"
         ? `message tool target unresolved: ${resolved.error.message}`
-        : `${requestedChannel === "last" ? "last -> no route, will fail-closed: " : ""}${resolved.error.message}`;
+        : `${plan.target === "owner" ? "owner has no route: " : requestedChannel === "last" ? "last -> no route, will be blocked: " : ""}${resolved.error.message}`;
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
       detail:
@@ -166,11 +168,15 @@ async function resolvePreparedCronDeliveryPreview(
   return {
     label: `${plan.mode} -> ${formatTarget(resolved.channel, resolved.to)}`,
     detail:
-      requestedChannel !== "last"
-        ? "explicit"
-        : deliverySessionKey
-          ? `resolved from last, session ${deliverySessionKey}`
-          : "resolved from last, main session",
+      plan.mode === "announce"
+        ? "commits to the destination conversation; sends one external notification"
+        : plan.target === "owner"
+          ? "resolved from configured owner"
+          : requestedChannel !== "last"
+            ? "explicit"
+            : deliverySessionKey
+              ? `resolved from last, session ${deliverySessionKey}`
+              : "resolved from last, main session",
   };
 }
 

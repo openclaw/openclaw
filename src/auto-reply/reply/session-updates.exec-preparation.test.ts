@@ -9,6 +9,10 @@ import {
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   applySessionEntryLifecycleMutation,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -23,7 +27,6 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeExecApprovalsConfigRow } from "../../infra/exec-approvals-sqlite.js";
 import * as approvalStore from "../../infra/exec-approvals-store.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -35,10 +38,12 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import { ensureSkillSnapshot, incrementCompactionCount } from "./session-updates.js";
-import { persistSessionUsageUpdate } from "./session-usage.js";
 
 // mock-isolation: Remote node discovery is outside the approval-read boundary.
 vi.mock("../../skills/runtime/remote.js", () => ({
@@ -49,7 +54,6 @@ vi.mock("../../skills/runtime/session-snapshot.js", () => ({
   resolveReusableWorkspaceSkillSnapshot: vi.fn(async () => ({
     snapshot: { prompt: "", skills: [] },
     shouldRefresh: false,
-    snapshotVersion: 0,
   })),
 }));
 
@@ -58,6 +62,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     vi.restoreAllMocks();
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
+    clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -66,6 +71,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+  setRuntimeConfigSnapshot(config);
 });
 
 function prepare(
@@ -90,6 +96,39 @@ function prepare(
   });
 }
 
+async function admitSkillSession(root: string, patch: Partial<InternalSessionEntry> = {}) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
+  await upsertSessionEntryCore(scope, { sessionId: "skill-exec", updatedAt: 1, ...patch });
+  const { databaseClaim } = await loadSessionEntryForAdmission(scope);
+  if (!("kind" in databaseClaim) || !databaseClaim.reader) {
+    await databaseClaim.release();
+    throw new Error("Expected the admitted skill session reader");
+  }
+  return { scope, databaseClaim, reader: databaseClaim.reader };
+}
+
+function preparationGate(phase: "approvals" | "skills") {
+  const entered = createDeferredCore();
+  const resume = createDeferredCore();
+  const wait = async () => {
+    entered.resolve();
+    await resume.promise;
+  };
+  if (phase === "approvals") {
+    vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync").mockImplementationOnce(async () => {
+      await wait();
+      return { version: 1, defaults: { security: "full" } };
+    });
+  } else {
+    vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
+      await wait();
+      return { snapshot: { prompt: "", skills: [] }, shouldRefresh: false };
+    });
+  }
+  return { entered, resume };
+}
+
 const config: OpenClawConfig = {
   tools: { exec: { host: "node", node: "build-node", mode: "full" } },
 };
@@ -98,6 +137,7 @@ it.each([false, true])(
   "persists first-turn skills only while the caller is current without caller-thread session SQL (revoked: %s)",
   async (revokeAtCommit) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:skill-persistence",
@@ -160,16 +200,15 @@ it.each([false, true])(
 
 it("prepares current sandbox and approval skill eligibility without caller-thread SQL", async () => {
   const root = tempDirs.make("openclaw-skill-exec-");
+  const executionConfig: OpenClawConfig = {
+    agents: { defaults: { sandbox: { mode: "all" } } },
+    tools: { exec: { host: "auto", node: "build-node", mode: "full" } },
+  };
   const source = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
   const approvals = vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
-  await upsertSessionEntryCore(scope, { sessionId: "skill-exec", updatedAt: 1 });
-  const { databaseClaim } = await loadSessionEntryForAdmission(scope);
-  if (!("kind" in databaseClaim) || !databaseClaim.reader) {
-    await databaseClaim.release();
-    throw new Error("Expected the admitted skill session reader");
-  }
+  setRuntimeConfigSnapshot(executionConfig);
+  const { databaseClaim, reader } = await admitSkillSession(root);
   const standalone = vi.spyOn(sessionReaders, "withSessionEntriesFromStoreInWorker");
   try {
     for (const [security, sandboxMode, canExec, approvalReads] of [
@@ -185,15 +224,7 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
       );
       approvals.mockClear();
       const calls = observeMainThreadSql();
-      const pending = prepare(
-        root,
-        {
-          agents: { defaults: { sandbox: { mode: "all" } } },
-          tools: { exec: { host: "auto", node: "build-node", mode: "full" } },
-        },
-        undefined,
-        databaseClaim.reader,
-      );
+      const pending = prepare(root, executionConfig, undefined, reader);
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-foreign-skill-exec-"));
       await pending;
       expect(approvals).toHaveBeenCalledTimes(approvalReads);
@@ -210,243 +241,140 @@ it("prepares current sandbox and approval skill eligibility without caller-threa
   }
 });
 
-it.each(["metadata", "lifecycle", "refresh"] as const)(
-  "consumes current skill preparation state after a concurrent change (%s)",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:skill-cohort",
-        storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
-      };
-      const entry = {
-        sessionId: "skill-cohort",
-        lifecycleRevision: "original",
-        updatedAt: 1,
-        pinnedAt: 1,
-        skillsSnapshot: { prompt: "prepared skills", skills: [] },
-      };
-      await replaceSessionEntry(scope, entry);
-      const { databaseClaim } = await loadSessionEntryForAdmission(scope);
-      if (!("kind" in databaseClaim) || !databaseClaim.reader) {
-        await databaseClaim.release();
-        throw new Error("Expected an admitted skill reader");
-      }
-      const reader = databaseClaim.reader;
-      const phases = vi.spyOn(reader, "withRead");
-      const handle = createReplySessionEntryHandle({
-        sessionKey: scope.sessionKey,
-        sessionEntry: entry,
-      });
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      const skillsSnapshot =
-        change === "refresh" ? { prompt: "refreshed skills", skills: [] } : entry.skillsSnapshot;
-      vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
-        entered.resolve();
-        await resume.promise;
-        return {
-          snapshot: skillsSnapshot,
-          shouldRefresh: change === "refresh",
-          snapshotVersion: 0,
-        };
-      });
-      const pending = ensureSkillSnapshot({
-        ...scope,
-        cfg: {},
-        workspaceDir: state.statePath("workspace"),
-        isFirstTurnInSession: false,
-        sessionEntry: entry,
-        sessionEntryHandle: handle,
-        reader,
-      });
-      try {
-        await awaitGateBeforeSettlement(
-          entered.promise,
-          pending,
-          "skill preparation did not start",
-        );
-        if (change === "refresh") {
-          await replaceSessionEntry(scope, {
-            ...entry,
-            pinnedAt: undefined,
-            updatedAt: 2,
-            systemSent: true,
-          });
-        } else {
-          const foreign = new (requireNodeSqlite().DatabaseSync)(reader.database.path);
-          try {
-            foreign
-              .prepare(
-                "UPDATE session_nodes SET entry_json = json_patch(entry_json, ?), updated_at = ?, pinned_at = ? WHERE session_key = ?",
-              )
-              .run(
-                JSON.stringify(
-                  change === "metadata"
-                    ? { pinnedAt: null, updatedAt: 2, systemSent: true }
-                    : { lifecycleRevision: "replacement" },
-                ),
-                change === "metadata" ? 2 : 1,
-                change === "metadata" ? null : 1,
-                scope.sessionKey,
-              );
-          } finally {
-            foreign.close();
-          }
-        }
-        resume.resolve();
-        if (change === "lifecycle") {
-          await expect(pending).rejects.toThrow("changed");
-          expect(handle.getCurrent()).toEqual(entry);
-        } else {
-          const result = await pending;
-          expect(result).toMatchObject({
-            systemSent: true,
-            skillsSnapshot,
-            sessionEntry: {
-              updatedAt: change === "refresh" ? expect.any(Number) : 2,
-              systemSent: true,
-              skillsSnapshot,
-            },
-          });
-          expect(result.sessionEntry).not.toHaveProperty("pinnedAt");
-          expect(handle.getCurrent()).toEqual(result.sessionEntry);
-          if (change === "refresh") {
-            expect(loadSessionEntry(scope)).toMatchObject({ skillsSnapshot, systemSent: true });
-          }
-        }
-        expect(phases).toHaveBeenCalledTimes(change === "refresh" ? 3 : 2);
-      } finally {
-        resume.resolve();
-        await Promise.allSettled([pending, databaseClaim.release()]);
-      }
-    });
-  },
-);
-
-it("refuses policy preparation when its admitted reader closes during the approval read", async () => {
-  const root = tempDirs.make("openclaw-skill-reader-retired-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
-  await upsertSessionEntryCore(scope, { sessionId: "skill-exec", updatedAt: 1 });
-  const { databaseClaim } = await loadSessionEntryForAdmission(scope);
-  if (!("kind" in databaseClaim) || !databaseClaim.reader) {
-    await databaseClaim.release();
-    throw new Error("Expected the admitted skill session reader");
-  }
-  const entered = createDeferredCore();
-  const resume = createDeferredCore();
-  vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync").mockImplementationOnce(async () => {
-    entered.resolve();
-    await resume.promise;
-    return { version: 1, defaults: { security: "full" } };
-  });
-  const pending = prepare(root, config, undefined, databaseClaim.reader);
-  try {
-    await awaitGateBeforeSettlement(entered.promise, pending, "approval read did not start");
-    await databaseClaim.release();
-    resume.resolve();
-    await expect(pending).rejects.toThrow();
-    expect(resolveReusableWorkspaceSkillSnapshot).not.toHaveBeenCalled();
-  } finally {
-    resume.resolve();
-    await Promise.allSettled([pending, databaseClaim.release()]);
-  }
-});
-
-it.each(["approvals", "skills"] as const)(
-  "refuses prepared eligibility when sandbox policy changes during %s preparation",
-  async (phase) => {
-    const root = tempDirs.make("openclaw-skill-policy-changed-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    const scope = { agentId: "main", sessionKey: "agent:main:exec-preparation" };
-    await upsertSessionEntryCore(scope, {
-      sessionId: "skill-exec",
+it.each([true, false])("refreshes only owned skill fields (first turn: %s)", async (firstTurn) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:skill-cohort",
+      storePath: state.statePath("agents", "main", "sessions", "sessions.json"),
+    };
+    const entry = {
+      sessionId: "skill-cohort",
+      lifecycleRevision: "original",
       updatedAt: 1,
-      sandboxMode: "off",
-    });
+      pinnedAt: 1,
+      modelOverride: "gpt-5.5",
+      label: "Before rename",
+      skillsSnapshot: { prompt: "prepared skills", skills: [] },
+    };
+    await replaceSessionEntry(scope, entry);
     const { databaseClaim } = await loadSessionEntryForAdmission(scope);
     if (!("kind" in databaseClaim) || !databaseClaim.reader) {
       await databaseClaim.release();
-      throw new Error("Expected the admitted skill session reader");
+      throw new Error("Expected an admitted skill reader");
     }
+    const reader = databaseClaim.reader;
+    const handle = createReplySessionEntryHandle({
+      sessionKey: scope.sessionKey,
+      sessionEntry: entry,
+    });
     const entered = createDeferredCore();
     const resume = createDeferredCore();
-    const wait = async () => {
+    const skillsSnapshot = { prompt: "refreshed skills", skills: [] };
+    vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
       entered.resolve();
       await resume.promise;
-    };
-    vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync").mockImplementationOnce(async () => {
-      if (phase === "approvals") {
-        await wait();
-      }
-      return { version: 1, defaults: { security: "full" } };
+      return { snapshot: skillsSnapshot, shouldRefresh: true };
     });
-    vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
-      if (phase === "skills") {
-        await wait();
-      }
-      return { snapshot: { prompt: "", skills: [] }, shouldRefresh: false, snapshotVersion: 0 };
+    const pending = ensureSkillSnapshot({
+      ...scope,
+      cfg: {},
+      workspaceDir: state.statePath("workspace"),
+      isFirstTurnInSession: firstTurn,
+      sessionEntry: entry,
+      sessionEntryHandle: handle,
+      reader,
     });
-    const pending = prepare(
-      root,
-      { ...config, agents: { defaults: { sandbox: { mode: "all" } } } },
-      undefined,
-      databaseClaim.reader,
-    );
     try {
-      await awaitGateBeforeSettlement(entered.promise, pending, "policy wait did not start");
-      await upsertSessionEntryCore(scope, { sandboxMode: undefined });
+      await awaitGateBeforeSettlement(entered.promise, pending, "skill preparation did not start");
+      await replaceSessionEntry(scope, {
+        ...entry,
+        pinnedAt: undefined,
+        updatedAt: 2,
+        systemSent: !firstTurn,
+        modelOverride: "sonnet-4.6",
+        label: "After rename",
+        sendPolicy: "deny",
+      });
       resume.resolve();
-      await expect(pending).rejects.toThrow("changed");
+      const result = await pending;
+      expect(result).toMatchObject({
+        systemSent: true,
+        skillsSnapshot,
+        sessionEntry: {
+          sessionId: entry.sessionId,
+          updatedAt: expect.any(Number),
+          systemSent: true,
+          skillsSnapshot,
+          modelOverride: "sonnet-4.6",
+          label: "After rename",
+          sendPolicy: "deny",
+        },
+      });
+      expect(result.sessionEntry).not.toHaveProperty("pinnedAt");
+      expect(handle.getCurrent()).toEqual(result.sessionEntry);
+      expect(loadSessionEntry(scope)).toMatchObject({ skillsSnapshot, systemSent: true });
     } finally {
       resume.resolve();
       await Promise.allSettled([pending, databaseClaim.release()]);
     }
-  },
-);
+  });
+});
 
-it.each(["approvals", "skills"] as const)(
-  "refuses a skill snapshot when its caller closes during %s preparation",
-  async (phase) => {
-    const root = tempDirs.make("openclaw-skill-retired-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    const controller = new AbortController();
-    const wait = async () => {
-      entered.resolve();
-      await resume.promise;
-    };
-    if (phase === "approvals") {
-      vi.spyOn(approvalStore, "loadExecApprovalsReadOnlyAsync").mockImplementationOnce(async () => {
-        await wait();
-        return { version: 1, defaults: { security: "full" } };
-      });
+it.each([
+  ["reader", "approvals"],
+  ["policy", "approvals"],
+  ["policy", "skills"],
+  ["caller", "approvals"],
+  ["caller", "skills"],
+] as const)("refuses eligibility when %s retires during %s preparation", async (retired, phase) => {
+  const root = tempDirs.make("openclaw-skill-retired-");
+  const executionConfig: OpenClawConfig =
+    retired === "policy"
+      ? { ...config, agents: { defaults: { sandbox: { mode: "all" } } } }
+      : config;
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  setRuntimeConfigSnapshot(executionConfig);
+  const admitted =
+    retired === "caller"
+      ? undefined
+      : await admitSkillSession(root, retired === "policy" ? { sandboxMode: "off" } : {});
+  const controller = new AbortController();
+  const { entered, resume } = preparationGate(phase);
+  const pending = prepare(
+    root,
+    executionConfig,
+    retired === "caller" ? () => controller.signal.throwIfAborted() : undefined,
+    admitted?.reader,
+  );
+  try {
+    await awaitGateBeforeSettlement(entered.promise, pending, "preparation did not reach its wait");
+    if (admitted) {
+      if (retired === "reader") {
+        await admitted.databaseClaim.release();
+      } else {
+        await upsertSessionEntryCore(admitted.scope, { sandboxMode: undefined });
+      }
     } else {
-      vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
-        await wait();
-        return {
-          snapshot: { prompt: "", skills: [] },
-          shouldRefresh: false,
-          snapshotVersion: 0,
-        };
-      });
+      controller.abort(new Error("skill caller retired"));
     }
-    const pending = prepare(root, config, () => controller.signal.throwIfAborted());
-    await awaitGateBeforeSettlement(
-      entered.promise,
-      pending,
-      "skill preparation did not reach its wait",
-    );
-    controller.abort(new Error("skill caller retired"));
     resume.resolve();
-    await expect(pending).rejects.toThrow("skill caller retired");
-    if (phase === "approvals") {
+    if (retired === "reader") {
+      await expect(pending).rejects.toThrow();
+    } else {
+      await expect(pending).rejects.toThrow(
+        retired === "policy" ? "changed" : "skill caller retired",
+      );
+    }
+    if (retired === "reader" || (retired === "caller" && phase === "approvals")) {
       expect(resolveReusableWorkspaceSkillSnapshot).not.toHaveBeenCalled();
     }
-  },
-);
+  } finally {
+    resume.resolve();
+    await Promise.allSettled([pending, admitted?.databaseClaim.release()]);
+  }
+});
 
 it("does not advertise node skills after the approval worker read fails", async () => {
   const root = tempDirs.make("openclaw-skill-exec-failure-");
@@ -467,49 +395,44 @@ it("does not advertise node skills after the approval worker read fails", async 
   calls.expectIdle();
 });
 
-type AccountingParams = Parameters<typeof incrementCompactionCount>[0];
+async function accountingFixture(state: OpenClawTestState) {
+  setRuntimeConfigSnapshot({});
+  const scope = {
+    agentId: "main",
+    storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+    sessionKey: "agent:main:compaction-accounting",
+  };
+  const entry: InternalSessionEntry = {
+    sessionId: randomUUID(),
+    lifecycleRevision: randomUUID(),
+    updatedAt: 1,
+    compactionCount: 0,
+  };
+  await replaceSessionEntry(scope, entry);
+  const sessionStore = { [scope.sessionKey]: entry };
+  return {
+    params: { ...scope, sessionEntry: entry, sessionStore, expectedSession: entry },
+    entry,
+    cached: () => sessionStore[scope.sessionKey],
+    read: () => loadSessionEntry({ ...scope, readConsistency: "latest" }),
+    replace: (patch: Partial<InternalSessionEntry>) =>
+      replaceSessionEntry(scope, { ...entry, ...patch }),
+    remove: () =>
+      applySessionEntryLifecycleMutation({
+        agentId: scope.agentId,
+        storePath: scope.storePath,
+        removals: [{ sessionKey: scope.sessionKey }],
+        skipMaintenance: true,
+      }),
+  };
+}
 
-async function withAccountingFixture(
-  body: (fixture: {
-    params: AccountingParams;
-    entry: InternalSessionEntry;
-    cached: () => InternalSessionEntry | undefined;
-    read: () => InternalSessionEntry | undefined;
-    replace: (patch: Partial<InternalSessionEntry>) => Promise<unknown>;
-    remove: () => Promise<unknown>;
-  }) => Promise<void>,
+function withAccountingFixture(
+  body: (fixture: Awaited<ReturnType<typeof accountingFixture>>) => Promise<void>,
 ) {
-  await withOpenClawTestState(
+  return withOpenClawTestState(
     { label: "compaction-accounting", scenario: "minimal" },
-    async (state) => {
-      const scope = {
-        agentId: "main",
-        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
-        sessionKey: "agent:main:compaction-accounting",
-      };
-      const entry: InternalSessionEntry = {
-        sessionId: randomUUID(),
-        lifecycleRevision: randomUUID(),
-        updatedAt: 1,
-        compactionCount: 0,
-      };
-      await replaceSessionEntry(scope, entry);
-      const sessionStore = { [scope.sessionKey]: entry };
-      await body({
-        params: { ...scope, sessionEntry: entry, sessionStore, expectedSession: entry },
-        entry,
-        cached: () => sessionStore[scope.sessionKey],
-        read: () => loadSessionEntry({ ...scope, readConsistency: "latest" }),
-        replace: (patch) => replaceSessionEntry(scope, { ...entry, ...patch }),
-        remove: () =>
-          applySessionEntryLifecycleMutation({
-            agentId: scope.agentId,
-            storePath: scope.storePath,
-            removals: [{ sessionKey: scope.sessionKey }],
-            skipMaintenance: true,
-          }),
-      });
-    },
+    async (state) => body(await accountingFixture(state)),
   );
 }
 
@@ -563,127 +486,81 @@ describe("completed compaction accounting", () => {
 
   it("records and clears byte-compaction progress with authoritative accounting", async () => {
     await withAccountingFixture(async (fixture) => {
-      const latch = {
-        activeBytes: 60_000,
-        sessionId: fixture.entry.sessionId,
-        maxBytes: 50_000,
-      };
+      const latch = { activeBytes: 60_000, sessionId: fixture.entry.sessionId, maxBytes: 50_000 };
 
       expect(
-        await incrementCompactionCount({
-          ...fixture.params,
-          transcriptByteCompactionLatch: latch,
-        }),
+        await incrementCompactionCount({ ...fixture.params, transcriptByteCompactionLatch: latch }),
       ).toBe(1);
       expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
 
       expect(await incrementCompactionCount(fixture.params)).toBe(2);
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
+
+      await incrementCompactionCount({ ...fixture.params, transcriptByteCompactionLatch: null });
       expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
     });
   });
 
-  it("does not overwrite a newer writer's count or token snapshot", async () => {
-    await withAccountingFixture(async (fixture) => {
-      await fixture.replace({
+  it.each([
+    {
+      name: "newer writer",
+      patch: {
         activeWriterRunId: "new-writer",
         compactionCount: 7,
         totalTokens: 666,
         totalTokensFresh: true,
-      });
-      const before = fixture.read();
-
-      expect(
-        await incrementCompactionCount({
-          ...fixture.params,
-          expectedSession: { ...fixture.entry, activeWriterRunId: "old-writer" },
-          tokensAfter: 123,
-        }),
-      ).toBeUndefined();
-
-      expect(fixture.read()).toEqual(before);
-    });
-  });
-
-  it("does not recreate a deleted row from a cached compaction result", async () => {
-    await withAccountingFixture(async (fixture) => {
-      await fixture.remove();
-
-      expect(
-        await incrementCompactionCount({
-          ...fixture.params,
-          expectedSession: undefined,
-        }),
-      ).toBeUndefined();
-      expect(fixture.read()).toBeUndefined();
-    });
-  });
-
-  it("does not write old compaction usage after the terminal writer changes", async () => {
-    await withAccountingFixture(async (fixture) => {
-      await fixture.replace({
-        activeWriterRunId: "new-writer",
-        totalTokens: 666,
-        totalTokensFresh: true,
-      });
-      const before = fixture.read();
-
-      await persistSessionUsageUpdate({
-        agentId: fixture.params.agentId,
-        storePath: fixture.params.storePath,
-        sessionKey: fixture.params.sessionKey,
-        cfg: {},
-        expectedSession: { ...fixture.entry, activeWriterRunId: "old-writer" },
-        currentContextSnapshot: { tokens: 123 },
-        authorize: () => true,
-      });
-
-      expect(fixture.read()).toEqual(before);
-    });
-  });
-
-  it.each([
-    { name: "session", patch: { sessionId: "replacement-session" } },
-    { name: "lifecycle", patch: { lifecycleRevision: "replacement-revision" } },
-  ])("does not account compaction against a replaced $name", async ({ patch }) => {
-    await withAccountingFixture(async (fixture) => {
-      await fixture.replace(patch);
-      const before = fixture.read();
-
-      expect(
-        await incrementCompactionCount({ ...fixture.params, tokensAfter: 123 }),
-      ).toBeUndefined();
-
-      expect(fixture.cached()).toBe(fixture.entry);
-      expect(fixture.read()).toEqual(before);
-    });
-  });
-
-  it.each(["compaction", "usage"] as const)(
-    "does not commit %s accounting when authority closes after admission",
-    async (kind) => {
-      await withAccountingFixture(async (fixture) => {
-        let authorized = true;
-        const authorize = () => {
-          queueMicrotask(() => {
-            authorized = false;
-          });
-          return authorized;
-        };
-        const result =
-          kind === "compaction"
-            ? await incrementCompactionCount({ ...fixture.params, tokensAfter: 123, authorize })
-            : await persistSessionUsageUpdate({
-                ...fixture.params,
-                cfg: {},
-                currentContextSnapshot: { tokens: 123 },
-                authorize,
-              });
-
-        expect(result).toBeUndefined();
-        expect(fixture.cached()).toBe(fixture.entry);
-        expect(fixture.read()?.compactionCount).toBe(0);
-        expect(fixture.read()?.totalTokens).toBeUndefined();
-      });
+      },
     },
-  );
+    { name: "deleted row", patch: undefined },
+    { name: "replaced session", patch: { sessionId: "replacement-session" } },
+    { name: "replaced lifecycle", patch: { lifecycleRevision: "replacement-revision" } },
+  ])("does not account compaction against a $name", async ({ name, patch }) => {
+    await withAccountingFixture(async (fixture) => {
+      if (patch) {
+        await fixture.replace(patch);
+      } else {
+        await fixture.remove();
+      }
+      const before = fixture.read();
+      const expectedSession =
+        name === "deleted row"
+          ? undefined
+          : name === "newer writer"
+            ? { ...fixture.entry, activeWriterRunId: "old-writer" }
+            : fixture.entry;
+      expect(
+        await incrementCompactionCount({
+          ...fixture.params,
+          expectedSession,
+          ...(patch ? { tokensAfter: 123 } : {}),
+        }),
+      ).toBeUndefined();
+      expect(fixture.read()).toEqual(before);
+      if (name.startsWith("replaced")) {
+        expect(fixture.cached()).toBe(fixture.entry);
+      }
+    });
+  });
+
+  it("does not commit compaction accounting when authority closes after admission", async () => {
+    await withAccountingFixture(async (fixture) => {
+      let authorized = true;
+      const authorize = () => {
+        queueMicrotask(() => {
+          authorized = false;
+        });
+        return authorized;
+      };
+      const result = await incrementCompactionCount({
+        ...fixture.params,
+        tokensAfter: 123,
+        authorize,
+      });
+
+      expect(result).toBeUndefined();
+      expect(fixture.cached()).toBe(fixture.entry);
+      expect(fixture.read()?.compactionCount).toBe(0);
+      expect(fixture.read()?.totalTokens).toBeUndefined();
+    });
+  });
 });

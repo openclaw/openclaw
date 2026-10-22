@@ -1,14 +1,26 @@
 import { MessageChannel } from "node:worker_threads";
 import type { WorkerTaskHost } from "@openclaw/worker-runtime";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
+import { getDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
+import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
+import { readSqliteDatabaseAdmissionDeadline } from "./sqlite-worker-database-admission-relay.js";
+import {
+  createSqliteDatabaseAdmissionRelay,
+  type SqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
 import {
   attributeWorkerToPool,
   createCpuTrackedWorker,
+  flushWorkerDiagnostics,
   markWorkerRetirement,
   receiveWorkerMemoryPort,
+  isWorkerGcObservationEnabled,
 } from "./worker-cpu.js";
+import { recordWorkerMessage } from "./worker-message-metrics.js";
 import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
@@ -19,8 +31,38 @@ import { workerRequestKind } from "./worker-request-kind.js";
 import { getWorkerComputeCapacity } from "./worker-task-capacity.js";
 import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
 import type { WorkerTaskPoolOwnerOptions } from "./worker-task-pool.types.js";
+import type { WorkerTaskContext } from "./worker-task-transport.js";
+
+// Diagnostics project a closed vocabulary, not arbitrary SDK task fields.
+const diagnosticTaskKinds = new Set([
+  "prepare",
+  "prepare-session",
+  "transcript-stats",
+  "session-entry",
+  "session-entries",
+  "session-cleanup",
+  "session-memory-capture",
+  "history-page",
+  "historical-eviction-candidates",
+  "usage-cost",
+  "model-context",
+  "context-messages",
+  "transcript-search",
+]);
 
 const prepareResources = createLazyRuntimeModule(() => import("./temp-artifact-cleanup.js"));
+const admissions = resolveGlobalSingleton(
+  Symbol.for("openclaw.workerTaskDatabaseAdmissionChannels"),
+  () =>
+    new Map<
+      Parameters<WorkerTaskHost["captureTaskContext"]>[0],
+      {
+        owner: SqliteWorkerOperationAdmission;
+        sent: boolean;
+        retiring: boolean;
+      }
+    >(),
+);
 
 export function createWorkerTaskHost(
   owner: WorkerTaskPoolOwnerOptions = {},
@@ -46,24 +88,22 @@ export function createWorkerTaskHost(
       }
       if (owner.retainedTransport) {
         const { port1, port2 } = new MessageChannel();
-        try {
-          const native = createRetainedNativeWorker(
-            url,
-            workerOptions,
-            source,
-            owner.nativeResource,
-            { host: port1, worker: port2 },
-          );
-          return { worker: native, native };
-        } catch (error) {
-          port1.close();
-          port2.close();
-          throw error;
-        }
+        const native = createRetainedNativeWorker(
+          url,
+          workerOptions,
+          source,
+          owner.nativeResource,
+          { host: port1, worker: port2 },
+        );
+        return { worker: native, native };
       }
       return { worker: createCpuTrackedWorker(url, workerOptions) };
     },
     serviceNativeWorkers(workers) {
+      // The shared native source can advance sibling pools while this caller cannot run events.
+      for (const { owner: admission } of admissions.values()) {
+        admission.service();
+      }
       // This factory binds every native worker in the pool to the same captured source.
       workers[0]?.service();
     },
@@ -72,7 +112,44 @@ export function createWorkerTaskHost(
       const { removeTemporaryArtifacts } = await prepareResources();
       await removeTemporaryArtifacts(directory, "Worker task");
     },
-    captureTaskContext: captureDeletedAgentDatabaseFences,
+    captureTaskContext(worker): WorkerTaskContext {
+      let admission = admissions.get(worker);
+      if (!admission) {
+        admission = {
+          owner: runInDetachedAsyncContext(() =>
+            createSqliteDatabaseAdmissionRelay(() => {
+              if (admissions.get(worker)?.retiring !== false) {
+                throw new Error("SQLite creation relay's task worker is retiring");
+              }
+            }),
+          ),
+          sent: false,
+          retiring: false,
+        };
+        admissions.set(worker, admission);
+        const retained = admission;
+        worker.once("exit", () => {
+          retained.owner.finish();
+          admissions.delete(worker);
+        });
+      }
+      // The retained relay supplies current facts on demand; global snapshots grow with sessions.
+      const selection = getDatabaseEngineSelection();
+      const context: WorkerTaskContext = {
+        collectWorkerMetrics: isWorkerGcObservationEnabled(),
+        ...(selection ? { databaseEngineSelection: selection } : {}),
+        deletedAgentDatabaseFences: captureDeletedAgentDatabaseFences(),
+        databaseAdmissionDeadlineAtMs: readSqliteDatabaseAdmissionDeadline(),
+        ...(!admission.sent ? { databaseAdmissionPort: admission.owner.port } : {}),
+      };
+      admission.sent = true;
+      return context;
+    },
+    taskContextTransferList(context) {
+      // SAFETY: The pool passes the context returned by this host's capture method.
+      const captured = context as WorkerTaskContext;
+      return captured.databaseAdmissionPort ? [captured.databaseAdmissionPort] : [];
+    },
     createTaskObserver(url) {
       const kind = workerRequestKind(url);
       return (operation) =>
@@ -81,9 +158,32 @@ export function createWorkerTaskHost(
           operation === undefined ? "task" : classifyWorkerRequest(operation),
         );
     },
+    describeTask(url, input) {
+      // Inspect a data property only: diagnostics must not execute an input getter.
+      const kind: unknown =
+        input !== null && typeof input === "object"
+          ? Object.getOwnPropertyDescriptor(input, "kind")?.value
+          : undefined;
+      const operation = typeof kind === "string" && diagnosticTaskKinds.has(kind) ? kind : "task";
+      return `${workerRequestKind(url)}.${operation}`;
+    },
     receiveMessage: receiveWorkerMemoryPort,
-    workerStarted: attributeWorkerToPool,
-    workerRetiring: markWorkerRetirement,
+    observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
+    workerStarted(worker, pool) {
+      if (owner.databaseAccess !== "read-only") {
+        trackSqliteDatabaseAdmissionWorker(worker);
+      }
+      attributeWorkerToPool(worker, pool, workerClass);
+    },
+    workerRetiring(worker, reason) {
+      const admission = admissions.get(worker);
+      if (admission) {
+        // Final facts still settle over this channel, but retirement cannot create a new file.
+        admission.retiring = true;
+      }
+      markWorkerRetirement(worker, reason);
+    },
+    flushWorkerDiagnostics,
     computeCapacity: getWorkerComputeCapacity(),
     pools: liveWorkerTaskPools,
   };

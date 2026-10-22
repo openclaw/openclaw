@@ -2,7 +2,11 @@ import { findRetiredConfigUpgradeRequirement } from "../../commands/doctor/share
 import { isConfigReadFailure } from "../../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import { normalizeSupportDiagnosticErrorCode } from "../../logging/diagnostic-support-redaction.js";
+import {
+  normalizeSupportDiagnosticErrorCode,
+  publicConfigIssueMessage,
+} from "../../logging/diagnostic-support-redaction.js";
+import { formatConcreteConfigPath } from "../../shared/dot-path.js";
 import { UpdatePreMutationError } from "./shared.js";
 
 /** Keep validation fields separate from diagnostics that can contain rejected secret values. */
@@ -29,10 +33,11 @@ export function createUpdateConfigFailure(
       },
     );
   }
-  const issues = snapshot.issues.map(({ path, pathSegments }) => ({
-    path,
-    pathSegments,
-    message: "Invalid configuration field",
+  const issues = snapshot.issues.map((issue) => ({
+    path: issue.pathSegments?.length
+      ? formatConcreteConfigPath(issue.pathSegments)
+      : issue.path || "<root>",
+    message: publicConfigIssueMessage(issue),
   }));
   const retired = findRetiredConfigUpgradeRequirement(
     snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
@@ -45,7 +50,7 @@ export function createUpdateConfigFailure(
   const nextAction =
     retired?.nextAction ??
     (includeOwnedLegacyRoster
-      ? "Doctor cannot safely rewrite this include-owned legacy roster. Back up the root config, included files, and persisted state, then temporarily consolidate the original legacy config into one openclaw.json. Preserve roster order, legacy markers, environment and secret references, and configured path meanings. Run `openclaw doctor --fix` or retry the update; after repair and `openclaw config validate` succeed, split the canonical config back into includes and validate again. See https://docs.openclaw.ai/gateway/doctor/config-migrations#agent-roster-migration."
+      ? "Doctor cannot safely rewrite this include-owned legacy roster. Back up the root config, included files, and persisted state, then temporarily consolidate the original legacy config into one openclaw.json. Preserve roster order, legacy markers, environment and secret references, and configured path meanings. Run `openclaw doctor --fix` or retry the update; after repair and `openclaw config validate` succeed, split the repaired config back into includes and validate again. See https://docs.openclaw.ai/gateway/doctor/config-migrations#agent-roster-migration."
       : "Run `openclaw doctor --fix` to repair retired or unrecognized configuration fields, then correct any remaining errors before retrying.");
   return new UpdatePreMutationError(
     "invalid-config",

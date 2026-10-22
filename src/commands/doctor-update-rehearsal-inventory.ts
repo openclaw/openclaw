@@ -27,7 +27,6 @@ function assertConfigLayout(config: unknown, stateDir: string): void {
   const expected: Record<string, unknown> = {
     "agents.defaults.workspace": workspace,
     "agents.defaults.cwd": workspace,
-    "agents.defaults.heartbeat.every": "0m",
     "logging.file": path.join(stateDir, "canary.log"),
     "gateway.mode": "local",
     "gateway.bind": "loopback",
@@ -74,7 +73,6 @@ function assertConfigLayout(config: unknown, stateDir: string): void {
       !within(workspace, agentWorkspace) ||
       valueAt(agent, "workspace") !== agentWorkspace ||
       valueAt(agent, "cwd") !== agentWorkspace ||
-      valueAt(agent, "heartbeat.every") !== "0m" ||
       typeof agentDir !== "string" ||
       !path.isAbsolute(agentDir) ||
       !within(stateDir, agentDir)
@@ -204,7 +202,7 @@ export async function inspectPreparedDoctorRehearsal(params: {
     path.resolve(stateDir) !== stateDir ||
     realpathSync(stateDir) !== stateDir
   ) {
-    refuse("the rehearsal root is not a private canonical directory");
+    refuse("the rehearsal root is not a private directory at its resolved path");
   }
   // Revalidate producer bindings before plugin inventory can import copied code.
   for (const fact of params.pluginCodeLinks ?? []) {
@@ -353,6 +351,13 @@ export async function inspectPreparedDoctorRehearsal(params: {
       registeredDatabases: registered,
     }),
   ];
+  // Plugin collectors read their configured roots. Admit copied roots first so
+  // no collector reads through an unsafe link; deferred external roots stay unread.
+  for (const root of configuredMigrationRoots) {
+    if (within(stateDir, root.path)) {
+      inspectPath(root.path);
+    }
+  }
   const resourceWarnings: PluginDoctorMigrationBackupWarning[] = [];
   const pluginScope = await preparePluginDoctorMigrationBackupResources({
     config,

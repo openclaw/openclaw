@@ -1,14 +1,24 @@
-import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
 import {
   isPairedDeviceTokenIdentityCurrent,
-  resolvePairedDeviceTokenIdentity,
+  resolveAuthenticatedDeviceTokenIdentity,
+  resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
+import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
+import {
+  recordPairedNodeConnection,
+  recordPairedNodeDisconnection,
+  recordPairedNodeHostStats,
+} from "./device-pairing-node.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "./device-pairing-store-readonly.js";
 import {
@@ -19,15 +29,18 @@ import {
 import {
   ensureDeviceToken,
   rotateDeviceToken,
+  revokeDeviceToken,
   verifyDeviceToken,
 } from "./device-pairing-tokens.js";
 import {
   getPairedDevice,
   getPendingDevicePairing,
+  recordPairedDeviceAccess,
   listDevicePairing,
   listDevicePairingReadOnly,
   requestDevicePairing,
   updatePairedDeviceMetadata,
+  updatePairedDevicePresence,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
 import { sqliteWorkerOwnerProbe as probe } from "./sqlite-worker-owner-probe.test-support.js";
@@ -48,7 +61,8 @@ beforeAll(() => {
   });
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  await withDevicePairingLock(async () => {});
   const now = Date.now();
   const state: DevicePairingStoreState = {
     pendingById: {
@@ -203,21 +217,15 @@ test("rolls back owner approval when live policy is revoked before worker commit
   );
 });
 
-test("refreshes cached reads after another connection replaces pairing authority", async () => {
+test("refreshes cached reads after a native owner replaces pairing authority", async () => {
   await expect(getPairedDevice("paired-rich", baseDir)).resolves.toMatchObject({
     publicKey: "synthetic-original-key",
   });
   await listDevicePairing(baseDir);
-  const other = new DatabaseSync(database.path);
-  try {
-    other
-      .prepare(
-        "UPDATE device_pairing_paired SET public_key = ?, display_name = ? WHERE device_id = ?",
-      )
-      .run("synthetic-external-key", "External fixture", "paired-rich");
-  } finally {
-    other.close();
-  }
+  const state = readDevicePairingStoreStateFromDatabase(database.db);
+  state.pairedByDeviceId["paired-rich"]!.publicKey = "synthetic-sibling-key";
+  state.pairedByDeviceId["paired-rich"]!.displayName = "Sibling fixture";
+  persistDevicePairingStoreState(state, baseDir, "paired");
   const native = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId[
     "paired-rich"
   ];
@@ -255,6 +263,7 @@ test("reconnects without replacing paired rows or changing unrelated device fiel
         baseDir,
       }),
     ).resolves.toEqual({ ok: true });
+    await withDevicePairingLock(async () => {});
     const verified = await getPairedDevice("paired-rich", baseDir);
     expect(verified?.tokens?.operator?.lastUsedAtMs).toBeGreaterThan(3);
     expect(verified?.lastSeenAtMs).toBe(verified?.tokens?.operator?.lastUsedAtMs);
@@ -303,29 +312,21 @@ test("reconnects without replacing paired rows or changing unrelated device fiel
   }
 });
 
-test("reconnect receipts ignore pending rows while invalidating foreign pairing changes", async () => {
+test("reconnect receipts ignore pending rows and leave sibling pairing changes to their own receipts", async () => {
   await listDevicePairing(baseDir);
   const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
   expect(previousBinding).not.toBeNull();
-  const other = new DatabaseSync(database.path);
-  try {
-    other
-      .prepare("UPDATE device_pairing_paired SET public_key = ? WHERE device_id = ?")
-      .run("synthetic-foreign-key", "paired-rich");
-    // A receipt must not decode unrelated pending requests.
-    other
-      .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
-      .run("synthetic-unreadable-json", "refreshed");
-  } finally {
-    other.close();
-  }
+  const state = readDevicePairingStoreStateFromDatabase(database.db);
+  state.pairedByDeviceId["paired-rich"]!.publicKey = "synthetic-sibling-key";
+  persistDevicePairingStoreState(state, baseDir, "paired");
+  // A receipt must not decode unrelated pending requests.
+  database.db
+    .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
+    .run("synthetic-unreadable-json", "refreshed");
   try {
     await expect(
       updatePairedDeviceMetadata("paired-minimal", { displayName: "Reconnected" }, baseDir),
     ).resolves.toBe(true);
-    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
-      "requires a current worker publication",
-    );
     const tokenParams = {
       deviceId: "paired-rich",
       role: "operator",
@@ -343,11 +344,191 @@ test("reconnect receipts ignore pending rows while invalidating foreign pairing 
     });
     expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(currentBinding);
   } finally {
+    await withDevicePairingLock(async () => {});
     database.db
       .prepare("UPDATE device_pairing_pending SET roles_json = ? WHERE request_id = ?")
       .run("[]", "refreshed");
   }
   expect((await getPendingDevicePairing("refreshed", baseDir))?.roles).toEqual([]);
+});
+
+test.each(["metadata", "presence"] as const)(
+  "publishes a device's %s update without loading unrelated paired rows",
+  async (kind) => {
+    await listDevicePairing(baseDir);
+    const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+    const device = await getPairedDevice("paired-rich", baseDir);
+    const generation = resolveNodePairingGeneration(device);
+    expect(originalBinding).not.toBeNull();
+    if (!generation) {
+      throw new Error("expected fixture node generation");
+    }
+    const unavailable = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockRejectedValueOnce(new Error("synthetic unavailable pairing read"));
+    try {
+      await expect(getPendingDevicePairing("unavailable", baseDir)).rejects.toThrow(
+        "synthetic unavailable pairing read",
+      );
+    } finally {
+      unavailable.mockRestore();
+    }
+    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
+      "Device pairing authority requires a current worker publication",
+    );
+    database.db
+      .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
+      .run("synthetic-unreadable-json", "paired-minimal");
+    try {
+      const patch = { lastSeenAtMs: 1234, lastSeenReason: "connect" };
+      await expect(
+        kind === "metadata"
+          ? updatePairedDeviceMetadata(" paired-rich ", patch, baseDir)
+          : updatePairedDevicePresence(" paired-rich ", patch, generation, baseDir),
+      ).resolves.toBe(true);
+      expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+      expect(await getPairedDevice("paired-rich", baseDir)).toMatchObject(patch);
+      expect(getPublishedPairedDeviceBinding("paired-minimal", baseDir)).toBeNull();
+    } finally {
+      database.db
+        .prepare("UPDATE device_pairing_paired SET tokens_json = NULL WHERE device_id = ?")
+        .run("paired-minimal");
+    }
+  },
+);
+
+test("persists token use and node connection facts without reading unrelated devices", async () => {
+  await listDevicePairing(baseDir);
+  const device = await getPairedDevice("paired-rich", baseDir);
+  const generation = resolveNodePairingGeneration(device);
+  if (!generation) {
+    throw new Error("expected fixture node generation");
+  }
+  const originalBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+  database.db
+    .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
+    .run("synthetic-unreadable-json", "paired-minimal");
+  try {
+    await expect(
+      verifyDeviceToken({
+        deviceId: "paired-rich",
+        role: "operator",
+        token: "synthetic-operator-token",
+        scopes: ["operator.read"],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+    await withDevicePairingLock(async () => {});
+    expect(
+      (await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.lastUsedAtMs,
+    ).toBeGreaterThan(3);
+    await expect(
+      recordPairedNodeConnection("paired-rich", 100, baseDir, generation),
+    ).resolves.toEqual({ recorded: true, firstConnection: true });
+    await expect(
+      recordPairedNodeDisconnection({
+        nodeId: "paired-rich",
+        connectedAtMs: 100,
+        disconnectedAtMs: 200,
+        expectedPairingGeneration: generation,
+        baseDir,
+      }),
+    ).resolves.toEqual({ recorded: true });
+    await expect(updatePairedNodeBins("paired-rich", ["git"], generation, baseDir)).resolves.toBe(
+      true,
+    );
+    const hostStats = {
+      cpuCount: 8,
+      memoryTotalBytes: 1024,
+      memoryFreeBytes: 512,
+      updatedAtMs: 300,
+    };
+    await expect(
+      recordPairedNodeHostStats({
+        nodeId: "paired-rich",
+        hostStats,
+        expectedPairingGeneration: generation,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      updatePairedNodeSessionHost({
+        nodeId: "paired-rich",
+        sessionHost: true,
+        expectedPairingGeneration: generation,
+        isConnectionCurrent: () => true,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
+    expect((await getPairedDevice("paired-rich", baseDir))?.nodeSurface).toMatchObject({
+      lastConnectedAtMs: 100,
+      lastDisconnectedAtMs: 200,
+      bins: ["git"],
+      sessionHost: true,
+      lastHostStats: hostStats,
+    });
+    expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+  } finally {
+    await withDevicePairingLock(async () => {});
+    database.db
+      .prepare("UPDATE device_pairing_paired SET tokens_json = NULL WHERE device_id = ?")
+      .run("paired-minimal");
+  }
+});
+
+test("serves reconnect lookups from committed rows while the read worker is unavailable", async () => {
+  const device = await getPairedDevice("paired-rich", baseDir);
+  const unavailable = vi
+    .spyOn(stateReads, "executeExistingOpenClawStateRead")
+    .mockRejectedValue(new Error("reader busy"));
+  try {
+    const rows = await Promise.all(
+      Array.from({ length: 160 }, () => getPairedDevice("paired-rich", baseDir)),
+    );
+    expect(rows).toEqual(Array.from({ length: 160 }, () => device));
+    rows[0]!.tokens!.operator!.revokedAtMs = 123;
+    expect(
+      (await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.revokedAtMs,
+    ).toBeUndefined();
+    await updatePairedDeviceMetadata("paired-rich", { displayName: "Committed" }, baseDir);
+    expect((await getPairedDevice("paired-rich", baseDir))?.displayName).toBe("Committed");
+  } finally {
+    unavailable.mockRestore();
+  }
+});
+
+test("coalesces reconnect presence without rewriting recent last-seen or replacement approvals", async () => {
+  const device = await getPairedDevice("paired-rich", baseDir);
+  if (!device) {
+    throw new Error("expected paired fixture");
+  }
+  const patch = { lastSeenAtMs: 100_000, lastSeenReason: "connect" };
+  await Promise.all(
+    Array.from({ length: 160 }, () =>
+      recordPairedDeviceAccess(device.deviceId, patch, device, baseDir),
+    ),
+  );
+  const before = readDevicePairingStoreStateFromDatabase(database.db);
+  expect(before.pairedByDeviceId[device.deviceId]).toMatchObject(patch);
+  await recordPairedDeviceAccess(
+    device.deviceId,
+    { ...patch, lastSeenAtMs: 100_001, lastSeenReason: "device-token-auth" },
+    device,
+    baseDir,
+  );
+  expect(readDevicePairingStoreStateFromDatabase(database.db)).toEqual(before);
+  await recordPairedDeviceAccess(
+    device.deviceId,
+    { ...patch, displayName: "Changed", lastSeenAtMs: 100_002 },
+    device,
+    baseDir,
+  );
+  expect((await getPairedDevice(device.deviceId, baseDir))?.displayName).toBe("Changed");
+  const replacement = readDevicePairingStoreStateFromDatabase(database.db);
+  replacement.pairedByDeviceId[device.deviceId]!.publicKey = "replacement-key";
+  persistDevicePairingStoreState(replacement, baseDir, "paired");
+  await recordPairedDeviceAccess(device.deviceId, { platform: "stale-platform" }, device, baseDir);
+  expect(readDevicePairingStoreStateFromDatabase(database.db)).toEqual(replacement);
 });
 
 test.each(["reply lost", "policy revoked", "callback throws"] as const)(
@@ -444,7 +625,12 @@ test("rechecks the original operator generation through reopened read-only pairi
   });
   try {
     const original = await loadPairedDevicePairingStoreRecordReadOnly(deviceId, isolatedDir);
-    const identity = resolvePairedDeviceTokenIdentity(original, "operator");
+    const identity = resolveAuthenticatedDeviceTokenIdentity(original, {
+      role: "operator",
+      publicKey: "synthetic-recovery-public-key",
+      token: original!.tokens!.operator!.token,
+      scopes,
+    });
     if (!identity) {
       throw new Error("Original admitted operator token has no generation");
     }
@@ -458,5 +644,96 @@ test("rechecks the original operator generation through reopened read-only pairi
     expect(isPairedDeviceTokenIdentityCurrent(rotated, "operator", identity, scopes)).toBe(false);
   } finally {
     await closeOpenClawStateDatabaseByPathAsync(isolatedDatabase.path);
+  }
+});
+
+test("reuses and verifies committed tokens while writes wait, then rejects committed revocation", async ({
+  signal,
+}) => {
+  await listDevicePairing(baseDir);
+  const params = { deviceId: "paired-rich", role: "operator", scopes: ["operator.read"], baseDir };
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const holding = withDevicePairingLock(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  try {
+    const reusable = await withinTest(
+      awaitGateBeforeSettlement(ensureDeviceToken(params), holding, "reuse waited for writer"),
+      signal,
+    );
+    expect(reusable?.token).toBe("synthetic-operator-token");
+    await expect(
+      withinTest(
+        awaitGateBeforeSettlement(
+          verifyDeviceToken({ ...params, token: reusable!.token }),
+          holding,
+          "verification waited for writer",
+        ),
+        signal,
+      ),
+    ).resolves.toEqual({ ok: true });
+    await expect(
+      ensureDeviceToken({ ...params, isIssuanceCurrent: () => false }),
+    ).resolves.toBeNull();
+    expect((await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.lastUsedAtMs).toBe(3);
+  } finally {
+    release.resolve();
+    await holding;
+    await withDevicePairingLock(async () => {});
+  }
+  expect(
+    (await getPairedDevice("paired-rich", baseDir))?.tokens?.operator?.lastUsedAtMs,
+  ).toBeGreaterThan(3);
+  await revokeDeviceToken(params);
+  await expect(
+    verifyDeviceToken({ ...params, token: "synthetic-operator-token" }),
+  ).resolves.toEqual({ ok: false, reason: "token-revoked" });
+});
+
+test("admits revocation between coalesced token last-use writes", async ({ signal }) => {
+  await listDevicePairing(baseDir);
+  const params = { deviceId: "paired-rich", role: "operator", scopes: ["operator.read"], baseDir };
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const revokedBeforeRecord: boolean[] = [];
+  let records = 0;
+  const writer = probe.command(stateWorker, async (command, options, scope) => {
+    if (command.type === "devicePairing.verifyToken") {
+      records++;
+      if (records === 1) {
+        entered.resolve();
+        await release.promise;
+      } else {
+        const device = await getPairedDevice(params.deviceId, baseDir);
+        revokedBeforeRecord.push(Boolean(device?.tokens?.operator?.revokedAtMs));
+      }
+    }
+    return scope.execute(command, options);
+  });
+  let revoking: Promise<unknown> | undefined;
+  try {
+    await expect(
+      verifyDeviceToken({ ...params, token: "synthetic-operator-token" }),
+    ).resolves.toEqual({ ok: true });
+    await withinTest(entered.promise, signal);
+    revoking = revokeDeviceToken(params);
+    await expect(
+      verifyDeviceToken({ ...params, token: "synthetic-operator-token" }),
+    ).resolves.toEqual({ ok: true });
+    release.resolve();
+    await withinTest(revoking, signal);
+    await withDevicePairingLock(async () => {});
+    expect(revokedBeforeRecord).toEqual([true]);
+    await expect(
+      verifyDeviceToken({ ...params, token: "synthetic-operator-token" }),
+    ).resolves.toEqual({ ok: false, reason: "token-revoked" });
+  } finally {
+    release.resolve();
+    await revoking;
+    await withDevicePairingLock(async () => {});
+    writer.mockRestore();
   }
 });

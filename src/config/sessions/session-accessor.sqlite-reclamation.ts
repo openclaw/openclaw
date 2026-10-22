@@ -1,14 +1,12 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
-  type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -21,10 +19,7 @@ import type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
 } from "./session-accessor.sqlite-contract.js";
-import {
-  prepareSessionDeletionInDatabase,
-  readValidatedSessionDeletionTarget,
-} from "./session-accessor.sqlite-deletion-plan.js";
+import { readValidatedSessionDeletionTarget } from "./session-accessor.sqlite-deletion-plan.js";
 import { runSqliteSessionDeletionTransaction } from "./session-accessor.sqlite-deletion.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
 import { deleteLifecycleTargetRows } from "./session-accessor.sqlite-entry-store.js";
@@ -49,13 +44,6 @@ import { deleteSessionDeliveryArtifacts } from "./session-accessor.sqlite-node-a
 import { commitPreparedSessionEntryLifecycleMutationInDatabase } from "./session-accessor.sqlite-projection-state.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 
-type SessionBoardCleanupDatabase = Pick<
-  OpenClawAgentKyselyDatabase,
-  "board_tabs" | "board_widgets"
-> & {
-  sqlite_schema: { name: string | null; type: string };
-};
-
 const reclamationQueue = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteSessionReclamationQueue"),
   () => new KeyedAsyncQueue(),
@@ -79,35 +67,6 @@ export function resolveSessionReclamationDatabaseOptions(
     },
     path: resolveOpenClawAgentSqlitePath(options),
   };
-}
-
-function deleteSessionBoardRows(
-  database: OpenClawAgentDatabase,
-  sessionKeys: readonly string[],
-): void {
-  const keys = [...new Set(sessionKeys)];
-  if (keys.length === 0) {
-    return;
-  }
-  const db = getNodeSqliteKysely<SessionBoardCleanupDatabase>(database.db);
-  const tables = new Set(
-    executeSqliteQuerySync(
-      database.db,
-      db
-        .selectFrom("sqlite_schema")
-        .select("name")
-        .where("type", "=", "table")
-        .where("name", "in", ["board_tabs", "board_widgets"]),
-    ).rows.map((row) => row.name),
-  );
-  if (!tables.has("board_tabs") || !tables.has("board_widgets")) {
-    return;
-  }
-  executeSqliteQuerySync(
-    database.db,
-    db.deleteFrom("board_widgets").where("session_key", "in", keys),
-  );
-  executeSqliteQuerySync(database.db, db.deleteFrom("board_tabs").where("session_key", "in", keys));
 }
 
 export function* prepareHistoricalGenerationDeletions(params: {
@@ -170,18 +129,6 @@ function reclaimSqliteRowsInTransaction(
   plan: Exclude<SqliteSessionReclamationPlan, { kind: "maintenance-pages" }>,
   callbacks: SqliteSessionReclamationCallbacks,
 ): SqliteSessionReclamationResult {
-  if (plan.kind === "deletion-plan") {
-    return runOpenClawAgentWriteTransaction(
-      (database) => {
-        callbacks.beforeMutation?.();
-        const value = prepareSessionDeletionInDatabase(database, plan.planning);
-        callbacks.onCommit?.(database);
-        return { kind: plan.kind, value };
-      },
-      plan.databaseOptions,
-      { operationLabel: "session.deletion.plan" },
-    );
-  }
   if (plan.kind === "lifecycle-projection-plan") {
     return runOpenClawAgentWriteTransaction(
       (database) => {
@@ -251,7 +198,9 @@ function reclaimSqliteRowsInTransaction(
   }
 
   if (plan.kind === "entry") {
-    const value = runSqliteSessionDeletionTransaction<DeleteSessionEntryLifecycleResult>(
+    const value = runSqliteSessionDeletionTransaction<
+      Extract<SqliteSessionReclamationResult, { kind: "entry" }>["value"]
+    >(
       (transactionDb) => {
         callbacks.beforeMutation?.();
         const current = readValidatedSessionDeletionTarget(transactionDb, {
@@ -273,7 +222,11 @@ function reclaimSqliteRowsInTransaction(
           undefined,
           new Set(sessionKeys),
         );
-        deleteLifecycleTargetRows(transactionDb, plan.deleteParams.target);
+        const transcriptInventoryUnchanged = deleteLifecycleTargetRows(
+          transactionDb,
+          plan.deleteParams.target,
+          snapshot,
+        );
         if (plan.deleteParams.deleteDeliveryArtifacts === true) {
           deleteSessionDeliveryArtifacts(
             transactionDb,
@@ -281,12 +234,14 @@ function reclaimSqliteRowsInTransaction(
             sessionKeys,
           );
         }
-        deleteSessionBoardRows(transactionDb, sessionKeys);
         callbacks.onCommit?.(transactionDb);
         return {
           archivedTranscripts,
           deleted: true,
-          deletedEntry: structuredClone(entry),
+          deletedEntry: entry,
+          ...(plan.materializedPlans.length === 0 && transcriptInventoryUnchanged
+            ? { transcriptInventoryUnchanged: true as const }
+            : {}),
           ...(entry.sessionId ? { deletedSessionId: entry.sessionId } : {}),
         };
       },
@@ -387,7 +342,6 @@ function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOp
 export function prepareReclamationDeleteParams({
   commitGuard: _commitGuard,
   env: _env,
-  descendantRunBasis: _descendantRunBasis,
   ...params
 }: DeleteSessionEntryLifecycleParams): ReclamationDeleteParams {
   return params;
@@ -426,6 +380,10 @@ export function createSessionMaintenanceFinalizationOperation(params: {
 }): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-finalize" }> {
   return {
     ...params,
+    entries: params.entries.map((removal) => ({
+      ...removal,
+      expectedEntry: removal.expectedEntry && { ...removal.expectedEntry },
+    })),
     databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     kind: "maintenance-finalize",
   };

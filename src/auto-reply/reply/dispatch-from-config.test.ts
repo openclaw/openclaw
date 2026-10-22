@@ -17,7 +17,7 @@ import {
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -70,6 +70,7 @@ describe("dispatchReplyFromConfig", () => {
       });
       expect(preparedLookup).toHaveBeenCalledTimes(2);
       expect(preparedLookup).toHaveBeenNthCalledWith(1, {
+        abortSignal: expect.any(AbortSignal),
         agentId: "main",
         demand: "interactive",
         onRuntimeLease: expect.any(Function),

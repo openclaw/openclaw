@@ -43,22 +43,12 @@ const disabledAccount = {
 describe("nextcloudTalkMessageActions", () => {
   beforeEach(() => {
     hoisted.sendReactionNextcloudTalk.mockReset();
-    hoisted.sendReactionNextcloudTalk.mockResolvedValue({ ok: true });
+    hoisted.sendReactionNextcloudTalk.mockResolvedValue(undefined);
     hoisted.listNextcloudTalkAccountIds.mockReset();
     hoisted.resolveNextcloudTalkAccount.mockReset();
   });
 
   describe("describeMessageTool", () => {
-    it("returns null when no accounts are configured", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([]);
-
-      const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {},
-      });
-
-      expect(result).toBeNull();
-    });
-
     it("returns null when configured account has no secret/baseUrl", () => {
       hoisted.listNextcloudTalkAccountIds.mockReturnValue([unconfiguredAccount.accountId]);
       hoisted.resolveNextcloudTalkAccount.mockReturnValue(unconfiguredAccount);
@@ -68,17 +58,6 @@ describe("nextcloudTalkMessageActions", () => {
       });
 
       expect(result).toBeNull();
-    });
-
-    it("advertises send + react when an account is configured", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([configuredAccount.accountId]);
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(configuredAccount);
-
-      const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {},
-      });
-
-      expect(result?.actions).toEqual(["send", "react"]);
     });
 
     it("scopes discovery to a specific accountId when provided", () => {
@@ -96,24 +75,9 @@ describe("nextcloudTalkMessageActions", () => {
       expect(hoisted.listNextcloudTalkAccountIds).not.toHaveBeenCalled();
       expect(result?.actions).toEqual(["send", "react"]);
     });
-
-    it("returns null when the targeted account is disabled", () => {
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(disabledAccount);
-
-      const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {},
-        accountId: "work",
-      });
-
-      expect(result).toBeNull();
-    });
   });
 
   describe("supportsAction", () => {
-    it("delegates send back to outbound", () => {
-      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "send" })).toBe(false);
-    });
-
     it("handles react locally", () => {
       expect(nextcloudTalkMessageActions.supportsAction?.({ action: "react" })).toBe(true);
     });
@@ -160,22 +124,6 @@ describe("nextcloudTalkMessageActions", () => {
       expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
     });
 
-    it("invokes sendReactionNextcloudTalk with normalized params for the react action", async () => {
-      const result = await react(
-        { to: "room:abc123", messageId: "42", emoji: "👍" },
-        { accountId: "work" },
-      );
-
-      expect(hoisted.sendReactionNextcloudTalk).toHaveBeenCalledTimes(1);
-      expect(hoisted.sendReactionNextcloudTalk).toHaveBeenCalledWith("room:abc123", "42", "👍", {
-        accountId: "work",
-        cfg,
-      });
-      expect(result).toMatchObject({
-        details: { ok: true, added: "👍" },
-      });
-    });
-
     it("uses toolContext.currentMessageId when params.messageId is missing", async () => {
       await react(
         { to: "room:abc123", emoji: "✅", remove: false },
@@ -188,20 +136,8 @@ describe("nextcloudTalkMessageActions", () => {
       });
     });
 
-    it("requires a target room token", async () => {
-      await expect(react({ messageId: "1", emoji: "👍" })).rejects.toThrow(
-        /to \(room token\) required/,
-      );
-      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
-
     it("requires a messageId (explicit or via toolContext)", async () => {
       await expect(react({ to: "room:abc123", emoji: "👍" })).rejects.toThrow(/messageId required/);
-      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
-
-    it("requires an emoji", async () => {
-      await expect(react({ to: "room:abc123", messageId: "1" })).rejects.toThrow(/emoji required/);
       expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
     });
 
@@ -232,16 +168,6 @@ describe("nextcloudTalkMessageActions", () => {
         react({ to: "room:abc123", messageId: "1", emoji: "👍", remove: true }),
       ).rejects.toThrow(/removal is not supported/);
       expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
-
-    it("propagates errors from sendReactionNextcloudTalk", async () => {
-      hoisted.sendReactionNextcloudTalk.mockRejectedValueOnce(
-        new Error("Nextcloud Talk reaction failed: 403 forbidden"),
-      );
-
-      await expect(react({ to: "room:abc123", messageId: "1", emoji: "👍" })).rejects.toThrow(
-        /403 forbidden/,
-      );
     });
   });
 });

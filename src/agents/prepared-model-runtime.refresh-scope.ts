@@ -7,7 +7,10 @@ import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
+import {
+  PreparedModelRuntimeClosedError,
+  retirePreparedModelRuntimeGeneration,
+} from "./prepared-model-runtime.lifecycle.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
   normalizePreparedModelRuntimeInput,
@@ -35,7 +38,10 @@ export function refreshCommittedProviderCatalogs(
     }
     owner.catalogRecovery = undefined;
     void owner.snapshot?.loadFullModelCatalog?.({ changedOnly: true }).catch((error: unknown) => {
-      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
+      if (
+        !(error instanceof PreparedModelRuntimePublicationSupersededError) &&
+        !(error instanceof PreparedModelRuntimeClosedError)
+      ) {
         log.warn(`provider catalog refresh failed: ${formatErrorMessage(error)}`);
       }
     });
@@ -106,6 +112,7 @@ export function listConfiguredRefreshInputs(
       options.defaultWorkspaceDir,
       options.allowGatewaySubagentBinding,
       preservedWorkspaceByAgentDir,
+      options.pluginMetadataSnapshot,
     ).map(normalizePreparedModelRuntimeInput),
   );
 }
@@ -154,30 +161,27 @@ export function updateOwnersForScopedRefresh(
   retiredPublications.forEach(releasePreparedPluginPublication);
 }
 
-/** Keeps a requested scope only when every retained owner has identical prepared dependencies. */
+/** Includes unfinished or changed owners without replacing unrelated prepared generations. */
 export function resolveSafeRefreshAgentIds(
   config: OpenClawConfig,
   options: PreparedModelRuntimeRefreshOptions,
   owners: Map<string, PreparedModelRuntimeOwner>,
 ): ReadonlySet<string> | undefined {
-  const requested = options.agentIds;
-  if (!requested) {
+  if (!options.agentIds) {
     return undefined;
   }
+  const agentIds = new Set(options.agentIds);
   const inputs = new Map(
     listConfiguredRefreshInputs(config, options, owners).flatMap((input) =>
       input.agentId ? [[input.agentId, input] as const] : [],
     ),
   );
   for (const owner of owners.values()) {
-    if (
-      owner.provenance !== "configured" ||
-      !owner.input.agentId ||
-      requested.has(owner.input.agentId)
-    ) {
+    if (owner.provenance !== "configured" || !owner.input.agentId) {
       continue;
     }
     const input = inputs.get(owner.input.agentId);
+    inputs.delete(owner.input.agentId);
     if (
       !input ||
       !owner.snapshot ||
@@ -187,10 +191,13 @@ export function resolveSafeRefreshAgentIds(
         owner.snapshot.metadataSnapshot !== options.pluginMetadataSnapshot) ||
       ownerKey({ ...owner.input, config: input.config }) !== ownerKey(input)
     ) {
-      return undefined;
+      agentIds.add(owner.input.agentId);
     }
   }
-  return requested;
+  for (const agentId of inputs.keys()) {
+    agentIds.add(agentId);
+  }
+  return agentIds;
 }
 
 /** Recovery operations share configured owners and the lifecycle's existing publication barrier. */

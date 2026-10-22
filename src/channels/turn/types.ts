@@ -164,8 +164,17 @@ export type { ChannelDeliveryOutcome, ChannelDeliveryResult } from "./delivery-o
 
 export type ChannelTurnDurableDeliveryOptions = Pick<
   DeliverOutboundPayloadsParams,
-  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+  | "deps"
+  | "formatting"
+  | "identity"
+  | "mediaAccess"
+  | "replyToMode"
+  | "retryAmbiguousFinalText"
+  | "silent"
+  | "threadId"
 > & {
+  /** Validate the admitted sender or restore its account view from current Gateway config. */
+  prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
   to?: string | null;
   replyToId?: string | null;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
@@ -289,6 +298,8 @@ type ChannelTurnContext = {
   storePath: string;
   ctxPayload: FinalizedMsgContext;
   recordInboundSession: RecordInboundSession;
+  /** Current channel authority at record and dispatch initiation, after awaited preparation. */
+  assertAuthority?: () => void;
   afterRecord?: () => void | Promise<void>;
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;

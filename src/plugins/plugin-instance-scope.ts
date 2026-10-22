@@ -8,8 +8,12 @@ import type {
   PluginInstanceConsumer,
   PluginInstanceDisposalResult,
   PluginInstanceExecution,
+  PluginRetentionSnapshot,
+  PluginRetentionReason,
+  PluginRetentionOwner,
+  PluginWorkRelease,
 } from "./plugin-instance.types.js";
-import type { PluginRecord, PluginRegistry, PluginRegistryGatewayOwner } from "./registry-types.js";
+import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
@@ -23,9 +27,10 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   adopt<T>(value: T): T;
   admitFactory(
     factory: (...args: never[]) => unknown,
-    resultCallbacks?: readonly PropertyKey[],
+    resultCallbacks?: "tool" | readonly PropertyKey[],
   ): void;
-  retainWork(): () => void;
+  retainWork(reason?: PluginRetentionReason): PluginWorkRelease;
+  retentionSnapshot(options?: { limit?: number; includeOwners?: boolean }): PluginRetentionSnapshot;
   readonly retainedWorkCount: number;
   readonly ordinaryCallCount: number;
   waitForRetainedWork(
@@ -38,6 +43,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
     kind?: "work" | "custody",
+    diagnostics?: { reason?: PluginRetentionReason; owner?: PluginRetentionOwner },
   ): PluginInstanceConsumer;
   runInRegistry<T>(
     registry: PluginRegistry | undefined,
@@ -58,15 +64,12 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
-  /** Retained consumers in this context are joined by a pending reload drain. */
   readonly holdsPendingReplacement?: boolean;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 
 export type PluginInstanceOwner = {
   record: PluginRecord;
-  /** Recovery follows the live Gateway without retaining a disposed registry. */
-  retiredGatewayOwner?: WeakRef<PluginRegistryGatewayOwner>;
   instance?: PluginInstanceHandle;
 } & (
   | { revoked: false; registry: PluginRegistry }
@@ -86,14 +89,13 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
 
-/** Current work that a pending reload drain is joining, through nested calls or retained scopes. */
+/** Compatibility query for callers holding a published plugin invocation context. */
 export function currentPluginWorkHoldsPendingReplacement(): boolean {
-  for (let call = pluginInstanceInvocation.getStore(); call; call = call.parent) {
-    if (call.instance.holdsPendingReplacement(call.token)) {
-      return true;
-    }
-  }
-  return pluginInvocationContext.getStore()?.holdsPendingReplacement === true;
+  const call = pluginInstanceInvocation.getStore();
+  return (
+    (call?.instance.holdsPendingReplacement(call.token) ?? false) ||
+    pluginInvocationContext.getStore()?.holdsPendingReplacement === true
+  );
 }
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {

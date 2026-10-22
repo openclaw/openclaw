@@ -315,7 +315,7 @@ suite.define(() => {
         const pageScope = page.locator(".settings-sidebar__agent openclaw-agent-select");
         await pageScope.locator(".agent-select__trigger").click();
         await pageScope
-          .locator("wa-dropdown-item[data-agent-option]")
+          .locator(".agent-select__option[data-agent-option]")
           .filter({ hasText: "Writer" })
           .click();
         await expect

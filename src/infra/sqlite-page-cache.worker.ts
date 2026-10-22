@@ -8,7 +8,6 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { readSqlitePageCacheResidency } from "./sqlite-page-cache-residency.js";
 import type { SqliteReadOnlyOperationContext } from "./sqlite-readonly-operation-types.js";
 
@@ -147,22 +146,16 @@ function* agentHotPages(
         db,
         query
           .selectFrom("transcript_events")
-          .select((eb) => [
-            eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["event_json"]), "<=", MAX_PAYLOAD_BYTES)
-              .then(eb.ref("event_json"))
-              .else(null)
-              .end()
-              .as("json"),
-            eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["event_zstd"]), "<=", MAX_PAYLOAD_BYTES)
-              .then(eb.ref("event_zstd"))
-              .else(null)
-              .end()
-              .as("compressed"),
-          ])
+          .select((eb) => {
+            const bounded = <Column extends "event_json" | "event_zstd">(column: Column) =>
+              eb
+                .case()
+                .when(eb.fn<number>("octet_length", [column]), "<=", MAX_PAYLOAD_BYTES)
+                .then(eb.ref(column))
+                .else(null)
+                .end();
+            return [bounded("event_json").as("json"), bounded("event_zstd").as("compressed")];
+          })
           .where("session_id", "=", row.current_session_id)
           .where("seq", "in", sequences),
       );
@@ -222,8 +215,7 @@ function* warm(
   };
   try {
     if (input.kind === "agent") {
-      db = openNodeSqliteDatabase(pathname, { readOnly: true });
-      setSqliteBusyTimeout(db, 0);
+      db = openNodeSqliteDatabase(pathname, { readOnly: true, timeout: 0 });
       db.exec("PRAGMA cache_size = -1024; PRAGMA mmap_size = 0;"); // sqlite-allow-raw -- Bound the private cache and account for pread bytes.
       const query = getNodeSqliteKysely<DB>(db);
       const hotQuery = sessionEntryProjection(query)
@@ -248,12 +240,12 @@ function* warm(
             progress.payloadBytes += chunk.payloadBytes;
             progress.payloadMessages += chunk.payloadMessages;
           }
-          update();
+          const current = update();
           if (Math.max(progress.readBytes, progress.diskBytes) >= input.maxBytes) {
             progress.limited = true;
             break;
           }
-          yield update();
+          yield current;
         }
       } finally {
         pages.return();

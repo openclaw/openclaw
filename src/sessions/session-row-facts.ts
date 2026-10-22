@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readPreparedSessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { readPreparedSessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
@@ -44,7 +44,10 @@ export function sessionChangeAffectsStoredRow(
     ignoreStoreTopology?: boolean;
   },
 ): boolean {
-  if (!sessionChangeScopeAffectsStoredRows(change)) {
+  if (
+    !sessionChangeScopeAffectsStoredRows(change) ||
+    ("sessionKey" in change && !target.sessionKeys.includes(change.sessionKey))
+  ) {
     return false;
   }
   const source = readPreparedSessionEntryPublicationSource(change);
@@ -66,9 +69,5 @@ export function sessionChangeAffectsStoredRow(
   }
   // Entry/member writers name their physical store. Agent IDs alone can describe
   // a logical owner, so a physical publication must also reach cross-owner aliases.
-  return (
-    change.storePath !== undefined &&
-    matchesStore(change.storePath) &&
-    target.sessionKeys.includes(change.sessionKey)
-  );
+  return change.storePath !== undefined && matchesStore(change.storePath);
 }

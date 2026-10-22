@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { readDirectoryEntriesSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   isMatrixActiveTokenRootDirectory,
@@ -29,7 +30,7 @@ const DEFAULT_ACCOUNT_KEY = "default";
 const STORAGE_META_FILENAME = "storage-meta.json";
 
 function openStorageMetaStore(rootDir: string) {
-  return getMatrixRuntime().state.openKeyedStore<MatrixStorageMetadata>(
+  return getMatrixRuntime().state.openKeyedStoreV2<MatrixStorageMetadata>(
     openMatrixStorageMetaStoreOptions(rootDir),
   );
 }
@@ -143,15 +144,7 @@ async function resolvePreferredMatrixStorageRoot(params: {
     mtimeMs: bestCurrentMtimeMs,
   };
 
-  let siblingEntries: fs.Dirent[];
-  try {
-    siblingEntries = fs.readdirSync(parentDir, { withFileTypes: true });
-  } catch {
-    return {
-      rootDir: best.rootDir,
-      tokenHash: best.tokenHash,
-    };
-  }
+  const siblingEntries = readDirectoryEntriesSync(parentDir);
 
   const populatedSiblingTokenHashes: string[] = [];
   const populatedTokenHashes = bestCurrentScore > 0 ? [params.canonicalTokenHash] : [];
@@ -250,7 +243,6 @@ export async function resolveMatrixStoragePaths(params: {
   return {
     rootDir,
     storagePath: path.join(rootDir, "bot-storage.json"),
-    cryptoPath: path.join(rootDir, "crypto"),
     recoveryKeyPath: path.join(rootDir, MATRIX_RECOVERY_KEY_FILENAME),
     idbSnapshotPath: path.join(rootDir, MATRIX_IDB_SNAPSHOT_FILENAME),
     accountKey: canonical.accountKey,
@@ -288,19 +280,15 @@ export async function maybeMigrateLegacyStorage({
     return;
   }
   const syncCache = await import("./sync-cache-state.js");
-  if (!(await syncCache.readLegacyMatrixSyncCacheState(rootDir))) {
+  const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
+  if (!persisted) {
     return;
   }
 
   const logger = getMatrixRuntime().logging.getChildLogger({ module: "matrix-storage" });
-  fs.mkdirSync(rootDir, { recursive: true });
   let migrated = false;
   try {
-    const persisted = await syncCache.readLegacyMatrixSyncCacheState(rootDir);
-    if (!persisted) {
-      return;
-    }
-    const store = getMatrixRuntime().state.openKeyedStore<
+    const store = getMatrixRuntime().state.openKeyedStoreV2<
       import("./sync-cache-state.js").MatrixSyncCacheRecord
     >(syncCache.openMatrixSyncCacheStoreOptions(rootDir));
     if (!(await syncCache.hasMatrixSyncCacheStateInStore({ storageRootDir: rootDir, store }))) {
@@ -378,21 +366,6 @@ async function mutateStorageMeta(rootDir: string, mutation: StorageMetaMutation)
       store,
       STORAGE_META_STATE_KEY,
       (current) => prepareStorageMetaMutation(decode(current), mutation) ?? undefined,
-      () => {
-        // The published >=2026.9.4 host floor predates data-only comparisons.
-        const legacyStore = getMatrixRuntime().state.openSyncKeyedStore<MatrixStorageMetadata>(
-          openMatrixStorageMetaStoreOptions(rootDir),
-        );
-        const next = prepareStorageMetaMutation(
-          decode(legacyStore.lookup(STORAGE_META_STATE_KEY)),
-          mutation,
-        );
-        if (!next) {
-          return false;
-        }
-        legacyStore.register(STORAGE_META_STATE_KEY, next);
-        return true;
-      },
       "skip",
     );
   } catch {

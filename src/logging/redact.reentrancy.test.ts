@@ -1,10 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { redactSensitiveText } from "../plugin-sdk/security-runtime.js";
 import { compileSafeRegexDetailed } from "../security/safe-regex.js";
 import {
-  computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
-  redactInputTextWithSourcePolicy,
   redactSensitiveFieldValue,
   resolveRedactOptions,
 } from "./redact.js";
@@ -14,47 +12,37 @@ function sharedPatternMatching(input: string): RegExp {
     (candidate): candidate is RegExp =>
       candidate instanceof RegExp && new RegExp(candidate.source, candidate.flags).test(input),
   );
-  if (!pattern) {
-    throw new Error(`No built-in regex matches synthetic fixture ${input}`);
-  }
+  assert(pattern, `No built-in regex matches synthetic fixture ${input}`);
   const compiled = compileSafeRegexDetailed(pattern.source, pattern.flags);
-  if (!compiled.regex) {
-    throw new Error("The built-in fixture regex must compile");
-  }
+  assert(compiled.regex, "The built-in fixture regex must compile");
   return compiled.regex;
 }
 
-describe("nested redaction calls", () => {
-  it("preserves shared regex state across nested bitmap scans", () => {
-    const pattern = /fixture/g;
-    const exec = pattern.exec.bind(pattern);
-    let nested = false;
-    const resolved = { mode: "tools" as const, patterns: [pattern] };
-    const spy = vi.spyOn(pattern, "exec").mockImplementation((input) => {
-      const match = exec(input);
-      if (match && !nested) {
-        nested = true;
-        try {
-          expect(computeSensitiveRedactionBitmap("fixture!", resolved).map(Number).join("")).toBe(
-            "11111110",
-          );
-        } finally {
-          nested = false;
-        }
-      }
-      return match;
-    });
-    pattern.lastIndex = 3;
-    try {
-      expect(
-        computeSensitiveRedactionBitmap("fixture fixture", resolved).map(Number).join(""),
-      ).toBe("111111101111111");
-      expect(pattern.lastIndex).toBe(3);
-    } finally {
-      spy.mockRestore();
-    }
-  });
+function withSharedPattern(fixture: string, run: (pattern: RegExp) => void) {
+  const pattern = sharedPatternMatching(fixture);
+  const { source, flags, lastIndex } = pattern;
+  try {
+    run(pattern);
+  } finally {
+    vi.restoreAllMocks();
+    pattern.compile(source, flags);
+    pattern.lastIndex = lastIndex;
+  }
+}
 
+function replacementMatcher(pattern: RegExp, replacement: () => string) {
+  return {
+    source: pattern.source,
+    *exec(input: string) {
+      for (const match of input.matchAll(pattern)) {
+        const result = { match: match[0], groups: [], input, offset: match.index };
+        yield { ...result, replacement: replacement() };
+      }
+    },
+  };
+}
+
+describe("nested redaction calls", () => {
   it("keeps nested matcher input and pattern order", () => {
     const inputs: string[] = [];
     const nested: string[] = [];
@@ -76,137 +64,58 @@ describe("nested redaction calls", () => {
     expect(nested).toEqual(["inside ***", "inside ***"]);
   });
 
-  it.each(["API_TOKEN=", "pass: "])("keeps nested source assignment policy for %s", (prefix) => {
-    const input = `${prefix}computeFirst()\n${prefix}computeSecond()`;
-    const assignments: string[] = [];
-
-    expect(
-      redactInputTextWithSourcePolicy(input, undefined, (text, offset) => {
-        expect(redactSensitiveText("pass: private pass: nested", { mode: "tools" })).toBe(
-          "pass: *** pass: ***",
-        );
-        assignments.push(text.slice(offset).split("\n")[0] ?? "");
-        return true;
-      }),
-    ).toBe(input);
-    expect(assignments).toEqual(expect.arrayContaining(["computeFirst()", "computeSecond()"]));
-  });
-
   it("rechecks vendor candidates after an intervening custom replacement", () => {
-    const injector = {
-      source: "synthetic vendor injection",
-      *exec(input: string) {
-        for (const match of input.matchAll(/\{inject\}/g)) {
-          yield {
-            match: match[0],
-            groups: [],
-            input,
-            offset: match.index,
-            replacement: "gho_abcdefghij",
-          };
-        }
-      },
-    };
-    expect(
-      redactSensitiveText("{inject}", {
-        patterns: [
-          String.raw`(ghp_[A-Za-z0-9]{10,})`,
-          injector,
-          String.raw`(gho_[A-Za-z0-9]{10,})`,
-        ],
-      }),
-    ).toBe("***");
+    const injector = replacementMatcher(/\{inject\}/g, () => "gho_abcdefghij");
+    const patterns = [
+      String.raw`(ghp_[A-Za-z0-9]{10,})`,
+      injector,
+      String.raw`(gho_[A-Za-z0-9]{10,})`,
+    ];
+    expect(redactSensitiveText("{inject}", { patterns })).toBe("***");
   });
-});
-
-describe("shared compiled redaction patterns", () => {
-  it.each(["API_TOKEN=tiny-value", "ghp_abcdefghij"])(
-    "admits a changed shared rule through only a legacy key word for %s",
-    (fixture) => {
-      const pattern = sharedPatternMatching(fixture);
-      const { source, flags } = pattern;
-      try {
+  const cases = ["source", "executor", "replacement hook"].flatMap((kind) =>
+    ["API_TOKEN=tiny-value", "ghp_abcdefghij"].map((fixture) => ({ kind, fixture })),
+  );
+  it.each(cases)("honors changed $kind on $fixture", ({ fixture, kind }) => {
+    withSharedPattern(fixture, (pattern) => {
+      const replacement = /fixture-unlisted/g;
+      if (kind === "source") {
         pattern.compile("(fixtureTOKEN)", "g");
-        resolveRedactOptions({ patterns: getDefaultRedactPatterns() });
+      } else if (kind === "executor") {
+        vi.spyOn(pattern, "exec").mockImplementation((input) => replacement.exec(input));
+      } else {
+        vi.spyOn(pattern, Symbol.replace).mockImplementation((input, replace) =>
+          replacement[Symbol.replace](input, replace),
+        );
+      }
+      resolveRedactOptions({ patterns: getDefaultRedactPatterns() });
+      if (kind === "source") {
         expect(redactSensitiveText("fixtureTOKEN", { mode: "tools" })).toBe("***");
         expect(redactSensitiveFieldValue("content", "fixtureTOKEN", { mode: "tools" })).toBe("***");
-      } finally {
-        pattern.compile(source, flags);
+      } else {
+        expect(redactSensitiveText("fixture-unlisted", { patterns: [pattern] })).toBe("***");
       }
-    },
-  );
+    });
+  });
 
   it.each(["API_TOKEN=tiny-value", "ghp_abcdefghij"])(
-    "resets a skipped global rule before the next custom rule for %s",
-    (fixture) => {
-      const pattern = sharedPatternMatching(fixture);
-      const observer = {
-        source: "synthetic global regex state observer",
-        *exec(input: string) {
-          yield {
-            match: input,
-            groups: [],
-            input,
-            offset: 0,
-            replacement: String(pattern.lastIndex),
-          };
-        },
-      };
-      pattern.lastIndex = 7;
-      try {
+    "resets skipped global state for %s",
+    (fixture) =>
+      withSharedPattern(fixture, (pattern) => {
+        const observer = replacementMatcher(/^.*$/g, () => String(pattern.lastIndex));
+        pattern.lastIndex = 7;
         expect(redactSensitiveText("fixture-unlisted", { patterns: [pattern, observer] })).toBe(
           "0",
         );
-      } finally {
-        pattern.lastIndex = 0;
-      }
-    },
-  );
-
-  it.each(["API_TOKEN=tiny-value", "ghp_abcdefghij"])(
-    "uses a custom executor on a rule originally matching %s",
-    (fixture) => {
-      const pattern = sharedPatternMatching(fixture);
-      const replacement = /fixture-unlisted/g;
-      const executor = vi
-        .spyOn(pattern, "exec")
-        .mockImplementation((input) => replacement.exec(input));
-      try {
-        resolveRedactOptions({ patterns: getDefaultRedactPatterns() });
-        expect(redactSensitiveText("fixture-unlisted", { patterns: [pattern] })).toBe("***");
-      } finally {
-        executor.mockRestore();
-      }
-    },
+      }),
   );
 
   it("uses changed case flags on a shared assignment rule", () => {
-    const pattern = sharedPatternMatching("API_TOKEN=tiny-value");
-    const { source, flags } = pattern;
-    try {
-      pattern.compile(source, "gi");
+    withSharedPattern("API_TOKEN=tiny-value", (pattern) => {
+      pattern.compile(pattern.source, "gi");
       expect(redactSensitiveText("password: tiny-value", { patterns: [pattern] })).toBe(
         "password: ***",
       );
-    } finally {
-      pattern.compile(source, flags);
-    }
+    });
   });
-
-  it.each(["API_TOKEN=tiny-value", "ghp_abcdefghij"])(
-    "uses a custom replacement hook on a rule originally matching %s",
-    (fixture) => {
-      const pattern = sharedPatternMatching(fixture);
-      const replacement = /fixture-unlisted/g;
-      const hook = vi
-        .spyOn(pattern, Symbol.replace)
-        .mockImplementation((input, replace) => replacement[Symbol.replace](input, replace));
-      try {
-        resolveRedactOptions({ patterns: getDefaultRedactPatterns() });
-        expect(redactSensitiveText("fixture-unlisted", { patterns: [pattern] })).toBe("***");
-      } finally {
-        hook.mockRestore();
-      }
-    },
-  );
 });

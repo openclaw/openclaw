@@ -369,20 +369,15 @@ function isShortClusterPrefixAllowed(clusterFlag: ShortClusterFlagSpec, prefix: 
   for (let index = 0; index < prefix.length; index += 1) {
     const char = prefix[index] ?? "";
     if (clusterFlag.prefixChars.includes(char)) {
-      if (clusterFlag.numericValuePrefixChars?.includes(char) === true) {
-        while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
-          index += 1;
-        }
+      if (clusterFlag.numericValuePrefixChars?.includes(char) !== true) {
+        continue;
       }
-      continue;
+    } else if (!(clusterFlag.allowNumericRecordSeparator === true && char === "0")) {
+      return false;
     }
-    if (clusterFlag.allowNumericRecordSeparator === true && char === "0") {
-      while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
-        index += 1;
-      }
-      continue;
+    while (/^[0-9]$/.test(prefix[index + 1] ?? "")) {
+      index += 1;
     }
-    return false;
   }
   return true;
 }

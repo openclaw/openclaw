@@ -5,7 +5,6 @@ import {
   recordSystemEventStoreReplaced,
 } from "../../../infra/system-event-ownership.js";
 import {
-  isGatewayRestartDraining,
   runWithGatewayDetachedWorkAdmission,
   runWithGatewayDetachedWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
@@ -14,6 +13,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
+import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
 import { getDeliveryLastError, isDeliverySuspended } from "./subagent-delivery-state.js";
 import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
 import {
@@ -76,6 +76,7 @@ export async function suspendPendingFinalDelivery(
   }
   logAnnounceGiveUp(entry, args.reason);
   // Suspension settles this child for requester drain while cleanup stays incomplete.
+  context.resumeAncestorCleanup(entry);
   scheduleRequesterSettleWake(context, entry.runId, entry);
 }
 
@@ -148,19 +149,18 @@ export function suspendReplacedStoreNotifications(
         entry.expectsCompletionMessage === true &&
         !isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
       );
-    })
-    .map((entry) => ({
-      entry,
-      deliveryGeneration: entry.delivery?.generation,
-    }));
+    });
   if (!entries.length) {
     return Promise.all(pending).then(() => {});
   }
-  entries.forEach(({ entry }) => subagentRuns.retireCompletionAuthority(entry));
+  for (const entry of entries) {
+    subagentRuns.retireCompletionAuthority(entry);
+    retireSubagentControllerInputs(entry);
+  }
   const work = runWithSubagentCleanupWorkAdmission(async () => {
-    for (const { entry, deliveryGeneration } of entries) {
-      let current = getCurrentSubagentRunOwner(options.runs, entry);
-      if (!current || current.delivery?.generation !== deliveryGeneration) {
+    for (const entry of entries) {
+      const current = getCurrentSubagentRunOwner(options.runs, entry);
+      if (!current) {
         continue;
       }
       if (
@@ -173,19 +173,15 @@ export function suspendReplacedStoreNotifications(
       ) {
         continue;
       }
-      current = getCurrentSubagentRunOwner(options.runs, entry);
-      if (!current || current.delivery?.generation !== deliveryGeneration) {
-        continue;
-      }
       options.resumedRuns.delete(getSubagentRunRuntimeKey(entry));
       recordSystemEventStoreReplaced();
     }
   }).finally(() => {
-    for (const { entry } of entries) {
+    for (const entry of entries) {
       pendingStoreRetirements.delete(getSubagentRunRuntimeKey(entry));
     }
   });
-  for (const { entry } of entries) {
+  for (const entry of entries) {
     pendingStoreRetirements.set(getSubagentRunRuntimeKey(entry), work);
   }
   pending.add(work);
@@ -229,15 +225,13 @@ export function scheduleResumeSubagentRun(
     return;
   }
   clearTimeout(context.scheduledResumeTimers.get(runtimeKey));
-  const currentOwner = () =>
-    context.scheduledResumeTimers.get(runtimeKey) === timer ? currentRun() : undefined;
   const timer = setTimeout(() => {
     const run =
       cleanupGeneration === undefined
         ? runWithGatewayDetachedWorkAdmission
         : runWithSubagentCleanupWorkAdmission;
     void run(async () => {
-      const current = currentOwner();
+      const current = currentRun();
       if (!current) {
         return;
       }
@@ -246,7 +240,7 @@ export function scheduleResumeSubagentRun(
           entry,
           stateContext,
           assertCurrent() {
-            if (!currentOwner()) {
+            if (!currentRun()) {
               throw new Error("Subagent cleanup resume owner changed.");
             }
           },
@@ -255,28 +249,15 @@ export function scheduleResumeSubagentRun(
           },
         });
       }
-      const resumedEntry = currentOwner();
-      if (resumedEntry) {
-        context.scheduledResumeTimers.delete(runtimeKey);
-        params.resumedRuns.delete(runtimeKey);
-        params.resumeSubagentRun(resumedEntry.runId);
+      if (context.scheduledResumeTimers.get(runtimeKey) !== timer || !currentRun()) {
+        return;
       }
+      context.scheduledResumeTimers.delete(runtimeKey);
+      params.resumedRuns.delete(runtimeKey);
+      params.resumeSubagentRun(current.runId);
     })
       .catch((err: unknown) => {
         params.warn("subagent delivery resume failed", { runId: entry.runId, error: err });
-        try {
-          if (isGatewayRestartDraining() && currentOwner()) {
-            scheduleResumeSubagentRun(
-              context,
-              entry,
-              Math.max(delayMs, 1_000),
-              cleanupGeneration,
-              stateContext,
-            );
-          }
-        } catch {
-          // A replaced state owner cannot retain this retry.
-        }
       })
       .finally(() => {
         if (context.scheduledResumeTimers.get(runtimeKey) === timer) {
@@ -321,7 +302,7 @@ export function runDetachedCleanupAttempt(
   // Completion outlives the spawning attempt; inherited lock owners would
   // reject requester transcript writes after that attempt is disposed.
   runWithoutOwnedSessionTranscriptWrites(() => {
-    void runWithSubagentCleanupWorkAdmission(async () => {
+    const execute = async () => {
       try {
         await commitSubagentLifecycleMutation(context, {
           entry,
@@ -337,9 +318,7 @@ export function runDetachedCleanupAttempt(
         startCommitted = true;
         releaseReservation();
         await run();
-        if (context.isCleanupGeneration(entry, cleanupGeneration)) {
-          context.cleanupFailureCounts.delete(identity);
-        }
+        context.cleanupFailureCounts.delete(identity);
       } catch (err) {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         if (hasSqliteWorkerOutcomeUnknown(err)) {
@@ -377,14 +356,6 @@ export function runDetachedCleanupAttempt(
         } else {
           releaseReservation();
         }
-        try {
-          assertSubagentRegistryWriteSourceCurrent(stateContext);
-        } catch {
-          return;
-        }
-        if (!context.isCleanupGenerationCurrent(entry, cleanupGeneration)) {
-          return;
-        }
         const failureCount = context.incrementCleanupFailureCount(current);
         const requiredDeliveryPending =
           current.expectsCompletionMessage === true && current.delivery?.status === "pending";
@@ -408,7 +379,8 @@ export function runDetachedCleanupAttempt(
           );
         }
       }
-    })
+    };
+    void runWithSubagentCleanupWorkAdmission(() => context.runBackgroundWork(entry, execute))
       .catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup admission failed (${runId}): ${String(err)}`);
       })

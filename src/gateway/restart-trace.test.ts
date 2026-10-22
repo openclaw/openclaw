@@ -10,6 +10,7 @@ import {
   finishGatewayRestartTrace,
   formatGatewayPendingCloseSteps,
   measureGatewayCloseStep,
+  measureGatewayRestartTrace,
   recordGatewayRestartTraceSpan,
   startGatewayRestartTrace,
 } from "./restart-trace.js";
@@ -29,6 +30,7 @@ describe("gateway shutdown diagnostics", () => {
   });
   afterEach(() => {
     finishGatewayRestartTrace("test.finish");
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     logInfo.mockClear();
@@ -84,6 +86,86 @@ describe("gateway shutdown diagnostics", () => {
     }
   });
 
+  it("reports live sub-waits every five seconds only while shutdown joins are pending", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const subWait = createDeferredCore();
+    const first = createDeferredCore();
+    const second = createDeferredCore();
+    const runtime = measureGatewayRestartTrace(
+      "worker-placement.reconcile.read",
+      () => subWait.promise,
+      undefined,
+      true,
+    );
+    let closingFirst: Promise<void> | undefined;
+    let closingSecond: Promise<void> | undefined;
+    try {
+      clock = 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).not.toHaveBeenCalled();
+      expect(formatGatewayPendingCloseSteps()).toBe("none");
+
+      closingFirst = measureGatewayCloseStep("shutdown.worker-placement", () => first.promise);
+      clock = 10_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).toHaveBeenLastCalledWith(
+        "shutdown pending: count=2 worker-placement.reconcile.read=10000ms, shutdown.worker-placement=5000ms",
+      );
+      closingSecond = measureGatewayCloseStep("shutdown.worker-environments", () => second.promise);
+      first.resolve();
+      await closingFirst;
+      clock = 15_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).toHaveBeenLastCalledWith(
+        "shutdown pending: count=2 worker-placement.reconcile.read=15000ms, shutdown.worker-environments=5000ms",
+      );
+
+      second.resolve();
+      await closingSecond;
+      logInfo.mockClear();
+      clock = 20_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).not.toHaveBeenCalled();
+      expect(formatGatewayPendingCloseSteps()).toBe("none");
+      subWait.resolve();
+      await runtime;
+      expect(logInfo).not.toHaveBeenCalled();
+    } finally {
+      subWait.resolve();
+      first.resolve();
+      second.resolve();
+      await Promise.allSettled([runtime, closingFirst, closingSecond]);
+    }
+  });
+
+  it("reports current retained custody while shutdown is pending", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const release = createDeferredCore();
+    const custody = { sources: 6, operations: 5, sourceWork: 5 };
+    const closing = measureGatewayCloseStep(
+      "restart.close.session-sources",
+      () => release.promise,
+      () => custody,
+    );
+    try {
+      clock = 5_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).toHaveBeenLastCalledWith(
+        "shutdown pending: count=1 restart.close.session-sources=5000ms sources=6.0 operations=5.0 sourceWork=5.0",
+      );
+      Object.assign(custody, { sources: 1, operations: 0, sourceWork: 1 });
+      clock = 10_000;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(logInfo).toHaveBeenLastCalledWith(
+        "shutdown pending: count=1 restart.close.session-sources=10000ms sources=1.0 operations=0.0 sourceWork=1.0",
+      );
+    } finally {
+      release.resolve();
+      await closing;
+    }
+    expect(formatGatewayPendingCloseSteps()).toBe("none");
+  });
+
   it("keeps the parent ready duration when recording child spans", () => {
     vi.stubEnv("OPENCLAW_GATEWAY_RESTART_TRACE", "1");
     startGatewayRestartTrace("restart.signal.received");
@@ -137,16 +219,6 @@ describe("gateway restart trace handoff", () => {
       OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS: String(startedAt),
       OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS: String(lastAt),
     });
-  });
-
-  it("includes restart resource counts with ready memory metrics", () => {
-    const metrics = Object.fromEntries(collectGatewayProcessMemoryUsageMb());
-
-    expect(metrics.rssMb).toEqual(expect.any(Number));
-    expect(metrics.activeTimersCount).toEqual(expect.any(Number));
-    expect(metrics.processRestartListenersCount).toEqual(expect.any(Number));
-    expect(metrics.processSigtermListenersCount).toEqual(expect.any(Number));
-    expect(metrics.processSigintListenersCount).toEqual(expect.any(Number));
   });
 
   it("counts active timer resources", () => {

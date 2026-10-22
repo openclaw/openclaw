@@ -22,11 +22,15 @@ Checking the streaming behavior and running the focused tests.
 ```
 
 The default draft shows a status headline, authored plan steps, and approval
-requests. On Discord and Telegram, it also keeps the current operation and
-delegated task status visible without a detailed tool log or utility model.
+requests. Discord keeps tool and delegated-task lifecycle rows out of the
+default draft. Telegram also keeps the current operation and delegated task
+status visible without a detailed tool log or utility model.
 Intermediate tool failures and nonzero command exits stay out of the draft.
 Set `streaming.progress.toolProgress: true` to add a rolling tool log,
-including tool failures, with rows such as `Bash: run tests`.
+including tool failures, with rows such as `Bash: run tests`. Discord and
+Telegram prefix each tool row with a text glyph for its tool, such as
+`📖 Read: from docs/index.md`; other channels keep plain rows. Channel plugins opt in
+through the `toolIcons` option of `createChannelProgressDraftCompositor`.
 
 <Note>
   Discord and Telegram default to `progress` without additional config. Set
@@ -67,7 +71,7 @@ migration, see [Streaming and chunking](/concepts/streaming).
 | Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler. |
 | Label           | Optional starter/status line such as `Working`.                             |
 | Progress lines  | Plan milestones, enabled commentary/reasoning, and approval requests.       |
-| Tool log        | Optional tool rows using the same icons and detail formatter as `/verbose`. |
+| Tool log        | Optional tool rows using the same detail formatter as `/verbose`.           |
 
 The status headline sits above the progress lines. With
 `progress.toolProgress: true`, tool rows remain visible underneath it.
@@ -179,8 +183,8 @@ Set it to `true` for the rolling tool log. Successful background-process polls
 and internal waits do not add routine rows. Failed calls still follow the
 selected tool-progress policy; `/verbose` retains their diagnostic summaries.
 
-On Discord and Telegram, the quiet draft keeps one current-operation status
-and bounded delegated-task status rows. These use public operation names and
+On Telegram, the quiet draft keeps one current-operation status and bounded
+delegated-task status rows. These use public operation names and
 task labels, never command text, arguments, child prose, or results. A late
 completion for an older operation cannot replace the currently displayed one.
 Other progress channels retain their existing presentation. With the tool log
@@ -292,6 +296,10 @@ With the commentary lane enabled, preambles render only as those interleaved
 💬 lines; the status headline below stays out of the way so the lane keeps its
 documented shape.
 
+Send-denied turns cannot forward visible progress callbacks, even when automatic
+source delivery is enabled. Message-tool-only reply ownership can permit temporary
+progress without an automatic final answer, but it never overrides a send denial.
+
 ### Status headline
 
 On Discord and Telegram in progress mode, the model's typed pre-tool preamble
@@ -300,6 +308,10 @@ progress-mode channels keep their existing status behavior. The headline is on
 by default and does not bypass the normal activity gate for short turns;
 enabling `streaming.progress.commentary` hands preambles to the interleaved
 commentary lane instead.
+
+On Telegram, `/verbose on` and `/verbose full` keep this temporary preamble
+headline while sending tool diagnostics separately. The preamble is not copied
+into the final answer.
 
 On Discord, when a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents/models#agents-defaults-model), or the primary
@@ -338,8 +350,8 @@ preamble headlines remain enabled:
 }
 ```
 
-Narration input is bounded and redacted: the utility model receives the
-inbound request text plus the same compact, redacted tool summaries the draft
+Narration input is bounded: the utility model receives the
+inbound request text plus the same compact tool summaries the draft
 would render — never raw command output or tool results. With
 `commandText: "status"`, narration input also omits exec/bash command text,
 matching what the draft shows.
@@ -382,6 +394,10 @@ the draft is edited, and OpenClaw truncates long lines so repeated draft edits
 do not wrap differently on every update. The default per-line budget is 120
 characters; prose cuts at a word boundary, while long details such as paths or
 raw commands are shortened with a middle ellipsis so the suffix stays visible.
+The same budget applies to prepared tool titles, including paths embedded in a
+Read title, rather than only to separate tool details.
+On Telegram, the budget includes the tool icon, label, and status as well as the
+command or detail text.
 
 Tune the per-line budget:
 
@@ -423,9 +439,10 @@ Add the rolling tool log to the single progress draft:
 
 With the default `toolProgress: false`, OpenClaw still suppresses the older
 standalone tool-progress messages for that turn; the draft shows the headline,
-authored text, plan milestones, and approval requests. Discord and Telegram also
-show safe current-operation and delegated-task status. Tool diagnostics
-remain available in the session transcript.
+authored text, plan milestones, and approval requests. Telegram also shows safe
+current-operation and delegated-task status. Discord shows tool and delegated-task
+lifecycle rows only when the tool log is enabled. Tool diagnostics remain
+available in the session transcript.
 
 ## Channel behavior
 
@@ -447,8 +464,9 @@ full runtime-behavior breakdown per channel.
 When the final answer is ready, OpenClaw tries to keep the chat clean:
 
 - A Telegram or Discord progress draft handed off to accepted announcing subagents stays
-  visible after the parent yields and keeps showing child status and prepared
-  operation names; the final answer is separate. See
+  visible after the parent yields; the final answer is separate. Telegram keeps
+  showing child status and prepared operation names. Discord shows those rows
+  only when the tool log is enabled. See
   [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
 
 - Otherwise, in `progress` mode on Discord, the final answer is sent as a fresh

@@ -1,4 +1,7 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
@@ -84,7 +87,10 @@ const browserSessionTabRecordSchema = z
         canonical.includes(record.profile) ||
         !canonical.every((entry, index) => entry === record.profileAliases?.[index])
       ) {
-        context.addIssue({ code: "custom", message: "profile aliases must be canonical" });
+        context.addIssue({
+          code: "custom",
+          message: "profile aliases must be sorted, unique, and exclude the primary profile",
+        });
       }
     }
     const cleanupFieldCount = [
@@ -106,11 +112,9 @@ export type BrowserDashboardStopIntent = z.infer<typeof browserDashboardStopInte
 function browserDashboardStopIntentKey(
   identity: Pick<BrowserDashboardIdentity, "sessionKey" | "agentId" | "instanceId" | "name">,
 ): string {
-  return `dashboard-stop:${createHash("sha256")
-    .update(
-      JSON.stringify([identity.sessionKey, identity.agentId, identity.instanceId, identity.name]),
-    )
-    .digest("hex")}`;
+  return `dashboard-stop:${sha256Hex(
+    JSON.stringify([identity.sessionKey, identity.agentId, identity.instanceId, identity.name]),
+  )}`;
 }
 
 export function parseBrowserDashboardStopIntent(
@@ -249,12 +253,14 @@ export async function drainBrowserSessionTabStore(runtime: BrowserStateRuntime):
   while (runtime.sessionTabOperations.size > 0 || runtime.dashboardOperations.size > 0) {
     await Promise.allSettled([
       ...runtime.sessionTabOperations.values(),
-      ...[...runtime.dashboardOperations.values()].map(({ promise }) => promise),
+      ...runtime.dashboardOperations.values(),
     ]);
   }
 }
 
-export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
+export function getBrowserSessionTabStore(
+  authority: BrowserSessionTabAuthority = {},
+): PluginStateKeyedStore<unknown, 2> {
   const runtime = authority.runtime ?? getBrowserStateRuntime();
   const withCurrent = runtime.sessionTabs.withCurrent;
   if (!withCurrent) {
@@ -266,7 +272,9 @@ export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority 
   });
 }
 
-export function getOptionalBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
+export function getOptionalBrowserSessionTabStore(
+  authority: BrowserSessionTabAuthority = {},
+): PluginStateKeyedStore<unknown, 2> | undefined {
   return authority.runtime || getOptionalBrowserStateRuntime()
     ? getBrowserSessionTabStore(authority)
     : undefined;
@@ -281,27 +289,15 @@ export async function withBrowserSessionTabOperation<T>(
   const runtime = authority.runtime ?? getBrowserStateRuntime();
   const store = getBrowserSessionTabStore({ ...authority, runtime });
   const selected = Array.isArray(keys) ? [...new Set(keys)] : [keys];
-  const previous = selected.flatMap((key) => runtime.sessionTabOperations.get(key) ?? []);
-  const pending = Promise.all([...previous, ...dependencies]).then(async () => {
-    assertBrowserSessionTabAuthority({ ...authority, runtime });
-    return await operation(store);
+  return await enqueueKeyedTask({
+    tails: runtime.sessionTabOperations,
+    keys: selected,
+    task: async () => {
+      await Promise.all(dependencies);
+      assertBrowserSessionTabAuthority({ ...authority, runtime });
+      return await operation(store);
+    },
   });
-  const settled = pending.then(
-    () => {},
-    () => {},
-  );
-  for (const key of selected) {
-    runtime.sessionTabOperations.set(key, settled);
-  }
-  try {
-    return await pending;
-  } finally {
-    for (const key of selected) {
-      if (runtime.sessionTabOperations.get(key) === settled) {
-        runtime.sessionTabOperations.delete(key);
-      }
-    }
-  }
 }
 
 /** Hold same-process mutation admission through the fresh read and synchronous effect dispatch. */
@@ -620,20 +616,14 @@ async function withBrowserSessionTabNativeIdentities<T>(
     dashboardTargets.length > 0
       ? withDashboardTabAdmission(dashboardTargets, authority, operation)
       : operation();
-  const identities = [
-    ...new Set(
-      records.flatMap((record) =>
-        record?.interactionTargetKind === "native" ? [browserSessionTabNativeIdentity(record)] : [],
-      ),
-    ),
-  ].toSorted();
-  const run = async (index: number): Promise<T> => {
-    const identity = identities[index];
-    return identity === undefined
-      ? await runOperation()
-      : await withBrowserSessionTabNativeActivity(identity, authority, () => run(index + 1));
-  };
-  return await run(0);
+  const nativeKeys = records.flatMap((record) =>
+    record?.interactionTargetKind === "native"
+      ? [`native:${browserSessionTabNativeIdentity(record)}`]
+      : [],
+  );
+  return nativeKeys.length > 0
+    ? await withBrowserSessionTabOperation(nativeKeys, authority, runOperation)
+    : await runOperation();
 }
 
 async function mutateBrowserSessionTabInOperation(

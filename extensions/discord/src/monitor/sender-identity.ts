@@ -9,12 +9,6 @@ export type DiscordSenderIdentity = {
   tag?: string;
   label: string;
   isPluralKit: boolean;
-  pluralkit?: {
-    memberId: string;
-    memberName?: string;
-    systemId?: string;
-    systemName?: string;
-  };
 };
 
 type DiscordWebhookMessageLike = {
@@ -51,12 +45,6 @@ export function resolveDiscordSenderIdentity(params: {
       tag: normalizeOptionalString(pkMember?.name),
       label,
       isPluralKit: true,
-      pluralkit: {
-        memberId,
-        memberName,
-        systemId: normalizeOptionalString(pkSystem?.id),
-        systemName,
-      },
     };
   }
 
@@ -72,7 +60,7 @@ export function resolveDiscordSenderIdentity(params: {
       : (senderDisplay ?? senderTag ?? params.author.id);
   return {
     id: params.author.id,
-    name: params.author.username ?? undefined,
+    name: params.author.username,
     tag: senderTag,
     label: senderLabel,
     isPluralKit: false,

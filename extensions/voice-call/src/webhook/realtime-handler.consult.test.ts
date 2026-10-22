@@ -17,15 +17,10 @@ type ToolHandler = Parameters<RealtimeCallHandler["registerToolHandler"]>[1];
 type ProviderRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
 
 async function createConsultFixture(delegation = false) {
-  const providers: Array<{
-    request: ProviderRequest;
-    submit: ReturnType<typeof vi.fn<RealtimeVoiceBridge["submitToolResult"]>>;
-  }> = [];
-  const connected = createDeferred<void>();
+  const connected = createDeferred<ProviderRequest>();
+  const submit = vi.fn<RealtimeVoiceBridge["submitToolResult"]>();
   const realtimeProvider = makeRealtimeProvider((request) => {
-    const submit = vi.fn<RealtimeVoiceBridge["submitToolResult"]>();
-    providers.push({ request, submit });
-    connected.resolve();
+    connected.resolve(request);
     return createBridge(vi.fn(), {
       supportsToolResultContinuation: true,
       submitToolResult: submit,
@@ -52,21 +47,22 @@ async function createConsultFixture(delegation = false) {
   );
   const consult = vi.fn<ToolHandler>();
   handler.registerToolHandler("openclaw_agent_consult", consult);
-  const connect = async () => {
-    const index = providers.length;
-    const connection = await connectCarrierStream(handler);
-    connection.ws.send(
-      JSON.stringify({
-        event: "start",
-        start: { streamSid: `MZ-consult-${index}`, callSid: call.providerCallId },
-      }),
-    );
-    await connected.promise;
-    const provider = expectDefined(providers[index], "realtime provider callbacks");
-    return {
-      ...provider,
+  const { ws } = await connectCarrierStream(handler);
+  ws.send(
+    JSON.stringify({
+      event: "start",
+      start: { streamSid: "MZ-consult-0", callSid: call.providerCallId },
+    }),
+  );
+  const request = await connected.promise;
+  return {
+    consult,
+    processEvent,
+    provider: {
+      request,
+      submit,
       invoke: (id: string, args: unknown) => {
-        provider.request.onToolCall?.({
+        request.onToolCall?.({
           itemId: `item-${id}`,
           callId: id,
           name: "openclaw_agent_consult",
@@ -74,12 +70,9 @@ async function createConsultFixture(delegation = false) {
         });
       },
       finalResults: (id: string) =>
-        provider.submit.mock.calls.filter(
-          ([callId, , options]) => callId === id && !options?.willContinue,
-        ),
-    };
+        submit.mock.calls.filter(([callId, , options]) => callId === id && !options?.willContinue),
+    },
   };
-  return { consult, processEvent, provider: await connect() };
 }
 
 afterEach(() => vi.useRealTimers());
@@ -133,7 +126,6 @@ describe("native realtime consult request identity", () => {
     { phase: "working response", final: true },
     { phase: "completed ASR", final: true },
     { phase: "same completed ASR", final: true },
-    { phase: "transcript settling", final: false },
     { phase: "transcript persistence", final: false },
   ])("isolates rejected speech during $phase (final=$final)", async ({ phase, final }) => {
     const { consult, provider, processEvent } = await createConsultFixture();

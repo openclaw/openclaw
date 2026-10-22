@@ -1,6 +1,5 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -150,7 +149,6 @@ export async function resolveDispatchTelegramContext(params: {
       }),
       telegramCfg,
       opts: { botInfo: params.context.primaryCtx.me },
-      telegramDeps: { resolveStorePath },
     });
     const ambientWatermark = params.context.ctxPayload.AmbientTranscriptPreviousMessageId
       ? {

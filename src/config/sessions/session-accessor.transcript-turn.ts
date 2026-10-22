@@ -9,7 +9,8 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../../sessions/transcript-events.js";
-import { getRuntimeConfig } from "../io.js";
+import { IncognitoSessionMissingError } from "../../state/incognito-session-error.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfigSnapshot } from "../io.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveSessionStorePathCore } from "./paths.js";
@@ -19,7 +20,7 @@ import {
   readCommittedTranscriptMessageSequence,
   rememberCommittedTranscriptMessageSequences,
 } from "./session-accessor.sqlite-transcript-sequences.js";
-import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { sanitizeTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { resolveSessionTranscriptRuntimeTarget } from "./session-accessor.transcript-target.js";
 import { appendTranscriptMessage, emitTranscriptUpdate } from "./session-accessor.transcript.js";
@@ -32,12 +33,18 @@ import type {
   SessionTranscriptTurnPersistOptions,
   SessionTranscriptTurnPersistResult,
 } from "./session-accessor.types.js";
-import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  withSessionActorStorage,
+} from "./session-actor-storage-binding.js";
+import { getSessionInputActor } from "./session-input-actor.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "./session-store-owner.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 import {
   captureSessionTranscriptSourcePublication,
+  captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptWriterFence,
   runWithOwnedSessionTranscriptWrite,
 } from "./transcript-write-context.js";
@@ -64,15 +71,6 @@ function resolveTranscriptTurnAgentId(params: {
     throw new Error(
       `Session key owner "${keyAgentId}" does not match requested agent "${scopedAgentId}".`,
     );
-  }
-  const incognito = captureIncognitoSessionOperation({
-    agentId: scopedAgentId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    env: params.env,
-  });
-  if (incognito) {
-    return incognito.actor.agentId;
   }
   const persistedStoreOwner =
     params.sessionStore && !params.storePath
@@ -143,7 +141,7 @@ export async function appendTranscriptMessages<TMessage>(
     messages: options.messages.map((append) => ({
       ...append,
       eventId: append.eventId ?? randomUUID(),
-      message: redactTranscriptMessageForStorage(append.message, options),
+      message: sanitizeTranscriptMessageForStorage(append.message),
       now: append.now ?? Date.now(),
     })),
     updateMode: "none",
@@ -155,7 +153,7 @@ export async function appendTranscriptMessages<TMessage>(
 }
 
 /**
- * Persists one logical transcript turn through the SQLite-backed session target.
+ * Persists one logical transcript turn through its selected session owner.
  * Transcript row append(s) and the requested
  * updatedAt touch happen before transcript update delivery is published.
  */
@@ -166,7 +164,11 @@ export async function persistSessionTranscriptTurn(
   },
   options: SessionTranscriptTurnPersistOptions,
 ): Promise<SessionTranscriptTurnPersistResult> {
-  const expectedSessionId = options.expectedSessionId;
+  const memory = captureSessionActorStorageOwner(scope, {
+    assertCurrent: () => options.assertCurrent?.(),
+    authorize: () => options.assertCurrent?.(),
+  });
+  const expectedSessionId = options.expectedSessionId ?? (memory ? scope.sessionId : undefined);
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
@@ -308,7 +310,7 @@ async function appendTranscriptTurnMessages(
     }
   }
   // Resolve cursors only after the last explicit parent has chosen the branch.
-  rememberCommittedTranscriptMessageSequences(target, appendedMessages);
+  await rememberCommittedTranscriptMessageSequences(target, appendedMessages);
   return appendedMessages;
 }
 
@@ -325,55 +327,94 @@ async function persistExpectedSessionTranscriptTurn(
 ): Promise<SessionTranscriptTurnPersistResult> {
   const requestedSessionKey = scope.sessionKey?.trim();
   const expectedSessionId = options.expectedSessionId;
+  const selectedScope = { ...scope, sessionId: expectedSessionId };
+  if (!getSessionActorStorageBinding(selectedScope)) {
+    const assertOwned = captureOwnedTranscriptWriteAssertion(selectedScope);
+    const assertCurrent = () => {
+      assertOwned();
+      options.assertCurrent?.();
+    };
+    const authority = { assertCurrent, authorize: assertCurrent };
+    if (captureSessionActorStorageOwner(selectedScope, authority)) {
+      const result = await withSessionActorStorage(
+        selectedScope,
+        {
+          authority,
+          lifetime: { assertCurrent, assertReadable: assertCurrent },
+          create: Boolean(options.initialSessionEntry),
+        },
+        () => persistExpectedSessionTranscriptTurn(scope, options, preparedTarget),
+      );
+      if (!result) {
+        throw new IncognitoSessionMissingError();
+      }
+      return result;
+    }
+  }
   const onCommittedSource = captureSessionTranscriptSourcePublication({
     ...scope,
     sessionId: expectedSessionId,
   });
-  const { selectedSessionId, selectedLifecycleRevision, ...target } =
+  const { selectedSessionId, selectedLifecycleRevision, resolveRuntimeTarget, ...prepared } =
     preparedTarget ??
-    (await prepareTranscriptTurnTarget({ ...scope, sessionId: expectedSessionId }, options.config));
+    (await prepareTranscriptTurnTarget(
+      { ...scope, sessionId: expectedSessionId },
+      options.config,
+      !options.messages.some((append) => append.shouldAppend),
+    ));
+  let target = prepared;
+  const ownerScope = { ...target, sessionKey: requestedSessionKey ?? target.sessionKey };
   const inheritedWriterFence = getOwnedSessionTranscriptWriterFence({
     sessionFile: target.sessionKey,
-    sessionKey: target.sessionKey,
-    sessionTarget: target,
+    sessionKey: ownerScope.sessionKey,
+    sessionTarget: ownerScope,
   });
   const turn = await runWithOwnedSessionTranscriptWrite(
     {
       sessionFile: target.sessionKey,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
+      sessionKey: ownerScope.sessionKey,
+      sessionTarget: ownerScope,
     },
     () =>
-      appendExpectedSessionTranscriptTurn(target, {
-        config: options.config,
-        cwd: options.cwd,
-        keyFormat: "agent-qualified",
-        selectedSessionId,
-        selectedLifecycleRevision,
-        expectedLifecycleRevision:
-          options.expectedLifecycleRevision !== undefined
-            ? options.expectedLifecycleRevision
-            : inheritedWriterFence?.expectedLifecycleRevision,
-        expectedWriterRunId:
-          options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
-        expectedSessionState: options.expectedSessionState,
-        assertCurrent: options.assertCurrent,
-        acceptedResultGuard: options.acceptedResultGuard,
-        expectedSessionId,
-        initialSessionEntry: options.initialSessionEntry,
-        atomicGroup: options.atomicGroup,
-        messages: options.messages.map((append) => ({
-          ...append,
-          message: attachSessionTranscriptRunId(append.message, options.runId),
-        })),
-        onMessageCommitted: options.onMessageCommitted,
-        onCommittedSource,
-        sessionLifecyclePatch: options.sessionLifecyclePatch,
-        sessionTurnMutation: options.sessionTurnMutation,
-        sessionFile: target.sessionKey!,
-        touchSessionEntry: options.touchSessionEntry,
-      }),
+      appendExpectedSessionTranscriptTurn(
+        target,
+        {
+          config: options.config,
+          cwd: options.cwd,
+          keyFormat: "agent-qualified",
+          selectedSessionId,
+          selectedLifecycleRevision,
+          resolveRuntimeTarget,
+          expectedLifecycleRevision:
+            options.expectedLifecycleRevision !== undefined
+              ? options.expectedLifecycleRevision
+              : inheritedWriterFence?.expectedLifecycleRevision,
+          expectedWriterRunId:
+            options.expectedWriterRunId ?? inheritedWriterFence?.expectedWriterRunId,
+          expectedSessionState: options.expectedSessionState,
+          assertCurrent: options.assertCurrent,
+          acceptedResultGuard: options.acceptedResultGuard,
+          expectedSessionId,
+          initialSessionEntry: options.initialSessionEntry,
+          atomicGroup: options.atomicGroup,
+          messages: options.messages.map((append) => ({
+            ...append,
+            message: attachSessionTranscriptRunId(append.message, options.runId),
+          })),
+          onMessageCommitted: options.onMessageCommitted,
+          onCommittedSource,
+          sessionLifecyclePatch: options.sessionLifecyclePatch,
+          sessionTurnMutation: options.sessionTurnMutation,
+          sessionFile: target.sessionKey!,
+          touchSessionEntry: options.touchSessionEntry,
+        },
+        ownerScope,
+      ),
   );
+
+  if (turn.runtimeTarget) {
+    target = { ...target, ...turn.runtimeTarget, storePath: target.storePath, env: target.env };
+  }
 
   if (turn.rejectedReason === "session-rebound") {
     return {
@@ -415,12 +456,34 @@ async function prepareTranscriptTurnTarget(
     sessionStore?: Record<string, SessionEntry>;
   },
   config?: OpenClawConfig,
+  deferRuntimeTarget = false,
 ) {
   const sessionKey = scope.sessionKey?.trim();
   if (!sessionKey || !scope.sessionId) {
     throw new Error("Cannot persist a transcript turn without a session key and session id");
   }
-  const effectiveConfig = config ?? getRuntimeConfig();
+  const memory = getSessionActorStorageBinding(scope);
+  if (memory) {
+    const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(
+      {
+        ...scope,
+        agentId: memory.agentId,
+        sessionKey: memory.actor.target.sessionKey,
+        sessionId: scope.sessionId,
+        storePath: memory.path,
+      },
+      config,
+      { keyFormat: "agent-qualified" },
+    );
+    return {
+      ...runtimeTarget,
+      storePath: memory.path,
+      env: scope.env,
+      resolveRuntimeTarget: undefined,
+    };
+  }
+  const effectiveConfig =
+    config ?? getRuntimeConfigSnapshot() ?? (await captureRuntimeConfigAsyncReader()());
   const agentId = resolveTranscriptTurnAgentId({
     config: effectiveConfig,
     scopeAgentId: scope.agentId,
@@ -445,12 +508,25 @@ async function prepareTranscriptTurnTarget(
     sessionKey,
     storePath,
   });
-  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding, config, {
+  if (deferRuntimeTarget && (await getSessionInputActor(binding, true))) {
+    return {
+      ...binding,
+      selectedSessionId: undefined,
+      selectedLifecycleRevision: undefined,
+      resolveRuntimeTarget: true as const,
+    };
+  }
+  const runtimeTarget = await resolveSessionTranscriptRuntimeTarget(binding, effectiveConfig, {
     keyFormat: "agent-qualified",
   });
   // Keep the selected locator and private storage namespace across the await.
   // Incognito accessors resolve their owner from env even with a concrete locator.
-  return { ...runtimeTarget, storePath: binding.storePath, env: binding.env };
+  return {
+    ...runtimeTarget,
+    storePath: binding.storePath,
+    env: binding.env,
+    resolveRuntimeTarget: undefined,
+  };
 }
 
 async function publishTranscriptTurnUpdate(params: {

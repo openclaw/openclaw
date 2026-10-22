@@ -105,12 +105,7 @@ export class TwilioProvider implements VoiceCallProvider {
     const webhookUrl = this.callWebhookUrls.get(providerCallId);
     let resolvedCallId = callId;
     if (!resolvedCallId && webhookUrl) {
-      try {
-        resolvedCallId = new URL(webhookUrl).searchParams.get("callId") || undefined;
-      } catch {
-        // The provider only stores URLs it constructed, but cleanup must still
-        // release provider-keyed state if a malformed value is injected.
-      }
+      resolvedCallId = new URL(webhookUrl).searchParams.get("callId") || undefined;
     }
     if (resolvedCallId) {
       this.twimlStorage.delete(resolvedCallId);
@@ -284,14 +279,6 @@ export class TwilioProvider implements VoiceCallProvider {
     return undefined;
   }
 
-  private static parseConfidence(value: string | null): number {
-    const trimmed = value?.trim();
-    if (!trimmed || !/^\d+(?:\.\d+)?$/.test(trimmed)) {
-      return 0.9;
-    }
-    return Number(trimmed);
-  }
-
   private normalizeEvent(
     params: URLSearchParams,
     options?: {
@@ -328,7 +315,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return { ...baseEvent, type: "call.amd", answeredBy };
     }
 
-    // Handle speech result (from <Gather>)
     const speechResult = params.get("SpeechResult");
     if (speechResult?.trim()) {
       return {
@@ -336,7 +322,6 @@ export class TwilioProvider implements VoiceCallProvider {
         type: "call.speech",
         transcript: speechResult,
         isFinal: true,
-        confidence: TwilioProvider.parseConfidence(params.get("Confidence")),
       };
     }
 
@@ -345,7 +330,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return { ...baseEvent, type: "call.dtmf", digits };
     }
 
-    // Handle call status changes
     const rawCallStatus = params.get("CallStatus");
     const callStatus = normalizeProviderStatus(rawCallStatus);
     if (callStatus === "initiated") {
@@ -596,10 +580,7 @@ export class TwilioProvider implements VoiceCallProvider {
         await this.playTtsViaStream(input.text, streamSid);
         return;
       } catch (err) {
-        console.warn(
-          `[voice-call] Telephony TTS failed:`,
-          err instanceof Error ? err.message : err,
-        );
+        console.warn(`[voice-call] Telephony TTS failed callId=${input.callId}`);
         throw err instanceof Error ? err : new Error(String(err));
       }
     }

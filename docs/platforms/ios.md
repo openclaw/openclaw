@@ -15,6 +15,8 @@ title: "iOS app"
 
 Availability: The official iPhone app is available on the [App Store](https://apps.apple.com/app/openclaw-ai-that-does-things/id6780396132). Local development builds can also run from source.
 
+The app requires iOS 26.2 or iPadOS 26.2 or later.
+
 ## What it does
 
 - Connects to a Gateway over WebSocket (LAN or tailnet).
@@ -22,8 +24,9 @@ Availability: The official iPhone app is available on the [App Store](https://ap
 - Receives `node.invoke` commands and reports node status events.
 - Browses the selected agent's workspace read-only from the Agents surface (Files): directory drill-down, syntax-highlighted text previews, image previews, and share-sheet export. No write operations; previews are size-capped by the Gateway.
 - Keeps a small read-only offline cache of recent chat sessions and transcripts per paired Gateway: cold opens paint the last known transcript immediately and refresh once the Gateway responds, recent chats stay browsable while disconnected, and reset/forget purges the protected local cache.
-- Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect with idempotent retries, remain durable until canonical history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
+- Queues text messages sent while disconnected in a durable per-gateway outbox (up to 50): queued bubbles show in the transcript, flush in order on reconnect without duplicating sends on retries, remain durable until saved history confirms the send, retry with backoff before surfacing a retry/delete action, and expire instead of sending after 48 hours offline; reset/forget clears the queue with the cache.
 - Chat is the single text-and-voice surface. Chat actions can open the full Sessions screen without leaving Chat and can show or hide assistant reasoning and tool activity. Tap the microphone for draft dictation, open its menu to record a voice note, or use the inline Talk control for realtime voice; the Talk control animates from live microphone or playback level while listening or speaking.
+- Assistant reasoning is visible only with `/reasoning on` and the local **Show reasoning & tool activity** setting enabled. `/reasoning off` hides it after history reload and relaunch. Tool activity follows the local setting independently.
 - Sessions has **Active**, **Snoozed**, and **Archived** scopes. Snoozed sessions stay out of the active sidebar and Overview until they wake.
 - Agent narration appears inline as each segment finishes, including after reconnect. Narration, tool activity, and the reply stay grouped in one response. Compact-width layouts hide the assistant avatar to leave more room for text; regular-width layouts keep a single top-aligned avatar. Completed standalone bubbles use sender-side tails where the avatar is hidden, and accessible reply containers retain the assistant’s name. Completed chat turns fold earlier work into a **Worked for …** disclosure above the reply on iPhone and iPad. Tap it to inspect the work. Final answers and media stay visible, and active or unanswered work stays expanded.
 - Chat accepts images from the photo picker, camera, Files, paste, and the iOS share sheet. Assistant-generated images render inline from short-lived Gateway artifact URLs, open in a full-screen preview, and remain available after reconnect or history reload without storing image bytes in the transcript cache.
@@ -35,6 +38,29 @@ Availability: The official iPhone app is available on the [App Store](https://ap
 - Long-press a message or open its actions menu and choose **Select Text** to select and copy any span in a native text view; code fences show a copy button that copies the raw code.
 - **Settings** opens the Dashboard settings pages when connected with `operator.admin`; the native Gateway screen remains available for connection and pairing.
 - Speaks assistant messages on demand: long-press a message in Chat and choose **Listen**. The app plays supported Gateway `tts.speak` clips with the configured TTS provider and falls back to on-device speech when Gateway audio is unavailable or unplayable. Playback stops on session switch or backgrounding.
+
+## Chat text size
+
+Chat uses a 13.5-point base text size for a denser transcript. It still follows
+your system or per-app Dynamic Type setting, including accessibility text sizes.
+This makes chat text smaller than the previous 17-point base at the same setting;
+increase the app’s text size in iOS Settings if you prefer larger text.
+
+At accessibility text sizes, the composer shows a model icon instead of a cramped
+model name. Its accessibility label and value still identify the selected model.
+Icon glyphs stay within their controls while chat text continues to scale.
+
+## Model sign-in
+
+Open the model menu in the chat composer and choose **Model sign-in**. The menu
+remains available during a response, while session settings are saving, and when
+no models are listed. Model choices still respect their existing permission and
+busy-state restrictions; opening sign-in does not grant permission to change them.
+
+When the selected model cannot send because its credentials are missing or invalid,
+a **Model sign-in** link also appears beside the composer. The link stays available
+when camera or voice-note capture replaces the model menu. Provider authentication
+and Gateway permissions are unchanged.
 
 ## Settings
 
@@ -525,7 +551,7 @@ allow-once/deny decision subset. Direct Watch Gateway mode does not carry
 approval prompts.
 
 Approval state is shared with the Control UI and supported chat surfaces. The
-first committed answer wins. iPhone and Watch fetch the Gateway's canonical
+first committed answer wins. iPhone and Watch fetch the Gateway's saved
 terminal record after another surface resolves the request, after a remote
 resolved notification, and whenever a resolve acknowledgement may have been
 lost. Actions stay unavailable until that readback confirms whether the
@@ -700,6 +726,10 @@ If mDNS is blocked, use a unicast DNS-SD zone (choose a domain; example: `opencl
 ### Manual host/port
 
 Open **Settings → Gateway**, enable **Use Manual Gateway**, and enter the Gateway host + port (default `18789`).
+
+IPv6 host fields accept raw addresses such as `fd00::1` and bracketed addresses
+such as `[fd00::1]`. Full Gateway URLs require brackets around the address,
+for example `wss://[fd00::1]:18789`.
 
 ## Multiple Gateways
 

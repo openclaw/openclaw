@@ -1,5 +1,4 @@
 // Parses and normalizes the persisted exec approval policy.
-import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
@@ -389,22 +388,21 @@ function normalizeAllowlistMetadata(
   return changed ? next : allowlist;
 }
 
+function sanitizePolicyEnum<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): T | undefined {
+  const normalized = readStringValue(value)?.trim();
+  return allowed.find((entry) => entry === normalized);
+}
+
 function sanitizeExecApprovalPolicy(
   policy: ExecApprovalsDefaults | ExecApprovalsAgent | undefined,
 ): ExecApprovalsDefaults {
-  const security = readStringValue(policy?.security)?.trim();
-  const ask = readStringValue(policy?.ask)?.trim();
-  const askFallback = readStringValue(policy?.askFallback)?.trim();
-  return {
-    security:
-      security === "deny" || security === "allowlist" || security === "full" ? security : undefined,
-    ask: ask === "off" || ask === "on-miss" || ask === "always" ? ask : undefined,
-    askFallback:
-      askFallback === "deny" || askFallback === "allowlist" || askFallback === "full"
-        ? askFallback
-        : undefined,
-    autoAllowSkills: policy?.autoAllowSkills,
-  };
+  const security = sanitizePolicyEnum(policy?.security, execSecuritySchema.options);
+  const ask = sanitizePolicyEnum(policy?.ask, execAskSchema.options);
+  const askFallback = sanitizePolicyEnum(policy?.askFallback, execSecuritySchema.options);
+  return { security, ask, askFallback, autoAllowSkills: policy?.autoAllowSkills };
 }
 
 export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApprovalsFile {
@@ -449,24 +447,35 @@ export function normalizeExecApprovalsInternal(file: ExecApprovalsFile): ExecApp
   };
 }
 
-export function mergeExecApprovalsSocketDefaults(params: {
-  normalized: ExecApprovalsFile;
-  current?: ExecApprovalsFile;
-}): ExecApprovalsFile {
-  const currentSocketPath = params.current?.socket?.path?.trim();
-  const currentToken = params.current?.socket?.token?.trim();
-  const socketPath =
-    params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? generateToken();
+/** Socket credentials are local; shared policy retains only unrelated socket metadata. */
+export function stripExecApprovalsSocketCredentials(file: ExecApprovalsFile): ExecApprovalsFile {
+  const { path: _path, token: _token, ...metadata } = file.socket ?? {};
   return {
-    ...params.normalized,
-    socket: {
-      path: socketPath,
-      token,
-    },
+    ...file,
+    socket: Object.keys(metadata).length ? metadata : undefined,
   };
 }
 
-export function generateToken(): string {
-  return randomBytes(24).toString("base64url");
+/** Raw repair preserves invalid policy fields while retiring embedded credentials. */
+export function stripExecApprovalsRawSocketCredentials(raw: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+  if (
+    !isRecord(parsed) ||
+    !isRecord(parsed.socket) ||
+    (!Object.hasOwn(parsed.socket, "path") && !Object.hasOwn(parsed.socket, "token"))
+  ) {
+    return raw;
+  }
+  const { path: _path, token: _token, ...metadata } = parsed.socket;
+  if (Object.keys(metadata).length) {
+    parsed.socket = metadata;
+  } else {
+    delete parsed.socket;
+  }
+  return `${JSON.stringify(parsed, null, 2)}\n`;
 }

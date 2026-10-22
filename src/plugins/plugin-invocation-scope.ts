@@ -1,3 +1,4 @@
+import { runWithAsyncStore } from "../shared/async-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import {
@@ -38,7 +39,8 @@ export async function runPluginCleanupScope<T>(values: readonly object[], run: (
     ]),
   );
   try {
-    return await pluginInvocationContext.run(
+    return await runWithAsyncStore(
+      pluginInvocationContext,
       {
         lookup: (instance) => {
           const binding = bindings.get(instance);
@@ -72,7 +74,9 @@ export class PluginInvocationScope {
       for (const instance of new Set(instances)) {
         if (options.retained) {
           const acquire = () =>
-            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
+            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind, {
+              reason: "invocation-scope",
+            });
           const parent = options.parent?.consumer(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
@@ -101,7 +105,6 @@ export class PluginInvocationScope {
     }
   }
 
-  /** Open retained consumers are drained by a reload that reserved their instance. */
   get holdsPendingReplacement(): boolean {
     return (
       !this.closed && [...this.consumers.keys()].some((instance) => instance.replacementPending)
@@ -118,7 +121,7 @@ export class PluginInvocationScope {
 
   run<T>(run: () => T): T {
     this.assertOpen();
-    return pluginInvocationContext.run(this, run);
+    return runWithAsyncStore(pluginInvocationContext, this, run);
   }
 
   wrap<T>(value: T): T {

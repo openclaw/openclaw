@@ -7,7 +7,8 @@ import {
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import { parseApiErrorInfo } from "../../shared/assistant-error-format.js";
-import { createWorkerInferenceManager, type WorkerInferenceExecutor } from "./inference.js";
+import type { WorkerInferenceExecutor } from "./connection-identity.js";
+import { createWorkerInferenceManager } from "./inference.js";
 import {
   accept,
   createMemoryStore,
@@ -17,22 +18,57 @@ import {
   IDENTITY,
   identityFor,
   makeManager,
+  type Manager,
   REQUEST,
   SESSION_TARGET,
   terminalFrames,
   waitForFast,
 } from "./inference.test-support.js";
 
+function start(instance: Manager, overrides: Partial<Parameters<Manager["start"]>[0]> = {}) {
+  return instance.start({
+    identity: IDENTITY,
+    request: REQUEST,
+    sessionTarget: SESSION_TARGET,
+    sink: overrides.sink ?? createSink().sink,
+    ...overrides,
+  });
+}
+
+function setup(executor: WorkerInferenceExecutor = async () => DONE) {
+  const store = createMemoryStore();
+  const begin = vi.spyOn(store, "begin");
+  const complete = vi.spyOn(store, "complete");
+  const cancelPending = vi.spyOn(store, "cancelPending");
+  const execute = vi.fn(executor);
+  return { begin, complete, cancelPending, execute, instance: makeManager(execute, store) };
+}
+
+function revalidationFailure(kind: "ordinary" | "outcome-unknown", stage: string) {
+  return new Error(`${stage} revalidation failed`, {
+    cause:
+      kind === "outcome-unknown"
+        ? new SqliteWorkerError(`${stage} native result lost`, "outcome-unknown")
+        : undefined,
+  });
+}
+
+function expectUnknownFailures(error: unknown, failures: unknown[]) {
+  expect(hasSqliteWorkerOutcomeUnknown(error)).toBe(true);
+  const graph = collectErrorGraphCandidates(error, (current) => [
+    ...(current instanceof Error ? [current.cause] : []),
+    ...(current instanceof AggregateError ? current.errors : []),
+  ]);
+  for (const failure of failures) {
+    expect(graph).toContain(failure);
+  }
+}
+
 describe("worker inference manager", () => {
   it.each(["complete", "execute", "cancelPending"] as const)(
     "preserves independent authority and native failures through %s settlement",
     async (stage) => {
       const ordinary = new Error("source authority failed independently");
-      const errorGraph = (error: unknown) =>
-        collectErrorGraphCandidates(error, (current) => [
-          ...(current instanceof Error ? [current.cause] : []),
-          ...(current instanceof AggregateError ? current.errors : []),
-        ]);
       const native = new SqliteWorkerError(
         "independent native settlement is unknown",
         "outcome-unknown",
@@ -49,10 +85,10 @@ describe("worker inference manager", () => {
           refused = error;
         }
       };
-      const store = createMemoryStore();
-      const begin = vi.spyOn(store, "begin");
-      const complete = vi.spyOn(store, "complete");
-      const cancelPending = vi.spyOn(store, "cancelPending");
+      const { begin, complete, cancelPending, instance } = setup((params) => {
+        providerEntered.resolve(params);
+        return stage === "execute" ? release.promise : Promise.resolve(DONE);
+      });
       // Synthetic controls; the SQLite refusal/reply-loss proof lives in inference-store.test.ts.
       if (stage === "complete") {
         complete.mockImplementation(async (_input, assertCurrent) => {
@@ -70,11 +106,6 @@ describe("worker inference manager", () => {
           throw native;
         });
       }
-      const execute = vi.fn<WorkerInferenceExecutor>((params) => {
-        providerEntered.resolve(params);
-        return stage === "execute" ? release.promise : Promise.resolve(DONE);
-      });
-      const instance = makeManager(execute, store);
       const sink = createSink();
       const revalidate = () => {
         if (invalid) {
@@ -83,7 +114,7 @@ describe("worker inference manager", () => {
         return null;
       };
       let cancellation: ReturnType<typeof instance.cancel> | undefined;
-      let drain: ReturnType<ReturnType<typeof instance.reserveSessionDrain>["accept"]> | undefined;
+      let drain: ReturnType<typeof instance.reserveSessionDrain> | undefined;
       try {
         if (stage === "cancelPending") {
           cancellation = instance.cancel({ identity: IDENTITY, request: REQUEST, revalidate });
@@ -96,7 +127,7 @@ describe("worker inference manager", () => {
             await providerEntered.promise;
           }
         }
-        const reserved = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+        const reserved = instance.reserveSessionDrain(REQUEST.sessionId);
         drain = reserved;
         const drained = Promise.allSettled([drain.drained]);
         invalid = true;
@@ -128,35 +159,27 @@ describe("worker inference manager", () => {
         if (settled.status !== "rejected") {
           throw new Error("raw settlement discarded independent failures");
         }
-        expect(hasSqliteWorkerOutcomeUnknown(settled.reason)).toBe(true);
-        expect(errorGraph(settled.reason)).toContain(ordinary);
-        expect(errorGraph(settled.reason)).toContain(native);
+        expectUnknownFailures(settled.reason, [ordinary, native]);
         expect(complete).toHaveBeenCalledTimes(stage === "complete" ? 1 : 0);
         expect(cancelPending).toHaveBeenCalledTimes(stage === "cancelPending" ? 1 : 0);
         expect(sink.frames).toEqual([]);
         drain.release();
         invalid = false;
-        expect(
-          await instance.start({
-            identity: IDENTITY,
-            request: REQUEST,
-            sessionTarget: SESSION_TARGET,
-            sink: sink.sink,
-          }),
-        ).toEqual({ ok: false, reason: "provider-error" });
+        expect(await start(instance, { sink: sink.sink })).toEqual({
+          ok: false,
+          reason: "provider-error",
+        });
         expect(begin).toHaveBeenCalledTimes(stage === "cancelPending" ? 0 : 1);
         const [stopped] = await Promise.allSettled([instance.stop()]);
         if (stopped.status !== "rejected") {
           throw new Error("shutdown discarded independent failures");
         }
-        expect(hasSqliteWorkerOutcomeUnknown(stopped.reason)).toBe(true);
-        expect(errorGraph(stopped.reason)).toContain(ordinary);
-        expect(errorGraph(stopped.reason)).toContain(native);
+        expectUnknownFailures(stopped.reason, [ordinary, native]);
       } finally {
         invalid = false;
         release.resolve(DONE);
         if (drain) {
-          // Accepted reservations must start even when an earlier assertion fails.
+          // Accepted drains must start even when an earlier assertion fails.
           drain.start();
           await Promise.allSettled([cancellation, drain.drained, instance.stop()]);
           drain.release();
@@ -174,20 +197,18 @@ describe("worker inference manager", () => {
       const allowBegin = createDeferred();
       const providerStarted = createDeferred();
       const finishProvider = createDeferred();
-      const store = createMemoryStore();
-      const begin = vi.spyOn(store, "begin").mockImplementation(async () => {
-        begun.resolve();
-        await allowBegin.promise;
-        return kind === "replay" ? { kind, outcome: DONE } : { kind };
-      });
-      const execute = vi.fn<WorkerInferenceExecutor>(async ({ emit }) => {
+      const { begin, execute, instance } = setup(async ({ emit }) => {
         emit({ type: "text_delta", contentIndex: 0, delta: "first" });
         providerStarted.resolve();
         await finishProvider.promise;
         emit({ type: "text_delta", contentIndex: 0, delta: "second" });
         return DONE;
       });
-      const instance = makeManager(execute, store);
+      begin.mockImplementation(async () => {
+        begun.resolve();
+        await allowBegin.promise;
+        return kind === "replay" ? { kind, outcome: DONE } : { kind };
+      });
       const first = createSink("first");
       const second = createSink("second");
       const pendingFirst = accept(instance, { sink: first.sink }, false);
@@ -226,20 +247,13 @@ describe("worker inference manager", () => {
   it.each(["ordinary", "outcome-unknown"] as const)(
     "retains %s stream revalidation failure without mutating an unknown outcome",
     async (failureKind) => {
-      const failure =
-        failureKind === "outcome-unknown"
-          ? new Error("revalidation failed", {
-              cause: new SqliteWorkerError("revalidation result lost", "outcome-unknown"),
-            })
-          : new Error("revalidation unavailable");
+      const failure = revalidationFailure(failureKind, "stream");
       const entered = createDeferred<Parameters<WorkerInferenceExecutor>[0]>();
       const finished = createDeferred<WorkerInferenceTerminalOutcome>();
-      const store = createMemoryStore();
-      const complete = vi.spyOn(store, "complete");
-      const instance = makeManager(async (params) => {
+      const { complete, instance } = setup(async (params) => {
         entered.resolve(params);
         return await finished.promise;
-      }, store);
+      });
       let current = true;
       const sink = createSink();
       await accept(instance, {
@@ -252,7 +266,7 @@ describe("worker inference manager", () => {
         },
       });
       const provider = await entered.promise;
-      const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+      const drain = instance.reserveSessionDrain(REQUEST.sessionId);
       const rejected = expect(drain.drained).rejects.toBe(failure);
       current = false;
       provider.emit({ type: "text_delta", contentIndex: 0, delta: "must be fenced" });
@@ -278,25 +292,12 @@ describe("worker inference manager", () => {
   it.each(["ordinary", "outcome-unknown"] as const)(
     "rejects a non-admitted start with its original %s authority failure",
     async (failureKind) => {
-      const failure =
-        failureKind === "outcome-unknown"
-          ? new Error("initial revalidation failed", {
-              cause: new SqliteWorkerError("initial native result lost", "outcome-unknown"),
-            })
-          : new Error("initial revalidation unavailable");
-      const store = createMemoryStore();
-      const begin = vi.spyOn(store, "begin");
-      const complete = vi.spyOn(store, "complete");
-      const cancelPending = vi.spyOn(store, "cancelPending");
-      const execute = vi.fn<WorkerInferenceExecutor>(async () => DONE);
-      const instance = makeManager(execute, store);
+      const failure = revalidationFailure(failureKind, "initial");
+      const { begin, complete, cancelPending, execute, instance } = setup();
       const sink = createSink();
       try {
         await expect(
-          instance.start({
-            identity: IDENTITY,
-            request: REQUEST,
-            sessionTarget: SESSION_TARGET,
+          start(instance, {
             sink: sink.sink,
             revalidate: () => {
               throw failure;
@@ -304,10 +305,7 @@ describe("worker inference manager", () => {
           }),
         ).rejects.toBe(failure);
         await expect(
-          instance.start({
-            identity: IDENTITY,
-            request: REQUEST,
-            sessionTarget: SESSION_TARGET,
+          start(instance, {
             sink: sink.sink,
             assertSourceCurrent: () => {
               throw failure;
@@ -330,7 +328,7 @@ describe("worker inference manager", () => {
         ).rejects.toBe(failure);
         expect(cancelPending).not.toHaveBeenCalled();
         expect(sink.frames).toEqual([]);
-        const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+        const drain = instance.reserveSessionDrain(REQUEST.sessionId);
         drain.start();
         await expect(drain.drained).resolves.toBeUndefined();
         drain.release();
@@ -347,30 +345,18 @@ describe("worker inference manager", () => {
   it.each(["ordinary", "outcome-unknown"] as const)(
     "retains %s begin-guard revalidation without completing inference",
     async (failureKind) => {
-      const failure =
-        failureKind === "outcome-unknown"
-          ? new Error("begin revalidation failed", {
-              cause: new SqliteWorkerError("begin native result lost", "outcome-unknown"),
-            })
-          : new Error("begin revalidation unavailable");
+      const failure = revalidationFailure(failureKind, "begin");
       const entered = createDeferred();
       const release = createDeferred();
-      const store = createMemoryStore();
-      const begin = vi.spyOn(store, "begin").mockImplementation(async (_input, assertCurrent) => {
+      const { begin, complete, execute, instance } = setup();
+      begin.mockImplementation(async (_input, assertCurrent) => {
         entered.resolve();
         await release.promise;
         assertCurrent?.();
         return { kind: "claimed" };
       });
-      const complete = vi.spyOn(store, "complete");
-      const execute = vi.fn<WorkerInferenceExecutor>(async () => DONE);
-      const instance = makeManager(execute, store);
       let invalid = false;
-      const started = instance.start({
-        identity: IDENTITY,
-        request: REQUEST,
-        sessionTarget: SESSION_TARGET,
-        sink: createSink().sink,
+      const started = start(instance, {
         revalidate: () => {
           if (invalid) {
             throw failure;
@@ -382,7 +368,7 @@ describe("worker inference manager", () => {
       invalid = true;
       release.resolve();
       expect(await started).toEqual({ ok: false, reason: "provider-error" });
-      const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+      const drain = instance.reserveSessionDrain(REQUEST.sessionId);
       drain.start();
       await expect(drain.drained).rejects.toBe(failure);
       drain.release();
@@ -448,14 +434,7 @@ describe("worker inference manager", () => {
     const store = createMemoryStore();
     const execute = vi.fn<WorkerInferenceExecutor>(async () => ERROR);
     const limited = createWorkerInferenceManager({ execute, store, requestMaxBytes: 32 });
-    expect(
-      await limited.start({
-        sessionTarget: SESSION_TARGET,
-        identity: IDENTITY,
-        request: REQUEST,
-        sink: createSink().sink,
-      }),
-    ).toEqual({
+    expect(await start(limited)).toEqual({
       ok: false,
       reason: "invalid-context",
     });
@@ -469,11 +448,9 @@ describe("worker inference manager", () => {
     await accept(instance, { sink: sink.sink });
     const competing = { ...REQUEST, runId: "run-b", turnId: "turn-b" };
     expect(
-      await instance.start({
-        sessionTarget: SESSION_TARGET,
+      await start(instance, {
         identity: identityFor(competing),
         request: competing,
-        sink: createSink().sink,
       }),
     ).toEqual({ ok: false, reason: "invalid-context" });
     await instance.stop();
@@ -555,7 +532,7 @@ describe("worker inference manager", () => {
       const original = createSink("original");
       await accept(instance, { sink: original.sink });
       await entered.promise;
-      const drain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+      const drain = instance.reserveSessionDrain(REQUEST.sessionId);
       drain.start();
       const failed = expect(drain.drained).rejects.toBe(failure);
       provider.resolve(ERROR);
@@ -563,12 +540,7 @@ describe("worker inference manager", () => {
       drain.release();
       expect(terminalFrames(original.frames)).toEqual([]);
       const retry = createSink("retry");
-      const retried = await instance.start({
-        identity: IDENTITY,
-        request: REQUEST,
-        sessionTarget: SESSION_TARGET,
-        sink: retry.sink,
-      });
+      const retried = await start(instance, { sink: retry.sink });
       if (kind === "outcome-unknown") {
         expect(retried).toEqual({ ok: false, reason: "provider-error" });
         expect(begin).toHaveBeenCalledOnce();
@@ -588,20 +560,16 @@ describe("worker inference manager", () => {
           },
           false,
         );
-        const successorDrain = instance.reserveSessionDrain(REQUEST.sessionId).accept();
+        const successorDrain = instance.reserveSessionDrain(REQUEST.sessionId);
         successorDrain.start();
         await expect(successorDrain.drained).resolves.toBeUndefined();
         successorDrain.release();
         expect(begin).toHaveBeenCalledTimes(2);
         expect(complete).toHaveBeenCalledTimes(2);
-        expect(
-          await instance.start({
-            identity: IDENTITY,
-            request: REQUEST,
-            sessionTarget: SESSION_TARGET,
-            sink: retry.sink,
-          }),
-        ).toEqual({ ok: false, reason: "provider-error" });
+        expect(await start(instance, { sink: retry.sink })).toEqual({
+          ok: false,
+          reason: "provider-error",
+        });
         expect(begin).toHaveBeenCalledTimes(2);
         expect(complete).toHaveBeenCalledTimes(2);
         await expect(instance.stop()).rejects.toBe(failure);
@@ -689,11 +657,8 @@ describe("worker inference manager", () => {
       [{ ...IDENTITY, ownerEpoch: REQUEST.runEpoch + 1 }, "epoch-mismatch"],
     ] as const) {
       expect(
-        await instance.start({
-          sessionTarget: SESSION_TARGET,
+        await start(instance, {
           identity,
-          request: REQUEST,
-          sink: createSink().sink,
         }),
       ).toEqual({
         ok: false,

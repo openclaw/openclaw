@@ -1,7 +1,11 @@
+import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
+import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store.types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -10,15 +14,26 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import { waitForAgentRunReply } from "../run-wait.js";
+import {
+  isTerminalAgentWaitTimeout,
+  readLatestAssistantReply,
+  waitForAgentRunReply,
+} from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   runWithGatewayToolContinuationContext,
 } from "./in-process-gateway.js";
+import { recordSessionToolActionFact } from "./sessions-access.js";
+import { sendReplyResult } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import type { SessionsSendStart } from "./sessions-send-tool.delivery.js";
+import type { AgentStepSession } from "./sessions-send-tool.types.js";
+import { jsonResult } from "./tool-results.js";
 const log = createSubsystemLogger("agents/sessions-send");
 
 /** Await custody transfer before returning the tool; result observation stays detached. */
@@ -84,6 +99,7 @@ export function startSessionsSendReplyFlow(
                 threadId: stringifyRouteThreadId(params.requesterOrigin?.threadId),
               },
               privateCompletion: true,
+              agentToolCaller: params.requester,
               expectFinal: true,
               onAccepted: (payload) => {
                 const receipt = asOptionalRecord(payload);
@@ -117,7 +133,8 @@ export function startSessionsSendReplyFlow(
               }
               return receipt;
             };
-            if (responseLost || isGatewayAgentRunPending(readReceipt())) {
+            let receipt = responseLost ? undefined : readReceipt();
+            if (responseLost || isGatewayAgentRunPending(receipt)) {
               const result = await waitForAgentRunReply({
                 runId: idempotencyKey,
                 timeoutMs,
@@ -143,8 +160,9 @@ export function startSessionsSendReplyFlow(
               // A successful run permits receipt-only replay of this exact
               // input. Failed or timed-out processing must never execute again here.
               response = await dispatch();
+              receipt = readReceipt();
             }
-            const delivery = resolvePrivateCompletionDeliveryResult(readReceipt());
+            const delivery = resolvePrivateCompletionDeliveryResult(receipt);
             if (!delivery.delivered) {
               throw new Error(delivery.error ?? "Private requester input was not processed.");
             }
@@ -193,4 +211,232 @@ export function startSessionsSendReplyFlow(
       });
     });
   return admitted.promise;
+}
+
+type SessionsSendReplyContext = Omit<
+  Parameters<typeof startSessionsSendReplyFlow>[0],
+  "runId" | "skip" | "completion" | "reply"
+>;
+
+/** Bind result routing to the captured requester and select its single completion owner. */
+export function prepareSessionsSendReplyContext(params: {
+  callerOwnsCompletion: boolean;
+  requesterIsSubagent: boolean;
+  ownedTask: boolean;
+  isIsolatedCronRequester: boolean;
+  targetIsSubagent: boolean;
+  requesterSessionKey: string;
+  targetSession:
+    | (NonNullable<Parameters<typeof isRequesterParentOfBackgroundAcpSession>[0]> &
+        AgentStepSession)
+    | undefined;
+  requesterTarget: GatewaySessionStoreTargetWithStore;
+  requesterSessionId?: string;
+  context: Omit<
+    SessionsSendReplyContext,
+    "replyMode" | "requesterSession" | "requesterDeliveryGeneration" | "targetSession"
+  >;
+}): SessionsSendReplyContext {
+  const caller = getGatewayToolCallerIdentity();
+  const requester = caller?.requesterOrigin
+    ? {
+        agentId: caller.agentId,
+        sessionKey: caller.sessionKey,
+        requesterOrigin: caller.requesterOrigin,
+      }
+    : undefined;
+  const requesterSessionEntry = params.requesterTarget.store[params.requesterTarget.canonicalKey];
+  const requesterSessionId = params.requesterSessionId ?? requesterSessionEntry?.sessionId;
+  const requesterSession = requesterSessionId
+    ? {
+        sessionId: requesterSessionId,
+        lifecycleRevision: requesterSessionEntry?.lifecycleRevision,
+      }
+    : undefined;
+  const requesterDeliveryGeneration =
+    requesterSessionEntry && requesterSession
+      ? {
+          agentId: params.requesterTarget.agentId,
+          storePath: params.requesterTarget.storePath,
+          sessionKey: params.requesterTarget.canonicalKey,
+          ...requesterSession,
+          lifecycleRevision: requesterSession.lifecycleRevision ?? null,
+        }
+      : undefined;
+  const taskOwned =
+    params.callerOwnsCompletion ||
+    params.requesterIsSubagent ||
+    params.ownedTask ||
+    params.isIsolatedCronRequester ||
+    isRequesterParentOfBackgroundAcpSession(params.targetSession, params.requesterSessionKey);
+  return {
+    ...params.context,
+    requester,
+    requesterSession,
+    requesterDeliveryGeneration,
+    targetSession: params.targetSession
+      ? {
+          sessionId: params.targetSession.sessionId,
+          lifecycleRevision: params.targetSession.lifecycleRevision,
+        }
+      : undefined,
+    replyMode: taskOwned ? undefined : params.targetIsSubagent ? "one-way" : "peer",
+  };
+}
+
+/** Resolve one accepted send inline or transfer its existing result custody before returning. */
+export async function finishSessionsSendReply(params: {
+  start: SessionsSendStart;
+  completion?: FollowupCompletionOwner;
+  registryCompletion: boolean;
+  watchField: { watched?: boolean };
+  replyContext: SessionsSendReplyContext;
+  targetSession: GatewaySessionStoreTargetWithStore;
+  cfg: OpenClawConfig;
+  requesterAgentId: string;
+  promptedAt: number;
+  timeoutSeconds: number;
+  timeoutMs: number;
+  targetIsSubagent: boolean;
+  isIsolatedCronRequester: boolean;
+}) {
+  const {
+    start,
+    completion,
+    registryCompletion,
+    watchField,
+    replyContext,
+    targetSession,
+    cfg,
+    requesterAgentId,
+    promptedAt,
+    timeoutSeconds,
+    timeoutMs,
+    targetIsSubagent,
+    isIsolatedCronRequester,
+  } = params;
+  if (!start.ok) {
+    return start.result;
+  }
+  const acceptedTargetSessionKey = start.a2aSessionKey ?? replyContext.targetSessionKey;
+  // Steering and registered completion owners retain their delivery obligation.
+  const delayedDelivery = {
+    status:
+      registryCompletion || (replyContext.replyMode && start.targetDisposition === "queued")
+        ? "pending"
+        : "skipped",
+  } as const;
+  recordSessionToolActionFact({
+    operation: "send",
+    fact: "committed",
+    targetAgentId: replyContext.targetAgentId,
+    targetSessionKey: acceptedTargetSessionKey,
+  });
+  try {
+    const acceptedTarget = start.a2aSessionKey
+      ? await resolveGatewaySessionStoreTargetInWorker({
+          cfg,
+          key: acceptedTargetSessionKey,
+          agentId: replyContext.targetAgentId,
+          projection: "full",
+        })
+      : targetSession;
+    if (start.a2aSessionKey && !acceptedTarget.store[acceptedTarget.canonicalKey]) {
+      throw new Error("Accepted Cron parent has no stored session entry.");
+    }
+    recordSessionParticipantBestEffort({
+      identity: { type: "agent", id: requesterAgentId },
+      promptedAt,
+      agentId: acceptedTarget.agentId,
+      sessionKey: acceptedTarget.canonicalKey,
+      storePath: acceptedTarget.storePath,
+      onError: (error) => log.warn("failed to record session participant", { error }),
+    });
+  } catch (error) {
+    log.warn("failed to record session participant", { error });
+  }
+  const runId = start.runId;
+  const accepted = () =>
+    jsonResult({
+      runId,
+      status: "accepted",
+      sessionKey: replyContext.displayKey,
+      targetDisposition: start.targetDisposition,
+      delivery: delayedDelivery,
+      ...watchField,
+    });
+  const startReplyFlow = (notifyRequesterOnWaitFailure: boolean) =>
+    startSessionsSendReplyFlow({
+      ...replyContext,
+      runId,
+      completion,
+      skip: registryCompletion || delayedDelivery.status === "skipped",
+      targetSessionKey: acceptedTargetSessionKey,
+      targetSession: start.a2aSession ?? replyContext.targetSession,
+      replyAdmission: start.replyAdmission,
+      displayKey: start.a2aSessionKey ?? replyContext.displayKey,
+      notifyRequesterOnWaitFailure: notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
+    });
+  const result =
+    // An active turn has no final-response identity correlated to this accepted input.
+    timeoutSeconds === 0 || start.targetDisposition === "steered"
+      ? undefined
+      : completion
+        ? await completion.take(timeoutMs)
+        : await waitForAgentRunReply({ runId, timeoutMs, callGateway: replyContext.callGateway });
+  if (!result) {
+    await startReplyFlow(true);
+    return accepted();
+  }
+  completion?.close();
+
+  if (result.status === "timeout") {
+    if (result.pendingError === true && result.error?.trim()) {
+      await startReplyFlow(targetIsSubagent);
+      return jsonResult({
+        runId,
+        status: "timeout",
+        error: result.error,
+        sentBeforeError: true,
+        sessionKey: replyContext.displayKey,
+        delivery: delayedDelivery,
+        ...watchField,
+      });
+    }
+    if (!isTerminalAgentWaitTimeout(result)) {
+      await startReplyFlow(true);
+      return accepted();
+    }
+  }
+  if (result.status === "timeout" || result.status === "error") {
+    return jsonResult({
+      runId,
+      status: result.status,
+      error: result.error ?? (result.status === "timeout" ? "agent run timed out" : "agent error"),
+      sentBeforeError: true,
+      sessionKey: replyContext.displayKey,
+      ...watchField,
+    });
+  }
+  let { replyText } = result;
+  let replyTruncated: true | undefined;
+  // Whitespace trimming can shorten a truncated preview; its length is not evidence of completeness.
+  if (replyText?.endsWith("…")) {
+    const stored = await readLatestAssistantReply({
+      runId,
+      sessionKey: acceptedTargetSessionKey,
+      agentId: replyContext.targetAgentId,
+      callGateway: replyContext.callGateway,
+    }).catch(() => undefined);
+    const snapshot = stored === undefined ? undefined : sanitizeAgentRunTerminalReply(stored);
+    if (snapshot?.disposition === "visible" && snapshot.text === replyText) {
+      replyText = stored;
+    } else {
+      replyTruncated = true;
+    }
+  }
+  return sendReplyResult(
+    { runId, sessionKey: replyContext.displayKey, ...watchField },
+    { ...result, replyText, replyTruncated },
+  );
 }

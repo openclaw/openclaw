@@ -1,111 +1,32 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
-import { type AddressInfo, createServer } from "node:net";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
-import type { Readable } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import { stopChildProcess } from "../../../test/helpers/stop-child-process.ts";
-import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   canRunPlaywrightChromium,
   controlUiSessionUrl,
   resolvePlaywrightChromiumExecutablePath,
   type ControlUiMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import {
+  startFixtureServer,
+  stopFixtureServer,
+  type FixtureServer,
+} from "./board-fixture-server.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const describeStandaloneMockServer =
   chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-type FixtureProcess = ChildProcessByStdio<null, Readable, Readable>;
-
-type FixtureServer = {
-  child: FixtureProcess;
-  url: string;
-  output: () => string;
-};
-
-async function reservePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const port = (server.address() as AddressInfo).port;
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return port;
-}
-
-async function startFixtureServer(fixture?: "attachments" | "workboard"): Promise<FixtureServer> {
-  const port = await reservePort();
-  const url = `http://127.0.0.1:${port}/__fixtures/board/`;
-  const child = spawn(
-    process.execPath,
-    [
-      "--import",
-      "./scripts/tsx.mjs",
-      "scripts/control-ui-mock-dev.ts",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      ...(fixture ? ["--fixture", fixture] : []),
-    ],
-    {
-      cwd: repoRoot,
-      env: { ...process.env, CI: "1" },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  let output = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk: string) => {
-    output += chunk;
-  });
-  child.stderr.on("data", (chunk: string) => {
-    output += chunk;
-  });
-  const mockServer = { child, url, output: () => output };
-
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`Control UI mock server exited before startup\n${output}`);
-    }
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        return mockServer;
-      }
-    } catch {}
-    await delay(100);
-  }
-
-  await stopFixtureServer(mockServer);
-  throw new Error(`timed out waiting for Control UI mock server\n${output}`);
-}
-
-async function stopFixtureServer(server: FixtureServer | undefined): Promise<void> {
-  if (server) {
-    await stopChildProcess(server.child, 5_000);
-  }
-}
 
 function colorChannelToLinear(channel: number): number {
   const value = channel / 255;
@@ -138,14 +59,13 @@ async function openWidgetMenu(page: Page): Promise<void> {
   const widget = page.locator('[data-test-id="board-widget"]').first();
   await widget.focus();
   await widget.locator(".board-widget__menu-trigger").click();
-  await page.locator(".board-widget__menu[open]").waitFor();
+  await widget.locator(".board-widget__menu-panel:popover-open").waitFor();
 }
 
 async function readMenuColors(page: Page): Promise<{ background: string; foreground: string }> {
   return page.evaluate(() => {
-    const dropdown = document.querySelector(".board-widget__menu");
-    const item = dropdown?.querySelector("wa-dropdown-item:not(.board-widget__menu-danger)");
-    const menu = dropdown?.shadowRoot?.querySelector('[part~="menu"]');
+    const menu = document.querySelector(".board-widget__menu-panel:popover-open");
+    const item = menu?.querySelector('[role="menuitem"]:not(.board-widget__menu-danger)');
     if (!(item instanceof HTMLElement) || !(menu instanceof HTMLElement)) {
       throw new Error("board fixture menu did not expose its surface and first item");
     }
@@ -159,20 +79,209 @@ async function readMenuColors(page: Page): Promise<{ background: string; foregro
 let browser: Browser;
 let fixtureServer: FixtureServer;
 
+function withFixturePage(run: (page: Page) => Promise<void>) {
+  return async () => {
+    const page = await browser.newPage();
+    try {
+      await run(page);
+    } finally {
+      await page.close();
+    }
+  };
+}
+
+async function openPreviewChat(page: Page) {
+  await page.goto(new URL("/chat", fixtureServer.url).toString());
+  await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+}
+
+async function isolatedPage(
+  url = fixtureServer.url,
+  options: Parameters<Browser["newContext"]>[0] = {},
+  allowedOrigins: string[] = [],
+  abortCode = "blockedbyclient",
+) {
+  const context = await browser.newContext(options);
+  const origin = new URL(url).origin;
+  const escaped: string[] = [],
+    requests: string[] = [];
+  try {
+    await context.route("**/*", (route) => {
+      const target = route.request().url();
+      requests.push(target);
+      if ([origin, ...allowedOrigins].includes(new URL(target).origin)) {
+        return route.continue();
+      }
+      escaped.push(target);
+      return route.abort(abortCode);
+    });
+    return { context, page: await context.newPage(), origin, escaped, requests };
+  } catch (error) {
+    await context.close();
+    throw error;
+  }
+}
+
+const textMessage = (role: string, text: string) =>
+  expect.objectContaining({
+    role,
+    content: [{ type: "text", text: expect.stringContaining(text) }],
+  });
+
 async function requestPreviewGateway(
   page: Page,
   requests: Array<{ method: string; params?: unknown }>,
 ): Promise<unknown[]> {
-  return page.evaluate((batch) => {
-    const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
-      "openclaw-app",
+  return evaluateControlUiContext(
+    page,
+    (context, batch) => {
+      const client = context.gateway.snapshot.client;
+      if (!client) {
+        throw new Error("Preview Gateway client is unavailable");
+      }
+      return Promise.all(batch.map(({ method, params }) => client.request(method, params)));
+    },
+    requests,
+  );
+}
+
+async function probeNativeEgress(page: Page, sinkUrl: string) {
+  return page.evaluate(async (sinkOrigin) => {
+    const results: Record<string, string> = {};
+    const rejected = async (name: string, run: () => unknown) => {
+      try {
+        await run();
+        results[name] = "allowed";
+      } catch {
+        results[name] = "blocked";
+      }
+    };
+    const localForm = document.createElement("form");
+    localForm.addEventListener("submit", (event) => {
+      event.preventDefault();
+      results.formHandler = "handled";
+    });
+    document.body.append(localForm);
+    localForm.requestSubmit();
+    localForm.remove();
+    await rejected("fetch", () => fetch(`${sinkOrigin}/fetch`));
+    await rejected("rtc", () => new RTCPeerConnection());
+    const workerUrl = URL.createObjectURL(
+      new Blob(["postMessage('escaped')"], { type: "text/javascript" }),
     );
-    const client = app?.runtime?.context.gateway.snapshot.client;
-    if (!client) {
-      throw new Error("Preview Gateway client is unavailable");
+    const worker = new Worker(workerUrl);
+    await rejected(
+      "worker",
+      () =>
+        new Promise((resolve, reject) => {
+          worker.addEventListener("message", resolve, { once: true });
+          worker.addEventListener("error", reject, { once: true });
+        }),
+    );
+    worker.terminate();
+    URL.revokeObjectURL(workerUrl);
+    results.popup = window.open(`${sinkOrigin}/popup`) === null ? "blocked" : "allowed";
+
+    // Each native attempt completes at the browser's policy event; no sleep
+    // or request interception can make a missing boundary pass this proof.
+    const policy = async (name: string, directive: string, run: () => void) => {
+      await new Promise<void>((resolve) => {
+        const listener = (event: SecurityPolicyViolationEvent) => {
+          if (event.effectiveDirective !== directive || !event.blockedURI.startsWith(sinkOrigin)) {
+            return;
+          }
+          document.removeEventListener("securitypolicyviolation", listener);
+          resolve();
+        };
+        document.addEventListener("securitypolicyviolation", listener);
+        run();
+      });
+      results[name] = "blocked";
+    };
+    // The navigation guard cancels this POST before CSP evaluates it.
+    const form = document.createElement("form");
+    form.action = `${sinkOrigin}/form`;
+    form.method = "POST";
+    document.body.append(form);
+    await new Promise<void>((resolve) => {
+      window.navigation.addEventListener(
+        "navigate",
+        (event) => {
+          results.form =
+            event.destination.url === form.action && event.defaultPrevented ? "blocked" : "allowed";
+          resolve();
+        },
+        { once: true },
+      );
+      form.submit();
+    });
+    form.remove();
+    await policy("xhr", "connect-src", () => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", `${sinkOrigin}/xhr`);
+      xhr.send();
+    });
+    let events: EventSource;
+    await policy("eventSource", "connect-src", () => {
+      events = new EventSource(`${sinkOrigin}/events`);
+    });
+    events!.close();
+    await policy("beacon", "connect-src", () => {
+      navigator.sendBeacon(`${sinkOrigin}/beacon`, "probe");
+    });
+    await policy("image", "img-src", () => {
+      const image = new Image();
+      image.src = `${sinkOrigin}/image`;
+      document.body.append(image);
+    });
+    await policy("media", "media-src", () => {
+      const audio = document.createElement("audio");
+      audio.preload = "auto";
+      audio.src = `${sinkOrigin}/media`;
+      document.body.append(audio);
+      audio.load();
+    });
+    for (const setter of ["property", "attribute", "namespaced", "empty-namespace"] as const) {
+      await rejected(`iframe:${setter}`, () => {
+        const frame = document.createElement("iframe");
+        const url = `${sinkOrigin}/frame`;
+        if (setter === "property") {
+          frame.src = url;
+        } else if (setter === "attribute") {
+          frame.setAttribute("src", url);
+        } else {
+          const namespace = setter === "namespaced" ? null : "";
+          frame.setAttributeNS(namespace, "src", url);
+        }
+        document.body.append(frame);
+      });
     }
-    return Promise.all(batch.map(({ method, params }) => client.request(method, params)));
-  }, requests);
+    await policy("script", "script-src-elem", () => {
+      const script = document.createElement("script");
+      script.src = `${sinkOrigin}/script`;
+      document.head.append(script);
+    });
+    await policy("style", "style-src-elem", () => {
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = `${sinkOrigin}/style`;
+      document.head.append(link);
+    });
+    await rejected("font", () => new FontFace("sink-probe", `url(${sinkOrigin}/font)`).load());
+    const forgedHmr = new WebSocket(`${sinkOrigin.replace("http:", "ws:")}/forged-hmr`, "vite-hmr");
+    await new Promise<void>((resolve) => {
+      forgedHmr.addEventListener("error", () => resolve(), { once: true });
+    });
+    forgedHmr.close();
+    results.forgedHmr = "blocked";
+    const beforeNavigation = location.href;
+    location.assign(`${sinkOrigin}/navigation`);
+    results.navigation = location.href === beforeNavigation ? "blocked" : "allowed";
+    // Same-origin completion sentinel proves the document is still live.
+    const sentinel = await fetch("/control-ui-config.json");
+    results.sentinel = sentinel.ok ? "local" : "failed";
+    return results;
+  }, sinkUrl);
 }
 
 describeStandaloneMockServer("standalone Control UI mock server", () => {
@@ -190,11 +299,10 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     );
   });
 
-  it("correlates concurrent caretaker replies with their original requests", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+  it(
+    "correlates concurrent caretaker replies with their original requests",
+    withFixturePage(async (page) => {
+      await openPreviewChat(page);
       const replies = await requestPreviewGateway(page, [
         { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
         { method: "openclaw.chat", params: { sessionId: "welcome" } },
@@ -203,16 +311,13 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         { sessionId: "delayed", reply: expect.stringContaining("demo turn 0") },
         { sessionId: "welcome", reply: expect.stringContaining("system caretaker") },
       ]);
-    } finally {
-      await page.close();
-    }
-  });
+    }),
+  );
 
-  it("keeps renamed preview groups authoritative across reads and reloads", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+  it(
+    "keeps renamed preview groups authoritative across reads and reloads",
+    withFixturePage(async (page) => {
+      await openPreviewChat(page);
       await requestPreviewGateway(page, [
         { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
       ]);
@@ -225,84 +330,67 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
         ]);
       }
-    } finally {
-      await page.close();
-    }
-  });
-
-  it.each([
-    {
-      sessionKey: "agent:main:tax-research",
-      user: "Inspect this session.",
-      assistant: "The current state is available in the session controls.",
-    },
-  ])(
-    "serves preview session $sessionKey through both chat entry points",
-    async ({ sessionKey, user, assistant }) => {
-      const page = await browser.newPage();
-      try {
-        await page.goto(new URL("/chat", fixtureServer.url).toString());
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-        const sampledAt = 1_790_598_431_356;
-        await page.clock.setFixedTime(sampledAt);
-        const [description] = (await requestPreviewGateway(page, [
-          { method: "sessions.describe", params: { key: sessionKey } },
-        ])) as Array<{ session: { sessionId: string; snapshotAt: number } }>;
-        expect(description).toMatchObject({
-          session: { key: sessionKey, sessionId: expect.any(String), snapshotAt: sampledAt },
-        });
-        // Each projection samples its read clock, not the stored row. Advance
-        // Date without delaying timers so descriptor/history/startup cannot
-        // accidentally pass by sharing one millisecond.
-        const replies: unknown[] = [];
-        for (const [index, method] of ["chat.history", "chat.startup"].entries()) {
-          await page.clock.setFixedTime(sampledAt + index + 1);
-          const [reply] = await requestPreviewGateway(page, [{ method, params: { sessionKey } }]);
-          replies.push(reply);
-        }
-        const userMessage = expect.objectContaining({
-          role: "user",
-          content: [{ type: "text", text: expect.stringContaining(user) }],
-        });
-        const assistantMessage = expect.objectContaining({
-          role: "assistant",
-          content: [{ type: "text", text: expect.stringContaining(assistant) }],
-        });
-        for (const [index, reply] of replies.entries()) {
-          expect(reply).toMatchObject({
-            sessionId: description!.session.sessionId,
-            sessionInfo: { ...description!.session, snapshotAt: sampledAt + index + 1 },
-            messages: expect.arrayContaining([userMessage, assistantMessage]),
-          });
-          const messages = asNullableRecord(reply)?.messages;
-          if (!Array.isArray(messages)) {
-            throw new Error("Background task history must contain messages");
-          }
-          const userIndex = messages.findIndex((message) => userMessage.asymmetricMatch(message));
-          const assistantIndex = messages.findIndex((message) =>
-            assistantMessage.asymmetricMatch(message),
-          );
-          expect(userIndex).toBeLessThan(assistantIndex);
-        }
-        const history = asNullableRecord(replies[0]);
-        expect(replies[1]).toMatchObject({
-          ...history,
-          sessionInfo: {
-            ...asNullableRecord(history?.sessionInfo),
-            snapshotAt: sampledAt + 2,
-          },
-        });
-      } finally {
-        await page.close();
-      }
-    },
+    }),
   );
 
-  it("keeps the main preview run active when hydrating canonical session metadata", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+  it(
+    "serves preview session agent:main:tax-research through both chat entry points",
+    withFixturePage(async (page) => {
+      const sessionKey = "agent:main:tax-research";
+      await openPreviewChat(page);
+      const sampledAt = 1_790_598_431_356;
+      await page.clock.setFixedTime(sampledAt);
+      const [description] = (await requestPreviewGateway(page, [
+        { method: "sessions.describe", params: { key: sessionKey } },
+      ])) as Array<{ session: { sessionId: string; snapshotAt: number } }>;
+      expect(description).toMatchObject({
+        session: { key: sessionKey, sessionId: expect.any(String), snapshotAt: sampledAt },
+      });
+      // Each projection samples its read clock, not the stored row. Advance
+      // Date without delaying timers so descriptor/history/startup cannot
+      // accidentally pass by sharing one millisecond.
+      const replies: unknown[] = [];
+      for (const [index, method] of ["chat.history", "chat.startup"].entries()) {
+        await page.clock.setFixedTime(sampledAt + index + 1);
+        const [reply] = await requestPreviewGateway(page, [{ method, params: { sessionKey } }]);
+        replies.push(reply);
+      }
+      const userMessage = textMessage("user", "Inspect this session.");
+      const assistantMessage = textMessage(
+        "assistant",
+        "The current state is available in the session controls.",
+      );
+      for (const [index, reply] of replies.entries()) {
+        expect(reply).toMatchObject({
+          sessionId: description!.session.sessionId,
+          sessionInfo: { ...description!.session, snapshotAt: sampledAt + index + 1 },
+          messages: expect.arrayContaining([userMessage, assistantMessage]),
+        });
+        const messages = asNullableRecord(reply)?.messages;
+        if (!Array.isArray(messages)) {
+          throw new Error("Background task history must contain messages");
+        }
+        const userIndex = messages.findIndex((message) => userMessage.asymmetricMatch(message));
+        const assistantIndex = messages.findIndex((message) =>
+          assistantMessage.asymmetricMatch(message),
+        );
+        expect(userIndex).toBeLessThan(assistantIndex);
+      }
+      const history = asNullableRecord(replies[0]);
+      expect(replies[1]).toMatchObject({
+        ...history,
+        sessionInfo: {
+          ...asNullableRecord(history?.sessionInfo),
+          snapshotAt: sampledAt + 2,
+        },
+      });
+    }),
+  );
+
+  it(
+    "keeps the main preview run active when hydrating canonical session metadata",
+    withFixturePage(async (page) => {
+      await openPreviewChat(page);
       expect(
         await requestPreviewGateway(page, [
           { method: "chat.startup", params: { sessionKey: "agent:main:main" } },
@@ -314,16 +402,13 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         },
       ]);
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
-    } finally {
-      await page.close();
-    }
-  });
+    }),
+  );
 
-  it("keeps generated search-session metadata in the canonical fixture catalog", async () => {
-    const page = await browser.newPage();
-    try {
-      await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+  it(
+    "keeps generated search-session metadata in the canonical fixture catalog",
+    withFixturePage(async (page) => {
+      await openPreviewChat(page);
       const replies = await requestPreviewGateway(
         page,
         ["telegram", "claude"].map((search) => ({
@@ -346,27 +431,18 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           ]),
         },
       ]);
-    } finally {
-      await page.close();
-    }
-  });
+    }),
+  );
 
   it("keeps synthetic avatar requests on the preview origin across reloads", async () => {
-    const context = await browser.newContext();
-    const previewOrigin = new URL(fixtureServer.url).origin;
-    const externalRequests: string[] = [];
+    const {
+      context,
+      page,
+      origin: previewOrigin,
+      escaped,
+    } = await isolatedPage(fixtureServer.url, {}, [], "failed");
     const avatarRequests: string[] = [];
     try {
-      // A failing regression must never reach a developer's real Gateway.
-      await context.route("**/*", (route) => {
-        const url = route.request().url();
-        if (new URL(url).origin !== previewOrigin) {
-          externalRequests.push(url);
-          return route.abort();
-        }
-        return route.continue();
-      });
-      const page = await context.newPage();
       page.on("request", (request) => {
         if (new URL(request.url()).pathname === "/api/users/presence-riley/avatar") {
           avatarRequests.push(request.url());
@@ -383,7 +459,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         expect([...new Set(avatarRequests.map((url) => new URL(url).origin))]).toEqual([
           previewOrigin,
         ]);
-        expect(externalRequests).toEqual([]);
+        expect(escaped).toEqual([]);
       }
     } finally {
       await context.close();
@@ -392,41 +468,35 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
 
   it("keeps profile and presence HTTP inside the standalone mock", async () => {
     const artifacts = createControlUiE2eArtifactDir("standalone-network-isolation");
-    const origin = new URL(fixtureServer.url).origin;
-    const escaped: string[] = [];
-    const requests: string[] = [];
-    const context = await browser.newContext({
+    const { context, page, origin, escaped, requests } = await isolatedPage(fixtureServer.url, {
       serviceWorkers: "block",
       viewport: { width: 1440, height: 1000 },
       recordVideo: captureUiProof ? { dir: artifacts } : undefined,
     });
     await runQaGatewayFixture(
       async () => {
-        // A pre-fix tripwire protects the operator, but every rejected escape still fails the test.
-        await context.route("**/*", (route) => {
-          const url = route.request().url();
-          requests.push(url);
-          if (new URL(url).origin !== origin) {
-            escaped.push(url);
-            return route.abort("blockedbyclient");
-          }
-          return route.continue();
-        });
-        const page = await context.newPage();
         await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
+        // The fixture viewer is Riley; this shared checkout belongs to Peter.
+        await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
         await page.getByRole("button", { name: "Write a message to send." }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "chat.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "chat.png") });
+        }
         await page.goto(`${origin}/profile`, { waitUntil: "networkidle" });
         await expect
           .poll(() => page.getByRole("textbox", { name: "Display name", exact: true }).inputValue())
           .toBe("Riley");
-        await page.screenshot({ path: path.join(artifacts, "profile.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "profile.png") });
+        }
         await page.goto(`${origin}/focus/terminal`, { waitUntil: "networkidle" });
         const terminal = page.locator("openclaw-terminal-panel");
         await terminal.locator(".tabstrip-tab.is-live").waitFor();
         await terminal.locator(".tp-host canvas").waitFor({ state: "visible" });
-        await page.screenshot({ path: path.join(artifacts, "terminal.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "terminal.png") });
+        }
         expect(
           escaped,
           "standalone mock must not attempt Gateway HTTP or external requests",
@@ -459,22 +529,18 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const sinkUrl = `http://127.0.0.1:${(sink.address() as AddressInfo).port}`;
     const origin = new URL(fixtureServer.url).origin;
     let context: BrowserContext | undefined;
-    const escaped: string[] = [];
+    let escaped: string[] = [];
     const outcomes: Record<string, unknown> = {};
     await runQaGatewayFixture(
       async () => {
-        context = await browser.newContext({ serviceWorkers: "block" });
         // Allow the synthetic sink through: the browser/server boundary, not the
         // test router, must prevent TCP connections. Still protect other origins.
-        await context.route("**/*", (route) => {
-          const target = new URL(route.request().url()).origin;
-          if (target === origin || target === sinkUrl) {
-            return route.continue();
-          }
-          escaped.push(route.request().url());
-          return route.abort("blockedbyclient");
-        });
-        const page = await context.newPage();
+        const isolated = await isolatedPage(fixtureServer.url, { serviceWorkers: "block" }, [
+          sinkUrl,
+        ]);
+        context = isolated.context;
+        escaped = isolated.escaped;
+        const { page } = isolated;
         const hmr: string[] = [];
         page.on("websocket", (socket) => {
           socket.on("framereceived", ({ payload }) => {
@@ -513,178 +579,13 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         expect(hmr.every((url) => new URL(url).host === new URL(origin).host)).toBe(true);
         outcomes.hmr = hmr;
 
-        outcomes.top = await page.evaluate(async (sinkOrigin) => {
-          const results: Record<string, string> = {};
-          const rejected = async (name: string, run: () => unknown) => {
-            try {
-              await run();
-              results[name] = "allowed";
-            } catch {
-              results[name] = "blocked";
-            }
-          };
-          const localForm = document.createElement("form");
-          localForm.addEventListener("submit", (event) => {
-            event.preventDefault();
-            results.formHandler = "handled";
-          });
-          document.body.append(localForm);
-          localForm.requestSubmit();
-          localForm.remove();
-          await rejected("fetch", () => fetch(`${sinkOrigin}/fetch`));
-          await rejected("rtc", () => new RTCPeerConnection());
-          const workerUrl = URL.createObjectURL(
-            new Blob(["postMessage('escaped')"], { type: "text/javascript" }),
-          );
-          const worker = new Worker(workerUrl);
-          await rejected(
-            "worker",
-            () =>
-              new Promise((resolve, reject) => {
-                worker.addEventListener("message", resolve, { once: true });
-                worker.addEventListener("error", reject, { once: true });
-              }),
-          );
-          worker.terminate();
-          URL.revokeObjectURL(workerUrl);
-          results.popup = window.open(`${sinkOrigin}/popup`) === null ? "blocked" : "allowed";
-
-          // Each native attempt completes at the browser's policy event; no sleep
-          // or request interception can make a missing boundary pass this proof.
-          const policy = async (name: string, directive: string, run: () => void) => {
-            await new Promise<void>((resolve) => {
-              const listener = (event: SecurityPolicyViolationEvent) => {
-                if (
-                  event.effectiveDirective !== directive ||
-                  !event.blockedURI.startsWith(sinkOrigin)
-                ) {
-                  return;
-                }
-                document.removeEventListener("securitypolicyviolation", listener);
-                resolve();
-              };
-              document.addEventListener("securitypolicyviolation", listener);
-              run();
-            });
-            results[name] = "blocked";
-          };
-          // The navigation guard cancels this POST before CSP evaluates it.
-          const form = document.createElement("form");
-          form.action = `${sinkOrigin}/form`;
-          form.method = "POST";
-          document.body.append(form);
-          await new Promise<void>((resolve) => {
-            window.navigation.addEventListener(
-              "navigate",
-              (event) => {
-                results.form =
-                  event.destination.url === form.action && event.defaultPrevented
-                    ? "blocked"
-                    : "allowed";
-                resolve();
-              },
-              { once: true },
-            );
-            form.submit();
-          });
-          form.remove();
-          await policy("xhr", "connect-src", () => {
-            const xhr = new XMLHttpRequest();
-            xhr.open("GET", `${sinkOrigin}/xhr`);
-            xhr.send();
-          });
-          let events: EventSource;
-          await policy("eventSource", "connect-src", () => {
-            events = new EventSource(`${sinkOrigin}/events`);
-          });
-          events!.close();
-          await policy("beacon", "connect-src", () => {
-            navigator.sendBeacon(`${sinkOrigin}/beacon`, "probe");
-          });
-          await policy("image", "img-src", () => {
-            const image = new Image();
-            image.src = `${sinkOrigin}/image`;
-            document.body.append(image);
-          });
-          await policy("media", "media-src", () => {
-            const audio = document.createElement("audio");
-            audio.preload = "auto";
-            audio.src = `${sinkOrigin}/media`;
-            document.body.append(audio);
-            audio.load();
-          });
-          for (const setter of [
-            "property",
-            "attribute",
-            "namespaced",
-            "empty-namespace",
-          ] as const) {
-            await rejected(`iframe:${setter}`, () => {
-              const frame = document.createElement("iframe");
-              const url = `${sinkOrigin}/frame`;
-              if (setter === "property") {
-                frame.src = url;
-              } else if (setter === "attribute") {
-                frame.setAttribute("src", url);
-              } else {
-                const namespace = setter === "namespaced" ? null : "";
-                frame.setAttributeNS(namespace, "src", url);
-              }
-              document.body.append(frame);
-            });
-          }
-          await policy("script", "script-src-elem", () => {
-            const script = document.createElement("script");
-            script.src = `${sinkOrigin}/script`;
-            document.head.append(script);
-          });
-          await policy("style", "style-src-elem", () => {
-            const link = document.createElement("link");
-            link.rel = "stylesheet";
-            link.href = `${sinkOrigin}/style`;
-            document.head.append(link);
-          });
-          await rejected("font", () =>
-            new FontFace("sink-probe", `url(${sinkOrigin}/font)`).load(),
-          );
-          const forgedHmr = new WebSocket(
-            `${sinkOrigin.replace("http:", "ws:")}/forged-hmr`,
-            "vite-hmr",
-          );
-          await new Promise<void>((resolve) => {
-            forgedHmr.addEventListener("error", () => resolve(), { once: true });
-          });
-          forgedHmr.close();
-          results.forgedHmr = "blocked";
-          const beforeNavigation = location.href;
-          location.assign(`${sinkOrigin}/navigation`);
-          results.navigation = location.href === beforeNavigation ? "blocked" : "allowed";
-          // Same-origin completion sentinel proves the document is still live.
-          const sentinel = await fetch("/control-ui-config.json");
-          results.sentinel = sentinel.ok ? "local" : "failed";
-          return results;
-        }, sinkUrl);
+        outcomes.top = await probeNativeEgress(page, sinkUrl);
+        const blocked = `form fetch rtc worker popup xhr eventSource beacon image media
+          iframe:property iframe:attribute iframe:namespaced iframe:empty-namespace
+          script style font forgedHmr navigation`.split(/\s+/u);
         expect(outcomes.top).toEqual({
+          ...Object.fromEntries(blocked.map((name) => [name, "blocked"])),
           formHandler: "handled",
-          form: "blocked",
-          fetch: "blocked",
-          rtc: "blocked",
-          worker: "blocked",
-          popup: "blocked",
-          xhr: "blocked",
-          eventSource: "blocked",
-          beacon: "blocked",
-          image: "blocked",
-          media: "blocked",
-          "iframe:property": "blocked",
-          "iframe:attribute": "blocked",
-          "iframe:namespaced": "blocked",
-          "iframe:empty-namespace": "blocked",
-          script: "blocked",
-          style: "blocked",
-          font: "blocked",
-          forgedHmr: "blocked",
-          navigation: "blocked",
           sentinel: "local",
         });
         expect(new URL(page.url()).origin).toBe(origin);
@@ -713,7 +614,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           body: { error: "Standalone mock has no HTTP fixture for this route." },
         });
         outcomes.missing = missing;
-        await page.screenshot({ path: path.join(artifacts, "board.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "board.png") });
+        }
         expect(escaped).toEqual([]);
         expect(received).toEqual([]);
         expect(connections).toBe(0);
@@ -743,17 +646,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     await runQaGatewayFixture(
       async () => {
         const artifacts = createControlUiE2eArtifactDir("standalone-isolated-attachments");
-        context = await browser.newContext({ serviceWorkers: "block" });
-        const origin = new URL(attachments.url).origin;
-        const escaped: string[] = [];
-        await context.route("**/*", (route) => {
-          if (new URL(route.request().url()).origin === origin) {
-            return route.continue();
-          }
-          escaped.push(route.request().url());
-          return route.abort("blockedbyclient");
-        });
-        const page = await context.newPage();
+        const isolated = await isolatedPage(attachments.url, { serviceWorkers: "block" });
+        context = isolated.context;
+        const { page, origin, escaped } = isolated;
         await page.goto(`${origin}/chat`, { waitUntil: "networkidle" });
         const result = await page.evaluate(async () => {
           const response = await fetch("/__fixtures/chat-attachments/sample-image.svg");
@@ -769,10 +664,14 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             policy: response.headers.get("content-security-policy"),
           };
         });
-        expect(result.type).toBe("image/svg+xml");
-        expect(result.width).toBe(640);
-        expect(result.policy).toContain("worker-src 'self'");
-        await page.screenshot({ path: path.join(artifacts, "attachments.png") });
+        expect(result).toMatchObject({
+          type: "image/svg+xml",
+          width: 640,
+          policy: expect.stringContaining("worker-src 'self'"),
+        });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "attachments.png") });
+        }
         expect(escaped).toEqual([]);
         await writeFile(
           path.join(artifacts, "network.json"),
@@ -784,8 +683,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     );
   });
 
-  for (const mode of ["dark", "light"] as const) {
-    it(`themes dropdown items and widget frames in ${mode} mode`, async () => {
+  it.each(["dark", "light"] as const)(
+    "themes dropdown items and widget frames in %s mode",
+    async (mode) => {
       const context = await browser.newContext({ colorScheme: mode });
       try {
         const page = await context.newPage();
@@ -793,12 +693,11 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         await expect
           .poll(() =>
             page.locator("html").evaluate((root) => ({
-              classes: [...root.classList],
               theme: (root as HTMLElement).dataset.theme,
               themeMode: (root as HTMLElement).dataset.themeMode,
             })),
           )
-          .toEqual({ classes: [`wa-${mode}`], theme: mode, themeMode: mode });
+          .toEqual({ theme: mode, themeMode: mode });
 
         await openWidgetMenu(page);
         const colors = await readMenuColors(page);
@@ -830,24 +729,30 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             widgetFrame!.evaluate(() => getComputedStyle(document.documentElement).colorScheme),
           )
           .toBe(mode);
+        if (mode === "dark") {
+          await page.emulateMedia({ colorScheme: "light" });
+          await expect
+            .poll(() => page.locator("html").getAttribute("data-theme-mode"))
+            .toBe("light");
+        }
       } finally {
         await context.close();
       }
-    });
-  }
+    },
+  );
 
-  it("renders consistent menu options with a leading trash icon", async () => {
-    const page = await browser.newPage();
-    try {
+  it(
+    "renders consistent menu options with a leading trash icon",
+    withFixturePage(async (page) => {
       await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
       await openWidgetMenu(page);
       const presentation = await page
-        .locator(".board-widget__menu[open] .board-widget__menu-danger")
+        .locator(".board-widget__menu-panel:popover-open .board-widget__menu-danger")
         .evaluate((action) => {
           const menu = action.parentElement;
-          const move = menu?.querySelector('wa-dropdown-item[value^="move:"]');
+          const move = menu?.querySelector('[role="menuitem"][data-value^="move:"]');
           const preset = menu?.querySelector(".board-widget__preset");
-          const icon = action.querySelector('[slot="icon"]');
+          const icon = action.querySelector(".board-widget__menu-icon");
           if (!(move instanceof HTMLElement) || !(preset instanceof HTMLElement)) {
             throw new Error("board fixture menu did not expose move and resize options");
           }
@@ -860,41 +765,22 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
             presetFontSize: getComputedStyle(preset).fontSize,
           };
         });
-      expect({
-        actionText: presentation.actionText,
-        fontSizesMatch:
-          presentation.moveFontSize === presentation.presetFontSize &&
-          presentation.actionFontSize === presentation.presetFontSize,
-        iconHidden: presentation.iconHidden,
-        iconSvg: presentation.iconSvg,
-      }).toEqual({
+      expect(presentation).toMatchObject({
         actionText: "Delete",
-        fontSizesMatch: true,
+        actionFontSize: presentation.presetFontSize,
+        moveFontSize: presentation.presetFontSize,
         iconHidden: "true",
         iconSvg: true,
       });
-    } finally {
-      await page.close();
-    }
-  });
+    }),
+  );
 
-  it("follows live system color-scheme changes", async () => {
-    const context = await browser.newContext({ colorScheme: "dark" });
-    try {
-      const page = await context.newPage();
-      await page.goto(fixtureServer.url, { waitUntil: "networkidle" });
-      await page.emulateMedia({ colorScheme: "light" });
-      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
-      await expect.poll(() => page.locator("html").getAttribute("class")).toBe("wa-light");
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("opens a visible catalog session with its transcript in chronological order", async () => {
-    const page = await browser.newPage();
-    try {
+  it(
+    "opens a visible catalog session with its transcript in chronological order",
+    withFixturePage(async (page) => {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      // External catalog sessions have no human owner.
+      await selectAllSidebarSessions(page);
       await page.getByText("Release checklist sweep", { exact: true }).click();
 
       const transcript = [
@@ -916,19 +802,15 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           .getByText("Cannot read properties of undefined (reading 'toReversed')", { exact: false })
           .count(),
       ).toBe(0);
-    } finally {
-      await page.close();
-    }
-  });
+    }),
+  );
 
-  it("starts with aligned build identity and an upgraded chat pane", async () => {
-    const page = await browser.newPage();
-    try {
+  it(
+    "starts with aligned build identity and an upgraded chat pane",
+    withFixturePage(async (page) => {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
       expect(await page.locator(".community-invite-card").count()).toBe(0);
-      expect(
-        await page.evaluate(() => localStorage.getItem("openclaw:control-ui:community-invite:v2")),
-      ).not.toBeNull();
+      await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
 
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
@@ -937,34 +819,33 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
         .evaluate(async (pane) => {
           const chatPane = pane as HTMLElement & {
-            hasUpdated?: boolean;
-            updateComplete?: Promise<boolean>;
+            transcriptReady: boolean;
+            updateComplete: Promise<unknown>;
           };
           await chatPane.updateComplete;
           const constructor = customElements.get("openclaw-chat-pane");
           return {
             connected: chatPane.isConnected,
-            hasUpdated: chatPane.hasUpdated,
+            transcriptReady: chatPane.transcriptReady,
             registered: constructor !== undefined,
             upgraded: constructor !== undefined && chatPane instanceof constructor,
           };
         });
       expect(paneState).toEqual({
         connected: true,
-        hasUpdated: true,
+        transcriptReady: true,
         registered: true,
         upgraded: true,
       });
       expect(await page.getByRole("button", { name: "Stop" }).count()).toBe(0);
-    } finally {
-      await page.close();
-    }
-  });
+    }),
+  );
 
-  it("renders a deterministic reply after generic chat.send", async () => {
-    const page = await browser.newPage();
-    try {
+  it(
+    "renders a deterministic reply after generic chat.send",
+    withFixturePage(async (page) => {
       await page.goto(new URL("/chat", fixtureServer.url).toString(), { waitUntil: "networkidle" });
+      await selectAllSidebarSessions(page);
       await page.getByText("OpenClaw work checkout", { exact: true }).click();
       await page.getByRole("button", { name: "Write a message to send." }).waitFor();
 
@@ -980,10 +861,8 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         .getByText(`Mock reply: ${prompt}`, { exact: true })
         .waitFor();
       expect(await composer.inputValue()).toBe("");
-    } finally {
-      await page.close();
-    }
-  });
+    }),
+  );
 });
 
 describeStandaloneMockServer("standalone native plugin preview", () => {
@@ -1028,10 +907,16 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
         )
         .toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+            {
+              reports: expect.arrayContaining([
+                expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+              ]),
+            },
           ]),
         );
-      await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+      }
 
       await page.goto(
         controlUiSessionUrl(
@@ -1043,7 +928,12 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
       const widget = page.locator('[data-test-id="workboard-board-widget"]');
       await widget.getByText("Capture customer feedback themes", { exact: true }).waitFor();
       expect(await page.getByText("Unknown plugin widget", { exact: false }).count()).toBe(0);
-      await page.screenshot({ path: path.join(artifactDir, "native-widget.png"), fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, "native-widget.png"),
+          fullPage: true,
+        });
+      }
     } finally {
       await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
       await context.close();

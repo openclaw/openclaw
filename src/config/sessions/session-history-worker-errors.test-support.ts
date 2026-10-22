@@ -3,6 +3,7 @@ import type {
   WorkerTaskOptions,
   WorkerTaskPoolOptions,
 } from "../../infra/worker-task-pool.types.js";
+import type { WorkerTaskContext } from "../../infra/worker-task-transport.js";
 import type { SessionTranscriptDisplayDeltaResult } from "./session-accessor.sqlite-history-query.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
@@ -13,15 +14,9 @@ type Request = {
   taskId: number;
   interactive?: boolean;
   nativeSections: SharedArrayBuffer;
-  taskContext: [string, string][];
+  taskContext: WorkerTaskContext;
 };
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
-type QuarantineDatabase = {
-  isOpen: boolean;
-  exec: () => void;
-  prepare: () => { get: () => unknown };
-  close: () => void;
-};
 const observed = vi.hoisted(() => ({
   receive: undefined as ((message: Request) => void) | undefined,
   post: vi.fn<(message: unknown) => void>(),
@@ -35,11 +30,6 @@ const observed = vi.hoisted(() => ({
   deferredRun: undefined as
     | ((prepare: () => unknown, options: { inputBytes?: number }) => Promise<unknown>)
     | undefined,
-  quarantineRead: vi.fn<() => unknown>(),
-  quarantineClose: vi.fn<() => void>(),
-  quarantineOpen: vi.fn<() => QuarantineDatabase>(),
-  quarantinePaths: new Set<string>(),
-  hydrate: vi.fn<() => unknown>(),
   rotate: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
@@ -101,6 +91,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
                 await prepared.releaseResources?.();
               }
             }
+            poolOptions.onRotationComplete?.();
           } catch (error) {
             void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
             throw error;
@@ -119,7 +110,8 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
     },
   };
 });
-vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
+vi.mock("../../state/openclaw-agent-db-resources.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-db-resources.js")>()),
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
     candidate.path === targetPath,
   registerOpenClawAgentDatabaseReadCandidateResource: (resource: Resource) => {
@@ -142,16 +134,6 @@ vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({
     }
   },
 }));
-vi.mock("../../infra/node-sqlite.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/node-sqlite.js")>();
-  return {
-    ...actual,
-    openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) =>
-      observed.quarantinePaths.has(args[0])
-        ? observed.quarantineOpen()
-        : actual.openNodeSqliteDatabase(...args),
-  };
-});
 // Keep the history fixture's fake pool out of the process-wide disk-scan singleton.
 vi.mock("./disk-budget-runtime.js", () => ({
   measureSessionPhysicalDiskUsage: () => {
@@ -159,16 +141,8 @@ vi.mock("./disk-budget-runtime.js", () => ({
   },
   drainSessionDiskBudgetWorkers: async () => {},
 }));
-vi.mock("./session-transcript-hydration.worker.js", () => ({
-  streamSessionTranscriptHydration: observed.hydrate,
-}));
 vi.mock("./session-accessor.sqlite-exact-read.js", () => ({
   loadSessionEntryReadOnlyInScope: () => observed.read(),
-}));
-vi.mock("./session-sharing-store.js", () => ({
-  listSessionMembers: () => {
-    throw new Error("Native membership reads are forbidden in these pure controls");
-  },
 }));
 vi.mock("../../gateway/session-history-readonly-reader.js", () => ({
   createReadonlySessionHistoryReader: () => ({
@@ -183,6 +157,12 @@ vi.mock("./session-cold-storage-read.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-cold-storage-read.js")>();
   return {
     ...actual,
+    readRestoredSessionTranscriptInWorker: (
+      ...args: Parameters<typeof actual.readRestoredSessionTranscriptInWorker>
+    ) =>
+      args[0].scope.sessionId === "delta"
+        ? args[1]()
+        : actual.readRestoredSessionTranscriptInWorker(...args),
     readRestoredSessionTranscript: (
       ...args: Parameters<typeof actual.readRestoredSessionTranscript>
     ) =>

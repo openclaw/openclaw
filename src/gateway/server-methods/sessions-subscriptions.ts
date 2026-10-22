@@ -3,7 +3,7 @@ import {
   errorShape,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
-  validateSessionsListParams,
+  validateSessionsSubscribeParams,
   validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -13,7 +13,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
-import { canAccessApprovalSession } from "./approval-record-lookup.js";
+import { prepareApprovalSessionAccess } from "./approval-record-lookup.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { sessionsListHandler } from "./sessions-read.js";
@@ -24,22 +24,28 @@ import { assertValidParams, defineValidatedGatewayHandler } from "./validation.j
 export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
   "sessions.subscribe": async (options) => {
     const { client, context, params, respond } = options;
-    if (!assertValidParams(params, validateSessionsListParams, "sessions.subscribe", respond)) {
+    if (
+      !assertValidParams(params, validateSessionsSubscribeParams, "sessions.subscribe", respond)
+    ) {
       return;
     }
+    const { includeMessageBodies, ...listParams } = params;
     const connId = client?.connId?.trim();
-    if (connId) {
+    if (client && connId) {
+      if (includeMessageBodies !== undefined) {
+        client.includeSessionMessageBodies = includeMessageBodies;
+      }
       // Subscribe before projecting the snapshot so mutations during the read
       // become live events; the UI queues one trailing refresh when needed.
       context.subscribeSessionEvents(connId);
     }
-    if (!connId || Object.keys(params).length === 0) {
+    if (!connId || Object.keys(listParams).length === 0) {
       respond(true, { subscribed: Boolean(connId) }, undefined);
       return;
     }
     await sessionsListHandler({
       ...options,
-      params,
+      params: listParams,
       respond: (ok, payload, error, meta) => {
         respond(ok, ok ? { subscribed: true, list: payload } : undefined, error, meta);
       },
@@ -127,13 +133,13 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       }
       const { agentId: requestedAgentId, sessionKey: canonicalKey } = requestedAgent.value;
       const subscriptionKey = resolveSessionSubscriptionKey(canonicalKey, requestedAgentId);
-      let read: ReturnType<typeof retainSessionScopedRead>;
+      let read: Awaited<ReturnType<typeof retainSessionScopedRead>>;
       let prepared: PreparedSessionApprovalReplay | undefined;
       let approvalReplay;
       try {
         mark?.("retainedReadAdmission");
         sessionMutationAuthorization?.assertCurrent();
-        read = retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
+        read = await retainSessionScopedRead(options, canonicalKey, requestedAgentId, {
           // Activity and labels may change while approvals load without revoking access.
           allowMetadataChanges: true,
           requireMaterialized:
@@ -158,16 +164,15 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
             );
           try {
             if (includeApprovals) {
-              mark?.("replayPreparation");
-              prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
+              using sessionAccess = await prepareApprovalSessionAccess({
+                client,
+                getCfg: context.getRuntimeConfig,
+                sources: [{ sessionKey: canonicalKey, agentId: requestedAgentId }],
+              });
               read?.assertCurrent();
               sessionMutationAuthorization?.assertCurrent();
-              if (prepared && !prepared.isCurrent()) {
-                prepared.release();
-                prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
-                read?.assertCurrent();
-                sessionMutationAuthorization?.assertCurrent();
-              }
+              mark?.("replayPreparation");
+              prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
               if (prepared && !prepared.isCurrent()) {
                 throw new Error("session approval replay changed during preparation");
               }
@@ -180,9 +185,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
                 signal?.aborted ||
                 hasCurrentClientAuthority?.() === false ||
                 !canReviewOperatorApproval(client) ||
-                !canAccessApprovalSession({
-                  cfg: context.getRuntimeConfig(),
-                  client,
+                !sessionAccess.canAccess({
                   sessionKey: canonicalKey,
                   agentId: requestedAgentId,
                 })

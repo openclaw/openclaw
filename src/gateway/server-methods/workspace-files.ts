@@ -244,116 +244,6 @@ function resolveSessionFileCandidates(params: {
   });
 }
 
-async function searchBrowserEntries(params: {
-  assertCurrent?: () => void;
-  root: string | WorkspaceRoot;
-  query: string;
-  relevance: ReadonlyMap<string, SessionFileRelevance>;
-}): Promise<{ entries: SessionFileBrowserEntry[]; truncated?: true }> {
-  const entries: SessionFileBrowserEntry[] = [];
-  const query = params.query.toLowerCase();
-  let visitedEntries = 0;
-  let truncated = false;
-  const shouldStop = (): boolean => {
-    if (entries.length >= MAX_SEARCH_ENTRIES || visitedEntries >= MAX_SEARCH_VISITED_ENTRIES) {
-      truncated = true;
-      return true;
-    }
-    return false;
-  };
-  const visit = async (dir: string): Promise<void> => {
-    if (shouldStop()) {
-      return;
-    }
-    const dirents = await listWorkspacePath(params.root, dir, params.assertCurrent);
-    if (!dirents) {
-      return;
-    }
-    for (const dirent of sortDirents(dirents)) {
-      if (shouldStop()) {
-        return;
-      }
-      visitedEntries += 1;
-      const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
-      if (browserPath.toLowerCase().includes(query)) {
-        const entry = toWorkspaceBrowserEntry(browserPath, dirent, params.relevance);
-        if (entry) {
-          entries.push(entry);
-        }
-      }
-      if (dirent.isDirectory && !SEARCH_SKIP_DIRS.has(dirent.name)) {
-        await visit(browserPath);
-      }
-    }
-  };
-  await visit("");
-  return { entries: sortWorkspaceEntries(entries), ...(truncated ? { truncated } : {}) };
-}
-
-async function buildBrowserResult(params: {
-  assertCurrent?: () => void;
-  root: string | undefined;
-  workspaceRoot?: WorkspaceRoot;
-  fileRoot: string | undefined;
-  path?: string;
-  search?: string;
-  files: readonly TouchedFile[];
-}): Promise<SessionFileBrowserResult | undefined> {
-  if (!params.root) {
-    return undefined;
-  }
-  const search = normalizeOptionalString(params.search);
-  const relevance = buildSessionRelevanceMap(params.files, params.root, params.fileRoot);
-  if (search) {
-    const result = await searchBrowserEntries({
-      root: params.workspaceRoot ?? params.root,
-      query: search,
-      relevance,
-      assertCurrent: params.assertCurrent,
-    });
-    return {
-      path: "",
-      search,
-      ...result,
-    };
-  }
-  const browserPath = normalizeRelativePath(params.path);
-  const resolved = resolveWorkspacePath(params.root, browserPath);
-  if (!resolved) {
-    return undefined;
-  }
-  const stat = await statWorkspacePath(
-    params.workspaceRoot ?? params.root,
-    browserPath,
-    params.assertCurrent,
-  );
-  if (!stat?.isDirectory) {
-    return undefined;
-  }
-  const dirents = await listWorkspacePath(
-    params.workspaceRoot ?? params.root,
-    browserPath,
-    params.assertCurrent,
-  );
-  if (!dirents) {
-    return undefined;
-  }
-  const entries = sortDirents(dirents)
-    .slice(0, MAX_BROWSER_ENTRIES + 1)
-    .map((dirent) => {
-      const entryPath = browserPath ? `${browserPath}/${dirent.name}` : dirent.name;
-      return toWorkspaceBrowserEntry(entryPath, dirent, relevance);
-    })
-    .filter((entry): entry is SessionFileBrowserEntry => Boolean(entry));
-  const parent = path.dirname(browserPath);
-  return {
-    path: browserPath,
-    ...(browserPath ? { parentPath: parent === "." ? "" : parent } : {}),
-    entries: sortWorkspaceEntries(entries.slice(0, MAX_BROWSER_ENTRIES)),
-    ...(entries.length > MAX_BROWSER_ENTRIES ? { truncated: true } : {}),
-  };
-}
-
 export async function listSessionWorkspaceFiles(
   params: LoadedSessionFiles & {
     path?: string;
@@ -395,13 +285,87 @@ export async function listSessionWorkspaceFiles(
       }),
     ),
   );
-  const browser = await buildBrowserResult({
-    ...params,
-    root,
-    fileRoot: params.fileRoot,
-    workspaceRoot,
-    files: workspaceFiles,
-  });
+  const { assertCurrent, fileRoot, path: requestedPath, search: requestedSearch } = params;
+  const browser = await (async (): Promise<SessionFileBrowserResult | undefined> => {
+    if (!root) {
+      return undefined;
+    }
+    const search = normalizeOptionalString(requestedSearch);
+    const relevance = buildSessionRelevanceMap(workspaceFiles, root, fileRoot);
+    const readRoot = workspaceRoot ?? root;
+    if (search) {
+      const entries: SessionFileBrowserEntry[] = [];
+      const query = search.toLowerCase();
+      let visitedEntries = 0;
+      let truncated = false;
+      const shouldStop = (): boolean => {
+        if (entries.length >= MAX_SEARCH_ENTRIES || visitedEntries >= MAX_SEARCH_VISITED_ENTRIES) {
+          truncated = true;
+          return true;
+        }
+        return false;
+      };
+      const visit = async (dir: string): Promise<void> => {
+        if (shouldStop()) {
+          return;
+        }
+        const dirents = await listWorkspacePath(readRoot, dir, assertCurrent);
+        if (!dirents) {
+          return;
+        }
+        for (const dirent of sortDirents(dirents)) {
+          if (shouldStop()) {
+            return;
+          }
+          visitedEntries += 1;
+          const browserPath = dir ? `${dir}/${dirent.name}` : dirent.name;
+          if (browserPath.toLowerCase().includes(query)) {
+            const entry = toWorkspaceBrowserEntry(browserPath, dirent, relevance);
+            if (entry) {
+              entries.push(entry);
+            }
+          }
+          if (dirent.isDirectory && !SEARCH_SKIP_DIRS.has(dirent.name)) {
+            await visit(browserPath);
+          }
+        }
+      };
+      await visit("");
+      return {
+        path: "",
+        search,
+        entries: sortWorkspaceEntries(entries),
+        ...(truncated ? { truncated } : {}),
+      };
+    }
+    const browserPath = normalizeRelativePath(requestedPath);
+    const resolved = resolveWorkspacePath(root, browserPath);
+    if (!resolved) {
+      return undefined;
+    }
+    const stat = await statWorkspacePath(readRoot, browserPath, assertCurrent);
+    if (!stat?.isDirectory) {
+      return undefined;
+    }
+    const dirents = await listWorkspacePath(readRoot, browserPath, assertCurrent);
+    if (!dirents) {
+      return undefined;
+    }
+    const entries = sortDirents(dirents)
+      .slice(0, MAX_BROWSER_ENTRIES + 1)
+      .map((dirent) => {
+        const entryPath = browserPath ? `${browserPath}/${dirent.name}` : dirent.name;
+        return toWorkspaceBrowserEntry(entryPath, dirent, relevance);
+      })
+      .filter((entry): entry is SessionFileBrowserEntry => Boolean(entry));
+    const parent = path.dirname(browserPath);
+    return {
+      path: browserPath,
+      ...(browserPath ? { parentPath: parent === "." ? "" : parent } : {}),
+      entries: sortWorkspaceEntries(entries.slice(0, MAX_BROWSER_ENTRIES)),
+      ...(entries.length > MAX_BROWSER_ENTRIES ? { truncated: true } : {}),
+    };
+  })();
   return {
     ...(root ? { root } : {}),
     ...(gitCheckout === undefined ? {} : { gitCheckout }),
@@ -411,11 +375,15 @@ export async function listSessionWorkspaceFiles(
 }
 
 export async function getSessionWorkspaceFile(
-  params: LoadedSessionFiles & { path: string; assertCurrent?: () => void },
+  params: LoadedSessionFiles & {
+    path: string;
+    assertCurrent?: () => void;
+    includeContent?: boolean;
+  },
 ): Promise<{ root?: string; file?: SessionFileEntry; reason?: "outside_session_boundary" }> {
   let outsideBoundary = false;
   const options = {
-    includeContent: true,
+    includeContent: params.includeContent !== false,
     assertCurrent: params.assertCurrent,
     authorizeHostRead: params.authorizeHostRead,
     onOutsideBoundary: () => {

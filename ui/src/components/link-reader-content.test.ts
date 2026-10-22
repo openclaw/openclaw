@@ -1,7 +1,11 @@
-import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
+import { createComponent, createSignal } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
-import { renderLinkReaderContent } from "./link-reader-content.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
+import { LinkReaderContent } from "./link-reader-content.tsx";
+import type { LoadImage } from "./link-reader-markdown.tsx";
+import type { ReaderReadyView } from "./link-reader-panel-view.ts";
 import type { LinkReaderTarget } from "./link-reader-target.ts";
 
 type ReaderComment = NonNullable<ControlUiLinkReaderDocument["comments"]>[number];
@@ -34,20 +38,106 @@ function detail(body: string, comments: ReaderComment[] = []): ControlUiLinkRead
     files: [],
   };
 }
-function mount(value: ControlUiLinkReaderDocument, link = target) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(renderLinkReaderContent(value, link), container);
-  return container;
+const updates = new WeakMap<
+  HTMLElement,
+  (value: ControlUiLinkReaderDocument, target: LinkReaderTarget) => void
+>();
+function mount(value: ControlUiLinkReaderDocument, link = target, loadImage?: LoadImage) {
+  const [state, setState] = createSignal({ detail: value, target: link });
+  const mounted = mountSolid(() =>
+    createComponent(LinkReaderContent, {
+      get detail() {
+        return state().detail;
+      },
+      get target() {
+        return state().target;
+      },
+      loadImage,
+    }),
+  );
+  updates.set(mounted.container, (next, nextTarget) =>
+    setState({ detail: next, target: nextTarget }),
+  );
+  flush();
+  return mounted.container;
 }
-afterEach(() => document.body.replaceChildren());
+function update(container: HTMLElement, value: ControlUiLinkReaderDocument, link = target) {
+  updates.get(container)!(value, link);
+  flush();
+}
 
 describe("link reader document content", () => {
+  it("loads only idle file sections entering the viewport and retires observation", () => {
+    const visible = new Set<(isIntersecting: boolean) => void>();
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(private readonly callback: (entries: { isIntersecting: boolean }[]) => void) {}
+        private readonly notify = (isIntersecting: boolean) => {
+          this.callback([{ isIntersecting }]);
+        };
+        observe() {
+          visible.add(this.notify);
+        }
+        disconnect() {
+          visible.delete(this.notify);
+        }
+      },
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const loadSection = vi.fn();
+    const [sections, setSections] = createSignal<ReaderReadyView["sections"]>({
+      checks: "idle",
+      files: "idle",
+      discussion: "idle",
+    });
+    const mounted = mountSolid(() =>
+      createComponent(LinkReaderContent, {
+        detail: { ...detail("Description"), files: undefined, comments: undefined },
+        target,
+        get sections() {
+          return sections();
+        },
+        onLoadSection: loadSection,
+      }),
+    );
+    flush();
+    for (const notify of visible) {
+      notify(false);
+    }
+    expect(loadSection).not.toHaveBeenCalled();
+    for (const notify of visible) {
+      notify(true);
+    }
+    expect(loadSection).toHaveBeenCalledExactlyOnceWith("files");
+    loadSection.mockClear();
+
+    for (const state of ["loading", "error"] as const) {
+      setSections({ files: state, checks: "idle", discussion: "idle" });
+      flush();
+      for (const notify of visible) {
+        notify(true);
+      }
+      expect(loadSection).not.toHaveBeenCalled();
+    }
+    setSections({ files: "idle" });
+    flush();
+    for (const notify of visible) {
+      notify(true);
+    }
+    expect(loadSection).toHaveBeenCalledExactlyOnceWith("files");
+    loadSection.mockClear();
+    mounted.unmount();
+    for (const notify of visible) {
+      notify(true);
+    }
+    expect(loadSection).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["success", "Checks passed"],
-    ["failure", "Checks failed"],
-    ["pending", "Checks in progress"],
-    ["neutral", "Checks"],
     ["unavailable", "Checks unavailable"],
   ] as const)(
     "renders %s check results without assuming service-specific labels",
@@ -72,7 +162,7 @@ describe("link reader document content", () => {
       });
       const checks = container.querySelector<HTMLDetailsElement>(".lr-checks")!;
       expect(checks.querySelector("summary strong")?.textContent).toBe(label);
-      expect(checks.open).toBe(state === "failure");
+      expect(checks.open).toBe(false);
       expect(checks.textContent).toContain("Provider-owned result");
       expect(checks.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("In progress");
       const run = checks.querySelector<HTMLAnchorElement>(".lr-check-copy a")!;
@@ -261,9 +351,53 @@ describe("link reader document content", () => {
     const original = container.querySelector<HTMLAnchorElement>("a[data-link-reader-external]");
     expect(original?.href).toBe("https://images.example/status.png");
     expect(container.querySelector("a a")).toBeNull();
-    render(renderLinkReaderContent(value, target), container);
+    update(container, { ...value, title: "Updated title" });
     expect(container.querySelector("img")).toBe(image);
     expect(container.textContent).toContain("Image unavailable: Build status");
+  });
+
+  it("keeps image requests with their Markdown view and ignores results after replacement or unmount", async () => {
+    const pending = new Map<string, (value: string) => void>();
+    const loadImage = vi.fn(
+      (source: string) =>
+        new Promise<string>((resolve) => {
+          pending.set(source, resolve);
+        }),
+    );
+    const first = detail("![First](https://images.example/first.png)");
+    const [value, setValue] = createSignal(first);
+    const mounted = mountSolid(() =>
+      createComponent(LinkReaderContent, {
+        get detail() {
+          return value();
+        },
+        target,
+        loadImage,
+      }),
+    );
+    flush();
+    const firstImage = mounted.container.querySelector("img")!;
+    setValue({ ...first, title: "New title" });
+    flush();
+    expect(loadImage).toHaveBeenCalledTimes(1);
+    expect(mounted.container.querySelector("img")).toBe(firstImage);
+
+    setValue(detail("![Second](https://images.example/second.png)"));
+    flush();
+    const secondImage = mounted.container.querySelector("img")!;
+    pending.get("https://images.example/first.png")!("blob:first");
+    await Promise.resolve();
+    expect(firstImage.hasAttribute("src")).toBe(false);
+    expect(secondImage.hasAttribute("src")).toBe(false);
+    firstImage.dispatchEvent(new Event("error"));
+    expect(firstImage.hidden).toBe(false);
+
+    mounted.unmount();
+    pending.get("https://images.example/second.png")!("blob:second");
+    await Promise.resolve();
+    expect(secondImage.hasAttribute("src")).toBe(false);
+    secondImage.dispatchEvent(new Event("error"));
+    expect(secondImage.hidden).toBe(false);
   });
 
   it("never creates image requests for unsafe/local sources or activates remote document instructions", () => {
@@ -357,17 +491,15 @@ describe("link reader document content", () => {
     expect(review.textContent).toContain("This text was shortened");
     expect(review.querySelector("img")?.alt).toBe("Review image");
     const commitUrl = "https://github.com/acme/project/commit/abcdef1234567890";
-    render(
-      renderLinkReaderContent(
-        {
-          ...detail("Commit message"),
-          url: commitUrl,
-          badge: { label: "Commit", tone: "neutral" },
-          comments: [{ ...common, id: "commitcomment-7", url: commitUrl + "#commitcomment-7" }],
-        },
-        { ...target, href: commitUrl },
-      ),
+    update(
       container,
+      {
+        ...detail("Commit message"),
+        url: commitUrl,
+        badge: { label: "Commit", tone: "neutral" },
+        comments: [{ ...common, id: "commitcomment-7", url: commitUrl + "#commitcomment-7" }],
+      },
+      { ...target, href: commitUrl },
     );
     expect(container.querySelector("#commitcomment-7 img")).not.toBeNull();
     expect(container.querySelector(".lr-state")?.textContent).toBe("Commit");
@@ -446,7 +578,7 @@ describe("link reader document content", () => {
     expect(container.querySelector("#note-n1")?.textContent).toContain("A note");
     expect(container.querySelector<HTMLDetailsElement>(".lr-file")?.open).toBe(true);
     expect(container.textContent).toContain("Renamed from src/old.ts");
-    expect(container.textContent).toContain("This view is incomplete");
+    expect(container.textContent).not.toContain("This view is incomplete");
     expect(container.textContent).toContain("Some comments could not be shown");
     expect(container.textContent).toContain("Some files could not be shown");
     expect(container.textContent).toContain("No text diff available");

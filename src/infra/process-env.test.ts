@@ -5,6 +5,9 @@ import {
   resolveEnvironmentValue,
 } from "./process-env.js";
 
+const routingEnv = (keys: string) =>
+  Object.fromEntries(keys.split(" ").map((key) => [key, `/fixture/${key}`]));
+
 describe("resolveEnvironmentValue", () => {
   it("preserves exact POSIX keys and the existing Path fallback", () => {
     const env = { PATH: "exact", Path: "fallback", path: "lowercase" };
@@ -29,11 +32,39 @@ describe("resolveEnvironmentValue", () => {
 });
 
 describe("mergeProcessEnv", () => {
-  it("lets later Windows sources override inherited keys regardless of case", () => {
-    expect(
-      mergeProcessEnv([{ TEMP: "inherited", HOME: "base" }, { temp: "configured" }], "win32"),
-    ).toEqual({ HOME: "base", temp: "configured" });
-  });
+  it.each(["linux", "win32"] as const)(
+    "preserves explicit prototype-named overrides and deletions on %s",
+    (platform) => {
+      const base = Object.freeze({ ["__proto__"]: "inherited", NORMAL_KEY: "control" });
+      const override = Object.freeze({ ["__proto__"]: "configured", constructor: "ordinary" });
+      const merged = mergeProcessEnv([base, override], platform);
+      expect(merged).toEqual({
+        ["__proto__"]: "configured",
+        NORMAL_KEY: "control",
+        constructor: "ordinary",
+      });
+      expect(mergeProcessEnv([merged, { ["__proto__"]: undefined }], platform)).toEqual({
+        NORMAL_KEY: "control",
+        constructor: "ordinary",
+      });
+    },
+  );
+
+  it.each([
+    ["temp", "HOME", "base"],
+    ["home", "TEMP", "inherited"],
+    ["HOME", "TEMP", "inherited"],
+  ] as const)(
+    "reapplies later Windows %s overrides with their source spelling and order",
+    (key, retainedKey, retainedValue) => {
+      const source = Object.freeze({ TEMP: "inherited", HOME: "base" });
+      const override = Object.freeze({ [key]: "configured" });
+      expect(Object.entries(mergeProcessEnv([source, override], "win32"))).toEqual([
+        [retainedKey, retainedValue],
+        [key, "configured"],
+      ]);
+    },
+  );
 
   it("keeps Node's lexicographically first Windows duplicate within one source", () => {
     expect(mergeProcessEnv([{ temp: "lower", Temp: "first" }], "win32")).toEqual({
@@ -41,8 +72,12 @@ describe("mergeProcessEnv", () => {
     });
   });
 
-  it("removes inherited Windows keys with a case-insensitive undefined override", () => {
-    expect(mergeProcessEnv([{ Path: "C:\\base" }, { PATH: undefined }], "win32")).toEqual({});
+  it("removes inherited Windows keys before a later source reintroduces them", () => {
+    const sources = [Object.freeze({ Path: "C:\\base" }), Object.freeze({ PATH: undefined })];
+    expect(mergeProcessEnv(sources, "win32")).toEqual({});
+    expect(mergeProcessEnv([...sources, Object.freeze({ path: "C:\\next" })], "win32")).toEqual({
+      path: "C:\\next",
+    });
   });
 
   it("preserves case-distinct POSIX keys", () => {
@@ -54,76 +89,37 @@ describe("mergeProcessEnv", () => {
 });
 
 describe("resolveDiagnosticProcessEnv", () => {
-  it("keeps native POSIX routing and known locale categories without arbitrary namespaces", () => {
-    const native = {
-      PATH: "/fixture/bin",
-      Path: "/fixture/fallback",
-      HOME: "/fixture/home",
-      USER: "fixture",
-      LOGNAME: "fixture",
-      TMPDIR: "/fixture/tmp",
-      LANG: "C",
-      LANGUAGE: "en",
-      TZ: "UTC",
-      LC_ALL: "C",
-      LC_CTYPE: "C",
-      LC_MESSAGES: "C",
-      LC_COLLATE: "C",
-      LC_MONETARY: "C",
-      LC_NUMERIC: "C",
-      LC_TIME: "C",
-    };
-    const source = Object.freeze({
-      ...native,
-      path: "/unexpected",
-      LC_UNKNOWN_CATEGORY: "synthetic",
-      NEUTRAL_FLAG: "synthetic",
-      NODE_OPTIONS: "--no-warnings",
-      PSModulePath: "/fixture/modules",
-      OPENAI_API_KEY: "synthetic",
-    });
-    expect(resolveDiagnosticProcessEnv(source, "linux")).toEqual(native);
-  });
-
-  it("preserves Windows bootstrap, profile, DLL and PowerShell cache routing with source casing", () => {
-    const native = {
-      Path: "C:\\tools",
-      systemRoot: "C:\\Windows",
-      windir: "C:\\Windows",
-      comSpec: "C:\\Windows\\System32\\cmd.exe",
-      pathExt: ".EXE;.COM",
-      systemDrive: "C:",
-      userProfile: "C:\\Users\\fixture",
-      homeDrive: "C:",
-      homePath: "\\Users\\fixture",
-      userName: "fixture",
-      userDomain: "fixture-host",
-      temp: "C:\\Temp",
-      tmp: "C:\\Temp",
-      appData: "C:\\Users\\fixture\\AppData\\Roaming",
-      localAppData: "C:\\Users\\fixture\\AppData\\Local",
-      programData: "C:\\ProgramData",
-      allUsersProfile: "C:\\ProgramData",
-      programFiles: "C:\\Program Files",
-      "programFiles(x86)": "C:\\Program Files (x86)",
-      programW6432: "C:\\Program Files",
-      commonProgramFiles: "C:\\Program Files\\Common Files",
-      "commonProgramFiles(x86)": "C:\\Program Files (x86)\\Common Files",
-      commonProgramW6432: "C:\\Program Files\\Common Files",
-      PSModuleAnalysisCachePath: "C:\\Temp\\ModuleAnalysisCache",
-    };
-    expect(
-      resolveDiagnosticProcessEnv(
-        {
-          ...native,
-          PSModulePath: "C:\\ExtraModules",
-          OPENCLAW_GATEWAY_TOKEN: "synthetic",
-          https_proxy: "http://proxy.invalid",
-        },
-        "win32",
-      ),
-    ).toEqual(native);
-  });
+  it.each([
+    [
+      "linux",
+      "PATH Path HOME USER LOGNAME TMPDIR LANG LANGUAGE TZ LC_ALL LC_CTYPE LC_MESSAGES LC_COLLATE LC_MONETARY LC_NUMERIC LC_TIME",
+      {
+        path: "/unexpected",
+        LC_UNKNOWN_CATEGORY: "synthetic",
+        NEUTRAL_FLAG: "synthetic",
+        NODE_OPTIONS: "--no-warnings",
+        PSModulePath: "/fixture/modules",
+        OPENAI_API_KEY: "synthetic",
+      },
+    ],
+    [
+      "win32",
+      "Path systemRoot windir comSpec pathExt systemDrive userProfile homeDrive homePath userName userDomain temp tmp appData localAppData programData allUsersProfile programFiles programFiles(x86) programW6432 commonProgramFiles commonProgramFiles(x86) commonProgramW6432 PSModuleAnalysisCachePath",
+      {
+        PSModulePath: "C:\\ExtraModules",
+        OPENCLAW_GATEWAY_TOKEN: "synthetic",
+        https_proxy: "http://proxy.invalid",
+      },
+    ],
+  ] as const)(
+    "preserves only native %s routing, with original values and casing",
+    (platform, keys, rejected) => {
+      const native = routingEnv(keys);
+      expect(
+        resolveDiagnosticProcessEnv(Object.freeze({ ...native, ...rejected }), platform),
+      ).toEqual(native);
+    },
+  );
 
   it("uses canonical Windows duplicate precedence, including undefined masking", () => {
     expect(

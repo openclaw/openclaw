@@ -1,19 +1,20 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
-  adoptSqliteSchemaFacts,
-  getAdmittedSqliteSchemaFacts,
-  getSqliteReadOperationRevision,
-  registerSqliteSchemaMutationListener,
-  type SqliteSchemaFacts,
-} from "../infra/sqlite-schema-facts.js";
-import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+} from "../infra/sqlite-database-admission.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
+import { registerSqliteSchemaMutationListener } from "../infra/sqlite-schema-facts.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+  resolveDatabasePathKey,
+} from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError,
@@ -22,11 +23,9 @@ import {
 import {
   clearPersistedOpenClawAgentCanonicalValidation,
   hasPersistedOpenClawAgentCanonicalValidation,
+  loadOpenClawAgentCanonicalValidationReceipt,
 } from "./openclaw-agent-canonical-validation-receipt.js";
-import {
-  adoptCanonicalSessionValidationSchema,
-  assertCanonicalSessionValidationSchema,
-} from "./openclaw-agent-canonical-validation-schema.js";
+import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import { CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   findOpenClawAgentDatabaseIdentity,
@@ -36,22 +35,24 @@ import {
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
 } from "./openclaw-agent-db-resources.js";
+import { readAgentDatabaseSchemaVersion } from "./openclaw-agent-db-schema-read.js";
+import {
+  agentDatabaseValidationKey,
+  createOpenClawAgentDatabaseValidationReceipt,
+  matchesAgentDatabaseValidation as matchesValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-facts.js";
+import {
+  adoptAgentValidationSchema,
+  matchesValidationSchema,
+  publishAgentValidationSchema,
+} from "./openclaw-agent-db-validation-schema.js";
 
-export type OpenClawAgentDatabaseValidation = {
-  agentId: string;
-  identity: string;
-  /** Shared-buffer wrappers change across worker transfers; this identifies the proof instance. */
-  receiptId: string;
-  /** Shared with admitted workers so owner invalidation revokes borrowed proof. */
-  valid: SharedArrayBuffer;
-  /** First full canonical proof; subsequent changes remain visible through the pending table. */
-  canonicalReady: SharedArrayBuffer;
-  /** Canonical admission, separately revoked by local DDL without discarding integrity proof. */
-  schema?: { facts: SqliteSchemaFacts; valid: SharedArrayBuffer };
-};
+export type { OpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-facts.js";
+
 export type OpenClawAgentDatabaseReadValidation = Omit<OpenClawAgentDatabaseValidation, "schema">;
-type ValidationDatabase = { db: DatabaseSync; path: string; agentId: string };
-type CanonicalValidationDatabase = { db: DatabaseSync; path?: string; agentId: string };
+type ValidationDatabase = { db: EngineConnection; path: string; agentId: string };
+type CanonicalValidationDatabase = { db: EngineConnection; path?: string; agentId: string };
 type ValidationEntry = {
   agentId?: string;
   validation?: OpenClawAgentDatabaseValidation;
@@ -66,11 +67,60 @@ const validatedPaths = resolveGlobalSingleton<Map<string, ValidationEntry>>(
   () => new Map(),
   () => clearOpenClawAgentDatabaseValidationCache(),
 );
+const validationObservations = resolveGlobalSingleton<
+  Map<string, { close(): void; revalidate(): void }>
+>(Symbol.for("openclaw.agentDatabaseValidationObservations"), () => new Map());
+
+function releaseValidationObservation(pathname: string): void {
+  validationObservations.get(pathname)?.close();
+}
+
+function observeValidationPath(pathname: string, admission: boolean): void {
+  const existing = validationObservations.get(pathname);
+  if (existing) {
+    if (admission) {
+      existing.revalidate();
+    }
+    return;
+  }
+  const revalidate = () => {
+    const validation = validatedPaths.get(pathname)?.validation;
+    if (!validation || Atomics.load(new Int32Array(validation.valid), 0) !== 1) {
+      return;
+    }
+    try {
+      assertExistingDatabaseIdentity(pathname, `file:${validation.identity}`, validation.birthtime);
+    } catch {
+      invalidateOpenClawAgentDatabaseValidation(pathname, validation.identity);
+    }
+  };
+  const watched = observeOwnedDirectory(path.dirname(pathname), (filename) => {
+    if (
+      filename === undefined ||
+      (process.platform === "win32"
+        ? filename.toLowerCase() === path.basename(pathname).toLowerCase()
+        : filename === path.basename(pathname))
+    ) {
+      revalidate();
+    }
+  });
+  // Retained proof outlives native handles; its cache owns observation cleanup.
+  validationObservations.set(pathname, {
+    revalidate,
+    close() {
+      watched.close();
+      validationObservations.delete(pathname);
+    },
+  });
+  // The first subscriber must not retain a file replaced before observation began.
+  revalidate();
+}
+
 const validationBindings = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseValidationBindings"),
   () =>
     new WeakMap<
-      DatabaseSync,
+      EngineConnection,
       { validation: OpenClawAgentDatabaseValidation; unregister: () => void }
     >(),
 );
@@ -84,13 +134,16 @@ function bindValidationLifetime(
     return;
   }
   current?.unregister();
-  const unobserve = registerSqliteSchemaMutationListener(database.db, (observed) => {
+  const key = readOpenClawAgentDatabaseIdentity(database).canonicalPath;
+  const anchor = sqlPublicationAnchor(database.db);
+  const unobserve = registerSqliteSchemaMutationListener(anchor, (observed) => {
     const revoke = (schema: OpenClawAgentDatabaseValidation["schema"]) => {
       // A late reader can observe DDL already covered by a newer admitted receipt.
       // Local pre-mutation notifications have no markers and still revoke every receipt.
       if (
         schema &&
         (!observed ||
+          schema.postgres ||
           schema.facts.schemaVersion !== observed.schemaVersion ||
           schema.facts.userVersion !== observed.userVersion)
       ) {
@@ -99,7 +152,7 @@ function bindValidationLifetime(
     };
     revoke(validation.schema);
     // A retained alias can mutate after another opener replaced its receipt.
-    const published = validatedPaths.get(path.resolve(database.path))?.validation;
+    const published = validatedPaths.get(key)?.validation;
     if (
       published?.schema &&
       published.agentId === validation.agentId &&
@@ -108,7 +161,7 @@ function bindValidationLifetime(
       revoke(published.schema);
     }
   });
-  const unregister = registerNodeSqliteDisposeCallback(database.db, (reason) => {
+  const unregister = registerNodeSqliteDisposeCallback(anchor, (reason) => {
     if (reason === "replace") {
       Atomics.store(new Int32Array(validation.valid), 0, 0);
     }
@@ -139,82 +192,11 @@ export function adoptOpenClawAgentDatabaseSchema(
   reuseIntegrity = true,
   required = false,
 ): boolean {
-  const validation = getOpenClawAgentDatabaseValidation(database);
-  const schema = validation?.schema;
-  // The physical receipt is checked above; current read admission supplies the same
-  // schema markers as native adoption, even when a sibling retained its own catalog.
-  const admitted =
-    reuseIntegrity && schema ? getSqliteReadOperationRevision(database.db)?.schema : undefined;
-  const adopted = Boolean(
-    reuseIntegrity &&
-    schema &&
-    Atomics.load(new Int32Array(schema.valid), 0) === 1 &&
-    ((admitted?.schemaVersion === schema.facts.schemaVersion &&
-      admitted.userVersion === schema.facts.userVersion) ||
-      adoptSqliteSchemaFacts(database.db, schema.facts)) &&
-    Atomics.load(new Int32Array(schema.valid), 0) === 1,
-  );
-  if (required && !adopted) {
-    throw new Error("Agent schema admission changed before handle adoption; retry the operation");
-  }
-  if (adopted) {
-    adoptCanonicalSessionValidationSchema(database.db);
-  }
-  return adopted;
-}
-
-function readTransferredSchema(value: unknown): OpenClawAgentDatabaseValidation["schema"] {
-  if (!isRecord(value) || !isRecord(value.facts)) {
-    return undefined;
-  }
-  const { facts, valid } = value;
-  if (
-    !(valid instanceof SharedArrayBuffer) ||
-    valid.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
-    typeof facts.revision !== "number" ||
-    typeof facts.userVersion !== "number" ||
-    typeof facts.schemaVersion !== "number" ||
-    !(facts.tables instanceof Set) ||
-    ![...facts.tables].every((table) => typeof table === "string") ||
-    !(facts.tableSql instanceof Map) ||
-    ![...facts.tableSql].every(
-      ([name, sql]) => typeof name === "string" && (sql === null || typeof sql === "string"),
-    ) ||
-    !(facts.indexes instanceof Set) ||
-    ![...facts.indexes].every((index) => typeof index === "string") ||
-    !(facts.triggers instanceof Map) ||
-    ![...facts.triggers].every(
-      ([name, trigger]) =>
-        typeof name === "string" &&
-        isRecord(trigger) &&
-        typeof trigger.table === "string" &&
-        (trigger.sql === null || typeof trigger.sql === "string"),
-    )
-  ) {
-    return undefined;
-  }
-  return {
-    valid,
-    facts: {
-      revision: facts.revision,
-      userVersion: facts.userVersion,
-      schemaVersion: facts.schemaVersion,
-      tables: facts.tables,
-      tableSql: facts.tableSql,
-      indexes: facts.indexes,
-      triggers: facts.triggers,
-    },
-  };
-}
-
-function matchesValidation(
-  database: ValidationDatabase,
-  validation: OpenClawAgentDatabaseValidation,
-): boolean {
-  return (
-    validation.agentId === database.agentId &&
-    validation.identity === findOpenClawAgentDatabaseIdentity(database)?.identity &&
-    Atomics.load(new Int32Array(validation.valid), 0) === 1
+  return adoptAgentValidationSchema(
+    database,
+    getOpenClawAgentDatabaseValidation(database),
+    reuseIntegrity,
+    required,
   );
 }
 
@@ -222,7 +204,7 @@ export function hasRevokedOpenClawAgentDatabaseValidation(
   pathname: string,
   received?: OpenClawAgentDatabaseValidation,
 ): boolean {
-  const previous = validatedPaths.get(path.resolve(pathname));
+  const previous = validatedPaths.get(resolveDatabasePathKey(pathname));
   return (
     (received !== undefined && Atomics.load(new Int32Array(received.valid), 0) !== 1) ||
     previous?.revoked === true ||
@@ -234,7 +216,41 @@ export function hasRevokedOpenClawAgentDatabaseValidation(
 export function getOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
 ): OpenClawAgentDatabaseValidation | undefined {
-  const entry = validatedPaths.get(path.resolve(database.path));
+  const pathname = readOpenClawAgentDatabaseIdentity(database).canonicalPath;
+  let entry = validatedPaths.get(pathname);
+  // Shared physical facts cannot undo a refusal by this path's admission owner.
+  if (entry?.revoked) {
+    return undefined;
+  }
+  if (
+    !entry?.integrityVerified ||
+    !entry.validation ||
+    (entry.validation.schema &&
+      Atomics.load(new Int32Array(entry.validation.schema.valid), 0) !== 1) ||
+    !matchesValidation(database, entry.validation)
+  ) {
+    const validation = getSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey);
+    if (validation && matchesValidation(database, validation)) {
+      if (
+        entry &&
+        (entry.agentId === undefined || entry.agentId === database.agentId) &&
+        (!entry.validation || matchesValidation(database, entry.validation))
+      ) {
+        // Promotion keeps custody captured before this physical proof arrived.
+        entry.agentId = database.agentId;
+        if (entry.validation && entry.validation.receiptId === validation.receiptId) {
+          // Schema publication refreshes the same receipt without replacing its borrowers' owner.
+          entry.validation.schema = validation.schema;
+        } else {
+          entry.validation = validation;
+        }
+        entry.integrityVerified = true;
+      } else {
+        entry = { agentId: database.agentId, validation, integrityVerified: true };
+        validatedPaths.set(pathname, entry);
+      }
+    }
+  }
   if (
     !entry?.integrityVerified ||
     !entry.validation ||
@@ -242,20 +258,21 @@ export function getOpenClawAgentDatabaseValidation(
   ) {
     return undefined;
   }
-  const validation = entry.validation;
-  bindValidationLifetime(database, validation);
-  return validation;
+  bindValidationLifetime(database, entry.validation);
+  return entry.validation;
 }
 
 /** The receiving opener must adopt this proof against its own physical file identity. */
 export function getOpenClawAgentDatabaseValidationForTransfer(
   database: Pick<ValidationDatabase, "agentId" | "path">,
 ): OpenClawAgentDatabaseValidation | undefined {
-  const entry = validatedPaths.get(path.resolve(database.path));
+  const pathname = validatedPaths.has(database.path)
+    ? database.path
+    : resolveDatabasePathKey(database.path);
+  const entry = validatedPaths.get(pathname);
   if (
     !entry?.integrityVerified ||
-    !entry.validation ||
-    entry.validation.agentId !== database.agentId ||
+    entry.validation?.agentId !== database.agentId ||
     Atomics.load(new Int32Array(entry.validation.valid), 0) !== 1
   ) {
     return undefined;
@@ -266,25 +283,39 @@ export function getOpenClawAgentDatabaseValidationForTransfer(
 /** Readers borrow physical/canonical proof without copying the schema catalog or opening a host handle. */
 export function captureOpenClawAgentDatabaseReadValidation(
   database: Pick<ValidationDatabase, "agentId" | "path">,
+  mode: "retained" | "admission" = "retained",
 ) {
   const current = getOpenClawAgentDatabaseValidationForTransfer(database);
   if (!current) {
     return undefined;
   }
-  const capturedIdentity = readDatabasePathIdentitySync(database.path);
-  if (capturedIdentity.key !== `file:${current.identity}`) {
-    // A retained pathname receipt cannot admit its replacement file.
-    return undefined;
+  let canonicalPath = database.path;
+  if (validatedPaths.has(canonicalPath)) {
+    observeValidationPath(canonicalPath, mode === "admission");
+    if (Atomics.load(new Int32Array(current.valid), 0) !== 1) {
+      return undefined;
+    }
+  } else {
+    const capturedIdentity = readDatabasePathIdentitySync(database.path);
+    if (
+      capturedIdentity.key !== `file:${current.identity}` ||
+      capturedIdentity.birthtime !== current.birthtime
+    ) {
+      return undefined;
+    }
+    canonicalPath = capturedIdentity.canonicalPath;
   }
-  const { agentId, identity, receiptId, valid, canonicalReady } = current;
+  const { agentId, identity, birthtime, receiptId, valid, canonicalReady } = current;
   const validation: OpenClawAgentDatabaseReadValidation = {
     agentId,
     identity,
+    birthtime,
     receiptId,
     valid,
     canonicalReady,
   };
   return {
+    canonicalPath,
     validation,
     inputBytes:
       JSON.stringify(validation).length * 2 + valid.byteLength + canonicalReady.byteLength,
@@ -326,7 +357,7 @@ function captureValidationTransfer(
   database: Pick<ValidationDatabase, "agentId" | "path">,
   schemaRequired: boolean,
 ): (identity: string, received: unknown) => "accepted" | "stale" | "invalid" {
-  const pathname = path.resolve(database.path);
+  const pathname = resolveDatabasePathKey(database.path);
   const existing = validatedPaths.get(pathname);
   const captured: ValidationEntry =
     existing?.agentId === database.agentId
@@ -338,25 +369,22 @@ function captureValidationTransfer(
         };
   validatedPaths.set(pathname, captured);
   const capturedValidation = captured.validation;
-  const capturedSchemaCell = capturedValidation?.schema?.valid;
   const wasValid = capturedValidation
     ? Atomics.load(new Int32Array(capturedValidation.valid), 0)
     : undefined;
-  return (identity, received) => {
+  return (identity, value) => {
+    const received = agentDatabaseValidationKey.read(value);
     if (
-      !isRecord(received) ||
+      !received ||
       received.agentId !== database.agentId ||
       received.identity !== identity ||
+      typeof received.birthtime !== "string" ||
       typeof received.receiptId !== "string" ||
-      received.receiptId.length === 0 ||
-      !(received.valid instanceof SharedArrayBuffer) ||
-      received.valid.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
-      !(received.canonicalReady instanceof SharedArrayBuffer) ||
-      received.canonicalReady.byteLength !== Int32Array.BYTES_PER_ELEMENT
+      received.receiptId.length === 0
     ) {
       return "invalid";
     }
-    const schema = readTransferredSchema(received.schema);
+    const schema = received.schema;
     const valid = Atomics.load(new Int32Array(received.valid), 0);
     const schemaValid = schema && Atomics.load(new Int32Array(schema.valid), 0);
     // A raced capture cannot turn a malformed receipt into a retryable refusal.
@@ -365,17 +393,6 @@ function captureValidationTransfer(
       (schemaRequired && (!schema || (schemaValid !== 0 && schemaValid !== 1)))
     ) {
       return "invalid";
-    }
-    const currentSchemaCell = captured.validation?.schema?.valid;
-    // A checked opener can promote proof while admission is pending. Revocation
-    // of that newer proof must not be undone by the older independent handoff.
-    if (
-      schemaValid === 1 &&
-      currentSchemaCell !== undefined &&
-      currentSchemaCell !== capturedSchemaCell &&
-      Atomics.load(new Int32Array(currentSchemaCell), 0) !== 1
-    ) {
-      return "stale";
     }
     if (
       (schemaRequired && schemaValid !== 1) ||
@@ -389,12 +406,17 @@ function captureValidationTransfer(
           Atomics.load(new Int32Array(captured.validation.valid), 0) !== 1)) ||
       Atomics.load(new Int32Array(received.valid), 0) !== 1
     ) {
+      if (schemaRequired && validatedPaths.get(pathname)?.revoked) {
+        // A refused opener may already have shared its receipt with another worker.
+        Atomics.store(new Int32Array(received.valid), 0, 0);
+      }
       return "stale";
     }
     if (
       captured.integrityVerified &&
       captured.validation?.agentId === database.agentId &&
       captured.validation.identity === identity &&
+      captured.validation.birthtime === received.birthtime &&
       Atomics.load(new Int32Array(captured.validation.valid), 0) === 1
     ) {
       const currentSchema = captured.validation.schema;
@@ -403,8 +425,7 @@ function captureValidationTransfer(
         schema &&
         schemaValid === 1 &&
         Atomics.load(new Int32Array(currentSchema.valid), 0) === 1 &&
-        currentSchema.facts.schemaVersion === schema.facts.schemaVersion &&
-        currentSchema.facts.userVersion === schema.facts.userVersion
+        matchesValidationSchema(currentSchema, schema)
       ) {
         // Retain the cell already shared with borrowers, including structured-clone aliases.
         return "accepted";
@@ -415,16 +436,8 @@ function captureValidationTransfer(
       captured.validation.schema = schema;
       return "accepted";
     }
-    const validation = {
-      agentId: database.agentId,
-      identity,
-      receiptId: received.receiptId,
-      valid: received.valid,
-      canonicalReady: received.canonicalReady,
-      schema,
-    };
     if (hasRevokedOpenClawAgentDatabaseValidation(pathname)) {
-      Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
+      Atomics.store(new Int32Array(received.canonicalReady), 0, 0);
     }
     const aliases =
       captured.validation?.identity === identity
@@ -442,15 +455,15 @@ function captureValidationTransfer(
       // Worker cleanup can revoke one borrowed receipt while independent aliases remain live.
       for (const alias of aliases) {
         const superseded = validatedPaths.get(alias)?.validation;
-        if (superseded && superseded.receiptId !== validation.receiptId) {
+        if (superseded && superseded.receiptId !== received.receiptId) {
           Atomics.store(new Int32Array(superseded.valid), 0, 0);
         }
       }
     }
-    validatedPaths.set(pathname, { validation, integrityVerified: true });
+    validatedPaths.set(pathname, { validation: received, integrityVerified: true });
     // A verified replacement is one physical receipt, including its already-admitted aliases.
     for (const alias of aliases) {
-      validatedPaths.set(alias, { validation, integrityVerified: true });
+      validatedPaths.set(alias, { validation: received, integrityVerified: true });
     }
     return "accepted";
   };
@@ -503,15 +516,12 @@ export function captureOpenClawAgentDatabaseAliasPublication(
 function canonicalValidationReceipt(
   database: CanonicalValidationDatabase,
 ): OpenClawAgentDatabaseValidation | undefined {
-  if (!database.db.isOpen || !findOpenClawAgentDatabaseIdentity(database)) {
+  const pathname = findOpenClawAgentDatabaseIdentity(database)?.canonicalPath;
+  if (!database.db.isOpen || !pathname) {
     return undefined;
   }
-  const pathname = database.path ?? database.db.location();
-  if (!pathname) {
-    return undefined;
-  }
-  const validation = validatedPaths.get(path.resolve(pathname))?.validation;
-  if (!validation || !matchesValidation({ ...database, path: pathname }, validation)) {
+  const validation = validatedPaths.get(pathname)?.validation;
+  if (!validation || !matchesValidation(database, validation)) {
     return undefined;
   }
   bindValidationLifetime({ ...database, path: pathname }, validation);
@@ -529,23 +539,23 @@ export function hasOpenClawAgentCanonicalValidation(
       Atomics.load(new Int32Array(validation.valid), 0) === 1
     );
   }
-  const pathname = database.path ?? findOpenClawAgentDatabaseIdentity(database)?.filename;
+  const pathname = findOpenClawAgentDatabaseIdentity(database)?.canonicalPath;
   if (
     !pathname ||
     database.db.isTransaction ||
-    validatedPaths.get(path.resolve(pathname))?.validation !== undefined ||
+    validatedPaths.get(pathname)?.validation !== undefined ||
     hasRevokedOpenClawAgentDatabaseValidation(pathname) ||
     !hasPersistedOpenClawAgentCanonicalValidation(database)
   ) {
     return false;
   }
-  const canonical = createValidationReceipt({ ...database, path: pathname }, true);
-  const entry: ValidationEntry = validatedPaths.get(path.resolve(pathname)) ?? {
+  const canonical = createOpenClawAgentDatabaseValidationReceipt(database, true);
+  const entry: ValidationEntry = validatedPaths.get(pathname) ?? {
     integrityVerified: false,
   };
   // A canonical read enriches this owner; only revocation replaces its handoff identity.
   entry.validation = canonical;
-  validatedPaths.set(path.resolve(pathname), entry);
+  validatedPaths.set(pathname, entry);
   bindValidationLifetime({ ...database, path: pathname }, canonical);
   return true;
 }
@@ -557,6 +567,11 @@ export function invalidateOpenClawAgentCanonicalValidation(
   const validation = canonicalValidationReceipt(database);
   if (validation) {
     Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
+    // A seal can restore a separate copy of this receipt after the last handle closes.
+    const pathname = findOpenClawAgentDatabaseIdentity(database)?.canonicalPath;
+    if (pathname && validatedPaths.get(pathname)?.integrityVerified) {
+      publishSqliteDatabaseAdmission(database.db, agentDatabaseValidationKey, validation);
+    }
   }
   clearPersistedOpenClawAgentCanonicalValidation(database);
 }
@@ -597,20 +612,21 @@ export function adoptOpenClawAgentDatabaseValidation(
   if (getOpenClawAgentDatabaseValidation(database)) {
     return true;
   }
-  if (hasRevokedOpenClawAgentDatabaseValidation(database.path)) {
+  const pathname = readOpenClawAgentDatabaseIdentity(database).canonicalPath;
+  if (hasRevokedOpenClawAgentDatabaseValidation(pathname)) {
     // Integrity handoff cannot replace the parent's requested canonical certification.
     Atomics.store(new Int32Array(validation.canonicalReady), 0, 0);
   }
-  invalidateOpenClawAgentDatabaseValidation(database.path);
-  validatedPaths.set(path.resolve(database.path), { validation, integrityVerified: true });
+  invalidateOpenClawAgentDatabaseValidation(pathname);
+  validatedPaths.set(pathname, { validation, integrityVerified: true });
   bindValidationLifetime(database, validation);
   return true;
 }
 
-function isOpenClawAgentCanonicalStoreEmpty(database: { db: DatabaseSync }): boolean {
+function isOpenClawAgentCanonicalStoreEmpty(database: { db: EngineConnection }): boolean {
   if (
     database.db.isTransaction ||
-    readSqliteUserVersion(database.db) < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
+    readAgentDatabaseSchemaVersion(database.db) < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
   ) {
     return false;
   }
@@ -625,40 +641,19 @@ function isOpenClawAgentCanonicalStoreEmpty(database: { db: DatabaseSync }): boo
   );
 }
 
-function createValidationReceipt(
-  database: ValidationDatabase,
-  canonicalReady: boolean,
-): OpenClawAgentDatabaseValidation {
-  const { identity } = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity !== "string") {
-    throw new Error("Only persistent agent databases retain integrity validation");
-  }
-  const validation = {
-    agentId: database.agentId,
-    identity,
-    receiptId: randomUUID(),
-    valid: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-    canonicalReady: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
-  };
-  if (canonicalReady) {
-    Atomics.store(new Int32Array(validation.canonicalReady), 0, 1);
-  }
-  Atomics.store(new Int32Array(validation.valid), 0, 1);
-  return validation;
-}
-
 export function setOpenClawAgentDatabaseValidation(
   database: ValidationDatabase,
 ): OpenClawAgentDatabaseValidation {
-  const revoked = hasRevokedOpenClawAgentDatabaseValidation(database.path);
-  let validation = createValidationReceipt(
+  const pathname = readOpenClawAgentDatabaseIdentity(database).canonicalPath;
+  const revoked = hasRevokedOpenClawAgentDatabaseValidation(pathname);
+  let validation = createOpenClawAgentDatabaseValidationReceipt(
     database,
     isOpenClawAgentCanonicalStoreEmpty(database) ||
       (!revoked &&
         !database.db.isTransaction &&
-        hasPersistedOpenClawAgentCanonicalValidation(database)),
+        loadOpenClawAgentCanonicalValidationReceipt(database)),
   );
-  const entry = validatedPaths.get(path.resolve(database.path));
+  const entry = validatedPaths.get(pathname);
   if (
     !revoked &&
     entry &&
@@ -667,6 +662,9 @@ export function setOpenClawAgentDatabaseValidation(
   ) {
     // Successful admission promotes this owner; only revocation retires pending handoffs.
     if (entry.validation) {
+      if (validation.integrityVerifiedAt !== undefined) {
+        entry.validation.integrityVerifiedAt = validation.integrityVerifiedAt;
+      }
       Atomics.store(
         new Int32Array(entry.validation.canonicalReady),
         0,
@@ -677,8 +675,8 @@ export function setOpenClawAgentDatabaseValidation(
     entry.validation = validation;
     entry.integrityVerified = true;
   } else {
-    invalidateOpenClawAgentDatabaseValidation(database.path);
-    validatedPaths.set(path.resolve(database.path), { validation, integrityVerified: true });
+    invalidateOpenClawAgentDatabaseValidation(pathname);
+    validatedPaths.set(pathname, { validation, integrityVerified: true });
   }
   bindValidationLifetime(database, validation);
   publishOpenClawAgentDatabaseSchema(database);
@@ -687,21 +685,14 @@ export function setOpenClawAgentDatabaseValidation(
 
 /** The open/migration owner calls this only after complete canonical schema validation. */
 export function publishOpenClawAgentDatabaseSchema(database: ValidationDatabase): void {
-  const validation = getOpenClawAgentDatabaseValidation(database);
-  const facts = getAdmittedSqliteSchemaFacts(database.db);
-  if (validation && facts && !database.db.isTransaction) {
-    invalidateOpenClawAgentDatabaseSchema(database);
-    const valid = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-    Atomics.store(new Int32Array(valid), 0, 1);
-    validation.schema = { facts, valid };
-  }
+  publishAgentValidationSchema(database, getOpenClawAgentDatabaseValidation(database));
 }
 
 export function invalidateOpenClawAgentDatabaseValidation(
   pathname: string,
-  identity = validatedPaths.get(path.resolve(pathname))?.validation?.identity,
+  identity = validatedPaths.get(resolveDatabasePathKey(pathname))?.validation?.identity,
 ): void {
-  const resolved = path.resolve(pathname);
+  const resolved = resolveDatabasePathKey(pathname);
   const paths = new Set([resolved]);
   if (identity) {
     for (const [candidate, entry] of validatedPaths) {
@@ -711,6 +702,7 @@ export function invalidateOpenClawAgentDatabaseValidation(
     }
   }
   for (const candidate of paths) {
+    releaseValidationObservation(candidate);
     const entry = validatedPaths.get(candidate);
     const validation = entry?.validation;
     if (validation) {
@@ -741,8 +733,9 @@ export function invalidateOpenClawAgentDatabaseValidationsForAgent(
 }
 
 export function clearOpenClawAgentDatabaseValidationCache(rootPath?: string): void {
+  const rootKey = rootPath === undefined ? undefined : resolveDatabasePathKey(rootPath);
   for (const pathname of validatedPaths.keys()) {
-    if (rootPath === undefined || isPathInside(rootPath, pathname)) {
+    if (rootKey === undefined || isPathInside(rootKey, pathname)) {
       invalidateOpenClawAgentDatabaseValidation(pathname);
       validatedPaths.delete(pathname);
     }
@@ -754,11 +747,15 @@ export function releaseOpenClawAgentDatabaseReadValidation(
   candidates: readonly Pick<OpenClawAgentDatabaseReadCandidateResource, "path" | "scope">[],
   retainedPaths: readonly string[] = [],
 ): void {
+  // Cleanup consumes captured physical paths, even when discovery found an unreadable directory.
   for (const pathname of validatedPaths.keys()) {
     if (
-      !retainedPaths.some((retained) => path.resolve(retained) === pathname) &&
+      !retainedPaths.some((retained) =>
+        matchesAgentDatabaseReadCandidatePath({ path: retained }, pathname),
+      ) &&
       candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, pathname))
     ) {
+      releaseValidationObservation(pathname);
       validatedPaths.delete(pathname);
     }
   }

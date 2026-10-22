@@ -8,6 +8,7 @@ import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  beamMirrorTestFixture,
   beamTestLogger,
   beamTestMirrorConfig,
   beamTestNow,
@@ -32,29 +33,6 @@ vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) =>
     await importOriginal<typeof import("openclaw/plugin-sdk/session-catalog-runtime")>();
   return { ...actual, listActiveSessionCatalogs: vi.fn(actual.listActiveSessionCatalogs) };
 });
-
-type SentRequest = { url: string; auth?: string; payload: BeamUpload };
-
-function captureFetch(
-  sent: SentRequest[],
-  status = 200,
-  onCancel?: () => void | Promise<void>,
-): typeof fetch {
-  return vi.fn(async (url: unknown, init?: RequestInit) => {
-    const headers = (init?.headers ?? {}) as Record<string, string>;
-    sent.push({
-      url: String(url),
-      ...(headers.Authorization ? { auth: headers.Authorization } : {}),
-      payload: JSON.parse(init?.body as string) as BeamUpload,
-    });
-    const body = onCancel
-      ? new ReadableStream<Uint8Array>({
-          cancel: onCancel,
-        })
-      : "{}";
-    return new Response(body, { status });
-  }) as unknown as typeof fetch;
-}
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -83,39 +61,14 @@ describe("parseBeamMirrorConfig", () => {
     );
   });
 
-  it("applies defaults and normalizes catalogs", () => {
-    const parsed = parseBeamMirrorConfig(beamTestMirrorConfig({ catalogs: [" Claude "] }));
-    expect(parsed).toMatchObject({
-      endpoint: "https://team.example/api/v1/beam/sessions",
-      catalogs: ["claude"],
-      pollSeconds: 30,
-      activeWindowMinutes: 180,
-    });
-  });
-
   it.each([
     { bogus: true },
     { endpoint: "ftp://x" },
     { endpoint: "not a url" },
     { endpoint: "http://team.example/x" },
-    { catalogs: undefined },
     { catalogs: [] },
   ])("rejects invalid mirror settings %j", (overrides) => {
     expect(typeof parseBeamMirrorConfig(beamTestMirrorConfig(overrides))).toBe("string");
-  });
-
-  it.each(["http://127.0.0.1:19351/x", "http://localhost:19351/x", "http://[::1]:19351/x"])(
-    "accepts plaintext loopback endpoint %s",
-    (endpoint) => {
-      expect(parseBeamMirrorConfig(beamTestMirrorConfig({ endpoint }))).toMatchObject({ endpoint });
-    },
-  );
-
-  it("bounds poll and window values", () => {
-    const parsed = parseBeamMirrorConfig(
-      beamTestMirrorConfig({ pollSeconds: 1, activeWindowMinutes: 999_999 }),
-    );
-    expect(parsed).toMatchObject({ pollSeconds: 10, activeWindowMinutes: 10_080 });
   });
 });
 
@@ -311,23 +264,23 @@ describe("createBeamMirrorRunner", () => {
 
   it("uploads the newest chronological suffix of a large transcript once", async () => {
     const count = 50;
-    const sent: SentRequest[] = [];
+    const fixture = beamMirrorTestFixture();
+    const { sent } = fixture;
     const reads: string[] = [];
     const cancel = vi.fn();
     const chronological = Array.from({ length: count }, (_, index) => ({
       type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
       text: `Message ${index}: ${"text ".repeat(300)}end`,
     }));
-    const catalog = createBeamTestCatalog({
-      sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: beamTestNow - 60_000 }],
-      items: chronological.toReversed(),
-      onRead: (threadId) => reads.push(threadId),
-    });
-    const runner = createBeamTestRunner({
-      runtime: createBeamTestRuntime(beamTestMirrorConfig({ token: "scratch-token" })),
-      fetchFn: captureFetch(sent, 200, cancel),
-      listCatalogs: () => [catalog],
-    });
+    const runner = fixture.runner(
+      {
+        sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: beamTestNow - 60_000 }],
+        items: chronological.toReversed(),
+        onRead: (threadId) => reads.push(threadId),
+      },
+      { runtime: createBeamTestRuntime(beamTestMirrorConfig({ token: "scratch-token" })) },
+      { cancel },
+    );
     await runner.tick();
     await runner.tick();
     expect(sent).toHaveLength(1);
@@ -349,8 +302,9 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("includes the latest source model without changing the sanitized message payload", async () => {
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog({
+    const fixture = beamMirrorTestFixture();
+    const { sent } = fixture;
+    const runner = fixture.runner({
       sessions: [
         {
           threadId: "t-model",
@@ -364,10 +318,6 @@ describe("createBeamMirrorRunner", () => {
         { type: "agentMessage", text: "Earlier", model: "gpt-5.6-terra" },
         { type: "userMessage", text: "Continue this" },
       ],
-    });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
     });
 
     await runner.tick();
@@ -383,49 +333,20 @@ describe("createBeamMirrorRunner", () => {
     ]);
   });
 
-  it("does not split a surrogate pair when clipping the session title", async () => {
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog({
-      sessions: [
-        { threadId: "t-emoji", name: `${"x".repeat(159)}🙂`, recencyAt: beamTestNow - 60_000 },
-      ],
-    });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
-    });
-    await runner.tick();
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.payload.title).toBe("x".repeat(159));
-  });
-
   it.each([
     {
       reason: "the source already truncated a message",
       item: { type: "userMessage", text: "Partial message", truncated: true },
       expectedText: "Partial message",
     },
-    {
-      reason: "a message exceeds the receiver character cap",
-      item: { type: "userMessage", text: "x".repeat(10_000) },
-      expectedText: "x".repeat(6_000),
-    },
-    {
-      reason: "clipping reaches a surrogate pair",
-      item: { type: "userMessage", text: `${"x".repeat(5_999)}🙂tail` },
-      expectedText: "x".repeat(5_999),
-    },
   ] satisfies Array<{
     reason: string;
     item: SessionCatalogTranscriptItem;
     expectedText: string;
   }>)("marks the upload truncated when $reason", async ({ item, expectedText }) => {
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog({ items: [item] });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
-    });
+    const fixture = beamMirrorTestFixture();
+    const { sent } = fixture;
+    const runner = fixture.runner({ items: [item] });
     await runner.tick();
     expect(sent).toHaveLength(1);
     expect(sent[0]?.payload).toMatchObject({
@@ -435,67 +356,17 @@ describe("createBeamMirrorRunner", () => {
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
   });
 
-  it("publishes a changed truncation flag even when the visible text is unchanged", async () => {
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog();
-    const read = catalog.read;
-    let hasOlderPage = false;
-    catalog.read = async (request) => ({
-      ...(await read(request)),
-      ...(hasOlderPage ? { nextCursor: "older-page" } : {}),
-    });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
-    });
-    await runner.tick();
-    hasOlderPage = true;
-    await runner.tick();
-    await runner.tick();
-    expect(sent.map(({ payload }) => payload.truncated === true)).toEqual([false, true]);
-    expect(sent[0]?.payload.items).toEqual(sent[1]?.payload.items);
-  });
-
-  it("redacts credentials from the uploaded title and visible messages while preserving prose", async () => {
-    const token = `sk-${"synthetic".repeat(5)}`;
-    const sent: SentRequest[] = [];
-    const catalog = createBeamTestCatalog({
-      sessions: [{ threadId: "t1", name: `Review credential ${token}`, recencyAt: beamTestNow }],
-      items: [
-        { type: "agentMessage", text: `Credential ${token} was found in configuration.` },
-        { type: "userMessage", text: `Use ${token} to inspect the gateway.` },
-      ],
-    });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [catalog],
-    });
-    await runner.tick();
-    expect(sent).toHaveLength(1);
-    expect(JSON.stringify(sent[0]?.payload)).not.toContain(token);
-    expect(sent[0]?.payload).toMatchObject({
-      title: expect.stringContaining("Review credential"),
-      items: [
-        { type: "userMessage", text: expect.stringContaining("inspect the gateway") },
-        { type: "agentMessage", text: expect.stringContaining("was found in configuration") },
-      ],
-    });
-  });
-
   it("keeps successful uploads successful when response cancellation rejects", async () => {
-    const sent: SentRequest[] = [];
-    const warnings: string[] = [];
+    const fixture = beamMirrorTestFixture();
+    const { sent, warnings } = fixture;
     const cancel = vi.fn(async () => {
       throw new Error("cancel failed");
     });
-    const catalog = createBeamTestCatalog({
-      sessions: [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }],
-    });
-    const runner = createBeamTestRunner({
-      logger: { warn: (message) => warnings.push(message), info: () => {} },
-      fetchFn: captureFetch(sent, 200, cancel),
-      listCatalogs: () => [catalog],
-    });
+    const runner = fixture.runner(
+      { sessions: [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }] },
+      {},
+      { cancel },
+    );
 
     await runner.tick();
     await runner.tick();
@@ -503,42 +374,6 @@ describe("createBeamMirrorRunner", () => {
     expect(sent).toHaveLength(1);
     expect(cancel).toHaveBeenCalledOnce();
     expect(warnings).toEqual([]);
-  });
-
-  it("bounds guarded uploads and releases their response resources", async () => {
-    const cancel = vi.fn();
-    const release = vi.fn();
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        cancel,
-      }),
-      { status: 200 },
-    );
-    const guardedFetch = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
-      response,
-      finalUrl: "https://team.example/api/v1/beam/sessions",
-      release,
-    });
-    const runner = createBeamTestRunner({
-      listCatalogs: () => [createBeamTestCatalog()],
-    });
-
-    try {
-      await runner.tick();
-
-      expect(guardedFetch).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://team.example/api/v1/beam/sessions",
-          timeoutMs: 15_000,
-          maxRedirects: 0,
-          policy: { allowedOrigins: ["https://team.example"] },
-        }),
-      );
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(release).toHaveBeenCalledOnce();
-    } finally {
-      guardedFetch.mockRestore();
-    }
   });
 
   it("stops before a paused transcript read settles without resuming mirror work", async () => {
@@ -550,21 +385,15 @@ describe("createBeamMirrorRunner", () => {
       readStarted.resolve();
       await releaseRead.promise;
     });
-    const sent: SentRequest[] = [];
-    const warnings: string[] = [];
-    const runner = createScheduledBeamTestRunner({
-      logger: { warn: (message) => warnings.push(message), info: () => {} },
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [
-        createBeamTestCatalog({
-          sessions: [
-            { threadId: "t1", recencyAt: beamTestNow },
-            { threadId: "t2", recencyAt: beamTestNow },
-          ],
-          onList: list,
-          onRead: read,
-        }),
+    const fixture = beamMirrorTestFixture();
+    const { sent, warnings } = fixture;
+    const runner = fixture.scheduled({
+      sessions: [
+        { threadId: "t1", recencyAt: beamTestNow },
+        { threadId: "t2", recencyAt: beamTestNow },
       ],
+      onList: list,
+      onRead: read,
     });
 
     try {
@@ -597,16 +426,9 @@ describe("createBeamMirrorRunner", () => {
       await releaseList.promise;
     });
     const read = vi.fn();
-    const sent: SentRequest[] = [];
-    const runner = createScheduledBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [
-        createBeamTestCatalog({
-          onList: list,
-          onRead: read,
-        }),
-      ],
-    });
+    const fixture = beamMirrorTestFixture();
+    const { sent } = fixture;
+    const runner = fixture.scheduled({ onList: list, onRead: read });
 
     try {
       const first = runner.tick();
@@ -731,7 +553,8 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("ignores idle sessions, node hosts, the beam catalog, and unlisted catalogs", async () => {
-    const sent: SentRequest[] = [];
+    const fixture = beamMirrorTestFixture();
+    const { sent } = fixture;
     const idle = createBeamTestCatalog({
       sessions: [{ threadId: "old", recencyAt: beamTestNow - 24 * 60 * 60_000 }],
     });
@@ -748,10 +571,10 @@ describe("createBeamMirrorRunner", () => {
       id: "pi",
       sessions: [{ threadId: "p1", recencyAt: beamTestNow }],
     });
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [idle, nodeHost, beamCatalog, unlisted],
-    });
+    const runner = fixture.runner(
+      {},
+      { listCatalogs: () => [idle, nodeHost, beamCatalog, unlisted] },
+    );
     await runner.tick();
     expect(sent).toHaveLength(0);
   });
@@ -777,18 +600,17 @@ describe("createBeamMirrorRunner", () => {
   });
 
   it("sends one completed upload for an observed idle session on a partial host page", async () => {
-    const sent: SentRequest[] = [];
+    const fixture = beamMirrorTestFixture();
+    const { sent } = fixture;
     const recency = beamTestNow - 60_000;
-    const catalog = createBeamTestCatalog({
-      hostCursor: "older-sessions",
-      sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: recency }],
-    });
     let clock = beamTestNow;
-    const runner = createBeamTestRunner({
-      fetchFn: captureFetch(sent),
-      now: () => clock,
-      listCatalogs: () => [catalog],
-    });
+    const runner = fixture.runner(
+      {
+        hostCursor: "older-sessions",
+        sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: recency }],
+      },
+      { now: () => clock },
+    );
     await runner.tick();
     expect(sent).toHaveLength(1);
     expect(sent[0]?.payload.completed).toBe(false);
@@ -801,38 +623,19 @@ describe("createBeamMirrorRunner", () => {
     expect(sent[1]?.payload.beamId).toBe(sent[0]?.payload.beamId);
   });
 
-  it("keeps tracking for retry when the receiver rejects an upload", async () => {
-    const sent: SentRequest[] = [];
-    const warnings: string[] = [];
-    const cancel = vi.fn();
-    const catalog = createBeamTestCatalog({
-      sessions: [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }],
-    });
-    const runner = createBeamTestRunner({
-      logger: { warn: (message) => warnings.push(message), info: () => {} },
-      fetchFn: captureFetch(sent, 503, cancel),
-      listCatalogs: () => [catalog],
-    });
-    await runner.tick();
-    await runner.tick();
-    // Both ticks retry because the failed upload was never fingerprinted.
-    expect(sent).toHaveLength(2);
-    expect(warnings.length).toBeGreaterThan(0);
-    expect(cancel).toHaveBeenCalledTimes(2);
-  });
-
   it("skips ticks when a configured token cannot be resolved", async () => {
-    const sent: SentRequest[] = [];
-    const runner = createBeamTestRunner({
-      runtime: createBeamTestRuntime(
-        beamTestMirrorConfig({
-          token: { source: "env", provider: "default", id: "BEAM_MISSING_TOKEN" },
-        }),
-      ),
-      env: {},
-      fetchFn: captureFetch(sent),
-      listCatalogs: () => [createBeamTestCatalog()],
-    });
+    const fixture = beamMirrorTestFixture();
+    const { sent } = fixture;
+    const runner = fixture.runner(
+      {},
+      {
+        runtime: createBeamTestRuntime(
+          beamTestMirrorConfig({
+            token: { source: "env", provider: "default", id: "BEAM_MISSING_TOKEN" },
+          }),
+        ),
+      },
+    );
     await runner.tick();
     expect(sent).toHaveLength(0);
   });

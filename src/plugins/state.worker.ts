@@ -3,6 +3,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import {
   DeferredPluginMigrationConflictError,
   readDeferredPluginMigrationCompletions,
+  readDeferredPluginMigrations,
   recordDeferredPluginMigrationsInTransaction,
   type DeferredPluginMigrationRecordInput,
 } from "../infra/deferred-plugin-migrations.js";
@@ -111,6 +112,7 @@ export const pluginRuntimeOperations = {
       runOpenClawStateWriteTransaction(
         ({ db }) => writeHostedCatalogSnapshotInDatabase(db, input.snapshot, input.now),
         options,
+        input.snapshot.monotonic?.mode === "signed-feed" ? {} : { singleStatement: true },
       );
       return { ok: true as const };
     } catch (error) {
@@ -158,4 +160,17 @@ export const pluginRuntimeOperations = {
   },
   "plugins.deferredMigrations.completions.read": (_input: undefined, { stateOptions }) =>
     readDeferredPluginMigrationCompletions(stateOptions()),
+  // Published 2026.10.1 updaters read pending migrations through this worker
+  // after replacing their package. Without their retained runtime (observed on
+  // Windows), that worker runs this package's code.
+  // Current callers use the read worker. Remove when upgrades from 2026.10.1
+  // leave the supported update window.
+  "plugins.deferredMigrations.read": (
+    input: { artifactPreservingReadOnly: boolean },
+    { stateOptions },
+  ) =>
+    readDeferredPluginMigrations({
+      ...stateOptions(),
+      artifactPreservingReadOnly: input.artifactPreservingReadOnly,
+    }),
 } satisfies WorkerOperationHandlers;

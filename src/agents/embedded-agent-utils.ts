@@ -1,12 +1,9 @@
 import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
-/**
- * Embedded-agent message text utilities.
- * Extracts visible assistant text, reasoning summaries, thinking-tag blocks,
- * and compact tool metadata for channel delivery and transcript replay.
- */
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import {
+  isAssistantTextContentBlockType,
   normalizeAssistantPhase,
   parseAssistantTextSignature,
   type AssistantPhase,
@@ -41,14 +38,10 @@ function sanitizeAssistantText(
     text,
     assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
-      streaming && phase === "final_answer",
+      streaming,
       options,
     ),
   );
-}
-
-function isAssistantTextContentBlockType(value: unknown): boolean {
-  return value === "text" || value === "input_text" || value === "output_text";
 }
 
 export function sanitizeAssistantVisibleStreamText(
@@ -66,7 +59,7 @@ export function createAssistantVisibleStreamText(phase?: AssistantPhase) {
   return createTextProjection([
     ...assistantVisibleTextFilters(
       phase === "final_answer" ? "final-answer-delivery" : "delivery",
-      phase === "final_answer",
+      true,
     ),
     ...userFacingTextFilters(false, true),
     trimTextFilter("both", { preserveCodeIndentation: true }),
@@ -156,9 +149,26 @@ function prepareEmbeddedAssistantTextForPhase(
       part.text = prepareText(part.text, index === parts.length - 1, part.phase, part.contentIndex);
     }
   }
+  // Adjacent blocks in the same phase share markup state; a phase boundary stays explicit.
+  const groupedParts: { text: string; phase?: AssistantPhase; contentIndex: number }[] = [];
+  for (const part of parts) {
+    const text = trimTextPreservingCode(part.text);
+    const previous = groupedParts.at(-1);
+    if (
+      previous &&
+      previous.phase === part.phase &&
+      previous.contentIndex + 1 === part.contentIndex
+    ) {
+      previous.contentIndex = part.contentIndex;
+      if (text) {
+        previous.text += `\n${text}`;
+      }
+    } else if (text) {
+      groupedParts.push({ text, phase: part.phase, contentIndex: part.contentIndex });
+    }
+  }
   return prepareRender(selectedPhase, () =>
-    // A native block boundary can divide markup; finalize only the selected snapshot.
-    parts
+    groupedParts
       .map(({ text, phase }) => sanitizeAssistantText(text, phase))
       .filter((text) => text.trim())
       .join("\n")
@@ -187,8 +197,11 @@ export function extractAssistantVisibleText(
   return prepareAssistantVisibleText(msg, prepareText)();
 }
 
-export function extractAssistantCommentaryText(msg: AssistantMessage): string {
-  return prepareEmbeddedAssistantTextForPhase(msg, "commentary")();
+export function extractAssistantCommentaryText(
+  msg: AssistantMessage,
+  prepareText?: Parameters<typeof prepareAssistantVisibleText>[1],
+): string {
+  return prepareEmbeddedAssistantTextForPhase(msg, "commentary", prepareText)();
 }
 
 export function extractEmbeddedAssistantText(msg: AssistantMessage): string {
@@ -270,6 +283,10 @@ export type ThinkingTagStreamState = {
   lastMatchEnd: number;
   lastTag?: { type: "open" | "close"; end: number };
 };
+
+export function createAssistantStreamBlockState() {
+  return { thinking: false, final: false, inlineCode: createInlineCodeState() };
+}
 
 export function createThinkingTagStreamState(): ThinkingTagStreamState {
   return {

@@ -5,7 +5,7 @@ import type {
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
-import { pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
@@ -281,12 +281,6 @@ export function subscribeForegroundChatBootstrap({
   initialChatRoute: boolean;
 }): () => void {
   connectionBootstrap.setForegroundRoute(initialChatRoute ? undefined : null);
-  const stopConnection = gateway.subscribe((snapshot) => {
-    connectionBootstrap.synchronize({
-      client: snapshot.client,
-      connected: snapshot.phase === "connected",
-    });
-  });
   const synchronizeRoute = (state: ReturnType<ApplicationRouter["getState"]>) => {
     const match = state.pendingMatches[0] ?? state.matches[0];
     if (!match && state.status === "idle") {
@@ -298,7 +292,7 @@ export function subscribeForegroundChatBootstrap({
     // Admission previews have no transcript controller and cannot claim its
     // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
     connectionBootstrap.setForegroundRoute(
-      match?.routeId !== "chat" || chatSubmissions.creation
+      !isSessionRouteId(match?.routeId) || chatSubmissions.creation
         ? null
         : match.status === "pending"
           ? undefined
@@ -320,6 +314,14 @@ export function subscribeForegroundChatBootstrap({
     );
   };
   const synchronize = () => synchronizeRoute(router.getState());
+  const stopConnection = gateway.subscribe((snapshot) => {
+    connectionBootstrap.synchronize({
+      client: snapshot.client,
+      connected: snapshot.phase === "connected",
+    });
+    // Literal routes can settle before hello assigns their storage scope.
+    synchronize();
+  });
   const stops = [
     stopConnection,
     router.subscribe(synchronizeRoute),

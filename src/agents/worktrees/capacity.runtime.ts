@@ -105,7 +105,8 @@ function allocatedBlobBytes(size: string): number {
 }
 
 // This projection belongs to the Git worker and disappears when that worker
-// idles out or the Gateway closes it. Hydration is reusable only by its live creation cohort.
+// idles out or the Gateway closes it. Default bases reuse hydration by immutable commit;
+// explicit refs without a preparation key still recheck object availability.
 const checkoutSizeFacts = new Map<string, { bytes: number; preparationKey?: string }>();
 const MAX_CHECKOUT_SIZE_FACTS = 32;
 
@@ -278,7 +279,7 @@ export async function estimateCheckoutTransitionBytes(
 }
 
 /** Measure without following links; unreadable trees must never be counted as empty. */
-export async function measureDirectoryTreeBytes(root: string, excludeGit = false): Promise<number> {
+export async function measureDirectoryTreeBytes(root: string): Promise<number> {
   let entries: Dirent[];
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
@@ -290,12 +291,12 @@ export async function measureDirectoryTreeBytes(root: string, excludeGit = false
   }
   let total = 0;
   for (const entry of entries) {
-    if (excludeGit && entry.name === ".git") {
+    if (entry.name === ".git") {
       continue;
     }
     const child = path.join(root, entry.name);
     if (entry.isDirectory()) {
-      total += await measureDirectoryTreeBytes(child, excludeGit);
+      total += await measureDirectoryTreeBytes(child);
     } else {
       total += (await rawPathStat(child))?.size ?? 0;
     }

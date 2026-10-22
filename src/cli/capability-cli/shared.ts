@@ -10,7 +10,7 @@ import {
   loadAuthProfileStoreForRuntime,
 } from "../../agents/auth-profiles.js";
 import {
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/config.js";
@@ -102,17 +102,14 @@ export function providerHasGenericConfig(params: {
 export function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
-  const resolved = resolveModelRefOverride(raw);
-  if (!raw?.trim()) {
+  const { provider, model } = resolveModelRefOverride(raw);
+  if (!model) {
     return undefined;
   }
-  if (!resolved.provider || !resolved.model) {
+  if (!provider) {
     throw new Error("Model overrides must use the form <provider/model>.");
   }
-  return {
-    provider: resolved.provider,
-    model: resolved.model,
-  };
+  return { provider, model };
 }
 
 export function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
@@ -141,7 +138,7 @@ export async function resolveLocalCapabilityRuntimeConfig(params: {
   optionalActivePaths?: Set<string>;
   config?: OpenClawConfig;
 }): Promise<OpenClawConfig> {
-  const cfg = params.config ?? getRuntimeConfig();
+  const cfg = params.config ?? (await captureRuntimeConfigAsyncReader()());
   const { effectiveConfig } = await resolveCommandConfigWithSecrets({
     config: cfg,
     commandName: params.commandName,

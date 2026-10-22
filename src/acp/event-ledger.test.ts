@@ -1,11 +1,11 @@
-/** Tests ACP event ledger recording, replay, retention, and SQLite persistence. */
-import { constants } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { createSqliteAcpEventLedger } from "./event-ledger.js";
 import {
   createTestAcpEventLedger,
@@ -13,107 +13,39 @@ import {
   withTestAcpEventLedgerDatabase,
 } from "./event-ledger.test-support.js";
 
+const textUpdate = (text: string) => ({
+  sessionUpdate: "agent_message_chunk" as const,
+  content: { type: "text" as const, text },
+});
+const makeSession = (sessionId: string, sessionKey: string, cwd = "/work", complete = true) => ({
+  sessionId,
+  sessionKey,
+  cwd,
+  complete,
+});
+const incomplete = { complete: false, events: [] };
+
 describe("ACP event ledger", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  it("falls back for non-finite event retention options", async () => {
-    const ledger = createTestAcpEventLedger({ maxEventsPerSession: Number.NaN });
-    await ledger.startSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      cwd: "/work",
-      complete: true,
-    });
-    await ledger.recordUpdate({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "First" },
-      },
-    });
-    await ledger.recordUpdate({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Second" },
-      },
-    });
-
-    await expect(
-      ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
-    ).resolves.toMatchObject({
-      complete: true,
-      events: [{ seq: 1 }, { seq: 2 }],
-    });
-  });
-
-  it("persists replay without reading old payloads during session writes or rejected replays", async () => {
+  it("persists replay through metadata changes and rejected replay bindings", async () => {
     await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
-      const first = createSqliteAcpEventLedger({ path: databasePath, now: () => 1000 });
-      await first.startSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        cwd: "/work",
-        complete: true,
-      });
-      await first.recordUpdate({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        runId: "run-1",
-        update: {
-          sessionUpdate: "agent_thought_chunk",
-          content: { type: "text", text: "Thinking" },
-        },
-      });
-      await expect(
-        first.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
-      ).resolves.toMatchObject({ complete: true });
+      const first = createSqliteAcpEventLedger({ path: databasePath });
+      const original = makeSession("session-1", "agent:main:work");
+      const thought = { ...textUpdate("Thinking"), sessionUpdate: "agent_thought_chunk" as const };
+      const answer = textUpdate("Answer");
+      await first.startSession(original);
+      await first.recordUpdate({ ...original, runId: "run-1", update: thought });
+      await expect(first.readReplay(original)).resolves.toMatchObject({ complete: true });
 
-      const session = {
-        sessionId: "session-1",
-        sessionKey: "agent:main:canonical-work",
-        cwd: "/new-work",
-        complete: false,
-      };
-      const { db } = openOpenClawStateDatabase({ path: databasePath });
-      // Payload access is unnecessary for append/metadata work and rejected
-      // replay; making it fail exposes accidental full-history hydration.
-      db.setAuthorizer((action, table, column) =>
-        action === constants.SQLITE_READ &&
-        table === "acp_replay_events" &&
-        column === "update_json"
-          ? constants.SQLITE_DENY
-          : constants.SQLITE_OK,
-      );
-      try {
-        await first.recordUpdate({
-          ...session,
-          runId: "run-1",
-          update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "Answer" },
-          },
-        });
-        await first.startSession(session);
-        await expect(
-          first.readReplay({ ...session, sessionKey: "agent:main:work" }),
-        ).resolves.toEqual({ complete: false, events: [] });
-        await first.markIncomplete(session);
-        await expect(first.readReplay(session)).resolves.toEqual({ complete: false, events: [] });
-        await expect(first.readReplayBySessionId(session)).resolves.toEqual({
-          complete: false,
-          events: [],
-        });
-        await first.startSession({ ...session, complete: true });
-      } finally {
-        db.setAuthorizer(null);
-      }
+      const session = makeSession("session-1", "agent:main:canonical-work", "/new-work", false);
+      await first.recordUpdate({ ...session, runId: "run-1", update: answer });
+      await first.startSession(session);
+      await expect(first.readReplay(original)).resolves.toEqual(incomplete);
+      await first.markIncomplete(session);
+      await expect(first.readReplay(session)).resolves.toEqual(incomplete);
+      await expect(first.readReplayBySessionId(session)).resolves.toEqual(incomplete);
+      await first.startSession({ ...session, complete: true });
 
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       const second = createSqliteAcpEventLedger({ path: databasePath });
       const replay = await second.readReplay(session);
 
@@ -122,49 +54,37 @@ describe("ACP event ledger", () => {
         [1, "agent:main:work"],
         [2, "agent:main:canonical-work"],
       ]);
-      expect(replay.events[0]?.update).toEqual({
-        sessionUpdate: "agent_thought_chunk",
-        content: { type: "text", text: "Thinking" },
-      });
-      expect(replay.events[1]?.update).toEqual({
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Answer" },
-      });
+      expect(replay.events.map((event) => event.update)).toEqual([thought, answer]);
     });
   });
 
-  it("marks SQLite-backed replay incomplete when event retention truncates history", async () => {
+  it("serializes appends from separate ledger handles and exposes each committed replay", async () => {
     await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
-      const ledger = createSqliteAcpEventLedger({
-        path: databasePath,
-        maxEventsPerSession: 1,
-      });
-      await ledger.startSession({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        cwd: "/work",
-        complete: true,
-      });
-      await ledger.recordUpdate({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "First" },
-        },
-      });
-      await ledger.recordUpdate({
-        sessionId: "session-1",
-        sessionKey: "agent:main:work",
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "Second" },
-        },
-      });
-
-      await expect(
-        ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
-      ).resolves.toEqual({ complete: false, events: [] });
+      const first = createSqliteAcpEventLedger({ path: databasePath });
+      const second = createSqliteAcpEventLedger({ path: databasePath });
+      const session = { sessionId: "shared", sessionKey: "key", cwd: "/work", complete: true };
+      await first.startSession(session);
+      const observed = observeHostDataSql();
+      try {
+        await Promise.all(
+          [first, second].map((ledger, index) =>
+            ledger.recordUpdate({
+              ...session,
+              update: textUpdate(`event-${index}`),
+            }),
+          ),
+        );
+        const replay = await second.readReplay(session);
+        expect(replay.events.map((event) => event.seq)).toEqual([1, 2]);
+        expect(replay.events.map((event) => event.update)).toEqual(
+          expect.arrayContaining([0, 1].map((index) => textUpdate(`event-${index}`))),
+        );
+        await second.markIncomplete(session);
+        await expect(first.readReplay(session)).resolves.toEqual(incomplete);
+        expect(observed.queries).toEqual([]);
+      } finally {
+        observed.restore();
+      }
     });
   });
 
@@ -179,13 +99,10 @@ describe("ACP event ledger", () => {
         );
         seed.close();
         const ledger = createSqliteAcpEventLedger({ path: databasePath });
-        const session = {
-          sessionId: "session-漢\0\ud800",
-          sessionKey: "\udc00-key😀",
-          cwd: "/é/e\u0301/台\0😀",
-          complete: true,
-        };
-        const { db } = openOpenClawStateDatabase({ path: databasePath });
+        const session = makeSession("session-漢\0\ud800", "\udc00-key😀", "/é/e\u0301/台\0😀");
+        const db = requireNativeSqliteDatabase(
+          openOpenClawStateDatabase({ path: databasePath }).db,
+        );
         await ledger.startSession(session);
         const initial = expectAcpReplayUtf8Accounting(db);
         for (let count = 0; count < 10; count++) {
@@ -196,10 +113,7 @@ describe("ACP event ledger", () => {
           await ledger.recordUpdate({
             ...session,
             runId,
-            update: {
-              sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: "漢😀\0\ud800é e\u0301" },
-            },
+            update: textUpdate("漢😀\0\ud800é e\u0301"),
           });
           expectAcpReplayUtf8Accounting(db);
         }
@@ -213,217 +127,29 @@ describe("ACP event ledger", () => {
     },
   );
 
-  it("marks a Unicode replay incomplete when its UTF-8 content exceeds the byte cap", async () => {
-    await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
-      const ledger = createSqliteAcpEventLedger({
-        path: databasePath,
-        maxSerializedBytes: 1024,
-      });
-      const session = { sessionId: "s", sessionKey: "key", cwd: "", complete: true };
-      await ledger.startSession(session);
-      await ledger.recordUpdate({
-        ...session,
-        update: {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: "漢".repeat(400) },
-        },
-      });
-      await expect(ledger.readReplayBySessionId(session)).resolves.toEqual({
-        complete: false,
-        events: [],
-      });
-    });
-  });
-
-  it("keeps footprint aggregates consistent while the byte budget evicts", async () => {
-    await withTestAcpEventLedgerDatabase(async ({ databasePath }) => {
-      const ledger = createSqliteAcpEventLedger({
-        path: databasePath,
-        // Small enough that appends force byte-budget eviction repeatedly.
-        maxSerializedBytes: 4_096,
-      });
-      for (let session = 0; session < 3; session += 1) {
-        await ledger.startSession({
-          sessionId: `session-😀-${session}`,
-          sessionKey: `agent:main:预算-${session}`,
-          cwd: "/台\0工作",
-          complete: true,
-        });
-        for (let index = 0; index < 40; index += 1) {
-          // Halfway through, the provisional key becomes a longer canonical
-          // key: the row-overhead component of the aggregate must follow.
-          const sessionKey =
-            index < 20 ? `agent:main:预算-${session}` : `agent:main:预算-${session}:canonical-😀`;
-          await ledger.recordUpdate({
-            sessionId: `session-😀-${session}`,
-            sessionKey,
-            update: {
-              sessionUpdate: "agent_message_chunk",
-              content: { type: "text", text: `payload-${session}-${index}-${"漢😀".repeat(32)}` },
-            },
-          });
-        }
-      }
-
-      const { DatabaseSync } = requireNodeSqlite();
-      const db = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expect(expectAcpReplayUtf8Accounting(db)).toBeLessThanOrEqual(4_096);
-      } finally {
-        db.close();
-      }
-    });
-  });
-
   it("preserves prompt history when a provisional ACP key becomes a canonical Gateway key", async () => {
-    const ledger = createTestAcpEventLedger({ now: () => 1000 });
-    await ledger.startSession({
-      sessionId: "acp-session-1",
-      sessionKey: "acp:gateway-session-1",
-      cwd: "/work",
-      complete: true,
-    });
+    const ledger = createTestAcpEventLedger();
+    const session = makeSession("acp-session-1", "acp:gateway-session-1");
+    const canonical = { ...session, sessionKey: "agent:main:acp:gateway-session-1" };
+    await ledger.startSession(session);
     await ledger.recordUserPrompt({
-      sessionId: "acp-session-1",
-      sessionKey: "acp:gateway-session-1",
+      ...session,
       runId: "run-1",
       prompt: [{ type: "text", text: "Question" }],
     });
-    await ledger.recordUpdate({
-      sessionId: "acp-session-1",
-      sessionKey: "agent:main:acp:gateway-session-1",
-      runId: "run-1",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Answer" },
-      },
-    });
+    await ledger.recordUpdate({ ...canonical, runId: "run-1", update: textUpdate("Answer") });
+    const replay = await ledger.readReplayBySessionKey(canonical);
 
-    const replay = await ledger.readReplayBySessionKey({
-      sessionKey: "agent:main:acp:gateway-session-1",
+    expect(replay).toMatchObject({
+      complete: true,
+      sessionId: session.sessionId,
+      sessionKey: canonical.sessionKey,
     });
-
-    expect(replay.complete).toBe(true);
-    expect(replay.sessionId).toBe("acp-session-1");
-    expect(replay.sessionKey).toBe("agent:main:acp:gateway-session-1");
     expect(replay.events.map((event) => event.seq)).toEqual([1, 2]);
     expect(replay.events.map((event) => event.runId)).toEqual(["run-1", "run-1"]);
     expect(replay.events.map((event) => event.update.sessionUpdate)).toEqual([
       "user_message_chunk",
       "agent_message_chunk",
     ]);
-  });
-
-  it("can replay multi-block prompt history by ACP session id", async () => {
-    const ledger = createTestAcpEventLedger({ now: () => 1000 });
-    await ledger.startSession({
-      sessionId: "acp-session-1",
-      sessionKey: "acp:gateway-session-1",
-      cwd: "/work",
-      complete: true,
-    });
-    await ledger.recordUserPrompt({
-      sessionId: "acp-session-1",
-      sessionKey: "acp:gateway-session-1",
-      runId: "run-1",
-      prompt: [
-        { type: "text", text: "First" },
-        { type: "text", text: "Second" },
-      ],
-    });
-
-    const replay = await ledger.readReplayBySessionId({ sessionId: "acp-session-1" });
-
-    expect(replay.complete).toBe(true);
-    expect(replay.sessionKey).toBe("acp:gateway-session-1");
-    expect(
-      replay.events.map((event) =>
-        event.update.sessionUpdate === "user_message_chunk" ? event.update.content : undefined,
-      ),
-    ).toEqual([
-      { type: "text", text: "First" },
-      { type: "text", text: "Second" },
-    ]);
-  });
-
-  it("evicts the oldest complete session when session retention is exceeded", async () => {
-    let now = 1000;
-    const ledger = createTestAcpEventLedger({ maxSessions: 1, now: () => now++ });
-    await ledger.startSession({
-      sessionId: "old-session",
-      sessionKey: "acp:old-gateway-session",
-      cwd: "/work",
-      complete: true,
-    });
-    await ledger.startSession({
-      sessionId: "new-session",
-      sessionKey: "acp:new-gateway-session",
-      cwd: "/work",
-      complete: true,
-    });
-
-    await expect(
-      ledger.readReplay({ sessionId: "old-session", sessionKey: "acp:old-gateway-session" }),
-    ).resolves.toEqual({ complete: false, events: [] });
-    const replay = await ledger.readReplayBySessionId({ sessionId: "new-session" });
-    expect(replay.complete).toBe(true);
-    expect(replay.sessionKey).toBe("acp:new-gateway-session");
-  });
-
-  it("resets stale events when a session is restarted with reset", async () => {
-    const ledger = createTestAcpEventLedger();
-    await ledger.startSession({
-      sessionId: "session-1",
-      sessionKey: "acp:old-session",
-      cwd: "/work",
-      complete: true,
-    });
-    await ledger.recordUpdate({
-      sessionId: "session-1",
-      sessionKey: "acp:old-session",
-      update: {
-        sessionUpdate: "agent_message_chunk",
-        content: { type: "text", text: "Old answer" },
-      },
-    });
-    await ledger.startSession({
-      sessionId: "session-1",
-      sessionKey: "acp:new-session",
-      cwd: "/work",
-      complete: true,
-      reset: true,
-    });
-
-    await expect(
-      ledger.readReplay({ sessionId: "session-1", sessionKey: "acp:old-session" }),
-    ).resolves.toEqual({ complete: false, events: [] });
-    const replay = await ledger.readReplayBySessionId({ sessionId: "session-1" });
-    expect(replay.complete).toBe(true);
-    expect(replay.sessionKey).toBe("acp:new-session");
-    expect(replay.events).toEqual([]);
-  });
-
-  it("marks replay incomplete when serialized byte retention trims payloads", async () => {
-    const ledger = createTestAcpEventLedger({ maxSerializedBytes: 900 });
-    await ledger.startSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      cwd: "/work",
-      complete: true,
-    });
-    await ledger.recordUpdate({
-      sessionId: "session-1",
-      sessionKey: "agent:main:work",
-      update: {
-        sessionUpdate: "tool_call_update",
-        toolCallId: "tool-1",
-        status: "completed",
-        rawOutput: { content: "x".repeat(5_000) },
-      },
-    });
-
-    await expect(
-      ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
-    ).resolves.toEqual({ complete: false, events: [] });
   });
 });

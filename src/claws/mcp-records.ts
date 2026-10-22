@@ -1,7 +1,8 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import { getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 
 export const CLAW_MCP_REF_SCHEMA_VERSION = "openclaw.clawMcpServerRef.v1" as const;
@@ -20,10 +21,10 @@ export type PersistedClawMcpServerRef = {
   updatedAtMs: number;
 };
 
-export type McpDatabase = Pick<DB, "claw_mcp_server_refs">;
-export type McpRefRow = Selectable<DB["claw_mcp_server_refs"]>;
+type McpDatabase = Pick<DB, "claw_mcp_server_refs">;
+type McpRefRow = Selectable<DB["claw_mcp_server_refs"]>;
 
-export function selectMcpRefs(db: DatabaseSync) {
+function selectMcpRefs(db: EngineConnection) {
   return getNodeSqliteKysely<McpDatabase>(db)
     .selectFrom("claw_mcp_server_refs")
     .select([
@@ -41,23 +42,7 @@ export function selectMcpRefs(db: DatabaseSync) {
     ]);
 }
 
-export function refToRow(ref: PersistedClawMcpServerRef): McpRefRow {
-  return {
-    agent_id: ref.agentId,
-    name: ref.name,
-    schema_version: ref.schemaVersion,
-    config_digest: ref.configDigest,
-    relationship: ref.relationship,
-    origin: ref.origin,
-    independent_owner: ref.independentOwner ? 1 : 0,
-    status: ref.status,
-    error: ref.error ?? null,
-    created_at_ms: ref.createdAtMs,
-    updated_at_ms: ref.updatedAtMs,
-  };
-}
-
-export function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
+function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
   return {
     schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
     agentId: row.agent_id,
@@ -70,8 +55,22 @@ export function rowToRef(row: McpRefRow): PersistedClawMcpServerRef {
     independentOwner: sqliteNumber(row.independent_owner) === 1,
     // SAFETY: Existing inventory exposes stored status without additional validation.
     status: row.status as PersistedClawMcpServerRef["status"],
-    ...(row.error ? { error: row.error } : {}),
+    ...(row.error !== null ? { error: row.error } : {}),
     createdAtMs: sqliteNumber(row.created_at_ms),
     updatedAtMs: sqliteNumber(row.updated_at_ms),
   };
+}
+
+export function readAllClawMcpServerRefsInDatabase(
+  db: EngineConnection,
+): PersistedClawMcpServerRef[] {
+  if (!tableExists(db, "claw_mcp_server_refs")) {
+    return [];
+  }
+  const query = selectMcpRefs(db).orderBy("agent_id").orderBy("name").compile();
+  const rows = db /* sqlite-allow-raw: read-only Claw MCP reference inventory. */
+    .prepare(query.sql)
+    // SAFETY: the query projects every persisted Claw MCP reference column.
+    .all() as McpRefRow[];
+  return rows.map(rowToRef);
 }

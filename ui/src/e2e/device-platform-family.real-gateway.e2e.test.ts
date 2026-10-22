@@ -144,6 +144,8 @@ suite.define(() => {
       retainedState: () => state.root,
       async run() {
         await state.writeConfig({
+          // Device identity proof must not wait on host installation discovery.
+          update: { channel: "stable" },
           gateway: {
             auth: { mode: "token", token },
             controlUi: { allowedOrigins: [new URL(suite.server.baseUrl).origin], enabled: false },
@@ -152,7 +154,8 @@ suite.define(() => {
         });
         state.applyEnv();
         const orphan = loadOrCreateDeviceIdentity({
-          path: path.join(state.stateDir, "legacy-device.sqlite"),
+          env: state.env,
+          identityKey: "legacy-device",
         });
         const orphanRequest = await requestDevicePairing({
           deviceId: orphan.deviceId,
@@ -367,7 +370,7 @@ suite.define(() => {
               );
               if (item === cases.at(-1)) {
                 await orphanRow.locator(".device-entry__menu-trigger").click();
-                await orphanRow.locator('wa-dropdown-item[value="remove"]').click();
+                await orphanRow.locator('[role="menuitem"][data-value="remove"]').click();
                 await page
                   .locator("openclaw-modal-dialog")
                   .last()

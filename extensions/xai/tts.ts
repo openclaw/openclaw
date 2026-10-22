@@ -8,7 +8,6 @@ import {
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import {
-  isValidXaiTtsVoice,
   normalizeXaiLanguageCode,
   normalizeXaiTtsBaseUrl,
   type XaiSpeechResponseFormat,
@@ -86,9 +85,6 @@ function prepareXaiTtsRequest({
   ...request
 }: XaiTtsRequest) {
   const language = normalizeXaiLanguageCode(rawLanguage) ?? "en";
-  if (!isValidXaiTtsVoice(request.voiceId)) {
-    throw new Error(`Invalid voice: ${request.voiceId}`);
-  }
   return { ...request, language, responseFormat, maxBytes };
 }
 
@@ -138,7 +134,7 @@ function resolveXaiNativeTtsStreamEndpoint(baseUrl: string): URL {
   }
   const pathname = url.pathname.replace(/\/+$/, "");
   if (url.username || url.password || url.port || pathname !== "/v1" || url.search || url.hash) {
-    throw new Error(`xAI streaming TTS requires the canonical ${XAI_BASE_URL} base URL`);
+    throw new Error(`xAI streaming TTS requires the supported ${XAI_BASE_URL} base URL`);
   }
   return url;
 }
@@ -199,7 +195,6 @@ export async function xaiTTSStream(request: XaiTtsRequest): Promise<{
         return;
       }
       connectSettled = true;
-      clearTimers();
       void release();
       reject(error);
     };
@@ -330,8 +325,6 @@ export async function xaiTTSStream(request: XaiTtsRequest): Promise<{
             return;
           }
           case "audio.done":
-            clearTimers();
-            closeStream?.();
             void release();
             return;
           case "error":

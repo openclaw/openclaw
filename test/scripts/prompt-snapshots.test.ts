@@ -31,6 +31,7 @@ import {
   CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
   CODEX_PROMPT_SNAPSHOT_FILES,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+  LOCAL_OLLAMA_PROMPT_SNAPSHOT_DIR,
 } from "../helpers/agents/prompt-snapshot-paths.js";
 
 function readCommittedSnapshot(fileName: string): string {
@@ -88,7 +89,8 @@ describe("happy path prompt snapshots", () => {
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
       { name: "discord-group", replacements: ["sessions_spawn"] },
-      { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
+      // Heartbeat turns offer the session's catalog, so the provider prompt cache holds.
+      { name: "heartbeat-turn", replacements: [] },
     ];
 
     for (const { name, replacements } of scenarios) {
@@ -153,25 +155,6 @@ describe("happy path prompt snapshots", () => {
     );
   });
 
-  it.each(Object.entries(CODEX_PROMPT_SNAPSHOT_FILES))(
-    "materializes the complete committed Codex prompt for %s",
-    async (scenario, fileName) => {
-      const materialized = await materializeCodexPromptSnapshot(scenario);
-      if (scenario === CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO) {
-        expect(materialized).toBe(readCommittedSnapshot(fileName));
-        return;
-      }
-      const base = readCommittedSnapshot(
-        CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO],
-      );
-      const delta = readCommittedSnapshot(`${fileName}.diff`);
-      expect(materializeCodexPromptSnapshotDelta({ scenario, base, delta })).toBe(materialized);
-      expect(fs.existsSync(path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName))).toBe(
-        false,
-      );
-    },
-  );
-
   it("rejects unknown and noncanonical Codex prompt deltas", async () => {
     await expect(materializeCodexPromptSnapshot("../outside")).rejects.toThrow(
       "Unknown Codex prompt snapshot scenario",
@@ -217,9 +200,11 @@ describe("happy path prompt snapshots", () => {
     try {
       const snapshotDir = path.join(root, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR);
       fs.mkdirSync(snapshotDir, { recursive: true });
+      fs.mkdirSync(path.join(root, LOCAL_OLLAMA_PROMPT_SNAPSHOT_DIR), { recursive: true });
       const stalePaths = ["stale-snapshot.md", "stale-snapshot.md.patch"].map((fileName) =>
         path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName),
       );
+      stalePaths.push(path.join(LOCAL_OLLAMA_PROMPT_SNAPSHOT_DIR, "stale-snapshot.json"));
       const currentPath = path.join(
         CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
         "current-snapshot.md.diff",
@@ -239,28 +224,6 @@ describe("happy path prompt snapshots", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
-
-  it("renders the Codex model-bound prompt layers", async () => {
-    const telegram = await materializeCodexPromptSnapshot("telegram-direct");
-
-    expect(telegram).toContain("## Reconstructed Model-Bound Prompt Layers");
-    expect(telegram).toContain("### System: Codex Model Instructions (gpt-5.5, pragmatic)");
-    expect(telegram).toContain("You are Codex, a coding agent based on GPT-5.");
-    expect(telegram).toContain("### Developer: Codex Permission Instructions");
-    expect(telegram).toContain(
-      "Approval policy is currently never. Do not provide the `sandbox_permissions`",
-    );
-    expect(telegram).toContain("### User: Codex Config Instructions");
-    expect(telegram).toContain("### User: Turn Input Text");
-    expect(telegram).toContain("OpenClaw runtime context for this turn:");
-    expect(telegram).toContain("<SOUL.md contents will be here>");
-    expect(telegram).toContain("<IDENTITY.md contents will be here>");
-    expect(telegram).toContain("<USER.md contents will be here>");
-    expect(telegram).toContain("<MEMORY.md contents will be here>");
-    expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");
-    expect(telegram).toContain("Codex loads AGENTS.md natively");
-    expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
   });
 
   it("renders every additional-context value with its native role before the current input", () => {

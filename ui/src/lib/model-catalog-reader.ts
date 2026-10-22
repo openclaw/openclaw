@@ -1,7 +1,6 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/context.ts";
-import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import {
   modelCatalogKey,
   modelCatalogParams,
@@ -22,7 +21,6 @@ export class ModelCatalogReader {
     gateway: ApplicationGateway;
     client: NonNullable<ApplicationGateway["snapshot"]["client"]>;
     scope: ModelCatalogReadScope;
-    presentationKey: number;
   };
   private controller?: AbortController;
   private unsubscribe?: () => void;
@@ -33,7 +31,9 @@ export class ModelCatalogReader {
     private readonly options: {
       timeoutMs?: GatewayProtocolRequestOptions["timeoutMs"];
       onResult?: (result: ModelCatalogResult) => void;
-      onError?: () => void;
+      /** Observes admitted reads, including event refreshes; current failures reject. */
+      onRead?: (read: Promise<ModelCatalogResult | undefined>) => void;
+      onError?: (error: unknown) => void;
     } = {},
   ) {}
 
@@ -66,18 +66,21 @@ export class ModelCatalogReader {
       gateway,
       client,
       scope,
-      presentationKey: gatewayPresentationScope(gateway).key,
     };
     this.binding = binding;
-    const unwatchCache = subscribeModelCatalogCache(client, () => {
-      if (!this.owns(binding)) {
-        return;
-      }
-      if (this.failed && peekModelCatalog(client, scope)) {
-        this.failed = false;
-      }
-      this.notify();
-    });
+    const unwatchCache = subscribeModelCatalogCache(
+      client,
+      () => {
+        if (!this.owns(binding)) {
+          return;
+        }
+        if (this.failed && peekModelCatalog(client, scope)) {
+          this.failed = false;
+        }
+        this.notify();
+      },
+      () => scope,
+    );
     const unwatchEvents = subscribeModelCatalogChanges(
       gateway,
       () => {
@@ -100,8 +103,7 @@ export class ModelCatalogReader {
     return (
       this.binding === binding &&
       binding.gateway.snapshot.client === binding.client &&
-      binding.gateway.snapshot.phase === "connected" &&
-      gatewayPresentationScope(binding.gateway).key === binding.presentationKey
+      binding.gateway.snapshot.phase === "connected"
     );
   }
 
@@ -116,14 +118,15 @@ export class ModelCatalogReader {
     if (cached) {
       this.failed = false;
       this.options.onResult?.(cached);
+      const read = Promise.resolve(cached);
+      this.options.onRead?.(read);
       this.notify();
-      return Promise.resolve(cached);
+      return read;
     }
     const controller = new AbortController();
     this.controller = controller;
     this.failed = false;
-    this.notify();
-    return loadModelCatalog(binding.client, {
+    const read = loadModelCatalog(binding.client, {
       ...binding.scope,
       signal: controller.signal,
       timeoutMs: this.options.timeoutMs,
@@ -137,17 +140,24 @@ export class ModelCatalogReader {
         this.notify();
         return result;
       },
-      () => {
+      (error: unknown) => {
         if (!this.owns(binding) || this.controller !== controller) {
           return undefined;
         }
         this.controller = undefined;
         this.failed = true;
-        this.options.onError?.();
+        this.options.onError?.(error);
         this.notify();
+        if (this.options.onRead) {
+          throw error;
+        }
         return undefined;
       },
     );
+    this.options.onRead?.(read);
+    this.notify();
+    // Existing callers consume errors through onError; observers also receive the rejection.
+    return this.options.onRead ? read.catch(() => undefined) : read;
   }
 
   clear(): void {

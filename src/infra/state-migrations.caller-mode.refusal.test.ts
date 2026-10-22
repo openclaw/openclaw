@@ -14,6 +14,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   createCallerModeSnapshot,
@@ -287,6 +288,30 @@ describe("legacy state migration read-only refusals", () => {
     },
   );
 
+  it("refuses a configured auth owner outside the copied snapshot without reading it", async () => {
+    const fixture = await makeFixture();
+    const ownerDir = path.join(fixture.homeDir, "ops-agent");
+    fs.writeFileSync(
+      fixture.configPath,
+      JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          defaults: { authInheritance: { agentId: "ops" } },
+          entries: { ops: { agentDir: ownerDir } },
+        },
+      }),
+    );
+    const inspect = vi.spyOn(sharedAuthBootstrap, "inspectSharedAuthLegacyRowsReadOnly");
+    const plan = await planFixture(fixture);
+
+    expect(plan.refusal?.code).toBe("shared-auth-source-outside-snapshot");
+    expect(plan.steps.find((step) => step.id === "migration-detection")?.source).toContainEqual({
+      kind: "sqlite",
+      path: path.join(ownerDir, "openclaw-agent.sqlite"),
+    });
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
   it("preserves a snapshot-bound OAuth directory in the read-only plan", async () => {
     const fixture = await makeFixture();
     const oauthDir = path.join(fixture.stateDir, "operator-credentials");
@@ -532,27 +557,6 @@ module.exports = { stateMigrations: [{
       expect.stringContaining(`Snapshot tree contains a symbolic link: ${linkedDir}`),
     ]);
     expect(fs.readFileSync(externalDatabase, "utf8")).toBe("external-bytes\n");
-  });
-
-  it("records named-profile workspace endpoints without authorizing unbound writes", async () => {
-    const fixture = await makeFixture();
-    fixture.env.OPENCLAW_PROFILE = "work";
-    const source = path.join(fixture.homeDir, ".openclaw", "workspace-work");
-    const target = path.join(fixture.homeDir, ".openclaw-work", "workspace");
-    fs.mkdirSync(source, { recursive: true });
-    fs.writeFileSync(path.join(source, "AGENTS.md"), "profile workspace\n");
-    const before = snapshotFiles(fixture.root);
-
-    const plan = await planFixture(fixture);
-
-    expect(plan.steps.find((step) => step.id === "profile-workspace")).toMatchObject({
-      source: [{ kind: "path", path: source }],
-      target: [{ kind: "path", path: target }],
-      requiredness: "conditional",
-      outcome: "deferred",
-      refusal: { code: "profile-workspace-snapshot-deferred" },
-    });
-    expect(snapshotFiles(fixture.root)).toEqual(before);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -823,13 +827,15 @@ module.exports = { stateMigrations: [{
       },
     }) as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
+    const result = await withStateMigrationBackupForTest({ env: fixture.env }, () =>
+      autoMigrateLegacyState({
+        cfg,
+        doctorOnlyStateMigrations: true,
+        env: fixture.env,
+        homedir: () => fixture.homeDir,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      }),
+    );
 
     expectBlockedTailInPlanOrder({
       plan,
@@ -847,7 +853,7 @@ module.exports = { stateMigrations: [{
     expect(result.stepReceipts[0]).toMatchObject({ outcome: "completed" });
     expect(result.stepReceipts[0]?.changes.length).toBeGreaterThan(0);
     expect(result.stepReceipts[1]).toMatchObject({
-      id: "plugin-install-index",
+      id: "retired-core-state",
       outcome: "skipped",
     });
     expect(result.stepReceipts[2]).toMatchObject({

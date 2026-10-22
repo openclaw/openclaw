@@ -15,41 +15,12 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { DoctorToolSchemaOptions } from "./doctor-tool-schema-frames.js";
 import type { HealthFinding } from "./health-checks.js";
-
-async function collectBundleMcpRuntimeToolSchemaFindings(params: {
-  bundleRuntime: BundleMcpToolRuntime;
-  cfg: OpenClawConfig;
-  agentId: string;
-  workspaceDir: string;
-  modelRef: { provider: string; model: string };
-  model: ProviderRuntimeModel;
-}): Promise<readonly HealthFinding[]> {
-  const { collectNormalizedToolSchemaFindings } =
-    await import("./doctor-tool-schema-projection.js");
-  const activeBundleTools = applyFinalEffectiveToolPolicy({
-    bundledTools: params.bundleRuntime.tools,
-    config: params.cfg,
-    conversationCapabilityProfile: resolveConversationCapabilityProfile({
-      config: params.cfg,
-      agentId: params.agentId,
-      modelProvider: params.modelRef.provider,
-      modelId: params.modelRef.model,
-    }),
-    warn: () => {},
-  });
-  return collectNormalizedToolSchemaFindings({
-    ...params,
-    tools: activeBundleTools,
-    normalizationFailureFinding: (error) => bundleMcpRuntimeFailureFinding(error, "normalize"),
-  });
-}
 
 function bundleMcpRuntimeFailureFinding(
   error: unknown,
@@ -199,11 +170,13 @@ export async function collectRuntimeToolSchemaFindings(
   ]);
   const cfg = captureRuntimeConfig(sourceConfig);
   const env = options.env ?? process.env;
+  await using ownedMetadataScope = options.runWithPluginMetadataSnapshot
+    ? undefined
+    : (
+        await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js")
+      ).createDoctorPluginMetadataSnapshotScope({ env });
   const runWithPluginMetadataSnapshot =
-    options.runWithPluginMetadataSnapshot ??
-    (
-      await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js")
-    ).createDoctorPluginMetadataSnapshotScope({ env }).run;
+    options.runWithPluginMetadataSnapshot ?? ownedMetadataScope!.run;
   const { frames, findings } = await prepareDoctorToolSchemaFrames(cfg, {
     ...options,
     env,
@@ -410,14 +383,31 @@ export async function collectRuntimeToolSchemaFindings(
             reportedBundleRuntimeDiagnostics.add(diagnostic.serverName);
           }
           findings.push(
-            ...(await collectBundleMcpRuntimeToolSchemaFindings({
-              bundleRuntime,
-              cfg,
-              agentId,
-              workspaceDir,
-              modelRef,
-              model,
-            })),
+            ...(await (async (): Promise<readonly HealthFinding[]> => {
+              const { collectNormalizedToolSchemaFindings } =
+                await import("./doctor-tool-schema-projection.js");
+              const activeBundleTools = applyFinalEffectiveToolPolicy({
+                bundledTools: bundleRuntime.tools,
+                config: cfg,
+                conversationCapabilityProfile: resolveConversationCapabilityProfile({
+                  config: cfg,
+                  agentId,
+                  modelProvider: modelRef.provider,
+                  modelId: modelRef.model,
+                }),
+                warn: () => {},
+              });
+              return collectNormalizedToolSchemaFindings({
+                cfg,
+                agentId,
+                workspaceDir,
+                modelRef,
+                model,
+                tools: activeBundleTools,
+                normalizationFailureFinding: (error) =>
+                  bundleMcpRuntimeFailureFinding(error, "normalize"),
+              });
+            })()),
           );
         }
       };

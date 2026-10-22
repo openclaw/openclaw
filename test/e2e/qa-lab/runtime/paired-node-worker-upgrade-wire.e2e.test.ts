@@ -4,6 +4,7 @@ import path from "node:path";
 import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { collectRuntimeImportClosure } from "../../../../scripts/lib/runtime-import-closure.mts";
 import { writeBuildInfo } from "../../../../scripts/write-build-info.js";
 import { hasErrnoCode } from "../../../../src/infra/errno.js";
 import {
@@ -31,6 +32,14 @@ const SESSION_KEY = "agent:qa:paired-node-worker-upgrade";
 const RESULT_FILE = "completed-before-upgrade.txt";
 const RESULT_BYTES = "Completed worker result must survive the Gateway update.\n";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const runtimeFiles = collectRuntimeImportClosure(process.cwd(), [
+  "package.json",
+  "openclaw.mjs",
+  "cli-invocation.mjs",
+  "node-version.mjs",
+  "node-sqlite.mjs",
+  "node-runtime-update.mjs",
+]);
 
 type DescribedSession = {
   sessionId?: string;
@@ -103,13 +112,7 @@ describe("paired node worker Gateway upgrade wire", () => {
           await fs.symlink(runtimeRoot, selfLink, "junction");
         }
       }
-      for (const file of [
-        "package.json",
-        "openclaw.mjs",
-        "node-version.mjs",
-        "node-sqlite.mjs",
-        "node-runtime-update.mjs",
-      ]) {
+      for (const file of runtimeFiles) {
         await fs.copyFile(path.join(process.cwd(), file), path.join(runtimeRoot, file));
       }
       await fs.symlink(
@@ -215,7 +218,7 @@ describe("paired node worker Gateway upgrade wire", () => {
           { runId, timeoutMs: PROOF_TIMEOUT_MS },
           { timeoutMs: PROOF_TIMEOUT_MS + 5_000 },
         );
-        expect(blockedUploads, JSON.stringify(firstTurn)).toBeGreaterThan(0);
+        expect(firstTurn).toMatchObject({ status: "ok" });
         const activeGateway = gateway;
         await vi.waitFor(
           () => {
@@ -226,6 +229,7 @@ describe("paired node worker Gateway upgrade wire", () => {
           },
           { timeout: PROOF_TIMEOUT_MS, interval: 100 },
         );
+        expect(blockedUploads).toBeGreaterThan(0);
         const localDir = created.execCwd ?? created.spawnedCwd;
         if (!localDir) {
           throw new Error("session omitted its canonical workspace");

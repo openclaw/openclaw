@@ -31,6 +31,7 @@ const boundary = vi.hoisted(() => ({
   stop: vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>(),
   read: vi.fn<typeof readGatewayServiceState>(),
   command: vi.fn<GatewayService["readCommand"]>(),
+  config: vi.fn(async () => ({ config: {} })),
   revalidate: vi.fn<typeof revalidateManagedGatewayServiceAfterUpdate>(),
   repair: vi.fn(async () => ({})),
   restart: vi.fn(),
@@ -70,8 +71,9 @@ vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),
   isDefaultInstallIdentity: () => true,
 }));
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: async () => ({ config: {} }),
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: boundary.config,
 }));
 vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
@@ -275,9 +277,6 @@ beforeEach(() => {
     runtime: { status: "stopped" },
   });
   boundary.health.mockResolvedValue({ outcome: "ready", healthy: true });
-  boundary.native.mockImplementation(() => {
-    throw new Error("Doctor settlement controls cannot start or inspect native processes");
-  });
 });
 afterEach(() => {
   try {

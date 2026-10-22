@@ -2,43 +2,42 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveDockerPluginSelection } from "../../scripts/lib/docker-plugin-selection.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const selectorScript = path.join(repoRoot, "scripts/lib/docker-plugin-selection.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let fixtureRoot: string;
+let extensionsRoot: string;
+beforeEach(() => {
+  fixtureRoot = tempDirs.make("openclaw-docker-plugin-selection-");
+  extensionsRoot = path.join(fixtureRoot, "extensions");
+  fs.mkdirSync(extensionsRoot);
+});
+const writeJson = (file: string, value: unknown) => fs.writeFileSync(file, JSON.stringify(value));
 
 function writePlugin(
-  extensionsRoot: string,
   dirName: string,
   manifestId?: string,
   dependencies?: Record<string, string>,
   requiredPlatformPackages?: string[],
+  providers?: string[],
 ) {
   const pluginDir = path.join(extensionsRoot, dirName);
   fs.mkdirSync(pluginDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    `${JSON.stringify({
-      name: dirName,
-      ...(dependencies && { dependencies }),
-      ...(requiredPlatformPackages && {
-        openclaw: { install: { requiredPlatformPackages } },
-      }),
-    })}\n`,
-  );
+  writeJson(path.join(pluginDir, "package.json"), {
+    name: dirName,
+    dependencies,
+    openclaw: requiredPlatformPackages ? { install: { requiredPlatformPackages } } : undefined,
+  });
   if (manifestId) {
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      `${JSON.stringify({ id: manifestId })}\n`,
-    );
+    writeJson(path.join(pluginDir, "openclaw.plugin.json"), { id: manifestId, providers });
   }
 }
 
 function runSelector(
-  extensionsRoot: string,
   selection: string,
   rootPackagePath?: string,
   requiredPlatformPackages = false,
@@ -52,6 +51,12 @@ function runSelector(
   return spawnSync(process.execPath, args, {
     encoding: "utf8",
   });
+}
+
+function expectOutput(output: string, ...args: Parameters<typeof runSelector>) {
+  const result = runSelector(...args);
+  expect(result).toMatchObject({ status: 0, stdout: output });
+  return result;
 }
 
 describe("Docker plugin selection", () => {
@@ -75,13 +80,11 @@ describe("Docker plugin selection", () => {
   });
 
   it("selects provider owners by manifest capability without assuming matching plugin ids", () => {
-    const extensionsRoot = tempDirs.make("openclaw-docker-provider-selection-");
-    writePlugin(extensionsRoot, "provider-source", "provider-plugin");
-    writePlugin(extensionsRoot, "other-source", "other-plugin");
-    fs.writeFileSync(
-      path.join(extensionsRoot, "provider-source", "openclaw.plugin.json"),
-      JSON.stringify({ id: "provider-plugin", providers: ["api-provider", "portal-provider"] }),
-    );
+    writePlugin("provider-source", "provider-plugin", undefined, undefined, [
+      "api-provider",
+      "portal-provider",
+    ]);
+    writePlugin("other-source", "other-plugin");
 
     expect(
       resolveDockerPluginSelection({
@@ -96,72 +99,52 @@ describe("Docker plugin selection", () => {
   });
 
   it("includes required core-bundled dependencies without changing optional plugin selections", () => {
-    const fixtureRoot = tempDirs.make("openclaw-docker-required-bundled-plugins-");
-    const extensionsRoot = path.join(fixtureRoot, "extensions");
     const rootPackagePath = path.join(fixtureRoot, "package.json");
-    fs.mkdirSync(extensionsRoot);
-    fs.writeFileSync(
-      rootPackagePath,
-      `${JSON.stringify({ files: ["dist/", "!dist/extensions/optional-provider/**"] })}\n`,
-    );
-    writePlugin(extensionsRoot, "bundled-provider", "bundled", { "provider-sdk": "1.0.0" });
-    writePlugin(extensionsRoot, "bundled-without-deps", "without-deps");
-    writePlugin(extensionsRoot, "optional-provider", "optional", { "optional-sdk": "1.0.0" }, [
+    writeJson(rootPackagePath, { files: ["dist/", "!dist/extensions/optional-provider/**"] });
+    writePlugin("bundled-provider", "bundled", { "provider-sdk": "1.0.0" });
+    writePlugin("bundled-without-deps", "without-deps");
+    writePlugin("optional-provider", "optional", { "optional-sdk": "1.0.0" }, [
       "optional-native-linux-arm64",
       "optional-native-darwin-arm64",
       "optional-native-linux-arm64",
     ]);
 
-    const required = runSelector(extensionsRoot, "", rootPackagePath);
-    expect(required.status).toBe(0);
-    expect(required.stderr).toBe("");
-    expect(required.stdout).toBe("bundled-provider\n");
-
-    const install = runSelector(extensionsRoot, "optional", rootPackagePath);
-    expect(install.status).toBe(0);
-    expect(install.stdout).toBe("bundled-provider\noptional-provider\n");
-
-    const selected = runSelector(extensionsRoot, "optional");
-    expect(selected.status).toBe(0);
-    expect(selected.stdout).toBe("optional-provider\n");
-
-    const platformPackages = runSelector(extensionsRoot, "optional", undefined, true);
-    expect(platformPackages.status).toBe(0);
-    expect(platformPackages.stdout).toBe(
+    expect(expectOutput("bundled-provider\n", "", rootPackagePath).stderr).toBe("");
+    expectOutput("bundled-provider\noptional-provider\n", "optional", rootPackagePath);
+    expectOutput("optional-provider\n", "optional");
+    expectOutput(
       "optional-native-darwin-arm64\noptional-native-linux-arm64\n",
+      "optional",
+      undefined,
+      true,
     );
-    expect(runSelector(extensionsRoot, "", undefined, true).stdout).toBe("");
+    expect(runSelector("", undefined, true).stdout).toBe("");
   });
 
   it("resolves manifest ids and source directory names deterministically", () => {
-    const extensionsRoot = tempDirs.make("openclaw-docker-plugin-selection-");
-    writePlugin(extensionsRoot, "source-only");
-    writePlugin(extensionsRoot, "provider-source", "provider-id");
-
-    const result = runSelector(
-      extensionsRoot,
+    writePlugin("source-only");
+    writePlugin("provider-source", "provider-id");
+    const result = expectOutput(
+      "provider-source\nsource-only\n",
       "source-only,provider-id provider-source,provider-id",
     );
-
-    expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toBe("provider-source\nsource-only\n");
   });
 
   it("fails closed for unknown, invalid, and ambiguous ids", () => {
-    const extensionsRoot = tempDirs.make("openclaw-docker-plugin-selection-errors-");
-    writePlugin(extensionsRoot, "shared");
-    writePlugin(extensionsRoot, "other-source", "shared");
+    writePlugin("shared");
+    writePlugin("other-source", "shared");
 
     for (const [selection, message] of [
       ["missing-plugin", "unknown OPENCLAW_EXTENSIONS plugin id: missing-plugin"],
       ["../invalid", "invalid OPENCLAW_EXTENSIONS plugin id: ../invalid"],
       ["shared", "ambiguous OPENCLAW_EXTENSIONS plugin id: shared"],
     ] as const) {
-      const result = runSelector(extensionsRoot, selection);
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(message);
+      expect(runSelector(selection)).toMatchObject({
+        status: 1,
+        stdout: "",
+        stderr: expect.stringContaining(message),
+      });
     }
   });
 });

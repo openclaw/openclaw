@@ -1,8 +1,11 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { createHarnessCompletionSourceAssertion } from "../agents/agent-harness-completion-recovery.js";
 import {
@@ -10,6 +13,7 @@ import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import type { HarnessCompletionRecovery } from "../config/sessions/restart-recovery-types.js";
 import {
   appendTranscriptMessage,
@@ -23,16 +27,17 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
-import {
-  getAgentRunContext,
-  readAgentRunDelegatedAuthorityFailure,
-} from "../infra/agent-run-registry.js";
-import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  createAgentEventTestHarness,
+  type AgentEventTestHarnessOptions,
+} from "./server-chat.agent-events.test-harness.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
@@ -41,20 +46,17 @@ import {
 } from "./server-methods/session-mutation-guards.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
-
-const routing = vi.hoisted(() => ({ loadSessionEntry: vi.fn() }));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: routing.loadSessionEntry,
-}));
+import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 let state: OpenClawTestState;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", label: "lifecycle-source" });
 });
 afterAll(async () => state?.cleanup());
+beforeEach(async () => {
+  await captureRuntimeConfigAsyncReader()();
+});
 afterEach(() => {
-  routing.loadSessionEntry.mockReset();
   vi.restoreAllMocks();
 });
 
@@ -104,28 +106,23 @@ async function recoveryFixture(name: string) {
       },
     },
   );
-  // Routing is already prepared by the caller; this boundary owns patch and source SQL.
-  routing.loadSessionEntry.mockReturnValue({
-    ...target,
-    canonicalKey: sessionKey,
-    entry: loadSessionEntry(target),
-  });
   const source = createHarnessCompletionSourceAssertion({ claim, storePath: target.storePath });
   const admission = prepareSystemAgentRunAdmission({}, runId, "main", "lifecycle-source", source);
   const admittedRunContext = await admission.admit("embedded");
   const writeContext = expectDefined(
-    captureAgentRunTerminalWriteContext(runId),
+    captureAgentRunTerminalPersistence(runId).writeContext,
     "The recovery must retain its exact delegated terminal writer",
   );
   const authority = expectDefined(
     getAgentRunContext(runId)?.delegatedAuthority,
     "The recovery must hold its admitted source authority",
   );
-  const scheduler = createTestGatewayScheduler();
-  const owner = createSessionLifecyclePersistenceOwner(scheduler);
+  const owner = createSessionLifecyclePersistenceOwner();
   return {
     target,
     entry,
+    runId,
+    writeContext,
     source,
     admittedRunContext,
     authority,
@@ -134,7 +131,7 @@ async function recoveryFixture(name: string) {
       owner.persist({
         sessionKey,
         agentId: "main",
-        assertCommitAllowed: writeContext.assertCurrent,
+        assertCommitAllowed: source,
         event: {
           runId,
           sessionId,
@@ -161,7 +158,6 @@ async function recoveryFixture(name: string) {
     async close() {
       await owner.drain();
       admission.close();
-      await scheduler.stop();
     },
   };
 }
@@ -191,45 +187,76 @@ it("settles a recovered source's start and terminal lifecycle without caller-thr
   }
 });
 
-it("refuses a changed same-store recovery source before lifecycle commit with the live owner's error", async () => {
+it("reuses the eager write through chat while persisting the remapped terminal run", async () => {
+  const fixture = await recoveryFixture("chat-handoff");
+  const clientRunId = "client-terminal-handoff";
+  const track =
+    vi.fn<NonNullable<AgentEventTestHarnessOptions["trackTrackedRunTerminalPersistence"]>>();
+  const h = createAgentEventTestHarness({
+    persistGatewaySessionLifecycleEventForEvent: fixture.owner.persist,
+    trackTrackedRunTerminalPersistence: track,
+  });
+  try {
+    await fixture.start();
+    h.register(fixture.runId, fixture.target.sessionKey, clientRunId);
+    const event: AgentEventRuntimePayload = {
+      runId: fixture.runId,
+      sessionId: fixture.entry.sessionId,
+      seq: 2,
+      stream: "lifecycle",
+      ts: 3_000,
+      data: { phase: "end", startedAt: 2_000, endedAt: 3_000 },
+    };
+    Object.defineProperty(event, "lifecycleGeneration", {
+      value: fixture.authority.lifecycleGeneration,
+      enumerable: false,
+    });
+    const persistence = fixture.owner.observe({
+      ...fixture.target,
+      event,
+      clientRunId,
+      writeContext: fixture.writeContext,
+    });
+    await h.handler(event);
+    await persistence;
+    expect(fixture.owner.persist({ ...fixture.target, event })).toBe(persistence);
+    expect(loadSessionEntry(fixture.target)).toMatchObject({
+      status: "done",
+      lastRunId: clientRunId,
+      startedAt: 2_000,
+      endedAt: 3_000,
+    });
+    expect(track).toHaveBeenCalledOnce();
+    expect(track.mock.calls[0]?.[0].persistence).toBe(persistence);
+  } finally {
+    await h.handler.dispose();
+    await fixture.close();
+  }
+});
+
+it("settles terminal bookkeeping after its recovery receipt no longer admits work", async () => {
   const fixture = await recoveryFixture("changed");
   try {
-    const prepareSource = expectDefined(
-      fixture.source.prepareSessionSource,
-      "Recovery has worker source preparation",
-    );
-    const replacement = { ...fixture.entry, restartRecoveryHarnessCompletion: undefined };
-    fixture.source.prepareSessionSource = async () => {
-      const prepared = await prepareSource();
-      try {
-        // The foreign writer changes the receipt after its read, before dispatch or any grant.
-        replaceSessionEntrySync(fixture.target, replacement);
-        return prepared;
-      } catch (error) {
-        await prepared.release?.();
-        throw error;
-      }
+    // A yielded checkpoint needs a resume write; an already-running start is a no-op.
+    const replacement = {
+      ...fixture.entry,
+      endedAt: 1_500,
+      restartRecoveryHarnessCompletion: undefined,
     };
-
-    await expect(fixture.finish()).rejects.toMatchObject({
-      name: "Error",
-      message: "Terminal write owner changed before commit",
-    });
-    expect(readAgentRunDelegatedAuthorityFailure(fixture.authority)?.cause).toBeInstanceOf(
-      SessionWorkStartChangedError,
-    );
+    replaceSessionEntrySync(fixture.target, replacement);
+    await expect(fixture.start()).rejects.toBeInstanceOf(SessionWorkStartChangedError);
+    await fixture.finish();
     expect(loadSessionEntry(fixture.target)).toMatchObject({
-      startedAt: 1_000,
-      updatedAt: 1_000,
+      status: "done",
+      startedAt: 2_000,
+      endedAt: 3_000,
     });
-    expect(loadSessionEntry(fixture.target)?.status).toBeUndefined();
-    expect(loadSessionEntry(fixture.target)?.endedAt).toBeUndefined();
   } finally {
     await fixture.close();
   }
 });
 
-it("keeps cross-store patches native and refuses a source revoked before submission", async () => {
+it("writes cross-store patches in the worker and refuses a source revoked before submission", async () => {
   expect(isMainThread).toBe(true);
   const fixture = await recoveryFixture("cross-store");
   const target = {
@@ -246,17 +273,19 @@ it("keeps cross-store patches native and refuses a source revoked before submiss
     const sql = observeHostDataSql();
     try {
       await expect(
-        patchSessionEntryCore(target, () => ({ label: "native cross-store write" }), {
+        patchSessionEntryCore(target, () => ({ label: "worker cross-store write" }), {
           workerGuard: { source: fixture.source },
         }),
-      ).resolves.toMatchObject({ label: "native cross-store write" });
-      expect(sql.queries.some((query) => /^update "session_nodes" set\b/i.test(query))).toBe(true);
-      // The statement execution observer distinguishes native work from worker-only writes.
-      expect(sql.calls[4]).toHaveBeenCalled();
+      ).resolves.toMatchObject({ label: "worker cross-store write" });
+      expect(
+        sql.queries.filter(
+          (query) => /^(?:insert|update|delete)\b/i.test(query) && isSessionEntryDataSql(query),
+        ),
+      ).toEqual([]);
     } finally {
       sql.restore();
     }
-    expect(loadSessionEntry(target)?.label).toBe("native cross-store write");
+    expect(loadSessionEntry(target)?.label).toBe("worker cross-store write");
     const prepare = expectDefined(fixture.source.prepareSessionSource, "Prepared recovery source");
     fixture.source.prepareSessionSource = async () => {
       const prepared = await prepare();
@@ -276,7 +305,7 @@ it("keeps cross-store patches native and refuses a source revoked before submiss
         workerGuard: { source: fixture.source },
       }),
     ).rejects.toBeInstanceOf(SessionWorkStartChangedError);
-    expect(loadSessionEntry(target)?.label).toBe("native cross-store write");
+    expect(loadSessionEntry(target)?.label).toBe("worker cross-store write");
   } finally {
     await fixture.close();
   }
@@ -295,11 +324,6 @@ it("keeps a recovered tool caller's source preparation through in-process Stop a
       startedAt: 1_000,
       lifecycleRunId: runId,
       activeWriterRunId: runId,
-    });
-    routing.loadSessionEntry.mockReturnValue({
-      ...target,
-      canonicalKey: target.sessionKey,
-      entry: loadSessionEntry(target),
     });
     const caller = expectDefined(
       createAdmittedGatewayToolCallerIdentity({
@@ -352,7 +376,7 @@ it("keeps a recovered tool caller's source preparation through in-process Stop a
       const assertAbortCurrent = composeSessionSourceAssertion([authority.assertCurrent]);
       const sql = observeHostDataSql();
       try {
-        await fixture.owner.persist({
+        await persistGatewaySessionLifecycleEvent({
           sessionKey: target.sessionKey,
           agentId: "main",
           assertCommitAllowed: assertAbortCurrent,

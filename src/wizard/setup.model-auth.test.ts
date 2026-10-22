@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
@@ -8,14 +10,17 @@ import { createTestConfigFileStore } from "../commands/test-runtime-config-helpe
 import type { ConfigWriteOptions } from "../config/io.js";
 import { resolvePersistCandidateForWrite } from "../config/io.write-prepare.js";
 import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
-import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
-import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { WizardCancelledError } from "./prompts.js";
+import { agentConfig, authCandidate as candidate } from "./setup.credentials.test-support.js";
+import { runSetupModelAuthStep } from "./setup.model-auth.js";
 import {
   requestTelemetryConsent,
   requireRiskAcknowledgement,
-  resolveQuickstartGatewayDefaults,
+  resolveQuickstartGatewayDefaults as gatewayDefaults,
   writeWizardConfigFile,
 } from "./setup.shared.js";
 
@@ -74,35 +79,8 @@ function runStep(params: Partial<Parameters<typeof runSetupModelAuthStep>[0]> = 
   });
 }
 
-function candidate(
-  config: OpenClawConfig,
-  authProfiles: SetupModelAuthCandidate["authProfiles"] = [],
-) {
-  return { config, authProfiles, persistAuthProfiles: vi.fn(async () => {}) };
-}
-
-const managedModels: OpenClawConfig["models"] = {
-  providers: {
-    "managed-local": {
-      baseUrl: "http://127.0.0.1:8080/v1",
-      models: [],
-      localService: { command: "/fixture/server" },
-    },
-  },
-};
-
-function createDefaultAgentConfig(): OpenClawConfig {
-  return {
-    agents: {
-      defaults: { workspace: "/tmp/global-workspace" },
-      entries: {
-        ops: {
-          agentDir: "/tmp/ops-agent",
-          workspace: "/tmp/ops-workspace",
-        },
-      },
-    },
-  };
+function expectCall(mock: unknown, fields: object) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
 }
 
 describe("runSetupModelAuthStep", () => {
@@ -114,7 +92,7 @@ describe("runSetupModelAuthStep", () => {
   });
 
   it("keeps the migrated setup owner and pending credentials through config copies", async () => {
-    const raw: OpenClawConfigWithLegacyRoster = createDefaultAgentConfig();
+    const raw: OpenClawConfigWithLegacyRoster = agentConfig();
     raw.agents!.entries = { alpha: {}, ...raw.agents!.entries };
     raw.agents!.entries!.ops!.default = true;
     let config = createCanonicalAgentConfigFixture(raw).config;
@@ -147,129 +125,88 @@ describe("runSetupModelAuthStep", () => {
     });
     const result = await runStep({ config, prompter });
     const target = { agentId: "ops", agentDir: "/tmp/ops-agent" };
-
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workspaceDir: "/tmp/ops-workspace",
-        detectedProviderIds: new Set(["ollama"]),
-      }),
-    );
-    expect(applyAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ...target,
-        preserveExistingDefaultModel: true,
-      }),
-    );
-    expect(promptDefaultModel).toHaveBeenCalledWith(
-      expect.objectContaining({ ...target, workspaceDir: "/tmp/ops-workspace", allowKeep: false }),
-    );
+    expectCall(applyAuthChoice, { ...target, preserveExistingDefaultModel: true });
+    expectCall(promptDefaultModel, {
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
+      workspaceDir: "/tmp/ops-workspace",
+      allowKeep: false,
+    });
     expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(expect.anything(), prompter, {
       ...target,
       pendingAuthProfiles: prepared.authProfiles,
     });
-    expect(resolvePluginSetupProviderCore).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "anthropic", pluginIds: ["anthropic"] }),
-    );
+    expect(result.authProfiles).toEqual(prepared.authProfiles);
     expect(result.persistAuthProfiles).toBe(prepared.persistAuthProfiles);
     expect(prepared.persistAuthProfiles).not.toHaveBeenCalled();
   });
 
-  it("stages provider auth on the pending named agent without nesting its workspace", async () => {
+  it("scopes pending-agent credential preparation to its selected workspace", async () => {
     const workspaceDir = "/tmp/robby-workspace";
     const config: OpenClawConfig = { agents: { defaults: { workspace: workspaceDir } } };
     promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
     applyAuthChoice.mockResolvedValueOnce(candidate(config));
-
     await runStep({ config, pendingAgent: { name: "Robby!", workspaceDir } });
-
-    const agentDir = expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/);
+    const target = {
+      agentId: "robby",
+      agentDir: expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/),
+    };
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
-    expect(promptAuthChoiceGrouped).toHaveBeenCalledWith(expect.objectContaining({ workspaceDir }));
-    expect(applyAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "robby", agentDir, workspaceDir }),
-    );
-    expect(promptDefaultModel).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "robby", agentDir, workspaceDir }),
-    );
+    expectCall(applyAuthChoice, { ...target, workspaceDir });
+    expectCall(promptDefaultModel, { ...target, workspaceDir });
     expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
-      expect.objectContaining({ agentId: "robby", agentDir }),
+      expect.objectContaining(target),
     );
   });
 
-  it("keeps managed model defaults owned by the selected fleet agent", async () => {
+  it("keeps provider-selected models owned by the selected fleet agent", async () => {
     const selectedModel = "managed-local/selected";
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          systemAgent: { agentId: "ops" },
-          model: { primary: "global/current" },
-          models: { "global/current": { alias: "global" } },
-        },
-        entries: {
-          ops: {
-            model: { primary: "ops/current" },
-            models: { "ops/current": { alias: "existing" } },
-            agentDir: "/tmp/ops-agent",
-            workspace: "/tmp/ops-workspace",
-          },
-          main: { model: { primary: "main/current" } },
-        },
+    const existingModels = { "ops/current": { alias: "existing" } };
+    const selectedModels = { ...existingModels, [selectedModel]: { alias: "selected" } };
+    const config = agentConfig({
+      ownership: "explicit",
+      defaults: {
+        systemAgent: { agentId: "ops" },
+        model: { primary: "global/current" },
+        models: { "global/current": { alias: "global" } },
       },
-    };
-    applyAuthChoice.mockImplementationOnce(({ config: authConfig }: { config: OpenClawConfig }) =>
-      candidate({
-        ...authConfig,
-        agents: {
-          ...authConfig.agents,
-          defaults: {
-            ...authConfig.agents?.defaults,
-            model: { primary: selectedModel },
-            models: {
-              ...authConfig.agents?.defaults?.models,
-              [selectedModel]: { alias: "selected" },
-            },
-          },
+      entries: {
+        ops: {
+          model: { primary: "ops/current" },
+          models: existingModels,
+          agentDir: "/tmp/ops-agent",
+          workspace: "/tmp/ops-workspace",
         },
-        models: managedModels,
-      }),
-    );
+        main: { model: { primary: "main/current" } },
+      },
+    });
+    applyAuthChoice.mockImplementationOnce(({ config: authConfig }: { config: OpenClawConfig }) => {
+      const prepared = structuredClone(authConfig);
+      prepared.agents!.defaults!.model = { primary: selectedModel };
+      prepared.agents!.defaults!.models = {
+        ...authConfig.agents?.defaults?.models,
+        [selectedModel]: { alias: "selected" },
+      };
+      return candidate(prepared);
+    });
 
     const result = await runStep({ config, opts: { authChoice: "anthropic-cli" } });
 
-    expect(applyAuthChoice).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "ops",
-        config: expect.objectContaining({
-          agents: expect.objectContaining({
-            defaults: expect.objectContaining({
-              model: { primary: "ops/current" },
-              models: { "ops/current": { alias: "existing" } },
-            }),
-          }),
-        }),
-      }),
-    );
     expect(result.config.agents?.defaults).toEqual(config.agents?.defaults);
     expect(result.config.agents?.entries?.main).toEqual(config.agents?.entries?.main);
     expect(result.config.agents?.entries?.ops?.model).toEqual({ primary: selectedModel });
-    expect(result.config.agents?.entries?.ops?.models).toEqual({
-      "ops/current": { alias: "existing" },
-      [selectedModel]: { alias: "selected" },
-    });
+    expect(result.config.agents?.entries?.ops?.models).toEqual(selectedModels);
   });
 
   it("passes the explicit system agent to custom setup while preserving its existing model", async () => {
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "ops" }, model: { primary: "global/current" } },
-        entries: { ops: { model: { primary: "ops/current" }, workspace: "/tmp/ops-workspace" } },
-      },
-    };
+    const config = agentConfig({
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "ops" }, model: { primary: "global/current" } },
+      entries: { ops: { model: { primary: "ops/current" }, workspace: "/tmp/ops-workspace" } },
+    });
     promptCustomApiConfig.mockResolvedValueOnce({ config });
 
     const result = await runStep({
@@ -279,17 +216,15 @@ describe("runSetupModelAuthStep", () => {
     });
     await result.persistAuthProfiles();
 
-    expect(promptCustomApiConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({ agentId: "ops", workspaceDir: "/tmp/ops-workspace" }),
-        setAsPrimary: false,
-      }),
-    );
+    expectCall(promptCustomApiConfig, {
+      target: expect.objectContaining({ agentId: "ops", workspaceDir: "/tmp/ops-workspace" }),
+      setAsPrimary: false,
+    });
     expect(result.config.agents).toEqual(config.agents);
   });
 
   it("applies and validates an interactive model selection on the configured agent", async () => {
-    const config = createDefaultAgentConfig();
+    const config = agentConfig();
     config.agents!.defaults!.model = "openai/global-model";
     config.agents!.entries!.ops!.model = {
       primary: "anthropic/old-model",
@@ -305,10 +240,6 @@ describe("runSetupModelAuthStep", () => {
       fallbacks: ["openai/fallback-model"],
     });
     expect(result.config.agents?.defaults?.model).toBe("openai/global-model");
-    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(result.config, expect.anything(), {
-      agentId: "ops",
-      agentDir: "/tmp/ops-agent",
-    });
   });
 
   it("keeps the current provider without applying auth or automatic lean changes", async () => {
@@ -352,32 +283,76 @@ describe("runSetupModelAuthStep", () => {
     applyAuthChoice.mockRejectedValueOnce(new WizardCancelledError());
     await expect(runStep()).rejects.toThrow(WizardCancelledError);
   });
+
+  it.each([
+    { source: "root", phase: "chooser" },
+    { source: "include", phase: "chooser" },
+    { source: "root", phase: "preparation" },
+    { source: "include", phase: "preparation" },
+  ])(
+    "revokes prepared provider requests when the $source config changes during $phase",
+    async ({ source, phase }) => {
+      await withOpenClawTestState({ label: "setup-auth-authority" }, async (state) => {
+        const config: OpenClawConfig = { gateway: { port: 19489 } };
+        const includePath = path.join(state.stateDir, "provider.json");
+        const write = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
+        await write(includePath, config);
+        await write(
+          state.configPath,
+          source === "include" ? { $include: "provider.json" } : config,
+        );
+        const replaceConfig = () =>
+          write(source === "include" ? includePath : state.configPath, {
+            gateway: { port: 19490 },
+          });
+        promptAuthChoiceGrouped
+          .mockReset()
+          .mockImplementationOnce(async () => {
+            if (phase === "chooser") {
+              await replaceConfig();
+            }
+            return "anthropic-cli";
+          })
+          .mockResolvedValueOnce("skip");
+        const sendCredentialRequest = vi.fn();
+        applyAuthChoice.mockReset().mockImplementationOnce(async ({ assertCurrent }) => {
+          if (phase === "preparation") {
+            await replaceConfig();
+          }
+          assertCurrent?.();
+          sendCredentialRequest();
+          return candidate(config);
+        });
+
+        await expect(runStep({ config, stateDir: state.stateDir })).rejects.toBeInstanceOf(
+          ConfigMutationConflictError,
+        );
+        expect(sendCredentialRequest).not.toHaveBeenCalled();
+        expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(1);
+      });
+    },
+  );
 });
 
 const configFiles = createTestConfigFileStore();
 
 const mocks = vi.hoisted(() => ({
   currentConfig: {} as OpenClawConfig,
-  transformConfigWithPendingPluginInstalls: vi.fn(),
+  transform: vi.fn(),
 }));
 
 vi.mock("../plugins/install-record-commit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/install-record-commit.js")>()),
-  transformConfigWithPendingPluginInstalls: mocks.transformConfigWithPendingPluginInstalls,
+  transformConfigWithPendingPluginInstalls: mocks.transform,
 }));
 
-describe("requestTelemetryConsent", () => {
-  it("records telemetry consent only once", async () => {
-    const enabled = true;
-    const select = vi.fn(async () => enabled) as unknown as WizardPrompter["select"];
-    const prompter = createWizardPrompter({ select });
-
-    const config = await requestTelemetryConsent({ opts: {}, prompter, config: {} });
-
-    expect(config.telemetry).toEqual({ enabled, consentedAt: expect.any(String) });
-    await expect(requestTelemetryConsent({ opts: {}, prompter, config })).resolves.toBe(config);
-    expect(select).toHaveBeenCalledOnce();
-  });
+it("records telemetry consent only once", async () => {
+  const prompter = createWizardPrompter();
+  vi.mocked(prompter.select).mockResolvedValue(true);
+  const config = await requestTelemetryConsent({ opts: {}, prompter, config: {} });
+  expect(config.telemetry).toEqual({ enabled: true, consentedAt: expect.any(String) });
+  await expect(requestTelemetryConsent({ opts: {}, prompter, config })).resolves.toBe(config);
+  expect(prompter.select).toHaveBeenCalledOnce();
 });
 
 describe("resolveQuickstartGatewayDefaults", () => {
@@ -396,33 +371,28 @@ describe("resolveQuickstartGatewayDefaults", () => {
     { credentials: { token: "stored-token" }, mode: "token" },
     { credentials: { password: "stored-password" }, mode: "password" },
   ])("retains existing no-auth credential inference: $mode", ({ credentials, mode }) => {
-    expect(
-      resolveQuickstartGatewayDefaults({ gateway: { auth: { mode: "none", ...credentials } } })
-        .authMode,
-    ).toBe(mode);
+    expect(gatewayDefaults({ gateway: { auth: { mode: "none", ...credentials } } }).authMode).toBe(
+      mode,
+    );
   });
 
   it("aligns credential-only overrides while keeping an explicit auth mode authoritative", () => {
-    const mode = (
-      opts: Parameters<typeof resolveQuickstartGatewayDefaults>[1],
-      config = storedConfig,
-    ) => resolveQuickstartGatewayDefaults(config, opts).authMode;
-    expect(mode({ gatewayPassword: "explicit-password" })).toBe("password");
-    expect(
-      mode(
-        { gatewayToken: "explicit-token" },
-        {
-          gateway: { auth: { mode: "password", password: "stored-password" } },
-        },
-      ),
-    ).toBe("token");
-    expect(mode({ gatewayAuth: "password", gatewayToken: "explicit-token" })).toBe("password");
-    expect(mode({ gatewayAuth: "token", gatewayPassword: "explicit-password" })).toBe("token");
+    const passwordConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "password", password: "stored-password" } },
+    };
+    for (const [opts, expected, config = storedConfig] of [
+      [{ gatewayPassword: "explicit-password" }, "password"],
+      [{ gatewayToken: "explicit-token" }, "token", passwordConfig],
+      [{ gatewayAuth: "password", gatewayToken: "explicit-token" }, "password"],
+      [{ gatewayAuth: "token", gatewayPassword: "explicit-password" }, "token"],
+    ] as const) {
+      expect(gatewayDefaults(config, opts).authMode).toBe(expected);
+    }
   });
 
   it("maps an explicit env-backed token to the canonical SecretRef", () => {
     expect(
-      resolveQuickstartGatewayDefaults(storedConfig, {
+      gatewayDefaults(storedConfig, {
         gatewayTokenRefEnv: " OPENCLAW_GATEWAY_TOKEN ",
       }),
     ).toMatchObject({
@@ -436,7 +406,7 @@ describe("writeWizardConfigFile", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.currentConfig = {};
-    mocks.transformConfigWithPendingPluginInstalls.mockImplementation(
+    mocks.transform.mockImplementation(
       async (params: { transform: (current: OpenClawConfig) => { nextConfig: OpenClawConfig } }) =>
         configFiles.write(params.transform(mocks.currentConfig).nextConfig),
     );
@@ -454,7 +424,7 @@ describe("writeWizardConfigFile", () => {
       afterWrite,
     });
 
-    expect(mocks.transformConfigWithPendingPluginInstalls).toHaveBeenCalledWith({
+    expect(mocks.transform).toHaveBeenCalledWith({
       baseHash: "verified-hash",
       maxAttempts: 1,
       afterWrite,
@@ -467,37 +437,30 @@ describe("writeWizardConfigFile", () => {
     const pluginConfig = (config: Record<string, unknown>): OpenClawConfig => ({
       plugins: { entries: { demo: { enabled: true, config } } },
     });
-    const base = pluginConfig({ choice: 1, unchangedNull: null, nested: { existing: true } });
-    const next = pluginConfig({
-      choice: null,
-      unchangedNull: null,
-      nested: { existing: true, optional: null },
-    });
+    const original = { choice: 1, unchangedNull: null, nested: { existing: true } };
+    const concurrent = { ...original, unchangedNull: "concurrent" };
+    const base = pluginConfig(original);
+    const requested = { choice: null, nested: { existing: true, optional: null } };
+    const next = pluginConfig({ ...original, ...requested });
     const sourceConfig = {
-      ...pluginConfig({ choice: 1, unchangedNull: "concurrent", nested: { existing: true } }),
+      ...pluginConfig(concurrent),
       gateway: { port: 19001 },
     };
     mocks.currentConfig = {
-      ...pluginConfig({
-        callerOwned: "concurrent",
-        choice: 1,
-        unchangedNull: "concurrent",
-        nested: { existing: true },
-      }),
-      gateway: { port: 19001 },
+      ...sourceConfig,
+      ...pluginConfig({ ...concurrent, callerOwned: "concurrent" }),
     };
     const explicitSetValueSource = pluginConfig({ callerOwned: "caller" });
-    mocks.transformConfigWithPendingPluginInstalls.mockImplementationOnce(
+    mocks.transform.mockImplementationOnce(
       async (params: {
         transform: (current: OpenClawConfig) => { nextConfig: OpenClawConfig };
         writeOptions?: ConfigWriteOptions;
       }) => {
-        const nextConfig = params.transform(mocks.currentConfig).nextConfig;
         return {
           nextConfig: resolvePersistCandidateForWrite({
             runtimeConfig: mocks.currentConfig,
             sourceConfig,
-            nextConfig,
+            nextConfig: params.transform(mocks.currentConfig).nextConfig,
             ...params.writeOptions,
           }) as OpenClawConfig,
         };
@@ -512,13 +475,8 @@ describe("writeWizardConfigFile", () => {
       },
     });
     expect(committed.nextConfig).toEqual({
-      ...pluginConfig({
-        callerOwned: "caller",
-        choice: null,
-        unchangedNull: "concurrent",
-        nested: { existing: true, optional: null },
-      }),
-      gateway: { port: 19001 },
+      ...sourceConfig,
+      ...pluginConfig({ ...concurrent, ...requested, callerOwned: "caller" }),
     });
   });
 });

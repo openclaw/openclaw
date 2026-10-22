@@ -336,7 +336,7 @@ export function formatRuntimeOptionsText(options: AcpSessionRuntimeOptions): str
     options.thinking ? `thinking=${options.thinking}` : null,
     options.cwd ? `cwd=${options.cwd}` : null,
     options.permissionProfile ? `permissionProfile=${options.permissionProfile}` : null,
-    typeof options.timeoutSeconds === "number" ? `timeoutSeconds=${options.timeoutSeconds}` : null,
+    options.timeoutSeconds !== undefined ? `timeoutSeconds=${options.timeoutSeconds}` : null,
     extras ? `extras={${extras}}` : null,
   ].filter(Boolean);
   return parts.join(", ") || "(none)";

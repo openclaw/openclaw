@@ -1,13 +1,16 @@
 import type { Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ResponseInput } from "openai/resources/responses/responses.js";
-import type { OpenAIResponsesCompactionRejection } from "../provider-options.js";
+import { Stream } from "openai/core/streaming";
+import type { ResponseInput, ResponseStreamEvent } from "openai/resources/responses/responses.js";
+import type { CompactionReplayRejection } from "../provider-options.js";
+import { registerSessionResourceCleanup } from "../session-resources.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
   DEFAULT_AZURE_OPENAI_API_VERSION,
   isPreviousResponseRejection,
   type OpenAIResponsesRequestParams,
+  type ResponsesPromptObservation,
 } from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import type { createResponsesPromptEgressObserver } from "./openai-responses-prompt-observer-internal.js";
@@ -79,21 +82,17 @@ function isOrphanedFunctionCallOutputError(error: unknown): boolean {
 
 type ResponsesEncryptedContentRequest = { input?: ResponseInput };
 
-type ResponsesEncryptedContentAttemptKind =
-  | "initial"
-  | "reasoning-stripped"
-  | "compaction-stripped"
-  | "continuation-rejected";
+type ResponsesEncryptedContentAttemptKind = ResponsesPromptObservation["payloadVariant"];
 
 export type ResponsesEncryptedContentAttempt<TRequest extends ResponsesEncryptedContentRequest> = {
   kind: ResponsesEncryptedContentAttemptKind;
   request: TRequest;
-  rejectedCompaction?: OpenAIResponsesCompactionRejection;
+  rejectedCompaction?: CompactionReplayRejection;
 };
 
 export function commitResponsesEncryptedContentAttempt(
   attempt: ResponsesEncryptedContentAttempt<ResponsesEncryptedContentRequest>,
-  commit: (checkpoint: OpenAIResponsesCompactionRejection | undefined) => void,
+  commit: (checkpoint: CompactionReplayRejection | undefined) => void,
 ): void {
   if (attempt.kind === "compaction-stripped") {
     commit(attempt.rejectedCompaction);
@@ -126,7 +125,7 @@ function stripResponsesRequestCompaction<TRequest extends ResponsesEncryptedCont
 
 function readOpenAIResponsesCompactionRejection(
   request: ResponsesEncryptedContentRequest,
-): OpenAIResponsesCompactionRejection | undefined {
+): CompactionReplayRejection | undefined {
   if (!Array.isArray(request.input)) {
     return undefined;
   }
@@ -147,7 +146,7 @@ export async function resolveNextResponsesEncryptedContentAttempt<
 >(
   attempt: ResponsesEncryptedContentAttempt<TRequest>,
   error: unknown,
-  options?: { buildFullHistoryRequest?: () => TRequest | Promise<TRequest> },
+  options: { buildFullHistoryRequest: () => TRequest | Promise<TRequest> },
 ): Promise<ResponsesEncryptedContentAttempt<TRequest> | undefined> {
   const orphanedFunctionOutput = isOrphanedFunctionCallOutputError(error);
   if (
@@ -171,9 +170,7 @@ export async function resolveNextResponsesEncryptedContentAttempt<
   }
   // Filtering the already-pruned checkpoint request would leave a context-blind
   // suffix. Rebuild full history lazily, then preserve any earlier reasoning strip.
-  let compactionStripped = options?.buildFullHistoryRequest
-    ? await options.buildFullHistoryRequest()
-    : locallyStripped;
+  let compactionStripped = await options.buildFullHistoryRequest();
   compactionStripped = stripResponsesRequestCompaction(compactionStripped);
   if (attempt.kind === "reasoning-stripped") {
     compactionStripped = stripResponsesRequestEncryptedReasoning(compactionStripped);
@@ -193,8 +190,8 @@ export async function createResponsesStreamWithRecovery(params: {
   encodeBody?: ReturnType<typeof prepareModelRequestBody>;
   observePrompt?: NonNullable<ReturnType<typeof createResponsesPromptEgressObserver>>;
   initialAttemptKind?: ResponsesEncryptedContentAttemptKind;
-  initialRejectedCompaction?: OpenAIResponsesCompactionRejection;
-  onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
+  initialRejectedCompaction?: CompactionReplayRejection;
+  onCompactionRejected?: (checkpoint: CompactionReplayRejection) => void;
   canRetryStream?: () => boolean;
   onServiceTierRejected?: (tier: "ultrafast" | "priority") => void;
   wrapStream?: (result: {
@@ -202,12 +199,83 @@ export async function createResponsesStreamWithRecovery(params: {
     response: Response;
     attempt: ResponsesEncryptedContentAttempt<OpenAIResponsesRequestParams>;
   }) => AsyncIterable<unknown>;
-  buildFullHistoryRequest?: () =>
+  buildFullHistoryRequest: () =>
     | OpenAIResponsesRequestParams
     | Promise<OpenAIResponsesRequestParams>;
 }): Promise<{
   stream: AsyncIterable<unknown>;
 }> {
+  async function* streamWithTerminalDrain(response: Response, body: ReadableStream<Uint8Array>) {
+    const reader = body.getReader();
+    let terminal = false;
+    try {
+      // Decoder cancellation must leave the request reader available for the bounded drain.
+      const forwarded = new ReadableStream<Uint8Array>(
+        {
+          async pull(controller) {
+            const { done, value } = await reader.read();
+            if (done) {
+              controller.close();
+            } else {
+              controller.enqueue(value);
+            }
+          },
+          cancel() {},
+        },
+        { highWaterMark: 0 },
+      );
+      const stream = Stream.fromSSEResponse<ResponseStreamEvent>(
+        new Response(forwarded, response),
+        new AbortController(),
+        params.client,
+      );
+      for await (const event of stream) {
+        terminal ||= event?.type === "response.completed" || event?.type === "response.incomplete";
+        yield event;
+      }
+    } finally {
+      if (!terminal) {
+        await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
+      } else {
+        const controller = new AbortController();
+        const unregister = registerSessionResourceCleanup((sessionId) => {
+          if (!sessionId) {
+            controller.abort();
+          }
+        });
+        const signal = AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(250),
+          ...(params.requestOptions?.signal ? [params.requestOptions.signal] : []),
+        ]);
+        const cancel = () => {
+          void reader.cancel().catch(() => undefined);
+        };
+        signal.addEventListener("abort", cancel, { once: true });
+        void (async () => {
+          try {
+            let bytes = 0;
+            while (!signal.aborted && bytes < 64 * 1024) {
+              const { done, value } = await reader.read();
+              if (done) {
+                break;
+              }
+              bytes += value.byteLength;
+            }
+          } catch {
+            /* Disposal must not change the delivered terminal result. */
+          } finally {
+            cancel();
+            reader.releaseLock();
+            signal.removeEventListener("abort", cancel);
+            unregister();
+          }
+        })();
+      }
+    }
+  }
+
   const encodeBody = params.encodeBody ?? prepareModelRequestBody(undefined);
   let tierCeiling: "priority" | "default" | undefined;
   const limitTier = (request: OpenAIResponsesRequestParams) =>
@@ -274,7 +342,11 @@ export async function createResponsesStreamWithRecovery(params: {
         if (!isAsyncIterable(data)) {
           throw new Error("OpenAI Responses streaming request returned a non-stream response");
         }
-        return { stream: data, response, attempt };
+        const stream =
+          data instanceof Stream && response.body
+            ? streamWithTerminalDrain(response, response.body)
+            : data;
+        return { stream, response, attempt };
       } catch (error) {
         let nextAttempt =
           (!responseAccepted ? recoverServiceTier(attempt, error) : undefined) ??
@@ -290,9 +362,7 @@ export async function createResponsesStreamWithRecovery(params: {
           isPreviousResponseRejection(error as { code?: unknown; param?: unknown })
         ) {
           const request = {
-            ...(params.buildFullHistoryRequest
-              ? await params.buildFullHistoryRequest()
-              : attempt.request),
+            ...(await params.buildFullHistoryRequest()),
           };
           delete request.previous_response_id;
           nextAttempt = { kind: "continuation-rejected", request };

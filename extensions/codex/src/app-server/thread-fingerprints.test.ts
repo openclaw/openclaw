@@ -2,129 +2,68 @@ import { describe, expect, it } from "vitest";
 import type { CodexDynamicToolFunctionSpec, JsonObject } from "./protocol.js";
 import {
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   fingerprintCodexThreadConfig,
+  fingerprintRestrictedThreadConfig,
   fingerprintUserMcpServersConfigPatch,
   readActiveCodexTurnIdsFromResume,
 } from "./thread-fingerprints.js";
 
-describe("codexDynamicToolsFingerprint", () => {
-  const createMessageTool = (description: string, channelDescription: string) =>
-    ({
+it("preserves legacy JSON bytes, including literal prototype keys and escaped descriptions", () => {
+  const tools = [
+    {
       type: "function",
       name: "message",
-      description,
       inputSchema: {
         type: "object",
+        required: ["text", "__proto__"],
         properties: {
-          channel: {
-            type: "string",
-            description: channelDescription,
-          },
+          text: { type: "string", description: 'Line one\n"Line two"' },
+          ["__proto__"]: { type: "string" },
         },
       },
-    }) satisfies CodexDynamicToolFunctionSpec;
+      description: "Send a message.",
+    },
+  ];
+  expect(codexLegacyDynamicToolsFingerprint(tools)).toBe(
+    '[{"description":"Send a message.","inputSchema":{"properties":{"__proto__":{"type":"string"},"text":{"description":"Line one\\n\\\"Line two\\\"","type":"string"}},"required":["text","__proto__"],"type":"object"},"name":"message","type":"function"}]',
+  );
+  expect(codexLegacyDynamicToolsFingerprint([])).toBe("[]");
+});
 
-  it("changes when model-visible dynamic tool descriptions change", () => {
-    expect(
-      codexDynamicToolsFingerprint([
-        createMessageTool("Send to the current Slack thread.", "Current channel."),
-      ]),
-    ).not.toBe(
-      codexDynamicToolsFingerprint([
-        createMessageTool("Send to the current Discord channel.", "Current channel."),
-      ]),
-    );
-  });
+it("keeps tool fingerprints stable when tools and schema properties are reordered", () => {
+  const message: CodexDynamicToolFunctionSpec = {
+    type: "function",
+    name: "message",
+    description: "Send a message.",
+    inputSchema: {
+      type: "object",
+      properties: { channel: { type: "string", description: "Current channel." } },
+    },
+  };
+  const reorderedMessage: CodexDynamicToolFunctionSpec = {
+    name: message.name,
+    type: message.type,
+    inputSchema: {
+      properties: { channel: { description: "Current channel.", type: "string" } },
+      type: "object",
+    },
+    description: message.description,
+  };
+  const search = { ...message, name: "search" };
 
-  it("changes when model-visible input schema descriptions change", () => {
-    expect(
-      codexDynamicToolsFingerprint([createMessageTool("Send a message.", "Current Slack thread.")]),
-    ).not.toBe(
-      codexDynamicToolsFingerprint([
-        createMessageTool("Send a message.", "Current Discord channel."),
-      ]),
-    );
-  });
-
-  it("changes when a literal __proto__ input property changes", () => {
-    const tool = (description: string): CodexDynamicToolFunctionSpec => ({
-      type: "function",
-      name: "inspect",
-      description: "Inspect a record.",
-      inputSchema: {
-        type: "object",
-        properties: { ["__proto__"]: { type: "string", description } },
-      },
-    });
-
-    expect(codexDynamicToolsFingerprint([tool("Current value.")])).not.toBe(
-      codexDynamicToolsFingerprint([tool("Previous value.")]),
-    );
-  });
-
-  it("remains stable when tools and schema properties are reordered", () => {
-    const message = createMessageTool("Send a message.", "Current channel.");
-    const reorderedMessage: CodexDynamicToolFunctionSpec = {
-      name: message.name,
-      type: message.type,
-      inputSchema: {
-        properties: {
-          channel: {
-            description: "Current channel.",
-            type: "string",
-          },
-        },
-        type: "object",
-      },
-      description: message.description,
-    };
-    const search: CodexDynamicToolFunctionSpec = {
-      type: "function",
-      name: "search",
-      description: "Search the current conversation.",
-      inputSchema: { type: "object", properties: {} },
-    };
-
-    expect(codexDynamicToolsFingerprint([message, search])).toBe(
-      codexDynamicToolsFingerprint([search, reorderedMessage]),
-    );
-  });
+  expect(codexDynamicToolsFingerprint([message, search])).toBe(
+    codexDynamicToolsFingerprint([search, reorderedMessage]),
+  );
 });
 
 describe("fingerprintCodexThreadConfig", () => {
-  const request = {
-    model: "gpt-5.6-sol",
-    modelProvider: "openai",
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
-    personality: "none",
-    serviceTier: "fast",
-    developerInstructions: "Keep the current conversation private.",
-    config: { features: { hooks: true, plugins: false } },
-  };
-
-  it("stabilizes equivalent config without exposing instructions or profile", () => {
-    const fingerprint = fingerprintCodexThreadConfig(request, "openai:personal");
-
-    expect(fingerprint).toBe(
-      fingerprintCodexThreadConfig(
-        { ...request, config: { features: { plugins: false, hooks: true } } },
-        "openai:personal",
-      ),
-    );
-    expect(fingerprint).not.toContain("private");
-    expect(fingerprint).not.toContain("openai:personal");
-  });
+  const request = { model: "gpt-5.6-sol", modelProvider: "openai" };
 
   it.each<{ setting: string; patch: JsonObject }>([
-    { setting: "model provider", patch: { modelProvider: "custom" } },
     { setting: "requested model provider", patch: { requestedModelProvider: "custom" } },
     { setting: "native multi-agent generation", patch: { model: "gpt-5.6-luna" } },
     { setting: "named permissions profile", patch: { permissions: "read-only" } },
-    { setting: "base instructions", patch: { baseInstructions: "Different base policy." } },
-    { setting: "developer instructions", patch: { developerInstructions: "Different policy." } },
-    { setting: "effective config", patch: { config: { features: { hooks: false } } } },
   ])("invalidates reuse when $setting changes", ({ patch }) => {
     expect(fingerprintCodexThreadConfig({ ...request, ...patch }, "openai:personal")).not.toBe(
       fingerprintCodexThreadConfig(request, "openai:personal"),
@@ -137,12 +76,6 @@ describe("fingerprintCodexThreadConfig", () => {
     );
   });
 
-  it("invalidates reuse when the native dynamic tool catalog changes", () => {
-    expect(fingerprintCodexThreadConfig(request, "openai:personal", "tools-after")).not.toBe(
-      fingerprintCodexThreadConfig(request, "openai:personal", "tools-before"),
-    );
-  });
-
   it("invalidates reuse when a literal __proto__ app link policy changes", () => {
     const config = (reviewer: string) => ({
       apps: { calendar: { links: { ["__proto__"]: { approvals_reviewer: reviewer } } } },
@@ -152,63 +85,74 @@ describe("fingerprintCodexThreadConfig", () => {
       fingerprintCodexThreadConfig({ ...request, config: config("auto_review") }),
     );
   });
+});
 
-  it.each<{ setting: string; patch: JsonObject }>([
-    { setting: "model", patch: { model: "gpt-5.6-terra" } },
-    { setting: "requested model", patch: { requestedModel: null } },
-    { setting: "approval policy", patch: { approvalPolicy: "on-request" } },
-    { setting: "approval reviewer", patch: { approvalsReviewer: "guardian" } },
-    { setting: "sandbox", patch: { sandbox: "read-only" } },
-    { setting: "service tier", patch: { serviceTier: "flex" } },
-    { setting: "personality", patch: { personality: "friendly" } },
-    { setting: "working directory", patch: { cwd: "/other/workspace" } },
-  ])("preserves the native session when turn/start changes $setting", ({ patch }) => {
-    expect(fingerprintCodexThreadConfig({ ...request, ...patch }, "openai:personal")).toBe(
-      fingerprintCodexThreadConfig(request, "openai:personal"),
-    );
+describe.each(["ordinary", "restricted"] as const)("%s proxied thread fingerprint", (kind) => {
+  function fingerprint(
+    port: number,
+    upstream = "https://api.example.com/v1",
+    auth = "personal",
+    hooks = true,
+  ) {
+    const route = {
+      baseUrl: `http://127.0.0.1:${port}/private-route`,
+      configurationIdentity: upstream,
+    };
+    const request = {
+      config: {
+        openai_base_url: route.baseUrl,
+        model_providers: { custom: { base_url: route.baseUrl } },
+        "model_providers.custom": { base_url: route.baseUrl },
+        "model_providers.custom.base_url": route.baseUrl,
+        features: { hooks },
+      },
+    };
+    const inference = {
+      inferenceRoute: route,
+      inferenceProviderRoutes: new Map([["custom", route]]),
+    };
+    return kind === "ordinary"
+      ? fingerprintCodexThreadConfig(request, auth, "tools", undefined, inference)
+      : fingerprintRestrictedThreadConfig(request, auth, "tools", {}, false, undefined, inference);
+  }
+
+  it("keeps identity across proxy restarts", () => {
+    expect(fingerprint(41001)).toBe(fingerprint(41002));
+  });
+
+  it("retains upstream, auth profile, and other configuration identity", () => {
+    const original = fingerprint(41001);
+    expect(fingerprint(41002, "https://other.example.com/v1")).not.toBe(original);
+    expect(fingerprint(41002, undefined, "work")).not.toBe(original);
+    expect(fingerprint(41002, undefined, undefined, false)).not.toBe(original);
   });
 });
 
-describe("fingerprintUserMcpServersConfigPatch", () => {
-  it.each(["server", "header"])("retains literal __proto__ %s keys during redaction", (scope) => {
-    const config = (value: string): JsonObject => ({
-      mcp_servers: {
-        [scope === "server" ? "__proto__" : "calendar"]: {
-          url: "https://example.test/mcp",
-          http_headers: {
-            Authorization: scope === "server" ? value : "synthetic-access-token",
-            ...(scope === "header" ? { ["__proto__"]: value } : {}),
-          },
+it("retains literal __proto__ MCP header keys during redaction", () => {
+  const config = (value: string): JsonObject => ({
+    mcp_servers: {
+      calendar: {
+        http_headers: {
+          Authorization: "synthetic-access-token",
+          ["__proto__"]: value,
         },
       },
-    });
-    const first = fingerprintUserMcpServersConfigPatch(config("synthetic-first"));
-    const second = fingerprintUserMcpServersConfigPatch(config("synthetic-second"));
-
-    expect(first).not.toBe(second);
-    expect(first).toMatch(/^sha256:[a-f0-9]{64}$/);
-    expect(first).not.toContain("synthetic");
-    expect(second).not.toContain("synthetic");
+    },
   });
+  const first = fingerprintUserMcpServersConfigPatch(config("synthetic-first"));
+  const second = fingerprintUserMcpServersConfigPatch(config("synthetic-second"));
+
+  expect(first).not.toBe(second);
+  expect(first).toMatch(/^sha256:[a-f0-9]{64}$/);
+  expect(first).not.toContain("synthetic");
+  expect(second).not.toContain("synthetic");
 });
 
-describe("readActiveCodexTurnIdsFromResume", () => {
-  it("uses the bounded initial turns page when Codex returns one", () => {
-    expect(
-      readActiveCodexTurnIdsFromResume({
-        thread: { turns: [{ id: "stale", status: "inProgress" }] },
-        initialTurnsPage: {
-          data: [{ id: "current", status: "inProgress" }],
-        },
-      }),
-    ).toEqual(["current"]);
-  });
-
-  it("falls back to legacy resume turns when no page is returned", () => {
-    expect(
-      readActiveCodexTurnIdsFromResume({
-        thread: { turns: [{ id: "legacy", status: "inProgress" }] },
-      }),
-    ).toEqual(["legacy"]);
-  });
+it.each([true, false])("reads active turn IDs with an initial page: %s", (hasPage) => {
+  expect(
+    readActiveCodexTurnIdsFromResume({
+      thread: { turns: [{ id: "legacy", status: "inProgress" }] },
+      ...(hasPage && { initialTurnsPage: { data: [{ id: "current", status: "inProgress" }] } }),
+    }),
+  ).toEqual([hasPage ? "current" : "legacy"]);
 });

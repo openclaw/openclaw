@@ -4,7 +4,7 @@ import {
   normalizeJsonSchemaForTypeBox,
   type JsonSchemaValue,
 } from "@openclaw/normalization-core/json-schema";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { Check } from "typebox/schema";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
@@ -270,10 +270,6 @@ function resolveSchemaRef(
 ): LocalRefResolution {
   const localTarget = resolveLocalRef(resourceRoot, ref, baseId);
   return localTarget.found ? localTarget : resolveSchemaResourceRef(root, ref, baseId);
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
 function visitSchemaChildren<T>(
@@ -546,23 +542,6 @@ export function findJsonSchemaShapeError(schema: JsonSchemaValue): string | unde
   return findJsonSchemaNodeError(schema, "<schema>", schema, schema, undefined);
 }
 
-function schemaWithResourceContext(
-  schema: JsonSchemaValue,
-  resourceRoot: JsonSchemaValue,
-): JsonSchemaValue {
-  if (!isRecord(schema) || !isRecord(resourceRoot)) {
-    return schema;
-  }
-  return {
-    ...schema,
-    ...(typeof resourceRoot.$id === "string" && schema.$id === undefined
-      ? { $id: resourceRoot.$id }
-      : {}),
-    ...(isRecord(resourceRoot.$defs) ? { $defs: resourceRoot.$defs } : {}),
-    ...(isRecord(resourceRoot.definitions) ? { definitions: resourceRoot.definitions } : {}),
-  };
-}
-
 function inlineLocalRefsForMatch(
   schema: JsonSchemaValue,
   root: JsonSchemaValue,
@@ -653,7 +632,17 @@ function schemaMatches(
 ): boolean {
   try {
     const matchSchema = inlineLocalRefsForMatch(schema, root, resourceRoot, resourceBaseId);
-    const contextualSchema = schemaWithResourceContext(matchSchema, resourceRoot);
+    let contextualSchema = matchSchema;
+    if (isRecord(matchSchema) && isRecord(resourceRoot)) {
+      contextualSchema = {
+        ...matchSchema,
+        ...(typeof resourceRoot.$id === "string" && matchSchema.$id === undefined
+          ? { $id: resourceRoot.$id }
+          : {}),
+        ...(isRecord(resourceRoot.$defs) ? { $defs: resourceRoot.$defs } : {}),
+        ...(isRecord(resourceRoot.definitions) ? { definitions: resourceRoot.definitions } : {}),
+      };
+    }
     return Check(normalizeJsonSchemaForTypeBox(contextualSchema), value);
   } catch {
     return false;
@@ -671,106 +660,6 @@ function countSchemaNodes(schema: JsonSchemaValue, seen = new Set<object>()): nu
     return undefined;
   });
   return count;
-}
-
-function applyObjectApplicatorDefaults(
-  schema: Record<string, unknown>,
-  valueInput: Record<string, unknown>,
-  root: JsonSchemaValue,
-  resolvingRefs: Set<string>,
-  currentResourceRoot: JsonSchemaValue,
-  currentResourceBaseId: string | undefined,
-): Record<string, unknown> {
-  let value = valueInput;
-  const applyChild = (child: unknown, current: unknown) =>
-    applySchemaDefaults(
-      child as JsonSchemaValue,
-      current,
-      root,
-      resolvingRefs,
-      currentResourceRoot,
-      currentResourceBaseId,
-    );
-  const settlePropertiesAndDependencies = () => {
-    const maxIterations = countSchemaNodes(schema);
-    for (let index = 0; index < maxIterations; index++) {
-      const before = JSON.stringify(value);
-      const properties = isRecord(schema.properties) ? schema.properties : {};
-      for (const [key, propertySchema] of Object.entries(properties)) {
-        if (isBlockedObjectKey(key)) {
-          continue;
-        }
-        const current = value[key];
-        const defaulted = applyChild(propertySchema, current);
-        if (defaulted !== undefined && defaulted !== current) {
-          value[key] = defaulted;
-        }
-      }
-      const patternMatchedKeys = new Set<string>();
-      if (isRecord(schema.patternProperties)) {
-        for (const [pattern, propertySchema] of Object.entries(schema.patternProperties)) {
-          let regex: RegExp;
-          try {
-            regex = new RegExp(pattern);
-          } catch {
-            continue;
-          }
-          for (const key of Object.keys(value)) {
-            if (isBlockedObjectKey(key) || !regex.test(key)) {
-              continue;
-            }
-            patternMatchedKeys.add(key);
-            value[key] = applyChild(propertySchema, value[key]);
-          }
-        }
-      }
-      if (isRecord(schema.additionalProperties)) {
-        for (const key of Object.keys(value)) {
-          if (
-            !isBlockedObjectKey(key) &&
-            !Object.hasOwn(properties, key) &&
-            !patternMatchedKeys.has(key)
-          ) {
-            value[key] = applyChild(schema.additionalProperties, value[key]);
-          }
-        }
-      }
-      for (const keyword of ["dependencies", "dependentSchemas"] as const) {
-        if (!isRecord(schema[keyword])) {
-          continue;
-        }
-        for (const [key, dependencySchema] of Object.entries(schema[keyword])) {
-          if (
-            Object.hasOwn(value, key) &&
-            !(keyword === "dependencies" && isStringArray(dependencySchema))
-          ) {
-            value = applyChild(dependencySchema, value) as Record<string, unknown>;
-          }
-        }
-      }
-      if (JSON.stringify(value) === before) {
-        break;
-      }
-    }
-  };
-
-  settlePropertiesAndDependencies();
-  if (typeof schema.if === "boolean" || isRecord(schema.if)) {
-    const branch = schemaMatches(
-      schema.if as JsonSchemaValue,
-      value,
-      root,
-      currentResourceRoot,
-      currentResourceBaseId,
-    )
-      ? schema.then
-      : schema.else;
-    if (typeof branch === "boolean" || isRecord(branch)) {
-      value = applyChild(branch, value) as Record<string, unknown>;
-    }
-  }
-  settlePropertiesAndDependencies();
-  return value;
 }
 
 function applySchemaDefaults(
@@ -821,7 +710,7 @@ function applySchemaDefaults(
     }
   }
 
-  const composedSchemas = [...(Array.isArray(schema.allOf) ? schema.allOf : [])];
+  const composedSchemas = Array.isArray(schema.allOf) ? schema.allOf : [];
   for (const branch of composedSchemas) {
     nextValue = applyChild(branch, nextValue);
   }
@@ -835,15 +724,87 @@ function applySchemaDefaults(
     typeof schema.if === "boolean" ||
     isRecord(schema.if);
   if ((schemaTypeIncludes(schema, "object") || hasObjectApplicators) && isRecord(nextValue)) {
-    nextValue = applyObjectApplicatorDefaults(
-      schema,
-      nextValue,
-      root,
-      resolvingRefs,
-      currentResourceRoot,
-      currentResourceBaseId,
-    );
-    return nextValue;
+    let value = nextValue;
+    const maxIterations = countSchemaNodes(schema);
+    const settlePropertiesAndDependencies = () => {
+      for (let index = 0; index < maxIterations; index++) {
+        const before = JSON.stringify(value);
+        const properties = isRecord(schema.properties) ? schema.properties : {};
+        for (const [key, propertySchema] of Object.entries(properties)) {
+          if (isBlockedObjectKey(key)) {
+            continue;
+          }
+          const current = value[key];
+          const defaulted = applyChild(propertySchema, current);
+          if (defaulted !== undefined && defaulted !== current) {
+            value[key] = defaulted;
+          }
+        }
+        const patternMatchedKeys = new Set<string>();
+        if (isRecord(schema.patternProperties)) {
+          for (const [pattern, propertySchema] of Object.entries(schema.patternProperties)) {
+            let regex: RegExp;
+            try {
+              regex = new RegExp(pattern);
+            } catch {
+              continue;
+            }
+            for (const key of Object.keys(value)) {
+              if (isBlockedObjectKey(key) || !regex.test(key)) {
+                continue;
+              }
+              patternMatchedKeys.add(key);
+              value[key] = applyChild(propertySchema, value[key]);
+            }
+          }
+        }
+        if (isRecord(schema.additionalProperties)) {
+          for (const key of Object.keys(value)) {
+            if (
+              !isBlockedObjectKey(key) &&
+              !Object.hasOwn(properties, key) &&
+              !patternMatchedKeys.has(key)
+            ) {
+              value[key] = applyChild(schema.additionalProperties, value[key]);
+            }
+          }
+        }
+        for (const keyword of ["dependencies", "dependentSchemas"] as const) {
+          if (!isRecord(schema[keyword])) {
+            continue;
+          }
+          for (const [key, dependencySchema] of Object.entries(schema[keyword])) {
+            if (
+              Object.hasOwn(value, key) &&
+              !(keyword === "dependencies" && isStringArray(dependencySchema))
+            ) {
+              value = applyChild(dependencySchema, value) as Record<string, unknown>;
+            }
+          }
+        }
+        if (JSON.stringify(value) === before) {
+          break;
+        }
+      }
+    };
+
+    settlePropertiesAndDependencies();
+    if (typeof schema.if === "boolean" || isRecord(schema.if)) {
+      const branch = schemaMatches(
+        schema.if as JsonSchemaValue,
+        value,
+        root,
+        currentResourceRoot,
+        currentResourceBaseId,
+      )
+        ? schema.then
+        : schema.else;
+      if (typeof branch === "boolean" || isRecord(branch)) {
+        value = applyChild(branch, value) as Record<string, unknown>;
+      }
+    }
+    settlePropertiesAndDependencies();
+    return value;
   }
 
   if (

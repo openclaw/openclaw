@@ -16,127 +16,91 @@ const acpMeta = (agent: string, backend: string): SessionAcpMeta => ({
   lastActivityAt: 0,
 });
 
+const recordedRuntime = (
+  agentHarnessId: string,
+  resolvedHarness = "codex",
+  session: LabelArgs["sessionEntry"] = {},
+): LabelArgs => ({ sessionEntry: { agentHarnessId, ...session }, resolvedHarness });
+
 describe("resolveAgentRuntimeLabel", () => {
-  it.each<{ name: string; args: LabelArgs; expected: string }>([
-    {
-      name: "ACP agent and backend outrank the resolved harness",
-      args: {
+  it.each<[string, LabelArgs, string]>([
+    [
+      "ACP agent and backend outrank the resolved harness",
+      {
         sessionEntry: { acp: acpMeta("gemini", "acpx"), agentHarnessId: "codex" },
         resolvedHarness: "openclaw",
       },
-      expected: "gemini (acp/acpx)",
-    },
-    {
-      name: "ACP agent without a backend still owns the label",
-      args: { sessionEntry: { acp: acpMeta("gemini", "") } },
-      expected: "gemini (acp)",
-    },
-    {
-      name: "auto defers to the CLI provider fallback",
-      args: {
-        sessionEntry: { modelProvider: "claude-cli" },
-        resolvedHarness: "auto",
-        classifyCliProvider,
-      },
-      expected: "Claude CLI",
-    },
-    {
-      name: "default defers to the CLI provider fallback",
-      args: {
-        resolvedHarness: "default",
-        fallbackProvider: "google-gemini-cli",
-        classifyCliProvider,
-      },
-      expected: "Gemini CLI",
-    },
-    {
-      name: "an unmapped CLI provider is marked as a CLI runtime",
-      args: { fallbackProvider: "vendor-cli", classifyCliProvider: () => true },
-      expected: "vendor-cli (cli)",
-    },
-  ])("$name", ({ args, expected }) => {
-    expect(resolveAgentRuntimeLabel(args)).toBe(expected);
-  });
-
-  it("names the persisted harness pin when it disagrees with the resolved harness", () => {
-    expect(
-      resolveAgentRuntimeLabel({
-        sessionEntry: {
-          agentHarnessId: "codex",
+      "gemini (acp/acpx)",
+    ],
+    ["ACP without backend", { sessionEntry: { acp: acpMeta("gemini", "") } }, "gemini (acp)"],
+    [
+      "auto uses session CLI provider",
+      { sessionEntry: { modelProvider: "claude-cli" }, resolvedHarness: "auto" },
+      "Claude CLI",
+    ],
+    [
+      "default uses fallback CLI provider",
+      { resolvedHarness: "default", fallbackProvider: "google-gemini-cli" },
+      "Gemini CLI",
+    ],
+    [
+      "unmapped CLI provider",
+      { fallbackProvider: "vendor-cli", classifyCliProvider: () => true },
+      "vendor-cli (cli)",
+    ],
+    [
+      "locked pin differs from resolved harness",
+      {
+        ...recordedRuntime("codex", "claude-bridge", {
           modelProvider: "anthropic",
           modelSelectionLocked: true,
-        },
-        resolvedHarness: "claude-bridge",
+        }),
         fallbackProvider: "anthropic",
         classifyCliProvider: () => false,
+      },
+      "claude-bridge (session pin: OpenAI Codex)",
+    ],
+    ["matching pin adds no note", recordedRuntime("codex"), "OpenAI Codex"],
+    ["retired pin alias matches", recordedRuntime("codex-app-server"), "OpenAI Codex"],
+    [
+      "locked retired pin alias matches",
+      recordedRuntime("codex-cli", "codex", { modelSelectionLocked: true }),
+      "OpenAI Codex",
+    ],
+    [
+      "plugin-owned locked harness is history",
+      recordedRuntime("openclaw", "codex", {
+        modelSelectionLocked: true,
+        pluginOwnerId: "model-owner",
       }),
-    ).toBe("claude-bridge (session pin: OpenAI Codex)");
-  });
-
-  it.each<{ name: string; args: LabelArgs; expected: string }>([
-    {
-      name: "a pin matching the resolved harness adds no note",
-      args: { sessionEntry: { agentHarnessId: "codex" }, resolvedHarness: "codex" },
-      expected: "OpenAI Codex",
-    },
-    {
-      name: "a retired pin alias is compared against its current runtime id",
-      args: { sessionEntry: { agentHarnessId: "codex-app-server" }, resolvedHarness: "codex" },
-      expected: "OpenAI Codex",
-    },
-    {
-      name: "a locked retired codex-cli pin is not reported as a session pin either",
-      args: {
-        sessionEntry: { agentHarnessId: "codex-cli", modelSelectionLocked: true },
-        resolvedHarness: "codex",
-      },
-      expected: "OpenAI Codex",
-    },
-    {
-      name: "a plugin-owned locked harness remains previous runtime history",
-      args: {
-        sessionEntry: {
-          agentHarnessId: "openclaw",
-          modelSelectionLocked: true,
-          pluginOwnerId: "model-owner",
-        },
-        resolvedHarness: "codex",
-      },
-      expected: "OpenAI Codex (previous runtime: OpenClaw Default)",
-    },
-    {
-      name: "a retired codex-cli pin still reports a real transition",
-      args: { sessionEntry: { agentHarnessId: "codex-cli" }, resolvedHarness: "claude-cli" },
-      expected: "Claude CLI (previous runtime: OpenAI Codex)",
-    },
-    {
-      name: "an auto pin carries no runtime ownership to report",
-      args: { sessionEntry: { agentHarnessId: "auto" }, resolvedHarness: "codex" },
-      expected: "OpenAI Codex",
-    },
-    {
-      name: "a pin diverging from the CLI provider fallback is reported",
-      args: {
-        sessionEntry: { agentHarnessId: "codex", modelProvider: "claude-cli" },
-        classifyCliProvider,
-      },
-      expected: "Claude CLI (previous runtime: OpenAI Codex)",
-    },
-    {
-      name: "a pin diverging from the built-in runtime fallback is reported",
-      args: {
+      "OpenAI Codex (previous runtime: OpenClaw Default)",
+    ],
+    [
+      "retired pin still reports transition",
+      recordedRuntime("codex-cli", "claude-cli"),
+      "Claude CLI (previous runtime: OpenAI Codex)",
+    ],
+    ["auto pin has no ownership", recordedRuntime("auto"), "OpenAI Codex"],
+    [
+      "pin differs from CLI provider fallback",
+      { sessionEntry: { agentHarnessId: "codex", modelProvider: "claude-cli" } },
+      "Claude CLI (previous runtime: OpenAI Codex)",
+    ],
+    [
+      "pin differs from built-in fallback",
+      {
         sessionEntry: { agentHarnessId: "codex" },
         fallbackProvider: "anthropic",
         classifyCliProvider: () => false,
       },
-      expected: "OpenClaw Default (previous runtime: OpenAI Codex)",
-    },
-    {
-      name: "an unmapped pin is reported by its sanitized id",
-      args: { sessionEntry: { agentHarnessId: "custom-harness" }, resolvedHarness: "codex" },
-      expected: "OpenAI Codex (previous runtime: custom-harness)",
-    },
-  ])("$name", ({ args, expected }) => {
-    expect(resolveAgentRuntimeLabel(args)).toBe(expected);
+      "OpenClaw Default (previous runtime: OpenAI Codex)",
+    ],
+    [
+      "unmapped pin uses sanitized id",
+      recordedRuntime("custom-harness"),
+      "OpenAI Codex (previous runtime: custom-harness)",
+    ],
+  ])("%s", (_name, args, expected) => {
+    expect(resolveAgentRuntimeLabel({ classifyCliProvider, ...args })).toBe(expected);
   });
 });

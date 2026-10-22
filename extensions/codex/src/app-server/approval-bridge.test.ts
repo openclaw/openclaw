@@ -75,6 +75,27 @@ function findApprovalEvent(
   throw new Error(`Expected approval event ${JSON.stringify(fields)}`);
 }
 
+function expectHumanApprovalRoundtrip() {
+  expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+    "plugin.approval.request",
+    "plugin.approval.waitDecision",
+  ]);
+  expect(mockCallGatewayTool.mock.calls.map(([, options]) => options)).toEqual([
+    { timeoutMs: 130_000 },
+    { timeoutMs: 130_000 },
+  ]);
+}
+
+function expectPolicy(fields: Record<string, unknown>) {
+  expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(expect.objectContaining(fields));
+}
+
+function expectDescription(...parts: string[]) {
+  for (const part of parts) {
+    expect(String(gatewayRequestPayload().description)).toContain(part);
+  }
+}
+
 function mockApprovalDecision(id: string, decision: "allow-once" | "allow-always" | "deny") {
   mockCallGatewayTool
     .mockResolvedValueOnce({ id, status: "accepted" })
@@ -105,7 +126,7 @@ function requestNativeApproval(
   });
 }
 
-function createParams() {
+function createParams(overrides: Partial<AgentHarnessHostCapabilities> = {}) {
   const onAgentEvent = vi.fn<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>();
   const params = {
     sessionKey: "agent:main:session-1",
@@ -127,7 +148,7 @@ function createParams() {
     requestApproval: async (request) =>
       (await callGatewayTool(
         "plugin.approval.request",
-        { timeoutMs: request.timeoutMs },
+        { timeoutMs: request.transportTimeoutMs },
         {
           pluginId: "codex",
           ...request,
@@ -139,7 +160,7 @@ function createParams() {
     waitForApproval: async (request) => {
       const result = (await callGatewayTool(
         "plugin.approval.waitDecision",
-        { timeoutMs: request.timeoutMs },
+        { timeoutMs: request.transportTimeoutMs },
         { id: request.approvalId },
       )) as { id?: string } & Partial<
         NonNullable<Awaited<ReturnType<AgentHarnessHostCapabilities["waitForApproval"]>>>
@@ -148,6 +169,7 @@ function createParams() {
         ? { decision: result.decision, terminalReason: result.terminalReason }
         : undefined;
     },
+    ...overrides,
   };
   return Object.assign(params, { hostCapabilities, onAgentEvent });
 }
@@ -182,11 +204,9 @@ describe("Codex app-server approval bridge", () => {
   });
 
   it("cancels native approval when permissions change during final file revalidation", async () => {
-    const params = createParams();
     const controller = new AbortController();
     const onNativeToolFailureDisposition = vi.fn();
-    params.hostCapabilities = {
-      ...params.hostCapabilities,
+    const params = createParams({
       prepareMutableFileApproval: async () => ({
         ok: true,
         requiresOneShot: false,
@@ -195,14 +215,11 @@ describe("Codex app-server approval bridge", () => {
           return { ok: true };
         },
       }),
-    };
+    });
 
     const result = await requestNativeApproval(
       params,
-      {
-        itemId: "cmd-permission-change",
-        command: "node script.js",
-      },
+      { itemId: "cmd-permission-change", command: "node script.js" },
       { autoApprove: true, signal: controller.signal, onNativeToolFailureDisposition },
     );
 
@@ -279,10 +296,7 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
     findApprovalEvent(params, { status: "denied", approvalId: "plugin:approval-auto-review" });
   });
 
@@ -294,35 +308,27 @@ describe("Codex app-server approval bridge", () => {
       params,
       {
         itemId: "cmd-auto-review-network",
-        networkApprovalContext: {
-          host: "example.test",
-          protocol: "https",
-        },
+        networkApprovalContext: { host: "example.test", protocol: "https" },
       },
       { autoApprove: true },
     );
 
     expect(result).toEqual({ decision: "accept" });
     expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
     expect(gatewayRequestPayload()).toMatchObject({
       title: "Codex app-server network approval",
       description: "Network: https://example.test",
       toolName: "codex_network_approval",
     });
-    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "codex_network_approval",
-        params: expect.objectContaining({
-          approval: expect.objectContaining({
-            networkApprovalContext: { host: "example.test", protocol: "https" },
-          }),
+    expectPolicy({
+      toolName: "codex_network_approval",
+      params: expect.objectContaining({
+        approval: expect.objectContaining({
+          networkApprovalContext: { host: "example.test", protocol: "https" },
         }),
       }),
-    );
+    });
   });
 
   it("passes the exact native command cwd to the host policy capability", async () => {
@@ -479,11 +485,8 @@ describe("Codex app-server approval bridge", () => {
       }
       return { stdout: "", stderr: "", exitCode: 0 };
     });
-    mockCallGatewayTool
-      .mockResolvedValueOnce({ id: "plugin:approval-execve-1", status: "accepted" })
-      .mockResolvedValueOnce({ id: "plugin:approval-execve-1", decision: "allow-once" })
-      .mockResolvedValueOnce({ id: "plugin:approval-execve-2", status: "accepted" })
-      .mockResolvedValueOnce({ id: "plugin:approval-execve-2", decision: "allow-once" });
+    mockApprovalDecision("plugin:approval-execve-1", "allow-once");
+    mockApprovalDecision("plugin:approval-execve-2", "allow-once");
 
     for (const [approvalId, command] of [
       ["execve-approval-1", "git status"],
@@ -539,9 +542,7 @@ describe("Codex app-server approval bridge", () => {
         command: "pnpm test extensions/codex/src/app-server",
         cwd: "/workspace",
       },
-      {
-        nativeHookRelay,
-      },
+      { nativeHookRelay },
     );
 
     expect(result).toEqual({ decision: "accept" });
@@ -572,10 +573,7 @@ describe("Codex app-server approval bridge", () => {
         command: "pnpm test extensions/codex/src/app-server",
         cwd: "/workspace",
       },
-      {
-        nativeHookRelay,
-        onNativeToolFailureDisposition,
-      },
+      { nativeHookRelay, onNativeToolFailureDisposition },
     );
 
     expect(result).toEqual({ decision: "decline" });
@@ -626,17 +624,11 @@ describe("Codex app-server approval bridge", () => {
         itemId: "permission-native-relay-registered",
         permissions: { network: { allowHosts: ["example.com"] } },
       },
-      {
-        method: "item/permissions/requestApproval",
-        nativeHookRelay,
-      },
+      { method: "item/permissions/requestApproval", nativeHookRelay },
     );
     expect(result).toEqual({ permissions: {}, scope: "turn" });
     expect(mockInvokeNativeHookRelay).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
   });
 
   it("denies command approvals when OpenClaw tool policy rewrites params", async () => {
@@ -709,10 +701,7 @@ describe("Codex app-server approval bridge", () => {
 
     const result = await requestNativeApproval(
       params,
-      {
-        itemId: "cmd-policy-failure",
-        command: "pnpm test",
-      },
+      { itemId: "cmd-policy-failure", command: "pnpm test" },
       { onNativeToolFailureDisposition },
     );
 
@@ -721,36 +710,29 @@ describe("Codex app-server approval bridge", () => {
   });
 
   it("describes command approval permission and policy amendments", async () => {
-    const params = createParams();
-    params.hostCapabilities = {
-      ...params.hostCapabilities,
-      prepareMutableFileApproval: prepareApprovalWithoutMutableFile,
-    };
+    const params = createParams({ prepareMutableFileApproval: prepareApprovalWithoutMutableFile });
     mockApprovalDecision("plugin:approval-command-permissions", "allow-always");
 
     const result = await requestNativeApproval(params, {
       itemId: "cmd-permissions",
       command: "npm install",
       commandActions: [{ command: `${"npm install ".repeat(500)} --unsafe-perm` }],
-      additionalPermissions: {
-        fileSystem: {
-          write: ["/"],
-        },
-      },
+      additionalPermissions: { fileSystem: { write: ["/"] } },
       proposedExecpolicyAmendment: ["npm install"],
       proposedNetworkPolicyAmendments: [{ host: "registry.npmjs.org", action: "allow" }],
     });
 
     expect(result).toEqual({ decision: "acceptForSession" });
-    const description = String(gatewayRequestPayload().description);
-    expect(description).toContain("Command: npm install");
-    expect(description).toContain("[preview truncated or unsafe content omitted]");
+    expectDescription(
+      "Command: npm install",
+      "[preview truncated or unsafe content omitted]",
+      "Additional permissions: fileSystem",
+      "High-risk targets: filesystem root",
+      "File system write: /",
+      "Proposed exec policy: npm install",
+      "Proposed network policy: allow registry.npmjs.org",
+    );
     expect(findApprovalEvent(params, {}).commandPreviewOmitted).toBe(true);
-    expect(description).toContain("Additional permissions: fileSystem");
-    expect(description).toContain("High-risk targets: filesystem root");
-    expect(description).toContain("File system write: /");
-    expect(description).toContain("Proposed exec policy: npm install");
-    expect(description).toContain("Proposed network policy: allow registry.npmjs.org");
   });
 
   it("sanitizes parsed command previews without changing the policy command", async () => {
@@ -810,18 +792,12 @@ describe("Codex app-server approval bridge", () => {
 
     const result = await requestNativeApproval(
       params,
-      {
-        itemId: "patch-stale",
-        reason: "needs write access",
-      },
+      { itemId: "patch-stale", reason: "needs write access" },
       { method: "item/fileChange/requestApproval" },
     );
 
     expect(result).toEqual({ decision: "decline" });
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
     findApprovalEvent(params, {
       status: "unavailable",
       approvalId: "plugin:approval-stale",
@@ -885,9 +861,7 @@ describe("Codex app-server approval bridge", () => {
 
     const result = await requestNativeApproval(
       params,
-      {
-        itemId: "future-1",
-      },
+      { itemId: "future-1" },
       { method: "future/requestApproval" },
     );
 
@@ -896,10 +870,7 @@ describe("Codex app-server approval bridge", () => {
       reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
     });
     expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
+    expectHumanApprovalRoundtrip();
     findApprovalEvent(params, {
       status: "denied",
       approvalId: "plugin:future-approval",
@@ -937,21 +908,14 @@ describe("Codex app-server approval bridge", () => {
       { method: "item/permissions/requestApproval", autoApprove: true },
     );
     expect(result).toEqual({ permissions: expectedPermissions, scope: "turn" });
-    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
-      "plugin.approval.request",
-      "plugin.approval.waitDecision",
-    ]);
-    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "codex_permission_approval" }),
-    );
+    expectHumanApprovalRoundtrip();
+    expectPolicy({ toolName: "codex_permission_approval" });
     const description = String(gatewayRequestPayload().description);
     expect(description.length).toBeLessThanOrEqual(700);
-    expect(description).toContain(
+    expectDescription(
       "Network enabled: true; allowHosts: example.com, *.internal (+1 more)",
-    );
-    expect(description).toContain("File system read: ~/.ssh/id_rsa; write: /; roots: /tmp/project");
-    expect(description).toContain("entries: read /workspace/project, write /tmp/output (+1 more)");
-    expect(description).toContain(
+      "File system read: ~/.ssh/id_rsa; write: /; roots: /tmp/project",
+      "entries: read /workspace/project, write /tmp/output (+1 more)",
       "High-risk targets: network access, wildcard hosts, private-network wildcards, filesystem root",
     );
     expect(description).not.toMatch(/secret-token|simone/);

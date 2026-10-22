@@ -8,14 +8,12 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
-import type { CodexAppServerClient } from "./client.js";
+import { listCodexMcpServerStatuses } from "./mcp-server-status.js";
 import { projectCodexMcpServerMetadata, projectCodexMcpToolMetadata } from "./mcp-tool-metadata.js";
 import type { CodexMcpServerStatus } from "./protocol.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 
-const MCP_STATUS_PAGE_SIZE = 100;
-const MCP_STATUS_MAX_PAGES = 100;
 type AgentHarnessMcpCatalogParams = Parameters<NonNullable<AgentHarness["loadMcpToolCatalog"]>>[0];
 
 function catalogTool(params: {
@@ -104,39 +102,12 @@ function buildCodexEffectiveMcpCatalog(
   };
 }
 
-async function listCodexMcpServerStatuses(
-  client: Pick<CodexAppServerClient, "request">,
-  threadId: string,
-): Promise<CodexMcpServerStatus[]> {
-  const statuses: CodexMcpServerStatus[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | null | undefined;
-  for (let page = 0; page < MCP_STATUS_MAX_PAGES; page += 1) {
-    const response = await client.request("mcpServerStatus/list", {
-      threadId,
-      detail: "toolsAndAuthOnly",
-      limit: MCP_STATUS_PAGE_SIZE,
-      ...(cursor ? { cursor } : {}),
-    });
-    statuses.push(...response.data);
-    cursor = response.nextCursor;
-    if (!cursor) {
-      return statuses;
-    }
-    if (seenCursors.has(cursor)) {
-      throw new Error("Codex mcpServerStatus/list repeated its pagination cursor");
-    }
-    seenCursors.add(cursor);
-  }
-  throw new Error("Codex mcpServerStatus/list exceeded the bounded page limit");
-}
-
 /** Loads MCP inventory from the bound Codex client while retaining its lease through all pages. */
 export async function loadCodexEffectiveMcpCatalog(
   params: AgentHarnessMcpCatalogParams,
   options: { bindingStore: CodexAppServerBindingStore },
 ): Promise<McpToolCatalog | undefined> {
-  const binding = options.bindingStore.read(
+  const binding = await options.bindingStore.readAsync(
     sessionBindingIdentity({
       agentId: params.agentId,
       sessionId: params.sessionId,
@@ -153,9 +124,21 @@ export async function loadCodexEffectiveMcpCatalog(
   }
   try {
     const allowedServerNames = new Set(params.mcpServerNames);
-    const statuses = (await listCodexMcpServerStatuses(retained.client, binding.threadId)).filter(
-      (status) => allowedServerNames.has(status.name),
-    );
+    const statuses = (
+      await listCodexMcpServerStatuses(
+        (cursor) =>
+          retained.client.request("mcpServerStatus/list", {
+            threadId: binding.threadId,
+            detail: "toolsAndAuthOnly",
+            limit: 100,
+            ...(cursor ? { cursor } : {}),
+          }),
+        {
+          repeatedCursor: "Codex mcpServerStatus/list repeated its pagination cursor",
+          pageLimit: "Codex mcpServerStatus/list exceeded the bounded page limit",
+        },
+      )
+    ).filter((status) => allowedServerNames.has(status.name));
     return buildCodexEffectiveMcpCatalog(statuses, params.toolOverrides);
   } finally {
     await retained.release();
@@ -168,7 +151,8 @@ export async function acquireCodexMcpAppRuntime(
   options: { bindingStore: CodexAppServerBindingStore; pluginConfig?: unknown },
 ) {
   const identity = sessionBindingIdentity(params);
-  let binding = options.bindingStore.read(identity);
+  let binding = await options.bindingStore.readAsync(identity);
+  params.assertCurrent();
   let retained = await retainSharedCodexAppServerClientByInstanceId(binding?.clientId);
   if (!retained && params.prepareSession) {
     const preparation = await params.prepareSession();
@@ -181,7 +165,8 @@ export async function acquireCodexMcpAppRuntime(
       assertCurrent: params.assertCurrent,
     });
     params.assertCurrent();
-    binding = options.bindingStore.read(identity);
+    binding = await options.bindingStore.readAsync(identity);
+    params.assertCurrent();
     retained = await retainSharedCodexAppServerClientByInstanceId(binding?.clientId);
   }
   if (!binding?.clientId || !retained) {

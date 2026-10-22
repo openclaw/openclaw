@@ -1,23 +1,18 @@
-import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
 } from "../cli/update-cli/update-command-executor.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
 import type { UpdateRepairTurnMessage, UpdateRepairTurnResult } from "./update-repair-protocol.js";
 import { repairSummary, runLocalUpdateRepairTurn } from "./update-repair-turn.js";
 import {
-  createManagedUpdateRequesterAuthority,
-  createManagedUpdateRequesterContinuationAuthority,
+  createDelegatedUpdateRequesterAuthority,
   resolveManagedUpdateRequester,
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
 import { getUpdateRun } from "./update-run-ledger.js";
-
-const log = createSubsystemLogger("update/repair");
 
 export async function runDelegatedUpdateRepairTurn(
   message: UpdateRepairTurnMessage,
@@ -32,19 +27,6 @@ export async function runDelegatedUpdateRepairTurn(
     () => controller.abort(new Error("wall-clock-budget")),
     message.wallClockMs,
   );
-  const traceTimings = log.isEnabled("trace");
-  const timings = { checks: 0, liveChecks: 0, fenceMs: 0, requesterMs: 0, runMs: 0, totalMs: 0 };
-  const measure = <T>(phase: "fenceMs" | "requesterMs" | "runMs", operation: () => T): T => {
-    if (!traceTimings) {
-      return operation();
-    }
-    const started = performance.now();
-    try {
-      return operation();
-    } finally {
-      timings[phase] += performance.now() - started;
-    }
-  };
   try {
     return await withDelegatedUpdateCommandExecutor(
       // SAFETY: The canonical owner validates this private IPC grant against live rows and our PID/start identity.
@@ -54,7 +36,7 @@ export async function runDelegatedUpdateRepairTurn(
       async (fence) => {
         fence.assertCurrent();
         const readCurrentRun = () => {
-          const run = measure("runMs", () => getUpdateRun(message.runId, { env: admissionEnv }));
+          const run = getUpdateRun(message.runId, { env: admissionEnv });
           if (!process.connected || run?.status !== "running" || run.phase !== "repairing") {
             throw new Error("Repair no longer owns the update attempt.");
           }
@@ -68,35 +50,26 @@ export async function runDelegatedUpdateRepairTurn(
         fence.assertCurrent();
         const requester = requesterInput
           ? await runtime.withUpdateRepairEnvironment(message.target, () =>
-              requesterInput.authorizationSource?.startsWith("profile:")
-                ? createManagedUpdateRequesterContinuationAuthority(
-                    requesterInput,
-                    { runId: message.runId, executor: fence },
-                    admissionEnv,
-                  )
-                : createManagedUpdateRequesterAuthority(requesterInput, admissionEnv),
+              createDelegatedUpdateRequesterAuthority(
+                requesterInput,
+                message.runId,
+                fence,
+                admissionEnv,
+              ),
             )
           : undefined;
         const assertAuthority = () => {
-          const started = traceTimings ? performance.now() : 0;
-          timings.checks += 1;
-          try {
-            measure("fenceMs", () => fence.assertCurrent());
-            return withSynchronousArtifactPreservingStateSnapshot(
-              () => {
-                readCurrentRun();
-                if (measure("requesterMs", () => requester?.isCurrent()) === false) {
-                  throw new UpdateRequesterRevokedError();
-                }
-                return true;
-              },
-              { current: { env: admissionEnv } },
-            );
-          } finally {
-            if (traceTimings) {
-              timings.totalMs += performance.now() - started;
-            }
-          }
+          fence.assertCurrent();
+          return withSynchronousArtifactPreservingStateSnapshot(
+            () => {
+              readCurrentRun();
+              if (requester?.isCurrent() === false) {
+                throw new UpdateRequesterRevokedError();
+              }
+              return true;
+            },
+            { current: { env: admissionEnv } },
+          );
         };
         const assertCurrent = () => {
           signal.throwIfAborted();
@@ -110,11 +83,10 @@ export async function runDelegatedUpdateRepairTurn(
         // and settlement still observe the run row and requester policy fresh.
         const assertTurnLive = () => {
           signal.throwIfAborted();
-          timings.liveChecks += 1;
           if (!process.connected) {
             throw new Error("Repair no longer owns the update attempt.");
           }
-          measure("fenceMs", () => fence.assertCurrent());
+          fence.assertCurrent();
           return true;
         };
         assertCurrent();
@@ -173,8 +145,5 @@ export async function runDelegatedUpdateRepairTurn(
     };
   } finally {
     clearTimeout(wallTimer);
-    if (traceTimings) {
-      log.trace(`authority check timing ${JSON.stringify(timings)}`);
-    }
   }
 }

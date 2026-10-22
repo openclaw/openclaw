@@ -70,6 +70,8 @@ async function setup(label: string) {
     session: { store: storePath },
   } as OpenClawConfig);
   await state.writeConfig(cfg);
+  const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+  setRuntimeConfigSnapshot(cfg);
   const runAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (p) => ({
     payloads: [{ text: "HEARTBEAT_OK" }],
     meta: {
@@ -86,27 +88,24 @@ function expectContractOnce(prompt: string, markup: string) {
   expect(prompt).toContain(`"text_markup": "${markup}"`);
 }
 
-it.each([["rich", "markdown_telegram_rich"]])(
-  "gives a Telegram reply on the %s account its contract once",
-  async (accountId, markup) => {
-    const { cfg, lastPrompt } = await setup("reply-delivery-format");
-    await getReplyFromConfig(
-      finalizeInboundContext({
-        Body: "Post the status table",
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        OriginatingTo: "telegram:123",
-        AccountId: accountId,
-        ChatType: "direct",
-        SessionKey: `agent:main:telegram:${accountId}:direct:123`,
-      }),
-      undefined,
-      cfg,
-    );
-    expectContractOnce(lastPrompt(), markup);
-  },
-);
+it("gives a Telegram reply on the rich account its contract once", async () => {
+  const { cfg, lastPrompt } = await setup("reply-delivery-format");
+  await getReplyFromConfig(
+    finalizeInboundContext({
+      Body: "Post the status table",
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      AccountId: "rich",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:rich:direct:123",
+    }),
+    undefined,
+    cfg,
+  );
+  expectContractOnce(lastPrompt(), "markdown_telegram_rich");
+});
 
 it("gives a heartbeat delivered to Telegram the delivering account's contract once", async () => {
   const { cfg, storePath, lastPrompt } = await setup("heartbeat-delivery-format");
@@ -126,7 +125,6 @@ it("gives a heartbeat delivered to Telegram the delivering account's contract on
     sessionKey,
     source: "cron",
     reason: "cron:status",
-    deps: { getReplyFromConfig },
   });
   expect(result.status).toBe("ran");
   expectContractOnce(lastPrompt(), "markdown_telegram_rich");

@@ -1,6 +1,9 @@
+// This suite owns NDJSON record framing and size bounds. Reader-cancellation
+// lifecycle cases stay with the guarded stream tests in stream-runtime.test.ts.
+// Match the complete content-free diagnostic, not just its prefix.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { parseNdjsonStream } from "./stream.runtime.js";
+import { parseNdjsonStream } from "./stream-ndjson.js";
 
 function mockNdjsonReader(lines: string[], options: { trailingNewline?: boolean } = {}) {
   const payload = lines.join("\n") + (options.trailingNewline === false ? "" : "\n");

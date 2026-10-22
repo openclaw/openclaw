@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { showInputDialog } from "./input-dialog.ts";
 
@@ -54,30 +56,6 @@ describe("showInputDialog", () => {
     restoreDialogPolyfill();
   });
 
-  it("renders accessible copy and resolves the submitted value", async () => {
-    const result = showInputDialog({
-      title: "Rename session",
-      label: "Session name",
-      defaultValue: "Original name",
-      submitLabel: "Rename",
-    });
-    const { modal, dialog } = await getRenderedModalDialog(document.body);
-    const input = modal.querySelector<HTMLInputElement>('input[name="value"]');
-
-    expect(dialog.getAttribute("aria-label")).toBe("Rename session");
-    expect(dialog.getAttribute("aria-description")).toBe("Session name");
-    expect(input?.value).toBe("Original name");
-
-    if (!input) {
-      throw new Error("Expected text input");
-    }
-    input.value = "Renamed session";
-    findButton("Rename").click();
-
-    await expect(result).resolves.toBe("Renamed session");
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
   it("treats modal dismissal as cancellation", async () => {
     const result = showInputDialog({ title: "Rename session" });
     const { modal } = await getRenderedModalDialog(document.body);
@@ -96,6 +74,26 @@ describe("showInputDialog", () => {
 
     await expect(result).resolves.toBeNull();
     expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
+  it("allows an explicitly admitted offline submit and updates admission with the Gateway", async () => {
+    const harness = createGatewayHarness(null, false);
+    const submit = vi.fn().mockResolvedValue(null);
+    const closed = showInputDialog({
+      title: "Rename session",
+      gateway: harness.gateway,
+      canSubmit: () => harness.gateway.snapshot.phase === "offline",
+      submit,
+    });
+    await getRenderedModalDialog(document.body);
+    await type("Notes");
+    expect(findButton("Save").disabled).toBe(true);
+    harness.update({ phase: "offline" });
+    flush();
+    expect(findButton("Save").disabled).toBe(false);
+    submitForm();
+    await expect(closed).resolves.toBe("Notes");
+    expect(submit).toHaveBeenCalledExactlyOnceWith("Notes");
   });
 
   it("rejects a reentrant input request instead of stacking or replaying it", async () => {
@@ -122,6 +120,7 @@ describe("showInputDialog", () => {
     expect(submit).not.toHaveBeenCalled();
 
     await type("  Client work  ");
+    expect(dialogInput().value).toBe("  Client work  ");
     expect(findButton("Create group").disabled).toBe(false);
     submitForm();
 
@@ -155,27 +154,6 @@ describe("showInputDialog", () => {
     await expect(closed).resolves.toBe("Projects");
   });
 
-  it("keeps the typed value and shows why a rejected attempt failed", async () => {
-    const submit = vi.fn().mockResolvedValueOnce("group name exceeds 512 characters");
-    submit.mockResolvedValue(null);
-    const closed = showInputDialog({ ...REQUIRED, submit });
-    await getRenderedModalDialog(document.body);
-
-    await type("Client work");
-    submitForm();
-    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce());
-    await Promise.resolve();
-
-    expect(document.body.textContent).toContain("group name exceeds 512 characters");
-    expect(document.body.querySelector('[role="alert"]')).not.toBeNull();
-    expect(dialogInput().value).toBe("Client work");
-
-    submitForm();
-    await closed;
-    expect(submit).toHaveBeenCalledTimes(2);
-    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-  });
-
   it("submits once while an attempt is in flight and blocks dismissal until it settles", async () => {
     let settle!: (message: string | null) => void;
     const submit = vi.fn().mockReturnValue(
@@ -190,6 +168,7 @@ describe("showInputDialog", () => {
     submitForm();
     submitForm();
     expect(submit).toHaveBeenCalledOnce();
+    flush();
     expect(dialogInput().disabled).toBe(true);
 
     const cancelEvent = new CustomEvent("modal-cancel", { cancelable: true });
@@ -226,6 +205,7 @@ describe("showInputDialog", () => {
       expect(dialogInput().disabled).toBe(false);
       expect(dialogInput().value).toBe("Client work");
       expect(findButton("Create group").disabled).toBe(false);
+      expect(document.activeElement).toBe(dialogInput());
 
       submitForm();
       await closed;

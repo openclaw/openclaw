@@ -1,5 +1,5 @@
 ---
-summary: "Canonical credential eligibility and resolution semantics for auth profiles"
+summary: "Credential eligibility and resolution rules for auth profiles"
 title: "Auth credential semantics"
 read_when:
   - Working on auth profile resolution or credential routing
@@ -58,6 +58,12 @@ confirm application, the key remains saved and the response includes a restart
 warning. This preserves the configured reload policy, including disabled reloads.
 Removing a key still rejects a binding or credential that changed concurrently.
 
+Provider `apiKey` values that name an existing compatible API-key or token profile
+are profile bindings, not literal credentials. Model discovery resolves those
+bindings through the same profile classification used by chat requests, including
+provider and base-URL compatibility checks. Values that do not name a stored
+profile remain literal keys. Saving a key does not change the stored binding format.
+
 ## Setup replacements
 
 Setup replacement credentials are saved under separate profile IDs with an
@@ -85,6 +91,8 @@ and first-run noninteractive setup retain their existing behavior.
 ## Agent copy portability
 
 Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the shared auth store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`). The shared store lives in `state/openclaw.sqlite` after `openclaw doctor --fix` performs the one-time relocation. Until then, doctor reports the legacy `agents/main/agent/openclaw-agent.sqlite` owner and leaves that agent undeletable.
+
+When `agents.defaults.authInheritance.agentId` names another agent, Doctor relocates that agent's credentials if `main` has none. If both stores contain credentials, Doctor leaves both untouched and reports a recoverable warning: keep the credentials agents should share in one store, then rerun `openclaw doctor --fix`. Agent-private credentials stay local. This repair applies during relocation; it does not change stores that have already completed the shared-state cutover.
 
 OAuth sibling synchronization writes the selected primary profile first, then the discovered shared owner before other siblings. This preserves read-through inheritance regardless of filesystem directory order. A shared owner outside the selected agents tree is not added to the synchronization targets.
 
@@ -115,6 +123,10 @@ closing that scope; retained callbacks cannot write after it closes.
 Each catalog request carries the Gateway's committed shared-store ownership. A
 reused worker installs that fact before reading credentials, so the first login's
 empty-store relocation cannot leave discovery attached to the legacy location.
+Catalog preparation carries the persisted-store inspection result and selected
+display path with the credential view. Labels reuse that source selection for the
+request; the next refresh observes committed changes. External credential refresh
+and the final credential authority check remain unchanged.
 Temporary probe stores wait for their database work and shared-registry removal
 before deleting credential files. If disposal fails, cleanup retains the directory
 and reports its location.
@@ -122,7 +134,7 @@ Stored formats, schema versions, and update or rollback behavior are unchanged.
 
 Inline API-key failure bookkeeping reads and updates the selected agent's auth
 state through its existing SQLite worker. It preserves credential bytes and
-other profiles' health state. Runtime snapshot publication reads canonical local
+other profiles' health state. Runtime snapshot publication reads stored local
 and shared rows off-thread, then retains the current host's resolved secrets and
 external profile overlays. A publication failure does not replay a committed
 health update. The synchronous SDK store APIs retain their existing contracts.
@@ -140,13 +152,16 @@ cache, and applies the requesting client's profile-identity visibility.
 File-backed external CLI bootstrap health stays with its reader's freshness
 lifecycle because external login can change without a Gateway publication.
 
-Repeated model resolution reuses persisted auth rows while the owning database's
-write generation and file identity remain unchanged. Committed auth writes and
-runtime snapshot reloads invalidate those rows immediately. Database, WAL, and
-journal identities are checked at most once per 100 ms on warm cache hits; the
-first read at or after that interval detects changes from other processes.
-Hits do not extend this freshness window. Cache misses still check identity
-before and after reading rows. Scoped overlays, migration refusals,
+Repeated model resolution reuses deeply frozen persisted auth rows while the
+auth publication revision and owning database identity remain unchanged.
+Committed auth writes, unclassified database writes, and runtime snapshot reloads
+invalidate those rows immediately. Writes certified as session-only preserve
+the same immutable rows without reading or freezing them again. Each request
+retains its own live read authority; cache reuse cannot revive a revoked reader.
+An auth read prepared before an agent database exists stays empty if the first
+session creates that database. A later read observes the new file; replacement
+of an already captured file still invalidates its read.
+Scoped overlays, migration refusals,
 and personal-account selection still run on each request. Isolated agent scopes
 and private database snapshots do not share this cache. Gateway cache misses reuse
 a read-only child whose lifetime ends at shutdown; each read reacquires its source
@@ -205,6 +220,18 @@ shared credential belongs to the same account. If that identity cannot be
 verified, the peer remains terminally fenced instead of inheriting another
 account.
 
+Catalog discovery fences and settles historical peers through the same
+request-owned native writer as the refreshing credential. Each peer update
+retains its captured database file identity and compares the credential inside
+the write transaction. An identity-bound read skips definitely unrelated refresh
+generations before write admission, so empty retained stores from completed agent
+deletions do not block a shared-store refresh. Matching generations still require
+write admission and remain blocked by completed deletion. Unreadable or
+identity-replaced stores fail closed.
+If peer fencing fails before the provider refresh starts, claimed credentials
+are restored. Once the provider request starts, failed refreshes remain terminal
+because the provider may already have consumed the old refresh token.
+
 ## Plugin SDK OAuth validation
 
 `resolveApiKeyForProfile`, exported from `openclaw/plugin-sdk/agent-runtime`,
@@ -216,13 +243,13 @@ refreshed credential. The callback also applies when a legacy
 Throwing from the callback rejects that credential. A rejected fallback is not
 returned or refreshed, and the original selected-profile refresh failure remains
 the operator-facing error. Rejecting an active refresh or settlement generation
-fails closed and can leave that generation and its peers terminally fenced, so
+blocks credential access and can leave that generation and its peers terminally fenced, so
 the operator must authenticate again. Callers that omit the callback retain the
 existing resolution and fallback behavior.
 
 `openclaw agent exec` preserves the original shared-store root when switching to temporary run state. Its bounded credential scope reads portable `api_key` and `token` profiles from that shared store without persisting copies; the configured agent's local profiles still win. Shared OAuth profiles are excluded from this temporary scope, even with `copyToAgents: true`, so the run does not acquire another refresh owner. `--auth-env-only` disables stored credential access entirely.
 
-Auth writes that explicitly select a state directory, including isolated QA staging, use that directory's shared store for ownership and OAuth deduplication. Their runtime publication and rollback retain the same owner; another process-local state root is not an inherited base. An unrelated outer database may be older, newer, or unreadable without blocking an isolated write, but an unreadable or newer database in the selected target still fails closed. Writes without an explicit state directory retain the normal ambient state and agent-directory configuration.
+Auth writes that explicitly select a state directory, including isolated QA staging, use that directory's shared store for ownership and OAuth deduplication. Their runtime publication and rollback retain the same owner; another process-local state root is not an inherited base. An unrelated outer database may be older, newer, or unreadable without blocking an isolated write, but an unreadable or newer database in the selected target still blocks the write. Writes without an explicit state directory retain the normal ambient state and agent-directory configuration.
 
 ## Personal model accounts
 
@@ -250,11 +277,17 @@ Prepared agent requests use their selected plugin metadata, configuration, works
 
 ## Model catalog discovery
 
-Stored-profile selection for model discovery follows the canonical auth order and
+Stored-profile selection for model discovery follows the resolved auth order and
 eligibility rules. A cooldown limited to one model does not suppress account-wide
 catalog discovery. Configured subscription modes remain attached to direct
 credentials, and successful OAuth preparation supplies the resolved current token
 to its catalog consumer rather than the captured store's older token.
+
+Deferred provider catalogs retain discovered models when a configured SecretRef
+has a matching credential in the active runtime snapshot. Catalog admission uses
+that credential only as availability evidence: it does not resolve the reference
+again or copy the value into model rows. Unresolved references and credentials
+retained in a generated catalog do not grant admission.
 
 Environment-backed profiles keep usable values from the discovery environment,
 including cold command and worker paths. When that material is missing, only the
@@ -304,7 +337,7 @@ continues to use the imported OpenClaw profile through its isolated runtime.
 
 Since 2026.9.5, native Codex login no longer supplies the runtime-only
 `openai:default` profile. If that OAuth profile is still declared but absent from
-an agent's canonical credential store, `openclaw doctor --fix`, Doctor lint, and
+an agent's credential store, `openclaw doctor --fix`, Doctor lint, and
 Gateway startup warn with the import command above. The warning does not copy
 credentials or block the update. Missing-profile errors identify local store
 absence without reporting a provider HTTP 401; the error records a local lookup
@@ -340,7 +373,7 @@ clears them; changing or removing a legacy file does not release them. Doctor li
 Session readers retain their local and shared auth-store owners and check each
 owner's current refusal before returning credentials. A shared-provider refusal
 does not replace an unrelated local credential with environment or config auth,
-and unresolved local SecretRefs still fail closed. Only recognized credential
+and unresolved local SecretRefs still block credential access. Only recognized credential
 entries can narrow a legacy refusal; metadata-only objects and unknown layouts
 remain owner-wide.
 
@@ -350,7 +383,7 @@ agent-local OAuth credential; a refusal on the write destination still blocks it
 
 Session migration guards use the same pinned runtime config as model discovery
 and the requested model's endpoint to resolve endpoint-dependent provider aliases.
-Prepared session views retain canonical profiles from both owners and validate
+Prepared session views retain stored profiles from both owners and validate
 their SecretRefs; migration metadata does not filter these profiles. The
 endpoint-aware request guards decide admission. Each selected credential also
 retains its physical source owner through merges and async resolution. A refusal
@@ -367,6 +400,29 @@ For script compatibility, check errors keep this first line unchanged:
 `Auth profile credentials are missing or expired.`
 
 Human-friendly detail and the stable reason code follow on subsequent lines in the form `↳ Auth reason [code]: ...`.
+
+## Client identities and paired tokens
+
+Client private identities and paired device-token caches live in the separately
+versioned local `client/credentials.sqlite`, including when the Gateway uses
+PostgreSQL. These are distinct from model-provider auth profiles. Native bootstrap
+does not open the selected Gateway database. Gateway-issued pairing and revocation
+remain under the Gateway's authority; a local cache does not grant authorization.
+
+Migration preserves exact private keys, tokens, scope strings, and timestamps.
+Legacy JSON imports record consumption atomically with the local write. Revocation
+retains that record, so a restored or rewritten legacy file cannot resurrect its
+token. Refresh and removal compare the observed token with the current local row.
+
+If the shared SQLite main file is missing while its WAL, shared-memory file, or
+rollback journal remains, credential startup and session import require recovery.
+Restore the matching main database and sidecars before retrying. OpenClaw does not
+create a replacement identity from an incomplete source.
+
+Automatic rollback restores the pre-upgrade shared credentials. Credentials issued
+between upgrade and rollback are lost; affected clients pair again. A subsequent
+upgrade rebuilds any stale local store from the restored shared source. See
+[credential migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
 
 ## Related
 

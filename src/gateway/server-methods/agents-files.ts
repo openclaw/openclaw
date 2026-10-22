@@ -11,7 +11,10 @@ import {
   validateAgentsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { buildIdentityMarkdownForWrite } from "../../agents/identity-file.js";
+import {
+  buildIdentityMarkdownForWrite,
+  loadAgentIdentityFromWorkspaceAsync,
+} from "../../agents/identity-file.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import {
@@ -367,15 +370,28 @@ export const agentFileHandlers: Pick<
       return;
     }
     const { agentId, workspaceDir, name } = resolved;
+    // Admit against the draft's target; the entire write below stays on this captured workspace.
+    if (params.expectedWorkspace !== undefined && params.expectedWorkspace !== workspaceDir) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Agent workspace changed since "${name}" was read. Your draft is preserved. Reload to use the current workspace file, or Overwrite to save this draft there.`,
+          { details: { type: "agent_file_conflict", name } },
+        ),
+      );
+      return;
+    }
     const access = getAgentWorkspaceAccess(workspaceDir);
     const filePath = path.join(workspaceDir, name);
     const content = params.content;
     let workspaceRoot: WorkspaceRoot | null = null;
     let conflict: { currentHash: string | undefined } | undefined;
+    if (Buffer.byteLength(params.content) > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      throw new Error("Workspace document exceeds its write bound");
+    }
     if (access) {
-      if (Buffer.byteLength(params.content) > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
-        throw new Error("Workspace document exceeds its write bound");
-      }
       const assertCurrent = () => {
         if (getAgentWorkspaceAccess(workspaceDir) !== access) {
           throw new Error("Workspace access changed while saving an Agent document");
@@ -472,6 +488,11 @@ export const agentFileHandlers: Pick<
     const meta: Partial<FileMeta> | null = access
       ? { size: Buffer.byteLength(content) }
       : await statWorkspaceFileSafely(workspaceRoot, name);
+    if (name === DEFAULT_IDENTITY_FILENAME) {
+      // Drain reads admitted before the write before clients start their replacement read.
+      await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
+      context.broadcast("agent.identity.changed", { agentId });
+    }
     respond(
       true,
       {

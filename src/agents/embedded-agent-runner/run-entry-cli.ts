@@ -4,7 +4,7 @@ import {
   readSessionEntryReadOnlyInWorker,
 } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { persistCliSessionBindingResult } from "../cli-session-store.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
@@ -59,7 +59,8 @@ export function withAdmittedCliCandidate(
         throw createAgentRunSupersededAbortError();
       }
       return run({
-        sessionEntry,
+        // History preparation publishes its writer into this candidate's working row.
+        sessionEntry: sessionEntry ? { ...sessionEntry } : undefined,
         cliSessionBinding: getCliSessionBinding(sessionEntry, params.provider),
         assertSettlementCurrent,
         settleResult: async ({ result, expectedSession, sessionStore, preserveBinding }) => {
@@ -84,6 +85,6 @@ export function withAdmittedCliCandidate(
         },
       });
     },
-    params.admission,
+    { ...params.admission, sessionTarget: params.sessionTarget },
   );
 }

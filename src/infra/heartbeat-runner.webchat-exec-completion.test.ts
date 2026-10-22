@@ -6,13 +6,21 @@ import {
 } from "../../test/helpers/promise.js";
 import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
 import { resolveExecNotificationDefaults } from "../agents/bash-tools.exec-request-preparation.js";
+import { extractMessagingToolSourceReplyPayload } from "../agents/embedded-agent-messaging-extraction.js";
+import { buildEmbeddedRunPayloads } from "../agents/embedded-agent-runner/run/payloads.js";
+import { createMessageTool } from "../agents/tools/message-tool-execution.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { initSessionState } from "../auto-reply/reply/session.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import {
@@ -30,11 +38,16 @@ import {
   withExecRequestTurn,
 } from "./exec-request-context.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
+import {
+  bindHeartbeatReply,
+  bindHeartbeatSend,
+  type HeartbeatReplyFn,
+} from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
-import type { HeartbeatDeps } from "./heartbeat-runner.js";
 import {
   readSessionStoreForTest,
   seedSessionStore,
+  setHeartbeatSilentCompletion,
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -54,10 +67,9 @@ it("suppresses a routeless cron reminder on a WebChat session", async () => {
       sessionKey: scenario.sessionKey,
       contextKey: "cron:overnight-report",
     });
-    const reply = vi
-      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-      .mockResolvedValue({ text: "Reminder handled" });
-    await runProjectionWake(scenario, reply, "cron");
+    const reply = vi.fn<HeartbeatReplyFn>().mockResolvedValue({ text: "Reminder handled" });
+    bindHeartbeatReply(reply);
+    await runProjectionWake(scenario, "cron");
     expect(reply).toHaveBeenCalledOnce();
     expect(reply.mock.calls[0]?.[0].Body).not.toContain("Please relay this reminder to the user");
     expect(await readProjectionMessages(scenario)).toEqual([]);
@@ -65,9 +77,11 @@ it("suppresses a routeless cron reminder on a WebChat session", async () => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.restoreAllMocks();
   resetSystemEventsForTest();
   resetHeartbeatEventsForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 type ProjectionScenario = {
@@ -88,6 +102,7 @@ async function withProjectionScenario(
       messages: { visibleReplies: "message_tool" },
       session: { store: storePath },
     };
+    setRuntimeConfigSnapshot(cfg);
     const sessionKey = options.sessionKey ?? resolveMainSessionKey(cfg);
     const sessionId = "publication-boundary-session";
     await seedSessionStore(storePath, sessionKey, {
@@ -115,9 +130,9 @@ function completionPayload(notificationText: string) {
 // The explicit target keeps hidden and replacement scenarios on their own queue.
 function runProjectionWake(
   scenario: ProjectionScenario,
-  getReplyFromConfig: HeartbeatDeps["getReplyFromConfig"],
   wake: "exec-event" | "manual" | "cron" = "exec-event",
 ) {
+  setRuntimeConfigSnapshot(scenario.cfg);
   return runHeartbeatOnce({
     cfg: scenario.cfg,
     agentId: "main",
@@ -125,7 +140,6 @@ function runProjectionWake(
     source: wake,
     intent: wake === "manual" ? "immediate" : "event",
     reason: wake === "manual" ? "wake" : wake,
-    deps: { getReplyFromConfig },
   });
 }
 
@@ -169,8 +183,9 @@ it.for(["route preparation", "model reply"] as const)(
       const entered = createDeferred();
       const release = createDeferred();
       const reply = vi
-        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+        .fn<HeartbeatReplyFn>()
         .mockResolvedValue(completionPayload("LIVE_COMPLETION"));
+      bindHeartbeatReply(reply);
       if (stage === "route preparation") {
         const resolve = heartbeatTargets.resolveHeartbeatDeliveryTargetWithSessionRoute;
         vi.spyOn(
@@ -199,7 +214,7 @@ it.for(["route preparation", "model reply"] as const)(
           published.push(update.message);
         }
       });
-      const pending = runProjectionWake(scenario, reply);
+      const pending = runProjectionWake(scenario);
       try {
         await withinTest(
           awaitGateBeforeSettlement(entered.promise, pending, "wake settled before the race gate"),
@@ -220,7 +235,7 @@ it.for(["route preparation", "model reply"] as const)(
         ]);
         expect(enqueue(canceledText, stoppedOwner)).toBeNull();
 
-        expect((await runProjectionWake(scenario, reply)).status).toBe("ran");
+        expect((await runProjectionWake(scenario)).status).toBe("ran");
         const next = reply.mock.calls.at(-1)?.[0];
         expect(next?.Body).toContain(liveText);
         expect(next?.Body).not.toContain(canceledText);
@@ -231,7 +246,7 @@ it.for(["route preparation", "model reply"] as const)(
         ]);
         expect(published).toHaveLength(1);
         const calls = reply.mock.calls.length;
-        expect(await runProjectionWake(scenario, reply)).toEqual({
+        expect(await runProjectionWake(scenario)).toEqual({
           status: "skipped",
           reason: "no-pending-event",
         });
@@ -249,6 +264,96 @@ it.for(["route preparation", "model reply"] as const)(
   },
 );
 
+it("keeps an encoded external destination subject to explicit targeting", async () => {
+  await withProjectionScenario(
+    async (scenario) => {
+      enqueueSystemEvent("Exec completed (encoded-route-proof, code 0) :: PRIVATE_OUTPUT", {
+        sessionKey: scenario.sessionKey,
+      });
+      const reply = vi.fn<HeartbeatReplyFn>().mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: "done",
+          notify: false,
+          summary: "private",
+        }),
+      );
+      bindHeartbeatReply(reply);
+      const result = await runProjectionWake(scenario);
+      expect(result.status).toBe("ran");
+      expect(reply).toHaveBeenCalledOnce();
+      expect(reply.mock.calls[0]?.[1]).toMatchObject({ requireExplicitMessageTarget: true });
+      expect(reply.mock.calls[0]?.[0].OriginatingChannel).toBeUndefined();
+    },
+    { sessionKey: "agent:main:telegram:direct:123456" },
+  );
+});
+
+it("keeps an isolated WebChat completion subject to explicit targeting", async () => {
+  await withProjectionScenario(async (scenario) => {
+    scenario.cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
+    const isolatedKey = `${scenario.sessionKey}:heartbeat`;
+    await seedSessionStore(scenario.storePath, isolatedKey, {
+      sessionId: "isolated-source-policy",
+      heartbeatIsolatedBaseSessionKey: scenario.sessionKey,
+    });
+    enqueueSystemEvent("Exec completed (isolated-proof, code 0) :: PRIVATE_OUTPUT", {
+      sessionKey: isolatedKey,
+    });
+    const reply = vi
+      .fn<HeartbeatReplyFn>()
+      .mockResolvedValue(
+        createHeartbeatToolResponsePayload({ outcome: "done", notify: false, summary: "private" }),
+      );
+    bindHeartbeatReply(reply);
+    const result = await runProjectionWake({ ...scenario, sessionKey: isolatedKey });
+    expect(result.status).toBe("ran");
+    expect(reply).toHaveBeenCalledOnce();
+    expect(reply.mock.calls[0]?.[1]).toMatchObject({ requireExplicitMessageTarget: true });
+    expect(reply.mock.calls[0]?.[0].OriginatingChannel).toBeUndefined();
+  });
+});
+
+it("preserves explicit target:none before target:last delivers in the same WebChat session", async () => {
+  await withProjectionScenario(async (scenario) => {
+    const heartbeat = scenario.cfg.agents?.defaults?.heartbeat;
+    if (!heartbeat) {
+      throw new Error("projection scenario heartbeat is missing");
+    }
+    for (const target of ["none", "last"] as const) {
+      heartbeat.target = target;
+      const marker = `EXPLICIT_TARGET_${target}`;
+      enqueueSystemEvent(`Exec completed (target-proof, code 0) :: ${marker}`, {
+        sessionKey: scenario.sessionKey,
+      });
+      const reply = vi.fn<HeartbeatReplyFn>().mockResolvedValue(
+        createHeartbeatToolResponsePayload({
+          outcome: "done",
+          notify: true,
+          summary: "private",
+          notificationText: marker,
+        }),
+      );
+      bindHeartbeatReply(reply);
+      await runProjectionWake(scenario);
+      expect(reply).toHaveBeenCalledOnce();
+      const context = reply.mock.calls[0]?.[0];
+      const messages = await readProjectionMessages(scenario);
+      expect(reply.mock.calls[0]?.[1]).toMatchObject({
+        requireExplicitMessageTarget: target === "none",
+      });
+      if (target === "none") {
+        expect(messages).toEqual([]);
+        expect(context?.Body).toContain("user delivery is disabled");
+      } else {
+        expect(messages).toHaveLength(1);
+        expect(JSON.stringify(messages[0]?.content)).toContain(marker);
+        expect(context?.Body).toContain(marker);
+        expect(context?.Body).not.toContain("user delivery is disabled");
+      }
+    }
+  });
+});
+
 it.each(["automatic", "message_tool"] as const)(
   "settles an unneeded completion silently in %s mode",
   async (visibleReplies) => {
@@ -257,28 +362,33 @@ it.each(["automatic", "message_tool"] as const)(
       enqueueSystemEvent("Exec completed (already-handled, code 0) :: Previously reported output", {
         sessionKey: scenario.sessionKey,
       });
-      const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>().mockResolvedValue(
-        visibleReplies === "automatic"
-          ? { text: "NO_REPLY" }
-          : createHeartbeatToolResponsePayload({
-              outcome: "done",
-              notify: false,
-              summary: "Result already handled; no new user-facing information.",
-            }),
-      );
+      const reply = vi.fn<HeartbeatReplyFn>().mockImplementation(async (_ctx, options) => {
+        if (visibleReplies === "automatic") {
+          setHeartbeatSilentCompletion(options);
+          return undefined;
+        }
+        return createHeartbeatToolResponsePayload({
+          outcome: "done",
+          notify: false,
+          summary: "Result already handled; no new user-facing information.",
+        });
+      });
+      bindHeartbeatReply(reply);
 
       // The runner must offer silence and retire the event without publishing a recap.
-      expect((await runProjectionWake(scenario, reply)).status).toBe("ran");
+      expect((await runProjectionWake(scenario)).status).toBe("ran");
       const prompt = reply.mock.calls[0]?.[0].Body;
       expect(prompt).toContain("duplicate or superseded results");
       expect(prompt).toContain(
-        visibleReplies === "automatic" ? "reply NO_REPLY only" : "notify=false",
+        visibleReplies === "automatic"
+          ? "reply with exactly NO_REPLY as the entire final answer"
+          : "notify=false",
       );
       expect(await readProjectionMessages(scenario)).toEqual([]);
       expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
       expect(getLastHeartbeatEvent()?.silent).toBe(true);
 
-      expect((await runProjectionWake(scenario, reply)).status).toBe("skipped");
+      expect((await runProjectionWake(scenario)).status).toBe("skipped");
       expect(reply).toHaveBeenCalledOnce();
       expect(await readProjectionMessages(scenario)).toEqual([]);
     });
@@ -343,16 +453,18 @@ it.each(visibleCompletions)(
         }
       });
       try {
-        const reply = vi
-          .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-          .mockResolvedValue(completionPayload(marker));
-        expect((await runProjectionWake(scenario, reply)).status).toBe("ran");
+        const reply = vi.fn<HeartbeatReplyFn>().mockResolvedValue(completionPayload(marker));
+        bindHeartbeatReply(reply);
+        expect((await runProjectionWake(scenario)).status).toBe("ran");
         expect(reply).toHaveBeenCalledOnce();
         expect(reply.mock.calls[0]?.[0]).toMatchObject({
           From: "heartbeat",
-          To: undefined,
-          OriginatingChannel: undefined,
-          OriginatingTo: undefined,
+          To: publishes ? scenario.sessionKey : undefined,
+          OriginatingChannel: publishes ? "webchat" : undefined,
+          OriginatingTo: publishes ? scenario.sessionKey : undefined,
+        });
+        expect(reply.mock.calls[0]?.[1]).toMatchObject({
+          requireExplicitMessageTarget: !publishes,
         });
         expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
         const messages = await readProjectionMessages(scenario);
@@ -372,7 +484,7 @@ it.each(visibleCompletions)(
           expect(prompt).toContain("Verify the resulting state before retrying");
         } else {
           expect(getLastHeartbeatEvent()?.status).toBe("sent");
-          await runProjectionWake(scenario, reply);
+          await runProjectionWake(scenario);
           expect(reply).toHaveBeenCalledOnce();
           expect(await readProjectionMessages(scenario)).toHaveLength(1);
         }
@@ -405,10 +517,9 @@ it.each([
     enqueueSystemEvent("Exec completed (hidden-proof, code 0) :: PRIVATE_OUTPUT", {
       sessionKey: scenario.sessionKey,
     });
-    const reply = vi
-      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-      .mockResolvedValue(completionPayload("PRIVATE_OUTPUT"));
-    await runProjectionWake(scenario, reply);
+    const reply = vi.fn<HeartbeatReplyFn>().mockResolvedValue(completionPayload("PRIVATE_OUTPUT"));
+    bindHeartbeatReply(reply);
+    await runProjectionWake(scenario);
     expect(await readProjectionMessages(scenario)).toEqual([]);
     expect(getLastHeartbeatEvent()?.status).not.toBe("sent");
     if (options.entry.createdVia === "internal") {
@@ -419,6 +530,100 @@ it.each([
   }, options);
 });
 
+it.each([
+  { field: "unchanged", phase: "routing" },
+  { field: "sessionId", phase: "routing" },
+  { field: "lifecycleRevision", phase: "routing" },
+  { field: "sessionId", phase: "tool" },
+  { field: "lifecycleRevision", phase: "tool" },
+] as const)(
+  "fences a targetless source send ($field replacement at $phase)",
+  async ({ field, phase }) => {
+    await withProjectionScenario(async (scenario) => {
+      const marker = "STALE_TOOL_COMPLETION";
+      enqueueSystemEvent(`Exec completed (source-race, code 0) :: ${marker}`, {
+        sessionKey: scenario.sessionKey,
+      });
+      const replaceSource = async () => {
+        if (field === "unchanged") {
+          return;
+        }
+        const current = readSessionStoreForTest(scenario.storePath)[scenario.sessionKey];
+        await replaceSessionEntry(
+          { agentId: "main", storePath: scenario.storePath, sessionKey: scenario.sessionKey },
+          {
+            ...current,
+            sessionId: scenario.sessionId,
+            updatedAt: Date.now(),
+            [field]: "replacement-generation",
+          },
+        );
+      };
+      const resolveTarget = heartbeatTargets.resolveHeartbeatDeliveryTargetWithSessionRoute;
+      vi.spyOn(
+        heartbeatTargets,
+        "resolveHeartbeatDeliveryTargetWithSessionRoute",
+      ).mockImplementationOnce(async (params) => {
+        const delivery = await resolveTarget(params);
+        // Reset can keep the session ID while rotating the admitted lifecycle.
+        if (phase === "routing") {
+          await replaceSource();
+        }
+        return delivery;
+      });
+      let sent = false;
+      const reply = vi.fn<HeartbeatReplyFn>().mockImplementation(async (_ctx, options) => {
+        if (phase === "tool") {
+          await replaceSource();
+        }
+        const current = readSessionStoreForTest(scenario.storePath)[scenario.sessionKey]!;
+        // Model boundary: reply initialization selected B. Exercise the real
+        // targetless tool and canonical sink, not a pre-persisted fake receipt.
+        const message = createMessageTool({
+          config: scenario.cfg,
+          agentId: "main",
+          agentSessionKey: scenario.sessionKey,
+          sessionId: current.sessionId,
+          runId: "source-race-run",
+          currentChannelProvider: "webchat",
+          sourceReplyDeliveryMode: "message_tool_only",
+          requireExplicitTarget: (options as InternalGetReplyOptions).requireExplicitMessageTarget,
+          preparedMessageToolCatalog: {
+            version: 0,
+            channels: [],
+            getChannel: () => undefined,
+          },
+        });
+        const result = await message.execute("source-race-send", {
+          action: "send",
+          message: marker,
+        });
+        sent = true;
+        return buildEmbeddedRunPayloads({
+          assistantTexts: [],
+          lastAssistant: undefined,
+          sessionKey: scenario.sessionKey,
+          agentId: "main",
+          sourceReplyDeliveryMode: "message_tool_only",
+          messagingToolSourceReplyPayloads: [extractMessagingToolSourceReplyPayload(result)!],
+        });
+      });
+      bindHeartbeatReply(reply);
+      await runProjectionWake(scenario);
+      const targetSessionId = field === "sessionId" ? "replacement-generation" : scenario.sessionId;
+      const messages = await readProjectionMessages({ ...scenario, sessionId: targetSessionId });
+      // The tool receipt owns the single row; heartbeat publication must reuse it.
+      const sourceMessages = messages.filter(
+        (message) => message !== undefined && JSON.stringify(message.content).includes(marker),
+      );
+      expect(sourceMessages, JSON.stringify(getLastHeartbeatEvent())).toHaveLength(
+        field === "unchanged" ? 1 : 0,
+      );
+      expect(sent).toBe(field === "unchanged");
+    });
+  },
+);
+
 it.each(["sessionId", "lifecycleRevision"] as const)(
   "rejects output after a %s replacement",
   async (field) => {
@@ -427,22 +632,21 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
         sessionKey: scenario.sessionKey,
       });
       const pending = peekSystemEventEntries(scenario.sessionKey);
-      const reply = vi
-        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-        .mockImplementation(async () => {
-          const current = readSessionStoreForTest(scenario.storePath)[scenario.sessionKey];
-          await replaceSessionEntry(
-            { storePath: scenario.storePath, sessionKey: scenario.sessionKey },
-            {
-              ...current,
-              sessionId: scenario.sessionId,
-              updatedAt: Date.now(),
-              [field]: "replacement-generation",
-            },
-          );
-          return completionPayload("OLD_GENERATION");
-        });
-      await runProjectionWake(scenario, reply);
+      const reply = vi.fn<HeartbeatReplyFn>().mockImplementation(async () => {
+        const current = readSessionStoreForTest(scenario.storePath)[scenario.sessionKey];
+        await replaceSessionEntry(
+          { storePath: scenario.storePath, sessionKey: scenario.sessionKey },
+          {
+            ...current,
+            sessionId: scenario.sessionId,
+            updatedAt: Date.now(),
+            [field]: "replacement-generation",
+          },
+        );
+        return completionPayload("OLD_GENERATION");
+      });
+      bindHeartbeatReply(reply);
+      await runProjectionWake(scenario);
       expect(getLastHeartbeatEvent()?.status).not.toBe("sent");
       expect(peekSystemEventEntries(scenario.sessionKey).map((event) => event.id)).toEqual(
         pending.map((event) => event.id),
@@ -465,7 +669,7 @@ it("consumes only captured occurrences and publishes distinct same-text completi
     const first = peekSystemEventEntries(scenario.sessionKey);
     const payload = completionPayload("SAME_NOTIFICATION");
     const reply = vi
-      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+      .fn<HeartbeatReplyFn>()
       .mockImplementationOnce(async () => {
         enqueueSystemEvent("Exec completed (later-proof, code 0) :: SAME_NOTIFICATION", {
           sessionKey: scenario.sessionKey,
@@ -473,12 +677,13 @@ it("consumes only captured occurrences and publishes distinct same-text completi
         return payload;
       })
       .mockResolvedValue(payload);
-    await runProjectionWake(scenario, reply);
+    bindHeartbeatReply(reply);
+    await runProjectionWake(scenario);
     const later = peekSystemEventEntries(scenario.sessionKey);
     expect(later).toHaveLength(1);
     expect(later[0]?.id).not.toBe(first[0]?.id);
     expect(await readProjectionMessages(scenario)).toHaveLength(1);
-    await runProjectionWake(scenario, reply);
+    await runProjectionWake(scenario);
     expect(reply).toHaveBeenCalledTimes(2);
     expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
     expect(await readProjectionMessages(scenario)).toHaveLength(2);
@@ -499,28 +704,27 @@ it("reconciles an ordinary persisted final with a response prefix", async () => 
         idempotencyKey: "ordinary-prefixed-final",
         __openclaw: { runId: "ordinary-writer" },
       };
-      const reply = vi
-        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-        .mockImplementation(async () => {
-          await persistSessionTranscriptTurn(
-            { agentId: "main", ...scenario },
-            {
-              expectedSessionId: scenario.sessionId,
-              expectedLifecycleRevision: "publication-boundary-generation",
-              expectedWriterRunId: "ordinary-writer",
-              messages: [{ message: original }],
-              updateMode: "none",
-            },
-          );
-          return setReplyPayloadMetadata(
-            { text },
-            {
-              assistantTranscriptOwned: true,
-              assistantTranscriptIdempotencyKey: original.idempotencyKey,
-            },
-          );
-        });
-      await runProjectionWake(scenario, reply);
+      const reply = vi.fn<HeartbeatReplyFn>().mockImplementation(async () => {
+        await persistSessionTranscriptTurn(
+          { agentId: "main", ...scenario },
+          {
+            expectedSessionId: scenario.sessionId,
+            expectedLifecycleRevision: "publication-boundary-generation",
+            expectedWriterRunId: "ordinary-writer",
+            messages: [{ message: original }],
+            updateMode: "none",
+          },
+        );
+        return setReplyPayloadMetadata(
+          { text },
+          {
+            assistantTranscriptOwned: true,
+            assistantTranscriptIdempotencyKey: original.idempotencyKey,
+          },
+        );
+      });
+      bindHeartbeatReply(reply);
+      await runProjectionWake(scenario);
       expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
       expect(getLastHeartbeatEvent()?.status).toBe("sent");
       expect(await readProjectionMessages(scenario)).toEqual([original]);
@@ -528,7 +732,7 @@ it("reconciles an ordinary persisted final with a response prefix", async () => 
         ?.lastHeartbeatText;
       expect(sentText).toContain(text);
       expect(sentText).toMatch(/^\[/);
-      await runProjectionWake(scenario, reply);
+      await runProjectionWake(scenario);
       expect(reply).toHaveBeenCalledOnce();
       expect(await readProjectionMessages(scenario)).toEqual([original]);
     },
@@ -543,7 +747,7 @@ it("retains a completion after visible tool failure", async () => {
     });
     const pending = peekSystemEventEntries(scenario.sessionKey);
     const reply = vi
-      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+      .fn<HeartbeatReplyFn>()
       .mockResolvedValueOnce(
         setReplyPayloadMetadata(
           { text: "The notification attempt failed.", isError: true },
@@ -551,18 +755,19 @@ it("retains a completion after visible tool failure", async () => {
         ),
       )
       .mockResolvedValue(completionPayload("RECOVERED_COMPLETION"));
-    expect((await runProjectionWake(scenario, reply)).status).toBe("failed");
+    bindHeartbeatReply(reply);
+    expect((await runProjectionWake(scenario)).status).toBe("failed");
     expect(peekSystemEventEntries(scenario.sessionKey).map((event) => event.id)).toEqual(
       pending.map((event) => event.id),
     );
-    await runProjectionWake(scenario, reply);
+    await runProjectionWake(scenario);
     expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
     expect(
       (await readProjectionMessages(scenario)).filter((message) =>
         JSON.stringify(message?.content).includes("RECOVERED_COMPLETION"),
       ),
     ).toHaveLength(1);
-    await runProjectionWake(scenario, reply);
+    await runProjectionWake(scenario);
     expect(reply).toHaveBeenCalledTimes(2);
   });
 });
@@ -574,9 +779,10 @@ it("settles an accepted completion before retrying a later queued occurrence", a
     });
     const first = peekSystemEventEntries(scenario.sessionKey);
     const reply = vi
-      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+      .fn<HeartbeatReplyFn>()
       .mockResolvedValueOnce(completionPayload("FIRST_ACCEPTED"))
       .mockResolvedValue(completionPayload("LATER_ACCEPTED"));
+    bindHeartbeatReply(reply);
     const result = await withOwnedSessionTranscriptWrites(
       {
         sessionKey: scenario.sessionKey,
@@ -590,14 +796,14 @@ it("settles an accepted completion before retrying a later queued occurrence", a
           throw new Error("owned drain failed after accepted publication");
         },
       },
-      () => runProjectionWake(scenario, reply),
+      () => runProjectionWake(scenario),
     );
     expect(result.status).toBe("ran");
     const pending = peekSystemEventEntries(scenario.sessionKey);
     expect(pending).toHaveLength(1);
     expect(pending[0]?.id).not.toBe(first[0]?.id);
     expect(getLastHeartbeatEvent()?.status).toBe("sent");
-    await runProjectionWake(scenario, reply);
+    await runProjectionWake(scenario);
     expect(reply).toHaveBeenCalledTimes(2);
     expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
     const messages = await readProjectionMessages(scenario);
@@ -606,7 +812,7 @@ it("settles an accepted completion before retrying a later queued occurrence", a
       [{ type: "text", text: "FIRST_ACCEPTED" }],
       [{ type: "text", text: "LATER_ACCEPTED" }],
     ]);
-    await runProjectionWake(scenario, reply);
+    await runProjectionWake(scenario);
     expect(reply).toHaveBeenCalledTimes(2);
     expect(await readProjectionMessages(scenario)).toEqual(messages);
   });
@@ -626,6 +832,7 @@ describe("WebChat completions with an explicit heartbeat target", () => {
       };
       scenario.cfg.channels = { telegram: { allowFrom: ["*"] } };
       const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "-100999000111" });
+      bindHeartbeatSend("telegram", sendTelegram);
       await run(scenario, sendTelegram);
     });
   }
@@ -638,31 +845,30 @@ describe("WebChat completions with an explicit heartbeat target", () => {
         deliveryContext: { channel: "webchat" },
         fromConversationTurn: true,
       });
-      const reply = vi
-        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-        .mockImplementation(async (ctx, options) => {
-          // Model stubs must still initialize the session to exercise persisted routing.
-          await initSessionState({
-            cfg: scenario.cfg,
-            ctx: finalizeInboundContext(ctx),
-            commandAuthorized: false,
-          });
-          if (reply.mock.calls.length === 1) {
-            const next = resolveExecNotificationDefaults({
-              trigger: "heartbeat",
-              continuesConversation: options?.continuesConversation,
-              messageProvider: ctx.OriginatingChannel,
-              currentChannelId: ctx.OriginatingTo ?? ctx.To,
-            });
-            enqueueSystemEvent("Exec completed (chained, code 0) :: next result", {
-              sessionKey: scenario.sessionKey,
-              deliveryContext: next.notifyDeliveryContext,
-              fromConversationTurn: next.notifyFromConversationTurn,
-            });
-            return completionPayload("First completed; started the next command.");
-          }
-          return completionPayload(marker);
+      const reply = vi.fn<HeartbeatReplyFn>().mockImplementation(async (ctx, options) => {
+        // Model stubs must still initialize the session to exercise persisted routing.
+        await initSessionState({
+          cfg: scenario.cfg,
+          ctx: finalizeInboundContext(ctx),
+          commandAuthorized: false,
         });
+        if (reply.mock.calls.length === 1) {
+          const next = resolveExecNotificationDefaults({
+            trigger: "heartbeat",
+            continuesConversation: options?.continuesConversation,
+            messageProvider: ctx.OriginatingChannel,
+            currentChannelId: ctx.OriginatingTo ?? ctx.To,
+          });
+          enqueueSystemEvent("Exec completed (chained, code 0) :: next result", {
+            sessionKey: scenario.sessionKey,
+            deliveryContext: next.notifyDeliveryContext,
+            fromConversationTurn: next.notifyFromConversationTurn,
+          });
+          return completionPayload("First completed; started the next command.");
+        }
+        return completionPayload(marker);
+      });
+      bindHeartbeatReply(reply);
       const run = () =>
         runHeartbeatOnce({
           cfg: scenario.cfg,
@@ -670,7 +876,6 @@ describe("WebChat completions with an explicit heartbeat target", () => {
           source: "exec-event",
           intent: "event",
           reason: "exec-event",
-          deps: { getReplyFromConfig: reply, telegram: sendTelegram },
         });
       expect((await run()).status).toBe("ran");
       expect(sendTelegram).not.toHaveBeenCalled();
@@ -699,13 +904,13 @@ describe("WebChat completions with an explicit heartbeat target", () => {
       });
       enqueueSystemEvent("Reminder: rotate the backup disk", { sessionKey: scenario.sessionKey });
       const reply = vi.fn().mockResolvedValue({ text: marker });
+      bindHeartbeatReply(reply);
       await runHeartbeatOnce({
         cfg: scenario.cfg,
         agentId: "main",
         source: "exec-event",
         intent: "event",
         reason: "exec-event",
-        deps: { getReplyFromConfig: reply, telegram: sendTelegram },
       });
       expect(sendTelegram).toHaveBeenCalledTimes(1);
       expect(JSON.stringify(sendTelegram.mock.calls[0])).toContain(marker);
@@ -731,26 +936,25 @@ describe("WebChat completions with an explicit heartbeat target", () => {
         } else if (failure === "thrown write") {
           publish.mockRejectedValueOnce(new Error("injected write failure"));
         }
-        const reply = vi
-          .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-          .mockImplementation(async (_ctx, options) => {
-            const context = getReplySystemEventContext(options);
-            // Real prompt admission must not drain the occurrence before publication commits.
-            const block = await drainFormattedSystemEvents({
-              cfg,
-              agentId: "main",
-              sessionKey,
-              isMainSession: false,
-              isNewSession: false,
-              events: context?.events ?? [],
-              deferredEventIds: context?.deferredEventIds,
-            });
-            expect(block).toContain(continuation);
-            if (failure === "failed model" && reply.mock.calls.length === 1) {
-              throw new Error("injected model failure after admission");
-            }
-            return completionPayload(marker);
+        const reply = vi.fn<HeartbeatReplyFn>().mockImplementation(async (_ctx, options) => {
+          const context = getReplySystemEventContext(options);
+          // Real prompt admission must not drain the occurrence before publication commits.
+          const block = await drainFormattedSystemEvents({
+            cfg,
+            agentId: "main",
+            sessionKey,
+            isMainSession: false,
+            isNewSession: false,
+            events: context?.events ?? [],
+            deferredEventIds: context?.deferredEventIds,
           });
+          expect(block).toContain(continuation);
+          if (failure === "failed model" && reply.mock.calls.length === 1) {
+            throw new Error("injected model failure after admission");
+          }
+          return completionPayload(marker);
+        });
+        bindHeartbeatReply(reply);
         const run = () =>
           runHeartbeatOnce({
             cfg,
@@ -759,7 +963,6 @@ describe("WebChat completions with an explicit heartbeat target", () => {
             source: "restart-sentinel",
             intent: "immediate",
             reason: "wake",
-            deps: { getReplyFromConfig: reply, telegram: sendTelegram },
           });
         const published = async () =>
           (await readProjectionMessages(scenario)).filter((message) =>

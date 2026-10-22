@@ -1,4 +1,5 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
@@ -18,11 +19,14 @@ import type { ImageCompressionPolicy } from "../../media/web-media.js";
 import { resolvePluginCapabilityProvider } from "../../plugins/capability-provider-runtime.js";
 import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
+import type { AgentToolResult } from "../runtime/index.js";
 import { createSandboxBridgeReadFile } from "../sandbox-media-paths.js";
 import { optionalFiniteNumberSchema, optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
+import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { readFiniteNumberParam, readPositiveIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   coerceImageModelConfig,
@@ -36,7 +40,6 @@ import {
   resolveImageModelConfigForOverride,
   runImagePrompt,
 } from "./image-tool.model-execution.js";
-import { buildNativeImageToolResult, type LoadedImageForTool } from "./image-tool.result.js";
 import {
   buildMediaReferenceDetails,
   buildTextToolResult,
@@ -51,7 +54,7 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
-  prepareToolAuthProfileStoreSource,
+  prepareToolAuthProfileStore,
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
@@ -59,6 +62,13 @@ import { textResult } from "./tool-results.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
+
+type LoadedImageForTool = {
+  buffer: Buffer;
+  mimeType: string;
+  resolvedInput: string;
+  rewrittenFrom?: string;
+};
 
 function modelRefProvider(candidate: string | null | undefined): string | undefined {
   const trimmed = candidate?.trim();
@@ -221,12 +231,6 @@ function resolveImageModelConfigForTool(params: {
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")] = {
-    resolveImageModelConfigForTool,
-  };
-}
-
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -243,11 +247,6 @@ export function createImageTool(options?: {
   currentChannelId?: string | null;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
-  /**
-   * Avoid resolving auto image-provider/model candidates while registering the
-   * tool. The concrete image model is still resolved before execution.
-   */
-  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   const modelHasVision = options?.modelHasVision === true;
@@ -265,23 +264,6 @@ export function createImageTool(options?: {
           imageModelConfig: explicit,
         })
       : null;
-  const shouldResolveAutoImageModel =
-    !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
-  const resolveInitialModelConfig = (authProfileStoreSource: boolean | undefined) =>
-    resolveImageModelConfigForTool({
-      cfg: options?.config,
-      agentDir,
-      workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      authProfileStoreSource,
-      preparedModelRuntime: options?.preparedModelRuntime,
-    });
-  const resolvedImageModelConfig = shouldResolveAutoImageModel
-    ? resolveInitialModelConfig(options?.authProfileStoreSource)
-    : explicitImageModelConfig;
-  if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
-    return null;
-  }
   const remoteMediaSsrfPolicy = options?.config?.tools?.web?.fetch?.ssrfPolicy;
 
   const description = modelHasVision
@@ -309,10 +291,7 @@ export function createImageTool(options?: {
     }),
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
-        const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
-        if (Array.isArray(record.paths)) {
-          record.paths = [...record.paths];
-        }
+        const record = asRecord(args);
         const capturedOperator = await captureAmbientGatewayOperatorAuthority({
           missingBindingError: () =>
             new Error("Image analysis requires its current Gateway binding."),
@@ -372,15 +351,21 @@ export function createImageTool(options?: {
           imageRoute = { kind: "native" };
         } else {
           let imageModelConfig =
-            resolvedImageModelConfig ??
+            explicitImageModelConfig ??
             resolveImageModelConfigForOverride({
               cfg: options?.config,
               modelOverride,
             });
           if (!imageModelConfig) {
-            const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+            const authStore = await prepareToolAuthProfileStore(options);
             assertCurrent();
-            imageModelConfig = resolveInitialModelConfig(authProfileStoreSource);
+            imageModelConfig = resolveImageModelConfigForTool({
+              cfg: options?.config,
+              agentDir,
+              workspaceDir: options?.workspaceDir,
+              authStore,
+              preparedModelRuntime: options?.preparedModelRuntime,
+            });
           }
           if (!imageModelConfig) {
             throw new Error(
@@ -501,7 +486,33 @@ export function createImageTool(options?: {
         }
 
         if (imageRoute.kind === "native") {
-          const result = await buildNativeImageToolResult(loadedImages, options?.config);
+          const content = await sanitizeContentBlocksImages(
+            loadedImages.map((image) => ({
+              type: "image" as const,
+              data: image.buffer.toString("base64"),
+              mimeType: image.mimeType,
+            })),
+            "image:native",
+            { ...resolveImageSanitizationLimits(options?.config), verifyDecodability: true },
+          );
+          // Sanitization replaces rejected image blocks with text at the same position.
+          const retainedImages = loadedImages.filter(
+            (_, index) => content[index]?.type === "image",
+          );
+          const result: AgentToolResult<unknown> = {
+            content: [
+              {
+                type: "text",
+                text: `Loaded ${retainedImages.length} image${retainedImages.length === 1 ? "" : "s"} into private model context for inspection; not displayed, attached, or sent to the user.`,
+              },
+              ...content,
+            ],
+            details: {
+              transport: "native",
+              ...buildMediaReferenceDetails(retainedImages, "image", { includeEmpty: true }),
+              media: { outbound: false },
+            },
+          };
           signal?.throwIfAborted();
           return result;
         }

@@ -4,12 +4,17 @@ import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  listSessionEntriesReadOnly,
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { resolveSessionKeyBySessionIdAsync } from "../config/sessions/session-accessor.transcript-target.js";
 import type { SessionTranscriptRuntimeScope } from "../config/sessions/session-accessor.types.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntries,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -33,7 +38,6 @@ class AgentRunSessionTargetResolutionError extends Error {
   }
 }
 
-/** Resolves the active runtime target used by current run/session internals. */
 export async function resolveAgentRunSessionTarget(
   input: {
     agentId?: string;
@@ -42,6 +46,7 @@ export async function resolveAgentRunSessionTarget(
     sessionId: string;
     sessionFile?: string;
     sessionKey?: string;
+    sessionPersistence?: "durable" | "detached";
     sessionTarget?: AgentRunSessionTarget;
   },
   prepareTarget?: (scope: SessionTranscriptRuntimeScope) => Promise<{
@@ -54,6 +59,7 @@ export async function resolveAgentRunSessionTarget(
     sessionTarget: input.sessionTarget ? { ...input.sessionTarget } : undefined,
   };
   const config = params.config ?? getRuntimeConfig();
+  const detached = params.sessionPersistence === "detached";
   const sessionTarget = params.sessionTarget;
   const targetAgentId = normalizeOptionalString(sessionTarget?.agentId);
   const targetSessionId = normalizeOptionalString(sessionTarget?.sessionId);
@@ -102,26 +108,31 @@ export async function resolveAgentRunSessionTarget(
   const compatibilitySessionKey =
     recognizedCompatibilitySessionKey ??
     (params.missingSessionKey === "create" ? plainCompatibilitySessionKey : undefined);
-  const markerEntries =
-    legacyMarker && !hasCompleteTypedTarget
-      ? listSessionEntriesReadOnly({
-          agentId: legacyMarker.agentId,
-          storePath: legacyMarker.storePath,
-        })
-      : [];
-  const markerMatches = legacyMarker
-    ? markerEntries.filter(({ entry }) => entry.sessionId === legacyMarker.sessionId)
-    : [];
-  const markerSessionKey =
-    legacyMarker && !hasCompleteTypedTarget
-      ? resolvePreferredSessionKeyForSessionIdMatches(
-          markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
-          legacyMarker.sessionId,
-        )
+  const activeMarker = hasCompleteTypedTarget ? undefined : legacyMarker;
+  const markerSource =
+    activeMarker && !detached
+      ? captureSessionActorStorageOwner(activeMarker, { assertCurrent() {}, authorize() {} })
       : undefined;
+  const markerEntries =
+    activeMarker && !detached
+      ? markerSource
+        ? readCapturedSessionActorEntries(markerSource)
+        : await readSessionEntrySummariesInWorker({
+            agentId: activeMarker.agentId,
+            storePath: activeMarker.storePath,
+          })
+      : [];
+  const markerMatches = activeMarker
+    ? markerEntries.filter(({ entry }) => entry.sessionId === activeMarker.sessionId)
+    : [];
+  const markerSessionKey = activeMarker
+    ? resolvePreferredSessionKeyForSessionIdMatches(
+        markerMatches.map(({ sessionKey, entry }) => [sessionKey, entry]),
+        activeMarker.sessionId,
+      )
+    : undefined;
   if (
-    legacyMarker &&
-    !hasCompleteTypedTarget &&
+    activeMarker &&
     !targetSessionKey &&
     !suppliedSessionKey &&
     markerMatches.length > 0 &&
@@ -154,18 +165,19 @@ export async function resolveAgentRunSessionTarget(
     targetStoreOwner.kind === "none",
   );
   const shouldResolveConfiguredStoreRow =
+    !detached &&
     params.missingSessionKey === "resolve-existing" &&
     !preliminarySessionKey &&
     !targetStorePath &&
     !legacyMarker;
   const configuredStoreResolution = shouldResolveConfiguredStoreRow
     ? agentId
-      ? resolveStoredSessionKeyForSessionId({
+      ? await resolveStoredSessionKeyForSessionId({
           cfg: config,
           sessionId,
           agentId,
         })
-      : resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
+      : await resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
     : undefined;
   const fixedAgentId =
     (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??
@@ -186,7 +198,8 @@ export async function resolveAgentRunSessionTarget(
     resolveSessionStorePathCore(config.session?.store, { agentId: lookupAgentId });
   const storedSessionKey =
     configuredStoreResolution?.sessionKey ??
-    (params.missingSessionKey === "resolve-existing" &&
+    (!detached &&
+    params.missingSessionKey === "resolve-existing" &&
     !preliminarySessionKey &&
     !shouldResolveConfiguredStoreRow
       ? await resolveSessionKeyBySessionIdAsync({
@@ -208,23 +221,21 @@ export async function resolveAgentRunSessionTarget(
         ?.entry
     : undefined;
   if (
-    legacyMarker &&
-    !hasCompleteTypedTarget &&
-    ((targetAgentId && targetAgentId !== legacyMarker.agentId) ||
-      (targetSessionId && targetSessionId !== legacyMarker.sessionId) ||
-      (params.agentId && params.agentId !== legacyMarker.agentId) ||
-      (targetKeyAgentId && targetKeyAgentId !== legacyMarker.agentId) ||
-      (suppliedKeyAgentId && suppliedKeyAgentId !== legacyMarker.agentId) ||
-      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(legacyMarker.storePath)))
+    activeMarker &&
+    ((targetAgentId && targetAgentId !== activeMarker.agentId) ||
+      (targetSessionId && targetSessionId !== activeMarker.sessionId) ||
+      (params.agentId && params.agentId !== activeMarker.agentId) ||
+      (targetKeyAgentId && targetKeyAgentId !== activeMarker.agentId) ||
+      (suppliedKeyAgentId && suppliedKeyAgentId !== activeMarker.agentId) ||
+      (targetStorePath && path.resolve(targetStorePath) !== path.resolve(activeMarker.storePath)))
   ) {
     throw new Error("Legacy SQLite transcript marker conflicts with the supplied session identity");
   }
   if (
-    legacyMarker &&
-    !hasCompleteTypedTarget &&
+    activeMarker &&
     candidateMarkerKey &&
     candidateMarkerEntry &&
-    candidateMarkerEntry.sessionId !== legacyMarker.sessionId
+    candidateMarkerEntry.sessionId !== activeMarker.sessionId
   ) {
     throw new Error("Legacy SQLite transcript marker conflicts with the supplied session key");
   }
@@ -250,6 +261,14 @@ export async function resolveAgentRunSessionTarget(
     storePath,
     ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
   };
+  // Detached runs own their identity in memory; persisted rows cannot select it.
+  if (detached) {
+    return {
+      ...scope,
+      agentId: effectiveAgentId,
+      sessionKey: resolveSqliteSessionKey(sessionKey, effectiveAgentId),
+    };
+  }
   const prepared = prepareTarget ? await prepareTarget(scope) : undefined;
   const target = prepared?.target ?? (await resolveSessionTranscriptRuntimeTarget(scope));
   prepared?.assertCurrent();

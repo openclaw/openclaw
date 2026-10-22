@@ -3,19 +3,30 @@ import type { RawBuilder } from "kysely";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   createSqliteQueryCache,
+  encodeSqliteStringSet,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  prepareSqliteQueryTakeFirstSync,
+  prepareSqliteQuerySync,
+  sqliteStringSetEntries,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
+import {
+  readSqliteDatabaseSiblingWriteRevision,
+  sqliteSessionIdWriteScope,
+  withSqliteDatabaseWriteScope,
+} from "../../infra/sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
   installSqliteTempTrackingSchema,
-  readSqliteCacheDataVersion,
 } from "../../infra/sqlite-schema-facts.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import {
+  deleteOrphanedTranscriptIndexRowsInTransaction,
+  listSessionsNeedingTranscriptIndexReconcile,
+  selectSessionTranscriptIndexStatus,
+} from "./session-transcript-index.js";
 
 const projectionTables = [
   "session_transcript_active_events",
@@ -37,7 +48,7 @@ type StatusDatabase = Pick<DB, "session_windows" | "transcript_events"> & {
 } & {
   openclaw_transcript_index_status: {
     id: number;
-    data_version: number;
+    sibling_write_revision: number;
     schema_version: number;
     complete: number;
     after_session: string | null;
@@ -48,26 +59,51 @@ type StatusDatabase = Pick<DB, "session_windows" | "transcript_events"> & {
 
 const admissionSeeks = createSqliteQueryCache((db) => {
   const kysely = getNodeSqliteKysely<StatusDatabase>(db);
-  const selectNext = (after?: RawBuilder<string>) => {
+  const selectBatch = (after?: RawBuilder<string>) => {
     const [first, ...remaining] = scanTables.map((table) => {
       const source =
         table === "openclaw_transcript_index_pending" ? kysely.withSchema("temp") : kysely;
-      let query = source.selectFrom(table).select("session_id").orderBy("session_id").limit(1);
-      if (after) {
-        query = query.where("session_id", ">", after);
-      }
-      return kysely.selectFrom(query.as("candidate")).select("session_id");
+      // Seek past each session's entire index range, including large transcripts.
+      const keys = source.withRecursive("session_keys", (query) => {
+        let firstKey = query
+          .selectFrom(table)
+          .select((eb) => [
+            eb.fn.min<string | null>("session_id").as("session_id"),
+            eb.val(1).as("depth"),
+          ]);
+        if (after) {
+          firstKey = firstKey.where("session_id", ">", after);
+        }
+        return firstKey.unionAll(
+          query
+            .selectFrom("session_keys")
+            .select((eb) => [
+              eb
+                .selectFrom(table)
+                .select((inner) => inner.fn.min<string | null>("session_id").as("session_id"))
+                .whereRef(`${table}.session_id`, ">", "session_keys.session_id")
+                .as("session_id"),
+              eb("depth", "+", 1).as("depth"),
+            ])
+            .where("session_id", "is not", null)
+            .where("depth", "<", MAX_SESSIONS),
+        );
+      });
+      return kysely
+        .selectFrom(keys.selectFrom("session_keys").select("session_id").as("candidate"))
+        .select("session_id")
+        .where("session_id", "is not", null);
     });
     return kysely
-      .selectFrom(remaining.reduce((query, next) => query.unionAll(next), first!).as("candidates"))
+      .selectFrom(remaining.reduce((query, next) => query.union(next), first!).as("candidates"))
       .select("session_id")
       .orderBy("session_id")
-      .limit(1);
+      .limit(MAX_SESSIONS);
   };
   return {
-    first: prepareSqliteQueryTakeFirstSync<void, { session_id: string }>(db, () => selectNext()),
-    after: prepareSqliteQueryTakeFirstSync<string, { session_id: string }>(db, (parameter) =>
-      selectNext(parameter((sessionId) => sessionId)),
+    first: prepareSqliteQuerySync<void, { session_id: string }>(db, () => selectBatch()),
+    after: prepareSqliteQuerySync<string, { session_id: string }>(db, (parameter) =>
+      selectBatch(parameter((sessionId) => sessionId)),
     ),
   };
 });
@@ -86,7 +122,6 @@ function installStatusTracking(db: DatabaseSync, schemaVersion: number): void {
     return;
   }
   installSqliteTempTrackingSchema(db, {
-    kind: "transcript-index",
     statusTable: "openclaw_transcript_index_status",
     pendingTable: "openclaw_transcript_index_pending",
     pendingIndex: "openclaw_transcript_index_pending_state",
@@ -104,37 +139,8 @@ function installStatusTracking(db: DatabaseSync, schemaVersion: number): void {
   });
 }
 
-/** Consume the writer's clean receipt without taking a write lock or host write grants. */
-export function isSessionTranscriptIndexStatusClean(db: DatabaseSync): boolean {
-  const dataVersion = readSqliteCacheDataVersion(db, "fresh");
-  const schema = getAdmittedSqliteSchemaFacts(db);
-  if (!schema || installations.get(db)?.schemaVersion !== schema.schemaVersion) {
-    return false;
-  }
-  const temporary = getNodeSqliteKysely<StatusDatabase>(db).withSchema("temp");
-  return (
-    executeSqliteQueryTakeFirstSync(
-      db,
-      temporary
-        .selectFrom("openclaw_transcript_index_status")
-        .select("id")
-        .where("id", "=", 1)
-        .where("data_version", "=", dataVersion)
-        .where("schema_version", "=", schema.schemaVersion)
-        .where("complete", "=", 1)
-        .where((eb) =>
-          eb.not(
-            eb.exists(
-              temporary.selectFrom("openclaw_transcript_index_pending").select("session_id"),
-            ),
-          ),
-        ),
-    ) !== undefined
-  );
-}
-
 /** Advance bounded maintenance inside the canonical writer's transaction. */
-export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
+export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
   sessionIds: string[];
   hasMore: boolean;
   traversalComplete: boolean;
@@ -144,7 +150,16 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
   if (!db.isTransaction) {
     throw new Error("Transcript projection status requires its writer transaction");
   }
-  const dataVersion = readSqliteCacheDataVersion(db, "fresh");
+  if (isPostgresSqlConnection(db)) {
+    deleteOrphanedTranscriptIndexRowsInTransaction(db);
+    const sessionIds = listSessionsNeedingTranscriptIndexReconcile(db, MAX_SESSIONS + 1);
+    return {
+      sessionIds: sessionIds.slice(0, MAX_SESSIONS),
+      hasMore: sessionIds.length > MAX_SESSIONS,
+      traversalComplete: true,
+    };
+  }
+  const siblingWriteRevision = readSqliteDatabaseSiblingWriteRevision(db);
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Transcript projection status requires admitted schema facts");
@@ -156,129 +171,160 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
     db,
     temporary.selectFrom("openclaw_transcript_index_status").selectAll().where("id", "=", 1),
   )!;
-  if (state.data_version === -1 || state.schema_version !== schema.schemaVersion) {
+  // An unknown sibling revision only blocks the clean receipt; resetting here would rescan
+  // the first batch forever and never reach later dirty sessions.
+  const resetPending = state.schema_version !== schema.schemaVersion;
+  if (resetPending) {
     executeSqliteQuerySync(db, temporary.deleteFrom("openclaw_transcript_index_pending"));
     state.complete = 0;
     state.after_session = null;
-    state.data_version = dataVersion;
-  } else if (state.complete && state.data_version !== dataVersion) {
+    state.sibling_write_revision = siblingWriteRevision ?? -1;
+  } else if (state.complete && state.sibling_write_revision !== siblingWriteRevision) {
     state.complete = 0;
     state.after_session = null;
-    state.data_version = dataVersion;
+    state.sibling_write_revision = siblingWriteRevision ?? -1;
   }
   const candidates = new Set(
-    executeSqliteQuerySync(
-      db,
-      temporary
-        .selectFrom("openclaw_transcript_index_pending")
-        .select("session_id")
-        .where("state", "=", 0)
-        .orderBy("session_id")
-        .limit(state.complete ? MAX_SESSIONS : MAX_SESSIONS / 2),
-    ).rows.map((row) => row.session_id),
+    resetPending
+      ? []
+      : executeSqliteQuerySync(
+          db,
+          temporary
+            .selectFrom("openclaw_transcript_index_pending")
+            .select("session_id")
+            .where("state", "=", 0)
+            .orderBy("session_id")
+            .limit(state.complete ? MAX_SESSIONS : MAX_SESSIONS / 2),
+        ).rows.map((row) => row.session_id),
   );
-  // Reserve traversal work despite local churn; TEMP candidates retain foreign-deleted sessions.
-  const seek = admissionSeeks(db);
-  let seeks = 0;
+  // Reserve traversal work despite local churn; TEMP candidates retain deleted sessions.
   let reachedTraversalEnd = false;
-  while (candidates.size < MAX_SESSIONS && !state.complete && seeks++ < MAX_SESSIONS) {
-    const next = state.after_session === null ? seek.first() : seek.after(state.after_session);
-    if (!next) {
+  if (!state.complete) {
+    const seeks = admissionSeeks(db);
+    const batch = (state.after_session === null ? seeks.first() : seeks.after(state.after_session))
+      .rows;
+    let consumed = 0;
+    for (const row of batch) {
+      if (candidates.size === MAX_SESSIONS) {
+        break;
+      }
+      state.after_session = row.session_id;
+      candidates.add(row.session_id);
+      consumed++;
+    }
+    if (consumed === batch.length && batch.length < MAX_SESSIONS) {
       state.complete = 1;
       reachedTraversalEnd = true;
       state.completed_traversals++;
-    } else {
-      state.after_session = next.session_id;
-      candidates.add(next.session_id);
     }
   }
+  const classified =
+    candidates.size === 0
+      ? []
+      : executeSqliteQuerySync(
+          db,
+          kysely
+            .selectFrom(
+              sqliteStringSetEntries(encodeSqliteStringSet([...candidates])).as("candidate"),
+            )
+            .select("candidate.value as session_id")
+            .select((eb) =>
+              kysely
+                .selectFrom(
+                  selectSessionTranscriptIndexStatus(db, eb.ref("candidate.value").$notNull()).as(
+                    "status",
+                  ),
+                )
+                .select("needs_reconcile")
+                .as("needs_reconcile"),
+            )
+            .orderBy("candidate.value"),
+        ).rows;
+  const pending: { session_id: string; state: number }[] = [];
   const remainingRows = projectionTables.map(() => MAX_ORPHAN_ROWS);
-  for (const sessionId of candidates) {
-    const hasTranscript =
-      executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("transcript_events")
-          .select("seq")
-          .where("session_id", "=", sessionId)
-          .limit(1),
-      ) !== undefined;
-    let pending = false;
+  for (const row of classified) {
+    const sessionId = row.session_id!;
     let unfinished = false;
-    if (hasTranscript) {
-      pending = sessionTranscriptIndexNeedsReconcile(db, sessionId);
-    } else {
+    if (row.needs_reconcile === null) {
       for (const [index, table] of projectionTables.entries()) {
-        const removed =
-          executeSqliteQuerySync(
-            db,
-            kysely
-              .deleteFrom(table)
-              .where(
-                "rowid",
-                "in",
-                kysely
-                  .selectFrom(table)
-                  .select("rowid")
-                  .where("session_id", "=", sessionId)
-                  .limit(remainingRows[index]!),
+        const budget = remainingRows[index]!;
+        const rows = executeSqliteQuerySync(
+          db,
+          kysely
+            .selectFrom(table)
+            .select("rowid as rowId")
+            .where("session_id", "=", sessionId)
+            .limit(budget + 1),
+        ).rows;
+        unfinished ||= rows.length > budget;
+        const selected = rows.slice(0, budget);
+        // Empty cleanup must not publish a write receipt that invalidates clean search hits.
+        if (selected.length > 0) {
+          const removed =
+            withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () =>
+              executeSqliteQuerySync(
+                db,
+                kysely.deleteFrom(table).where(
+                  "rowid",
+                  "in",
+                  selected.map((orphanRow) => orphanRow.rowId),
+                ),
               ),
-          ).numAffectedRows ?? 0n;
-        remainingRows[index]! -= Number(removed);
-        unfinished ||=
-          executeSqliteQueryTakeFirstSync(
-            db,
-            kysely
-              .selectFrom(table)
-              .select("session_id")
-              .where("session_id", "=", sessionId)
-              .limit(1),
-          ) !== undefined;
+            ).numAffectedRows ?? 0n;
+          remainingRows[index]! -= Number(removed);
+        }
       }
     }
-    // Cleanup triggers can requeue this session; consume only after its final observation.
-    executeSqliteQuerySync(
-      db,
-      temporary.deleteFrom("openclaw_transcript_index_pending").where("session_id", "=", sessionId),
-    );
-    if (pending || unfinished) {
-      executeSqliteQuerySync(
-        db,
-        temporary
-          .insertInto("openclaw_transcript_index_pending")
-          .values({ session_id: sessionId, state: unfinished ? 0 : 1 }),
-      );
+    if (row.needs_reconcile || unfinished) {
+      pending.push({ session_id: sessionId, state: unfinished ? 0 : 1 });
     }
   }
-  const hasUnknown =
-    state.complete !== 0 &&
-    executeSqliteQueryTakeFirstSync(
+  // Cleanup triggers can requeue candidates; consume after all bounded deletions.
+  if (candidates.size > 0) {
+    executeSqliteQuerySync(
       db,
       temporary
-        .selectFrom("openclaw_transcript_index_pending")
-        .select("session_id")
-        .where("state", "=", 0)
-        .limit(1),
-    ) !== undefined;
-  // Rebuild known work after enumeration without waiting for foreign writers to become quiet.
+        .deleteFrom("openclaw_transcript_index_pending")
+        .where("session_id", "in", [...candidates]),
+    );
+  }
+  if (pending.length > 0) {
+    executeSqliteQuerySync(
+      db,
+      temporary.insertInto("openclaw_transcript_index_pending").values(pending),
+    );
+  }
+  // After a reset, this transaction rebuilt the entire queue from these candidates.
+  const hasUnknown =
+    state.complete !== 0 &&
+    (resetPending
+      ? pending.some((row) => row.state === 0)
+      : executeSqliteQueryTakeFirstSync(
+          db,
+          temporary
+            .selectFrom("openclaw_transcript_index_pending")
+            .select("session_id")
+            .where("state", "=", 0)
+            .limit(1),
+        ) !== undefined);
+  // Rebuild known work after enumeration without waiting for sibling writers to become quiet.
   const traversalComplete = reachedTraversalEnd || (state.complete !== 0 && !hasUnknown);
-  // Resume fair traversal when local churn outgrows queue classification; foreign commits
+  // Resume fair traversal when local churn outgrows queue classification. Sibling commits
   // restart only after reaching the end, so neither source of writes can starve late keys.
-  // Only a complete pass at one foreign revision can certify a clean store.
   if (
     state.complete &&
-    (state.data_version !== dataVersion || (hasUnknown && !reachedTraversalEnd))
+    (state.sibling_write_revision !== siblingWriteRevision || (hasUnknown && !reachedTraversalEnd))
   ) {
     state.complete = 0;
     state.after_session = null;
-    state.data_version = dataVersion;
+    state.sibling_write_revision = siblingWriteRevision ?? -1;
   }
   executeSqliteQuerySync(
     db,
     temporary
       .updateTable("openclaw_transcript_index_status")
       .set({
-        data_version: state.data_version,
+        sibling_write_revision: state.sibling_write_revision,
         schema_version: schema.schemaVersion,
         complete: state.complete,
         after_session: state.after_session,
@@ -286,18 +332,20 @@ export function maintainSessionTranscriptIndexStatus(db: DatabaseSync): {
       })
       .where("id", "=", 1),
   );
-  const sessionIds = executeSqliteQuerySync(
-    db,
-    temporary
-      .selectFrom("openclaw_transcript_index_pending")
-      .select("session_id")
-      .where("state", "=", 1)
-      .orderBy("session_id"),
-  ).rows.map((row) => row.session_id);
+  const sessionIds = resetPending
+    ? pending.filter((row) => row.state === 1).map((row) => row.session_id)
+    : executeSqliteQuerySync(
+        db,
+        temporary
+          .selectFrom("openclaw_transcript_index_pending")
+          .select("session_id")
+          .where("state", "=", 1)
+          .orderBy("session_id"),
+      ).rows.map((row) => row.session_id);
   return {
     sessionIds,
-    hasMore: !state.complete || hasUnknown,
-    traversalComplete,
+    hasMore: siblingWriteRevision === undefined || !state.complete || hasUnknown,
+    traversalComplete: siblingWriteRevision !== undefined && traversalComplete,
     traversal: {
       schemaVersion: schema.schemaVersion,
       completedTraversals: state.completed_traversals,

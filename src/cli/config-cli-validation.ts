@@ -6,10 +6,9 @@ import type {
 } from "../config/config.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferred-plugin-migration-config.js";
-import { configFailureHeading, isConfigReadFailure } from "../config/io.invalid-config.js";
+import { configFailureHeading } from "../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
-import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { ConfigValidationIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -41,27 +40,12 @@ import {
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { shortenHomePath } from "../utils.js";
-import { formatCliCommand } from "./command-format.js";
 import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
 import { getAtPath } from "./config-cli-path.js";
-import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
+import { formatInvalidConfigRepairHint } from "./config-recovery-hints.js";
 import type { ConfigSetDryRunError, ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { writeInvalidConfigCliJson } from "./config-validation-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
-
-function formatInvalidConfigRepairHint(
-  snapshot: Pick<
-    ConfigFileSnapshot,
-    "valid" | "issues" | "warnings" | "legacyIssues" | "readError"
-  >,
-  doctorMessage: string,
-): string {
-  return isConfigReadFailure(snapshot)
-    ? "Resolve the read error shown above, then retry."
-    : isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-      ? formatPluginPackagingRuntimeOutputRecoveryHint()
-      : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
-}
 
 export function ensureValidConfigSnapshotForCli(
   snapshot: ConfigFileSnapshot,
@@ -83,13 +67,31 @@ export function ensureValidConfigSnapshotForCli(
   exitCliAfterOutput(runtime, 1);
 }
 
-export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRuntime) {
-  const prepared = await readConfigFileSnapshotForWrite();
+export async function loadValidConfigForWrite(
+  runtime: RuntimeEnv = defaultRuntime,
+  options?: { databaseOnly?: true },
+) {
+  // Preparation can finish as a preview or no-op without recording state health.
+  const prepared = await readConfigFileSnapshotForWrite({
+    observe: false,
+    ...(options?.databaseOnly ? { pluginValidation: "core-only" } : {}),
+  });
   ensureValidConfigSnapshotForCli(prepared.snapshot, runtime);
-  return prepared;
+  return {
+    ...prepared,
+    writeOptions: {
+      ...prepared.writeOptions,
+      observe: false,
+      ...(options?.databaseOnly
+        ? {
+            databaseAccess: "none" as const,
+            skipPluginValidation: true,
+            skipRuntimeSnapshotRefresh: true,
+          }
+        : {}),
+    },
+  };
 }
-
-export { formatInvalidConfigRepairHint };
 
 export async function finishConfigValidationForCli(
   read: ReadConfigFileSnapshotWithPluginMetadataResult,
@@ -244,11 +246,13 @@ function collectStrictConfigErrors(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
   deferredPluginMigrations?: readonly DeferredPluginMigration[],
+  skipPluginValidation?: true,
 ): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRawWithPlugins(config, {
     semanticValidation: "strict",
     pluginMetadataSnapshot,
     deferredPluginMigrations,
+    ...(skipPluginValidation ? { pluginValidation: "skip" } : {}),
   });
   if (validated.ok) {
     return [];
@@ -263,11 +267,13 @@ export function assertStrictConfigForMutation(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
   deferredPluginMigrations?: readonly DeferredPluginMigration[],
+  skipPluginValidation?: true,
 ): void {
   const errors = collectStrictConfigErrors(
     config,
     pluginMetadataSnapshot,
     deferredPluginMigrations,
+    skipPluginValidation,
   );
   if (errors.length === 0) {
     return;
@@ -341,6 +347,7 @@ export async function validateConfigMutation(params: {
   unchanged: boolean;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
+  databaseOnly?: true;
 }): Promise<{ kind: "dry-run"; result: ConfigSetDryRunResult } | { kind: "unchanged" | "write" }> {
   const { config, operations, options, pluginMetadataSnapshot } = params;
   assertDeferredPluginMigrationConfigEditAllowed({
@@ -383,6 +390,7 @@ export async function validateConfigMutation(params: {
         config,
         pluginMetadataSnapshot,
         params.deferredPluginMigrations,
+        params.databaseOnly,
       );
       return { kind: "unchanged" };
     }
@@ -426,7 +434,12 @@ export async function validateConfigMutation(params: {
   errors.push(...providerErrors);
   if (requiresFullSchema) {
     errors.push(
-      ...collectStrictConfigErrors(config, pluginMetadataSnapshot, params.deferredPluginMigrations),
+      ...collectStrictConfigErrors(
+        config,
+        pluginMetadataSnapshot,
+        params.deferredPluginMigrations,
+        params.databaseOnly,
+      ),
     );
   }
   if (checksRefs) {

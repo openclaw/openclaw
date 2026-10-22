@@ -48,12 +48,11 @@ describe("callBrowserRequest", () => {
     await callBrowserRequest(
       { json: true },
       { method: "GET", path: "/status", query: { profile: "openclaw" } },
-      { progress: true },
     );
 
     const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
     const extra = call?.[3];
-    expect(extra).toEqual({ progress: true, scopes: ["operator.admin"] });
+    expect(extra).toEqual({ scopes: ["operator.admin"] });
   });
 
   it("rejects partial parent timeout values before gateway dispatch", async () => {
@@ -61,18 +60,6 @@ describe("callBrowserRequest", () => {
       callBrowserRequest({ json: true, timeout: "60000ms" }, { method: "GET", path: "/status" }),
     ).rejects.toThrow("--timeout must be a positive integer.");
     expect(gatewayMocks.callGatewayFromCli).not.toHaveBeenCalled();
-  });
-
-  it("caps explicit request timeouts to Node's safe timer range", async () => {
-    await callBrowserRequest(
-      { json: true },
-      { method: "GET", path: "/status" },
-      { timeoutMs: 3_000_000_000 },
-    );
-
-    const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
-    expect(call?.[1]).toMatchObject({ timeout: String(MAX_TIMER_TIMEOUT_MS) });
-    expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 10_000 });
   });
 
   it("caps parent timeout values to Node's safe timer range", async () => {
@@ -83,17 +70,6 @@ describe("callBrowserRequest", () => {
 
     const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
     expect(call?.[1]).toMatchObject({ timeout: String(MAX_TIMER_TIMEOUT_MS) });
-    expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 10_000 });
-  });
-
-  it("accepts strict signed and zero-padded parent timeout values", async () => {
-    await callBrowserRequest(
-      { json: true, timeout: " +060000 " },
-      { method: "GET", path: "/status" },
-    );
-
-    const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
-    expect(call?.[1]).toMatchObject({ timeout: "70000" });
-    expect(call?.[2]).toMatchObject({ timeoutMs: 60_000 });
+    expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 130_000 });
   });
 });

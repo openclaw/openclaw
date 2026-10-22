@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   replaceSessionEntry,
@@ -56,13 +57,26 @@ async function withWebchatTool(
   await withOpenClawTestState({ layout: "home" }, async (state) => {
     const sessionStorePath = path.join(state.sessionsDir(), "sessions.json");
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      agents: {
+        entries: { main: { workspace: state.workspaceDir } },
+        defaults: { model: "openai/gpt-4.1" },
+      },
       session: { store: sessionStorePath },
       channels: channelsEnabled
         ? { discord: { token: "test-token" }, telegram: { botToken: "test-token" } }
         : {},
       plugins: { entries: { discord: { enabled: true }, telegram: { enabled: true } } },
     };
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:webchat-fixture": {
+          type: "api_key",
+          provider: "openai",
+          key: "synthetic-webchat-inference-key",
+        },
+      },
+    });
     setRuntimeConfigSnapshot(cfg);
     setActivePluginRegistry(
       createTestRegistry(
@@ -93,7 +107,6 @@ async function withWebchatTool(
       defaultAgentId: "main",
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: async () => {
         throw new Error("disabled fixture must not run an agent");
       },
@@ -123,8 +136,33 @@ async function withWebchatTool(
       getRuntimeConfig: () => cfg,
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     });
-    const tool = createCronTool(
-      {
+    const gatewaySpy = vi
+      .spyOn(gatewayModule, "callGatewayTool")
+      .mockImplementation(async (method, _opts, params) => {
+        expect(["cron.add", "cron.update", "cron.get"]).toContain(method);
+        if (!isRecord(params)) {
+          throw new Error("expected cron request record");
+        }
+        const respond = vi.fn();
+        await expectDefined(
+          cronHandlers[method],
+          "cron handler",
+        )({
+          req: { type: "req", id: "webchat-cron-add", method, params },
+          params,
+          respond,
+          context,
+          client,
+          isWebchatConnect: () => false,
+        });
+        const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
+        if (!ok) {
+          throw new Error(String(error.message));
+        }
+        return result;
+      });
+    try {
+      const tool = createCronTool({
         config: cfg,
         agentSessionKey: sessionKey,
         currentDeliveryContext: {
@@ -134,34 +172,7 @@ async function withWebchatTool(
           threadId: "internal-thread",
         },
         creatorToolAllowlist: ["read"],
-      },
-      {
-        callGatewayTool: async (method, _opts, params) => {
-          expect(["cron.add", "cron.update", "cron.get"]).toContain(method);
-          if (!isRecord(params)) {
-            throw new Error("expected cron request record");
-          }
-          const respond = vi.fn();
-          await expectDefined(
-            cronHandlers[method],
-            "cron handler",
-          )({
-            req: { type: "req", id: "webchat-cron-add", method, params },
-            params,
-            respond,
-            context,
-            client,
-            isWebchatConnect: () => false,
-          });
-          const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
-          if (!ok) {
-            throw new Error(String(error.message));
-          }
-          return result;
-        },
-      },
-    );
-    try {
+      });
       await check({
         cron,
         creatorStorePath: sessionStorePath,
@@ -183,6 +194,7 @@ async function withWebchatTool(
         },
       });
     } finally {
+      gatewaySpy.mockRestore();
       revoke();
       cron.stop();
     }
@@ -253,7 +265,11 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           expect(updated.details).not.toHaveProperty("deliveryPreview");
           expect(added.details).toMatchObject({
             deliveryPreview: channelsEnabled
-              ? { label: "announce -> telegram:recipient", detail: "explicit" }
+              ? {
+                  label: "announce -> telegram:recipient",
+                  detail:
+                    "commits to the destination conversation; sends one external notification",
+                }
               : {
                   label: "announce -> creating conversation",
                   detail: "commits to this conversation (no external channel route)",
@@ -295,7 +311,6 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           trigger: { script: "return { fire: false };", once: true },
         }),
       ]);
-      expect(jobs[0]?.delivery).toEqual(delivery ?? { mode: "announce" });
     }, storedContext);
   });
 

@@ -145,9 +145,7 @@ export class CodexGeneratedMediaProjection {
     try {
       await materialization;
     } finally {
-      if (this.pendingMaterializationsByItemId.get(params.itemId) === materialization) {
-        this.pendingMaterializationsByItemId.delete(params.itemId);
-      }
+      this.pendingMaterializationsByItemId.delete(params.itemId);
     }
   }
 

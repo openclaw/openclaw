@@ -5,7 +5,7 @@ import {
   type AgentMessage,
   type EmbeddedRunAttemptParamsV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { applyCodexTranscriptTaint } from "./transcript-mirror-attestation.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -86,7 +86,7 @@ export class CodexTranscriptCheckpoint {
         return message
           ? [
               projectAgentHarnessTranscriptMessageForDisplay({
-                hidden: this.params.trigger === "memory",
+                hidden: this.params.privateCompletion === true || this.params.trigger === "memory",
                 inputProvenance: this.params.inputProvenance,
                 message: applyCodexTranscriptTaint(message, taint),
               }),
@@ -95,7 +95,7 @@ export class CodexTranscriptCheckpoint {
       });
       try {
         await codexTranscriptMirrorRuntime.mirror({
-          assertWriteCurrent: createNativeSessionBindingAuthority([], () => {
+          assertWriteCurrent: createNativeSessionBindingScope(() => {
             if (this.state === "abandoned") {
               throw new Error("Codex transcript checkpoint was retired before write");
             }

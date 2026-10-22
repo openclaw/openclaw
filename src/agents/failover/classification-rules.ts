@@ -2,6 +2,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { isTransientNetworkError } from "../../infra/retryable-network-errors.js";
 import {
   extractLeadingHttpStatus,
+  extractProviderWrappedHttpStatus,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
 import {
@@ -10,11 +11,6 @@ import {
   isRateLimitErrorMessage,
 } from "./message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./signal.js";
-const FAILOVER_TIMEOUT_ERROR_CODES = new Set([
-  "EHOSTDOWN",
-  "ENETRESET",
-  "ERR_STREAM_PREMATURE_CLOSE",
-]);
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
 const PRESERVED_NOT_FOUND_OR_GONE_REASONS = new Set<FailoverReason | null>([
@@ -27,12 +23,13 @@ function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();
 }
 export function inferSignalStatus(signal: FailoverSignal): number | undefined {
-  if (typeof signal.status === "number" && Number.isFinite(signal.status)) {
+  if (Number.isFinite(signal.status)) {
     return signal.status;
   }
-  return extractLeadingHttpStatus(stripErrorPrefix(signal.message?.trim() ?? ""))?.code;
+  const message = stripErrorPrefix(signal.message?.trim() ?? "");
+  return extractLeadingHttpStatus(message)?.code ?? extractProviderWrappedHttpStatus(message)?.code;
 }
-function isExplicitNoBodyHttpMessage(raw: string | undefined, status?: number): boolean {
+function isExplicitNoBodyHttpMessage(raw: string | undefined, status: number): boolean {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return false;
@@ -40,7 +37,7 @@ function isExplicitNoBodyHttpMessage(raw: string | undefined, status?: number): 
   const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
   const leadingStatus = extractLeadingHttpStatus(candidate);
   if (leadingStatus) {
-    if (typeof status === "number" && leadingStatus.code !== status) {
+    if (leadingStatus.code !== status) {
       return false;
     }
     return NO_BODY_HTTP_WRAPPER_RE.test(leadingStatus.rest);
@@ -193,7 +190,7 @@ export function classifyFailoverClassificationFromHttpStatus(
   opts?: { preserveProviderSignalClassification?: boolean },
 ): FailoverClassification | null {
   const messageReason = failoverReasonFromClassification(messageClassification);
-  if (typeof status !== "number" || !Number.isFinite(status)) {
+  if (status === undefined || !Number.isFinite(status)) {
     return null;
   }
   if (status === 402) {
@@ -306,53 +303,47 @@ export function classifyFailoverClassificationFromHttpStatus(
 }
 // Only cross-provider structured codes classify in core; provider-native
 // mappings belong to provider hooks.
+const FAILOVER_CODE_REASONS = new Map<string, FailoverReason>([
+  ["DEGENERATE_OUTPUT", "server_error"],
+  ["UNKNOWN_PARAMETER", "format"],
+  ["RESOURCE_EXHAUSTED", "rate_limit"],
+  ["RATE_LIMIT", "rate_limit"],
+  ["RATE_LIMITED", "rate_limit"],
+  ["RATE_LIMIT_EXCEEDED", "rate_limit"],
+  ["TOO_MANY_REQUESTS", "rate_limit"],
+  ["THROTTLED", "rate_limit"],
+  ["THROTTLING", "rate_limit"],
+  ["THROTTLINGEXCEPTION", "rate_limit"],
+  ["THROTTLING_EXCEPTION", "rate_limit"],
+  ["DEACTIVATED_WORKSPACE", "auth_permanent"],
+  ["SELECTED_AUTH_PROFILE_UNAVAILABLE", "auth"],
+  ["OVERLOADED", "overloaded"],
+  ["OVERLOADED_ERROR", "overloaded"],
+  ["EHOSTDOWN", "timeout"],
+  ["ENETRESET", "timeout"],
+  ["ERR_STREAM_PREMATURE_CLOSE", "timeout"],
+]);
 export function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason | null {
   const normalized = raw?.trim().toUpperCase();
   if (!normalized) {
     return null;
   }
-  switch (normalized) {
-    case "UNKNOWN_PARAMETER":
-      return "format";
-    case "RESOURCE_EXHAUSTED":
-    case "RATE_LIMIT":
-    case "RATE_LIMITED":
-    case "RATE_LIMIT_EXCEEDED":
-    case "TOO_MANY_REQUESTS":
-    case "THROTTLED":
-    case "THROTTLING":
-    case "THROTTLINGEXCEPTION":
-    case "THROTTLING_EXCEPTION":
-      return "rate_limit";
-    case "DEACTIVATED_WORKSPACE":
-      return "auth_permanent";
-    case "SELECTED_AUTH_PROFILE_UNAVAILABLE":
-      return "auth";
-    case "OVERLOADED":
-    case "OVERLOADED_ERROR":
-      return "overloaded";
-    default:
-      return FAILOVER_TIMEOUT_ERROR_CODES.has(normalized) ||
-        isTransientNetworkError({ code: normalized })
-        ? "timeout"
-        : null;
-  }
+  return (
+    FAILOVER_CODE_REASONS.get(normalized) ??
+    (isTransientNetworkError({ code: normalized }) ? "timeout" : null)
+  );
 }
+const FAILOVER_ERROR_TYPE_REASONS = new Map<string, FailoverReason>([
+  ["invalid_request_error", "format"],
+  ["server_error", "server_error"],
+  ["upstream_error", "server_error"],
+  ["overloaded_error", "overloaded"],
+]);
 export function classifyCoreFailoverReasonFromErrorType(
   raw: string | undefined,
 ): FailoverReason | null {
   const normalized = normalizeOptionalLowercaseString(raw);
-  switch (normalized) {
-    case "invalid_request_error":
-      return "format";
-    case "server_error":
-    case "upstream_error":
-      return "server_error";
-    case "overloaded_error":
-      return "overloaded";
-    default:
-      return null;
-  }
+  return normalized ? (FAILOVER_ERROR_TYPE_REASONS.get(normalized) ?? null) : null;
 }
 function hasStructuredBilling429Signal(raw: string): boolean {
   if (hasBillingApiErrorType(raw)) {

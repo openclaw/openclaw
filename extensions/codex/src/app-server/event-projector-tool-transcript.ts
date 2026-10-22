@@ -17,6 +17,7 @@ import {
   type CodeModeNativeCall,
 } from "./event-projector-code-mode.js";
 import {
+  auditNativeToolTerminalStatus,
   isMutatingNativeToolItem,
   isNonSuccessItemStatus,
   isProjectedNativeToolItem,
@@ -51,7 +52,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
+import { asCodexToolArguments } from "./tool-progress-normalization.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import type { CodexTranscriptCheckpointEntry } from "./transcript-checkpoint.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
@@ -59,7 +60,7 @@ import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 const MISSING_TOOL_RESULT_ERROR =
   "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.";
 const NATIVE_PATCH_REJECTION_RE =
-  /^\s*patch rejected:\s*writing outside of the project;\s*rejected by user approval settings\s*$/iu;
+  /^\s*(?:patch rejected:\s*writing outside of the project;\s*rejected by user approval settings|apply_patch verification failed:\s*\S[\s\S]*)\s*$/iu;
 const NATIVE_COMMAND_WORKSPACE_REJECTION_RE =
   /^\s*command rejected:\s*writing outside of the project;\s*rejected by user approval settings\s*$/iu;
 const CODE_MODE_RESULT_RE =
@@ -164,7 +165,7 @@ export class CodexToolTranscriptProjection {
     this.recordToolCall({
       id: params.callId,
       name: params.tool,
-      arguments: sanitizeCodexToolArguments(params.arguments),
+      arguments: asCodexToolArguments(params.arguments),
     });
   }
 
@@ -305,7 +306,6 @@ export class CodexToolTranscriptProjection {
         }
       }
       if (args) {
-        this.pendingRawOutputIds.add(callId);
         this.recordToolCall({ id: callId, name: "apply_patch", arguments: args });
       }
       return;
@@ -331,13 +331,14 @@ export class CodexToolTranscriptProjection {
     const codeModeCall = this.codeModeNativeCallsByCallId.get(callId);
     this.codeModeNativeCallsByCallId.delete(callId);
     if (codeModeCall && !codeModeCall.nativeItemObserved) {
+      const commandExecuted =
+        execution?.[1]?.toLowerCase() === "completed" && codeModeCall.call.name === "bash";
       const failed =
         execution?.[1]?.toLowerCase() === "failed" ||
-        (execution?.[1]?.toLowerCase() === "completed" &&
-          codeModeCall.call.name === "bash" &&
-          codeModeCommandFailed(execution[2] ?? ""));
+        (commandExecuted && codeModeCommandFailed(execution[2] ?? ""));
       if (failed) {
         const failure = execution?.[2]?.replace(/^Script error:\s*/iu, "").trim() || text;
+        this.progress.recordToolFailure(callId, codeModeCall.call.name, commandExecuted);
         this.recordToolCall({
           id: callId,
           ...codeModeCall.call,
@@ -378,6 +379,9 @@ export class CodexToolTranscriptProjection {
         }
         const commandWorkspaceRejected =
           isCommandFallback && NATIVE_COMMAND_WORKSPACE_REJECTION_RE.test(text);
+        if (commandWorkspaceRejected) {
+          this.progress.recordToolFailure(callId, name);
+        }
         // Calls can fail before a native item exists. Keep the response under
         // its own call ID, never under a nested code-mode process ID.
         this.recordToolCall({ ...rawCall, name, arguments: args });
@@ -394,6 +398,7 @@ export class CodexToolTranscriptProjection {
       ) {
         // Only the upstream's explicit rejection can settle without a native
         // FileChange status; unknown outcomes must remain failed-closed.
+        this.progress.recordToolFailure(callId, "apply_patch");
         this.recordToolResult({
           id: callId,
           name: "apply_patch",
@@ -494,14 +499,17 @@ export class CodexToolTranscriptProjection {
     const output =
       this.progress.approvalTimeoutExplanation(params.item.id, params.status) ??
       itemOutputText(params.item, this.progress.outputTextByItem);
+    const status =
+      params.status === "running" ? "running" : auditNativeToolTerminalStatus(params.item);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
       threadId: this.threadId,
       turnId: this.turnId,
       itemId: params.item.id,
       toolCallId: params.item.id,
       name: params.name,
-      status: params.status,
+      status,
       isError: isNonSuccessItemStatus(params.status),
+      ...(status === "running" || status === "unknown" ? {} : { success: status === "completed" }),
       ...(toolResult ? { result: toolResult } : {}),
       ...(output ? { output } : {}),
     });
@@ -585,6 +593,7 @@ export class CodexToolTranscriptProjection {
         name,
         status: processId ? "running" : "failed",
         isError: !processId,
+        ...(!processId ? { success: false } : {}),
         result: processId
           ? { status: "running", processId }
           : { status: "failed", reason: "missing_tool_result" },

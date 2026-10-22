@@ -7,6 +7,7 @@ import {
 } from "../../agent-steering-queue.js";
 import { captureGatewayToolCallerAssertion } from "../../tools/gateway-caller-context.js";
 import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
+import { resolveRecordedRequester } from "./subagent-child-owner-match.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
 import {
@@ -16,7 +17,6 @@ import {
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import {
-  countActiveRunsForSessionFromRuns,
   listSwarmRunsForGroupFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
@@ -25,6 +25,7 @@ import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-requester-yield.js";
 import { claimSubagentYieldInRuns } from "./subagent-registry-run-pause.js";
 import {
+  countActiveSubagentRunsForSession,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   withSubagentRunReadSnapshot,
@@ -48,7 +49,6 @@ export function createSubagentRegistryPublicApi(config: {
   async function leasePendingAgentSteeringItems(params: {
     requesterSessionKey: string;
     leaseId: string;
-    now?: number;
   }) {
     const context = captureOpenClawStateWorkerContext();
     await restoreOnce(context);
@@ -89,7 +89,6 @@ export function createSubagentRegistryPublicApi(config: {
   function ackPendingAgentSteeringItems(params: {
     runIds: readonly string[];
     leaseId: string;
-    now?: number;
   }): Promise<number> {
     return mutateSubagentRuns(
       params.runIds,
@@ -208,7 +207,6 @@ export function createSubagentRegistryPublicApi(config: {
     if (!entry?.collect || entry.collectorCompletion) {
       throw new Error("collector run is unavailable");
     }
-    const next = structuredClone(state);
     await mutateSubagentRuns(
       [entry.runId],
       (rows) => {
@@ -223,8 +221,8 @@ export function createSubagentRegistryPublicApi(config: {
         if (
           current.structuredOutput?.structured !== undefined ||
           (current.structuredOutput?.invalidAttempts ?? 0) >= 2 ||
-          (next.structured === undefined &&
-            next.invalidAttempts !== (current.structuredOutput?.invalidAttempts ?? 0) + 1)
+          (state.structured === undefined &&
+            state.invalidAttempts !== (current.structuredOutput?.invalidAttempts ?? 0) + 1)
         ) {
           throw new SubagentRegistryMutationRejectedError(
             "collector output changed before publication",
@@ -232,7 +230,7 @@ export function createSubagentRegistryPublicApi(config: {
         }
         return {
           value: undefined,
-          postimages: new Map([[current.runId, { ...current, structuredOutput: next }]]),
+          postimages: new Map([[current.runId, { ...current, structuredOutput: state }]]),
         };
       },
       { runs, assertCurrent },
@@ -273,24 +271,13 @@ export function createSubagentRegistryPublicApi(config: {
               entry.swarmLaunchReplayKey === key &&
               (!requesterKey ||
                 (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey) &&
-              (!requesterAgentId || entry.requesterAgentId === requesterAgentId),
+              (!requesterAgentId || resolveRecordedRequester(entry) === requesterAgentId),
           )
           .map((entry) => entry.runId),
         sessionKeys: [],
       }),
       (_selection, selected) => selected.values().next().value,
       "all",
-    );
-  }
-
-  function countActiveRunsForSession(
-    requesterSessionKey: string,
-    options?: { collect?: boolean; requesterAgentId?: string },
-  ): number {
-    return countActiveRunsForSessionFromRuns(
-      new Map([...getSubagentSessionListRunsSnapshotForRead(runs), ...runs]),
-      requesterSessionKey,
-      options,
     );
   }
 
@@ -386,7 +373,7 @@ export function createSubagentRegistryPublicApi(config: {
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
     getSwarmRunByLaunchReplayKey,
-    countActiveRunsForSession,
+    countActiveRunsForSession: countActiveSubagentRunsForSession.bind(null, runs),
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
     listUnsettledRequesterChildren,

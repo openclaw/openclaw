@@ -1,11 +1,8 @@
-import {
-  createSendCfgThreadingRuntime,
-  expectProvidedCfgSkipsRuntimeLoad,
-} from "openclaw/plugin-sdk/channel-test-helpers";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
-  loadConfig: vi.fn(),
+  currentConfig: vi.fn(() => ({})),
   resolveMarkdownTableMode: vi.fn(() => "preserve"),
   convertMarkdownTables: vi.fn((text: string) => text),
   record: vi.fn(),
@@ -18,23 +15,38 @@ const hoisted = vi.hoisted(() => ({
   mockFetchGuard: vi.fn(),
 }));
 
-vi.mock("./send.runtime.js", () => {
-  return {
-    convertMarkdownTables: hoisted.convertMarkdownTables,
-    fetchWithSsrFGuard: hoisted.mockFetchGuard,
-    generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
-    getOptionalNextcloudTalkRuntime: () => createSendCfgThreadingRuntime(hoisted),
-    requireRuntimeConfig: (cfg: unknown, context: string) => {
-      if (cfg) {
-        return cfg;
-      }
-      throw new Error(`${context} requires a resolved runtime config`);
-    },
-    resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
-    resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
-    ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
-  };
-});
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>()),
+  resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
+}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
+  ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
+}));
+vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>()),
+  convertMarkdownTables: hoisted.convertMarkdownTables,
+}));
+vi.mock("../runtime-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime-api.js")>()),
+  fetchWithSsrFGuard: hoisted.mockFetchGuard,
+}));
+vi.mock("./accounts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./accounts.js")>()),
+  resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
+}));
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getOptionalNextcloudTalkRuntime: () =>
+    createPluginRuntimeMock({
+      config: { current: hoisted.currentConfig },
+      channel: { activity: { record: hoisted.record } },
+    }),
+}));
+vi.mock("./signature.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./signature.js")>()),
+  generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
+}));
 
 const { sendMessageNextcloudTalk, sendReactionNextcloudTalk } = await import("./send.js");
 
@@ -62,7 +74,7 @@ describe("nextcloud-talk send cfg threading", () => {
       const response = await globalThis.fetch(p.url, p.init);
       return { response, release: async () => {}, finalUrl: p.url };
     });
-    hoisted.loadConfig.mockReset();
+    hoisted.currentConfig.mockReset();
     hoisted.resolveMarkdownTableMode.mockClear();
     hoisted.convertMarkdownTables.mockClear();
     hoisted.record.mockReset();
@@ -77,15 +89,6 @@ describe("nextcloud-talk send cfg threading", () => {
     hoisted.mockFetchGuard.mockReset();
     vi.unstubAllGlobals();
   });
-
-  function useUnavailableBotSecretAccount() {
-    hoisted.resolveNextcloudTalkAccount.mockReturnValue({
-      ...defaultAccount,
-      secret: "",
-      tokenStatus: "configured_unavailable",
-    });
-    return { source: "provided" } as const;
-  }
 
   it.each([
     ["configured_unavailable", /bot secret.*configured.*unavailable.*"work".*check/i],
@@ -113,21 +116,20 @@ describe("nextcloud-talk send cfg threading", () => {
     },
   );
 
-  it("uses an explicit per-call credential when the configured account SecretRef is unavailable", async () => {
-    const cfg = useUnavailableBotSecretAccount();
+  it("signs the unchanged authored text with the configured account credential", async () => {
+    const cfg = { source: "provided" } as const;
     const text = "Example:\n⚠️ 🛠️ `search repos (agent)` failed";
     mockNextcloudMessageResponse(456, 1_706_000_000);
 
     await expect(
       sendMessageNextcloudTalk("room:abc123", text, {
         cfg,
-        secret: "per-call-secret",
       }),
     ).resolves.toMatchObject({ messageId: "456" });
 
     expect(hoisted.generateNextcloudTalkSignature).toHaveBeenCalledWith({
       body: text,
-      secret: "per-call-secret",
+      secret: "secret-value",
     });
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ message: text }));
@@ -149,14 +151,13 @@ describe("nextcloud-talk send cfg threading", () => {
     const cfg = { source: "provided" } as const;
     fetchMock.mockResolvedValueOnce(new Response("", { status: 201 }));
 
-    const result = await sendReactionNextcloudTalk("room:ops", "m-1", "👍", {
+    await sendReactionNextcloudTalk("room:ops", "m-1", "👍", {
       cfg,
       accountId: "work",
     });
 
-    expectProvidedCfgSkipsRuntimeLoad({
-      loadConfig: hoisted.loadConfig,
-      resolveAccount: hoisted.resolveNextcloudTalkAccount,
+    expect(hoisted.currentConfig).not.toHaveBeenCalled();
+    expect(hoisted.resolveNextcloudTalkAccount).toHaveBeenCalledWith({
       cfg,
       accountId: "work",
     });
@@ -177,6 +178,5 @@ describe("nextcloud-talk send cfg threading", () => {
         body: JSON.stringify({ reaction: "👍" }),
       },
     );
-    expect(result).toEqual({ ok: true });
   });
 });

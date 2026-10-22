@@ -1,9 +1,8 @@
 .context-usage__popover,
 .chat-controls__inline-select-menu,
-.agent-chat__attach-menu::part(menu),
-.agent-chat__capability-menu::part(menu),
-.chat-controls__permission-picker::part(menu),
-.chat-talk-input-picker::part(menu) {
+.agent-chat__capability-menu-panel,
+.chat-controls__permission-menu,
+.chat-talk-input-picker__menu {
   border: 1px solid var(--chat-composer-popover-border, var(--overlay-border));
   border-radius: var(--chat-composer-popover-radius, var(--radius-lg));
   background: var(--chat-composer-popover-background, var(--bg-elevated));
@@ -11,16 +10,41 @@
   corner-shape: superellipse(1.5);
 }
 
-.chat-controls__inline-select[open] > wa-popup::part(popup) {
-  animation: chat-composer-picker-in var(--wa-transition-fast) ease;
+/* Retire entry animation before the overlay waits for closing presentation. */
+.chat-controls__inline-select[open] > .chat-picker-overlay:where(:not([data-phase="closing"])) {
+  animation: chat-composer-picker-in var(--control-ui-transition-fast) ease;
 }
 
-.chat-controls__inline-select[open] > wa-popup[data-current-placement^="top"]::part(popup) {
+.chat-controls__inline-select[open] > .chat-picker-overlay[data-placement^="top"] {
   transform-origin: bottom;
 }
 
-.chat-controls__inline-select[open] > wa-popup[data-current-placement^="bottom"]::part(popup) {
-  transform-origin: top;
+.oc-overlay.chat-picker-overlay {
+  /* Fit above the composer before flipping into the space below its controls. */
+  max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));
+  position-try-fallbacks:
+    --chat-picker-fit,
+    --chat-picker-fit flip-inline,
+    --chat-picker-fit flip-block,
+    --chat-picker-fit flip-block flip-inline,
+    --chat-picker-fill,
+    --chat-picker-fill flip-inline,
+    --chat-picker-fill flip-block,
+    --chat-picker-fill flip-block flip-inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+}
+
+@position-try --chat-picker-fit {
+  /* A long catalog must leave room for search and choices before this side wins. */
+  max-height: min(var(--oc-overlay-max-height, 420px), max(200px, calc(100% - 16px)));
+}
+
+/* Only accept a smaller panel when neither side can provide a usable catalog. */
+@position-try --chat-picker-fill {
+  max-height: min(var(--oc-overlay-max-height, 420px), calc(100% - 16px));
 }
 
 @keyframes chat-composer-picker-in {
@@ -102,6 +126,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .chat-controls__inline-select[open] > .chat-picker-overlay {
+    animation: none;
+  }
+
   .agent-chat__input--dictating::after {
     --chat-dictation-edge-angle: 238deg;
     animation: none;
@@ -137,15 +165,19 @@
   color: color-mix(in srgb, var(--danger) 78%, var(--text));
 }
 
-.agent-chat__composer-status-band {
+.agent-chat__composer-status-band,
+.agent-chat__composer-error {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
   min-height: 44px;
-  padding: 8px 14px;
   font-size: var(--control-ui-text-sm);
   line-height: 1.35;
+}
+
+.agent-chat__composer-status-band {
+  width: 100%;
+  padding: 8px 14px;
   white-space: nowrap;
 }
 
@@ -163,7 +195,9 @@
 
 .agent-chat__composer-status-text,
 .chat-controls__auth-meta-label,
-.chat-controls__model-option-name {
+.chat-controls__model-option-name,
+.chat-talk-input-picker__label,
+.chat-controls__inline-select-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -235,19 +269,28 @@
 
 .agent-chat__attach-menu-option,
 .agent-chat__capability-menu-item,
-.chat-controls__permission-option {
+.chat-controls__permission-option,
+.chat-controls__inline-select-option {
   display: flex;
   align-items: center;
   gap: var(--chat-composer-menu-row-gap);
   width: 100%;
+}
+
+.agent-chat__attach-menu-option,
+.agent-chat__capability-menu-item,
+.chat-controls__permission-option,
+.chat-controls__inline-select-option,
+.chat-talk-input-picker__item {
   min-height: var(--chat-composer-menu-row-height);
   padding: var(--chat-composer-menu-row-padding);
   border-radius: var(--chat-composer-menu-row-radius);
-  font-size: 12px;
 }
 
-.agent-chat__attach-menu-option [slot="icon"] {
-  color: var(--muted);
+.agent-chat__attach-menu-option,
+.agent-chat__capability-menu-item,
+.chat-controls__permission-option {
+  font-size: 12px;
 }
 
 .agent-chat__attach-menu-option svg,
@@ -262,10 +305,8 @@
   stroke-width: 1.5px;
 }
 
-.agent-chat__capability-menu::part(menu) {
-  /* Web Awesome owns this menu's important max-height rule. Keep capability
-     views compact while respecting the composer's live viewport budget. */
-  --auto-size-available-height: min(
+.agent-chat__capability-menu-panel {
+  --oc-overlay-max-height: min(
     420px,
     50dvh,
     var(--chat-composer-popover-max-height, calc(100dvh - 116px))
@@ -279,7 +320,7 @@
   scrollbar-gutter: stable;
 }
 
-.agent-chat__capability-menu[data-view="root"]::part(menu) {
+.agent-chat__capability-menu[data-view="root"] .agent-chat__capability-menu-panel {
   /* Wide enough that "Web search" plus its trailing switch stays one line. */
   width: 208px;
   min-width: 208px;
@@ -288,7 +329,7 @@
   scrollbar-gutter: auto;
 }
 
-.agent-chat__capability-menu-item[value="back"] {
+.agent-chat__capability-menu-item[data-value="back"] {
   position: sticky;
   top: calc(-1 * var(--menu-padding));
   z-index: 1;
@@ -296,14 +337,11 @@
 }
 
 .agent-chat__capability-menu-item {
-  --wa-color-text-normal: var(--text);
-
   flex-shrink: 0;
 }
 
 .agent-chat__attach-menu-option,
-.agent-chat__capability-menu-item,
-.agent-chat__capability-menu-state {
+.agent-chat__capability-menu-item {
   color: var(--text);
 }
 
@@ -346,17 +384,16 @@
   color: var(--muted);
 }
 
-/* Row voice shared with the permission picker: 13/600 strong titles, muted 11px
-   notes, and a 16px icon part so the icon→label distance is the row gap alone
-   (wa-dropdown-item's default icon part is 24px wide, which read as a wider,
-   misaligned gap next to the custom-markup pickers). */
-.agent-chat__attach-menu-option::part(icon),
-.agent-chat__capability-menu-item::part(icon) {
+/* Keep native menu rows aligned with the permission picker. */
+:is(.agent-chat__attach-menu-option, .agent-chat__capability-menu-item) > .oc-menu-item__icon {
   width: var(--chat-composer-menu-icon);
+  margin-inline-end: 0;
 }
 
-.agent-chat__attach-menu-option::part(label),
-.agent-chat__capability-menu-item::part(label) {
+.agent-chat__attach-menu-option > .oc-menu-item__label,
+.agent-chat__capability-menu-item > .oc-menu-item__label,
+.chat-talk-input-picker__label,
+.chat-controls__permission-option-title {
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 600;
@@ -370,8 +407,12 @@
   gap: 2px;
 }
 
+.agent-chat__attach-menu-option > .oc-menu-item__icon,
 .agent-chat__capability-menu-note,
-.agent-chat__capability-menu-state {
+.agent-chat__capability-menu-state,
+.chat-talk-input-picker__option-icon,
+.chat-controls__permission-option-description,
+.chat-controls__model-search::placeholder {
   color: var(--muted);
 }
 
@@ -381,7 +422,11 @@
   line-height: 1.25;
 }
 
-.agent-chat__capability-menu-item[value^="library-"] .agent-chat__capability-menu-label > span {
+.agent-chat__capability-menu-item[data-value^="library-"] .agent-chat__capability-menu-label > span,
+.chat-browser-annotation-card__meta > span,
+.chat-controls__model-option-title,
+.chat-controls__model-option-meta,
+.chat-controls__model-option-auth-warning > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -397,7 +442,7 @@
   pointer-events: none;
 }
 
-.agent-chat__capability-menu-toggle[type="checkbox"]::part(checkmark) {
+.agent-chat__capability-menu-toggle--switch > .oc-menu-item__check {
   display: none;
 }
 
@@ -456,13 +501,7 @@
 }
 
 .agent-chat__composer-error {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
   padding: 8px 10px 8px 14px;
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.35;
   overflow-wrap: anywhere;
 }
 
@@ -537,7 +576,8 @@
   font-size: 12px;
 }
 
-.agent-chat__dictation-phase {
+.agent-chat__dictation-phase,
+.chat-controls__account-selection {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -557,7 +597,6 @@
     );
     background-size: 200% 100%;
     background-repeat: repeat-x;
-    -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
     -webkit-text-fill-color: transparent;
@@ -648,7 +687,8 @@
 }
 
 .agent-chat__capability-menu-clear-overrides svg,
-.chat-talk-input-picker__settings svg {
+.chat-talk-input-picker__settings svg,
+.chat-attachment-remove svg {
   width: 13px;
   height: 13px;
 }
@@ -727,17 +767,22 @@
    opens the input-device list. Foreground follows the composer's own secondary
    step, with a plain muted fallback for the composer-replacement banner, which
    renders these controls outside the composer surface. */
-.chat-talk-input-picker__trigger {
+.chat-talk-input-picker__trigger,
+.chat-controls__model-refresh-details,
+.chat-controls__provider-settings {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.chat-talk-input-picker__trigger {
   width: 0;
   min-width: 0;
   height: var(--chat-composer-control-size);
-  padding: 0;
-  border: 0;
   border-radius: var(--radius-full);
-  background: transparent;
   color: var(--chat-composer-secondary, var(--muted));
   opacity: 0;
   overflow: hidden;
@@ -813,7 +858,10 @@
   }
 }
 
-.chat-talk-input-picker[open] .chat-talk-input-picker__trigger {
+.chat-talk-input-picker[open] .chat-talk-input-picker__trigger,
+.chat-talk-input-picker__settings:hover,
+.chat-controls__permission-learn-more:hover,
+.chat-controls__speed-option:hover:not(:disabled) {
   color: var(--text-strong);
 }
 
@@ -856,30 +904,29 @@
   transform: rotate(180deg);
 }
 
-.chat-talk-input-picker::part(menu) {
+.chat-talk-input-picker__menu {
   width: min(300px, calc(100vw - 24px));
   padding: 8px;
 }
 
 .chat-talk-input-picker__item {
-  min-height: var(--chat-composer-menu-row-height);
-  padding: var(--chat-composer-menu-row-padding);
-  border-radius: var(--chat-composer-menu-row-radius);
   color: var(--text);
   font-size: 13px;
 }
 
-.chat-talk-input-picker__item[aria-checked="true"] {
+.chat-talk-input-picker__item[aria-checked="true"],
+.chat-controls__permission-option--selected {
   background: var(--chat-composer-menu-selected);
 }
 
-.chat-talk-input-picker__option-icon {
+.chat-talk-input-picker__option-icon,
+.chat-talk-input-picker__check,
+.chat-controls__inline-select-check {
   display: inline-flex;
   width: var(--chat-composer-menu-icon);
   height: var(--chat-composer-menu-icon);
   align-items: center;
   justify-content: center;
-  color: var(--muted);
 }
 
 .chat-talk-input-picker__option-icon svg {
@@ -889,29 +936,14 @@
 }
 
 .chat-talk-input-picker__label {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Selected-state check shares the mic picker's box: a 16px slot centering a
-   14px accent glyph, so checks land on the same rail as 16px row icons. */
-.chat-talk-input-picker__check,
-.chat-controls__inline-select-check {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--chat-composer-menu-icon);
-  height: var(--chat-composer-menu-icon);
-  color: var(--accent);
-}
-
 .chat-talk-input-picker__check svg,
-.chat-controls__inline-select-check svg {
+.chat-controls__inline-select-check svg,
+.chat-controls__model-search-wrap svg,
+.chat-controls__model-catalog-state-label svg,
+.chat-controls__model-catalog-action svg {
   width: 14px;
   height: 14px;
 }
@@ -935,7 +967,7 @@
 
 /* Sole content of the popover when no input can be selected, so it carries the
    row's own weight instead of reading as a footnote under the heading. */
-.chat-talk-input-picker__notice {
+.chat-talk-input-picker__notice:disabled {
   padding: 0;
   opacity: 1;
   color: inherit;
@@ -961,17 +993,21 @@
   padding-top: 8px;
 }
 
-.chat-talk-input-picker__capability {
+.chat-talk-input-picker__capability,
+.chat-talk-input-picker__preference {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
   margin-top: 5px;
-  padding: 8px 9px 3px;
   border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  line-height: 1.35;
+}
+
+.chat-talk-input-picker__capability {
+  gap: var(--space-3);
+  padding: 8px 9px 3px;
   color: var(--muted);
   font-size: 11px;
-  line-height: 1.35;
 }
 
 .chat-talk-input-picker__capability + .chat-talk-input-picker__capability {
@@ -1026,24 +1062,15 @@
   cursor: var(--cursor-action);
 }
 
-.chat-talk-input-picker__settings:hover {
-  color: var(--text-strong);
-}
-
 .chat-talk-input-picker__preference {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 5px;
+  gap: var(--space-4);
   padding: 11px 9px 5px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
   color: var(--text);
   font-size: 12px;
-  line-height: 1.35;
 }
 
-.chat-talk-input-picker__preference::part(checkmark) {
+.chat-talk-input-picker__preference > .oc-menu-item__check,
+.chat-talk-input-picker__item > .oc-menu-item__check {
   display: none;
 }
 
@@ -1190,6 +1217,11 @@
     );
     max-height: min(440px, var(--auto-size-available-height, calc(100dvh - 116px)));
   }
+
+  .agent-chat__input .chat-controls__inline-select > .chat-picker-overlay {
+    position-area: top span-all;
+    justify-self: center;
+  }
 }
 
 @media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -1213,7 +1245,6 @@
   .agent-chat__input:has(.chat-controls__inline-select[open]),
   .agent-chat__input:has(.context-usage details[open]) {
     backdrop-filter: none;
-    -webkit-backdrop-filter: none;
   }
 }
 
@@ -1406,7 +1437,7 @@
     rgb(0 0 0 / 12%) calc(100% - 12px), transparent calc(100% - 4px);
 
   display: flex;
-  gap: calc(var(--chat-composer-editor-inset-block) * 3);
+  gap: calc(var(--chat-attachment-inset-block) * 3);
   flex-wrap: nowrap;
   flex-shrink: 0;
   /* Keep horizontal clipping inside the composer. Reserve remove-target and
@@ -1414,8 +1445,8 @@
   width: 100%;
   max-width: 100%;
   margin-block-start: calc(-1 * var(--chat-attachment-hit-slop));
-  padding-block: calc(var(--chat-composer-editor-inset-block) * 2 + var(--chat-attachment-hit-slop))
-    var(--chat-composer-editor-inset-block);
+  padding-block: calc(var(--chat-attachment-inset-block) * 2 + var(--chat-attachment-hit-slop))
+    var(--chat-attachment-inset-block);
   padding-inline: var(--chat-composer-editor-inset-inline)
     calc(var(--chat-composer-editor-inset-inline) + var(--chat-attachment-hit-slop));
   overflow-x: auto;
@@ -1521,14 +1552,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   }
 }
 
-.chat-attachment-error {
-  display: grid;
-  width: 100%;
-  height: 100%;
-  place-items: center;
-  border-radius: inherit;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .chat-attachment-loading,
   .chat-attachment-loading > span {
@@ -1596,15 +1619,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   line-height: 1.1;
 }
 
-.chat-browser-annotation-card__meta > span,
-.chat-controls__model-option-title,
-.chat-controls__model-option-meta,
-.chat-controls__model-option-auth-warning > span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .chat-browser-annotation-card__remove:not(:disabled) {
   cursor: var(--cursor-action);
 }
@@ -1614,28 +1628,32 @@ html[dir="rtl"] .chat-attachment-loading > span {
   outline-offset: -3px;
 }
 
-.chat-attachment-thumb img {
+.chat-attachment-thumb img,
+.chat-attachment-image-button.chat-attachment-image-button {
   width: 100%;
   height: 100%;
+}
+
+.chat-attachment-thumb img,
+.chat-attachment-image-button.chat-attachment-image-button,
+.chat-attachment-image-button.chat-attachment-image-button::after,
+.chat-attachment-file {
   border-radius: calc(var(--chat-attachment-radius) - 1px);
   corner-shape: superellipse(1.5);
+}
+
+.chat-attachment-thumb img {
   object-fit: cover;
 }
 
 .chat-attachment-image-button.chat-attachment-image-button {
   position: relative;
-  width: 100%;
-  height: 100%;
-  border-radius: calc(var(--chat-attachment-radius) - 1px);
-  corner-shape: superellipse(1.5);
 }
 
 .chat-attachment-image-button.chat-attachment-image-button::after {
   content: "";
   position: absolute;
   inset: 0;
-  border-radius: calc(var(--chat-attachment-radius) - 1px);
-  corner-shape: superellipse(1.5);
   background: color-mix(in srgb, var(--text-strong) 8%, transparent);
   opacity: 0;
   pointer-events: none;
@@ -1691,8 +1709,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-attachment-remove svg {
-  width: 13px;
-  height: 13px;
   stroke-width: 2px;
 }
 
@@ -1708,9 +1724,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   overflow: hidden;
   font-size: 0.72rem;
   color: var(--text);
-  border-radius: calc(var(--chat-attachment-radius) - 1px);
   background: transparent;
-  corner-shape: superellipse(1.5);
   transition: background var(--duration-fast) ease;
 }
 
@@ -1735,10 +1749,27 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--muted);
 }
 
-.chat-attachment-file__preview img {
+.chat-attachment-file__preview img,
+.chat-attachment-video__placeholder {
   border-radius: max(0px, calc(var(--chat-attachment-radius) - 5px));
   outline: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
   outline-offset: -1px;
+}
+
+.chat-attachment-video__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.chat-attachment-video__placeholder > svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+  stroke: none;
 }
 
 .chat-attachment-file__preview > svg {
@@ -1765,6 +1796,22 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 10px;
   fill: currentColor;
   stroke: none;
+}
+
+.chat-attachment-video__play--warning {
+  color: var(--popover);
+  background: var(--warn);
+}
+
+.chat-attachment-video__play--error {
+  color: var(--destructive-foreground);
+  background: var(--destructive);
+}
+
+.chat-attachment-video__play--warning svg,
+.chat-attachment-video__play--error svg {
+  fill: none;
+  stroke: currentColor;
 }
 
 .chat-attachment-file__icon {
@@ -1809,15 +1856,19 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
-.chat-attachment-file__open {
+.chat-attachment-file__open,
+.chat-attachment-text-action {
   padding: 0;
   border: none;
   background: transparent;
-  color: inherit;
   font: inherit;
   line-height: 1.15;
-  text-align: start;
   cursor: var(--cursor-action);
+}
+
+.chat-attachment-file__open {
+  color: inherit;
+  text-align: start;
 }
 
 .chat-attachment-text-action {
@@ -1826,15 +1877,9 @@ html[dir="rtl"] .chat-attachment-loading > span {
   max-width: 100%;
   align-items: center;
   gap: 3px;
-  padding: 0;
-  border: none;
   color: var(--muted);
-  background: transparent;
-  cursor: var(--cursor-action);
-  font: inherit;
   overflow: hidden;
   font-size: 0.64rem;
-  line-height: 1.15;
   text-align: left;
   text-overflow: ellipsis;
   text-decoration: underline;
@@ -1850,6 +1895,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .agent-chat__photo-input,
 .agent-chat__camera-input {
   display: none;
+  position: fixed;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .chat-controls__model {
@@ -1874,7 +1926,9 @@ html[dir="rtl"] .chat-attachment-loading > span {
   min-width: 44px;
 }
 
-.chat-controls__effort-picker {
+.chat-controls__effort-picker,
+.chat-controls__context-window-options,
+.chat-controls__inline-select-check {
   flex: 0 0 auto;
 }
 
@@ -1883,14 +1937,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__effort-picker--reserved {
-  visibility: hidden;
-  pointer-events: none;
-}
-
-/* Collapse the empty effort slot while loading unless the open model menu
-   needs its anchor. */
-.chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
-  .chat-controls__effort-picker--reserved {
+  /* The model menu follows its CSS anchor without an empty effort slot. */
   display: none;
 }
 
@@ -1932,6 +1979,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__inline-select-trigger:hover,
+.chat-controls__inline-select-trigger[aria-expanded="true"],
 .chat-controls__inline-select[open] > .chat-controls__inline-select-trigger {
   background: color-mix(in srgb, var(--text) 7%, transparent);
   color: var(--text-strong);
@@ -1945,10 +1993,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__inline-select-label {
-  min-width: 0;
-  overflow: hidden;
   line-height: 1.35;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1997,15 +2042,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__inline-select-option {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: var(--chat-composer-menu-row-gap);
-  width: 100%;
-  min-height: var(--chat-composer-menu-row-height);
-  padding: var(--chat-composer-menu-row-padding);
   border: 0;
-  border-radius: var(--chat-composer-menu-row-radius);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -2045,7 +2083,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
   max-height: min(280px, var(--auto-size-available-height, calc(100vh - 120px)));
 }
 
-.chat-controls__permission-picker::part(menu) {
+.chat-controls__permission-menu {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   column-gap: 16px;
@@ -2070,12 +2108,16 @@ html[dir="rtl"] .chat-attachment-loading > span {
   text-transform: none;
 }
 
-.chat-controls__permission-learn-more:hover {
-  color: var(--text-strong);
-}
-
 .chat-controls__permission-option {
   grid-column: 1 / -1;
+}
+
+.chat-controls__permission-option > .oc-menu-item__check {
+  display: none;
+}
+
+.chat-controls__permission-option > :is(.oc-menu-item__icon, .oc-menu-item__details) {
+  margin-inline: 0;
 }
 
 .chat-controls__permission-icon,
@@ -2094,6 +2136,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: currentColor;
 }
 
+.chat-controls__permission-trigger > .oc-menu-item__label {
+  display: contents;
+}
+
 .agent-chat__input .chat-controls__permission-trigger--default,
 .agent-chat__input .chat-controls__permission-trigger,
 .agent-chat__input .chat-controls__model-settings .chat-controls__inline-select-trigger {
@@ -2110,14 +2156,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   justify-content: center;
 }
 
-.chat-controls__permission-trigger--full .chat-controls__permission-icon {
-  color: var(--accent);
-}
-
-.chat-controls__permission-option--selected {
-  background: var(--chat-composer-menu-selected);
-}
-
 .chat-controls__permission-option-copy {
   display: grid;
   min-width: 0;
@@ -2131,7 +2169,12 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--muted);
 }
 
-.chat-controls__permission-option:state(disabled) .chat-controls__permission-option-icon,
+/* Selected-state check shares the mic picker's box: a 16px slot centering a
+   14px accent glyph, so checks land on the same rail as 16px row icons. */
+.chat-talk-input-picker__check,
+.chat-controls__inline-select-check,
+.chat-controls__permission-trigger--full .chat-controls__permission-icon,
+.chat-controls__permission-option:disabled .chat-controls__permission-option-icon,
 .chat-controls__permission-option[data-chat-permission-option="full"]
   .chat-controls__permission-option-icon {
   color: var(--accent);
@@ -2141,9 +2184,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--text-strong);
-  font-size: 13px;
-  font-weight: 600;
   line-height: 1.2;
 }
 
@@ -2161,7 +2201,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__permission-option-description {
-  color: var(--muted);
   font-size: 11px;
   line-height: 1.25;
 }
@@ -2182,8 +2221,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__model-search-wrap svg {
-  width: 14px;
-  height: 14px;
   color: var(--muted);
   flex: 0 0 auto;
 }
@@ -2195,16 +2232,12 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__model-refresh-details {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
+  gap: 6px;
   height: 24px;
-  padding: 0;
-  border: 0;
   border-radius: var(--radius-sm);
-  background: transparent;
   color: inherit;
+  font: inherit;
+  font-size: 12px;
 }
 
 .chat-controls__model-search {
@@ -2218,10 +2251,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--text);
   font: inherit;
   font-size: 12px;
-}
-
-.chat-controls__model-search::placeholder {
-  color: var(--muted);
 }
 
 .chat-controls__locked-model {
@@ -2344,16 +2373,10 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__provider-settings {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 22px;
   height: 22px;
   margin-left: auto;
-  padding: 0;
-  border: 0;
   border-radius: 5px;
-  background: transparent;
   color: var(--muted);
   cursor: var(--cursor-action);
 }
@@ -2624,13 +2647,8 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__account-selection {
-  min-width: 0;
   margin-left: auto;
-  overflow: hidden;
-  color: var(--muted);
   font-weight: 400;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-controls__account-heading .chat-controls__inline-select-chevron {
@@ -2674,8 +2692,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 
 .chat-controls__model-catalog-state-label svg,
 .chat-controls__model-catalog-action svg {
-  width: 14px;
-  height: 14px;
   flex: 0 0 14px;
 }
 
@@ -2746,7 +2762,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .chat-controls__reasoning-range {
-  -webkit-appearance: none;
   appearance: none;
   position: relative;
   z-index: 1;
@@ -2926,10 +2941,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   font-weight: 600;
 }
 
-.chat-controls__speed-option:hover:not(:disabled) {
-  color: var(--text-strong);
-}
-
 .chat-controls__speed-option[aria-checked="true"] {
   border-color: var(--border);
   background: var(--card);
@@ -3049,10 +3060,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
-.chat-controls__context-window-options {
-  flex: 0 0 auto;
-}
-
 .chat-controls__speed-toggle {
   position: relative;
   display: block;
@@ -3139,10 +3146,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
   background: color-mix(in srgb, var(--accent) 12%, var(--card));
   color: var(--text-strong);
-}
-
-.chat-controls__inline-select-check {
-  flex: 0 0 auto;
 }
 
 @container chat-composer (max-width: 480px) {
@@ -3404,8 +3407,12 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .agent-chat__welcome-avatar {
   width: 96px;
   height: 96px;
-  border-radius: 50%;
   object-fit: cover;
+}
+
+.agent-chat__welcome-avatar,
+.agent-chat__welcome-avatar .identity-avatar--agent {
+  border-radius: 50%;
 }
 
 .agent-chat__welcome-avatar .identity-avatar__text {
@@ -3558,9 +3565,14 @@ html[dir="rtl"] .chat-attachment-loading > span {
 }
 
 .agent-chat__recent-time {
+  /* The timestamp never yields width: the name and subtitle truncate first, so
+     every row keeps a one-line timestamp flush with the right edge. */
+  flex: none;
   margin-left: auto;
   color: var(--muted);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: end;
   white-space: nowrap;
 }
 

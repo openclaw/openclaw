@@ -1,18 +1,38 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { scanInstalledApps } from "./installed-apps.js";
+
+const redirectedRoots = vi.hoisted(() => new Map<string, string>());
+vi.mock("@openclaw/fs-safe/walk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/fs-safe/walk")>();
+  return {
+    ...actual,
+    walkDirectory: ((root, options) => {
+      const target = redirectedRoots.get(root);
+      if (!target) {
+        throw new Error(`Unowned installed-app fixture root: ${root}`);
+      }
+      return actual.walkDirectory(target, options);
+    }) satisfies typeof actual.walkDirectory,
+  };
+});
+
+beforeEach(() => {
+  mockProcessPlatform("darwin");
+});
+afterEach(() => {
+  redirectedRoots.clear();
+  vi.restoreAllMocks();
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function makeFixtureRoot(): Promise<{
-  root: string;
-  applications: string;
-  userApplications: string;
-  systemApplications: string;
-}> {
+async function makeFixtureRoot() {
   const root = await fs.realpath(tempDirs.make("openclaw-installed-apps-"));
   const applications = path.join(root, "Applications");
   const userApplications = path.join(root, "UserApplications");
@@ -22,6 +42,9 @@ async function makeFixtureRoot(): Promise<{
       fs.mkdir(directory, { recursive: true }),
     ),
   );
+  redirectedRoots.set("/Applications", applications);
+  redirectedRoots.set(path.join(os.homedir(), "Applications"), userApplications);
+  redirectedRoots.set("/System/Applications", systemApplications);
   return { root, applications, userApplications, systemApplications };
 }
 
@@ -33,6 +56,15 @@ async function createApp(root: string, name: string, plist?: string): Promise<st
     await fs.writeFile(plistPath, plist);
   }
   return plistPath;
+}
+
+function expectedApp(root: string, label: string, system = false, bundleId?: string) {
+  return {
+    label,
+    path: path.join(root, `${label}.app`),
+    system,
+    ...(bundleId ? { bundleId } : {}),
+  };
 }
 
 describe("scanInstalledApps", () => {
@@ -48,54 +80,28 @@ describe("scanInstalledApps", () => {
       createApp(roots.systemApplications, "Calculator"),
       fs.mkdir(path.join(roots.applications, "Not An App")),
     ]);
-
-    const result = await scanInstalledApps({ platform: "darwin", roots });
+    await fs.symlink(
+      path.join(roots.applications, "Alpha.app"),
+      path.join(roots.userApplications, "Linked.app"),
+    );
+    const result = await scanInstalledApps();
 
     expect(result).toEqual({
       status: "ok",
       apps: [
-        {
-          label: "Alpha",
-          path: path.join(roots.applications, "Alpha.app"),
-          system: false,
-        },
-        {
-          label: "Mail",
-          path: path.join(roots.systemApplications, "Mail.app"),
-          system: true,
-        },
-        {
-          label: "No Plist",
-          path: path.join(roots.userApplications, "No Plist.app"),
-          system: false,
-        },
-        {
-          label: "Zulu",
-          path: path.join(roots.applications, "Zulu.app"),
-          system: false,
-        },
+        expectedApp(roots.applications, "Alpha"),
+        expectedApp(roots.userApplications, "Linked"),
+        expectedApp(roots.systemApplications, "Mail", true),
+        expectedApp(roots.userApplications, "No Plist"),
+        expectedApp(roots.applications, "Zulu"),
       ],
     });
   });
 
-  it("includes symlinked app bundles", async () => {
-    const roots = await makeFixtureRoot();
-    await createApp(roots.applications, "RealTarget");
-    await fs.symlink(
-      path.join(roots.applications, "RealTarget.app"),
-      path.join(roots.userApplications, "Linked.app"),
-    );
-    const result = await scanInstalledApps({ platform: "darwin", roots });
-    expect(result.status).toBe("ok");
-    if (result.status === "ok") {
-      expect(result.apps.map((app) => app.label)).toContain("Linked");
-    }
-  });
-
   it("returns a typed unsupported result off macOS", async () => {
-    await expect(scanInstalledApps({ platform: "linux" })).resolves.toEqual({
+    mockProcessPlatform("linux");
+    await expect(scanInstalledApps()).resolves.toEqual({
       status: "unsupported",
-      platform: "linux",
       apps: [],
     });
   });
@@ -104,58 +110,42 @@ describe("scanInstalledApps", () => {
     "reads only nonempty string identifiers from native plists and retains apps with invalid metadata",
     async () => {
       const roots = await makeFixtureRoot();
-      const fixtures: Array<{
-        name: string;
-        value?: string;
-        extra?: string;
-        bundleId?: string;
-        binary?: boolean;
-      }> = [
-        {
-          name: "XML",
-          value: "<string> \tcom.example.xml\n </string>",
-          bundleId: "com.example.xml",
-        },
-        {
-          name: "Binary",
-          value: "<string>com.example.binary</string>",
-          bundleId: "com.example.binary",
-          binary: true,
-        },
-        {
-          name: "Unrelated Date",
-          value: "<string>com.example.date</string>",
-          extra: "<key>BuildDate</key><date>2026-01-01T00:00:00Z</date>",
-          bundleId: "com.example.date",
-        },
-        {
-          name: "Large Unrelated Value",
-          value: "<string>com.example.large</string>",
-          extra: `<key>Unrelated</key><string>${"x".repeat(2 * 1024 * 1024)}</string>`,
-          bundleId: "com.example.large",
-        },
-        { name: "Numeric String", value: "<string>42</string>", bundleId: "42" },
-        { name: "Empty", value: "<string></string>" },
-        { name: "Whitespace", value: "<string> \t\n </string>" },
-        { name: "Missing Identifier" },
-        { name: "Integer", value: "<integer>42</integer>" },
-        { name: "Boolean", value: "<true/>" },
-        { name: "Array", value: "<array><string>com.example.array</string></array>" },
-        { name: "Dictionary", value: "<dict><key>id</key><string>example</string></dict>" },
-        { name: "Data", value: "<data>ZXhhbXBsZQ==</data>" },
-        { name: "Date Identifier", value: "<date>2026-01-01T00:00:00Z</date>" },
-        { name: "Oversized Identifier", value: `<string>${"x".repeat(2 * 1024 * 1024)}</string>` },
+      const fixtures: Array<[name: string, value?: string, bundleId?: string, extra?: string]> = [
+        ["XML", "<string> \tcom.example.xml\n </string>", "com.example.xml"],
+        ["Binary", "<string>com.example.binary</string>", "com.example.binary"],
+        [
+          "Unrelated Date",
+          "<string>com.example.date</string>",
+          "com.example.date",
+          "<key>BuildDate</key><date>2026-01-01T00:00:00Z</date>",
+        ],
+        [
+          "Large Unrelated Value",
+          "<string>com.example.large</string>",
+          "com.example.large",
+          `<key>Unrelated</key><string>${"x".repeat(2 * 1024 * 1024)}</string>`,
+        ],
+        ["Numeric String", "<string>42</string>", "42"],
+        ["Empty", "<string></string>"],
+        ["Whitespace", "<string> \t\n </string>"],
+        ["Missing Identifier"],
+        ["Integer", "<integer>42</integer>"],
+        ["Boolean", "<true/>"],
+        ["Array", "<array><string>com.example.array</string></array>"],
+        ["Dictionary", "<dict><key>id</key><string>example</string></dict>"],
+        ["Data", "<data>ZXhhbXBsZQ==</data>"],
+        ["Date Identifier", "<date>2026-01-01T00:00:00Z</date>"],
+        ["Oversized Identifier", `<string>${"x".repeat(2 * 1024 * 1024)}</string>`],
       ];
-      for (const fixture of fixtures) {
-        const identifier =
-          fixture.value === undefined ? "" : `<key>CFBundleIdentifier</key>${fixture.value}`;
+      for (const [name, value, , extra] of fixtures) {
+        const identifier = value === undefined ? "" : `<key>CFBundleIdentifier</key>${value}`;
         const plistPath = await createApp(
           roots.applications,
-          fixture.name,
+          name,
           `<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict>${identifier}${fixture.extra ?? ""}</dict></plist>`,
+<plist version="1.0"><dict>${identifier}${extra ?? ""}</dict></plist>`,
         );
-        if (fixture.binary) {
+        if (name === "Binary") {
           execFileSync("/usr/bin/plutil", ["-convert", "binary1", plistPath], { timeout: 2_000 });
           expect((await fs.readFile(plistPath)).subarray(0, 8).toString()).toBe("bplist00");
         }
@@ -165,7 +155,7 @@ describe("scanInstalledApps", () => {
       const linkedPath = path.join(roots.userApplications, "Linked.app");
       await fs.symlink(path.join(roots.applications, "XML.app"), linkedPath);
 
-      const result = await scanInstalledApps({ roots });
+      const result = await scanInstalledApps();
 
       expect(result.status).toBe("ok");
       if (result.status !== "ok") {
@@ -173,24 +163,15 @@ describe("scanInstalledApps", () => {
       }
       expect(result.apps).toHaveLength(fixtures.length + 3);
       const apps = new Map(result.apps.map((app) => [app.label, app]));
-      for (const fixture of [
-        ...fixtures,
-        { name: "Malformed", bundleId: undefined },
-        { name: "No Plist", bundleId: undefined },
-      ]) {
-        expect(apps.get(fixture.name), fixture.name).toEqual({
-          label: fixture.name,
-          ...(fixture.bundleId ? { bundleId: fixture.bundleId } : {}),
-          path: path.join(roots.applications, `${fixture.name}.app`),
-          system: false,
-        });
+      const expectedFixtures: typeof fixtures = [...fixtures, ["Malformed"], ["No Plist"]];
+      for (const [name, , bundleId] of expectedFixtures) {
+        expect(apps.get(name), name).toEqual(
+          expectedApp(roots.applications, name, false, bundleId),
+        );
       }
-      expect(apps.get("Linked")).toEqual({
-        label: "Linked",
-        bundleId: "com.example.xml",
-        path: linkedPath,
-        system: false,
-      });
+      expect(apps.get("Linked")).toEqual(
+        expectedApp(roots.userApplications, "Linked", false, "com.example.xml"),
+      );
     },
   );
 });

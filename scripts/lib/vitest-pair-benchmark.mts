@@ -234,6 +234,9 @@ export function buildBenchmarkCommandEnv(
     PATH: ambientEnv.PATH,
     TMPDIR: path.join(cacheRoot, "tmp"),
     npm_config_cache: npmCache,
+    // Both source cuts must use the benchmark's selected pnpm, even when their
+    // packageManager fields name older releases.
+    pnpm_config_pm_on_fail: "ignore",
     npm_execpath: packageManager.executable,
   };
 }
@@ -242,27 +245,14 @@ function runVitestArgs(lane: BenchmarkLane, reportFile: string): string[] {
   if (!path.isAbsolute(reportFile)) {
     throw new Error("Vitest JSON report path must be absolute");
   }
-  if (lane.config) {
-    return [
-      "scripts/run-vitest.mjs",
-      "run",
-      "--config",
-      lane.config,
-      "--reporter=json",
-      "--includeTaskLocation",
-      "--outputFile",
-      reportFile,
-      ...lane.files,
-    ];
-  }
   return [
     "scripts/run-vitest.mjs",
-    ...lane.files,
-    "--",
+    ...(lane.config ? ["run", "--config", lane.config] : [...lane.files, "--"]),
     "--reporter=json",
     "--includeTaskLocation",
     "--outputFile",
     reportFile,
+    ...(lane.config ? lane.files : []),
   ];
 }
 
@@ -301,13 +291,8 @@ async function runBenchmarkCommand(
   let timing: ReturnType<typeof parseGnuTime> | undefined;
   let execution: BenchmarkExecutionSummary | null = null;
   const createRecord = (): BenchmarkRunRecord => ({
-    id: plan.id,
-    phase: plan.phase,
-    side: plan.side,
+    ...plan,
     lane: plan.lane.id,
-    round: plan.round,
-    pair: plan.pair,
-    cacheMode: plan.cacheMode,
     command,
     packageManager,
     startedAt,
@@ -452,8 +437,8 @@ async function runVitestPairBenchmarkBeforeDeadline(
   if (gitOutput(candidateDir, ["rev-parse", "HEAD"], deadline) !== context.candidateSha) {
     throw new Error("candidate checkout does not match the requested SHA");
   }
-  if (process.version !== "v24.21.0") {
-    throw new Error(`vitest-pair benchmark requires Node v24.21.0, got ${process.version}`);
+  if (process.version !== "v24.22.1") {
+    throw new Error(`vitest-pair benchmark requires Node v24.22.1, got ${process.version}`);
   }
   mkdirSync(context.outputDir, { recursive: true });
   mkdirSync(context.scratchDir, { recursive: true });
@@ -464,8 +449,8 @@ async function runVitestPairBenchmarkBeforeDeadline(
     deadline,
   );
   deadline.throwIfExpired();
-  if (packageManager.version !== "12.7.0") {
-    throw new Error(`vitest-pair benchmark requires pnpm 12.7.0, got ${packageManager.version}`);
+  if (packageManager.version !== "12.15.0") {
+    throw new Error(`vitest-pair benchmark requires pnpm 12.15.0, got ${packageManager.version}`);
   }
   const baselineInventory = assertInventoryAvailable(baselineDir, context.manifest);
   const candidateInventory = assertInventoryAvailable(candidateDir, context.manifest);

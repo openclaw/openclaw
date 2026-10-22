@@ -1,4 +1,3 @@
-// Normalized full status scan result shape.
 // Builders flatten the gateway snapshot so downstream text/JSON code reads one stable object.
 
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
@@ -26,8 +25,6 @@ export type StatusScanResult<
   AgentStatus extends StatusJsonAgentStatuses = AgentLocalStatusesResult,
 > = Omit<
   StatusScanOverviewResult,
-  | "coldStart"
-  | "hasConfiguredChannels"
   | "skipColdStartNetworkChecks"
   | "gatewaySnapshot"
   | "channelsStatus"
@@ -36,6 +33,8 @@ export type StatusScanResult<
   | "agentStatus"
 > &
   StatusScanGatewayResult & {
+    /** Local callers publish again after their final asynchronous preparation. */
+    publish?: () => { summary: StatusSummary; agentStatus: AgentStatus };
     summary: StatusSummary;
     memory: MemoryStatusSnapshot | null;
     memoryPlugin: MemoryPluginStatus;
@@ -49,26 +48,20 @@ export type StatusScanResult<
 
 export type StatusJsonScanResult = StatusScanResult<StatusJsonAgentStatuses>;
 
-/** Flattens overview, gateway, channel, summary, memory, and compatibility inputs into a scan result. */
 export function buildStatusScanResult<
   AgentStatus extends StatusJsonAgentStatuses = AgentLocalStatusesResult,
 >(
   params: Omit<StatusScanResult<AgentStatus>, keyof StatusScanGatewayResult> & {
-    gatewaySnapshot: StatusScanGatewayResult;
+    gatewaySnapshot: StatusScanOverviewResult["gatewaySnapshot"];
   },
 ): StatusScanResult<AgentStatus> {
   const { gatewaySnapshot, advertisedControlUiLinks, ...result } = params;
+  const { gatewayCallOverrides: _gatewayCallOverrides, ...gateway } = gatewaySnapshot;
   return {
     ...result,
     ...(advertisedControlUiLinks ? { advertisedControlUiLinks } : {}),
-    gatewayConnection: gatewaySnapshot.gatewayConnection,
-    remoteUrlMissing: gatewaySnapshot.remoteUrlMissing,
-    gatewayMode: gatewaySnapshot.gatewayMode,
-    gatewayProbeAuth: gatewaySnapshot.gatewayProbeAuth,
+    ...gateway,
     gatewayProbeAuthWarning: gatewaySnapshot.gatewayProbeAuthWarning,
-    gatewayProbe: gatewaySnapshot.gatewayProbe,
-    gatewayReachable: gatewaySnapshot.gatewayReachable,
     localGatewayHealthy: gatewaySnapshot.localGatewayHealthy,
-    gatewaySelf: gatewaySnapshot.gatewaySelf,
   };
 }

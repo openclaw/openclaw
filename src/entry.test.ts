@@ -71,6 +71,7 @@ describe("entry root help fast path", () => {
   it("structures root help rendering failures for JSON console style", async () => {
     const logging = await import("./logging.js");
     logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+    const previousExitCode = process.exitCode;
     const stderrSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
       throw new Error(`exit ${String(code)}`);
@@ -88,14 +89,16 @@ describe("entry root help fast path", () => {
             throw new Error("render failed");
           },
         }),
-      ).rejects.toThrow("exit 1");
+      ).resolves.toBe(true);
       const line = stderrSpy.mock.calls.map(([value]) => String(value)).join("");
       expect(JSON.parse(line)).toMatchObject({
         level: "error",
         message: expect.stringContaining("Failed to display help"),
       });
-      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(process.exitCode).toBe(1);
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
+      process.exitCode = previousExitCode;
       logging.resetLogger();
       vi.restoreAllMocks();
     }
@@ -145,18 +148,18 @@ describe("entry precomputed command help fast path", () => {
   });
 
   it("skips the host command help fast path when a container target is active", async () => {
-    const outputPrecomputedSecretsHelpText = vi.fn();
+    const outputPrecomputedCommandHelpText = vi.fn();
 
     const handled = await runWithPrecomputedHelpMocks(
       tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "--container", "demo", "secrets", "--help"],
       {
         env: {},
-        outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpText.mockReturnValue(true),
+        outputPrecomputedCommandHelpText: outputPrecomputedCommandHelpText.mockReturnValue(true),
       },
     );
 
     expect(handled).toBe(false);
-    expect(outputPrecomputedSecretsHelpText).not.toHaveBeenCalled();
+    expect(outputPrecomputedCommandHelpText).not.toHaveBeenCalled();
   });
 });

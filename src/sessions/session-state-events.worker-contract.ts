@@ -14,6 +14,15 @@ export type SessionStateWatchAddress = {
   watcherStorePath: string | null;
 };
 
+export type SessionStateEventWrite = {
+  event: SessionStateEventInput;
+  now: number;
+  onlyIfWatched?: boolean;
+  expectedUpstream?: SessionUpstreamLink;
+  acpControl?: AcpSessionControlConstraint;
+  sessionEntryCurrentSource?: SessionEntryCurrentSource;
+};
+
 export type SessionStateWorkerOperations = {
   "sessionState.cleanup": {
     input:
@@ -25,7 +34,6 @@ export type SessionStateWorkerOperations = {
     input: {
       cursors: readonly SessionStateSweepAddress[];
       now: number;
-      sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
     };
     output: SessionStateNotice[];
   };
@@ -51,15 +59,8 @@ export type SessionStateWorkerOperations = {
     output: SessionStateNotice[];
   };
   "sessionState.record": {
-    input: {
-      event: SessionStateEventInput;
-      now: number;
-      onlyIfWatched?: boolean;
-      expectedUpstream?: SessionUpstreamLink;
-      acpControl?: AcpSessionControlConstraint;
-      sessionEntryCurrentSource?: SessionEntryCurrentSource;
-    };
-    output: { row?: SessionStateEventRow; notices: SessionStateNotice[] };
+    input: Omit<SessionStateEventWrite, "event"> & { events: readonly SessionStateEventInput[] };
+    output: { rows: SessionStateEventRow[]; notices: SessionStateNotice[] };
   };
   "sessionState.prune": {
     input: { now: number; sessionEntryCurrentSource?: SessionEntryCurrentSource };

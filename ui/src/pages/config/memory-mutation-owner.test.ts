@@ -1,9 +1,14 @@
 /* @vitest-environment jsdom */
 
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { setPluginEnabled } from "../../lib/plugins/index.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { mountConfigPage } from "./config-page.test-support.ts";
 import {
+  mountMemoryPage,
+  memoryTabRoute,
   activeEngine,
   addonSwitch,
   createMemoryPage,
@@ -13,8 +18,8 @@ import {
   createMemoryTestMutationResult as committed,
   selectEngine,
   toggleAddon,
-} from "./memory-page.test-support.ts";
-import "./memory-page.ts";
+} from "./memory-page.test-support.tsx";
+import "./memory-page.tsx";
 
 vi.mock("../../lib/plugins/index.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/plugins/index.ts")>();
@@ -33,13 +38,13 @@ describe("Memory plugin mutation ownership", () => {
       ],
       refresh: () => Promise.reject(new Error("authoritative snapshot unavailable")),
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
-      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
       selectEngine(element, "other");
 
-      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
-      await waitForFast(() =>
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+      await waitForSolid(() =>
         expect(element.textContent).toContain(
           "Could not refresh Control UI configuration: authoritative snapshot unavailable",
         ),
@@ -48,6 +53,102 @@ describe("Memory plugin mutation ownership", () => {
       expect(element.textContent).not.toContain("Could not change the memory engine");
     } finally {
       element.remove();
+    }
+  });
+
+  it("previews an enabling engine without presenting the old disabled state", async () => {
+    const mutation = createMemoryTestDeferred<unknown>();
+    const { element, runExternalMutation } = createMemoryPage({
+      configObject: {},
+      catalog: [
+        createMemoryTestEngine("memory-core", true),
+        createMemoryTestEngine("other", false),
+      ],
+      setEnabled: () => mutation.promise,
+    });
+    mountMemoryPage(element);
+    try {
+      await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
+      selectEngine(element, "other");
+      await waitForSolid(() => expect(activeEngine(element)).toBe("other"));
+      expect(element.textContent).not.toContain("This engine is disabled");
+    } finally {
+      mutation.resolve(committed("other", true));
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      element.remove();
+    }
+  });
+
+  it("keeps a later add-on pending through the real configuration owner", async () => {
+    const engine = createMemoryTestDeferred<unknown>();
+    const addon = createMemoryTestDeferred<unknown>();
+    let configObject = { plugins: { slots: { memory: "memory-core" } } };
+    const { context } = createMemoryPage({
+      configObject,
+      methods: ["config.get", "config.set", "config.schema.lookup"],
+      listCatalog: () =>
+        Promise.resolve({
+          plugins: [
+            createMemoryTestEngine("memory-core", true),
+            createMemoryTestEngine("other", configObject.plugins.slots.memory === "other"),
+            createMemoryTestAddon("active-memory", false),
+          ],
+        }),
+      settingsRequest: async (method) =>
+        method === "config.get"
+          ? {
+              config: configObject,
+              sourceConfig: configObject,
+              hash: "memory-actions",
+              valid: true,
+              issues: [],
+            }
+          : { type: "object" },
+      setEnabled: async (id) => {
+        if (id !== "other") {
+          return addon.promise;
+        }
+        const result = await engine.promise;
+        configObject = { plugins: { slots: { memory: "other" } } };
+        return result;
+      },
+    });
+    const runtimeConfig = createRuntimeConfigCapability(context.gateway);
+    Object.assign(context, { runtimeConfig });
+    const runExternalMutation = vi.spyOn(runtimeConfig, "runExternalMutation");
+    await runtimeConfig.ensureLoaded();
+    const view = mountConfigPage(context, {
+      pageId: "memory",
+      routeData: memoryTabRoute("settings"),
+    });
+    try {
+      await waitForSolid(() => expect(activeEngine(view.page)).toBe("memory-core"));
+      selectEngine(view.page, "other");
+      await waitForSolid(() => expect(activeEngine(view.page)).toBe("other"));
+      toggleAddon(view.page, "Active memory", true);
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => {
+        expect(addonSwitch(view.page, "Active memory")?.checked).toBe(true);
+        expect(addonSwitch(view.page, "Active memory")?.disabled).toBe(true);
+      });
+      engine.resolve(committed("other", true));
+      await waitForSolid(() =>
+        expect(setPluginEnabled).toHaveBeenCalledWith(expect.anything(), "active-memory", true),
+      );
+      await waitForSolid(() => {
+        expect(activeEngine(view.page)).toBe("other");
+        expect(
+          view.page.querySelector<HTMLInputElement>(".settings-segmented__input:checked")?.disabled,
+        ).toBe(false);
+        expect(addonSwitch(view.page, "Active memory")?.disabled).toBe(true);
+        expect(view.page.textContent).not.toContain("This engine is disabled");
+      });
+    } finally {
+      engine.resolve(committed("other", true));
+      addon.resolve(committed("active-memory", true));
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      view.dispose();
+      runtimeConfig.dispose();
     }
   });
 
@@ -66,20 +167,107 @@ describe("Memory plugin mutation ownership", () => {
       ],
       setEnabled,
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
       toggleAddon(element, "Memory wiki", true);
 
-      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
       expect(setEnabled).toHaveBeenCalledWith("active-memory", false);
 
       firstMutation.resolve(committed("active-memory", false));
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalledWith("memory-wiki", true));
+      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledWith("memory-wiki", true));
     } finally {
       firstMutation.resolve(committed("active-memory", false));
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      element.remove();
+    }
+  });
+
+  it("finishes one add-on while its admitted sibling is still pending", async () => {
+    const first = createMemoryTestDeferred<unknown>();
+    const second = createMemoryTestDeferred<unknown>();
+    const setEnabled = vi.fn((pluginId: string) =>
+      pluginId === "active-memory" ? first.promise : second.promise,
+    );
+    const { element, runExternalMutation } = createMemoryPage({
+      configObject: {},
+      catalog: [
+        createMemoryTestAddon("active-memory", true),
+        createMemoryTestAddon("memory-wiki", false),
+      ],
+      setEnabled,
+    });
+    mountMemoryPage(element);
+    try {
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      toggleAddon(element, "Active memory", false);
+      toggleAddon(element, "Memory wiki", true);
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => {
+        expect(addonSwitch(element, "Active memory")?.checked).toBe(false);
+        expect(addonSwitch(element, "Memory wiki")?.checked).toBe(true);
+      });
+      first.resolve(committed("active-memory", false));
+      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledWith("memory-wiki", true));
+      await waitForSolid(() => {
+        expect(addonSwitch(element, "Active memory")?.disabled).toBe(false);
+        expect(addonSwitch(element, "Memory wiki")?.disabled).toBe(true);
+      });
+    } finally {
+      first.resolve(committed("active-memory", false));
+      second.resolve(committed("memory-wiki", true));
+      await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
+      element.remove();
+    }
+  });
+
+  it("retires an old preview on reconnect while its catalog reload is pending", async () => {
+    const oldCatalog = createMemoryTestDeferred<{
+      plugins: ReturnType<typeof createMemoryTestAddon>[];
+    }>();
+    let enabled = true;
+    const { element, request, runExternalMutation, setPhase } = createMemoryPage({
+      configObject: {},
+      listCatalog: (call) =>
+        call === 1
+          ? oldCatalog.promise
+          : Promise.resolve({ plugins: [createMemoryTestAddon("active-memory", enabled)] }),
+      setEnabled: (id, value) => {
+        enabled = value;
+        return Promise.resolve(committed(id, value));
+      },
+    });
+    mountMemoryPage(element);
+    try {
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      toggleAddon(element, "Active memory", false);
+      await waitForSolid(() =>
+        expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
+      );
+      enabled = true;
+      setPhase("disconnected");
+      setPhase("connected");
+      await waitForSolid(() => {
+        expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
+        expect(addonSwitch(element, "Active memory")?.disabled).toBe(false);
+      });
+      toggleAddon(element, "Active memory", false);
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => {
+        expect(addonSwitch(element, "Active memory")?.checked).toBe(false);
+        expect(addonSwitch(element, "Active memory")?.disabled).toBe(false);
+      });
+      oldCatalog.resolve({ plugins: [createMemoryTestAddon("active-memory", true)] });
+      await nextTurn();
+      await waitForSolid(() => {
+        expect(addonSwitch(element, "Active memory")?.checked).toBe(false);
+        expect(addonSwitch(element, "Active memory")?.disabled).toBe(false);
+      });
+    } finally {
+      oldCatalog.resolve({ plugins: [createMemoryTestAddon("active-memory", true)] });
       await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
       element.remove();
     }
@@ -110,11 +298,11 @@ describe("Memory plugin mutation ownership", () => {
         waitForPendingWrites: () => pendingWrites.promise,
         setEnabled,
       });
-      document.body.append(element);
+      mountMemoryPage(element);
       try {
-        await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+        await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
         toggleAddon(element, "Active memory", false);
-        await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+        await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
 
         if (change === "reconnect") {
           setPhase("disconnected");
@@ -126,7 +314,7 @@ describe("Memory plugin mutation ownership", () => {
         } else {
           mutationAllowed = false;
           publishPluginGeneration(1);
-          await waitForFast(() => expect(addonSwitch(element, "Active memory")).toBeNull());
+          await waitForSolid(() => expect(addonSwitch(element, "Active memory")).toBeNull());
         }
         pendingWrites.resolve();
         await runExternalMutation.mock.results[0]?.value;
@@ -155,28 +343,28 @@ describe("Memory plugin mutation ownership", () => {
         waitForPendingWrites: () => pendingWrites.promise,
         setEnabled,
       });
-      document.body.append(element);
+      mountMemoryPage(element);
       try {
-        await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+        await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
         toggleAddon(element, "Active memory", false);
-        await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+        await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
         if (phase === "in flight") {
           pendingWrites.resolve();
-          await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+          await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
         }
         publishPluginGeneration(1);
         publishPluginGeneration(1);
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(true),
         );
         expect(setEnabled).toHaveBeenCalledTimes(phase === "queued" ? 0 : 1);
         pendingWrites.resolve();
-        await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+        await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
         reply.resolve(committed("active-memory", false, ["Review active-memory settings."]));
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(element.textContent).toContain("Review active-memory settings."),
         );
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false),
         );
         expect(runExternalMutation).toHaveBeenCalledOnce();
@@ -202,14 +390,14 @@ describe("Memory plugin mutation ownership", () => {
           ? firstMutation.promise
           : Promise.resolve(committed(pluginId, enabled, ["Review memory-wiki settings."])),
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
       toggleAddon(element, "Memory wiki", true);
-      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
       firstMutation.resolve(committed("active-memory", false, ["Review active-memory settings."]));
-      await waitForFast(() => {
+      await waitForSolid(() => {
         expect(element.textContent).toContain("Review active-memory settings.");
         expect(element.textContent).toContain("Review memory-wiki settings.");
       });
@@ -235,11 +423,11 @@ describe("Memory plugin mutation ownership", () => {
           warnings: ["Review the addon settings."],
         }),
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
-      await waitForFast(() => expect(element.textContent).toContain("Review the addon settings."));
+      await waitForSolid(() => expect(element.textContent).toContain("Review the addon settings."));
       expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(0);
     } finally {
       processInfo.resolve({ processInstanceId: "memory-process" });
@@ -260,34 +448,33 @@ describe("Memory plugin mutation ownership", () => {
       catalog: [createMemoryTestAddon("active-memory", true)],
       setEnabled,
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
 
       setPhase("disconnected");
       setPhase("connected");
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
       );
-      await waitForFast(async () => {
-        await element.updateComplete;
+      await waitForSolid(() => {
         expect(addonSwitch(element, "Active memory")).not.toBeNull();
       });
       toggleAddon(element, "Active memory", false);
-      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
 
       firstMutation.resolve(committed("active-memory", false));
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalledTimes(2));
-      await waitForFast(() =>
+      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledTimes(2));
+      await waitForSolid(() =>
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
       );
-      await element.updateComplete;
+      flush();
       expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(true);
 
       secondMutation.resolve(committed("active-memory", false));
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false),
       );
     } finally {
@@ -313,42 +500,37 @@ describe("Memory plugin mutation ownership", () => {
       ],
       setEnabled,
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
-      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
       selectEngine(element, "other");
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
 
       setPhase("disconnected");
       setPhase("connected");
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
       );
-      await waitForFast(async () => {
-        await element.updateComplete;
+      await waitForSolid(() => {
         expect(activeEngine(element)).toBe("memory-core");
       });
       selectEngine(element, "other");
-      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
 
       firstMutation.resolve(committed("other", true));
-      await waitForFast(() => expect(setEnabled).toHaveBeenCalledTimes(2));
-      await waitForFast(() =>
+      await waitForSolid(() => expect(setEnabled).toHaveBeenCalledTimes(2));
+      await waitForSolid(() =>
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
       );
-      await element.updateComplete;
-      expect(
-        element.querySelector<HTMLElement & { disabled?: boolean }>(
-          "wa-radio-group.settings-segmented",
-        )?.disabled,
-      ).toBe(true);
+      flush();
+      expect(element.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled).toBe(
+        true,
+      );
 
       secondMutation.resolve(committed("other", true));
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(
-          element.querySelector<HTMLElement & { disabled?: boolean }>(
-            "wa-radio-group.settings-segmented",
-          )?.disabled,
+          element.querySelector<HTMLInputElement>(".settings-segmented__input")?.disabled,
         ).toBe(false),
       );
     } finally {
@@ -373,20 +555,20 @@ describe("Memory plugin mutation ownership", () => {
         );
       },
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       toggleAddon(element, "Active memory", false);
-      await waitForFast(() => expect(element.textContent).toContain("Earlier runtime warning."));
-      await waitForFast(() =>
+      await waitForSolid(() => expect(element.textContent).toContain("Earlier runtime warning."));
+      await waitForSolid(() =>
         expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false),
       );
       toggleAddon(element, "Active memory", true);
-      await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
-      await waitForFast(() =>
+      await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+      await waitForSolid(() =>
         expect(element.textContent).not.toContain("Earlier runtime warning."),
       );
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
     } finally {
       await Promise.allSettled(runExternalMutation.mock.results.map(({ value }) => value));
       element.remove();
@@ -403,23 +585,23 @@ describe("Memory plugin mutation ownership", () => {
         catalog: [createMemoryTestAddon("active-memory", true)],
         setEnabled,
       });
-      document.body.append(element);
+      mountMemoryPage(element);
       try {
-        await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+        await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
         toggleAddon(element, "Active memory", false);
-        await waitForFast(() => expect(setEnabled).toHaveBeenCalledOnce());
+        await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
         setBootId(bootId);
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false),
         );
         reply.resolve(committed("active-memory", false, ["Old boot runtime warning."]));
         await runExternalMutation.mock.results[0]?.value;
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(
             3,
           ),
         );
-        await element.updateComplete;
+        flush();
         expect(element.textContent).not.toContain("Old boot runtime warning.");
         expect(element.textContent).not.toContain("Could not update Active memory");
       } finally {
@@ -448,11 +630,11 @@ describe("Memory plugin mutation ownership", () => {
         );
       },
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
-      await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
+      await waitForSolid(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       toggleAddon(element, "Active memory", false);
-      await waitForFast(() => {
+      await waitForSolid(() => {
         expect(element.textContent).toContain("old authoritative refresh failed");
         expect(element.textContent).toContain("Review active-memory settings.");
       });
@@ -460,7 +642,7 @@ describe("Memory plugin mutation ownership", () => {
       failRefresh = false;
       setPhase("disconnected");
       setPhase("connected");
-      await waitForFast(() => {
+      await waitForSolid(() => {
         expect(element.textContent).not.toContain("old authoritative refresh failed");
         expect(element.textContent).toContain("Review active-memory settings.");
       });
@@ -497,7 +679,7 @@ describe("Memory plugin mutation ownership", () => {
               : committed(pluginId, enabled),
           ),
       });
-      document.body.append(element);
+      mountMemoryPage(element);
       const mutate = (owner: typeof first | typeof second) => {
         if (owner === "engine") {
           selectEngine(element, "other");
@@ -510,16 +692,16 @@ describe("Memory plugin mutation ownership", () => {
         );
       };
       try {
-        await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
-        await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
+        await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
+        await waitForSolid(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
         mutate(first);
-        await waitForFast(() =>
+        await waitForSolid(() =>
           expect(element.textContent).toContain("previous authoritative refresh failed"),
         );
 
         mutate(second);
-        await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
-        await waitForFast(() =>
+        await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledTimes(2));
+        await waitForSolid(() =>
           expect(element.textContent).not.toContain("previous authoritative refresh failed"),
         );
         if (first === "active-memory") {
@@ -551,20 +733,20 @@ describe("Memory plugin mutation ownership", () => {
         }),
       setEnabled: () => pendingMutation.promise,
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
-      await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
+      await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
       selectEngine(element, "other");
-      await waitForFast(() => expect(setPluginEnabled).toHaveBeenCalledOnce());
+      await waitForSolid(() => expect(setPluginEnabled).toHaveBeenCalledOnce());
 
       setPhase("disconnected");
       setPhase("connected");
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
       );
       pendingMutation.resolve(committed("other", true));
 
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
       );
       expect(element.textContent).not.toContain("Could not change the memory engine");

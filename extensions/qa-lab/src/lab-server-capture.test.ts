@@ -1,34 +1,35 @@
 // Qa Lab tests cover lab server capture plugin behavior.
 import { createServer } from "node:http";
+import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createQaCaptureLifecycle,
-  mapCaptureEventForQa,
-  readQaCaptureStartupStatus,
-} from "./lab-server-capture.js";
-
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  acquireDebugProxyCaptureStoreAsync: undefined,
-}));
+import { mapCaptureEventForQa, readQaCaptureStartupStatus } from "./lab-server-capture.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
 });
 
 describe("qa-lab server capture helpers", () => {
-  it("refuses unavailable async capture without running the operation", async () => {
-    const capture = createQaCaptureLifecycle();
-    const operation = vi.fn();
-    await expect(capture.withStore(operation)).rejects.toThrow(
-      "QA capture requires async proxy capture support. Upgrade the OpenClaw host.",
-    );
-    expect(operation).not.toHaveBeenCalled();
-    capture.stopAdmission();
-    await expect(capture.release()).resolves.toBeUndefined();
+  it("reports timed-out probes as unavailable and closes their sockets", async () => {
+    const sockets: net.Socket[] = [];
+    vi.spyOn(net, "createConnection").mockImplementation(() => {
+      const socket = new net.Socket();
+      sockets.push(socket);
+      queueMicrotask(() => socket.emit("timeout"));
+      return socket;
+    });
+
+    const status = await readQaCaptureStartupStatus({
+      publicBaseUrl: "http://127.0.0.1:8080",
+    });
+
+    expect(status.proxy).toMatchObject({ ok: false, error: "timeout" });
+    expect(status.gateway).toMatchObject({ ok: false, error: "timeout" });
+    expect(sockets.every((socket) => socket.destroyed)).toBe(true);
   });
 
   it("maps capture rows into QA-friendly fields", () => {

@@ -7,6 +7,10 @@ import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 type PendingInput = NonNullable<BuildChatItemsProps["pendingInputs"]>[number];
 
+function makeMessage(role: string, content: string, timestamp: number, metadata: object) {
+  return { role, content, timestamp, __openclaw: metadata };
+}
+
 function queuedInput(
   text: string,
   createdAt: number,
@@ -64,7 +68,7 @@ function visibleRows(
   return build(createInput(overrides)).flatMap((item) =>
     item.kind === "group"
       ? item.messages.map(({ message }) => extractTextCached(message))
-      : item.kind === "notice"
+      : item.kind === "notice" || item.kind === "stream"
         ? [item.text]
         : [],
   );
@@ -74,7 +78,68 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
-  it("moves durable steers below their run's output without reordering other history", () => {
+  it("keeps parent output around a worker update in the same order live and saved", () => {
+    const original = makeMessage("user", "Publish the change", 10, {
+      id: "request",
+      idempotencyKey: "parent:user",
+      seq: 1,
+    });
+    const update = {
+      role: "assistant",
+      content: "Worker update",
+      timestamp: 30,
+      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      senderSession: { sessionKey: "agent:main:worker" },
+      __openclaw: { id: "update", seq: 3 },
+    };
+    const before = makeMessage("assistant", "Preparing publication", 20, {
+      id: "before",
+      runId: "parent",
+      seq: 2,
+    });
+    const after = makeMessage("assistant", "Published successfully", 40, {
+      id: "after",
+      runId: "parent",
+      seq: 4,
+    });
+    const next = makeMessage("user", "Next request", 50, {
+      id: "next",
+      idempotencyKey: "next:user",
+      seq: 5,
+    });
+    const expected = [
+      "Publish the change",
+      "Preparing publication",
+      "Worker update",
+      "Published successfully",
+      "Next request",
+    ];
+    for (const mode of ["stream", "segment", "saved"] as const) {
+      expect(
+        visibleRows({
+          messages: [original, before, update, ...(mode === "saved" ? [after] : []), next],
+          runId: mode === "saved" ? null : "parent",
+          runWorking: mode !== "saved",
+          stream: mode === "stream" ? "Published successfully" : null,
+          streamStartedAt: 40,
+          streamSegments:
+            mode === "segment"
+              ? [
+                  {
+                    text: "Published successfully",
+                    ts: 40,
+                    runId: "parent",
+                    itemId: "commentary",
+                    afterUserSendId: "parent",
+                  },
+                ]
+              : [],
+        }),
+        mode,
+      ).toEqual(expected);
+    }
+  });
+  it("keeps accepted steers at their transcript positions between same-run answers", () => {
     const messages = [
       { role: "user", content: "Original", __openclaw: { idempotencyKey: "run:user", seq: 1 } },
       { role: "assistant", content: "Before", __openclaw: { runId: "run", seq: 2 } },
@@ -88,10 +153,10 @@ describe("transcript input order", () => {
     expect(visibleRows({ messages })).toEqual([
       "Original",
       "Before",
-      "After",
-      "Final",
       "Steer one",
+      "After",
       "Steer two",
+      "Final",
       "Next",
       "Other run",
     ]);
@@ -105,6 +170,97 @@ describe("transcript input order", () => {
       "Next",
       "Other run",
     ]);
+  });
+
+  it.each([
+    { includeOriginal: true, showReasoning: false },
+    { includeOriginal: false, showReasoning: false },
+    { includeOriginal: true, showReasoning: true },
+    { includeOriginal: false, showReasoning: true },
+  ])(
+    "keeps the live tail after accepted steers and before a later turn (original=$includeOriginal, reasoning=$showReasoning)",
+    ({ includeOriginal, showReasoning }) => {
+      const original = {
+        role: "user",
+        content: "Original",
+        timestamp: 1_000,
+        __openclaw: { idempotencyKey: "run:user", seq: 1 },
+      };
+      const messages = [
+        ...(includeOriginal ? [original] : []),
+        makeMessage("assistant", "Before", 1_050, { runId: "run", seq: 2 }),
+        makeMessage("user", "Steer one", 1_200, {
+          idempotencyKey: "steer-one:user",
+          steerTargetRunId: "run",
+          seq: 3,
+        }),
+        makeMessage("assistant", "After", 1_300, { runId: "run", seq: 4 }),
+        makeMessage("user", "Steer two", 1_400, {
+          idempotencyKey: "steer-two:user",
+          steerTargetRunId: "run",
+          seq: 5,
+        }),
+        makeMessage("user", "Next turn", 2_000, { idempotencyKey: "next:user", seq: 6 }),
+      ];
+      const input = createInput({
+        messages,
+        runId: "run",
+        streamStartedAt: 1_100,
+        showReasoning,
+        reasoning: showReasoning
+          ? {
+              runId: "run",
+              items: [
+                { itemId: "thinking", text: "Working through the request.", startedAt: 1_100 },
+              ],
+            }
+          : null,
+      });
+      for (const stream of ["Live continuation", "Live continuation grows"]) {
+        expect(visibleRows({ ...input, stream }, buildCachedChatItems)).toEqual([
+          ...(includeOriginal ? ["Original"] : []),
+          "Before",
+          "Steer one",
+          "After",
+          "Steer two",
+          stream,
+          "Next turn",
+        ]);
+      }
+    },
+  );
+
+  it("keeps retained activity before a steer when its observed prompt is paged out", () => {
+    expect(
+      visibleRows({
+        runId: "run",
+        messages: [
+          {
+            role: "user",
+            content: "Steer",
+            __openclaw: { idempotencyKey: "steer:user", steerTargetRunId: "run", seq: 3 },
+          },
+        ],
+        streamSegments: [
+          {
+            text: "Earlier commentary",
+            itemId: "comment",
+            runId: "run",
+            ts: 9000,
+            afterUserSendId: "original",
+          },
+        ],
+        toolMessages: [
+          {
+            role: "assistant",
+            content: "Earlier tool",
+            runId: "run",
+            timestamp: 9001,
+            openclawToolStreamAfterSendId: "original",
+          },
+        ],
+      }),
+    ).toEqual(["Earlier commentary", "Earlier tool", "Steer"]);
   });
 
   it.each(["steer", "interrupt"] as const)(
@@ -191,7 +347,7 @@ describe("transcript input order", () => {
     ({ state, timestamps }) => {
       const notice =
         state === "interrupted"
-          ? "Interrupted before the agent started it. It will not run automatically; copy it and send again."
+          ? "Interrupted before the agent started it. If it does not resume, copy it and send again."
           : state === "cancelled"
             ? "Cancelled before the agent started it. It will not run automatically; copy it and send again."
             : null;
@@ -239,18 +395,16 @@ describe("transcript input order", () => {
     (queueMode) => {
       const earlier = queuedInput("Earlier input", 10, "failed");
       const later = { ...queuedInput("Later input", 20), queueMode };
-      const reply = {
-        role: "assistant",
-        content: "Recovered reply",
-        timestamp: 30,
-        __openclaw: { id: "recovered-reply", seq: 2, runId: later.sendRunId },
-      };
-      const canonical = {
-        role: "user",
-        content: later.text,
-        timestamp: 20,
-        __openclaw: { id: "later-input", seq: 1, idempotencyKey: `${later.sendRunId}:user` },
-      };
+      const reply = makeMessage("assistant", "Recovered reply", 30, {
+        id: "recovered-reply",
+        seq: 2,
+        runId: later.sendRunId,
+      });
+      const canonical = makeMessage("user", later.text, 20, {
+        id: "later-input",
+        seq: 1,
+        idempotencyKey: `${later.sendRunId}:user`,
+      });
       const expected =
         queueMode === "steer"
           ? ["Later input", "Recovered reply", "Earlier input"]

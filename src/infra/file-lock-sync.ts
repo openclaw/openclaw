@@ -2,7 +2,7 @@ import fs from "node:fs";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { hasErrnoCode } from "./errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "./errno.js";
 import { acquireFileLockSync } from "./file-lock-manager.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 
@@ -58,8 +58,8 @@ export function acquireFileLockSyncWithRetry(
       });
       return () => lock.release();
     } catch (error) {
-      // fs-safe rechecks the sidecar after our callback. Only disappearance can
-      // be a release; a surviving replacement or another authority failure refuses.
+      // A live holder can release during the reclaim callback. A surviving
+      // replacement or any other authority failure must still refuse admission.
       if (
         deadline === undefined ||
         !reclaimObserved ||
@@ -73,14 +73,11 @@ export function acquireFileLockSyncWithRetry(
       if (performance.now() >= deadline) {
         throw Object.assign(
           new Error(`Storage lock admission timed out: ${lockPath}`, { cause: error }),
-          {
-            code: "file_lock_timeout",
-            lockPath,
-          },
+          { code: "file_lock_timeout", lockPath },
         );
       }
-      // Re-observe through the same Root and its original remaining budget,
-      // before any caller operation or SQLite transaction has been entered.
+      // Reacquire through the same Root and original budget before entering
+      // caller work; an admitted database transaction is never replayed.
     }
   }
 }
@@ -99,10 +96,8 @@ function rejectUnsupportedLockPath(lockPath: string): void {
   try {
     observed = fs.lstatSync(lockPath);
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return;
-    }
-    throw error;
+    ignoreMissingPath(error);
+    return;
   }
   if (observed.isFile() && !observed.isSymbolicLink()) {
     return;

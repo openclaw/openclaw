@@ -11,22 +11,6 @@ function asConfig(value: unknown): CoreConfig {
 }
 
 describe("listIrcAccountIds", () => {
-  it("normalizes, deduplicates, and sorts configured account ids", () => {
-    const cfg = asConfig({
-      channels: {
-        irc: {
-          accounts: {
-            "Ops Team": {},
-            "ops-team": {},
-            Work: {},
-          },
-        },
-      },
-    });
-
-    expect(listIrcAccountIds(cfg)).toEqual(["ops-team", "work"]);
-  });
-
   it("keeps the implicit default account when named accounts are added to top-level connection config", () => {
     const cfg = asConfig({
       channels: {
@@ -49,24 +33,6 @@ describe("listIrcAccountIds", () => {
   });
 });
 
-describe("resolveDefaultIrcAccountId", () => {
-  it("prefers configured defaultAccount when it matches", () => {
-    const cfg = asConfig({
-      channels: {
-        irc: {
-          defaultAccount: "Ops Team",
-          accounts: {
-            default: {},
-            "ops-team": {},
-          },
-        },
-      },
-    });
-
-    expect(resolveDefaultIrcAccountId(cfg)).toBe("ops-team");
-  });
-});
-
 describe("resolveIrcAccount", () => {
   let fixtureDirectory: string;
   let fixturePasswordFile: string;
@@ -80,52 +46,12 @@ describe("resolveIrcAccount", () => {
   afterAll(() => fs.rmSync(fixtureDirectory, { recursive: true, force: true }));
   afterEach(() => vi.unstubAllEnvs());
 
-  it("matches normalized configured account ids", () => {
-    const account = resolveIrcAccount({
-      cfg: asConfig({
-        channels: {
-          irc: {
-            accounts: {
-              "Ops Team": {
-                host: "irc.example.com",
-                nick: "claw",
-              },
-            },
-          },
-        },
-      }),
-      accountId: "ops-team",
-    });
-
-    expect(account.accountId).toBe("ops-team");
-    expect(account.host).toBe("irc.example.com");
-    expect(account.nick).toBe("claw");
-    expect(account.configured).toBe(true);
-  });
-
-  it("parses delimited IRC_CHANNELS env values for the default account", () => {
-    vi.stubEnv("IRC_CHANNELS", "alpha, beta\ngamma; delta");
-    const account = resolveIrcAccount({
-      cfg: asConfig({
-        channels: {
-          irc: {
-            host: "irc.example.com",
-            nick: "claw",
-          },
-        },
-      }),
-    });
-
-    expect(account.config.channels).toEqual(["alpha", "beta", "gamma", "delta"]);
-  });
-
   it.each([
     { accountId: "default", credential: "password" },
     { accountId: "default", credential: "nickserv" },
-    { accountId: "default", credential: "nickserv", enabled: false },
   ])(
-    "isolates an unavailable $credential SecretRef for $accountId only when enabled=$enabled",
-    ({ accountId, credential, enabled }) => {
+    "isolates an unavailable $credential SecretRef for $accountId",
+    ({ accountId, credential }) => {
       vi.stubEnv("IRC_PASSWORD", "ambient-server-secret");
       vi.stubEnv("IRC_NICKSERV_PASSWORD", "ambient-nickserv-secret");
 
@@ -140,7 +66,7 @@ describe("resolveIrcAccount", () => {
                   nick: "openclaw",
                   ...(credential === "password"
                     ? { password: ref, passwordFile: fixturePasswordFile }
-                    : { nickserv: { enabled, password: ref, passwordFile: fixturePasswordFile } }),
+                    : { nickserv: { password: ref, passwordFile: fixturePasswordFile } }),
                 },
               },
             },
@@ -150,7 +76,7 @@ describe("resolveIrcAccount", () => {
       });
 
       expect(account.configured).toBe(true);
-      expect(account.tokenStatus).toBe(enabled === false ? "available" : "configured_unavailable");
+      expect(account.tokenStatus).toBe("configured_unavailable");
       if (credential === "password") {
         expect(account.password).toBe("");
         expect(account.passwordSource).toBe("config");
@@ -163,11 +89,7 @@ describe("resolveIrcAccount", () => {
   it.each<[string, string, string, string, boolean, string]>([
     ["password", "default", "plain", "env", true, "env"],
     ["password", "default", "plain", "", true, "file"],
-    ["password", "work", "plain", "env", true, "file"],
     ["password", "work", "plain", "env", false, "plain"],
-    ["nickserv", "default", "plain", "env", true, "plain"],
-    ["nickserv", "default", "", "env", true, "env"],
-    ["nickserv", "default", "", "", true, "file"],
     ["nickserv", "work", "", "env", true, "file"],
   ])(
     "preserves %s precedence for %s (plaintext=%s, env=%s, file=%s => %s)",

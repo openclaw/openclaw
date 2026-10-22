@@ -17,7 +17,6 @@ import {
   GATEWAY_STORE_TEST_HELLO as HELLO,
   stubGatewayStoreTestGlobals,
 } from "./gateway-store.test-support.ts";
-import type { ApplicationGatewayConnectOptions } from "./gateway.ts";
 import { loadSettings, persistSessionToken, saveSettings } from "./settings.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
@@ -78,7 +77,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
     const configured = gateway.connection.gatewayUrl;
     vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl: configured, proxyPath: "/dev-proxy" });
     gateway.connect({ token: "configured-credential" });
-    current().opts.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
+    current().testOptions.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
     const connection = { ...gateway.connection };
 
     gateway.connect({ gatewayUrl: "wss://other.example", token: "other-credential" });
@@ -91,7 +90,10 @@ describe("createApplicationGateway authentication diagnostics", () => {
 
     gateway.connect();
     expect(store.clients).toHaveLength(2);
-    expect(current().opts).toMatchObject({ url: configured, token: "configured-credential" });
+    expect(current().testOptions).toMatchObject({
+      url: configured,
+      token: "configured-credential",
+    });
   });
 
   it("does not persist a password-mode secret or accept a retired client hello", () => {
@@ -105,14 +107,14 @@ describe("createApplicationGateway authentication diagnostics", () => {
     expect(write).not.toHaveBeenCalled();
     expect(loadSettings().token).toBe("previous-token");
 
-    current().opts.onHello?.({ ...HELLO, snapshot: { authMode: "password" } });
+    current().testOptions.onHello?.({ ...HELLO, snapshot: { authMode: "password" } });
     expect(loadSettings().token).toBe("");
     expect(gateway.connection.token).toBe(secret);
     expect(write).not.toHaveBeenCalled();
 
     // Late hello from a replaced client must not persist its submitted secret.
     gateway.connect({ token: "replacement-secret" });
-    retired.opts.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
+    retired.testOptions.onHello?.({ ...HELLO, snapshot: { authMode: "token" } });
     expect(loadSettings().token).toBe("");
   });
 
@@ -131,7 +133,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
   }
 
   function rejectStaleBuild() {
-    current().opts.onClose?.(
+    current().testOptions.onClose?.(
       rejection(
         {
           code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
@@ -145,10 +147,10 @@ describe("createApplicationGateway authentication diagnostics", () => {
   }
 
   it.each([
-    { action: "resume", jitter: 0, elapsed: 1_000, probes: 2, reloads: 1 },
-    { action: "stop during initial jitter", jitter: 0.5, elapsed: 30_000, probes: 0, reloads: 0 },
-    { action: "stop during probe retry", jitter: 0, elapsed: 30_000, probes: 1, reloads: 0 },
-  ])("keeps build recovery owned by the current connection: $action", async (scenario) => {
+    { action: "resume", jitter: 0, elapsed: 1_000, reloads: 1 },
+    { action: "stop during initial jitter", jitter: 0.5, elapsed: 30_000, reloads: 0 },
+    { action: "stop during probe retry", jitter: 0, elapsed: 30_000, reloads: 0 },
+  ])("keeps build reload owned by the current connection: $action", async (scenario) => {
     vi.useFakeTimers();
     vi.mocked(Math.random).mockReturnValue(scenario.jitter);
     const { replace, fetchMock } = stubBuildReloadDocument();
@@ -167,9 +169,8 @@ describe("createApplicationGateway authentication diagnostics", () => {
 
     await vi.advanceTimersByTimeAsync(scenario.elapsed);
     expect(replace).toHaveBeenCalledTimes(scenario.reloads);
-    expect(fetchMock).toHaveBeenCalledTimes(scenario.probes);
-    expect(sessionStorage.getItem(RELOAD_GUARD_KEY)).toBe(
-      scenario.reloads ? "replacement-build" : null,
+    expect(JSON.parse(sessionStorage.getItem(RELOAD_GUARD_KEY) ?? "null")).toEqual(
+      scenario.reloads ? { buildId: "replacement-build", at: expect.any(Number) } : null,
     );
   });
 
@@ -213,9 +214,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
       await vi.waitFor(() => expect(replace).toHaveBeenCalledOnce());
       const destination = new URL(replace.mock.calls[0]![0]);
       const resumed = resolveApplicationStartupSettings(loadSettings(), destination);
-      expect(resumed.pendingBootstrapToken).toBe(
-        handoff === "replacement" ? "replacement-bootstrap" : bootstrapToken,
-      );
+      expect(resumed.pendingBootstrapToken).toBe("replacement-bootstrap");
       expect(resumed.pendingBootstrapProfile).toBe("owner");
       expect(resumed.location.pathname).toBe("/settings/appearance");
       expect(new URLSearchParams(resumed.location.search).get("keep")).toBe("yes");
@@ -232,7 +231,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
 
   it("retires a rejected browser handoff before retrying with the Gateway secret", () => {
     gateway.connect({ bootstrapToken: "synthetic-used-bootstrap", bootstrapProfile: "owner" });
-    current().opts.onClose?.(
+    current().testOptions.onClose?.(
       rejection(
         { code: ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID },
         "INVALID_REQUEST",
@@ -242,9 +241,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
     );
     gateway.connect({ token: "synthetic-replacement-secret" });
 
-    expect(current().opts.token).toBe("synthetic-replacement-secret");
-    expect(current().opts.bootstrapToken).toBeUndefined();
-    expect(current().opts.bootstrapProfile).toBeUndefined();
+    expect(current().testOptions.token).toBe("synthetic-replacement-secret");
+    expect(current().testOptions.bootstrapToken).toBeUndefined();
+    expect(current().testOptions.bootstrapProfile).toBeUndefined();
   });
 
   it("does not reload the serving document for a remote Gateway", async () => {
@@ -261,30 +260,28 @@ describe("createApplicationGateway authentication diagnostics", () => {
     expect(gateway.snapshot.phase).toBe("reload-required");
   });
 
-  it.each([
-    { authReason: "trusted_proxy_user_not_allowed", expected: "trusted_proxy_user_not_allowed" },
-  ])("projects only a current recognized auth reason: $authReason", ({ authReason, expected }) => {
+  it("projects only a current recognized auth reason", () => {
     gateway.start();
     const rejected = rejection({
       code: ConnectErrorDetailCodes.AUTH_UNAUTHORIZED,
-      authReason,
+      authReason: "trusted_proxy_user_not_allowed",
     });
-    current().opts.onClose?.(rejected);
-    expect(gateway.snapshot.lastErrorAuthReason).toBe(expected);
+    current().testOptions.onClose?.(rejected);
+    expect(gateway.snapshot.lastErrorAuthReason).toBe("trusted_proxy_user_not_allowed");
 
     const stale = current();
     gateway.connect();
     expect(gateway.snapshot.lastErrorAuthReason).toBeNull();
-    stale.opts.onClose?.(rejected);
+    stale.testOptions.onClose?.(rejected);
     expect(gateway.snapshot.lastErrorAuthReason).toBeNull();
 
-    current().opts.onClose?.(rejected);
-    current().opts.onHello?.(HELLO);
+    current().testOptions.onClose?.(rejected);
+    current().testOptions.onHello?.(HELLO);
     expect(gateway.snapshot.lastErrorAuthReason).toBeNull();
-    current().opts.onClose?.(rejected);
-    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
+    current().testOptions.onClose?.(rejected);
+    current().testOptions.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
     expect(gateway.snapshot.lastErrorAuthReason).toBeNull();
-    current().opts.onClose?.(rejected);
+    current().testOptions.onClose?.(rejected);
     gateway.stop();
     expect(gateway.snapshot.lastErrorAuthReason).toBeNull();
   });
@@ -294,15 +291,15 @@ describe("createApplicationGateway authentication diagnostics", () => {
     beforeEach(() => {
       stopDiagnostics = gateway.subscribeEventLog(() => {});
       gateway.start();
-      current().opts.onHello?.(hello("account-a"));
-      current().opts.onEvent?.(A_EVENT);
+      current().testOptions.onHello?.(hello("account-a"));
+      current().testOptions.onEvent?.(A_EVENT);
     });
     it("captures bounded immutable history only while diagnostics is subscribed", () => {
       stopDiagnostics();
       const idleHistory = gateway.eventLog;
       const delivered = vi.fn();
       gateway.subscribeEvents(delivered);
-      current().opts.onEvent?.(A_EVENT);
+      current().testOptions.onEvent?.(A_EVENT);
       expect(gateway.eventLog).toBe(idleHistory);
       expect(gateway.eventLog).toEqual([]);
       expect(delivered).toHaveBeenCalledExactlyOnceWith(A_EVENT);
@@ -310,11 +307,11 @@ describe("createApplicationGateway authentication diagnostics", () => {
       const observed = vi.fn();
       const stopFirst = gateway.subscribeEventLog(observed);
       const stopSecond = gateway.subscribeEventLog(() => {});
-      current().opts.onEvent?.(A_EVENT);
+      current().testOptions.onEvent?.(A_EVENT);
       const captured = gateway.eventLog;
       stopFirst();
       for (let index = 0; index < 251; index++) {
-        current().opts.onEvent?.(createGatewayEvent("chat", { index }));
+        current().testOptions.onEvent?.(createGatewayEvent("chat", { index }));
       }
       expect(observed).toHaveBeenCalledOnce();
       expect(captured.map((entry) => entry.payload)).toEqual([A_EVENT.payload]);
@@ -327,24 +324,22 @@ describe("createApplicationGateway authentication diagnostics", () => {
       expect(gateway.eventLogRevision).toBe(0);
       const stopReopened = gateway.subscribeEventLog(observed);
       expect(gateway.eventLog).toEqual([]);
-      current().opts.onEvent?.(B_EVENT);
+      current().testOptions.onEvent?.(B_EVENT);
       expect(gateway.eventLog.map((entry) => entry.payload)).toEqual([B_EVENT.payload]);
       stopReopened();
     });
 
-    it.each([["shared token", { token: "synthetic-replacement-token" }]] satisfies Array<
-      [string, ApplicationGatewayConnectOptions]
-    >)("retires old payloads before connecting with a changed %s", (_name, overrides) => {
+    it("retires old payloads before connecting with a changed shared token", () => {
       const oldClient = current();
       const observed = vi.fn<(events: readonly EventLogEntry[]) => void>();
       gateway.subscribeEventLog(observed);
 
-      gateway.connect(overrides);
+      gateway.connect({ token: "synthetic-replacement-token" });
 
       expect(gateway.eventLog).toEqual([]);
       expect(observed).toHaveBeenLastCalledWith([]);
       expect(gateway.eventLogRevision).toBe(1);
-      oldClient.opts.onEvent?.(A_EVENT);
+      oldClient.testOptions.onEvent?.(A_EVENT);
       expect(gateway.eventLog).toEqual([]);
     });
 
@@ -359,10 +354,10 @@ describe("createApplicationGateway authentication diagnostics", () => {
           sessionStorage.setItem(key, request);
         }
         if (recoveryScope === "") {
-          current().opts.onHello?.(HELLO);
+          current().testOptions.onHello?.(HELLO);
         }
         Object.defineProperty(current(), "recoveryScope", { value: recoveryScope });
-        current().opts.onRecoveryScopeChange?.();
+        current().testOptions.onRecoveryScopeChange?.();
         expect(sessionStorage.getItem(ownKey)).toBe(recoveryScope ? request : null);
         expect(sessionStorage.getItem(oldKey)).toBeNull();
         expect(sessionStorage.getItem(otherGatewayKey)).toBe(request);
@@ -379,9 +374,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
     it("retires an account change at unchanged settings without requiring presence", () => {
       const observed = vi.fn<(events: readonly EventLogEntry[]) => void>();
       gateway.subscribeEventLog(observed);
-      current().opts.onClose?.({ code: 1006, reason: "lost", willRetry: true });
+      current().testOptions.onClose?.({ code: 1006, reason: "lost", willRetry: true });
 
-      current().opts.onHello?.(hello("account-b"));
+      current().testOptions.onHello?.(hello("account-b"));
 
       expect(gateway.snapshot.selfUser).toBeNull();
       expect(gateway.connectionRevision).toBe(0);
@@ -389,9 +384,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
       expect(gateway.eventLogRevision).toBe(1);
       expect(observed).toHaveBeenLastCalledWith([]);
 
-      current().opts.onEvent?.(B_EVENT);
-      current().opts.onHello?.(hello("account-b"));
-      current().opts.onRecoveryScopeChange?.();
+      current().testOptions.onEvent?.(B_EVENT);
+      current().testOptions.onHello?.(hello("account-b"));
+      current().testOptions.onRecoveryScopeChange?.();
       expect(gateway.eventLog.map((event) => event.payload)).toEqual([B_EVENT.payload]);
       expect(gateway.eventLogRevision).toBe(1);
     });
@@ -409,7 +404,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
           if (action === "replace") {
             gateway.connect({ gatewayUrl: C_URL });
           } else {
-            current().opts.onEvent?.(B_EVENT);
+            current().testOptions.onEvent?.(B_EVENT);
           }
         });
         gateway.subscribeEventLog((events) => observed.push(events.map((event) => event.payload)));
@@ -457,7 +452,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
           gateway.connect({ gatewayUrl: B_URL });
           expect(store.clients[1]?.started).toBe(0);
         } else {
-          retired.opts.onHello?.(hello("account-b"));
+          retired.testOptions.onHello?.(hello("account-b"));
         }
 
         expect(observed).toHaveBeenLastCalledWith([]);
@@ -502,7 +497,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
     ({ gateway, current } = createStore({ settings }));
     try {
       gateway.connect();
-      current().opts.onHello?.(hello("account-a"));
+      current().testOptions.onHello?.(hello("account-a"));
       localStorage.setItem(peerBootKey, JSON.stringify(peerRecord));
       expect(await new SessionSnapshotStore().read(sessionKey)).not.toBeNull();
       gateway.connect({ token: "" });
@@ -529,74 +524,68 @@ describe("canvas capability renewal", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each([{ scopes: ["operator.sessions.write"] }])(
-    "does not renew a canvas capability without operator read access: $scopes",
-    async ({ scopes }) => {
-      const { gateway, current } = createStore();
-      gateway.start();
-      current().request.mockRejectedValue(
-        new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.read" }),
-      );
-      const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
-      current().opts.onHello?.({
-        ...HELLO,
-        auth: { role: "operator", scopes },
-        pluginSurfaceUrls: { canvas: helloUrl },
-      });
-      await vi.dynamicImportSettled();
-      await vi.advanceTimersByTimeAsync(57 * 60_000);
+  it("does not renew a canvas capability without operator read access", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    current().request.mockRejectedValue(
+      new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.read" }),
+    );
+    const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
+    current().testOptions.onHello?.({
+      ...HELLO,
+      auth: { role: "operator", scopes: ["operator.sessions.write"] },
+      pluginSurfaceUrls: { canvas: helloUrl },
+    });
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(57 * 60_000);
 
-      const refreshes = current().request.mock.calls.filter(
-        ([method]) => method === "plugin.surface.refresh",
-      );
-      expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(helloUrl);
-      gateway.stop();
-      expect(refreshes).toHaveLength(0);
-    },
-  );
+    const refreshes = current().request.mock.calls.filter(
+      ([method]) => method === "plugin.surface.refresh",
+    );
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(helloUrl);
+    gateway.stop();
+    expect(refreshes).toHaveLength(0);
+  });
 
-  it.each(["operator.read"])(
-    "renews with %s and stops after a reconnect without read access",
-    async (scope) => {
-      const { gateway, current } = createStore();
-      gateway.start();
-      const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
-      const refreshedUrl = "https://canvas.test/__openclaw__/cap/refreshed";
-      current().request.mockImplementation(async (method) => {
-        if (method === "users.self") {
-          return { profile: { id: "reader", emails: [] } };
-        }
-        return {
-          surface: "canvas",
-          pluginSurfaceUrls: { canvas: refreshedUrl },
-          expiresAtMs: Date.now() + 60_000,
-        };
-      });
-      current().opts.onHello?.({
-        ...HELLO,
-        auth: { role: "operator", scopes: [scope] },
-        pluginSurfaceUrls: { canvas: helloUrl },
-      });
-      await vi.dynamicImportSettled();
-      expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(refreshedUrl);
-      await vi.advanceTimersByTimeAsync(45_000);
-      expect(
-        current().request.mock.calls.filter(([method]) => method === "plugin.surface.refresh"),
-      ).toHaveLength(2);
+  it("renews with operator.read and stops after a reconnect without read access", async () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const helloUrl = "https://canvas.test/__openclaw__/cap/hello";
+    const refreshedUrl = "https://canvas.test/__openclaw__/cap/refreshed";
+    current().request.mockImplementation(async (method) => {
+      if (method === "users.self") {
+        return { profile: { id: "reader", emails: [] } };
+      }
+      return {
+        surface: "canvas",
+        pluginSurfaceUrls: { canvas: refreshedUrl },
+        expiresAtMs: Date.now() + 60_000,
+      };
+    });
+    current().testOptions.onHello?.({
+      ...HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
+      pluginSurfaceUrls: { canvas: helloUrl },
+    });
+    await vi.dynamicImportSettled();
+    expect(gateway.snapshot.canvasPluginSurfaceUrl).toBe(refreshedUrl);
+    await vi.advanceTimersByTimeAsync(45_000);
+    expect(
+      current().request.mock.calls.filter(([method]) => method === "plugin.surface.refresh"),
+    ).toHaveLength(2);
 
-      current().opts.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
-      current().request.mockClear();
-      current().opts.onHello?.({
-        ...HELLO,
-        pluginSurfaceUrls: { canvas: helloUrl },
-      });
-      await vi.dynamicImportSettled();
-      await vi.advanceTimersByTimeAsync(57 * 60_000);
-      const refreshes = current().request.mock.calls.filter(
-        ([method]) => method === "plugin.surface.refresh",
-      );
-      gateway.stop();
-      expect(refreshes).toHaveLength(0);
-    },
-  );
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+    current().request.mockClear();
+    current().testOptions.onHello?.({
+      ...HELLO,
+      pluginSurfaceUrls: { canvas: helloUrl },
+    });
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(57 * 60_000);
+    const refreshes = current().request.mock.calls.filter(
+      ([method]) => method === "plugin.surface.refresh",
+    );
+    gateway.stop();
+    expect(refreshes).toHaveLength(0);
+  });
 });

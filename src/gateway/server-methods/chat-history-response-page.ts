@@ -1,3 +1,4 @@
+import { constants as zlibConstants, deflateRawSync } from "node:zlib";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
 import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
@@ -29,29 +30,6 @@ function readPageMessageSequence(message: unknown, messageSequences?: MessageSeq
     messageSequences?.[readChatHistoryPaginationKey(message) ?? ""] ??
     readChatHistoryMessageSeq(message)
   );
-}
-
-function resolveChatHistoryNextOffset(params: {
-  messages: unknown[];
-  totalMessages: number;
-  offset: number;
-  rawPageMessages: number;
-  messageSequences?: MessageSequences;
-}): number {
-  const sequence = (message: unknown) => readPageMessageSequence(message, params.messageSequences);
-  let oldestSeq: number | undefined;
-  for (const message of params.messages) {
-    oldestSeq = sequence(message);
-    if (oldestSeq !== undefined) {
-      break;
-    }
-  }
-  if (oldestSeq === undefined) {
-    return params.offset + params.rawPageMessages;
-  }
-  const recordOffset = params.totalMessages - oldestSeq + 1;
-  // Every selected source row is complete, inline or by reference.
-  return Math.max(params.offset + 1, recordOffset);
 }
 
 /** Preserve token metrics saved by pre-removal builds; new markers own their metrics. */
@@ -118,75 +96,6 @@ function resolveChatHistoryMessageGroup(
   return { start, end, cost };
 }
 
-function capChatHistoryTail(params: {
-  messages: unknown[];
-  maxCost: number;
-  messageCost: (message: unknown) => number;
-  messageSequences?: MessageSequences;
-}): unknown[] {
-  let start = params.messages.length;
-  let cost = 0;
-  while (start > 0) {
-    const group = resolveChatHistoryMessageGroup(
-      params.messages,
-      start - 1,
-      params.messageCost,
-      params.messageSequences,
-    );
-    if (cost + group.cost > params.maxCost) {
-      break;
-    }
-    start = group.start;
-    cost += group.cost;
-  }
-  return start > 0 ? params.messages.slice(start) : params.messages;
-}
-
-function capChatHistoryAroundMessage(params: {
-  messages: unknown[];
-  messageId: string;
-  maxCost: number;
-  messageCost: (message: unknown) => number;
-  messageSequences?: MessageSequences;
-}): unknown[] {
-  const anchorIndex = params.messages.findIndex(
-    (message) => readChatHistoryMessageId(message) === params.messageId,
-  );
-  if (anchorIndex === -1) {
-    return [];
-  }
-  const groupAt = (index: number) =>
-    resolveChatHistoryMessageGroup(
-      params.messages,
-      index,
-      params.messageCost,
-      params.messageSequences,
-    );
-  const anchorGroup = groupAt(anchorIndex);
-  if (!(anchorGroup.cost <= params.maxCost)) {
-    return [params.messages[anchorIndex]];
-  }
-
-  let { start, end, cost } = anchorGroup;
-  const grow = (index: number) => {
-    const group = groupAt(index);
-    if (!(cost + group.cost <= params.maxCost)) {
-      return false;
-    }
-    start = Math.min(start, group.start);
-    end = Math.max(end, group.end);
-    cost += group.cost;
-    return true;
-  };
-  let canGrowOlder = start > 0;
-  let canGrowNewer = end < params.messages.length;
-  while (canGrowOlder || canGrowNewer) {
-    canGrowOlder &&= grow(start - 1) && start > 0;
-    canGrowNewer &&= grow(end) && end < params.messages.length;
-  }
-  return params.messages.slice(start, end);
-}
-
 export function prepareChatHistoryResponsePage(
   historyPage: ChatHistoryPage,
   {
@@ -236,30 +145,86 @@ export function prepareChatHistoryResponsePage(
     messages: groups,
     maxSingleMessageBytes: Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxCost - 1),
   });
-  const capParams = { messages: replaced.messages, maxCost, messageCost, messageSequences };
+  const messages = replaced.messages;
+  function capChatHistoryTail(): unknown[] {
+    let start = messages.length;
+    let cost = 0;
+    while (start > 0) {
+      const group = resolveChatHistoryMessageGroup(
+        messages,
+        start - 1,
+        messageCost,
+        messageSequences,
+      );
+      if (cost + group.cost > maxCost) {
+        break;
+      }
+      start = group.start;
+      cost += group.cost;
+    }
+    return start > 0 ? messages.slice(start) : messages;
+  }
+
+  function capChatHistoryAroundMessage(anchorMessageId: string): unknown[] {
+    const anchorIndex = messages.findIndex(
+      (message) => readChatHistoryMessageId(message) === anchorMessageId,
+    );
+    if (anchorIndex === -1) {
+      return [];
+    }
+    const groupAt = (index: number) =>
+      resolveChatHistoryMessageGroup(messages, index, messageCost, messageSequences);
+    const anchorGroup = groupAt(anchorIndex);
+    if (!(anchorGroup.cost <= maxCost)) {
+      return [messages[anchorIndex]];
+    }
+
+    let { start, end, cost } = anchorGroup;
+    const grow = (index: number) => {
+      const group = groupAt(index);
+      if (!(cost + group.cost <= maxCost)) {
+        return false;
+      }
+      start = Math.min(start, group.start);
+      end = Math.max(end, group.end);
+      cost += group.cost;
+      return true;
+    };
+    let canGrowOlder = start > 0;
+    let canGrowNewer = end < messages.length;
+    while (canGrowOlder || canGrowNewer) {
+      canGrowOlder &&= grow(start - 1) && start > 0;
+      canGrowNewer &&= grow(end) && end < messages.length;
+    }
+    return messages.slice(start, end);
+  }
   const capped = messageId
-    ? capChatHistoryAroundMessage({
-        ...capParams,
-        messageId: historyPage.anchor?.direction
+    ? capChatHistoryAroundMessage(
+        historyPage.anchor?.direction
           ? (readChatHistoryMessageId(
               historyPage.anchor.direction === "newer"
                 ? replaced.messages[0]
                 : replaced.messages.at(-1),
             ) ?? messageId)
           : messageId,
-      })
-    : capChatHistoryTail(capParams);
+      )
+    : capChatHistoryTail();
   const pagination = historyPage.pagination;
-  const candidateNextOffset =
-    pagination === undefined
-      ? undefined
-      : resolveChatHistoryNextOffset({
-          messages: capped,
-          totalMessages: pagination.totalMessages,
-          offset: pagination.offset,
-          rawPageMessages: pagination.rawPageMessages,
-          messageSequences: pagination.messageSequences,
-        });
+  let candidateNextOffset: number | undefined;
+  if (pagination !== undefined) {
+    let oldestSeq: number | undefined;
+    for (const message of capped) {
+      oldestSeq = readPageMessageSequence(message, pagination.messageSequences);
+      if (oldestSeq !== undefined) {
+        break;
+      }
+    }
+    // Every selected source row is complete, inline or by reference.
+    candidateNextOffset =
+      oldestSeq === undefined
+        ? pagination.offset + pagination.rawPageMessages
+        : Math.max(pagination.offset + 1, pagination.totalMessages - oldestSeq + 1);
+  }
   const hasMore =
     pagination !== undefined && candidateNextOffset !== undefined
       ? candidateNextOffset < pagination.totalMessages
@@ -300,13 +265,24 @@ export function encodeChatHistoryResponsePage(
     return page;
   }
   const response = prepareChatHistoryResponsePage(page, params);
+  const messages = new TextEncoder().encode(JSON.stringify(response.messages));
   return {
     ...page,
     messages: [],
     activity: undefined,
+    // Paging maps have already become response cursors; do not clone them onto the host.
+    pagination: undefined,
+    anchor: undefined,
+    // Own an exact ArrayBuffer so worker transfer never clones a pooled Buffer.
+    encodedMessagesDeflate:
+      params.deflateResponse && messages.byteLength >= 4 * 1024
+        ? new Uint8Array(
+            deflateRawSync(messages, { level: 1, finishFlush: zlibConstants.Z_SYNC_FLUSH }),
+          )
+        : undefined,
     encodedResponse: {
       ...response,
-      messages: new TextEncoder().encode(JSON.stringify(response.messages)),
+      messages,
     },
   };
 }

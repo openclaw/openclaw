@@ -60,7 +60,7 @@ openclaw gateway run
 
 ## How routing works
 
-With a valid proxy URL, protected runtime processes (`openclaw gateway run`, `openclaw node run`, `openclaw agent --local`) route normal HTTP and WebSocket egress through the proxy:
+With a valid proxy URL, protected runtime processes (`openclaw gateway run`, `openclaw node run`, `openclaw agent --local`, and the local terminal UI: `openclaw chat`, `openclaw terminal`, `openclaw tui --local`, and bare `openclaw` when it opens onboarding or the local TUI instead of a Gateway) route normal HTTP and WebSocket egress through the proxy:
 
 ```text
 OpenClaw process
@@ -172,7 +172,7 @@ openclaw proxy validate --proxy-url https://proxy.corp.example:8443 --proxy-ca-f
 
 If no config, environment, or `--proxy-url` value is available, the command reports a config problem; pass `--proxy-url` for a one-off preflight before changing config.
 
-With no `--allowed-url`/`--denied-url`, the default checks are: `https://example.com/` must succeed, and a temporary loopback canary server the proxy must not reach must be blocked. The loopback check passes on a transport failure, or on a non-2xx response that lacks the canary's per-run token; it fails on a 2xx response missing the token (an unexpected success from something other than the canary) and, especially, on any response carrying the matching token, since that proves the proxy actually forwarded a loopback destination it should have denied. Custom `--denied-url` targets have no such canary token, so they are fail-closed: any HTTP response counts as reachable, and a transport error fails the check too, because OpenClaw cannot confirm your proxy denied a reachable origin versus something else going wrong. Only the built-in loopback canary treats a transport error as proof of blocking. See [`openclaw proxy`](/cli/proxy) for the CLI-side statement of the same rule. `--apns-reachable` sends an intentionally invalid provider token, so a `403 InvalidProviderToken` response counts as proof the tunnel reached Apple. The command exits `1` on any validation failure; proxy URL credentials are redacted from both text and JSON output.
+With no `--allowed-url`/`--denied-url`, the default checks are: `https://example.com/` must succeed, and a temporary loopback canary server the proxy must not reach must be blocked. The loopback check passes on a transport failure, or on a non-2xx response that lacks the canary's per-run token; it fails on a 2xx response missing the token (an unexpected success from something other than the canary) and, especially, on any response carrying the matching token, since that proves the proxy actually forwarded a loopback destination it should have denied. Custom `--denied-url` targets have no such canary token, so validation rejects uncertain results: any HTTP response counts as reachable, and a transport error fails the check too, because OpenClaw cannot confirm your proxy denied a reachable origin versus something else going wrong. Only the built-in loopback canary treats a transport error as proof of blocking. See [`openclaw proxy`](/cli/proxy) for the CLI-side statement of the same rule. `--apns-reachable` sends an intentionally invalid provider token, so a `403 InvalidProviderToken` response counts as proof the tunnel reached Apple. The command exits `1` on any validation failure; proxy URL credentials are redacted from both text and JSON output.
 
 ```json
 {

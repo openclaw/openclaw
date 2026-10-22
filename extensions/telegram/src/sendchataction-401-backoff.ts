@@ -2,10 +2,10 @@ import { GrammyError, type Bot, type Transformer } from "grammy";
 import {
   computeBackoff,
   sleepWithAbort,
-  waitForAbortSignal,
   type BackoffPolicy,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { TELEGRAM_CHAT_ACTION_INTERVAL_MS } from "./chat-action-timing.js";
 import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
 
 type ChatAction = Parameters<Bot["api"]["sendChatAction"]>[1];
@@ -28,9 +28,6 @@ export type TelegramSendChatActionHandler = {
 
 type CreateTelegramSendChatActionHandlerParams = {
   logger: (message: string) => void;
-  maxConsecutive401?: number;
-  minIntervalMs?: number;
-  now?: () => number;
 };
 
 const BACKOFF_POLICY: BackoffPolicy = {
@@ -65,23 +62,17 @@ function is401Error(error: unknown): boolean {
  * that caused Telegram to delete bots (issue #27092).
  *
  * When a 401 occurs, exponential backoff is applied (1s → 2s → 4s → ... → 5min).
- * After maxConsecutive401 failures (default 10), all sendChatAction calls are
+ * After ten consecutive 401 failures, all sendChatAction calls are
  * suspended until reset() is called.
  */
 export function createTelegramSendChatActionHandler({
   logger,
-  maxConsecutive401 = 10,
-  minIntervalMs = 0,
-  now = () => Date.now(),
 }: CreateTelegramSendChatActionHandlerParams) {
   let consecutive401Failures = 0;
   let consecutiveTransientFailures = 0;
   let transientCooldownUntilMs = 0;
-  let failureVersion = 0;
-  let authorizationRetryTail = Promise.resolve();
   const blockedUntilByKey = new Map<string, number>();
-  const isSuspended = () =>
-    consecutive401Failures > 0 && consecutive401Failures >= maxConsecutive401;
+  const isSuspended = () => consecutive401Failures >= 10;
 
   const clearTransientCooldown = () => {
     consecutiveTransientFailures = 0;
@@ -89,7 +80,7 @@ export function createTelegramSendChatActionHandler({
   };
 
   const assertNotCoolingDown = () => {
-    const remainingMs = transientCooldownUntilMs - now();
+    const remainingMs = transientCooldownUntilMs - Date.now();
     if (remainingMs > 0) {
       throw new Error(`sendChatAction transient cooldown active for ${Math.ceil(remainingMs)}ms`);
     }
@@ -111,78 +102,40 @@ export function createTelegramSendChatActionHandler({
       return;
     }
 
-    const attemptedAt = now();
+    const attemptedAt = Date.now();
     // Reject cooldown starts so channel typing guards can stop their keepalive loops.
     assertNotCoolingDown();
 
     const threadId = threadParams?.message_thread_id;
-    const key =
-      minIntervalMs > 0
-        ? `${String(chatId)}:${action}${threadId === undefined ? "" : `:${threadId}`}`
-        : undefined;
-    if (key) {
-      const blockedUntil = blockedUntilByKey.get(key);
-      if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
-        return;
-      }
-      blockedUntilByKey.set(key, Number.POSITIVE_INFINITY);
+    const key = `${String(chatId)}:${action}${threadId === undefined ? "" : `:${threadId}`}`;
+    const blockedUntil = blockedUntilByKey.get(key);
+    if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
+      return;
     }
+    blockedUntilByKey.set(key, Number.POSITIVE_INFINITY);
 
     try {
       await send();
     } finally {
-      if (key) {
-        blockedUntilByKey.set(key, attemptedAt + minIntervalMs);
-      }
+      blockedUntilByKey.set(key, attemptedAt + TELEGRAM_CHAT_ACTION_INTERVAL_MS);
     }
   };
 
   const sendWithBackoff = async <T>(send: () => Promise<T>, signal: AbortSignal): Promise<T> => {
     signal.throwIfAborted();
     assertCanSend();
-    let attemptFailureVersion = failureVersion;
-    let releaseAuthorizationRetry: (() => void) | undefined;
     try {
       if (consecutive401Failures > 0) {
-        // Only one authorization retry may sleep or send for this account at a time.
-        const previousRetry = authorizationRetryTail;
-        const retryFinished = new Promise<void>((resolve) => {
-          releaseAuthorizationRetry = resolve;
-        });
-        // A canceled waiter can release its node without releasing its predecessor.
-        authorizationRetryTail = previousRetry.then(() => retryFinished);
-        await Promise.race([
-          previousRetry,
-          waitForAbortSignal(signal).then(() => {
-            throw new DOMException("Chat action canceled", "AbortError");
-          }),
-        ]);
-        signal.throwIfAborted();
-        assertCanSend();
-      }
-      let failuresBeforeBackoff = consecutive401Failures;
-      while (failuresBeforeBackoff > 0) {
-        const backoffMs = computeBackoff(BACKOFF_POLICY, failuresBeforeBackoff);
+        const backoffMs = computeBackoff(BACKOFF_POLICY, consecutive401Failures);
         logger(
           `sendChatAction backoff: waiting ${backoffMs}ms before retry ` +
-            `(failure ${consecutive401Failures}/${maxConsecutive401})`,
+            `(failure ${consecutive401Failures}/10)`,
         );
         await sleepWithAbort(backoffMs, signal);
-        // Another topic can change account state while this request backs off.
-        assertCanSend();
-        // Earlier in-flight calls can add failures; repeat only for a higher failure count.
-        if (consecutive401Failures <= failuresBeforeBackoff) {
-          break;
-        }
-        failuresBeforeBackoff = consecutive401Failures;
       }
-
-      attemptFailureVersion = failureVersion;
+      assertCanSend();
       const result = await send();
-      // A request admitted before a newer failure cannot establish account recovery.
-      if (attemptFailureVersion !== failureVersion) {
-        return result;
-      }
+      // Typing is best effort: any successful action clears the failure streak.
       if (consecutive401Failures > 0) {
         logger(`sendChatAction recovered after ${consecutive401Failures} consecutive 401 failures`);
         consecutive401Failures = 0;
@@ -194,13 +147,10 @@ export function createTelegramSendChatActionHandler({
         throw error;
       }
       if (is401Error(error)) {
-        if (attemptFailureVersion === failureVersion) {
-          clearTransientCooldown();
-        }
-        failureVersion++;
+        clearTransientCooldown();
         consecutive401Failures++;
 
-        if (consecutive401Failures >= maxConsecutive401) {
+        if (consecutive401Failures >= 10) {
           logger(
             `CRITICAL: sendChatAction suspended after ${consecutive401Failures} consecutive 401 errors. ` +
               `Bot token is likely invalid. Telegram may DELETE the bot if requests continue. ` +
@@ -208,22 +158,21 @@ export function createTelegramSendChatActionHandler({
           );
         } else {
           logger(
-            `sendChatAction 401 error (${consecutive401Failures}/${maxConsecutive401}). ` +
+            `sendChatAction 401 error (${consecutive401Failures}/10). ` +
               `Retrying with exponential backoff.`,
           );
         }
       } else if (isRetryableTelegramApiError(error, { context: "action" })) {
-        failureVersion++;
         consecutiveTransientFailures++;
         const retryAfterMs = readTelegramRetryAfterMs(error);
         const cooldownMs =
           retryAfterMs !== undefined && retryAfterMs > 0
             ? retryAfterMs
             : computeBackoff(BACKOFF_POLICY, consecutiveTransientFailures);
-        const cooldownStartedAt = now();
+        const cooldownStartedAt = Date.now();
         // Keep transient failures rejected through the same-chat coalesce window;
         // otherwise the next typing keepalive can look successful and reset its guard.
-        const coalescingUntilMs = cooldownStartedAt + minIntervalMs;
+        const coalescingUntilMs = cooldownStartedAt + TELEGRAM_CHAT_ACTION_INTERVAL_MS;
         transientCooldownUntilMs = Math.max(
           transientCooldownUntilMs,
           cooldownStartedAt + cooldownMs,
@@ -234,12 +183,10 @@ export function createTelegramSendChatActionHandler({
           `sendChatAction transient error (${consecutiveTransientFailures}). ` +
             `Cooling down ${effectiveCooldownMs}ms before retry.`,
         );
-      } else if (attemptFailureVersion === failureVersion) {
+      } else {
         clearTransientCooldown();
       }
       throw error;
-    } finally {
-      releaseAuthorizationRetry?.();
     }
   };
 

@@ -16,6 +16,24 @@ provenance-based deletion.
 Provided by the bundled `memory-core` plugin. `plugins.slots.memory` selects
 `memory-core` by default. Other memory plugins expose their own CLI namespaces.
 
+`search` and `session-backfill` route through the local Gateway when it is
+running. Search preserves its result limits, session scope, and recall recording.
+When dreaming is enabled, those recalls feed the requested agent's workspace
+just as they do when searching offline.
+Backfill preview, apply, and rollback retain their existing output. Apply keeps
+its bounded batch loop and requires the same Gateway owner throughout; a failed
+request is never replayed locally. Update an
+older Gateway if it does not support this routing.
+
+Other commands, and session backfill with `--rem` or `--archive-files`, require
+the local Gateway to be stopped. Diagnostics and previews can initialize writable
+stores. Stop the Gateway through its service
+owner, run the command, then restart it. Commands refuse before opening those
+stores when a Gateway owns the state directory; offline execution retains
+exclusive ownership through manager and worker cleanup. The provider health
+returned by `memory.status` RPC is different from the CLI's aggregate index,
+source, embedding, and dreaming diagnostics and repair options.
+
 When another plugin owns the memory slot and `memory-core` runs only as the
 dreaming consolidation sidecar:
 
@@ -73,6 +91,9 @@ configured, falls back to the default agent.
 With local llama.cpp embeddings, `--deep` and `--index` also show available
 server, model, capability, and endpoint diagnostics.
 
+Repair preserves recorded recall days, including local dates that differ from
+UTC. It fills in a day from the last recall timestamp only when no day is recorded.
+
 If the `Dreaming` line stays `off` even with `dreaming.enabled: true`, or
 scheduled sweeps never seem to run, the managed dreaming cron depends on the
 default agent's heartbeat firing to trigger reconciliation. See
@@ -108,7 +129,9 @@ extra-path details before showing indexing progress. The completion message
 reports the indexed file count. An empty corpus is a successful no-op: the
 command reports the resolved workspace path and that nothing was indexed, and
 leaves the missing `memory/` directory for the first memory write to create.
-Internal dreaming-narrative, cron, and heartbeat session transcripts are
+An index request that joins an active pass also processes newly observed
+memory-file changes before reporting completion.
+Internal Active Memory recall, dreaming-narrative, cron, and heartbeat session transcripts are
 excluded from indexing, including retained compressed narrative archives whose
 original sessions are no longer active. Sessions previously selected by
 `memory forget` also remain excluded. `--force` removes stale index records for
@@ -116,14 +139,30 @@ both groups without reindexing their retained transcripts. Ordinary retained,
 reset, and deleted user-session archives remain eligible until explicitly
 targeted.
 
+Recognizable Active Memory recall helpers are also excluded from existing search
+indexes before result limits are applied. Ordinary synchronization removes their
+stale index records without `--force` or re-embedding unchanged conversations.
+Historical transcripts without a recognizable helper identity remain eligible.
+
 Full rebuilds wait for temporary database cleanup before reporting completion.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
+SQLite background rebuilds retain completed work when foreground activity interrupts
+indexing. The next sync resumes the rebuild, incorporating source changes before
+publishing the complete index. Closing the memory owner or restarting the Gateway
+discards this unfinished work. PostgreSQL rebuilds restart after an interruption.
 
 When an embedding provider rate-limits indexing, each embedding operation gets
 up to five attempts. Retries honor valid provider cooldown hints, capped at
 60 seconds per wait. Other transient errors keep the shorter three-attempt
 budget. Permanent quota errors without a cooldown hint stop that operation.
 The verbose output shows each retry wait.
+
+For OpenAI and OpenAI-compatible embeddings, set
+`OPENCLAW_DEBUG_MEMORY_EMBEDDINGS=1` to log remote request counts, HTTP status,
+response sizes when provided, and vector shape. These diagnostics omit headers,
+URLs, input text, and vector contents. Validation errors identify the provider,
+model, batch size, and rejected condition. A rejected batch still aborts indexing;
+full rebuilds publish only a complete index.
 
 Interactive `memory_search` keeps three attempts and at most eight seconds of
 total retry sleep within the agent tool's 30-second deadline. A cancelled caller
@@ -155,7 +194,7 @@ Both repair commands replace the derived memory index while preserving other age
 state. Use `--agent` to limit the repair to the affected agent.
 
 <Warning>
-The default `openclaw-agent.sqlite` database also contains canonical sessions,
+The default `openclaw-agent.sqlite` database also contains stored sessions,
 transcripts, and other durable agent state. Never delete it or its `-wal`,
 `-shm`, or `-journal` sidecars to reset a memory index. Use `memory index --force`
 to rebuild, or [`memory reset`](/cli/memory#memory-reset) to clear the derived index and
@@ -214,6 +253,9 @@ If automatic indexing failed, or the index identity is incompatible, human
 output warns that matches may be incomplete. With `--json`, the response adds
 `stale: true`, plus `warning` and `action` fields. Treat an empty `results`
 array as authoritative only when `stale` is absent.
+
+If recording a search for later memory promotion fails, search still returns
+its matches with a warning naming the recording error.
 
 The Control UI's Memories tab shows the same warning and recovery guidance
 alongside stale search results, and clears them after a fresh search.
@@ -503,16 +545,16 @@ openclaw memory session-backfill --agent <id> --rollback [--json]
 | `--to YYYY-MM-DD`           | none         | Include messages on or before this day in the dreaming timezone.                                              |
 | `--limit-days <n>`          | `92`         | Process at most this many hash-untracked days, oldest first.                                                  |
 | `--archive-files <path...>` | none         | Also inspect foreign transcript files as untrusted input; embedded owner metadata is not accepted.            |
-| `--rem`                     | off          | Write deterministic grounded per-day previews to `DREAMS.md` and retain their source-origin records.          |
+| `--rem`                     | off          | Write rule-based grounded per-day previews to `DREAMS.md` and retain their source-origin records.             |
 | `--apply`                   | preview only | Drain all bounded batches, stage trusted candidates, and write reversible `DREAMS.md` diary blocks.           |
 | `--rollback`                | off          | Remove all grounded backfill candidates and shared backfill diary blocks, including `rem-backfill` artifacts. |
 | `--json`                    | off          | Print machine-readable per-day counts and top candidates.                                                     |
 
-The command reads the selected agent's canonical session store, including
+The command reads the selected agent's session store, including
 retained SQLite transcript identities from session rotation. It uses the same
 tracked message hashes and per-run caps as live session ingestion, so repeated
 `--apply` runs skip already ingested messages. Owner and agent lines from the
-canonical store are eligible; tool output, web or non-owner input, and turns
+session store are eligible; tool output, web or non-owner input, and turns
 without trustworthy owner provenance are excluded. Foreign archive files have
 no authenticated owner-provenance contract, so their embedded ownership fields
 remain untrusted and cannot be staged. Sessions previously purged with
@@ -559,7 +601,7 @@ facts into `MEMORY.md`). Only deep writes to `MEMORY.md`.
 - Human-readable phase output goes to `DREAMS.md` (or an existing `dreams.md`).
   By default (`dreaming.storage.mode: "separate"`) each phase also writes a
   standalone report to `memory/dreaming/<phase>/YYYY-MM-DD.md`; set `mode:
-"inline"` to fold reports into the daily memory file instead, or `"both"`
+  "inline"` to fold reports into the daily memory file instead, or `"both"`
   for both.
 - Scheduled and manual `memory promote` runs share the same deep-phase ranking
   signals and default thresholds; explicit CLI flags remain one-run overrides.
@@ -602,6 +644,11 @@ If active memory remote API key fields are configured as SecretRefs, `memory`
 commands resolve them from the active gateway snapshot; if the gateway is
 unavailable, the command fails fast. This requires a gateway supporting the
 `secrets.resolve` method; older gateways return an unknown-method error.
+
+When another plugin owns the memory slot, `memory status` and Doctor's memory
+probe also resolve that plugin's manifest-declared credentials before opening
+the provider. If a credential cannot be resolved, they report the provider as
+unavailable instead of authenticating with the unresolved reference.
 
 ## Related
 

@@ -1,9 +1,9 @@
-/* @vitest-environment jsdom */
-import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import { renderChatComposerNotices } from "../chat-view-notices.ts";
-import type { ChatChildAttention } from "./chat-child-attention.ts";
+/* @vitest-environment jsdom */
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { renderChatComposerNotices } from "../chat-view-notices.tsx";
 
 const parentKey = "agent:main:dashboard:parent";
 const childKey = "agent:main:subagent:diagnostic";
@@ -33,25 +33,32 @@ function mount(rows: GatewaySessionRow[] = [child]) {
   const container = document.body.appendChild(document.createElement("div"));
   const open = vi.fn();
   // Reproduce the parent entry point: no run error or new assistant message.
-  render(
-    renderChatComposerNotices({
-      sessionKey: parentKey,
-      subagentParentKey: parentKey,
-      messages: [{ role: "assistant", content: "The diagnostic is running." }],
-      subagentSessions: rows,
-      subagentSessionsRead: true,
-      onOpenSubagent: open,
-    }),
-    container,
-  );
-  const notice = container.querySelector<ChatChildAttention>("openclaw-chat-child-attention");
+  let props: Parameters<typeof renderChatComposerNotices>[0] = {
+    sessionKey: parentKey,
+    subagentParentKey: parentKey,
+    messages: [{ role: "assistant", content: "The diagnostic is running." }],
+    subagentSessions: rows,
+    subagentSessionsRead: true,
+    onOpenSubagent: open,
+  };
+  const view = mountSolid(renderChatComposerNotices, props, container);
+  const notice = container.querySelector<HTMLElement>("openclaw-chat-child-attention");
   expect(notice).not.toBeNull();
-  return { container, open, notice: notice! };
+  return {
+    container,
+    open,
+    notice: notice!,
+    unmount: view.dispose,
+    update(this: void, changes: Partial<typeof props>) {
+      props = { ...props, ...changes };
+      view.update(props);
+    },
+  };
 }
 
 it("shows the blocked child outcome in its idle parent and opens that exact child", async () => {
-  const { container, notice, open } = mount();
-  await notice.updateComplete;
+  const { container, open } = mount();
+  flush();
   const card = container.querySelector(".chat-child-attention");
   expect(card?.getAttribute("role")).toBe("status");
   expect(card?.textContent).toContain(child.label);
@@ -70,32 +77,32 @@ it.each(["failed", "timeout"] as const)(
       agentStatus: undefined,
       lastRunError: "Diagnostic failed <img src=x>",
     };
-    const { notice } = mount([failed]);
-    await notice.updateComplete;
+    const { notice, update } = mount([failed]);
+    flush();
     expect(notice.querySelector('[role="alert"]')?.textContent).toContain(failed.lastRunError);
     expect(notice.querySelector("img")).toBeNull();
-    notice.sessions = [{ ...failed, lastReadAt: now }];
-    await notice.updateComplete;
+    update({ subagentSessions: [{ ...failed, lastReadAt: now }] });
+    flush();
     expect(notice.querySelector(".chat-child-attention")).toBeNull();
   },
 );
 
 it("reconciles cleared notes, expiry, and changed parent without retaining stale blockers", async () => {
-  const { notice } = mount();
-  await notice.updateComplete;
-  notice.sessions = [{ ...child, agentStatus: undefined }];
-  await notice.updateComplete;
+  const { notice, update } = mount();
+  flush();
+  update({ subagentSessions: [{ ...child, agentStatus: undefined }] });
+  flush();
   expect(notice.querySelector(".chat-child-attention")).toBeNull();
-  notice.sessions = [child];
-  await notice.updateComplete;
-  notice.sessionKey = "agent:main:dashboard:other";
-  await notice.updateComplete;
+  update({ subagentSessions: [child] });
+  flush();
+  update({ subagentParentKey: "agent:main:dashboard:other" });
+  flush();
   expect(notice.querySelector(".chat-child-attention")).toBeNull();
-  notice.sessionKey = parentKey;
-  await notice.updateComplete;
+  update({ subagentParentKey: parentKey });
+  flush();
   expect(notice.querySelector(".chat-child-attention")).not.toBeNull();
   await vi.advanceTimersByTimeAsync(60_001);
-  await notice.updateComplete;
+  flush();
   expect(notice.querySelector(".chat-child-attention")).toBeNull();
   expect(vi.getTimerCount()).toBe(0);
 });
@@ -107,27 +114,28 @@ it("uses sidebar ancestry for nested outcomes and excludes unrelated or archived
     spawnedBy: parentKey,
   };
   const nested = { ...child, spawnedBy: intermediate.key };
-  const { notice } = mount([
+  const { notice, update } = mount([
     intermediate,
     nested,
     { ...child, key: "agent:main:subagent:other", spawnedBy: "agent:main:other" },
     { ...child, key: "agent:main:subagent:archived", archived: true },
   ]);
-  await notice.updateComplete;
+  flush();
   expect(
     [...notice.querySelectorAll("[data-child-session-key]")].map((node) =>
       node.getAttribute("data-child-session-key"),
     ),
   ).toEqual([childKey]);
-  notice.sessions = [{ ...intermediate, archived: true }, nested];
-  await notice.updateComplete;
+  update({ subagentSessions: [{ ...intermediate, archived: true }, nested] });
+  flush();
   expect(notice.querySelector(".chat-child-attention")).toBeNull();
 });
 
 it("retires its expiry timer when the pane is removed", async () => {
-  const { notice } = mount();
-  await notice.updateComplete;
+  const { unmount } = mount();
+  flush();
   expect(vi.getTimerCount()).toBe(1);
-  notice.remove();
+  unmount();
+  await Promise.resolve();
   expect(vi.getTimerCount()).toBe(0);
 });

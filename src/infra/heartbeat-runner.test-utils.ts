@@ -1,39 +1,43 @@
 // Shared heartbeat runner fixtures for infra tests.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { vi } from "vitest";
-import { seedCronStoreInCurrentDatabase } from "../../test/helpers/cron/store.js";
+import { afterAll, vi } from "vitest";
+import { writeCronJobScratchForMaintenance } from "../../test/helpers/cron/scratch-store.js";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { MsgContext } from "../auto-reply/templating.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
   listSessionEntriesCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { createJob } from "../cron/service/jobs.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
-import { loadCronStoreFromDatabase } from "../cron/store/load.kernel.js";
+import { loadCronRows, upsertCronJobRow } from "../cron/store/row-codec.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/runtime-authority-store.js";
+import { getCronStoreKysely } from "../cron/store/schema.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  drainSessionStateForTest,
+  useSessionStoreTempDirs,
+} from "../test-utils/session-state-cleanup.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import type { HeartbeatDeps } from "./heartbeat-runner.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
+
+const sandboxDirs = useSessionStoreTempDirs(afterAll, "openclaw-heartbeat-suite-");
 
 // Heartbeat test utilities seed session stores and temporary heartbeat prompts
 // while keeping plugin registry and environment state isolated per test.
@@ -46,13 +50,21 @@ type HeartbeatSessionSeed = Partial<InternalSessionEntry> & {
   lastThreadId?: string | number;
 };
 
-type HeartbeatReplyFn = NonNullable<HeartbeatDeps["getReplyFromConfig"]>;
+type HeartbeatReplyFn = typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfig;
 export type HeartbeatReplySpy = ReturnType<typeof vi.fn<HeartbeatReplyFn>>;
 
 function createHeartbeatReplySpy(): HeartbeatReplySpy {
   const replySpy: HeartbeatReplySpy = vi.fn<HeartbeatReplyFn>();
   replySpy.mockResolvedValue({ text: "ok" });
   return replySpy;
+}
+export function setHeartbeatSilentCompletion(options: InternalGetReplyOptions | undefined): void {
+  const runState = resolveReplyOperationRunState(options);
+  if (!runState) {
+    throw new Error("Expected heartbeat reply operation run state");
+  }
+  runState.replyCompletion = { expectation: "optional", outcome: "silent" };
+  options?.onDeliberateSilentTerminalReply?.();
 }
 
 /** Set the invocation's execution receipt without replacing its admission state. */
@@ -78,7 +90,7 @@ export function setHeartbeatAgentTurnStatus(
   }
 }
 
-/** Seed one system heartbeat monitor and its private scratch in the test state DB. */
+/** Seed one historical heartbeat monitor and its private scratch in the test state DB. */
 export async function seedHeartbeatScratchForTest(params: {
   content: string | null;
   agentId?: string;
@@ -86,13 +98,16 @@ export async function seedHeartbeatScratchForTest(params: {
 }): Promise<string> {
   const agentId = params.agentId ?? "main";
   const storePath = params.storePath ?? resolveCronJobsStorePath();
-  const store = loadCronStoreFromDatabase(
-    openOpenClawStateDatabase().db,
-    cronStoreKey(storePath),
-  ).store;
+  const storeKey = cronStoreKey(storePath);
   const declarationKey = `heartbeat:${agentId}`;
-  let job = store.jobs.find((entry) => entry.declarationKey === declarationKey);
-  if (!job) {
+  const jobId = runOpenClawStateWriteTransaction(({ db }) => {
+    const rows = loadCronRows(db, storeKey);
+    const existing = rows.find(
+      (row) => row.declaration_key === declarationKey && row.payload_kind === "heartbeat",
+    );
+    if (existing) {
+      return existing.job_id;
+    }
     const noop = () => {};
     const state = createCronServiceState({
       scheduler: createTestGatewayScheduler(),
@@ -101,25 +116,39 @@ export async function seedHeartbeatScratchForTest(params: {
       defaultAgentId: "main",
       log: { debug: noop, info: noop, warn: noop, error: noop },
       enqueueSystemEvent: () => false,
-      requestHeartbeat: noop,
       runIsolatedAgentJob: async () => ({ status: "skipped", error: "test" }),
     });
-    job = createJob(state, {
+    const job = createJob(state, {
       declarationKey,
       displayName: `Heartbeat (${agentId})`,
       name: `heartbeat-${agentId}`,
       agentId,
       enabled: true,
       schedule: { kind: "every", everyMs: 30 * 60_000, anchorMs: 0 },
-      payload: { kind: "heartbeat" },
+      payload: { kind: "systemEvent", text: "Historical heartbeat monitor" },
       sessionTarget: "main",
       wakeMode: "next-heartbeat",
     });
-    // Fixture preparation needs persisted rows, not a cold scheduler worker per case.
-    seedCronStoreInCurrentDatabase(storePath, { ...store, jobs: [...store.jobs, job] });
-  }
-  writeCronJobScratchForMaintenance({ storePath, jobId: job.id, content: params.content });
-  return job.id;
+    // The public writer rejects retired payloads. Keep a historical row for the
+    // retained executor tests until its removal, using the Doctor fixture pattern.
+    upsertCronJobRow(db, storeKey, job, rows.length);
+    replaceCronRuntimeAuthorityRows({ db, storeKey, jobs: [job] });
+    const row = loadCronRows(db, storeKey, new Set([job.id]))[0]!;
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .updateTable("cron_jobs")
+        .set({
+          payload_kind: "heartbeat",
+          job_json: JSON.stringify({ ...JSON.parse(row.job_json), payload: { kind: "heartbeat" } }),
+        })
+        .where("store_key", "=", storeKey)
+        .where("job_id", "=", job.id),
+    );
+    return job.id;
+  });
+  writeCronJobScratchForMaintenance({ storePath, jobId, content: params.content });
+  return jobId;
 }
 
 /** Write a single heartbeat session entry through the SQLite session accessor. */
@@ -183,7 +212,7 @@ export async function withTempHeartbeatSandbox<T>(
     unsetEnvVars?: string[];
   },
 ): Promise<T> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-hb-"));
+  const tmpDir = await fs.mkdtemp(path.join(sandboxDirs.make(), options?.prefix ?? "openclaw-hb-"));
   const storePath = path.join(tmpDir, "sessions.json");
   const replySpy = createHeartbeatReplySpy();
   const envNames = new Set(["OPENCLAW_STATE_DIR", ...(options?.unsetEnvVars ?? [])]);
@@ -194,16 +223,21 @@ export async function withTempHeartbeatSandbox<T>(
     ]),
   );
   return withEnvAsync(env, async () => {
+    let initialized = false;
     try {
       await seedHeartbeatScratchForTest({ content: "- Check status\n" });
+      initialized = true;
       return await fn({ tmpDir, storePath, replySpy });
     } finally {
-      await closeOpenClawAgentDatabasesAsync(tmpDir);
+      if (initialized) {
+        await drainSessionStateForTest({ stateDir: path.join(tmpDir, "state"), rootPath: tmpDir });
+      } else {
+        // Setup can fail before a database path exists; retain the original failure cleanup.
+        await closeOpenClawAgentDatabasesAsync(tmpDir);
+        await closeStateDatabaseForTest();
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
       replySpy.mockReset();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      // A failed drain retains the sandbox for its still-owned resources.
-      await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
 }

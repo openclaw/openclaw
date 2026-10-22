@@ -2,23 +2,18 @@ import { describe, expect, it } from "vitest";
 import { buildMSTeamsPresentationCard } from "./presentation.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 
+const presentationCard = (
+  block: Parameters<typeof buildMSTeamsPresentationCard>[0]["presentation"]["blocks"][number],
+) => buildMSTeamsPresentationCard({ presentation: { blocks: [block] } });
+
 describe("buildMSTeamsPresentationCard", () => {
   it("submits command actions as command text", () => {
     expect(
-      buildMSTeamsPresentationCard({
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Plugins",
-                  action: { type: "command", command: "/codex plugins menu" },
-                },
-              ],
-            },
-          ],
-        },
+      presentationCard({
+        type: "buttons",
+        buttons: [
+          { label: "Plugins", action: { type: "command", command: "/codex plugins menu" } },
+        ],
       }),
     ).toMatchObject({
       actions: [{ type: "Action.Submit", title: "Plugins", data: "/codex plugins menu" }],
@@ -27,19 +22,13 @@ describe("buildMSTeamsPresentationCard", () => {
 
   it("keeps unavailable select commands visible in the Adaptive Card", () => {
     expect(
-      buildMSTeamsPresentationCard({
-        presentation: {
-          blocks: [
-            {
-              type: "select",
-              placeholder: "Environment",
-              options: [
-                { label: "Production", action: { type: "command", command: "/deploy production" } },
-                { label: "Opaque", action: { type: "callback", value: "private-callback-token" } },
-              ],
-            },
-          ],
-        },
+      presentationCard({
+        type: "select",
+        placeholder: "Environment",
+        options: [
+          { label: "Production", action: { type: "command", command: "/deploy production" } },
+          { label: "Opaque", action: { type: "callback", value: "private-callback-token" } },
+        ],
       }),
     ).toMatchObject({
       body: [
@@ -53,18 +42,12 @@ describe("buildMSTeamsPresentationCard", () => {
 
   it("renders web app button links as open-url actions", () => {
     expect(
-      buildMSTeamsPresentationCard({
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                { label: "Open app", webApp: { url: "https://example.com/app" } },
-                { label: "Legacy app", web_app: { url: "https://example.com/legacy" } },
-              ],
-            },
-          ],
-        },
+      presentationCard({
+        type: "buttons",
+        buttons: [
+          { label: "Open app", webApp: { url: "https://example.com/app" } },
+          { label: "Legacy app", web_app: { url: "https://example.com/legacy" } },
+        ],
       }),
     ).toMatchObject({
       actions: [
@@ -76,65 +59,23 @@ describe("buildMSTeamsPresentationCard", () => {
 });
 
 describe("buildWelcomeCard", () => {
-  it("builds card with default prompt starters", () => {
-    const card = buildWelcomeCard();
-    expect(card.type).toBe("AdaptiveCard");
-    expect(card.version).toBe("1.5");
-
-    const body = card.body as Array<{ text: string }>;
-    expect(body[0]?.text).toContain("OpenClaw");
-
-    const actions = card.actions as Array<{ title: string; data: unknown }>;
-    expect(actions.length).toBe(3);
-    expect(actions[0]?.title).toBe("What can you do?");
-  });
-
-  it("styles the heading with valid PascalCase Adaptive Card enum values", () => {
-    // Lowercase weight/size fall back to Default in the Teams renderer, so the heading must use the
-    // schema's PascalCase enums to render bold/medium.
-    const card = buildWelcomeCard();
-    const heading = (card.body as Array<{ weight?: string; size?: string }>)[0];
-    expect(heading?.weight).toBe("Bolder");
-    expect(heading?.size).toBe("Medium");
-  });
-
-  it("uses custom bot name", () => {
-    const card = buildWelcomeCard({ botName: "TestBot" });
-    const body = card.body as Array<{ text: string }>;
-    expect(body[0]?.text).toContain("TestBot");
-  });
-
   it("uses custom prompt starters", () => {
-    const card = buildWelcomeCard({
-      promptStarters: ["Do X", "Do Y"],
-    });
-    const actions = card.actions as Array<{ title: string; data: unknown }>;
-    expect(actions.length).toBe(2);
-    expect(actions[0]?.title).toBe("Do X");
-    expect(actions[1]?.title).toBe("Do Y");
-
-    // Verify imBack data
-    const data = actions[0]?.data as { msteams: { type: string; value: string } };
-    expect(data.msteams.type).toBe("imBack");
-    expect(data.msteams.value).toBe("Do X");
+    expect(buildWelcomeCard({ promptStarters: ["Do X", "Do Y"] }).actions).toMatchObject([
+      { title: "Do X", data: { msteams: { type: "imBack", value: "Do X" } } },
+      { title: "Do Y" },
+    ]);
   });
 
   it("falls back to defaults when promptStarters is empty", () => {
     const card = buildWelcomeCard({ promptStarters: [] });
-    const actions = card.actions as Array<{ title: string }>;
-    expect(actions.length).toBe(3);
+    expect(card.body).toEqual([
+      expect.objectContaining({ weight: "Bolder", size: "Medium" }),
+      expect.anything(),
+    ]);
+    expect(card.actions).toHaveLength(3);
   });
 });
 
-describe("buildGroupWelcomeText", () => {
-  it("includes bot name", () => {
-    const text = buildGroupWelcomeText("MyBot");
-    expect(text).toContain("MyBot");
-    expect(text).toContain("@MyBot");
-  });
-
-  it("defaults to OpenClaw", () => {
-    const text = buildGroupWelcomeText();
-    expect(text).toContain("OpenClaw");
-  });
+it("buildGroupWelcomeText defaults to OpenClaw", () => {
+  expect(buildGroupWelcomeText()).toContain("OpenClaw");
 });

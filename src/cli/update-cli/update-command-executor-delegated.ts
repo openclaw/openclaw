@@ -15,12 +15,16 @@ import {
   type UpdateCommandChildGrant,
 } from "./update-command-executor-children.js";
 import { resolveUpdateCommandChildBinding } from "./update-command-executor-grant.js";
-import { withUpdateCommandExecutorOperation } from "./update-command-executor-operation.js";
+import {
+  prepareUpdateCommandExecutorTerminal,
+  withUpdateCommandExecutorOperation,
+} from "./update-command-executor-operation.js";
 import {
   admittedAuthorities,
   slotReservations,
   occupiedSlotKey,
   childOwners,
+  terminalPreparations,
 } from "./update-command-executor-state.js";
 import { createUpdateIdentityWarningReporter } from "./update-command-identity-warning.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -183,13 +187,9 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         owner.run(childRoot, childOperation, purpose),
       );
       try {
-        return await withUpdateCommandExecutorOperation(
+        const operationOutcome = await withUpdateCommandExecutorOperation(
           {
             children: owner,
-            assertCurrent: () => {
-              fence.assertCurrent();
-              identityWarnings.flush();
-            },
             operation: () => {
               fence.assertCurrent();
               admittedAuthorities.set(fence, {
@@ -222,12 +222,22 @@ export async function withDelegatedUpdateCommandExecutor<T>(
             },
           },
           "delegated",
+        ).then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
         );
+        const outcome = await prepareUpdateCommandExecutorTerminal(fence, operationOutcome);
+        if ("error" in outcome) {
+          throw outcome.error;
+        }
+        return outcome.result;
       } finally {
+        identityWarnings.flush();
         active = false;
         childOwners.delete(fence);
         slotReservations.delete(fence);
         admittedAuthorities.delete(fence);
+        terminalPreparations.delete(fence);
       }
     }, activation.signal),
   );

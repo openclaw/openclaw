@@ -2,6 +2,7 @@ import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
+  ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
@@ -11,6 +12,7 @@ import {
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
   resolveMatrixAccountAsync,
+  type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
 import type { CoreConfig } from "./types.js";
 
@@ -57,7 +59,7 @@ const MATRIX_PROFILE_MEDIA_PROPERTIES = {
     }),
   ),
 } as const;
-const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = Object.freeze(["avatarUrl", "avatarPath"]);
+const MATRIX_PROFILE_MEDIA_SOURCE_PARAMS = ["avatarUrl", "avatarPath"] as const;
 
 function createMatrixExposedActions(params: {
   gate: ReturnType<typeof createActionGate>;
@@ -105,6 +107,20 @@ function buildMatrixProfileToolSchema(): ChannelMessageToolSchemaContribution {
   };
 }
 
+function buildMatrixReadCursorToolSchema(): ChannelMessageToolSchemaContribution {
+  const cursor =
+    "Matrix read: pagination token from a previous read's nextBatch/prevBatch, not an event id;";
+  return {
+    // The shared before/after parameters keep read valid across channels; this
+    // contribution only adds Matrix cursor guidance for those parameters.
+    actions: [],
+    properties: {
+      before: Type.Optional(Type.String({ description: `${cursor} pages toward older messages.` })),
+      after: Type.Optional(Type.String({ description: `${cursor} pages toward newer messages.` })),
+    },
+  };
+}
+
 function resolveMatrixActionAccount(params: { cfg: CoreConfig; accountId?: string | null }) {
   if (!params.accountId && requiresExplicitMatrixDefaultAccount(params.cfg)) {
     return null;
@@ -114,6 +130,49 @@ function resolveMatrixActionAccount(params: { cfg: CoreConfig; accountId?: strin
     accountId: params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
   });
   return account.enabled && account.configured ? account : null;
+}
+
+function describeMatrixMessageTool(
+  account: ResolvedMatrixAccount | null,
+  senderIsOwner?: boolean,
+): ChannelMessageToolDiscovery {
+  if (!account?.enabled || !account.configured) {
+    return { actions: [], capabilities: [] };
+  }
+  const gate = createActionGate(account.config.actions);
+  const actions = createMatrixExposedActions({
+    gate,
+    encryptionEnabled: account.config.encryption === true,
+    senderIsOwner,
+  });
+  const listedActions = Array.from(actions);
+  const schema: ChannelMessageToolSchemaContribution[] = [];
+  if (actions.has("read")) {
+    schema.push(buildMatrixReadCursorToolSchema());
+  }
+  if (actions.has("set-profile")) {
+    schema.push(buildMatrixProfileToolSchema());
+  }
+  if (actions.has("react")) {
+    schema.push({
+      actions: ["react", "reactions"],
+      properties: {
+        emoji: Type.Optional(
+          Type.String({
+            description: `Unicode emoji or custom emote shortcode.${actions.has("emoji-list") ? ' Discover room and personal custom emotes with action:"emoji-list".' : ""}`,
+          }),
+        ),
+      },
+    });
+  }
+  return {
+    actions: listedActions,
+    capabilities: ["presentation"],
+    schema: schema.length > 1 ? schema : (schema[0] ?? null),
+    mediaSourceParams: listedActions.includes("set-profile")
+      ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
+      : null,
+  };
 }
 
 export const matrixMessageActions: ChannelMessageActionAdapter = {
@@ -126,43 +185,24 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
     "member-info",
     "channel-info",
   ],
+  /** @deprecated Use describeMessageToolAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   describeMessageTool: ({ cfg, accountId, senderIsOwner }) => {
-    const resolvedCfg = cfg as CoreConfig;
-    const account = resolveMatrixActionAccount({ cfg: resolvedCfg, accountId });
-    if (!account) {
-      return { actions: [], capabilities: [] };
-    }
-    const gate = createActionGate(account.config.actions);
-    const actions = createMatrixExposedActions({
-      gate,
-      encryptionEnabled: account.config.encryption === true,
+    return describeMatrixMessageTool(
+      resolveMatrixActionAccount({ cfg: cfg as CoreConfig, accountId }),
       senderIsOwner,
-    });
-    const listedActions = Array.from(actions);
-    const schema: ChannelMessageToolSchemaContribution[] = [];
-    if (actions.has("set-profile")) {
-      schema.push(buildMatrixProfileToolSchema());
-    }
-    if (actions.has("react")) {
-      schema.push({
-        actions: ["react", "reactions"],
-        properties: {
-          emoji: Type.Optional(
-            Type.String({
-              description: `Unicode emoji or custom emote shortcode.${actions.has("emoji-list") ? ' Discover room and personal custom emotes with action:"emoji-list".' : ""}`,
-            }),
-          ),
-        },
-      });
-    }
-    return {
-      actions: listedActions,
-      capabilities: ["presentation"],
-      schema: schema.length > 1 ? schema : (schema[0] ?? null),
-      mediaSourceParams: listedActions.includes("set-profile")
-        ? { "set-profile": MATRIX_PROFILE_MEDIA_SOURCE_PARAMS }
-        : null,
-    };
+    );
+  },
+  describeMessageToolAsync: async ({ cfg, accountId, senderIsOwner }) => {
+    // SAFETY: The host validates channels.matrix against this plugin's config schema.
+    const resolvedCfg = cfg as CoreConfig;
+    const account =
+      !accountId && requiresExplicitMatrixDefaultAccount(resolvedCfg)
+        ? null
+        : await resolveMatrixAccountAsync({
+            cfg: resolvedCfg,
+            accountId: accountId ?? resolveDefaultMatrixAccountId(resolvedCfg),
+          });
+    return describeMatrixMessageTool(account, senderIsOwner);
   },
   supportsAction: ({ action }) => MATRIX_PLUGIN_HANDLED_ACTIONS.has(action),
   extractToolSend: ({ args }) => {

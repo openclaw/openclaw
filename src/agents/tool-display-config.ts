@@ -5,7 +5,7 @@
  * icons, and detail keys without embedding presentation data in tool handlers.
  */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
-import { MESSAGE_TOOL_DISPLAY_SPEC } from "./tool-display-message-config.js";
+import { displayAction, MESSAGE_TOOL_DISPLAY_SPEC } from "./tool-display-message-config.js";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   icon: string;
@@ -19,10 +19,6 @@ type ToolDisplayConfig = {
 
 function displayTool(icon: string, title: string, detailKeys?: string[]): ToolDisplaySpec {
   return detailKeys === undefined ? { icon, title } : { icon, title, detailKeys };
-}
-
-function displayAction(label: string, detailKeys?: string[]) {
-  return detailKeys === undefined ? { label } : { label, detailKeys };
 }
 
 function mediaGenerationTool(icon: string, title: string, detailKeys: string[]): ToolDisplaySpec {
@@ -202,6 +198,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     plugins: displayTool("puzzle", "Plugins", ["action", "pluginId", "packageName", "query"]),
     exec: displayTool("squareTerminal", "Exec", ["command"]),
     tool_call: displayTool("wrench", "Tool Call", []),
+    dispatch_action: displayTool("wrench", "Tool Call", []),
     tool_call_update: displayTool("wrench", "Tool Call", []),
     session_status: displayTool("barChart", "Session Status", ["sessionKey", "model"]),
     github_publish: displayTool("github", "GitHub Publish", ["title"]),
@@ -224,6 +221,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         group_delete: displayAction("delete group", ["name"]),
       },
     },
+    sessions_create: displayTool("layers", "New session", ["label", "agentId", "cwd", "group"]),
     sessions_list: displayTool("layers", "Sessions", [
       "kinds",
       "label",

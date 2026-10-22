@@ -42,7 +42,7 @@ type DiscordReactionDispatchData = {
   rawMessage?: APIMessage;
 };
 
-type ListenerDataByEvent = {
+export type ListenerDataByEvent = {
   [GatewayDispatchEvents.Ready]: unknown;
   [GatewayDispatchEvents.GuildCreate]: GatewayGuildCreateDispatchData | APIUnavailableGuild;
   [GatewayDispatchEvents.GuildDelete]: GatewayGuildDeleteDispatchData;
@@ -67,40 +67,4 @@ export abstract class ReadyListener extends BaseListener<GatewayDispatchEvents.R
 
 export abstract class GuildCreateListener extends BaseListener<GatewayDispatchEvents.GuildCreate> {
   readonly type = GatewayDispatchEvents.GuildCreate;
-}
-
-export abstract class GuildDeleteListener extends BaseListener<GatewayDispatchEvents.GuildDelete> {
-  readonly type = GatewayDispatchEvents.GuildDelete;
-}
-
-export abstract class MessageCreateListener extends BaseListener<GatewayDispatchEvents.MessageCreate> {
-  readonly type = GatewayDispatchEvents.MessageCreate;
-}
-
-export abstract class InteractionCreateListener extends BaseListener<GatewayDispatchEvents.InteractionCreate> {
-  readonly type = GatewayDispatchEvents.InteractionCreate;
-}
-
-export abstract class MessageReactionAddListener extends BaseListener<GatewayDispatchEvents.MessageReactionAdd> {
-  readonly type = GatewayDispatchEvents.MessageReactionAdd;
-}
-
-export abstract class MessageReactionRemoveListener extends BaseListener<GatewayDispatchEvents.MessageReactionRemove> {
-  readonly type = GatewayDispatchEvents.MessageReactionRemove;
-}
-
-export abstract class PresenceUpdateListener extends BaseListener<GatewayDispatchEvents.PresenceUpdate> {
-  readonly type = GatewayDispatchEvents.PresenceUpdate;
-}
-
-export abstract class VoiceStateUpdateListener extends BaseListener<GatewayDispatchEvents.VoiceStateUpdate> {
-  readonly type = GatewayDispatchEvents.VoiceStateUpdate;
-}
-
-export abstract class ThreadUpdateListener extends BaseListener<GatewayDispatchEvents.ThreadUpdate> {
-  readonly type = GatewayDispatchEvents.ThreadUpdate;
-}
-
-export abstract class ThreadDeleteListener extends BaseListener<GatewayDispatchEvents.ThreadDelete> {
-  readonly type = GatewayDispatchEvents.ThreadDelete;
 }

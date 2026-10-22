@@ -1,4 +1,5 @@
 import { fork } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   UPDATE_RUN_DRIVER_LIMIT,
@@ -28,6 +29,7 @@ import { renderUpdateRunReport } from "./update-run-report.js";
 import { parseUpdateAdmissionVerdict } from "./update-run-schema.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+import * as windowsUser from "./windows-user-sid.js";
 
 const tempDirs = createTempDirTracker();
 const admissionRouting = {
@@ -59,49 +61,48 @@ afterEach(async () => {
 });
 
 describe("update run ledger", () => {
-  it.each(["candidate", "installed"] as const)(
-    "persists and reports %s admission through the existing origin metadata",
-    (owner) => {
-      const options = isolatedOptions();
-      const run = createUpdateRun({ trigger: "cli" }, options);
-      const checks = [{ name: "config", status: "warn" as const, detail: "Missing custom path." }];
-      const admission =
-        owner === "candidate"
-          ? { owner, protocol: 1 as const, candidateVersion: "2026.9.5", checks }
-          : { owner, fallbackReason: "update-admission-unsupported-target" };
-      const candidateAdmission =
-        owner === "candidate"
-          ? {
-              protocol: 1 as const,
-              verdict: "admit" as const,
-              reasons: [],
-              warnings: [{ code: "missing-load-path", message: "Missing custom path." }],
-              facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
-            }
-          : undefined;
-      const saved = recordUpdateRunPhase(
-        run.runId,
-        "staging",
-        { origin: { admission, candidateAdmission } },
-        options,
-      );
-      expect(saved.admission).toEqual(admission);
-      const retained = getUpdateRun(run.runId, options)!;
-      expect(retained.admission).toEqual(admission);
-      expect(retained.origin.candidateAdmission).toEqual(candidateAdmission);
-      expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
-      const report = renderUpdateRunReport(retained).markdown;
-      expect(report).toContain(`Update safety checks ran in the ${owner} updater`);
-      expect(report).toContain(
-        owner === "candidate" ? "config: warn" : "update-admission-unsupported-target",
-      );
-      const database = openOpenClawStateDatabase(options);
-      const row = database.db
-        .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
-        .get(run.runId) as { origin_json: string };
-      expect(JSON.parse(row.origin_json).admission).toEqual(admission);
-    },
-  );
+  it("confirms channel-only outages without inheriting a stale core proof", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    recordUpdateRunVerification(run.runId, { coreReady: true }, options);
+    const facts = {
+      serviceRunning: true,
+      versionMatch: true,
+      settled: true,
+      pluginErrors: [],
+      readyz: false,
+      channelsReady: false,
+    };
+    expect(recordUpdateRunVerification(run.runId, facts, options).confirmedAtMs).toBeNull();
+    recordUpdateRunVerification(run.runId, { ...facts, coreReady: true }, options);
+    expect(getUpdateRun(run.runId, options)).toMatchObject({
+      confirmedAtMs: expect.any(Number),
+      verification: { ...facts, coreReady: true },
+    });
+  });
+
+  it("persists and reports installed admission through the existing origin metadata", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const admission = {
+      owner: "installed" as const,
+      fallbackReason: "update-admission-unsupported-target",
+    };
+    const saved = recordUpdateRunPhase(run.runId, "staging", { origin: { admission } }, options);
+    expect(saved.admission).toEqual(admission);
+    const retained = getUpdateRun(run.runId, options)!;
+    expect(retained.admission).toEqual(admission);
+    expect(retained.origin.candidateAdmission).toBeUndefined();
+    expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
+    const report = renderUpdateRunReport(retained).markdown;
+    expect(report).toContain("Update safety checks ran in the installed updater");
+    expect(report).toContain("update-admission-unsupported-target");
+    const database = openOpenClawStateDatabase(options);
+    const row = database.db
+      .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
+      .get(run.runId) as { origin_json: string };
+    expect(JSON.parse(row.origin_json).admission).toEqual(admission);
+  });
 
   it("retains an accepted admission's identities beside maximum driver metadata and large warnings", () => {
     const options = isolatedOptions();
@@ -156,6 +157,9 @@ describe("update run ledger", () => {
       candidateVersion,
       installedVersion,
     });
+    expect(renderUpdateRunReport(retained).markdown).toContain(
+      "Update safety checks ran in the candidate updater",
+    );
     expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
   });
 
@@ -183,7 +187,9 @@ describe("update run ledger", () => {
         ],
         status: "restore-failed" as const,
       },
+      windowsUserSid: "S-1-5-21-100",
     };
+    vi.spyOn(windowsUser, "readWindowsUserSid").mockReturnValue(receipts.windowsUserSid);
     receipts.updateRecoveryCapture.warnings[0]!.message += "w".repeat(
       16 * 1024 - Buffer.byteLength(JSON.stringify(receipts)),
     );
@@ -647,13 +653,16 @@ describe("update run ledger", () => {
       let saved = createUpdateRun({ trigger: "cli" }, options);
       expect(() => {
         for (let index = 0; index < 130; index++) {
-          saved = recordUpdateRunStep(
-            saved.runId,
-            {
-              step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
-              status: "completed",
-            },
-            options,
+          saved = expectDefined(
+            recordUpdateRunStep(
+              saved.runId,
+              {
+                step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
+                status: "completed",
+              },
+              options,
+            ),
+            "required finalization receipt",
           );
         }
       }).toThrow(/retained step.*limit/);

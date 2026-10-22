@@ -127,6 +127,7 @@ the same Compose files and overlays as your current deployment:
 
 ```bash
 docker compose pull openclaw-gateway openclaw-cli
+docker compose stop openclaw-gateway
 docker compose up -d openclaw-gateway
 ```
 
@@ -233,6 +234,73 @@ maintenance ownership before starting the Gateway. This covers the default image
 command and Compose's foreground Gateway command, including its selected profile.
 Routine image upgrades do not require a separate Doctor pass.
 
+Keep one Gateway replica per state volume, and stop the old container before
+starting its replacement. The startup repair needs exclusive maintenance
+ownership of that state; an overlapping Gateway can prevent it from completing.
+For Compose, use the same files and overlays as your running deployment:
+
+```bash
+docker compose pull openclaw-gateway openclaw-cli
+docker compose stop openclaw-gateway
+docker compose up -d openclaw-gateway
+```
+
+In Docker Swarm, keep `replicas: 1` and use `update_config.order: stop-first` and
+`rollback_config.order: stop-first`. In Kubernetes, keep `replicas: 1` and use a
+`Recreate` Deployment strategy, as the [provided manifest](/install/kubernetes)
+does. A shared volume is not a way to scale Gateway replicas. Back up the state
+before upgrading; see [Backups](/install/backups).
+
+Activation retains a full pre-repair copy of local state under
+`<state-dir>.update-captures/` the first time Doctor captures in a container.
+Later starts of the same container (`docker stop`/`docker start`, restart
+policies, host reboots) still run the Doctor repair pass but skip that repeated
+full copy, keep it, and still retire other Doctor copies older than 30 days;
+repair-specific backups still apply. If a capture fails, the next
+start tries again. A new image, a recreated container, or a container whose
+`/tmp` does not persist across restarts captures again.
+
+### Read-only container root
+
+A read-only container root still needs writable runtime storage. For example,
+with `HOME=/state` and `OPENCLAW_STATE_DIR=/state`, provide these mounts:
+
+| Path                                                                   | Purpose                                                                                                  | Storage                             |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `/state`                                                               | SQLite databases and sidecars, credentials, and state ownership locks under `/state/tmp/openclaw-<uid>/` | Persistent writable volume          |
+| Configured workspace directories, such as `/workspace`                 | Agent files and workspace migrations                                                                     | Persistent writable volume          |
+| `/state/.cache` or the absolute directory selected by `XDG_CACHE_HOME` | Private SQLite snapshot staging                                                                          | Writable volume or tmpfs            |
+| `/tmp`                                                                 | Runtime temporary files and the container activation marker                                              | Writable tmpfs                      |
+| `/state.update-captures`                                               | Retained pre-repair state captures                                                                       | Separate persistent writable volume |
+
+Set ownership so the container's UID/GID can create files and directories in each
+writable location. Database files and their parent directories must be writable;
+mounting only the database file writable is insufficient for SQLite sidecars.
+Configured plugin storage or other file outputs may need additional mounts.
+See [Gateway lock](/gateway/gateway-lock#state-and-config-locks) for the lock paths.
+`TMPDIR` does not relocate state ownership locks.
+
+The capture path is a sibling of the resolved state directory, not a child. A
+writable `/state` therefore does not make `/state.update-captures` writable. If
+that sibling is unavailable, standalone Doctor reports that the original state
+capture was unavailable and continues. This warning does not identify the cause
+of a later fatal filesystem error. Keep the capture volume private: it contains
+raw pre-repair state and credentials, and is excluded from normal backups and
+support exports.
+
+For a read-only config bind such as `/run/config/openclaw.json`, set
+`OPENCLAW_CONFIG_PATH=/run/config/openclaw.json` and
+`OPENCLAW_CONFIG_READONLY=1` in both the Gateway and CLI container environments.
+Doctor can still repair writable state, but config repairs must be applied in
+your external deployment source. Invalid or legacy config that blocks startup
+must be migrated there before restarting. See
+[Externally managed config](/cli/config#externally-managed-config).
+
+If startup reports `EROFS`, inspect the path and operation in the error and check
+that its mount is writable. Changing file modes cannot make a read-only mount
+writable. Do not delete state or lock files to repair a mount error, and do not
+disable native filesystem checks.
+
 On older Linux hosts such as Synology DSM, an unavailable `openat2` syscall can
 make older images report that another Gateway owns even an empty state volume.
 Current images use the guarded filesystem fallback; keep native filesystem
@@ -251,7 +319,11 @@ Gateway; a custom entrypoint bypasses this activation step.
 This includes agent database schema upgrades, shared-state audit migrations, and
 legacy workspace setup imports. Before advancing database schemas, Doctor saves
 verified SQLite copies beside the originals as
-`<database>.pre-startup-migration-<id>.bak`. The shared database and affected agent
+`<database>.pre-startup-migration-<id>.bak`. Fully declared table migrations may
+instead use `.scoped.bak` archives; restore those with
+`openclaw database restore-migration-backup`, never by replacing the database file.
+See [declared migration scopes](/reference/database-schemas/versioning#declared-migration-backup-scopes).
+The shared database and affected agent
 databases use the same backup ID. Config backups and retired workspace-file
 archives follow the normal Doctor repair rules. Keep these files with your
 pre-upgrade backup; a rollback must restore the matching state as well as the old
@@ -286,7 +358,7 @@ Readiness remains false while the default or system agent database is refused,
 and the readiness response includes the admission reason. A refused optional
 agent remains isolated while healthy agents can serve requests.
 
-Missing or drifted canonical SQLite indexes are rebuilt by the schema migration
+Missing or drifted required SQLite indexes are rebuilt by the schema migration
 owner before session startup completes. Repair warnings identify the agent,
 database path, rebuilt indexes, and elapsed time. Current-schema shape refusal
 reports list all affected databases in stable path order. Missing required tables,
@@ -317,7 +389,12 @@ podman run --rm -v <openclaw-state>:/home/node/.openclaw <image> openclaw doctor
 
 After doctor finishes, restart the Gateway container with its default command.
 In Kubernetes, run the same command in a one-off Job or debug pod mounted to the
-same PVC, then restart the Deployment or StatefulSet.
+same PVC. First scale the Gateway workload to zero and wait for its pods to
+terminate; in Swarm, scale the Gateway service to zero and wait for its tasks to
+stop. Keep the workload stopped until Doctor finishes, then restore one replica.
+If ownership is still refused after the old container has stopped, follow
+[Gateway lock recovery](/gateway/gateway-lock#recover-a-crashed-foreign-owner).
+Do not delete lock files or repeatedly restart competing containers.
 
 After the container is running again, run the read-only deployment preflight
 against the same mounted state:
@@ -413,9 +490,9 @@ export OTEL_SERVICE_NAME="openclaw-gateway"
 ./scripts/docker/setup.sh
 ```
 
-Official prebuilt images already bundle `diagnostics-otel`; install `clawhub:@openclaw/diagnostics-otel` yourself only if you removed it. To enable export, allow and enable the `diagnostics-otel` plugin in config, then set `diagnostics.otel.enabled=true` (see the full example in [OpenTelemetry export](/gateway/opentelemetry)). Collector auth headers go through `diagnostics.otel.headers`, not Docker environment variables.
+Official prebuilt images already bundle `diagnostics-otel`; install `@openclaw/diagnostics-otel` yourself only if you removed it. To enable export, allow and enable the `diagnostics-otel` plugin in config, then set `diagnostics.otel.enabled=true` (see the full example in [OpenTelemetry export](/gateway/opentelemetry)). Collector auth headers go through `diagnostics.otel.headers`, not Docker environment variables.
 
-Prometheus metrics reuse the already-published Gateway port. Install `clawhub:@openclaw/diagnostics-prometheus`, enable the `diagnostics-prometheus` plugin, then scrape:
+Prometheus metrics reuse the already-published Gateway port. Install `@openclaw/diagnostics-prometheus`, enable the `diagnostics-prometheus` plugin, then scrape:
 
 ```text
 http://<gateway-host>:18789/api/diagnostics/prometheus

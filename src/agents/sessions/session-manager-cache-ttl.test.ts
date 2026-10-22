@@ -1,18 +1,12 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, expect, it } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
-import {
-  replaceTranscriptEventsSync,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { seedUnindexedTranscriptForTest } from "../../config/sessions/session-accessor.sqlite-import.test-support.js";
+import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { serializeCacheTtlToolResultProjections } from "../embedded-agent-runner/cache-ttl-checkpoint.js";
 import {
   createToolResultPromptProjectionState,
@@ -23,26 +17,14 @@ import {
   truncateOversizedToolResultsInMessages,
 } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    for (const dir of tempDirs.dirs) {
-      await closeOpenClawAgentDatabasesAsync(dir);
-      closeOpenClawAgentDatabasesForTest(dir);
-    }
-    cleanup();
-  }),
-);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cache-ttl-");
 
 async function createSessionScope(sessionId: string) {
-  const dir = tempDirs.make("openclaw-session-cache-ttl-");
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const dir = tempDirs.make();
+  const scope = sessionScope(path.join(dir, "sessions.json"), sessionId);
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return { dir, scope };
 }

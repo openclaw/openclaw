@@ -20,7 +20,7 @@ import { recordEmbeddedToolReceipt } from "./tool-send-receipts.js";
 export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
-  workspaceDir?: string;
+  workspaceDir: string;
   model: ProviderRuntimeModel | undefined;
   agentId?: string;
   sessionId?: string;
@@ -90,7 +90,9 @@ export function buildEmbeddedExtensionFactories(params: {
         turnId: event.turnId,
         toolCallId,
         toolName: event.toolName,
-        args: asOptionalRecord(adjustedInput ?? event.input) ?? {},
+        args:
+          asOptionalRecord(adjustedInput == null ? event.input : structuredClone(adjustedInput)) ??
+          {},
         cwd: ctx.cwd,
         isError: event.isError,
         result: current,

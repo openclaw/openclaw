@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as compactionActivity from "./context-compaction-activity.js";
 import { createNativeCommandItem } from "./event-projector-command.test-support.js";
+import * as fixture from "./event-projector.compact.test-support.js";
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
@@ -15,16 +16,11 @@ import {
   createProjectorWithHooks,
   createMockPluginRegistry,
   initializeGlobalHookRunner,
-  buildEmptyToolTelemetry,
-  mockCallArg,
   findAgentEvent,
-  forCurrentTurn,
-  turnCompleted,
 } from "./event-projector.test-harness.js";
+import { prepareCodexServerNotification } from "./protocol-validators.js";
 import * as sessionHistory from "./session-history.js";
-
 registerCodexEventProjectorTestLifecycle();
-
 const hookRun = {
   id: "hook-1",
   eventName: "preToolUse",
@@ -39,58 +35,45 @@ const hookRun = {
 };
 
 describe("CodexAppServerEventProjector verbose output and hook projection", () => {
-  it("redacts secrets in verbose command summaries", async () => {
+  async function verboseProjector(verboseLevel: "on" | "full", raw = false) {
     const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "full",
-      toolProgressDetail: "raw",
+    const { projector } = await fixture.observe({
+      verboseLevel,
+      ...(raw ? { toolProgressDetail: "raw" as const } : {}),
       onToolResult,
     });
-
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: createNativeCommandItem({
-          id: "cmd-1",
-          command: "OPENAI_API_KEY=sk-1234567890abcdefZZZZ pnpm test",
-          status: "inProgress",
-          exitCode: null,
-          durationMs: null,
-        }),
+    return { projector, onToolResult };
+  }
+  it("preserves source text in verbose command summaries", async () => {
+    const { projector, onToolResult } = await verboseProjector("full", true);
+    await fixture.start(
+      projector,
+      createNativeCommandItem({
+        id: "cmd-1",
+        command: "OPENAI_API_KEY=sk-1234567890abcdefZZZZ pnpm test",
+        status: "inProgress",
+        exitCode: null,
+        durationMs: null,
       }),
     );
-
-    const text = (mockCallArg(onToolResult, 0, 0, "onToolResult") as { text?: string }).text;
-    expect(text).toContain("OPENAI_API_KEY=*** pnpm test");
-    expect(text).not.toContain("sk-1234567890abcdefZZZZ");
+    expect(onToolResult.mock.calls[0]?.[0]).toMatchObject({
+      text: expect.stringContaining("OPENAI_API_KEY=sk-1234567890abcdefZZZZ pnpm test"),
+    });
   });
 
   it("hides command arguments from ordinary verbose dynamic tool summaries", async () => {
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "on",
-      onToolResult,
-    });
-
+    const { projector, onToolResult } = await verboseProjector("on");
     projector.recordDynamicToolCall({
       callId: "tool-command-1",
       tool: "server.exec",
       arguments: { command: "cat /private/operator-file" },
     });
-
     expect(onToolResult).toHaveBeenCalledWith({ text: "Server.exec" });
     expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private/operator-file");
   });
 
   it("emits a summary and completed dynamic tool output when verbose is full", async () => {
-    const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
-      verboseLevel: "full",
-      onToolResult,
-    });
-
+    const { projector, onToolResult } = await verboseProjector("full");
     projector.recordDynamicToolCall({
       callId: "tool-1",
       tool: "read",
@@ -102,36 +85,24 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       contentItems: [{ type: "inputText", text: "file contents" }],
       success: true,
     });
-
-    expect(onToolResult).toHaveBeenCalledTimes(2);
-    expect(onToolResult).toHaveBeenNthCalledWith(1, {
-      text: "Read: `from README.md`",
-    });
-    expect(onToolResult).toHaveBeenNthCalledWith(2, {
-      text: "Read\n```txt\nfile contents\n```",
-    });
+    expect(onToolResult.mock.calls).toEqual([
+      [{ text: "Read: `from README.md`" }],
+      [{ text: "Read\n```txt\nfile contents\n```" }],
+    ]);
   });
 
   it("continues projecting turn completion when an event consumer throws", async () => {
     const onAgentEvent = vi.fn(() => {
       throw new Error("consumer failed");
     });
-    const projector = await createProjector({
-      ...(await createParams()),
-      onAgentEvent,
-    });
-
+    const { projector } = await fixture.observe({ onAgentEvent });
     await expect(
-      projector.handleNotification(
-        turnCompleted([
-          { type: "plan", id: "plan-1", text: "step one\nstep two" },
-          { type: "agentMessage", id: "msg-1", text: "final answer" },
-        ]),
-      ),
+      fixture.finish(projector, [
+        { type: "plan", id: "plan-1", text: "step one\nstep two" },
+        fixture.message("msg-1", "final answer"),
+      ]),
     ).resolves.toBeUndefined();
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
+    const result = fixture.result(projector);
     expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
       { step: "step one", status: "pending" },
       { step: "step two", status: "pending" },
@@ -149,10 +120,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       channelId: "chat-a",
       chatId: "chat-a",
       senderId: "sender-a",
-      channelContext: {
-        sender: { id: "sender-a" },
-        chat: { id: "chat-a" },
-      },
+      channelContext: { sender: { id: "sender-a" }, chat: { id: "chat-a" } },
     };
     const onContextCompacted = vi.fn();
     const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks({
@@ -160,44 +128,26 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       onContextCompacted,
     });
     const openSpy = vi.spyOn(SessionManager, "open");
-
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: { type: "contextCompaction", id: "compact-1" },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "contextCompaction", id: "compact-1" },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "contextCompaction", id: "compact-1" },
-      }),
-    );
+    await fixture.start(projector, { type: "contextCompaction", id: "compact-1" });
+    await fixture.complete(projector, { type: "contextCompaction", id: "compact-1" });
+    await fixture.complete(projector, { type: "contextCompaction", id: "compact-1" });
     expect(openSpy).not.toHaveBeenCalled();
-    expect(projector.buildResult(buildEmptyToolTelemetry()).compactionCount).toBe(1);
+    expect(fixture.result(projector).compactionCount).toBe(1);
     expect(onContextCompacted).toHaveBeenCalledOnce();
-    expect(beforeCompaction).toHaveBeenCalledOnce();
-    expect(afterCompaction).toHaveBeenCalledOnce();
-
-    expect(beforeCompaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageCount: 1,
-        sessionFile: expect.stringContaining("session.jsonl"),
-        messages: [expect.objectContaining({ role: "assistant" })],
-      }),
-      expect.objectContaining(agentHookContext),
-    );
-    expect(afterCompaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageCount: 1,
-        compactedCount: -1,
-        sessionFile: expect.stringContaining("session.jsonl"),
-      }),
-      expect.objectContaining(agentHookContext),
-    );
+    for (const [hook, detail] of [
+      [beforeCompaction, { messages: [expect.objectContaining({ role: "assistant" })] }],
+      [afterCompaction, { compactedCount: -1 }],
+    ] as const) {
+      expect(hook).toHaveBeenCalledOnce();
+      expect(hook).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageCount: 1,
+          sessionFile: expect.stringContaining("session.jsonl"),
+          ...detail,
+        }),
+        expect.objectContaining(agentHookContext),
+      );
+    }
   });
 
   it.each([
@@ -238,9 +188,9 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       { ...(await createParams()), onAgentEvent },
       { runAbortSignal: runAbort.signal },
     );
-    const notification = projector.handleNotification(
-      forCurrentTurn(method, { item: { type: "contextCompaction", id: "compact-late" } }),
-    );
+    const notification = fixture.notify(projector, method, {
+      item: { type: "contextCompaction", id: "compact-late" },
+    });
     await entered.promise;
     if (ending === "closed") {
       await projector.closeProjection();
@@ -251,77 +201,44 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     }
     release.resolve();
     await notification;
-
     expect(hook).toHaveBeenCalledTimes(pendingStage === "hook" ? 1 : 0);
     expect(onAgentEvent).not.toHaveBeenCalled();
     expect(persistActivity).not.toHaveBeenCalled();
     expect(read.mock.calls[0]?.[2]).toBe(runAbort.signal);
   });
 
-  it("projects codex hook started and completed notifications into agent events", async () => {
-    const onAgentEvent = vi.fn();
-    const params = await createParams();
-    const projector = await createProjector({ ...params, onAgentEvent });
-
-    await projector.handleNotification(
-      forCurrentTurn("hook/started", {
-        run: hookRun,
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("hook/completed", {
-        run: {
-          ...hookRun,
+  it.each([false, true])(
+    "projects hook notifications (thread scoped: %s)",
+    async (threadScoped) => {
+      const { projector, events } = await fixture.observe();
+      const run = threadScoped
+        ? { ...hookRun, id: "hook-thread-1", eventName: "sessionStart", scope: "thread" }
+        : hookRun;
+      await projector.handleNotification(
+        prepareCodexServerNotification({
+          method: "hook/started",
+          params: { threadId: THREAD_ID, turnId: threadScoped ? null : TURN_ID, run },
+        }),
+      );
+      expect(events("codex_app_server.hook", "started")[0]).toMatchObject({
+        threadId: THREAD_ID,
+        turnId: threadScoped ? null : TURN_ID,
+        hookRunId: run.id,
+        eventName: run.eventName,
+        ...(threadScoped ? { scope: "thread" } : { status: "running" }),
+      });
+      if (!threadScoped) {
+        const completion = {
           status: "blocked",
           statusMessage: "blocked by hook",
           durationMs: 42,
           entries: [{ kind: "stderr", text: "blocked" }],
-        },
-      }),
-    );
-
-    const started = findAgentEvent(onAgentEvent, {
-      stream: "codex_app_server.hook",
-      phase: "started",
-    }).data;
-    expect(started.threadId).toBe(THREAD_ID);
-    expect(started.turnId).toBe(TURN_ID);
-    expect(started.hookRunId).toBe("hook-1");
-    expect(started.eventName).toBe("preToolUse");
-    expect(started.status).toBe("running");
-    const completed = findAgentEvent(onAgentEvent, {
-      stream: "codex_app_server.hook",
-      phase: "completed",
-    }).data;
-    expect(completed.hookRunId).toBe("hook-1");
-    expect(completed.status).toBe("blocked");
-    expect(completed.statusMessage).toBe("blocked by hook");
-    expect(completed.durationMs).toBe(42);
-    expect(completed.entries).toEqual([{ kind: "stderr", text: "blocked" }]);
-  });
-
-  it("projects thread-scoped codex hook notifications that omit a turn id", async () => {
-    const onAgentEvent = vi.fn();
-    const params = await createParams();
-    const projector = await createProjector({ ...params, onAgentEvent });
-
-    await projector.handleNotification({
-      method: "hook/started",
-      params: {
-        threadId: THREAD_ID,
-        turnId: null,
-        run: { ...hookRun, id: "hook-thread-1", eventName: "sessionStart", scope: "thread" },
-      },
-    });
-
-    const started = findAgentEvent(onAgentEvent, {
-      stream: "codex_app_server.hook",
-      phase: "started",
-    }).data;
-    expect(started.threadId).toBe(THREAD_ID);
-    expect(started.turnId).toBeNull();
-    expect(started.hookRunId).toBe("hook-thread-1");
-    expect(started.eventName).toBe("sessionStart");
-    expect(started.scope).toBe("thread");
-  });
+        };
+        await fixture.notify(projector, "hook/completed", { run: { ...run, ...completion } });
+        const completed = events("codex_app_server.hook", "completed")[0];
+        expect(completed).toMatchObject({ hookRunId: run.id, ...completion });
+        expect(completed.entries).toEqual(completion.entries);
+      }
+    },
+  );
 });

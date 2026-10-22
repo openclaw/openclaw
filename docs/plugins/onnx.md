@@ -9,7 +9,7 @@ read_when:
 # Local ONNX decision models
 
 The installable **ONNX** plugin runs classifiers locally through the
-[decision model API](/plugins/sdk-overview/capabilities#decision-models-contract-version-1).
+[decision model API](/plugins/sdk-overview/capabilities#prepared-decision-execution-contract-version-2).
 It uses a separate, persistent Node process with ONNX Runtime's CPU backend.
 Inference does not send state or questions to a remote service. Models download
 only when you explicitly run the download command.
@@ -19,15 +19,17 @@ examples, and provider-neutral plugin API.
 
 ## Setup
 
-The decision-provider API was added after released OpenClaw `2026.9.5`.
-Packaged ONNX installs require a host and plugin API of at least `2026.9.6`;
-the installer rejects `2026.9.5` before loading the plugin. The native runtime
-belongs to the plugin package and is not bundled into core.
+This adapter requires the prepared decision-provider V2 API. Released OpenClaw
+`2026.10.4` exposes V1 only. Use a matching source checkout until a supporting
+paired host/plugin release is available. The normal release process aligns
+plugin API and build versions with the host; the older installation floor alone
+does not establish V2 compatibility. The native runtime belongs to the plugin
+package and is not bundled into core.
 
 ### Current development checkout
 
 Until a supporting release is available, use an OpenClaw source checkout that
-contains both the decision-provider API and `extensions/onnx`. Build that
+contains both the prepared decision-provider V2 API and `extensions/onnx`. Build that
 checkout with `pnpm install --frozen-lockfile` and `pnpm build`, then enable the
 plugin and select its model using the configuration below. Run commands from
 the checkout:
@@ -39,7 +41,8 @@ pnpm openclaw onnx probe gliclass-edge-v3.0
 ```
 
 The checkout's co-versioned source plugins use the host's development API. This
-does not make a packaged plugin compatible with a released `2026.9.5` host.
+does not make the V2 adapter compatible with a host that only exposes the
+V1 decision-provider contract.
 
 ### Packaged installation
 
@@ -121,6 +124,9 @@ third-party attestation. Few-shot example sections are not supported by this exp
 These models classify text against a rubric. JSON state and rubric entries are
 serialized as text; instructions and criterion descriptions condition classification.
 Use descriptive criteria rather than opaque IDs when possible.
+The prepared runtime uses the normal model catalog and plugin-owned local auth;
+no API key is required. Text and JSON batches support Boolean, Choice, and Score.
+Image, Sort, Tags, and explicit reasoning modes other than `auto` are unsupported.
 
 - **Choice:** softmax over the model's complete label logits; highest-probability label wins.
 - **Score:** classify the ordered criterion levels, then return their expected zero-based index.

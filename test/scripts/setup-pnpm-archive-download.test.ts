@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
-import path from "node:path";
+import { basename, join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect } from "vitest";
 import { parse } from "yaml";
@@ -8,22 +8,27 @@ import { createCommandTest } from "../helpers/command-fixture.js";
 import { createPnpmArchiveFixture } from "./setup-pnpm-archive.test-support.js";
 
 const it = createCommandTest();
+const read = (file: string) => fs.readFileSync(file, "utf8");
+const action = parse(read(".github/actions/setup-pnpm-store-cache/action.yml"));
+function expectNoSeed(
+  result: { status: number | null; stderr: string; stdout: string },
+  calls: string,
+) {
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toBe("");
+  expect(fs.existsSync(calls)).toBe(false);
+}
 
 describe("pinned pnpm cold bootstrap", () => {
   it.for([{ platform: "darwin" }, { arch: "riscv64" }, { glibc: false }])(
-    "leaves unsupported native selection with its owner: %j",
+    "leaves unsupported hosts with Corepack: %j",
     async (options, { command }) => {
       const f = createPnpmArchiveFixture(command, options);
-      const result = await f.run();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe("");
-      expect(fs.existsSync(f.calls)).toBe(false);
+      expectNoSeed(await f.run(), f.calls);
     },
   );
 
-  it("bootstraps from store, image, then registry while authenticating each archive", async ({
-    command,
-  }) => {
+  it("authenticates store, image and registry archives", async ({ command }) => {
     const f = createPnpmArchiveFixture(command);
     const archives = fs.readdirSync(f.registry);
     const phases = [
@@ -36,25 +41,23 @@ describe("pinned pnpm cold bootstrap", () => {
     for (const [index, { source, corruptStore }] of phases.entries()) {
       for (const name of archives) {
         if (source === "image") {
-          fs.copyFileSync(path.join(f.registry, name), path.join(f.image, name));
+          fs.copyFileSync(join(f.registry, name), join(f.image, name));
         } else {
-          fs.writeFileSync(path.join(f.image, name), "corrupt image");
+          fs.writeFileSync(join(f.image, name), "corrupt image");
         }
       }
       for (const name of corruptStore) {
-        fs.writeFileSync(path.join(f.store, "toolchain", name), "corrupt store");
+        fs.writeFileSync(join(f.store, "toolchain", name), "corrupt store");
       }
       const result = await f.run(
         source === "registry" ? {} : { COREPACK_ENABLE_NETWORK: "0", CURL_FIXTURE_EXIT: "35" },
       );
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout.trim()).not.toBe("");
-      const root = path.join(result.stdout.trim(), "v1/pnpm/12.7.0");
-      expect(fs.readFileSync(path.join(root, "pnpm"), "utf8")).toBe("wrapper-fixture\n");
-      expect(
-        fs.readFileSync(path.join(root, "node_modules/@pnpm/exe.linux-x64/pnpm"), "utf8"),
-      ).toBe("native-fixture\n");
-      expect(JSON.parse(fs.readFileSync(path.join(root, ".corepack"), "utf8"))).toEqual({
+      const root = join(result.stdout.trim(), "v1/pnpm/12.15.0");
+      expect(read(join(root, "pnpm"))).toBe("wrapper-fixture\n");
+      expect(read(join(root, "node_modules/@pnpm/exe.linux-x64/pnpm"))).toBe("native-fixture\n");
+      expect(JSON.parse(read(join(root, ".corepack")))).toEqual({
         locator: { name: "pnpm", reference: f.spec.slice(5) },
         bin: { pnpm: "./bin/pnpm.mjs", pnpx: "./bin/pnpx.mjs" },
         hash: f.spec.split("+")[1],
@@ -62,55 +65,25 @@ describe("pinned pnpm cold bootstrap", () => {
       expect(fs.existsSync(f.calls)).toBe(source === "registry");
       if (source === "registry") {
         downloads += 1;
-        expect(fs.readFileSync(f.calls, "utf8").trim().split("\n")).toHaveLength(downloads);
+        expect(read(f.calls).trim().split("\n")).toHaveLength(downloads);
       }
       expect(fs.readdirSync(f.runner)).toHaveLength(index + 1);
       for (const name of archives) {
-        expect(fs.readFileSync(path.join(f.store, "toolchain", name))).toEqual(
-          fs.readFileSync(path.join(f.registry, name)),
+        expect(fs.readFileSync(join(f.store, "toolchain", name))).toEqual(
+          fs.readFileSync(join(f.registry, name)),
         );
       }
     }
-    expect(fs.readFileSync(f.calls, "utf8").trim().split("\n")).toHaveLength(2);
+    expect(read(f.calls).trim().split("\n")).toHaveLength(2);
   });
 
   it.for([
-    {
-      name: "recovers a transient response",
-      status: 503,
-      failures: 1,
-      attempts: 2,
-      succeeds: true,
-    },
-    {
-      name: "recovers a connection reset",
-      status: null,
-      failures: 1,
-      attempts: 2,
-      succeeds: true,
-    },
-    {
-      name: "bounds persistent connection resets",
-      status: null,
-      failures: 4,
-      attempts: 3,
-      succeeds: false,
-    },
-    {
-      name: "bounds persistent transient failures",
-      status: 503,
-      failures: 4,
-      attempts: 3,
-      succeeds: false,
-    },
-    {
-      name: "does not retry permanent failures",
-      status: 404,
-      failures: 4,
-      attempts: 1,
-      succeeds: false,
-    },
-  ])("$name with real curl", async ({ status, failures, attempts, succeeds }, { command }) => {
+    ["recovers a transient response", 503, 1, 2],
+    ["recovers a connection reset", null, 1, 2],
+    ["bounds persistent connection resets", null, 4, 3],
+    ["bounds persistent transient failures", 503, 4, 3],
+    ["does not retry permanent failures", 404, 4, 1],
+  ] as const)("%s with real curl", async ([, status, failures, attempts], { command }) => {
     await command.lifetime.run(async () => {
       const server = createServer();
       try {
@@ -127,8 +100,8 @@ describe("pinned pnpm cold bootstrap", () => {
         });
         let wrapperAttempts = 0;
         server.on("request", (request, response) => {
-          const name = path.basename(request.url ?? "");
-          if (name === "pnpm-12.7.0.tgz" && ++wrapperAttempts <= failures) {
+          const name = basename(request.url ?? "");
+          if (name === "pnpm-12.15.0.tgz" && ++wrapperAttempts <= failures) {
             if (status === null) {
               request.socket.destroy();
               return;
@@ -136,17 +109,17 @@ describe("pinned pnpm cold bootstrap", () => {
             response.writeHead(status).end();
             return;
           }
-          response.end(fs.readFileSync(path.join(f.registry, name)));
+          response.end(fs.readFileSync(join(f.registry, name)));
         });
         const result = await f.run();
         expect(wrapperAttempts).toBe(attempts);
-        if (succeeds) {
+        if (failures === 1) {
           expect(result.status, result.stderr).toBe(0);
-          expect(
-            fs.readFileSync(path.join(result.stdout.trim(), "v1/pnpm/12.7.0/pnpm"), "utf8"),
-          ).toBe("wrapper-fixture\n");
-          expect(fs.readFileSync(path.join(f.store, "toolchain/pnpm-12.7.0.tgz"))).toEqual(
-            fs.readFileSync(path.join(f.registry, "pnpm-12.7.0.tgz")),
+          expect(read(join(result.stdout.trim(), "v1/pnpm/12.15.0/pnpm"))).toBe(
+            "wrapper-fixture\n",
+          );
+          expect(fs.readFileSync(join(f.store, "toolchain/pnpm-12.15.0.tgz"))).toEqual(
+            fs.readFileSync(join(f.registry, "pnpm-12.15.0.tgz")),
           );
         } else {
           expect(result.status).not.toBe(0);
@@ -166,11 +139,11 @@ describe("pinned pnpm cold bootstrap", () => {
     });
   });
 
-  it.for(["pnpm-12.7.0.tgz", "exe.linux-x64-12.7.0.tgz"])(
-    "rejects substituted downloaded %s and removes incomplete state",
+  it.for(["pnpm-12.15.0.tgz", "exe.linux-x64-12.15.0.tgz"])(
+    "rejects substituted %s without incomplete state",
     async (name, { command }) => {
       const f = createPnpmArchiveFixture(command);
-      fs.writeFileSync(path.join(f.registry, name), "substituted bytes");
+      fs.writeFileSync(join(f.registry, name), "substituted bytes");
       const result = await f.run();
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("checksum mismatch");
@@ -183,23 +156,15 @@ describe("pinned pnpm cold bootstrap", () => {
     { COREPACK_ENABLE_NETWORK: "0" },
     { COREPACK_NPM_REGISTRY: "https://registry.example.test" },
     { COREPACK_INTEGRITY_KEYS: '{"npm":[]}' },
-  ])(
-    "retains ordinary owner policy when cold network seeding is unavailable: %j",
-    async (env, { command }) => {
-      const f = createPnpmArchiveFixture(command);
-      const result = await f.run(env);
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toBe("");
-      expect(fs.existsSync(f.calls)).toBe(false);
-      expect(fs.readdirSync(f.runner)).toEqual([]);
-    },
-  );
-
-  it("does not fetch an unrecognized version or changed packageManager integrity", async ({
-    command,
-  }) => {
+  ])("retains owner policy without cold seeding: %j", async (env, { command }) => {
     const f = createPnpmArchiveFixture(command);
-    for (const spec of [f.spec.replace("12.7.0", "12.7.1"), f.spec.replace(/.$/u, "z")]) {
+    expectNoSeed(await f.run(env), f.calls);
+    expect(fs.readdirSync(f.runner)).toEqual([]);
+  });
+
+  it("ignores unknown versions and mismatched integrity", async ({ command }) => {
+    const f = createPnpmArchiveFixture(command);
+    for (const spec of [f.spec.replace("12.15.0", "12.11.2"), f.spec.replace(/.$/u, "z")]) {
       const result = await f.run({}, spec);
       expect(result.status).toBe(0);
       expect(result.stdout).toBe("");
@@ -214,12 +179,9 @@ describe("pnpm version output owns its failure", () => {
     "restores the store root before pnpm runs (configured: %s)",
     async (configured, { command }) => {
       const root = command.createTempDir("pnpm-store-root-");
-      const output = path.join(root, "outputs");
-      const envFile = path.join(root, "env");
-      const store = path.join(root, configured ? "custom-store" : ".cache/openclaw-pnpm-store");
-      const action = parse(
-        fs.readFileSync(".github/actions/setup-pnpm-store-cache/action.yml", "utf8"),
-      );
+      const output = join(root, "outputs");
+      const envFile = join(root, "env");
+      const store = join(root, configured ? "custom-store" : ".cache/openclaw-pnpm-store");
       const steps = action.runs.steps as Array<{ name: string; run: string }>;
       const resolve = steps.findIndex((step) => step.name === "Resolve pnpm store path");
       const restore = steps.findIndex((step) => step.name === "Restore pnpm store cache");
@@ -239,8 +201,8 @@ describe("pnpm version output owns its failure", () => {
       });
       expect(result.error, "pnpm store action subprocess").toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
-      expect(fs.readFileSync(output, "utf8")).toBe(`path=${store}\n`);
-      expect(fs.readFileSync(envFile, "utf8")).toBe(
+      expect(read(output)).toBe(`path=${store}\n`);
+      expect(read(envFile)).toBe(
         `PNPM_CONFIG_STORE_DIR=${store}\nPNPM_CONFIG_CACHE_DIR=${store}/cache\n`,
       );
     },
@@ -248,13 +210,10 @@ describe("pnpm version output owns its failure", () => {
 
   it.for([0, 42])("preserves the version probe exit status %s", async (status, { command }) => {
     const root = command.createTempDir("pnpm-version-step-");
-    const output = path.join(root, "outputs");
+    const output = join(root, "outputs");
     fs.writeFileSync(output, "");
-    const action = parse(
-      fs.readFileSync(".github/actions/setup-pnpm-store-cache/action.yml", "utf8"),
-    );
     const step = action.runs.steps.find((entry: { id?: string }) => entry.id === "pnpm-version");
-    const run = `pnpm() { if [ ${status} -eq 0 ]; then printf '12.7.0\\n'; else return ${status}; fi; }\n${step.run}`;
+    const run = `pnpm() { if [ ${status} -eq 0 ]; then printf '12.9.0\\n'; else return ${status}; fi; }\n${step.run}`;
     const result = await command.run(
       "bash",
       ["--noprofile", "--norc", "-e", "-o", "pipefail", "-c", run],
@@ -266,6 +225,6 @@ describe("pnpm version output owns its failure", () => {
     );
     expect(result.error, "pnpm version action subprocess").toBeUndefined();
     expect(result.status, result.stderr).toBe(status);
-    expect(fs.readFileSync(output, "utf8")).toBe(status === 0 ? "pnpm-version=12.7.0\n" : "");
+    expect(read(output)).toBe(status === 0 ? "pnpm-version=12.9.0\n" : "");
   });
 });

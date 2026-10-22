@@ -4,12 +4,9 @@ import type {
   TranscriptMessageAppendResult,
   TranscriptWriteSnapshot,
 } from "../../config/sessions/session-accessor.sqlite-contract.js";
+import type { SessionActorAppendCommitted } from "../../config/sessions/session-actor-contract.js";
 import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
-import { copyPreparedModelVisibleToolText } from "../../logging/redact-internal.js";
-import {
-  copyCodeModeSourceAppend,
-  getCodeModeSourceAppend,
-} from "../transcript-code-mode-source.js";
+import { persistCodeModeCheckpoint } from "../code-mode-checkpoint.js";
 import { isIndexedSessionEntry } from "./session-manager-codec.js";
 import type {
   AppendPersistenceOptions,
@@ -17,6 +14,7 @@ import type {
   SessionMessageEntry,
 } from "./session-manager-types.js";
 import type { PreparedSessionTranscriptReload } from "./session-manager-view-types.js";
+import { shareSessionSystemPrompt } from "./system-prompt-pool.js";
 
 export type PersistRecordResult =
   | undefined
@@ -34,6 +32,9 @@ export type PersistWorkerRecordResult = {
   reload?: PreparedSessionTranscriptReload;
   committedVersion: SessionTranscriptContextVersion;
   viewFailure?: Error;
+  modelPromptProjection?: NonNullable<
+    SessionActorAppendCommitted["modelPromptProjection"]
+  >["result"];
 };
 
 export type PersistRecordOptions = AppendPersistenceOptions & {
@@ -78,39 +79,17 @@ export function adoptCommittedMessagePayload(
   return receipt.effectiveParentId;
 }
 
-export function canonicalizeSessionEntry<T extends SessionEntry>(
-  entry: T,
-  options?: AppendPersistenceOptions,
-): T {
-  const sourceAppend = getCodeModeSourceAppend(options);
-  const canonicalEntry = normalizeTranscriptJsonValue(entry, "", Boolean(sourceAppend));
+export function canonicalizeSessionEntry<T extends SessionEntry>(entry: T): T {
+  const sourceMessage = entry.type === "message" ? entry.message : undefined;
+  const canonicalEntry = normalizeTranscriptJsonValue(entry, "");
   if (!isIndexedSessionEntry(canonicalEntry) || canonicalEntry.type !== entry.type) {
     throw new Error(`Invalid session transcript entry: ${entry.type}`);
   }
-  if (entry !== canonicalEntry && entry.type === "message" && canonicalEntry.type === "message") {
-    if (
-      entry.message.role === "toolResult" &&
-      canonicalEntry.message.role === "toolResult" &&
-      Array.isArray(entry.message.content) &&
-      Array.isArray(canonicalEntry.message.content)
-    ) {
-      const canonicalContent = canonicalEntry.message.content;
-      entry.message.content.forEach((block, index) => {
-        const canonicalBlock = canonicalContent[index];
-        if (block?.type === "text" && canonicalBlock?.type === "text") {
-          copyPreparedModelVisibleToolText(block, canonicalBlock);
-        }
-      });
-    }
-    copyCodeModeSourceAppend(
-      entry.message,
-      canonicalEntry.message,
-      sourceAppend,
-      (source) => source,
-    );
+  if (canonicalEntry.type === "message" && sourceMessage) {
+    canonicalEntry.message = persistCodeModeCheckpoint(canonicalEntry.message, sourceMessage);
   }
   // SAFETY: Manager-built envelopes retain T's checked discriminant; the codec validates their JSON storage shape.
-  return canonicalEntry as T;
+  return shareSessionSystemPrompt(canonicalEntry) as T;
 }
 
 export function adoptPersistedMessage(

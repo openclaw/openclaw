@@ -23,7 +23,8 @@ export class GatewaySendLimiter {
   ) {}
 
   send(serialized: string, options?: { critical?: boolean }): void {
-    if (options?.critical || this.canSend(Date.now())) {
+    // Critical sends bypass capacity, not expiration of the shared send window.
+    if (this.canSend(Date.now()) || options?.critical) {
       this.sendSerialized(serialized);
       return;
     }
@@ -58,19 +59,6 @@ export class GatewaySendLimiter {
     this.outboundQueue = [];
     this.droppedEvents = 0;
     this.overflowWarningEmitted = false;
-  }
-
-  getStatus() {
-    const now = Date.now();
-    this.pruneWindow(now);
-    const oldest = this.outboundSendTimestamps[0] ?? now;
-    return {
-      remainingEvents: Math.max(0, GATEWAY_SEND_LIMIT - this.outboundSendTimestamps.length),
-      resetTime: oldest + GATEWAY_SEND_WINDOW_MS,
-      currentEventCount: this.outboundSendTimestamps.length,
-      queuedEvents: this.outboundQueue.length,
-      droppedEvents: this.droppedEvents,
-    };
   }
 
   private pruneWindow(now: number): void {

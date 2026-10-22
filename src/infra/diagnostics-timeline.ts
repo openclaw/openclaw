@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import { isTruthyEnvValue } from "./env.js";
+import { runWithMainThreadTask } from "./main-thread-stall.js";
 
 const OPENCLAW_DIAGNOSTICS_TIMELINE_SCHEMA_VERSION = "openclaw.diagnostics.v1";
 const MAX_PENDING_TIMELINE_BYTES = 64 * 1024;
@@ -56,7 +57,7 @@ type DiagnosticsTimelineSpanOptions = DiagnosticsTimelineOptions &
     omitErrorMessage?: boolean;
   };
 
-type DiagnosticsTimelineOptions = {
+export type DiagnosticsTimelineOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 };
@@ -75,6 +76,37 @@ type StartedDiagnosticsTimelineSpan = ActiveDiagnosticsTimelineSpan & {
 };
 
 const activeDiagnosticsTimelineSpan = new AsyncLocalStorage<ActiveDiagnosticsTimelineSpan>();
+type SpanObserver = (
+  name: string,
+  attributes: DiagnosticsTimelineAttributes | undefined,
+) => (() => void) | undefined;
+const spanObserver = new AsyncLocalStorage<SpanObserver>();
+
+/** Observe existing spans within one request, independently of timeline file logging. */
+export function withDiagnosticsTimelineObserver<T>(observer: SpanObserver, run: () => T): T {
+  return spanObserver.run(observer, run);
+}
+
+function observeSpan(name: string, options: DiagnosticsTimelineSpanOptions) {
+  let finish: (() => void) | undefined;
+  try {
+    finish = spanObserver.getStore()?.(name, options.attributes);
+  } catch {
+    // Best-effort observers cannot change the operation they measure.
+  }
+  if (!finish) {
+    return undefined;
+  }
+  return {
+    [Symbol.dispose]() {
+      try {
+        finish?.();
+      } catch {
+        // Preserve the original result or failure.
+      }
+    },
+  };
+}
 const timelineWriter = resolveGlobalSingleton(
   Symbol.for("openclaw.diagnosticsTimelineWriter"),
   () => {
@@ -154,12 +186,14 @@ export function flushDiagnosticsTimeline(): void {
 /** Returns true when diagnostics flags and a JSONL output path both allow timeline writes. */
 export function isDiagnosticsTimelineEnabled(options: DiagnosticsTimelineOptions = {}): boolean {
   const { config, env = process.env } = options;
+  const path = env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+  if (typeof path !== "string" || path.trim().length === 0) {
+    return false;
+  }
   return (
-    (isDiagnosticFlagEnabled("timeline", config, env) ||
-      isDiagnosticFlagEnabled("diagnostics.timeline", config, env) ||
-      isTruthyEnvValue(env.OPENCLAW_DIAGNOSTICS)) &&
-    typeof env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH === "string" &&
-    env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH.trim().length > 0
+    isDiagnosticFlagEnabled("timeline", config, env) ||
+    isDiagnosticFlagEnabled("diagnostics.timeline", config, env) ||
+    isTruthyEnvValue(env.OPENCLAW_DIAGNOSTICS)
   );
 }
 
@@ -338,12 +372,13 @@ export async function measureDiagnosticsTimelineSpan<T>(
   run: () => Promise<T> | T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): Promise<T> {
+  using _ = observeSpan(name, options);
   const span = startDiagnosticsTimelineSpan(name, options);
   if (!span) {
-    return await run();
+    return await runWithMainThreadTask(name, run);
   }
   try {
-    const result = await runInDiagnosticsTimelineSpan(span, () => run());
+    const result = await runInDiagnosticsTimelineSpan(span, () => runWithMainThreadTask(name, run));
     emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {
@@ -358,12 +393,13 @@ export function measureDiagnosticsTimelineSpanSync<T>(
   run: () => T,
   options: DiagnosticsTimelineSpanOptions = {},
 ): T {
+  using _ = observeSpan(name, options);
   const span = startDiagnosticsTimelineSpan(name, options);
   if (!span) {
-    return run();
+    return runWithMainThreadTask(name, run);
   }
   try {
-    const result = runInDiagnosticsTimelineSpan(span, run);
+    const result = runInDiagnosticsTimelineSpan(span, () => runWithMainThreadTask(name, run));
     emitFinishedDiagnosticsTimelineSpan(span);
     return result;
   } catch (error) {

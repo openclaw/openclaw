@@ -5,6 +5,7 @@ import {
   type NavigationRouteId,
 } from "../app-navigation.ts";
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
+import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { i18n, t } from "../i18n/index.ts";
 
 const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
@@ -26,7 +27,7 @@ export function settingsNavigationLabelForRoute(
     return t(deviceSettingsGroupLabelKey(snapshot));
   }
   if (routeId === "custodian") {
-    return t("nav.askOpenClaw");
+    return askBrandLabel();
   }
   return titleForRoute(routeId);
 }
@@ -36,15 +37,9 @@ let settingsSearchSegmenter: Intl.Segmenter | null = null;
 
 function settingsSearchHasWordPrefix(value: string, query: string): boolean {
   const locale = i18n.getLocale();
-  if (settingsSearchSegmenterLocale !== locale) {
+  if (!settingsSearchSegmenter || settingsSearchSegmenterLocale !== locale) {
     settingsSearchSegmenterLocale = locale;
-    settingsSearchSegmenter =
-      typeof Intl !== "undefined" && "Segmenter" in Intl
-        ? new Intl.Segmenter(locale, { granularity: "word" })
-        : null;
-  }
-  if (!settingsSearchSegmenter) {
-    return value.split(/[^\p{L}\p{N}]+/u).some((word) => word.startsWith(query));
+    settingsSearchSegmenter = new Intl.Segmenter(locale, { granularity: "word" });
   }
   for (const segment of settingsSearchSegmenter.segment(value)) {
     if (segment.isWordLike !== false && segment.segment.startsWith(query)) {

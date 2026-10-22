@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSmsRuntime } from "./runtime.js";
 import { resolveTwilioMessageSid } from "./twilio.js";
@@ -63,10 +63,6 @@ function resolveDeliveryStatus(form: Record<string, string>): string {
   );
 }
 
-function hashAccountSid(accountSid: string): string {
-  return createHash("sha256").update(accountSid).digest("hex");
-}
-
 function fingerprintObservation(params: {
   source: SmsDeliveryObservationSource;
   messageSid: string;
@@ -74,27 +70,15 @@ function fingerprintObservation(params: {
   errorCode?: string;
   rawDlrDoneDate?: string;
 }): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        params.source,
-        params.messageSid,
-        params.status,
-        params.errorCode ?? "",
-        params.rawDlrDoneDate ?? "",
-      ]),
-    )
-    .digest("hex");
-}
-
-function deliveryRecordKey(params: {
-  accountId: string;
-  accountSidHash: string;
-  messageSid: string;
-}): string {
-  return createHash("sha256")
-    .update(`${params.accountId}\n${params.accountSidHash}\n${params.messageSid}`)
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      params.source,
+      params.messageSid,
+      params.status,
+      params.errorCode ?? "",
+      params.rawDlrDoneDate ?? "",
+    ]),
+  );
 }
 
 function openDeliveryStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
@@ -192,36 +176,6 @@ function reduceDeliveryStatus(
   };
 }
 
-function mergeSmsDeliveryObservation(params: {
-  accountId: string;
-  accountSidHash: string;
-  messageSid: string;
-  current: SmsDeliveryRecord | undefined;
-  observation: SmsDeliveryObservation;
-}): SmsDeliveryRecord | undefined {
-  if (
-    params.current?.observations.some(
-      (existing) => existing.fingerprint === params.observation.fingerprint,
-    )
-  ) {
-    return undefined;
-  }
-  const reduced = reduceDeliveryStatus(params.current, params.observation);
-  return {
-    accountId: params.accountId,
-    accountSidHash: params.accountSidHash,
-    messageSid: params.messageSid,
-    status: reduced.status,
-    firstObservedAt: params.current?.firstObservedAt ?? params.observation.observedAt,
-    lastObservedAt: params.observation.observedAt,
-    ...(reduced.errorCode ? { errorCode: reduced.errorCode } : {}),
-    ...(reduced.conflict ? { conflict: true } : {}),
-    observations: [...(params.current?.observations ?? []), params.observation].slice(
-      -DELIVERY_MAX_OBSERVATIONS_PER_MESSAGE,
-    ),
-  };
-}
-
 async function recordSmsDeliveryObservation(params: {
   account: ResolvedSmsAccount;
   messageSid: string;
@@ -232,21 +186,35 @@ async function recordSmsDeliveryObservation(params: {
     throw new Error("SMS delivery observations require plugin state comparisons.");
   }
   const accountId = params.account.accountId;
-  const accountSidHash = hashAccountSid(params.account.accountSid);
-  const key = deliveryRecordKey({
-    accountId,
-    accountSidHash,
-    messageSid: params.messageSid,
-  });
+  const accountSidHash = sha256Hex(params.account.accountSid);
+  const key = sha256Hex(`${accountId}\n${accountSidHash}\n${params.messageSid}`);
   let observed = await params.store.observe(key);
-  while (true) {
-    const next = mergeSmsDeliveryObservation({
+  function mergeSmsDeliveryObservation(): SmsDeliveryRecord | undefined {
+    const messageSid = params.messageSid;
+    const current = observed.value;
+    const observation = params.observation;
+    if (
+      current?.observations.some((existing) => existing.fingerprint === observation.fingerprint)
+    ) {
+      return undefined;
+    }
+    const reduced = reduceDeliveryStatus(current, observation);
+    return {
       accountId,
       accountSidHash,
-      messageSid: params.messageSid,
-      current: observed.value,
-      observation: params.observation,
-    });
+      messageSid,
+      status: reduced.status,
+      firstObservedAt: current?.firstObservedAt ?? observation.observedAt,
+      lastObservedAt: observation.observedAt,
+      ...(reduced.errorCode ? { errorCode: reduced.errorCode } : {}),
+      ...(reduced.conflict ? { conflict: true } : {}),
+      observations: [...(current?.observations ?? []), observation].slice(
+        -DELIVERY_MAX_OBSERVATIONS_PER_MESSAGE,
+      ),
+    };
+  }
+  while (true) {
+    const next = mergeSmsDeliveryObservation();
     const result = await params.store.compareAndApply(
       key,
       observed.comparison,
@@ -321,7 +289,7 @@ export async function listRecentSmsDeliveryRecords(
   if (limit <= 0) {
     return [];
   }
-  const accountSidHash = hashAccountSid(account.accountSid);
+  const accountSidHash = sha256Hex(account.accountSid);
   return (await store.entries())
     .map((entry) => entry.value)
     .filter(

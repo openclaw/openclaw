@@ -13,6 +13,7 @@ import { refreshPreparedModelRuntimeSnapshots } from "../agents/prepared-model-r
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { createStubTool } from "../agents/test-helpers/agent-tool-stubs.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadExactSessionEntry,
   loadTranscriptEventsSync,
@@ -54,11 +55,18 @@ describe("Side chat with a published Gateway runtime", () => {
       });
       const cfg: OpenClawConfig = {
         agents: {
-          entries: { main: { workspace: state.workspaceDir } },
+          entries: {
+            main: {
+              workspace: state.workspaceDir,
+              models: { "test-provider/utility-model": { codeMode: true } },
+              tools: { codeMode: true },
+            },
+          },
           defaults: {
             workspace: state.workspaceDir,
             model: "test-provider/test-model",
             utilityModel: "test-provider/utility-model",
+            models: { "test-provider/utility-model": { codeMode: true } },
           },
         },
         models: {
@@ -176,10 +184,12 @@ describe("Side chat with a published Gateway runtime", () => {
         await waitForSessionTranscriptProjection(selected);
         const retained = selectedManager.getPersistedEntries();
         // Admission must use committed Gateway policy, not the caller's stale config.
-        await refreshPreparedModelRuntimeSnapshots(
-          { ...cfg, messages: { responsePrefix: "committed" } },
-          { gatewayLifecycle: true, catalogMode: "static" },
-        );
+        const committedConfig = { ...cfg, messages: { responsePrefix: "committed" } };
+        setRuntimeConfigSnapshot(committedConfig);
+        await refreshPreparedModelRuntimeSnapshots(committedConfig, {
+          gatewayLifecycle: true,
+          catalogMode: "static",
+        });
         // Keep source-module preparation outside the RPC deadline and hydration barrier.
         await import("../agents/embedded-agent-runner/run.js");
         let connected = true;

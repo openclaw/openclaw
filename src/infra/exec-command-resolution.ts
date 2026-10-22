@@ -116,19 +116,13 @@ export function resolveExecutableTrustPath(
 export function resolveExecutionTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
-  if (!resolution) {
-    return null;
-  }
-  return resolution.kind === "command" ? resolution.execution : resolution;
+  return resolution?.kind === "command" ? resolution.execution : (resolution ?? null);
 }
 
 export function resolvePolicyTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
-  if (!resolution) {
-    return null;
-  }
-  return resolution.kind === "command" ? resolution.policy : resolution;
+  return resolution?.kind === "command" ? resolution.policy : (resolution ?? null);
 }
 
 export function resolveExecutionTargetCandidatePath(
@@ -136,7 +130,7 @@ export function resolveExecutionTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.execution : resolution,
+    resolveExecutionTargetResolution(resolution),
     cwd,
   );
 }
@@ -145,10 +139,7 @@ export function resolveExecutionTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.execution : resolution,
-    cwd,
-  );
+  return resolveExecutableTrustPath(resolveExecutionTargetResolution(resolution), cwd);
 }
 
 export function resolvePolicyTargetCandidatePath(
@@ -156,7 +147,7 @@ export function resolvePolicyTargetCandidatePath(
   cwd?: string,
 ): string | undefined {
   return resolveExecutableCandidatePathFromResolution(
-    resolution?.kind === "command" ? resolution.policy : resolution,
+    resolvePolicyTargetResolution(resolution),
     cwd,
   );
 }
@@ -165,10 +156,7 @@ export function resolvePolicyTargetTrustPath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
 ): string | undefined {
-  return resolveExecutableTrustPath(
-    resolution?.kind === "command" ? resolution.policy : resolution,
-    cwd,
-  );
+  return resolveExecutableTrustPath(resolvePolicyTargetResolution(resolution), cwd);
 }
 
 export function resolveApprovalAuditTrustPath(

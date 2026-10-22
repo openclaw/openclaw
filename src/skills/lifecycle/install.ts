@@ -171,26 +171,6 @@ async function runCommandSafely(
   }
 }
 
-function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
-  if (process.platform === "freebsd") {
-    return createInstallFailure({
-      message:
-        "brew not installed — Homebrew is not supported on FreeBSD. Install the required binaries on the Gateway host using pkg or Ports, then run `openclaw skills check` (use `--agent <id>` for a specific agent) to verify readiness.",
-    });
-  }
-  const formula = spec.formula ?? "this package";
-  if (process.platform === "linux" && isContainerEnvironment()) {
-    return createInstallFailure({
-      message: `brew not installed — Homebrew is not installed in this Linux container. Build a custom image with Homebrew or install "${formula}" manually using a supported system package before enabling this skill.`,
-    });
-  }
-  const hint =
-    process.platform === "linux"
-      ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`
-      : "Homebrew is not installed. Install it from https://brew.sh";
-  return createInstallFailure({ message: `brew not installed — ${hint}` });
-}
-
 // Go 1.21 is the onboarding auto-install baseline. Module-specific toolchain
 // requirements stay with `go install`, which can honor local, path, or automatic
 // switching according to the user's GOTOOLCHAIN setting.
@@ -471,6 +451,16 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const result = access
     ? await access.installSkillDependencies!(request)
     : await installSkillDependencies(request);
+  if (result.ok) {
+    try {
+      const { refreshSkillsDiscovery } = await import("../runtime/refresh.js");
+      await refreshSkillsDiscovery({ workspaceDir, config: params.config });
+    } catch (error) {
+      warnings.push(
+        `Dependencies installed, but discovery refresh failed: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
   return withWarnings(result, warnings);
 }
 
@@ -491,7 +481,23 @@ export async function installSkillDependencies(
 
   const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
   if (spec.kind === "brew" && !brewExe) {
-    return resolveBrewMissingFailure(spec);
+    if (process.platform === "freebsd") {
+      return createInstallFailure({
+        message:
+          "brew not installed — Homebrew is not supported on FreeBSD. Install the required binaries on the Gateway host using pkg or Ports, then run `openclaw skills check` (use `--agent <id>` for a specific agent) to verify readiness.",
+      });
+    }
+    const formula = spec.formula ?? "this package";
+    if (process.platform === "linux" && isContainerEnvironment()) {
+      return createInstallFailure({
+        message: `brew not installed — Homebrew is not installed in this Linux container. Build a custom image with Homebrew or install "${formula}" manually using a supported system package before enabling this skill.`,
+      });
+    }
+    const hint =
+      process.platform === "linux"
+        ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`
+        : "Homebrew is not installed. Install it from https://brew.sh";
+    return createInstallFailure({ message: `brew not installed — ${hint}` });
   }
 
   const goWasAlreadyInstalled = spec.kind === "go" && hasBinary("go");

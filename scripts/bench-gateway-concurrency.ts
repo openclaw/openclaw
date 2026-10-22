@@ -704,8 +704,8 @@ function remainingMs(deadlineAt: number): number {
   return Math.max(0, deadlineAt - performance.now());
 }
 
-function requireRemainingMs(deadlineAt: number, label: string): number {
-  const remaining = remainingMs(deadlineAt);
+function requireRemainingMs(deadlineAt: number, label: string, now = performance.now()): number {
+  const remaining = Math.max(0, deadlineAt - now);
   if (remaining <= 0) {
     throw new Error(`benchmark timed out while ${label}`);
   }
@@ -1164,7 +1164,6 @@ function buildConfig(
   agents.defaults = {
     ...(agents.defaults as Record<string, unknown>),
     maxConcurrent: concurrency,
-    heartbeat: { every: "0m" },
   };
   const pluginFixtures =
     pluginCount > 0 ? writePluginFixtures(root, { count: pluginCount }) : undefined;
@@ -1217,17 +1216,38 @@ async function connectGateway(
     params: unknown,
     requestedTimeoutMs?: number,
   ): Promise<T> => {
-    const response = await client.request(
-      method,
-      params,
-      Math.max(
-        1,
-        Math.min(
-          requestedTimeoutMs ?? 65_000,
-          requireRemainingMs(requestDeadlineAt, `waiting for ${method}`),
-        ),
-      ),
+    // A later phase may advance the client's deadline while this request is pending.
+    // Keep its original budget with the failure; transport errors are not timer verdicts.
+    const issuedAtMs = performance.now();
+    const deadlineAtMs = requestDeadlineAt;
+    const remainingAtIssueMs = requireRemainingMs(
+      deadlineAtMs,
+      `waiting for ${method}`,
+      issuedAtMs,
     );
+    const requestedCapMs = requestedTimeoutMs ?? 65_000;
+    const selectedTimeoutMs = Math.max(1, Math.min(requestedCapMs, remainingAtIssueMs));
+    let response: Awaited<ReturnType<typeof client.request>>;
+    try {
+      response = await client.request(method, params, selectedTimeoutMs);
+    } catch (cause) {
+      const rejectedAtMs = performance.now();
+      const timing = {
+        method,
+        issuedAtMs,
+        deadlineAtMs,
+        remainingAtIssueMs,
+        requestedCapMs,
+        selectedTimeoutMs,
+        scheduledExpiryAtMs: issuedAtMs + selectedTimeoutMs,
+        rejectedAtMs,
+        remainingAtRejectionMs: Math.max(0, deadlineAtMs - rejectedAtMs),
+      };
+      throw new Error(
+        `${cause instanceof Error ? cause.message : String(cause)}\nRPC failure timing: ${JSON.stringify(timing)}`,
+        { cause },
+      );
+    }
     if (!response.ok) {
       const message =
         response.error && typeof response.error === "object" && "message" in response.error
@@ -1913,7 +1933,10 @@ async function runGatewaySample(
         ? createLiveGatewayEvidence(agentIds, options.turnsPerSession)
         : undefined;
     const timelinePath = path.join(fixtureRoot, "diagnostics-timeline.jsonl");
-    const requestLogPath = path.join(fixtureRoot, "mock-provider-requests.jsonl");
+    const requestLogPath = path.join(
+      mkdtempSync(path.join(fixtureRoot, "telemetry-")),
+      "mock-provider-requests.jsonl",
+    );
     const responseControlPath = path.join(fixtureRoot, "mock-provider-responses.json");
     const heapProfilePath = options.heapProfDir
       ? path.resolve(options.heapProfDir, `gateway-load-${randomUUID()}.heapprofile`)
@@ -3087,6 +3110,8 @@ function summarizeRuns(
   runs: readonly BenchmarkRun[],
   options: Pick<CliOptions, "maxControlMs" | "maxHandshakeMs"> = {},
 ) {
+  const summarize = <T>(samples: readonly T[], read: (sample: T) => number | null | undefined) =>
+    summarizeNumbers(samples.map(read).filter((value): value is number => value != null));
   const controlPlane = runs.flatMap((run) => run.controlPlane);
   const browserClicks = runs.flatMap((run) => run.browser?.clicks ?? []);
   const controlUi = runs.flatMap((run) => run.controlUi);
@@ -3167,93 +3192,72 @@ function summarizeRuns(
         }
       : {}),
     budgetViolations,
-    gatewayProcessCpuMs: summarizeNumbers(runs.map((run) => run.cpuUsage.process.totalMs)),
-    gatewayProcessCpuMsPerTurn: summarizeNumbers(
-      runs.map((run) => run.cpuUsage.process.totalMs / run.turnCount),
+    gatewayProcessCpuMs: summarize(runs, (run) => run.cpuUsage.process.totalMs),
+    gatewayProcessCpuMsPerTurn: summarize(
+      runs,
+      (run) => run.cpuUsage.process.totalMs / run.turnCount,
     ),
-    gatewayMainThreadCpuMs: summarizeNumbers(runs.map((run) => run.cpuUsage.mainThread.totalMs)),
-    gatewayProcessCpuCoreRatio: summarizeNumbers(
-      runs.map((run) => run.cpuUsage.process.totalMs / run.cpuUsage.wallMs),
+    gatewayMainThreadCpuMs: summarize(runs, (run) => run.cpuUsage.mainThread.totalMs),
+    gatewayProcessCpuCoreRatio: summarize(
+      runs,
+      (run) => run.cpuUsage.process.totalMs / run.cpuUsage.wallMs,
     ),
-    gatewaySampledAllocatedBytes: summarizeNumbers(
-      runs.flatMap((run) => (run.heapProfile ? [run.heapProfile.sampledAllocatedBytes] : [])),
-    ),
-    gatewaySampledAllocatedBytesPerTurn: summarizeNumbers(
-      runs.flatMap((run) =>
-        run.heapProfile ? [run.heapProfile.sampledAllocatedBytes / run.turnCount] : [],
-      ),
+    gatewaySampledAllocatedBytes: summarize(runs, (run) => run.heapProfile?.sampledAllocatedBytes),
+    gatewaySampledAllocatedBytesPerTurn: summarize(
+      runs,
+      (run) => run.heapProfile && run.heapProfile.sampledAllocatedBytes / run.turnCount,
     ),
     controlPlane: Object.fromEntries(
       controlMethodProbes.map(({ method, samples }) => [
         method,
         {
           failedSamples: samples.filter((sample) => !sample.ok).length,
-          latencyMs: summarizeNumbers(samples.map((sample) => sample.latencyMs)),
+          latencyMs: summarize(samples, (sample) => sample.latencyMs),
         },
       ]),
     ),
     controlUiFailedSamples: controlUi.filter((sample) => !sample.ok).length,
-    controlUiLatencyMs: summarizeNumbers(controlUi.map((sample) => sample.latencyMs)),
-    cpuCoreRatio: summarizeNumbers(
-      readyz.flatMap((sample) => (sample.cpuCoreRatio == null ? [] : [sample.cpuCoreRatio])),
-    ),
+    controlUiLatencyMs: summarize(controlUi, (sample) => sample.latencyMs),
+    cpuCoreRatio: summarize(readyz, (sample) => sample.cpuCoreRatio),
     degradedSamples: readyz.filter((sample) => sample.degraded === true).length,
-    eventLoopDelayMaxMs: summarizeNumbers(
-      readyz.flatMap((sample) => (sample.delayMaxMs == null ? [] : [sample.delayMaxMs])),
-    ),
-    eventLoopDelayP99Ms: summarizeNumbers(
-      readyz.flatMap((sample) => (sample.delayP99Ms == null ? [] : [sample.delayP99Ms])),
-    ),
-    eventLoopUtilization: summarizeNumbers(
-      readyz.flatMap((sample) => (sample.utilization == null ? [] : [sample.utilization])),
-    ),
+    eventLoopDelayMaxMs: summarize(readyz, (sample) => sample.delayMaxMs),
+    eventLoopDelayP99Ms: summarize(readyz, (sample) => sample.delayP99Ms),
+    eventLoopUtilization: summarize(readyz, (sample) => sample.utilization),
     freshConnectionFailedRuns: runs.filter((run) => !run.freshConnection.ok).length,
-    freshConnectionLatencyMs: summarizeNumbers(runs.map((run) => run.freshConnection.latencyMs)),
+    freshConnectionLatencyMs: summarize(runs, (run) => run.freshConnection.latencyMs),
     gatewayUncleanExits: runs.filter(
       (run) =>
         run.gatewayExit && (run.gatewayExit.exitCode !== 0 || run.gatewayExit.signal !== null),
     ).length,
-    gatewayExternalGrowthMb: summarizeNumbers(
-      runs.flatMap((run) => {
-        const before = run.memory.before.externalMb;
-        const after = run.memory.after.externalMb;
-        return before === undefined || after === undefined ? [] : [after - before];
-      }),
+    gatewayExternalGrowthMb: summarize(runs, (run) => {
+      const before = run.memory.before.externalMb;
+      const after = run.memory.after.externalMb;
+      return before === undefined || after === undefined ? undefined : after - before;
+    }),
+    gatewayExternalMb: summarize(runs, (run) => run.memory.after.externalMb),
+    gatewayArrayBuffersGrowthMb: summarize(runs, (run) => {
+      const before = run.memory.before.arrayBuffersMb;
+      const after = run.memory.after.arrayBuffersMb;
+      return before === undefined || after === undefined ? undefined : after - before;
+    }),
+    gatewayArrayBuffersMb: summarize(runs, (run) => run.memory.after.arrayBuffersMb),
+    gatewayHeapGrowthMb: summarize(
+      runs,
+      (run) => run.memory.after.heapUsedMb - run.memory.before.heapUsedMb,
     ),
-    gatewayExternalMb: summarizeNumbers(
-      runs.flatMap((run) =>
-        run.memory.after.externalMb === undefined ? [] : [run.memory.after.externalMb],
-      ),
-    ),
-    gatewayArrayBuffersGrowthMb: summarizeNumbers(
-      runs.flatMap((run) => {
-        const before = run.memory.before.arrayBuffersMb;
-        const after = run.memory.after.arrayBuffersMb;
-        return before === undefined || after === undefined ? [] : [after - before];
-      }),
-    ),
-    gatewayArrayBuffersMb: summarizeNumbers(
-      runs.flatMap((run) =>
-        run.memory.after.arrayBuffersMb === undefined ? [] : [run.memory.after.arrayBuffersMb],
-      ),
-    ),
-    gatewayHeapGrowthMb: summarizeNumbers(
-      runs.map((run) => run.memory.after.heapUsedMb - run.memory.before.heapUsedMb),
-    ),
-    gatewayHeapUsedMb: summarizeNumbers(runs.map((run) => run.memory.after.heapUsedMb)),
-    gatewayPeakRssMb: summarizeNumbers(runs.map((run) => run.memory.peakRssMb)),
-    gatewayRssGrowthMb: summarizeNumbers(
-      runs.map((run) => run.memory.after.rssMb - run.memory.before.rssMb),
-    ),
+    gatewayHeapUsedMb: summarize(runs, (run) => run.memory.after.heapUsedMb),
+    gatewayPeakRssMb: summarize(runs, (run) => run.memory.peakRssMb),
+    gatewayRssGrowthMb: summarize(runs, (run) => run.memory.after.rssMb - run.memory.before.rssMb),
     historyFailedSamples: history.filter((sample) => !sample.ok).length,
-    historyLatencyMs: summarizeNumbers(history.map((sample) => sample.latencyMs)),
+    historyLatencyMs: summarize(history, (sample) => sample.latencyMs),
     historySampleCount: history.length,
     messageSubscriptionFailedSamples: subscriptions.filter((sample) => !sample.ok).length,
-    messageSubscriptionLatencyMs: summarizeNumbers(subscriptions.map((sample) => sample.latencyMs)),
+    messageSubscriptionLatencyMs: summarize(subscriptions, (sample) => sample.latencyMs),
     messageSubscriptionLoadFailedSamples: subscriptionsDuringLoad.filter((sample) => !sample.ok)
       .length,
-    messageSubscriptionLoadLatencyMs: summarizeNumbers(
-      subscriptionsDuringLoad.map((sample) => sample.latencyMs),
+    messageSubscriptionLoadLatencyMs: summarize(
+      subscriptionsDuringLoad,
+      (sample) => sample.latencyMs,
     ),
     ...(mockRequests.length === runs.length
       ? {
@@ -3281,18 +3285,18 @@ function summarizeRuns(
       (sum, run) => sum + run.pluginMetadataScans.totalDurationMs,
       0,
     ),
-    readyzLatencyMs: summarizeNumbers(readyz.map((sample) => sample.latencyMs)),
+    readyzLatencyMs: summarize(readyz, (sample) => sample.latencyMs),
     readyzFailedSamples: readyz.filter((sample) => !sample.ok).length,
     sampleCount: readyz.length,
-    sessionSeedDurationMs: summarizeNumbers(runs.map((run) => run.sessionSeedDurationMs)),
-    sessionsListLatencyMs: summarizeNumbers(sessionsList.map((sample) => sample.latencyMs)),
+    sessionSeedDurationMs: summarize(runs, (run) => run.sessionSeedDurationMs),
+    sessionsListLatencyMs: summarize(sessionsList, (sample) => sample.latencyMs),
     sessionsListFailedSamples: sessionsList.filter((sample) => !sample.ok).length,
     sessionUpdateFailedSamples: sessionUpdates.filter((sample) => !sample.ok).length,
-    sessionUpdateLatencyMs: summarizeNumbers(sessionUpdates.map((sample) => sample.latencyMs)),
+    sessionUpdateLatencyMs: summarize(sessionUpdates, (sample) => sample.latencyMs),
     sessionUpdateSampleCount: sessionUpdates.length,
-    setupDurationMs: summarizeNumbers(runs.map((run) => run.setupDurationMs)),
+    setupDurationMs: summarize(runs, (run) => run.setupDurationMs),
     turnCount: runs.reduce((sum, run) => sum + run.turnCount, 0),
-    turnsDurationMs: summarizeNumbers(runs.map((run) => run.turnsDurationMs)),
+    turnsDurationMs: summarize(runs, (run) => run.turnsDurationMs),
   };
 }
 
@@ -3480,6 +3484,7 @@ async function main(): Promise<void> {
 }
 
 export const testing = {
+  connectGateway,
   waitForGatewayDispatchReady,
   parseOptions,
   parseMockRequests,

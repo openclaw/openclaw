@@ -3,64 +3,61 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractArchive } from "openclaw/plugin-sdk/archive";
-import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleDirFetch } from "../node-host/dir-fetch.js";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
+import {
+  createCtx,
+  requireInvokeParams,
+  requireRecord,
+} from "./node-invoke-policy.test-support.js";
 import * as filePolicy from "./policy.js";
 
 vi.mock("./audit.js", () => ({
   appendFileTransferAudit: vi.fn(async () => undefined),
 }));
 
-const requireRecord = createRequireRecord("object", "label-not-object");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const policy = createFileTransferNodeInvokePolicy();
 
-async function createRealDirFetchContext(input: {
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(clearRuntimeConfigSnapshot);
+
+function createRealDirFetchContext(input: {
   approved: string;
-  maxBytes: number;
-  requested: string;
+  maxBytes?: number;
+  requested?: string;
   denyPaths?: string[];
 }) {
   const approvals = {
     request: vi.fn(async () => ({ id: "approval-1", decision: "deny" as const })),
   };
-  const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(
-    async ({ params } = {}) => ({
-      ok: true,
-      payload: await handleDirFetch((params ?? {}) as Parameters<typeof handleDirFetch>[0]),
-    }),
-  );
-  const ctx: OpenClawPluginNodeInvokePolicyContext = {
-    nodeId: "node-1",
+  const { approved, requested = approved, maxBytes = 1024 * 1024, denyPaths } = input;
+  const { ctx, invokeNode } = createCtx({
     command: "dir.fetch",
-    params: { path: input.requested, maxBytes: input.maxBytes },
-    config: {},
+    params: { path: requested, maxBytes },
     pluginConfig: {
-      policyVersion: 2,
-      nodes: {
-        "node-1": {
-          ask: "on-miss",
-          followSymlinks: true,
-          maxBytes: input.maxBytes,
-          denyPaths: input.denyPaths,
-        },
-      },
+      nodes: { "node-1": { ask: "on-miss", followSymlinks: true, maxBytes, denyPaths } },
       literalGrants: [
         {
           nodeId: "node-1",
           command: "dir.fetch",
-          requestedPath: input.requested,
-          canonicalPath: input.approved,
+          requestedPath: requested,
+          canonicalPath: approved,
         },
       ],
     },
-    node: { nodeId: "node-1", displayName: "Node One" },
     approvals,
-    invokeNode,
-  };
+  });
+  invokeNode.mockImplementation(async ({ params }: Parameters<typeof invokeNode>[0] = {}) => ({
+    ok: true,
+    payload: await handleDirFetch((params ?? {}) as Parameters<typeof handleDirFetch>[0]),
+  }));
   return { approvals, ctx, invokeNode };
 }
 
@@ -94,14 +91,34 @@ async function extractFetchedArchive(payload: Record<string, unknown>, tempRoot:
   return destDir;
 }
 
-function firstInvokeParams(
-  invokeNode: ReturnType<typeof vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>>,
-) {
-  const request = requireRecord(invokeNode.mock.calls[0]?.[0], "invoke request");
-  return requireRecord(request.params, "invoke params");
+async function sourceFixture(filename: string, contents: string) {
+  const tmpRoot = await fs.realpath(tempDirs.make("file-transfer-identity-"));
+  const source = path.join(tmpRoot, "source");
+  const sourceFile = path.join(source, filename);
+  await fs.mkdir(source);
+  await fs.writeFile(sourceFile, contents);
+  return { tmpRoot, source, sourceFile };
 }
 
 describe.runIf(process.platform !== "win32")("file-transfer real dir.fetch policy", () => {
+  it("admits compressible directories within the compressed transfer budget", async () => {
+    const contents = "a".repeat(2 * 1024 * 1024);
+    const { tmpRoot, source } = await sourceFixture("repeated.txt", contents);
+    const maxBytes = 64 * 1024;
+    const { ctx, invokeNode } = createRealDirFetchContext({ approved: source, maxBytes });
+
+    const result = await policy.handle(ctx);
+
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ ok: true });
+    const payload = requireRecord(requireRecord(result, "result").payload, "payload");
+    expect(payload).toMatchObject({ ok: true, path: source });
+    expect(payload.tarBytes).toBeGreaterThan(0);
+    expect(payload.tarBytes).toBeLessThanOrEqual(maxBytes);
+    const destDir = await extractFetchedArchive(payload, tmpRoot);
+    expect(await fs.readFile(path.join(destDir, "repeated.txt"), "utf8")).toBe(contents);
+  });
+
   it("rejects a retargeted literal grant before archive preflight I/O", async () => {
     const tmpRoot = tempDirs.make("file-transfer-policy-");
     const approved = path.join(tmpRoot, "approved");
@@ -111,47 +128,30 @@ describe.runIf(process.platform !== "win32")("file-transfer real dir.fetch polic
     await fs.mkdir(replacement);
     await fs.writeFile(path.join(replacement, "secret.bin"), crypto.randomBytes(4096));
     await fs.symlink(replacement, requested);
-    const { approvals, ctx, invokeNode } = await createRealDirFetchContext({
+    const { approvals, ctx, invokeNode } = createRealDirFetchContext({
       approved,
       maxBytes: 1,
       requested,
     });
 
-    const result = await createFileTransferNodeInvokePolicy().handle(ctx);
-
-    expect(result).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
+    expect(await policy.handle(ctx)).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
     expect(approvals.request).toHaveBeenCalledTimes(1);
     expect(invokeNode).toHaveBeenCalledOnce();
-    expect(firstInvokeParams(invokeNode).expectedCanonicalPath).toBe(approved);
+    expect(requireInvokeParams(invokeNode, 0).expectedCanonicalPath).toBe(approved);
   });
 
   it.each([
-    {
-      name: "denies the real LF descendant in source preflight",
-      deniedName: "line\n.txt",
-      denied: true,
-    },
-    {
-      name: "preserves LF identity through producer, policy, and extraction",
-      deniedName: "line/n.txt",
-      denied: false,
-    },
-  ])("$name", async ({ deniedName, denied }) => {
-    const tmpRoot = await fs.realpath(tempDirs.make("file-transfer-identity-"));
-    const source = path.join(tmpRoot, "source");
+    ["denies the real LF descendant in source preflight", "line\n.txt", true],
+    ["preserves LF identity through producer, policy, and extraction", "line/n.txt", false],
+  ] as const)("%s", async (_name, deniedName, denied) => {
     const filename = "line\n.txt";
-    await fs.mkdir(source);
-    await fs.writeFile(path.join(source, filename), "literal LF payload");
-    const { ctx, invokeNode } = await createRealDirFetchContext({
+    const { tmpRoot, source } = await sourceFixture(filename, "literal LF payload");
+    const { ctx, invokeNode } = createRealDirFetchContext({
       approved: source,
-      requested: source,
-      maxBytes: 1024 * 1024,
       // A deny for the display alias must not deny the actual LF filename.
       denyPaths: [path.join(source, deniedName)],
     });
-
-    const result = await createFileTransferNodeInvokePolicy().handle(ctx);
-
+    const result = await policy.handle(ctx);
     if (denied) {
       expect(result).toMatchObject({
         ok: false,
@@ -173,44 +173,28 @@ describe.runIf(process.platform !== "win32")("file-transfer real dir.fetch polic
     });
   });
 
-  it.runIf(process.platform === "darwin")(
-    "authorizes every materialized member from the real macOS metadata producer",
-    async () => {
-      const tmpRoot = await fs.realpath(tempDirs.make("file-transfer-identity-"));
-      const source = path.join(tmpRoot, "source");
-      await fs.mkdir(source);
-      const sourceFile = path.join(source, "note.txt");
-      await fs.writeFile(sourceFile, "synthetic file payload");
-      execFileSync("/usr/bin/xattr", [
-        "-w",
-        "user.openclaw-fixture",
-        "synthetic metadata",
-        sourceFile,
-      ]);
-      const { ctx } = await createRealDirFetchContext({
-        approved: source,
-        requested: source,
-        maxBytes: 1024 * 1024,
-      });
-      const evaluated = vi.spyOn(filePolicy, "evaluateFilePolicyConstraints");
-      try {
-        const result = await createFileTransferNodeInvokePolicy().handle(ctx);
-        expect(result).toMatchObject({ ok: true });
-        const payload = requireRecord(requireRecord(result, "result").payload, "payload");
-        const destDir = await extractFetchedArchive(payload, tmpRoot);
-        const materialized = (await fs.readdir(destDir)).toSorted();
-        expect(materialized).toContain("._note.txt");
-        expect(await fs.readFile(path.join(destDir, "note.txt"), "utf8")).toBe(
-          "synthetic file payload",
-        );
-        const policyPaths = new Set(evaluated.mock.calls.map(([input]) => input.path));
-        expect(policyPaths).toEqual(
-          new Set([source, ...materialized.map((name) => path.join(source, name))]),
-        );
-        expect(payload.entries).toEqual(materialized);
-      } finally {
-        evaluated.mockRestore();
-      }
-    },
-  );
+  it.runIf(process.platform === "darwin")("authorizes real macOS metadata members", async () => {
+    const contents = "synthetic file payload";
+    const { tmpRoot, source, sourceFile } = await sourceFixture("note.txt", contents);
+    const attr = ["-w", "user.openclaw-fixture", "synthetic metadata", sourceFile];
+    execFileSync("/usr/bin/xattr", attr);
+    const { ctx } = createRealDirFetchContext({ approved: source });
+    const evaluated = vi.spyOn(filePolicy, "evaluateFilePolicyConstraints");
+    try {
+      const result = await policy.handle(ctx);
+      expect(result).toMatchObject({ ok: true });
+      const payload = requireRecord(requireRecord(result, "result").payload, "payload");
+      const destDir = await extractFetchedArchive(payload, tmpRoot);
+      const materialized = (await fs.readdir(destDir)).toSorted();
+      expect(materialized).toContain("._note.txt");
+      expect(await fs.readFile(path.join(destDir, "note.txt"), "utf8")).toBe(contents);
+      const policyPaths = new Set(evaluated.mock.calls.map(([input]) => input.path));
+      expect(policyPaths).toEqual(
+        new Set([source, ...materialized.map((name) => path.join(source, name))]),
+      );
+      expect(payload.entries).toEqual(materialized);
+    } finally {
+      evaluated.mockRestore();
+    }
+  });
 });

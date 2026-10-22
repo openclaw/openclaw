@@ -1,3 +1,4 @@
+import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { MemoryIndexWorkItem } from "./manager-sync-base.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
@@ -8,13 +9,23 @@ export abstract class MemorySyncTestHarness extends MemoryManagerSyncOps {
   protected beginSyncProviderGeneration(): void {}
   protected endSyncProviderGeneration(): void {}
 
+  protected async syncBackground(params: MemorySyncParams): Promise<void> {
+    this.syncIsBackground = true;
+    try {
+      await this.sync(params);
+    } finally {
+      this.syncIsBackground = false;
+    }
+  }
+
   protected async retireCurrentProvider(): Promise<void> {
     throw new Error("Source sync harness does not own embedding providers");
   }
 
-  protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
+  protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<MemoryIndexWorkItem[]> {
     for (const item of items) {
       await this.indexFile(item.entry, item.source);
     }
+    return [];
   }
 }

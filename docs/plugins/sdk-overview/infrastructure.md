@@ -28,9 +28,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
 | `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
-| `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
 | `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
-| `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
 | `api.registerAutoEnableProbe(probe)`              | Config check that can auto-enable this plugin                          |
@@ -38,7 +36,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 
-Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
+Gateway methods default to `profileAccess: "required"`, so a request is rejected before plugin dispatch if authenticated-profile verification fails. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
 Read-only methods may opt into WebSocket response sharing with registration options
 `shareKey(caller, params)`, `shareInvalidationEvents`, and `shareMaxAgeMs`.
@@ -122,6 +120,13 @@ update warning; callers using only the existing synchronous guard remain support
 
 ### SQLite write admission
 
+For runtime storage, use the owning domain's awaited operations or
+`openOpenClawAgentSqliteWorkerStoreV2`; see
+[native SQLite migration](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+The following `sqlite-runtime` callback helper is deprecated compatibility through
+2026-12-31. Awaiting admission does not move its SQL off the
+caller's thread.
+
 `runSqliteImmediateTransaction(db, prepare, options?)` from
 `openclaw/plugin-sdk/sqlite-runtime` waits for write admission without blocking
 the event loop. Its asynchronous `prepare` function may run more than once when
@@ -141,11 +146,92 @@ same transaction diagnostics as `runSqliteImmediateTransactionSync`. Keep the
 database handle and its owning operation alive until the returned promise settles.
 The callback and SQLite calls still run synchronously on the caller's thread.
 
-For a repeated fixed query, `prepareSqliteQuerySync(db, build)` compiles its
+Inside a worker backend, `prepareSqliteQuerySync(db, build)` from
+`openclaw/plugin-sdk/sqlite-worker-runtime` compiles a repeated fixed query's
 Kysely shape once and binds fresh parameters on each call. It uses the normal
 synchronous executor and the connection's bounded statement cache when enabled.
 Keep the prepared function with its database owner and discard it when closing
 the connection; transaction callbacks must remain synchronous.
+
+### Database engine adapters (experimental)
+
+Engine-aware stores use two narrow SDK entrypoints. Keep them on their owning
+side of the host/worker boundary:
+
+- `openclaw/plugin-sdk/database-engine-runtime` is host-only. Await
+  `resolveDatabaseEngineInput(config)` to resolve the configured connection secret,
+  then carry the resulting `DatabaseEngineInput` through the existing worker
+  input transport. `openEngineWorkerStore` opens the worker store and observes
+  its connection open, execute, and close requests. `runEngineStoreOperation`
+  wraps host-side store operations, preserving write admission,
+  current-authority checks, and worker-request observation without making the
+  store facade branch on the engine. This
+  entrypoint does not load the synchronous PostgreSQL bridge.
+- `openclaw/plugin-sdk/database-engine-worker-runtime` is worker/admission-only.
+  Call `openEngineStore` with the physical SQLite handle, `StoreSchema`, resolved
+  input, and the store's existing SQLite open and anchor-preparation callbacks.
+  `StoreSchema` declares the store ID, version, canonical SQLite DDL, and optional
+  generated PostgreSQL DDL. The owner selects the adapter, admits the physical
+  store once, and returns an `EngineConnection`. Use `runEngineStoreReadSnapshot`
+  for snapshot reads. `runEngineWorkerWrite` selects the extra PostgreSQL worker
+  envelope using the kernel's transaction callback; SQLite executes the operation
+  directly. Keep the kernel's own write-transaction API atomic on both engines.
+  `jsonPathValue(connection, value, path, kind)` projects an object-member JSON
+  path as text, a number, or JSON text. It preserves SQLite's `json_extract`
+  statement and bindings and selects the PostgreSQL expression for that engine.
+
+The worker entrypoint exports the `EngineConnection`, `StoreSchema`, and
+`DatabaseEngineAdapter` types; it does not export a PostgreSQL connection
+constructor. Open physical connections through `openEngineStore`. A store
+without registered PostgreSQL DDL stays on SQLite; a selected PostgreSQL store that
+fails admission never falls back. See [Database engines](/reference/database-engines)
+for configuration, supported stores, durability, anchors, and observation events.
+
+Experimental search capabilities use the same worker entrypoint. Call
+`admitStoreSearch` with an admitted store and its existing index declarations to
+bind `TextIndex` and `VectorIndex` handles. `FullTextCapability` supplies native
+Kysely expressions; `VectorCapability` owns native candidate queries and derived
+index maintenance. Callers retain filters, limits, chronology, snippets' display
+bounds, and scoring policy. The adapter's existing capability labels remain
+diagnostic metadata. SQLite retains its L2 candidate selection and cosine
+reranking, with the memory owner's exact fallback when native vectors are
+unavailable. PostgreSQL uses native full-text and exact vector retrieval.
+`fullText.rank(index, query, { postgres: { normalization: 0 } })` selects
+unnormalized cover density; omitting the option retains document-length
+normalization (`2`). SQLite ignores PostgreSQL rank options. Feature owners
+calibrate native ranks for their scoring policy; the capability does not promise
+SQLite ranking equivalence.
+
+### Owned stdio processes
+
+Bundled and official plugins with a bidirectional CLI protocol can use
+`createOwnedStdioProcess(options)` and `closeOwnedStdioProcess(child, options?)`
+from `openclaw/plugin-sdk/process-runtime`. The `OwnedStdioProcessOptions` and
+`OwnedStdioProcess` types describe the launch and its process-tree owner.
+Creation resolves after startup and private-input delivery. A failed launch
+also reports a cleanup failure if resource closure cannot be confirmed.
+
+Pass the command and arguments together as `argv`, with optional `argv0`, `cwd`,
+`env`, and `abortSignal`. For an already prepared CLI invocation, `exactEnv: true`
+preserves its environment and avoids a shell wrapper; the shared native child
+OOM policy still applies on Linux. `windowsShell: true` retains the configured
+Windows wrapper's shell launch contract when needed.
+
+| Option                            | Contract                                                                                                                                                                                                       |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `terminateOnHostLoss: true`       | On POSIX, terminate the owned process tree when its host disappears, before forwarding input EOF. Explicit `child.stdin.end()` still delivers graceful protocol EOF. Omit for the existing input-EOF behavior. |
+| `secretInput: { fd, createData }` | Deliver one credential buffer through a private descriptor numbered 3 or higher. The owner closes the descriptor after delivery and clears the returned buffer.                                                |
+| `assertCurrent`                   | Revalidate the caller's authority during launch preparation and before private-input delivery.                                                                                                                 |
+| `stdoutConsumption: "awaited"`    | Return an additional `consumeStdout(listener)` method. Subscribe once; it awaits each accepted chunk, decoder flush, and EOF.                                                                                  |
+| `stderrDestination`               | Send stderr to the supplied writable stream instead of callback observation.                                                                                                                                   |
+
+Use `onStdout`, `onStderr`, `onExit`, and `onError` for observation. `wait()` joins
+the command's result; it does not by itself prove that descendants have stopped.
+For shutdown, await `closeOwnedStdioProcess(child)`. It sends graceful input EOF,
+waits up to `graceMs` (2,000 ms by default), then escalates through `SIGTERM` and
+`SIGKILL` if needed. `{ force: true }` skips directly to `SIGKILL`. Both paths join
+process-tree cleanup, report cleanup failures, and dispose the owner. Do not
+replace that join with a child-exit listener or a separate process census.
 
 ### Worker task admission
 
@@ -241,6 +327,14 @@ have bounded inputs and must not wait for network, user input, or unbounded work
 
 ### SQLite worker stores
 
+For canonical agent databases, use `openOpenClawAgentSqliteWorkerStoreV2` with
+`{ version: 2, assertCurrent }`. It retains the existing agent execution owner,
+provides explicit worker-owned `prepare()` for creation, and checks live
+authority at transaction and commit admission. `executeExisting` leaves missing
+storage absent. See the [migration example](/plugins/sdk-migration/how-to-migrate#replace-native-sqlite-runtime-writes).
+Released raw native callbacks retain their ordering and warn on use until their
+removal in the first January 2027 stable release.
+
 Use `openSqliteWorkerStore<Operations>` from
 `openclaw/plugin-sdk/sqlite-runtime` to move a feature's SQLite lifecycle off the
 application event loop. Call it from the main application thread with
@@ -327,7 +421,7 @@ File identities are admission facts, not native-handle attestations. Close and
 drain a database's clients before replacing or relocating its file. The host
 refuses observed identity changes and collisions with an existing owner; path
 checks cannot protect against an uncoordinated filesystem replacement.
-Each client retains its admitted lexical and canonical pathnames through
+Each client retains its admitted lexical pathnames and resolved filesystem paths through
 drainage and close. The backend's opening paths remain pinned for its native
 lifetime; released secondary aliases do not accumulate while other clients live.
 
@@ -362,14 +456,8 @@ Use `close` for terminal cleanup or selected-error diagnostics; it does not prov
 delivery. Keep successful-response activity on `finish`, with the caller's
 success-status check, so an aborted request cannot report healthy activity.
 
-Older Bun HTTP transports use native response completion because their raw socket
-operations do not flush the HTTP response. OpenClaw detects the native HTTP
-`destroySoon` implementation introduced by Bun's Node compatibility rework rather
-than relying on version labels shared by different canary builds. Queued HEAD
-rejections on newer Bun wait for response socket assignment, including builds
-without HTTP response-finish diagnostics. Older Bun can still report client
-connection resets during large outstanding uploads, even after delivering the
-complete error.
+Queued HEAD rejections on supported Bun wait for response socket assignment,
+including builds without HTTP response-finish diagnostics.
 
 Gateway HTTP requests run in order on each connection, including their response
 lifetimes. A closing connection cannot admit later requests or upgrades. Queued
@@ -391,7 +479,7 @@ through `new URL(rawPath, "http://localhost").pathname` first. Results `live`,
 `ready`, and `startup` identify exact paths owned by checks on the Gateway port;
 choose a different webhook path. Results `namespace` and `outside` do not identify
 an exact check route. The same private facade exports `resolvePluginRoutePathContext`
-and `isProtectedPluginRoutePathFromContext` for canonical protected-path checks.
+and `isProtectedPluginRoutePathFromContext` for shared protected-path checks.
 If the callback falls under a protected namespace, choose the channel's safe default
 path before moving the external callback or reverse proxy to the Gateway port.
 A legacy listener can still serve its old path during that migration.
@@ -428,7 +516,7 @@ runtime routing and Doctor guidance. Plugin-owned Doctor contracts can compose
 `createLegacyWebhookListenerDoctorContract` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve authored ports and
 inherited bind addresses through the normal backed-up config write. An explicit
-legacy host without a port uses the channel's shipped default port. Canonical
+legacy host without a port uses the channel's shipped default port. Current
 `false` settings remain authoritative when Doctor removes retired keys.
 For retirement of a historical default, export the helper's static
 `historicalWebhookListener` property from the existing config Doctor module and
@@ -569,7 +657,7 @@ Contract notes:
   redaction registry.
 - Requester-scoped servers do not mint MCP App views: a view outlives the
   requester-authenticated run and the gateway view boundary has no requester
-  identity, so app previews stay fail-closed for these servers. Tool results
+  identity, so app previews remain blocked for these servers. Tool results
   are unaffected.
 - Static servers without a resolver keep the existing session-scoped lifecycle.
 - **Harness delivery rule:** requester-scoped servers never enter harness-native
@@ -588,11 +676,14 @@ Contract notes:
   requester. OpenClaw never falls back to another requester's credentials.
 
 Memory prompt supplement builders receive optional `agentId`,
-`agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
+`agentSessionKey`, `sandboxed`, and `projectKey` context. `projectKey` is the
+host-resolved repository identity for the current run, or absent outside a
+repository. The host only resolves it; a memory plugin that stores project
+scope decides whether and how to ask the agent to annotate writes with it. Memory corpus supplement `search`
 and `get` calls receive optional `agentId` and `sandboxed` context. Plugins with
 agent-owned storage should resolve that storage for each call instead of
 capturing one global path during registration. If an agent id is required but
-missing in a multi-agent operation, fail closed rather than choosing an
+missing in a multi-agent operation, reject the operation rather than choosing an
 arbitrary agent.
 
 Use `registerMemoryPromptPreparation(...)` when prompt text depends on async

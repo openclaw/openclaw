@@ -1,6 +1,6 @@
 // Public certificate inspection is read-only; server startup alone provisions TLS material.
 import { X509Certificate } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
@@ -43,10 +43,10 @@ async function publishGeneratedTlsOutput(
 ): Promise<GatewayTlsDegradationReason[]> {
   const degradationReasons: GatewayTlsDegradationReason[] = [];
   const stagedHandle = await fs.open(stagedPath, "r+");
-  let stagedIdentity: Stats;
+  let stagedIdentity: BigIntStats;
   try {
     await stagedHandle.sync();
-    stagedIdentity = await stagedHandle.stat();
+    stagedIdentity = await stagedHandle.stat({ bigint: true });
   } finally {
     await stagedHandle.close();
   }
@@ -69,7 +69,6 @@ async function publishGeneratedTlsOutput(
 // fingerprint advertised to clients.
 export type GatewayTlsRuntime = {
   enabled: boolean;
-  required: boolean;
   certPath?: string;
   keyPath?: string;
   caPath?: string;
@@ -208,7 +207,7 @@ export async function loadGatewayTlsServerRuntime(
   log?: GatewayTlsLog,
 ): Promise<GatewayTlsRuntime> {
   if (!cfg || cfg.enabled !== true) {
-    return { enabled: false, required: false };
+    return { enabled: false };
   }
 
   const autoGenerate = cfg.autoGenerate !== false;
@@ -224,7 +223,7 @@ export async function loadGatewayTlsServerRuntime(
       : path.join(baseDir, "gateway-key.pem"),
   );
   const caPath = cfg.caPath ? resolveUserPath(cfg.caPath) : undefined;
-  const runtime = { enabled: false, required: true, certPath, keyPath };
+  const runtime = { enabled: false, certPath, keyPath };
 
   const hasCert = await pathExists(certPath);
   const hasKey = await pathExists(keyPath);

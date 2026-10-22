@@ -28,6 +28,7 @@ import {
   createNativeModelSourceFixture as modelSource,
   requireNativeModelSourceCapture as requireCapture,
 } from "./native-subagent-monitor.test-support.js";
+import { isJsonObject } from "./protocol.js";
 
 afterEach(() => resetDiagnosticEventsForTest());
 
@@ -76,9 +77,7 @@ describe("Codex native hook relay managed policy", () => {
     "qualifies the actual warm/cold provider before native input (%s, projected=%s, accepted=%s, System=%s)",
     async (status, projected, accepted, system) => {
       const client = createClient();
-      const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
-        recoveryPollDelaysMs: [],
-      });
+      const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime());
       const oldConfiguration = {
         assertCurrent: () => {},
         hasProvider: (provider: string) => provider === "provider-q",
@@ -148,13 +147,11 @@ describe("Codex native hook relay managed policy", () => {
     },
   );
 
-  it.each(["native load", "routing replacement", "unadmitted active"] as const)(
+  it.each(["routing replacement", "native load", "unadmitted active"] as const)(
     "refuses an unqualified receiver read after %s",
     async (change) => {
       const client = createClient();
-      const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
-        recoveryPollDelaysMs: [],
-      });
+      const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime());
       const qualification = { assertCurrent: () => {}, hasProvider: () => true };
       let targetQualification: typeof qualification | undefined;
       const source = modelSource(["model-b"]);
@@ -184,6 +181,7 @@ describe("Codex native hook relay managed policy", () => {
         return returned.promise;
       });
       const nativeWrite = vi.fn();
+      let loadNotification: Promise<void> | undefined;
       const pending = monitor
         .prepareModelInput({
           threadId: "parent-thread",
@@ -201,10 +199,13 @@ describe("Codex native hook relay managed policy", () => {
             throw new Error("Input admission finished before target read");
           }),
         ]);
-        if (change === "native load") {
-          await notifyChildStarted(client, "parent-thread", threadId);
-        } else if (change === "routing replacement") {
+        if (change === "routing replacement") {
           targetQualification = { assertCurrent: () => {}, hasProvider: () => false };
+        } else if (change === "native load") {
+          loadNotification = client.notify({
+            method: "thread/status/changed",
+            params: { threadId, status: { type: "idle" } },
+          });
         }
         const stale = threadRead({
           childThreadId: threadId,
@@ -219,6 +220,7 @@ describe("Codex native hook relay managed policy", () => {
         );
         expect(nativeWrite).not.toHaveBeenCalled();
       } finally {
+        await loadNotification;
         await monitor.dispose();
         await parent.unregister();
       }
@@ -311,9 +313,7 @@ describe("Codex native hook relay managed policy", () => {
     expect(source.release).toHaveBeenCalledOnce();
     expect(() => captured.assertCurrent()).toThrow("released");
 
-    const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
-      recoveryPollDelaysMs: [],
-    });
+    const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime());
     const unknown = await monitor.registerParent({ parentThreadId: "unknown" });
     unknown.bindTurn("unknown-turn");
     expect(
@@ -413,13 +413,7 @@ describe("Codex native hook relay managed policy", () => {
         nativeModel: { provider: "test-provider", model: "wire-b" },
         authorizedModel: { provider: "test-provider", model: "catalog-b" },
       };
-      const monitor = new codexNativeSubagentMonitorRuntime.Monitor(
-        client.client,
-        createRuntime(),
-        {
-          recoveryPollDelaysMs: [],
-        },
-      );
+      const monitor = new codexNativeSubagentMonitorRuntime.Monitor(client.client, createRuntime());
       const first = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: a,
@@ -711,6 +705,50 @@ describe("Codex native hook relay config", () => {
     expect(config["hooks.PreToolUse"]).toEqual([
       expect.objectContaining({ matcher: "(?i)^(?:deploy)$" }),
     ]);
+  });
+
+  it("selects workspace operations without delaying independent native tools", () => {
+    const config = buildCodexNativeHookRelayConfig({
+      relay: createRelay({
+        matchers: {
+          pre_tool_use: [
+            "exec",
+            "process",
+            "read",
+            "write",
+            "edit",
+            "ls",
+            "grep",
+            "find",
+            "apply_patch",
+          ],
+        },
+      }),
+      events: ["pre_tool_use"],
+      hookTimeoutSec: 120,
+    });
+    const entries = config["hooks.PreToolUse"];
+    const hook = Array.isArray(entries) ? entries[0] : undefined;
+    if (!isJsonObject(hook) || typeof hook.matcher !== "string" || !Array.isArray(hook.hooks)) {
+      throw new Error("Expected a native pre-tool hook matcher and commands");
+    }
+    const { matcher, hooks } = hook;
+    const matches = new RegExp(`^(?:${matcher})$`, "u");
+    for (const name of [
+      "Bash",
+      "exec_command",
+      "write_stdin",
+      "read_file",
+      "list_dir",
+      "grep_files",
+      "apply_patch",
+    ]) {
+      expect(matches.test(name), name).toBe(true);
+    }
+    for (const name of ["web_search", "web_fetch", "request_user_input"]) {
+      expect(matches.test(name), name).toBe(false);
+    }
+    expect(hooks[0]).toMatchObject({ timeout: 120 });
   });
 
   it("rejects an empty canonical matcher scope instead of widening to match-all", () => {

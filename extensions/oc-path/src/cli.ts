@@ -6,11 +6,13 @@
  * / `--human` override.
  */
 
+import { isUtf8 } from "node:buffer";
 import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import { inferKind } from "./oc-path/dispatch.js";
+import { OcPathEditError } from "./oc-path/edit-error.js";
 import { findOcPaths } from "./oc-path/find.js";
 import { MAX_JSONC_INPUT_BYTES, parseJsonc } from "./oc-path/jsonc/parse.js";
 import { parseJsonl } from "./oc-path/jsonl/parse.js";
@@ -88,6 +90,7 @@ async function loadOcPathFile(
   absPath: string,
   fileName: string,
   mode: OutputMode,
+  params: { requireUtf8?: boolean } = {},
 ): Promise<OcAst | null> {
   const kind = inferKind(fileName);
   // A blocking open can hang on a FIFO before stat can reject it. O_NONBLOCK
@@ -119,29 +122,43 @@ async function loadOcPathFile(
       process.exitCode = 2;
       return null;
     }
+    // Only the editing verb re-emits the whole file, so only it asks for strict
+    // admission: replacement decoding there would rewrite bytes the edit never
+    // touched. The read-only verbs keep their existing decode contract.
+    if (params.requireUtf8 === true && !isUtf8(bytes)) {
+      emitError(
+        mode,
+        `input is not valid UTF-8; the file was left unchanged: ${absPath}. ` +
+          `Convert or repair a backed-up copy as UTF-8, then retry.`,
+        "OC_PATH_INPUT_NOT_UTF8",
+      );
+      process.exitCode = 2;
+      return null;
+    }
     raw = bytes.toString("utf8");
   } finally {
     await handle.close();
   }
   if (kind === "jsonc") {
     const result = parseJsonc(raw);
-    const sizeDiagnostic = result.diagnostics.find(
-      (diagnostic) => diagnostic.code === "OC_JSONC_INPUT_TOO_LARGE",
-    );
-    if (sizeDiagnostic) {
-      emitError(mode, sizeDiagnostic.message, sizeDiagnostic.code);
+    if (result.oversizedInputBytes !== undefined) {
+      emitError(
+        mode,
+        `input exceeds MAX_JSONC_INPUT_BYTES (${MAX_JSONC_INPUT_BYTES} bytes; got ${result.oversizedInputBytes})`,
+        "OC_JSONC_INPUT_TOO_LARGE",
+      );
       process.exitCode = 2;
       return null;
     }
-    return result.ast;
+    return result;
   }
   if (kind === "jsonl") {
-    return parseJsonl(raw).ast;
+    return parseJsonl(raw);
   }
   if (kind === "yaml") {
-    return parseYaml(raw).ast;
+    return parseYaml(raw);
   }
-  return parseMd(raw).ast;
+  return parseMd(raw);
 }
 
 function resolveFsPath(path: OcPath, options: PathCommandOptions): string {
@@ -255,15 +272,25 @@ async function pathSetCommand(
     return;
   }
   const fsPath = resolveFsPath(ocPath, options);
-  const ast = await loadOcPathFile(fsPath, ocPath.file, mode);
+  const ast = await loadOcPathFile(fsPath, ocPath.file, mode, { requireUtf8: true });
   if (ast === null) {
     return;
   }
 
-  let result: ReturnType<typeof setOcPath>;
+  let updated: OcAst;
   try {
-    result = setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true });
+    updated = setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true });
   } catch (err) {
+    if (err instanceof OcPathEditError) {
+      const detail = err.detail;
+      emit(
+        mode,
+        { ok: false, reason: err.reason, detail },
+        () => `set failed: ${err.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
+      );
+      process.exitCode = 1;
+      return;
+    }
     // Keep sentinel errors inside the scrubbed --json error boundary.
     if (err instanceof OcEmitSentinelError) {
       emitError(mode, `set refused: ${err.message}`, "OC_EMIT_SENTINEL");
@@ -272,18 +299,8 @@ async function pathSetCommand(
     }
     throw err;
   }
-  if (!result.ok) {
-    const detail = result.detail;
-    emit(
-      mode,
-      { ok: false, reason: result.reason, detail },
-      () => `set failed: ${result.reason}${detail !== undefined ? ` — ${detail}` : ""}`,
-    );
-    process.exitCode = 1;
-    return;
-  }
   // Setters guard edits and publish the rebuilt bytes; round-trip emission reads them verbatim.
-  const newBytes = result.ast.raw;
+  const newBytes = updated.raw;
   const byteLength = Buffer.byteLength(newBytes, "utf8");
 
   if (options.dryRun === true) {

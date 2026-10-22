@@ -1,15 +1,8 @@
 /** Formatting, retry, and idempotency policy for direct cron delivery. */
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import {
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
-} from "../../auto-reply/tokens.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
-import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
   captureDeliveryQueueStateContext,
@@ -32,7 +25,6 @@ import type {
   DispatchCronDeliveryParams,
   SuccessfulCronDeliveryTarget,
 } from "./delivery-dispatch-types.js";
-import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   idPrefix: "cron-direct-delivery:v1:",
@@ -52,7 +44,7 @@ export function resolveDirectCronDeliveryGeneration(
     | "cfgWithAgentDefaults"
   >,
 ) {
-  return params.job.sessionTarget === "isolated" &&
+  return (params.job.sessionTarget === "isolated" || params.job.sessionTarget === "current") &&
     params.sourceSessionKey &&
     params.sourceSessionGeneration &&
     !hasExplicitCronDeliveryTarget(params.deliveryPlan)
@@ -68,42 +60,9 @@ export function resolveDirectCronDeliveryGeneration(
     : undefined;
 }
 
-export function normalizeDeliveryTarget(channel: string, to: string): string {
+function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
-}
-
-type NormalizedSilentReplyText = {
-  text: string | undefined;
-  strippedTrailingSilentToken: boolean;
-};
-
-export function normalizeSilentReplyText(text: string | undefined): NormalizedSilentReplyText {
-  if (!text) {
-    return { text, strippedTrailingSilentToken: false };
-  }
-  if (isSuppressedControlReplyText(text)) {
-    return { text: undefined, strippedTrailingSilentToken: false };
-  }
-
-  let next = text;
-  const hasLeadingSilentToken = startsWithSilentToken(next, SILENT_REPLY_TOKEN);
-  if (hasLeadingSilentToken) {
-    next = stripLeadingSilentToken(next, SILENT_REPLY_TOKEN);
-  }
-
-  let strippedTrailingSilentToken = false;
-  if (hasLeadingSilentToken || next.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
-    const trimmedBefore = next.trim();
-    const stripped = stripSilentToken(next, SILENT_REPLY_TOKEN);
-    strippedTrailingSilentToken = stripped !== trimmedBefore;
-    next = stripped;
-  }
-
-  if (!next.trim() || isSuppressedControlReplyText(next)) {
-    return { text: undefined, strippedTrailingSilentToken };
-  }
-  return { text: next, strippedTrailingSilentToken };
 }
 
 const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
@@ -134,8 +93,8 @@ const subagentFollowupRuntimeLoader = createLazyImportLoader(
 type DescendantSubagentFollowup = {
   /** Descendant reply that replaces the interim cron text; undefined keeps the original. */
   finalReply: string | undefined;
+  finalDisposition?: "visible" | "silent" | "empty";
   hasUnsettledDescendants: boolean;
-  hadDescendants: boolean;
 };
 
 /** Resolves whether descendant subagent output should replace the interim cron text. */
@@ -148,7 +107,6 @@ export async function resolveDescendantSubagentFollowup(params: {
   initialSynthesizedText: string;
   abortSignal?: AbortSignal;
 }): Promise<DescendantSubagentFollowup> {
-  const expectedFollowup = expectsSubagentFollowup(params.initialSynthesizedText);
   const subagentRegistryRuntime = await deliverySubagentRegistryRuntimeLoader.load();
   let hasUnsettledDescendants = await subagentRegistryRuntime.hasUnsettledCronDescendants(
     params.sessionKey,
@@ -156,30 +114,39 @@ export async function resolveDescendantSubagentFollowup(params: {
   const shouldCheckCompletedDescendants =
     !params.abortSignal?.aborted &&
     !hasUnsettledDescendants &&
-    (params.spawnOnlyHandoff || isLikelyInterimCronMessage(params.initialSynthesizedText));
-  const needsFollowupRuntime =
-    shouldCheckCompletedDescendants || hasUnsettledDescendants || expectedFollowup;
+    (params.spawnOnlyHandoff || !params.initialSynthesizedText.trim());
+  const needsFollowupRuntime = shouldCheckCompletedDescendants || hasUnsettledDescendants;
   const followupRuntime = needsFollowupRuntime
     ? await subagentFollowupRuntimeLoader.load()
     : undefined;
-  // A child may settle before delivery starts without matching the narrow
-  // follow-up hints. Its result still replaces the parent's interim text.
+  if (params.spawnOnlyHandoff && followupRuntime) {
+    const result = await followupRuntime.waitForDescendantSubagentResult({
+      sessionKey: params.sessionKey,
+      runStartedAt: params.runStartedAt,
+      timeoutMs: params.timeoutMs,
+      abortSignal: params.abortSignal,
+    });
+    return {
+      finalReply: result?.reply,
+      finalDisposition: result?.disposition,
+      hasUnsettledDescendants: await subagentRegistryRuntime.hasUnsettledCronDescendants(
+        params.sessionKey,
+      ),
+    };
+  }
+  // A settled child replaces absent parent output or a recorded handoff, not a finished synthesis.
   const completedDescendantReply = shouldCheckCompletedDescendants
     ? await followupRuntime?.readDescendantSubagentFallbackReply({
         sessionKey: params.sessionKey,
         runStartedAt: params.runStartedAt,
       })
     : undefined;
-  const hadDescendants = hasUnsettledDescendants || Boolean(completedDescendantReply);
-  if (
-    (!params.deliveryBestEffort || params.spawnOnlyHandoff) &&
-    (hasUnsettledDescendants || expectedFollowup)
-  ) {
+  if (!params.deliveryBestEffort && hasUnsettledDescendants) {
     let finalReply = await followupRuntime?.waitForDescendantSubagentSummary({
       sessionKey: params.sessionKey,
       initialReply: params.initialSynthesizedText,
       timeoutMs: params.timeoutMs,
-      observedActiveDescendants: hasUnsettledDescendants || expectedFollowup,
+      observedActiveDescendants: hasUnsettledDescendants,
       abortSignal: params.abortSignal,
     });
     hasUnsettledDescendants = await subagentRegistryRuntime.hasUnsettledCronDescendants(
@@ -195,26 +162,14 @@ export async function resolveDescendantSubagentFollowup(params: {
     return {
       finalReply: finalReply && !hasUnsettledDescendants ? finalReply : undefined,
       hasUnsettledDescendants,
-      hadDescendants,
     };
   }
-  return { finalReply: completedDescendantReply, hasUnsettledDescendants, hadDescendants };
+  return { finalReply: completedDescendantReply, hasUnsettledDescendants };
 }
 
 export async function logCronDeliveryWarn(message: string): Promise<void> {
   const { logWarn } = await deliveryLoggerRuntimeLoader.load();
   logWarn(message);
-}
-
-export async function logCronDeliveryError(message: string): Promise<void> {
-  const { logError } = await deliveryLoggerRuntimeLoader.load();
-  logError(message);
-}
-
-export function logCronDeliveryErrorDeferred(message: string): void {
-  void deliveryLoggerRuntimeLoader.load().then(({ logError }) => {
-    logError(message);
-  });
 }
 
 export function resolveStaleCronDeliveryError(params: {
@@ -234,7 +189,7 @@ export function resolveStaleCronDeliveryError(params: {
 export async function maybeApplyTtsToCronPayloads(params: {
   cfg: OpenClawConfig;
   payloads: ReplyPayload[];
-  delivery: SuccessfulCronDeliveryTarget;
+  delivery: Pick<SuccessfulCronDeliveryTarget, "channel" | "accountId">;
   agentId: string;
   ttsAuto?: TtsAutoMode;
 }): Promise<ReplyPayload[]> {
@@ -271,7 +226,7 @@ export async function maybeApplyTtsToCronPayloads(params: {
 export function buildDirectCronDeliveryIdempotencyKey(params: {
   jobId: string;
   runStartedAt: number;
-  delivery: SuccessfulCronDeliveryTarget;
+  delivery: Pick<SuccessfulCronDeliveryTarget, "channel" | "to" | "accountId" | "threadId">;
 }): string {
   // Include route identity, not just the cron execution id, because one run can
   // target different channels/accounts/threads across retry and fallback paths.

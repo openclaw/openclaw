@@ -20,13 +20,14 @@ import {
   assertSafeGitPublicationWorkspace,
   createGitHubPublicationCommandRunner,
 } from "./github-publication-git-transport.js";
+import { readRepositoryGitHubPublicationBranchAsync } from "./github-publication-store-async.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { prepareRepositoryPublicationRestore } from "./github-repository-publication-restore.js";
-import { readRepositoryGitHubPublicationBranch } from "./github-repository-publication-store.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { retainGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
+import type { GatewaySessionEntryRead } from "./session-utils-store.js";
 import { prepareSessionWorktree } from "./session-worktree-preparation.js";
+import { prepareRepositoryGitHubIdentity } from "./worker-environments/repository-github-identity.js";
 import { withSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
-import { prepareWorkerGitHubBinding } from "./worker-environments/worker-github-binding.js";
 import { applyStagedWorkerWorkspace } from "./worker-environments/workspace-reconcile-apply.js";
 
 /** Explicit Gateway moves and failed-placement recovery restore only accepted source results. */
@@ -38,7 +39,28 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   assertCurrent: SessionSourceAssertion;
   signal?: AbortSignal;
 }): Promise<void> {
-  const initial = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const initial = await retainGatewaySessionEntryReadOnly(
+    params.sessionKey,
+    params.agentId,
+    (previous, current) => previous.repositoryWorkspaceId === current.repositoryWorkspaceId,
+    params.cfg,
+  );
+  try {
+    return await materializeCapturedRepositoryWorkspace(params, initial, () => {
+      if (!initial.isCurrentAtResponse()) {
+        throw new Error("Repository workspace changed during Gateway materialization; retry move");
+      }
+    });
+  } finally {
+    initial.release();
+  }
+}
+
+async function materializeCapturedRepositoryWorkspace(
+  params: Parameters<typeof materializeSessionRepositoryWorkspaceOnGateway>[0],
+  initial: GatewaySessionEntryRead,
+  assertEntryCurrent: () => void,
+): Promise<void> {
   if (initial.entry?.sessionId !== params.sessionId) {
     throw new Error("Session changed before repository materialization");
   }
@@ -64,13 +86,12 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       `Repository workspace does not match the configured GitHub host (${githubHost}); restore its GitHub configuration before retrying the Gateway move`,
     );
   }
-  const branch = () =>
-    readRepositoryGitHubPublicationBranch({
-      workspaceId,
-      branch: repository.branch,
-      pushRepository: `${remote.owner}/${remote.repo}`,
-    });
-  const selected = branch();
+  const branchInput = {
+    workspaceId,
+    branch: repository.branch,
+    pushRepository: `${remote.owner}/${remote.repo}`,
+  };
+  const selected = await readRepositoryGitHubPublicationBranchAsync(branchInput);
   const published = selected.head;
   if (selected.unsettled) {
     throw new Error(
@@ -79,16 +100,11 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
   }
   const assertOtherOwners = () => {
     params.signal?.throwIfAborted();
-    const currentBranch = branch();
-    if (
-      currentBranch.unsettled ||
-      currentBranch.head?.pushed_head_commit !== published?.pushed_head_commit ||
-      preparedRepository.current()?.revision !== repository.revision
-    ) {
+    if (preparedRepository.current()?.revision !== repository.revision) {
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     }
   };
-  const assertEntry = (current: typeof initial.entry) => {
+  const assertEntry = (current: Partial<NonNullable<typeof initial.entry>> | undefined) => {
     if (
       current?.sessionId !== params.sessionId ||
       current.lifecycleRevision !== initial.entry?.lifecycleRevision ||
@@ -104,20 +120,9 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       storePath: initial.storePath,
     },
     readSource: initial.capturedReadSource,
-    fields: ["sessionId", "lifecycleRevision"],
+    fields: ["sessionId", "lifecycleRevision", "repositoryWorkspaceId"],
     expected: initial.entry,
-    assertCurrent: () => {
-      const current = loadGatewaySessionEntryReadOnly(params.sessionKey, {
-        agentId: params.agentId,
-      });
-      if (
-        current.storePath !== initial.storePath ||
-        current.canonicalKey !== initial.canonicalKey
-      ) {
-        throw new Error("Repository workspace changed during Gateway materialization; retry move");
-      }
-      assertEntry(current.entry);
-    },
+    assertCurrent: assertEntryCurrent,
     refuse: () => {
       throw new Error("Repository workspace changed during Gateway materialization; retry move");
     },
@@ -130,41 +135,40 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
     },
   );
   assertCurrent();
-  const github = await prepareWorkerGitHubBinding({
-    sessionId: params.sessionId,
-    sessionKey: initial.canonicalKey,
-    agentId: params.agentId,
-    assertCurrent: () => {
-      assertCurrent();
-      return true;
-    },
-  });
-  // Optional launch binding absorbs unavailable auth, including a thrown owner
-  // assertion. A closed move must never proceed as an anonymous clone.
+  const github = await prepareRepositoryGitHubIdentity(params.agentId, assertCurrent);
   assertCurrent();
-  const project = await materializeProjectClone(
-    {
-      cfg: params.cfg,
-      gitUrl: repository.url,
-      requiredCommit: published?.pushed_head_commit ?? repository.baseCommit,
-    },
-    { signal: params.signal, token: github?.token, assertCurrent },
-  ).catch((error: unknown) => {
-    if (error instanceof ProjectCloneError && error.failure === "auth_required") {
-      throw new ProjectCloneError(
-        error.failure,
-        "GitHub could not authenticate this repository with the selected shared GitHub identity. Check its repository access or reconnect it in Settings, then retry the Gateway move.",
-      );
-    }
-    throw error;
-  });
+  const cloneOptions = {
+    signal: params.signal,
+    token: github.token,
+    assertCurrent: github.assertSelected,
+  };
+  const requiredCommit = published?.pushed_head_commit ?? repository.baseCommit;
+  const project = await github
+    .start(() =>
+      materializeProjectClone(
+        {
+          cfg: params.cfg,
+          gitUrl: repository.url,
+          requiredCommit,
+        },
+        cloneOptions,
+      ),
+    )
+    .catch((error: unknown) => {
+      if (error instanceof ProjectCloneError && error.failure === "auth_required") {
+        throw new ProjectCloneError(
+          error.failure,
+          "GitHub could not authenticate this repository with the selected shared GitHub identity. Check its repository access or reconnect it in Settings, then retry the Gateway move.",
+        );
+      }
+      throw error;
+    });
   assertCurrent();
   const {
     step,
     require: command,
     run,
   } = createGitHubPublicationCommandRunner(assertCurrent, "session.materialize");
-  const cloneOptions = { signal: params.signal, token: github?.token, assertCurrent };
   const source = { url: repository.url, target: project.repoRoot };
   const remoteHead = await step(() =>
     readProjectCheckoutRemoteHead({ ...source, branch: repository.branch }, cloneOptions),
@@ -256,42 +260,37 @@ export async function materializeSessionRepositoryWorkspaceOnGateway(params: {
       );
     }
     if (repository.checkpointRef) {
-      await withSessionRepositoryCheckpoint(
-        { workspaceId, includePublication: true },
-        async (snapshot) => {
-          assertCurrent();
-          const applied = await applyStagedWorkerWorkspace({
-            ...snapshot,
-            acceptance: { kind: "reconcile" },
-            root,
-            // The checkout is unbound until verification. Failed preparation rolls it
-            // back; a crash leaves the immutable checkpoint available for a fresh retry.
-            journal: {
-              load: async () => undefined,
-              begin: async () => assertCurrent(),
-              commit: async () => assertCurrent(),
-              abort: async () => {},
-            },
-          });
-          if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
-            throw new Error(
-              "Repository changes could not be fully restored; retry the Gateway move",
-            );
-          }
-          await applied.verifyLocalStable();
-          await alignPublication();
-          for (const restore of await prepareRepositoryPublicationRestore({
-            ...snapshot,
-            ...(published?.pushed_head_commit
-              ? { indexBase: { root, commit: published.pushed_head_commit, assertCurrent } }
-              : {}),
-          })) {
-            await command(restore.argv, { cwd: root, input: restore.input });
-          }
-          await applied.verifyLocalStable();
-          assertCurrent();
-        },
-      );
+      await withSessionRepositoryCheckpoint({ workspaceId }, async (snapshot) => {
+        assertCurrent();
+        const applied = await applyStagedWorkerWorkspace({
+          ...snapshot,
+          acceptance: { kind: "reconcile" },
+          root,
+          // The checkout is unbound until verification. Failed preparation rolls it
+          // back; a crash leaves the immutable checkpoint available for a fresh retry.
+          journal: {
+            load: async () => undefined,
+            begin: async () => assertCurrent(),
+            commit: async () => assertCurrent(),
+            abort: async () => {},
+          },
+        });
+        if (applied.conflictPaths.length || applied.manifestRef !== repository.manifestHash) {
+          throw new Error("Repository changes could not be fully restored; retry the Gateway move");
+        }
+        await applied.verifyLocalStable();
+        await alignPublication();
+        for (const restore of await prepareRepositoryPublicationRestore({
+          ...snapshot,
+          ...(published?.pushed_head_commit
+            ? { indexBase: { root, commit: published.pushed_head_commit, assertCurrent } }
+            : {}),
+        })) {
+          await command(restore.argv, { cwd: root, input: restore.input });
+        }
+        await applied.verifyLocalStable();
+        assertCurrent();
+      });
     } else {
       await alignPublication();
     }

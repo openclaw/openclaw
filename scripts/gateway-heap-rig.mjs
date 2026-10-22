@@ -82,6 +82,8 @@ config.cron = { enabled: true };
 config.gateway.controlUi.allowedOrigins = [`http://127.0.0.1:${port}`];
 config.memory = { search: { enabled: false } };
 config.plugins.slots = { memory: "none" };
+// Background reviews share the agent model and would consume its ordered tool fixtures.
+config.skills = { ...config.skills, workshop: { autonomous: { mode: "off" } } };
 applyMockOpenAiModelConfig(config, { mockPort: port + 1 });
 // Utility summaries must not consume the agent mock's ordered tool-response script.
 config.models.providers["heap-rig-utility"] = {
@@ -91,7 +93,6 @@ config.models.providers["heap-rig-utility"] = {
 config.agents.defaults.utilityModel = "heap-rig-utility/gpt-5.6-luna";
 config.agents.defaults = {
   ...config.agents.defaults,
-  heartbeat: { every: "0m" },
   skipBootstrap: true,
   skills: [],
   modelPolicy: {},

@@ -41,6 +41,8 @@ describe("Slack QA debug capture", () => {
       ["response", posted.dataText],
     ]);
     const events = [
+      { ...response(6), status: 500, dataText: undefined, dataBlobId: "failed-response" },
+      request(6, "chat.postMessage", { text: "FAILED" }),
       response(4),
       request(4, "chat.update", { text: "receipt", ts: "2.000000" }),
       { ...posted, dataText: undefined, dataBlobId: "response" },
@@ -56,7 +58,12 @@ describe("Slack QA debug capture", () => {
         sessionId: "qa-slack",
         store: {
           getSessionEvents: async () => events,
-          readBlob: async (id: string) => blobs.get(id) ?? null,
+          readBlob: async (id: string) => {
+            if (id === "failed-response") {
+              throw new Error("Failed responses are not message evidence");
+            }
+            return blobs.get(id) ?? null;
+          },
         },
       }),
     ).resolves.toEqual([
@@ -64,7 +71,6 @@ describe("Slack QA debug capture", () => {
         blockText: ["Update", "COMMENTARY"],
         channelId: "C123",
         text: "fallback",
-        threadTs: "1.000000",
         ts: "2.000000",
       },
       { channelId: "C123", text: "receipt", ts: "2.000000" },
@@ -158,7 +164,7 @@ describe("Slack QA debug capture", () => {
       }),
     ]);
     expect(JSON.stringify(writes)).not.toContain("private-");
-    events.push(response(7));
+    events.push(response(7), response(8), { flowId: "8", kind: "error" });
     const settled = await readSlackQaNativeWrites(params);
     expect(settled.find((write) => write.requestEventId === 7)).toMatchObject({
       evidence: "api-accepted",
@@ -166,10 +172,13 @@ describe("Slack QA debug capture", () => {
       threadId: "1.000000",
     });
     expect(settled.find((write) => write.requestEventId === 7)).not.toHaveProperty("reason");
+    expect(settled.find((write) => write.requestEventId === 8)).toMatchObject({
+      evidence: "api-accepted",
+    });
     expect(
       settled
         .filter((write) => write.evidence === "uncertain")
         .map((write) => write.requestEventId),
-    ).toEqual([8, 11]);
+    ).toEqual([11]);
   });
 });

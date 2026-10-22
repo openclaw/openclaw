@@ -17,7 +17,7 @@ not replace maintainer judgment.
 
 ## Barnacle
 
-Barnacle is deterministic GitHub triage. It looks for known queue-management
+Barnacle applies fixed rules to GitHub triage. It looks for known queue-management
 cases and responds with labels, comments, or closures.
 
 Barnacle may act when:
@@ -48,14 +48,14 @@ Maintainers still decide whether and when a PR is ready to merge.
 ClawSweeper is queue-based. When you open a non-draft PR or mark a draft ready
 for review, it posts a short receipt comment right away, but the review itself
 still waits for a queue slot. Do not expect an immediate review after opening a
-PR, pushing a commit, or adding a review request. Label updates after a
-ClawSweeper run can also take time.
+PR or adding a review request. Label updates after a ClawSweeper run can also
+take time.
 
-New PRs enter the ClawSweeper review queue. Maintainers can also queue review,
-repair, or automerge flows with labels or commands. For ordinary contributor
-updates, ask ClawSweeper for another review only after you have updated the
-branch, PR description, proof, or code. Then request a fresh review with a new
-PR comment:
+ClawSweeper reviews each PR automatically once. Later pushes, description edits,
+and reopens do not start another review on their own. Maintainers can also queue
+review, repair, or automerge flows with labels or commands. After you have
+updated the branch, PR description, proof, or code, request a fresh review with
+a new PR comment:
 
 ```text
 @clawsweeper re-review
@@ -107,6 +107,9 @@ links. For visual changes, include before and after screenshots when practical.
 For proof files, prefer linking CI artifacts, GitHub-uploaded screenshots or
 recordings, or a short redacted log excerpt. Do not commit generated proof files
 unless they are part of the actual docs, tests, or product change.
+
+For behavioral changes, use the [boundary-proof guide](/help/testing/writing-tests#prove-behavior-at-the-owning-boundary)
+to review production-path, provider-request, and failure/reconstruction evidence.
 
 Redacting sensitive data is the contributor's responsibility. Remove secrets,
 tokens, private URLs, user data, and unrelated logs before posting proof.
@@ -178,14 +181,14 @@ workflow instead.
 ## Troubleshooting
 
 Maintainers can set `OPENCLAW_PR_TOOLING_ROOT` to a full checkout of this repository
-to source materialized `scripts/pr` dependencies independently of a canonical checkout parked
+to source materialized `scripts/pr` dependencies independently of a primary checkout parked
 on another branch. The environment setting takes precedence over
-`git config openclaw.pr.toolingRoot /path/to/tooling-checkout` in the canonical
+`git config openclaw.pr.toolingRoot /path/to/tooling-checkout` in the primary
 checkout; without either, dependency sourcing stays unchanged. Versions must
 match the wrapper's trust-anchor manifest. On mismatch, a separate clean `main`
 tooling checkout is fetched, fast-forwarded, and installed with
 `pnpm install --frozen-lockfile` once, then rechecked. Dirty or non-main tooling
-checkouts are refused with repair guidance; the canonical checkout is never
+checkouts are refused with repair guidance; the primary checkout is never
 refreshed. The setting applies at both dependency materialization handoffs;
 in-place wrappers keep their checkout's dependency context. Wrapper code selection
 and trust stay unchanged.

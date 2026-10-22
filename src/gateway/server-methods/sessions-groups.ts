@@ -26,7 +26,7 @@ import {
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 import {
   isWorkspacePathContainmentCurrent,
   resolveWorkspacePathContainment,
@@ -67,13 +67,10 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       respond(true, { defaults }, undefined);
     },
   ),
-  "sessions.groups.put": async ({ params, respond, context, sessionMutationAuthorization }) => {
-    if (
-      !assertValidParams(params, validateSessionsGroupsPutParams, "sessions.groups.put", respond)
-    ) {
-      return;
-    }
-    try {
+  "sessions.groups.put": defineValidatedGatewayHandler(
+    "sessions.groups.put",
+    validateSessionsGroupsPutParams,
+    async ({ params, respond, context, sessionMutationAuthorization }) => {
       const groups = await putSessionGroups({
         cfg: context.getRuntimeConfig(),
         names: params.names,
@@ -88,10 +85,9 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       );
       // Catalog-only changes still need to reach other open clients.
       emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
-    } catch (error) {
-      respond(false, undefined, sessionGroupMutationError(error, SessionGroupNotEmptyError));
-    }
-  },
+    },
+    (error) => sessionGroupMutationError(error, SessionGroupNotEmptyError),
+  ),
   "sessions.groups.rename": defineValidatedGatewayHandler(
     "sessions.groups.rename",
     validateSessionsGroupsRenameParams,

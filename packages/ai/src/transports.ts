@@ -1,5 +1,8 @@
 /** Provider transport implementations and transport-specific compatibility helpers. */
-export type { OpenAIResponsesCompactionRejection } from "./provider-options.js";
+export type {
+  CompactionReplayRejection,
+  OpenAIResponsesCompactionRejection,
+} from "./provider-options.js";
 export * from "./transports/anthropic-payload-policy.js";
 export * from "./transports/anthropic-transport-stream.js";
 export { resolveCompletionTokenReservation } from "./transports/anthropic-transport-options.js";
@@ -26,6 +29,7 @@ export * from "./transports/openai-transport-params.js";
 export * from "./transports/openai-transport-shared.js";
 export * from "./transports/provider-compaction-replay.js";
 export * from "./transports/provider-transport-stream.js";
+export * from "./transports/provider-wait.js";
 export * from "./transports/responses-image-payload-sanitizer.js";
 export * from "./transports/simple-completion-transport.js";
 export * from "./transports/transport-stream-shared.js";
@@ -42,3 +46,7 @@ export {
   projectGoogleMessages,
   requiresGoogleToolCallId,
 } from "./providers/google-messages.js";
+export {
+  buildGoogleGenerationConfig,
+  buildGoogleSimpleThinking,
+} from "./providers/google-shared.js";

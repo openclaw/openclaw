@@ -1,16 +1,10 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage, redirect } from "@openclaw/uirouter";
-import { html, nothing } from "lit";
 import { pathForRoute, routePageSpec, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { CONFIG_PAGE_IDS, type ConfigPageId } from "./config-sections.ts";
-import {
-  configRouteData,
-  configTargetIdFromHash,
-  SETTINGS_ROUTE_TARGETS,
-  type ConfigRouteData,
-} from "./route-data.ts";
+import { configRouteData, configTargetIdFromHash, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
 
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
@@ -66,6 +60,7 @@ function loadConfigRoute(
   }
   return {
     ...route,
+    pageId,
     ...(agentSelectionIntent ? { agentSelectionIntent } : {}),
   };
 }
@@ -82,11 +77,10 @@ function configPage(id: ConfigPageId) {
     },
     loader: (context: ApplicationContext, { location }) => loadConfigRoute(context, location, id),
     component: () =>
-      import("./config-page.ts").then(() => ({
-        header: true,
-        render: (data: ConfigRouteData | undefined) => html`
-          <openclaw-config-page .pageId=${id} .routeData=${data ?? null}></openclaw-config-page>
-        `,
+      import("./config-page.tsx").then((module) => ({
+        // Keep the current owner while another Settings subpage loads its data.
+        renderOwnerKey: () => "settings-config",
+        renderSolid: module.ConfigRoute,
       })),
   });
 }
@@ -107,7 +101,7 @@ const removedGeneralRedirectPage = definePage({
     });
   },
   // Redirect routes still require a module by contract, but never render page content.
-  component: async () => ({ header: true, render: () => nothing }),
+  component: async () => ({ renderSolid: () => null }),
 });
 
 export const pages = [
@@ -118,7 +112,7 @@ export const pages = [
         ? undefined
         : redirect({ ...location, pathname: pathForRoute("chat", context.basePath) }),
     // The shell reuses its lazy settings navigation as the embedded list page.
-    component: async () => ({ render: () => nothing }),
+    component: async () => ({ renderSolid: () => null }),
   }),
   removedGeneralRedirectPage,
   ...CONFIG_PAGE_IDS.map(configPage),

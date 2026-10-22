@@ -1,25 +1,13 @@
-// Sessions command tests cover listing, details, filtering, and transcript display behavior.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
+import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
-import {
-  assignSessionOwner,
-  patchSessionEntryCore,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import { assignSessionOwner, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordSessionParticipant } from "../config/sessions/session-accessor.sqlite-participants.native.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   cleanupStore,
@@ -28,13 +16,80 @@ import {
   resetMockSessionsConfig,
   runSessionsJson,
   setMockSessionsConfig,
-  writeStore,
+  writeStore as seedStore,
 } from "./sessions.test-helpers.js";
 
 mockSessionsConfig();
+const gatewayOwner = { pid: 123, port: 19461, createdAt: "fixture" };
+
+const catalogState = vi.hoisted(() => ({
+  catalog: { entries: [], routeVariants: [] } as ModelCatalogSnapshot,
+  callGateway: vi.fn<typeof import("../gateway/call.js").callGateway>(),
+  readActiveGatewayLockIdentity:
+    vi.fn<typeof import("../infra/gateway-lock.js").readActiveGatewayLockIdentity>(),
+}));
+// mock-isolation: Supply catalog I/O without provider discovery or prepared-runtime startup.
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogSnapshot: vi.fn(async () => catalogState.catalog),
+}));
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGateway: catalogState.callGateway,
+  isImplicitLocalGatewayTarget: vi.fn(async () => true),
+}));
+vi.mock("../infra/gateway-lock.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/gateway-lock.js")>()),
+  readActiveGatewayLockIdentity: catalogState.readActiveGatewayLockIdentity,
+}));
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2025-12-06T00:00:00Z"));
+  catalogState.catalog = { entries: [], routeVariants: [] };
+  catalogState.callGateway.mockReset();
+  catalogState.readActiveGatewayLockIdentity.mockReset().mockResolvedValue(undefined);
+});
+afterEach(() => {
+  resetMockSessionsConfig();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 import { sessionsCommand } from "./sessions.js";
+
+async function writeStore(...args: Parameters<typeof seedStore>) {
+  const store = await seedStore(...args);
+  onTestFinished(() => cleanupStore(store));
+  return store;
+}
+
+function makeSession(sessionId: string, fields: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId, updatedAt: Date.now() - 60_000, ...fields };
+}
+
+function writeSession(sessionId: string, fields: Partial<SessionEntry>, key = "agent:main:main") {
+  return writeStore({ [key]: makeSession(sessionId, fields) });
+}
+
+function readSessionsJson(store: string, options?: Parameters<typeof runSessionsJson>[2]) {
+  return runSessionsJson<SessionsJsonPayload>(sessionsCommand, store, options);
+}
+
+function configureModels(
+  primary: string,
+  models: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"],
+  providers?: Record<
+    string,
+    { models: Array<{ id: string; contextTokens: number; contextWindow?: number }> }
+  >,
+  store?: string,
+) {
+  setMockSessionsConfig(() => ({
+    agents: { defaults: { model: { primary }, models } },
+    ...(providers ? { models: { providers } } : {}),
+    ...(store ? { session: { store } } : {}),
+  }));
+}
 
 function singleSessionTableCells(logs: string[]): string[] {
   const lines = stripAnsi(logs.join("\n"))
@@ -52,17 +107,6 @@ function singleSessionTableCells(logs: string[]): string[] {
 }
 
 describe("sessionsCommand", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-06T00:00:00Z"));
-  });
-
-  afterEach(() => {
-    resetMockSessionsConfig();
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   it.each([
     { name: "listing", run: sessionsCommand, options: {} },
     { name: "cleanup dry-run", run: sessionsCleanupCommand, options: { dryRun: true } },
@@ -105,7 +149,6 @@ describe("sessionsCommand", () => {
         }
       }
     } finally {
-      cleanupStore(store);
       if (columns) {
         Object.defineProperty(process.stdout, "columns", columns);
       } else {
@@ -115,139 +158,196 @@ describe("sessionsCommand", () => {
   });
 
   it("preserves recorded tokens without freshness provenance in text and JSON", async () => {
-    const store = await writeStore({
-      "agent:main:boundary": {
-        sessionId: "boundary-session",
-        updatedAt: Date.now() - 60_000,
+    const store = await writeSession(
+      "boundary-session",
+      {
         totalTokens: 49,
         totalTokensFresh: true,
         contextTokens: 200_000,
         modelSelectionLocked: true,
         model: "test:opus",
       },
-    });
-    try {
-      const { runtime, logs } = makeRuntime();
-      await sessionsCommand({ store }, runtime);
-      expect(singleSessionTableCells(logs)[5]).toBe("49/200k (?%)");
-      const json = makeRuntime();
-      await sessionsCommand({ store, json: true }, json.runtime);
-      expect(JSON.parse(json.logs.join("\n")).sessions).toEqual([
-        expect.objectContaining({
-          key: "agent:main:boundary",
-          totalTokens: 49,
-          totalTokensFresh: false,
-          contextTokens: 200_000,
-        }),
-      ]);
-    } finally {
-      cleanupStore(store);
-    }
-  });
-
-  it("renders the agent runtime in the tabular view", async () => {
-    setMockSessionsConfig(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-7" },
-          models: {
-            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
-          },
-        },
-      },
-    }));
-    const store = await writeStore(
-      {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now() - 60_000,
-          modelProvider: "claude-cli",
-          model: "claude-opus-4-7",
-        },
-      },
-      "sessions-runtime-table",
+      "agent:main:boundary",
     );
-
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
-
-    cleanupStore(store);
-
-    expect(logs.join("\n")).toContain("Runtime");
-
-    expect(singleSessionTableCells(logs)).toEqual([
-      "direct",
-      "agent:main:main",
-      "1m ago",
-      "claude-opus-4-7",
-      "Claude CLI",
-      "unknown/200k (?%)",
-      "visibility:shared id:main-session",
+    expect(singleSessionTableCells(logs)[5]).toBe("49/200k (?%)");
+    const payload = await readSessionsJson(store);
+    expect(payload.sessions).toEqual([
+      expect.objectContaining({
+        key: "agent:main:boundary",
+        totalTokens: 49,
+        totalTokensFresh: false,
+        contextTokens: 200_000,
+      }),
     ]);
   });
 
-  it("renders recorded runtime with current context after a same-model runtime change", async () => {
-    setMockSessionsConfig(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6-luna" },
-          models: {
-            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: {
-            models: [{ id: "gpt-5.6-luna", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
-          },
-        },
-      },
-    }));
-    const store = await writeStore(
+  it("renders current runtime and context after a same-model runtime change", async () => {
+    configureModels(
+      "openai/gpt-5.6-luna",
+      { "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } } },
       {
-        "agent:main:main": {
-          sessionId: "stale-openclaw-window",
-          updatedAt: Date.now() - 60_000,
-          modelProvider: "openai",
-          model: "gpt-5.6-luna",
-          agentHarnessId: "openclaw",
-          contextTokens: 272_000,
-          contextTokensSource: "runtime",
-          totalTokens: 11,
-          totalTokensFresh: true,
-          totalTokensVersion: 1,
+        openai: {
+          models: [{ id: "gpt-5.6-luna", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
         },
       },
-      "sessions-current-runtime-table",
     );
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCommand({ store }, runtime);
-    cleanupStore(store);
-
-    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
-    expect(row).toContain("OpenClaw Default");
-    expect(row).toContain("11/1.0m (0%)");
-  });
-
-  it("shows placeholder rows when tokens are missing", async () => {
-    const store = await writeStore({
-      "agent:main:quietchat:group:demo": {
-        sessionId: "xyz",
-        updatedAt: Date.now() - 5 * 60_000,
-        thinkingLevel: "high",
-      },
+    const store = await writeSession("stale-openclaw-window", {
+      modelProvider: "openai",
+      model: "gpt-5.6-luna",
+      agentHarnessId: "openclaw",
+      contextTokens: 272_000,
+      contextTokensSource: "runtime",
+      totalTokens: 11,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
     });
 
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    cleanupStore(store);
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("OpenAI Codex");
+    expect(row).toContain("11/1.0m (0%)");
+  });
+
+  it.each([
+    { capacity: 32_768, runtimeId: "openclaw" },
+    { capacity: undefined, runtimeId: "openclaw" },
+    { capacity: 96_000, runtimeId: "native-fixture" },
+  ])(
+    "reports admitted Gateway capacity $capacity for $runtimeId without a default denominator",
+    async ({ capacity, runtimeId }) => {
+      catalogState.readActiveGatewayLockIdentity.mockResolvedValue(gatewayOwner);
+      const runtimeChoices = [
+        {
+          agentRuntime: { id: runtimeId, source: "model" },
+          contextWindow: 128_000,
+          contextTokens: capacity,
+        },
+      ];
+      const model = {
+        provider: "ollama",
+        id: "qwen3:4b",
+        name: "qwen3:4b",
+        contextWindow: 262_144,
+        contextTokens: runtimeId === "openclaw" ? capacity : 32_768,
+        agentRuntime: { id: "openclaw", source: "model" },
+        ...(runtimeId !== "openclaw" ? { runtimeChoices } : {}),
+      };
+      catalogState.callGateway.mockResolvedValue({ models: capacity === undefined ? [] : [model] });
+      const store = await writeSession("local-model-switch", {
+        updatedAt: Date.now(),
+        modelProvider: "ollama",
+        model: runtimeId === "openclaw" ? "qwen3:8b" : "qwen3:4b",
+        providerOverride: "ollama",
+        modelOverride: "qwen3:4b",
+        agentHarnessId: runtimeId,
+        contextTokens: 128_000,
+        contextTokensSource: "resolved-v1",
+      });
+      configureModels(
+        "ollama/qwen3:8b",
+        { "ollama/qwen3:4b": { agentRuntime: { id: runtimeId } } },
+        { ollama: { models: [{ id: "qwen3:8b", contextTokens: 128_000 }] } },
+        store,
+      );
+      const payload = await runSessionsJson<SessionsJsonPayload>(
+        (options, runtime) => sessionsCommand({ ...options, store: undefined }, runtime),
+        store,
+      );
+
+      expect(payload.sessions?.[0]).toMatchObject({
+        modelProvider: "ollama",
+        model: "qwen3:4b",
+        contextTokens: capacity ?? null,
+        agentRuntime: { id: runtimeId },
+      });
+      const catalogParams = { preparedOnly: true, agentId: "main", provider: "ollama" };
+      expect(catalogState.callGateway).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "models.list",
+          localPortOverride: 19461,
+          params: expect.objectContaining(catalogParams),
+        }),
+      );
+    },
+  );
+
+  it.each(["absent", "unreachable", "uninspectable", "other-workspace"])(
+    "preserves verified capacity for auto runtime when the Gateway is %s",
+    async (gatewayState) => {
+      const spawnedWorkspaceDir =
+        gatewayState === "other-workspace" ? "/workspace/spawned" : undefined;
+      if (gatewayState === "uninspectable") {
+        catalogState.readActiveGatewayLockIdentity.mockRejectedValue(
+          new Error("Gateway lock payload could not be verified"),
+        );
+      } else if (gatewayState !== "absent") {
+        catalogState.readActiveGatewayLockIdentity.mockResolvedValue(gatewayOwner);
+        if (gatewayState === "unreachable") {
+          catalogState.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
+        } else {
+          catalogState.callGateway.mockResolvedValue({
+            models: [
+              { provider: "llama-cpp", id: "local-llama", name: "Local", contextTokens: 131_072 },
+            ],
+          });
+        }
+      }
+      const store = await writeSession("saved-local-capacity", {
+        updatedAt: Date.now(),
+        modelProvider: "llama-cpp",
+        model: "local-llama",
+        agentHarnessId: "openclaw",
+        contextTokens: 16_384,
+        contextTokensSource: "resolved-v1",
+        spawnedWorkspaceDir,
+      });
+      setMockSessionsConfig(() => ({
+        session: { store },
+        agents: { defaults: { model: { primary: "llama-cpp/local-llama" } } },
+      }));
+      const { runtime, logs, errors } = makeRuntime();
+      await sessionsCommand({ json: true }, runtime);
+      const payload = JSON.parse(logs[0] ?? "{}") as SessionsJsonPayload;
+      expect(payload.sessions?.[0]).toMatchObject({
+        contextTokens: 16_384,
+        agentRuntime: { id: "openclaw" },
+      });
+      const gatewayUnavailable = ["unreachable", "uninspectable"].includes(gatewayState);
+      expect(errors).toHaveLength(gatewayUnavailable ? 1 : 0);
+      if (gatewayState === "uninspectable") {
+        expect(catalogState.callGateway).not.toHaveBeenCalled();
+      }
+      if (spawnedWorkspaceDir) {
+        expect(loadPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
+          expect.objectContaining({ workspaceDir: spawnedWorkspaceDir, readOnly: true }),
+        );
+      }
+      if (gatewayUnavailable) {
+        expect(errors[0]).toContain("showing configured or last verified capacity");
+      }
+    },
+  );
+
+  it("shows placeholder rows when tokens are missing", async () => {
+    const store = await writeSession(
+      "xyz",
+      {
+        updatedAt: Date.now() - 5 * 60_000,
+        thinkingLevel: "high",
+      },
+      "agent:main:quietchat:group:demo",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
 
     const row = logs.find((line) => line.includes("id:xyz")) ?? "";
     expect(row).toContain("group");
-    expect(row).toContain("unknown/200k (?%)");
+    expect(row).toContain("unknown/? (?%)");
     expect(row).toContain("think:high");
   });
 
@@ -255,13 +355,7 @@ describe("sessionsCommand", () => {
     const key = "agent:main:\u001B[31mpeer\nrow";
     const sessionId = "session-\u001B[31mid\r\nforged-id";
     const model = "model-\u001B]0;session-model\u0007🦞\tvariant";
-    const store = await writeStore({
-      [key]: {
-        sessionId,
-        updatedAt: Date.now() - 60_000,
-        model,
-      },
-    });
+    const store = await writeSession(sessionId, { model }, key);
 
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
@@ -273,32 +367,27 @@ describe("sessionsCommand", () => {
     expect(textOutput).toContain("\\r\\nforged-id");
     expect(textOutput).toContain("🦞\\tvariant");
 
-    const payload = await runSessionsJson<{
-      sessions?: Array<{ key: string; sessionId?: string; model?: string }>;
-    }>(sessionsCommand, store);
-    cleanupStore(store);
+    const payload = await readSessionsJson(store);
 
     expect(payload.sessions?.[0]).toMatchObject({ key, sessionId, model });
   });
 
   it("preserves collaboration metadata in JSON and human output", async () => {
     const sessionKey = "agent:main:shared";
-    const store = await writeStore(
+    const ids = ["profile-ada", "profile-ben", "profile-cam", "profile-dee", "profile-eli"];
+    const store = await writeSession(
+      "shared-session",
       {
-        [sessionKey]: {
-          sessionId: "shared-session",
-          updatedAt: Date.now() - 60_000,
-          model: "test:opus",
-          visibility: "suggest",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: "profile-creator",
-            label: "Creator",
-          },
+        model: "test:opus",
+        visibility: "suggest",
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: "profile-creator",
+          label: "Creator",
         },
       },
-      "sessions-collaboration",
+      sessionKey,
     );
     const scope = { agentId: "main", sessionKey, storePath: store };
     assignSessionOwner(scope, {
@@ -306,10 +395,8 @@ describe("sessionsCommand", () => {
       assignedBy: { type: "human", id: "profile-admin", label: "Admin" },
       assignedAt: Date.now() - 30_000,
     });
-    for (const id of ["profile-ada", "profile-ben", "profile-cam", "profile-dee", "profile-eli"]) {
-      recordSessionParticipant(scope, {
-        identity: { type: "profile", id },
-      });
+    for (const id of ids) {
+      recordSessionParticipant(scope, { identity: { type: "profile", id } });
     }
 
     const { runtime, logs } = makeRuntime();
@@ -319,17 +406,7 @@ describe("sessionsCommand", () => {
       "visibility:suggestowner:profile-ownerparticipants:profile:profile-ada,profile:profile-ben,profile:profile-cam,profile:profile-dee,+1id:shared-session",
     );
 
-    const payload = await runSessionsJson<{
-      sessions?: Array<
-        Pick<
-          SessionEntry,
-          "visibility" | "createdActor" | "owner" | "participants" | "participantCount"
-        > & {
-          key: string;
-          sharingRole?: unknown;
-        }
-      >;
-    }>(sessionsCommand, store);
+    const payload = await readSessionsJson(store);
     const shared = payload.sessions?.find((entry) => entry.key === sessionKey);
     expect(shared).toMatchObject({
       visibility: "suggest",
@@ -340,13 +417,7 @@ describe("sessionsCommand", () => {
         assignedAt: Date.now() - 30_000,
       },
       participantCount: 5,
-      participants: [
-        { identity: { type: "profile", id: "profile-ada" } },
-        { identity: { type: "profile", id: "profile-ben" } },
-        { identity: { type: "profile", id: "profile-cam" } },
-        { identity: { type: "profile", id: "profile-dee" } },
-        { identity: { type: "profile", id: "profile-eli" } },
-      ],
+      participants: ids.map((id) => ({ identity: { type: "profile", id } })),
     });
     expect(shared).not.toHaveProperty("sharingRole");
   });
@@ -356,7 +427,6 @@ describe("sessionsCommand", () => {
     const { runtime, logs, errors } = makeRuntime();
 
     await sessionsCommand({ store }, runtime);
-    cleanupStore(store);
 
     expect(errors).toEqual([]);
     expect(logs).toEqual([
@@ -367,59 +437,7 @@ describe("sessionsCommand", () => {
   });
 
   it("exports session color and subagent lineage metadata in JSON output", async () => {
-    const store = await writeStore({
-      "agent:main:child": {
-        sessionId: "child-session",
-        updatedAt: Date.now() - 10 * 60_000,
-        spawnedBy: "agent:main:main",
-        spawnedWorkspaceDir: "/workspace/project",
-        spawnedCwd: "/workspace/project/tasks",
-        parentSessionKey: "agent:main:main",
-        forkedFromParent: true,
-        spawnDepth: 1,
-        subagentRole: "leaf",
-        subagentControlScope: "none",
-        sessionStartedAt: Date.now() - 20 * 60_000,
-        lastInteractionAt: Date.now() - 5 * 60_000,
-        label: "research helper",
-        color: "blue",
-        status: "done",
-        model: "test:opus",
-      },
-      "agent:main:uncolored": { sessionId: "uncolored-session", updatedAt: Date.now() },
-      "agent:main:cleared": {
-        sessionId: "cleared-session",
-        updatedAt: Date.now(),
-        color: "red",
-      },
-    });
-    await patchSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:cleared", storePath: store },
-      () => ({ color: undefined }),
-      { skipMaintenance: true },
-    );
-
-    const payload = await runSessionsJson<{
-      sessions?: Array<{
-        key: string;
-        spawnedBy?: string;
-        spawnedWorkspaceDir?: string;
-        spawnedCwd?: string;
-        parentSessionKey?: string;
-        forkedFromParent?: boolean;
-        spawnDepth?: number;
-        subagentRole?: string;
-        subagentControlScope?: string;
-        sessionStartedAt?: number;
-        lastInteractionAt?: number;
-        label?: string;
-        color?: string;
-        status?: string;
-      }>;
-    }>(sessionsCommand, store);
-
-    const child = payload.sessions?.find((row) => row.key === "agent:main:child");
-    expect(child).toMatchObject({
+    const lineage = {
       spawnedBy: "agent:main:main",
       spawnedWorkspaceDir: "/workspace/project",
       spawnedCwd: "/workspace/project/tasks",
@@ -433,7 +451,26 @@ describe("sessionsCommand", () => {
       label: "research helper",
       color: "blue",
       status: "done",
+    } satisfies Partial<SessionEntry>;
+    const store = await writeStore({
+      "agent:main:child": makeSession("child-session", {
+        updatedAt: Date.now() - 10 * 60_000,
+        ...lineage,
+        model: "test:opus",
+      }),
+      "agent:main:uncolored": makeSession("uncolored-session"),
+      "agent:main:cleared": makeSession("cleared-session", { color: "red" }),
     });
+    await patchSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:cleared", storePath: store },
+      () => ({ color: undefined }),
+      { skipMaintenance: true },
+    );
+
+    const payload = await readSessionsJson(store);
+
+    const child = payload.sessions?.find((row) => row.key === "agent:main:child");
+    expect(child).toMatchObject(lineage);
     expect(child).not.toHaveProperty("sessionFile");
     for (const key of ["agent:main:uncolored", "agent:main:cleared"]) {
       const row = payload.sessions?.find((session) => session.key === key);
@@ -479,14 +516,7 @@ describe("sessionsCommand", () => {
       },
     }));
 
-    const payload = await runSessionsJson<{
-      sessions?: Array<{
-        agentId?: string;
-        key: string;
-        modelProvider?: string;
-        runtimePolicySessionKey?: string;
-      }>;
-    }>(sessionsCommand, store, { active: "10" });
+    const payload = await readSessionsJson(store, { active: "10" });
 
     expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
       agentId: "ops",
@@ -508,18 +538,9 @@ describe("sessionsCommand", () => {
       "sessions-limit-all",
     );
 
-    const payload = await runSessionsJson<{
-      count?: number;
-      totalCount?: number;
-      limitApplied?: number | null;
-      hasMore?: boolean;
-      sessions?: Array<{ key: string }>;
-    }>(sessionsCommand, store, { limit: "all" });
+    const payload = await readSessionsJson(store, { limit: "all" });
 
-    expect(payload.count).toBe(2);
-    expect(payload.totalCount).toBe(2);
-    expect(payload.limitApplied).toBeNull();
-    expect(payload.hasMore).toBe(false);
+    expect(payload).toMatchObject({ count: 2, totalCount: 2, limitApplied: null, hasMore: false });
     expect(payload.sessions?.map((row) => row.key)).toEqual([
       "agent:main:newest",
       "agent:main:oldest",
@@ -560,192 +581,139 @@ describe("sessionsCommand", () => {
 });
 
 type SessionsJsonPayload = {
-  sessions?: Array<{
-    key: string;
-    modelProvider?: string | null;
-    model?: string | null;
-    agentRuntime?: { id: string; source: string };
-    contextTokens?: number | null;
-  }>;
+  count?: number;
+  totalCount?: number;
+  limitApplied?: number | null;
+  hasMore?: boolean;
+  sessions?: Array<
+    Partial<Omit<SessionEntry, "modelProvider" | "model" | "contextTokens">> & {
+      key: string;
+      agentId?: string;
+      runtimePolicySessionKey?: string;
+      modelProvider?: string | null;
+      model?: string | null;
+      agentRuntime?: { id: string; source: string };
+      contextTokens?: number | null;
+    }
+  >;
 };
 
-async function resolveSubagentModel(
-  runtimeFields: Record<string, unknown>,
+async function legacySessionJson(
   sessionId: string,
-): Promise<string | null | undefined> {
-  const sessionKey = "agent:main:subagent:demo";
-  return await withSqliteStore(
-    "sessions-model",
-    {
-      [sessionKey]: {
-        sessionId,
-        updatedAt: Date.now() - 2 * 60_000,
-        ...runtimeFields,
-      },
-    },
-    async (store) => {
-      const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-      return payload.sessions?.find((row) => row.key === sessionKey)?.model;
-    },
-  );
-}
-
-async function withSqliteStore<T>(
-  prefix: string,
-  entries: Record<string, SessionEntry>,
-  run: (storePath: string) => Promise<T>,
-): Promise<T> {
-  // Use a sessions.json-shaped path so the accessor targets the same SQLite
-  // database layout that command code resolves from configured session stores.
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
-  const storePath = path.join(dir, "sessions.json");
-  try {
-    await Promise.all(
-      Object.entries(entries).map(([sessionKey, entry]) =>
-        replaceSessionEntry({ agentId: "main", sessionKey, storePath }, entry),
-      ),
-    );
-    return await run(storePath);
-  } finally {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(dir, { force: true, recursive: true });
-  }
+  fields: Partial<SessionEntry>,
+  sessionKey = "agent:main:main",
+): Promise<SessionsJsonPayload> {
+  const databasePath = await writeSession(sessionId, fields, sessionKey);
+  // The fixture seeds through this legacy path; exercise command-side resolution too.
+  return readSessionsJson(path.join(path.dirname(databasePath), "sessions.json"));
 }
 
 describe("sessionsCommand model resolution", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-06T00:00:00Z"));
-  });
+  it.each([false, true])(
+    "resolves fallback aliases with the store owner (agent-scoped=%s)",
+    async (agentScoped) => {
+      const store = await writeStore(
+        {
+          global: makeSession("alias-fallback"),
+          recorded: makeSession("recorded-model", {
+            modelProvider: "custom",
+            model: "recorded-model",
+          }),
+        },
+        "sessions-model-alias",
+        { agentId: "ops" },
+      );
+      setMockSessionsConfig(() => ({
+        session: { scope: "global", store },
+        agents: {
+          ownership: "explicit",
+          defaults: {
+            model: { primary: "selected" },
+            models: { "anthropic/default-model": { alias: "selected" } },
+            sessionStore: { agentId: "ops" },
+          },
+          entries: {
+            ops: agentScoped
+              ? {
+                  model: { primary: "selected" },
+                  models: { "custom/agent-model": { alias: "selected" } },
+                }
+              : {},
+          },
+        },
+      }));
 
-  afterEach(() => {
-    resetMockSessionsConfig();
-    vi.useRealTimers();
-  });
+      const payload = await readSessionsJson(store);
+
+      expect(payload.sessions?.find((row) => row.key === "global")).toMatchObject({
+        agentId: "ops",
+        modelProvider: agentScoped ? "custom" : "anthropic",
+        model: agentScoped ? "agent-model" : "default-model",
+      });
+      expect(payload.sessions?.find((row) => row.sessionId === "recorded-model")).toMatchObject({
+        modelProvider: "custom",
+        model: "recorded-model",
+      });
+    },
+  );
 
   it("preserves nested override models when their provider is recorded separately", async () => {
-    const model = await resolveSubagentModel(
-      { providerOverride: "clawrouter", modelOverride: "openai/gpt-5.6" },
+    const payload = await legacySessionJson(
       "subagent-router-override",
+      {
+        updatedAt: Date.now() - 2 * 60_000,
+        providerOverride: "clawrouter",
+        modelOverride: "openai/gpt-5.6",
+      },
+      "agent:main:subagent:demo",
     );
-    expect(model).toBe("openai/gpt-5.6");
+    expect(payload.sessions?.[0]?.key).toBe("agent:main:subagent:demo");
+    expect(payload.sessions?.[0]?.model).toBe("openai/gpt-5.6");
   });
 
   it("reports the owning Codex harness for locked sessions despite a stale OpenClaw override", async () => {
-    setMockSessionsConfig(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
-          },
-        },
-      },
-    }));
-    await withSqliteStore(
-      "sessions-locked-codex-runtime",
-      {
-        "agent:main:main": {
-          sessionId: "locked-codex-session",
-          updatedAt: Date.now() - 60_000,
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          agentHarnessId: "codex",
-          agentRuntimeOverride: "openclaw",
-          modelSelectionLocked: true,
-        },
-      },
-      async (store) => {
-        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-        const session = payload.sessions?.find((row) => row.key === "agent:main:main");
-
-        expect(session?.agentRuntime).toEqual({
-          id: "codex",
-          source: "session",
-        });
-      },
-    );
+    configureModels("openai/gpt-5.5", {
+      "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+    });
+    const payload = await legacySessionJson("locked-codex-session", {
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
+      modelSelectionLocked: true,
+    });
+    expect(payload.sessions?.[0]?.key).toBe("agent:main:main");
+    expect(payload.sessions?.[0]?.agentRuntime).toEqual({ id: "codex", source: "session" });
   });
 
   it("preserves a router-owned session's recorded model, runtime, and context window", async () => {
-    setMockSessionsConfig(() => ({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.6" },
-          models: {
-            "clawrouter/openai/gpt-5.6": { agentRuntime: { id: "openclaw" } },
-            "openai/gpt-5.6": { agentRuntime: { id: "codex" } },
-          },
+    configureModels(
+      "openai/gpt-5.6",
+      {
+        "clawrouter/openai/gpt-5.6": { agentRuntime: { id: "openclaw" } },
+        "openai/gpt-5.6": { agentRuntime: { id: "codex" } },
+      },
+      {
+        clawrouter: { models: [{ id: "openai/gpt-5.6", contextTokens: 272_000 }] },
+        openai: {
+          models: [{ id: "gpt-5.6", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
         },
       },
-      models: {
-        providers: {
-          clawrouter: { models: [{ id: "openai/gpt-5.6", contextTokens: 272_000 }] },
-          openai: {
-            models: [{ id: "gpt-5.6", contextTokens: 1_000_000, contextWindow: 1_050_000 }],
-          },
-        },
-      },
-    }));
-    const sessionKey = "agent:main:main";
-    const sessionEntry = {
-      sessionId: "router-owned-session",
-      updatedAt: Date.now() - 60_000,
+    );
+    const payload = await legacySessionJson("router-owned-session", {
       modelProvider: "clawrouter",
       model: "openai/gpt-5.6",
       agentHarnessId: "openclaw",
       contextTokens: 272_000,
       contextTokensSource: "runtime",
-    } satisfies SessionEntry;
-
-    await withSqliteStore(
-      "sessions-router-owned-runtime-context",
-      { [sessionKey]: sessionEntry },
-      async (store) => {
-        const databasePath = resolveSqliteTargetFromSessionStorePath(store, {
-          agentId: "main",
-        }).path;
-        const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-        const db = getNodeSqliteKysely<
-          Pick<OpenClawAgentKyselyDatabase, "session_nodes" | "session_windows">
-        >(database.db);
-        const persisted = executeSqliteQueryTakeFirstSync(
-          database.db,
-          db
-            .selectFrom("session_windows")
-            .innerJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
-            .select([
-              "session_windows.model_provider as modelProvider",
-              "session_windows.model as model",
-              "session_windows.agent_harness_id as agentHarnessId",
-              "session_nodes.session_key as sessionKey",
-              "session_nodes.current_session_id as sessionId",
-              "session_nodes.entry_json as entryJson",
-            ])
-            .where("session_windows.session_id", "=", sessionEntry.sessionId),
-        );
-
-        expect(persisted).toEqual({
-          modelProvider: "clawrouter",
-          model: "openai/gpt-5.6",
-          agentHarnessId: "openclaw",
-          sessionKey,
-          sessionId: sessionEntry.sessionId,
-          entryJson: expect.any(String),
-        });
-        expect(JSON.parse(persisted?.entryJson ?? "{}")).toMatchObject(sessionEntry);
-
-        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-        const session = payload.sessions?.find((row) => row.key === sessionKey);
-
-        expect(session).toMatchObject({
-          modelProvider: "clawrouter",
-          model: "openai/gpt-5.6",
-          agentRuntime: { id: "openclaw", source: "session" },
-          contextTokens: 272_000,
-        });
-      },
-    );
+    });
+    expect(payload.sessions?.[0]).toMatchObject({
+      key: "agent:main:main",
+      sessionId: "router-owned-session",
+      modelProvider: "clawrouter",
+      model: "openai/gpt-5.6",
+      agentRuntime: { id: "openclaw", source: "model" },
+      contextTokens: 272_000,
+    });
   });
 });

@@ -1,19 +1,17 @@
-import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
-import type { ControlUiDisposer, ControlUiPlugin } from "../../../src/plugin-sdk/control-ui.js";
+import type {
+  ControlUiDisposer,
+  ControlUiPlugin,
+  ControlUiSettingsView,
+  ControlUiChannelSettingsView,
+} from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
-import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
+import { listen } from "../lib/reactive/listener.ts";
+import { controlUiPluginAssetUrls } from "./control-ui-assets.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
 // Native views and contributions must be defined before activation can publish registrations.
-import "./control-ui-view.runtime.ts";
-
-function assetUrl(path: string, prefix: string): string {
-  const url = new URL(uiDevGatewayResourceUrl(path), window.location.href);
-  if (url.origin !== window.location.origin || !url.pathname.startsWith(prefix)) {
-    throw new Error("Native plugin assets must be served by this Control UI Gateway.");
-  }
-  return url.href;
-}
+import "./control-ui-view.solid.tsx";
+import "./control-ui-contributions.solid.tsx";
 
 export async function initializeControlUiPlugin(
   getContext: () => ApplicationContext,
@@ -26,35 +24,17 @@ export async function initializeControlUiPlugin(
     return undefined;
   }
   const { descriptor, abort } = owner;
-  const prefix = `${controlUiPluginAssetPrefix(descriptor.pluginId, getContext().resourceBasePath)}${encodeURIComponent(descriptor.revision)}/`;
+  const urls = controlUiPluginAssetUrls(descriptor, getContext().resourceBasePath);
   const complete: ControlUiPluginOwner = Object.assign(owner, {
     host: createControlUiPluginHost(getContext, runtime, owner),
   });
-  const url = assetUrl(descriptor.entryUrl, prefix);
-  for (const path of descriptor.styles) {
-    const link = document.createElement("link");
-    link.rel = "stylesheet";
-    link.media = "not all";
-    link.href = assetUrl(path, prefix);
-    const loaded = new Promise<void>((resolve, reject) => {
-      link.addEventListener("load", () => resolve(), { once: true, signal: abort.signal });
-      link.addEventListener(
-        "error",
-        () => reject(new Error(`Could not load plugin stylesheet: ${descriptor.pluginId}`)),
-        { once: true, signal: abort.signal },
-      );
-      abort.signal.addEventListener(
-        "abort",
-        () => reject(new Error("Plugin UI activation ended.")),
-        { once: true },
-      );
-    });
-    document.head.append(link);
-    complete.disposers.add(() => link.remove());
-    styles.push(link);
-    await loaded;
-  }
-  const module: { default?: ControlUiPlugin } = await import(/* @vite-ignore */ url);
+  const module = await loadControlUiPluginAssets(
+    descriptor.pluginId,
+    urls,
+    abort.signal,
+    (stop) => complete.disposers.add(stop),
+    styles,
+  );
   if (!runtime.isCurrent(owner)) {
     dispose();
     return undefined;
@@ -72,4 +52,50 @@ export async function initializeControlUiPlugin(
     return undefined;
   }
   return complete;
+}
+
+export type ControlUiPluginModule = {
+  default?: ControlUiPlugin;
+  pluginId?: string;
+  settingsViews?: readonly (ControlUiSettingsView | ControlUiChannelSettingsView)[];
+};
+
+/** Both activation and packaged Settings presentations share one asset loader. */
+export async function loadControlUiPluginAssets(
+  pluginId: string,
+  urls: { entry: string; styles: readonly string[] },
+  signal: AbortSignal,
+  retain: (dispose: ControlUiDisposer) => void,
+  styles?: HTMLLinkElement[],
+): Promise<ControlUiPluginModule> {
+  signal.throwIfAborted();
+  const stylesLoaded = urls.styles.map(async (url) => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.media = "not all";
+    link.href = url;
+    const pending = new AbortController();
+    const loaded = new Promise<void>((resolve, reject) => {
+      const options = { once: true, signal: pending.signal };
+      listen(link, "load", () => resolve(), options);
+      listen(
+        link,
+        "error",
+        () => reject(new Error(`Could not load plugin stylesheet: ${pluginId}`)),
+        options,
+      );
+      listen(signal, "abort", () => reject(new Error("Plugin UI activation ended.")), options);
+    }).finally(() => pending.abort());
+    document.head.append(link);
+    retain(() => link.remove());
+    styles?.push(link);
+    return loaded;
+  });
+  // Fetch code alongside CSS; publish only after this revision's styles are ready.
+  const [module]: [ControlUiPluginModule, void[]] = await Promise.all([
+    import(/* @vite-ignore */ urls.entry),
+    Promise.all(stylesLoaded),
+  ]);
+  signal.throwIfAborted();
+  return module;
 }

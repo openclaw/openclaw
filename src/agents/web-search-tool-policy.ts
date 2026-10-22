@@ -2,13 +2,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveEffectiveToolPolicy, resolveGroupToolPolicy } from "./agent-tools.policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
-import type { SandboxToolPolicy } from "./sandbox.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
   resolveScheduledToolCallerContext,
   type ScheduledToolPolicyContext,
 } from "./scheduled-tool-policy.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "./subagents/announce/subagent-announce-handoff.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { isRuntimeToolAllowed, isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
 
@@ -35,12 +36,23 @@ export type WebSearchToolPolicyParams = {
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   runtimeToolAllowlist?: string[];
+  preparedRequesterPolicy?: Pick<
+    ReturnType<typeof resolveRequesterToolPolicies>,
+    "delegated" | "groupPolicy" | "senderPolicy" | "subagentPolicy" | "inheritedToolPolicy"
+  >;
 };
 
 type WebSearchToolPolicyResolution = {
   allowed: boolean;
   persistentAllowed: boolean;
 };
+
+/** Prepares stored session capability facts, so callers need no warm Gateway projection. */
+export function resolveWebSearchToolPolicyAsync(
+  params: WebSearchToolPolicyParams,
+): Promise<WebSearchToolPolicyResolution> {
+  return withPreparedSessionCapabilityRead(() => resolveWebSearchToolPolicy(params));
+}
 
 /** Resolves current and sender-independent policy for the managed web_search tool. */
 export function resolveWebSearchToolPolicy(
@@ -95,22 +107,24 @@ export function resolveWebSearchToolPolicy(
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
   };
-  const requesterPolicies = resolveRequesterToolPolicies({
-    ...groupPolicyParams,
-    agentId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    inputProvenance: params.inputProvenance,
-    trustedInternalHandoff: params.trustedInternalHandoff,
-    sessionId: params.sessionId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-    senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
-    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
-  });
+  const requesterPolicies =
+    params.preparedRequesterPolicy ??
+    resolveRequesterToolPolicies({
+      ...groupPolicyParams,
+      agentId,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
+      sessionId: params.sessionId,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
+      groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+      requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+    });
   const persistentGroupPolicy = requesterPolicies.delegated
     ? undefined
     : resolveGroupToolPolicy(groupPolicyParams);

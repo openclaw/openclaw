@@ -61,7 +61,6 @@ export async function runAgentResetPhase(params: {
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
   respond: GatewayRequestHandlerOptions["respond"];
-  abortForLifecycleRotation: (target?: { sessionKey?: string; agentId?: string }) => boolean;
   setCommittedResetCompletion: (completion: CommittedResetCompletion) => void;
 }): Promise<AgentResetPhaseResult> {
   const base = {
@@ -73,14 +72,6 @@ export async function runAgentResetPhase(params: {
   const resetCommandMatch = params.message.match(AGENT_SESSION_RESET_COMMAND_RE);
   if (!resetCommandMatch || !params.requestedSessionKey) {
     return { ...base, stop: false, accepted: false };
-  }
-  if (
-    params.abortForLifecycleRotation({
-      sessionKey: params.requestedSessionKey,
-      agentId: params.agentId,
-    })
-  ) {
-    return { ...base, stop: true, accepted: true };
   }
   const postResetMessage = normalizeOptionalString(resetCommandMatch[2]) ?? "";
   if (!hasGatewayAdminScope(params.client)) {
@@ -94,52 +85,39 @@ export async function runAgentResetPhase(params: {
   const resetReason =
     normalizeOptionalLowercaseString(resetCommandMatch[1]) === "new" ? "new" : "reset";
   params.assertAdmissionCurrent?.();
-  let resetResult: Awaited<ReturnType<typeof performGatewaySessionReset>>;
-  try {
-    const creation = await prepareSkillLibrarySessionCreation(
-      params.client,
-      params.context.getRuntimeConfig,
-      resolveAgentRunSessionCreation(params.client),
-    );
-    resetResult = await performGatewaySessionReset({
-      key: params.requestedSessionKey,
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      reason: resetReason,
-      commandSource: "gateway:agent",
-      armSessionDiffBaselineCapture: true,
-      creation,
-      ...(params.client?.authenticatedUserProfile?.profileId
-        ? { requestingOperatorProfileId: params.client.authenticatedUserProfile.profileId }
-        : {}),
-      ...(params.client?.internal?.operatorRoleActor
-        ? { operatorRoleActor: params.client.internal.operatorRoleActor }
-        : {}),
-      assertCurrent: () => {
-        params.assertAdmissionCurrent?.();
-        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
-        assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
-      },
-      onCommitted: (commit) => {
-        params.setCommittedResetCompletion({
-          reason: resetReason,
-          sessionId: commit.sessionId,
-          sessionKey: commit.key,
-          agentId: params.agentId,
-          followUpPending: Boolean(postResetMessage),
-        });
-      },
-    });
-  } catch (err) {
-    if (
-      params.abortForLifecycleRotation({
-        sessionKey: params.requestedSessionKey,
+  const creation = await prepareSkillLibrarySessionCreation(
+    params.client,
+    params.context.getRuntimeConfig,
+    resolveAgentRunSessionCreation(params.client),
+  );
+  const resetResult = await performGatewaySessionReset({
+    key: params.requestedSessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    reason: resetReason,
+    commandSource: "gateway:agent",
+    armSessionDiffBaselineCapture: true,
+    creation,
+    ...(params.client?.authenticatedUserProfile?.profileId
+      ? { requestingOperatorProfileId: params.client.authenticatedUserProfile.profileId }
+      : {}),
+    ...(params.client?.internal?.operatorRoleActor
+      ? { operatorRoleActor: params.client.internal.operatorRoleActor }
+      : {}),
+    assertCurrent: () => {
+      params.assertAdmissionCurrent?.();
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      assertPreparedSkillLibrarySelection(creation.skillLibrarySelections);
+    },
+    onCommitted: (commit) => {
+      params.setCommittedResetCompletion({
+        reason: resetReason,
+        sessionId: commit.sessionId,
+        sessionKey: commit.key,
         agentId: params.agentId,
-      })
-    ) {
-      return { ...base, stop: true, accepted: true };
-    }
-    throw err;
-  }
+        followUpPending: Boolean(postResetMessage),
+      });
+    },
+  });
   if (!resetResult.ok) {
     params.respond(false, undefined, resetResult.error);
     return { ...base, stop: true, accepted: false };
@@ -161,11 +139,6 @@ export async function runAgentResetPhase(params: {
   params.setCommittedResetCompletion(completion);
   params.assertAdmissionCurrent?.();
   if (postResetMessage) {
-    if (
-      params.abortForLifecycleRotation({ sessionKey: resetResult.key, agentId: params.agentId })
-    ) {
-      return { ...next, stop: true, accepted: true };
-    }
     return {
       ...next,
       stop: false,
@@ -178,7 +151,7 @@ export async function runAgentResetPhase(params: {
   try {
     const deliverySession =
       params.request.deliver === true
-        ? loadBareSessionResetDeliverySession({
+        ? await loadBareSessionResetDeliverySession({
             sessionKey: resetResult.key,
             ...(params.agentId ? { agentId: params.agentId } : {}),
           })
@@ -221,11 +194,6 @@ export async function runAgentResetPhase(params: {
     // replay must retain that outcome without repeating either side effect.
     if (params.request.deliver === true) {
       params.setCommittedResetCompletion({ ...completion, replyError: error });
-    }
-    if (
-      params.abortForLifecycleRotation({ sessionKey: resetResult.key, agentId: params.agentId })
-    ) {
-      return { ...next, stop: true, accepted: true };
     }
     params.respond(false, undefined, error);
     return { ...next, stop: true, accepted: false };

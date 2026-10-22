@@ -1,10 +1,17 @@
 import type { RouteId } from "../../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import {
   appearanceSettingsRouteTarget,
   APPEARANCE_SETTINGS_TARGET_IDS,
   SETTINGS_ROUTE_TARGETS,
 } from "./route-data.ts";
+import { sessionSourcePresentations } from "./session-source-presentation.ts";
+
+registerChatComposerEnglish();
+
+registerSessionOrganizationEnglish();
 
 export const SESSION_STORAGE_SETTINGS_TARGET_ID = "settings-session-storage";
 
@@ -55,6 +62,18 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases:
       "web internet native hosted automatic provider brave parallel google gemini searxng codex openai api key endpoint",
+  },
+  appearanceBackground: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.background.title",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.background}`,
+    searchKeys: [
+      "configView.appearance.background.custom",
+      "configView.appearance.background.newSession",
+      "configView.appearance.background.sessions",
+      "configView.appearance.background.visibility",
+    ],
+    aliases: "wallpaper photo picture image backdrop hide disable opt out",
   },
   sessionStorage: {
     routeId: "ai-agents",
@@ -357,10 +376,7 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.sessionSources.title",
     searchKeys: [
       "configView.sessionSources.hint",
-      "configView.sessionSources.claude",
-      "configView.sessionSources.codex",
-      "configView.sessionSources.opencode",
-      "configView.sessionSources.pi",
+      ...sessionSourcePresentations.map((source) => source.labelKey),
     ],
     aliases:
       "automatic auto discover discovery native external conversations show hide sidebar claude sessions",

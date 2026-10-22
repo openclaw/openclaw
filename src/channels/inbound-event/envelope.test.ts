@@ -6,6 +6,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withPluginRuntimePluginScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelInboundEnvelopeBuilder,
   resolveChannelInboundRouteEnvelope,
@@ -31,28 +32,56 @@ const cfg = {
   agents: { defaults: { userTimezone: "UTC" } },
   session: { store: "/state/{agentId}/sessions.json" },
 } as OpenClawConfig;
+const coreRoute = { agentId: "main", sessionKey: "agent:main:telegram:direct:peer" };
+const routeParams = {
+  cfg,
+  channel: "telegram",
+  accountId: "default",
+  peer: { kind: "direct" as const, id: "peer" },
+};
+const envelopeParams = {
+  cfg,
+  sessionStore: cfg.session?.store,
+  resolveStorePath,
+  readSessionUpdatedAt: readSessionUpdatedAtCore,
+  resolveEnvelopeFormatOptions,
+  formatAgentEnvelope,
+};
+const message = { channel: "Telegram", from: "Alice", body: "hello" };
+const timedMessage = { ...message, timestamp: 120_000 };
+const formattedMessage = "[Telegram Alice +1m Thu 1970-01-01T00:02:00Z] hello";
+const sdkResult = { storePath: "/state/main/sessions.json", body: formattedMessage };
 
 describe("channel inbound envelope", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("warns once with an awaited replacement while retaining the released envelope result", () => {
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      withPluginRuntimePluginScope({ pluginId: "envelope-deprecation-consumer" }, () => {
+        for (let i = 0; i < 2; i += 1) {
+          const buildEnvelope = createInboundEnvelopeBuilder({
+            ...envelopeParams,
+            route: resolveAgentRoute(),
+          });
+          expect(buildEnvelope(timedMessage)).toEqual(sdkResult);
+        }
+      });
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          "createInboundEnvelopeBuilder is deprecated; use await createChannelInboundEnvelopeBuilderAsync",
+        ),
+        { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
 
   it.each(["direct", "routed", "runtime"] as const)(
     "preserves the shipped SDK resolveStorePath callback through the %s helper",
     (helper) => {
       const route = resolveAgentRoute();
-      const envelopeParams = {
-        cfg,
-        sessionStore: cfg.session?.store,
-        resolveStorePath,
-        readSessionUpdatedAt: readSessionUpdatedAtCore,
-        resolveEnvelopeFormatOptions,
-        formatAgentEnvelope,
-      };
-      const routeParams = {
-        cfg,
-        channel: "telegram",
-        accountId: "default",
-        peer: { kind: "direct" as const, id: "peer" },
-      };
       const resolved =
         helper === "direct"
           ? { route, buildEnvelope: createInboundEnvelopeBuilder({ ...envelopeParams, route }) }
@@ -73,35 +102,15 @@ describe("channel inbound envelope", () => {
               });
 
       expect(resolved.route.sessionKey).toBe("agent:main:telegram:direct:peer");
-      expect(
-        resolved.buildEnvelope({
-          channel: "Telegram",
-          from: "Alice",
-          body: "hello",
-          timestamp: 120_000,
-        }),
-      ).toEqual({
-        storePath: "/state/main/sessions.json",
-        body: "[Telegram Alice +1m Thu 1970-01-01T00:02:00Z] hello",
-      });
+      expect(resolved.buildEnvelope(timedMessage)).toEqual(sdkResult);
       expect(resolveStorePath).toHaveBeenCalledWith(cfg.session?.store, { agentId: "main" });
     },
   );
 
   it("owns session lookup and formatting for a resolved route", () => {
-    const buildEnvelope = createChannelInboundEnvelopeBuilder({
-      cfg,
-      route: { agentId: "main", sessionKey: "agent:main:telegram:direct:peer" },
-    });
+    const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route: coreRoute });
 
-    expect(
-      buildEnvelope({
-        channel: "Telegram",
-        from: "Alice",
-        body: "hello",
-        timestamp: 120_000,
-      }),
-    ).toBe("[Telegram Alice +1m Thu 1970-01-01T00:02:00Z] hello");
+    expect(buildEnvelope(timedMessage)).toBe(formattedMessage);
     expect(resolveStorePath).toHaveBeenCalledWith(cfg.session?.store, { agentId: "main" });
     expect(readSessionUpdatedAtCore).toHaveBeenCalledWith({
       storePath: "/state/main/sessions.json",
@@ -110,35 +119,18 @@ describe("channel inbound envelope", () => {
   });
 
   it("binds routing and envelope construction in one core operation", () => {
-    const params = {
-      cfg,
-      channel: "telegram",
-      accountId: "default",
-      peer: { kind: "direct" as const, id: "peer" },
-    };
-    const resolved = resolveChannelInboundRouteEnvelope(params);
+    const resolved = resolveChannelInboundRouteEnvelope(routeParams);
 
-    expect(resolveAgentRoute).toHaveBeenCalledWith(params);
+    expect(resolveAgentRoute).toHaveBeenCalledWith(routeParams);
     expect(resolved.route.sessionKey).toBe("agent:main:telegram:direct:peer");
-    expect(resolved.buildEnvelope({ channel: "Telegram", from: "Alice", body: "hello" })).toBe(
-      "[Telegram Alice] hello",
-    );
+    expect(resolved.buildEnvelope(message)).toBe("[Telegram Alice] hello");
   });
 
   it("formats buffered history without reading the live session timestamp", () => {
-    const buildEnvelope = createChannelInboundEnvelopeBuilder({
-      cfg,
-      route: { agentId: "main", sessionKey: "agent:main:telegram:direct:peer" },
-    });
+    const buildEnvelope = createChannelInboundEnvelopeBuilder({ cfg, route: coreRoute });
 
     expect(
-      buildEnvelope({
-        channel: "Telegram",
-        from: "Alice",
-        body: "older",
-        timestamp: 30_000,
-        previousTimestamp: null,
-      }),
+      buildEnvelope({ ...message, body: "older", timestamp: 30_000, previousTimestamp: null }),
     ).toBe("[Telegram Alice Thu 1970-01-01T00:00:30Z] older");
     expect(readSessionUpdatedAtCore).not.toHaveBeenCalled();
   });

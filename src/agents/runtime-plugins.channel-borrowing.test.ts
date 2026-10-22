@@ -33,7 +33,7 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-it.each(["direct-loader-successor", "prepared-with-another-gateway-active"] as const)(
+it.each(["direct-loader-successor", "prepared"] as const)(
   "revokes borrowed channel methods and read grants through %s without retiring the lender",
   async (producer) => {
     const root = tempDirs.make("openclaw-channel-borrowing-");
@@ -66,6 +66,7 @@ it.each(["direct-loader-successor", "prepared-with-another-gateway-active"] as c
     vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
     const config: OpenClawConfig = {
+      agents: { defaults: { model: "fixture/gateway" } },
       plugins: {
         allow: [channelId, freshId],
         entries: { [channelId]: { enabled: true }, [freshId]: { enabled: true } },
@@ -81,124 +82,111 @@ it.each(["direct-loader-successor", "prepared-with-another-gateway-active"] as c
       preferBuiltPluginArtifacts: true,
       runtimeOptions: { allowGatewaySubagentBinding: true },
     };
-    const loadGateway = (model: string) => {
-      const registry = loadOpenClawPlugins({
-        ...options,
-        config: { ...config, agents: { defaults: { model } } },
-        onlyPluginIds: [channelId],
-        activate: false,
-        runtimeSideEffects: true,
-        cache: false,
-      });
-      const runtime = getPluginRegistryRuntime(registry);
-      if (!runtime) {
-        throw new Error("Expected a loaded Gateway runtime");
-      }
-      bindGatewayContextResolver(runtime, () => undefined);
-      activatePluginRegistry(registry, null, "gateway-bindable", workspaceDir);
-      return createPluginRegistryOwner(registry, workspaceDir);
-    };
-    const gateway = loadGateway("fixture/gateway-a");
-    const other =
-      producer === "prepared-with-another-gateway-active"
-        ? loadGateway("fixture/gateway-b")
-        : undefined;
-    try {
-      const liveRecord = gateway.registry.plugins.find((record) => record.id === channelId)!;
-      const liveInstance = getPluginInstance(liveRecord)!;
-      const liveEntry = gateway.registry.channels[0]!;
-      expect(liveRecord).toMatchObject({ status: "loaded", origin: "bundled" });
-      expect(liveEntry.captureReadAuthority?.()?.()).toBe(true);
-      expect(getActivePluginRegistry()).toBe(other?.registry ?? gateway.registry);
-      await using buildResources = new PreparedModelRuntimeBuildResources(
-        retainPreparedPluginRegistry,
-      );
-      const acquired = await withPluginRuntimeRegistryScope(gateway.registry, async () => {
-        if (producer === "direct-loader-successor") {
-          const previous = await acquirePluginRegistryForInspection({
+    const registry = loadOpenClawPlugins({
+      ...options,
+      onlyPluginIds: [channelId],
+      activate: false,
+      runtimeSideEffects: true,
+      cache: false,
+    });
+    const runtime = getPluginRegistryRuntime(registry);
+    if (!runtime) {
+      throw new Error("Expected a loaded Gateway runtime");
+    }
+    bindGatewayContextResolver(runtime, () => undefined);
+    activatePluginRegistry(registry, null, "gateway-bindable", workspaceDir);
+    const gateway = createPluginRegistryOwner(registry, workspaceDir);
+    await using cleanup = new AsyncDisposableStack();
+    cleanup.defer(async () => {
+      await gateway.close();
+    });
+    const liveRecord = gateway.registry.plugins.find((record) => record.id === channelId)!;
+    const liveInstance = getPluginInstance(liveRecord)!;
+    const liveEntry = gateway.registry.channels[0]!;
+    expect(liveRecord).toMatchObject({ status: "loaded", origin: "bundled" });
+    expect(liveEntry.captureReadAuthority?.()?.()).toBe(true);
+    expect(getActivePluginRegistry()).toBe(gateway.registry);
+    const buildResources = cleanup.use(
+      new PreparedModelRuntimeBuildResources(retainPreparedPluginRegistry),
+    );
+    const acquired = await withPluginRuntimeRegistryScope(gateway.registry, async () => {
+      if (producer === "direct-loader-successor") {
+        const previous = await acquirePluginRegistryForInspection({
+          ...options,
+          onlyPluginIds: [channelId],
+          borrowRegistry: gateway.registry,
+        });
+        try {
+          return await acquirePluginRegistryForInspection({
             ...options,
-            onlyPluginIds: [channelId],
+            previousRegistry: previous?.registry,
             borrowRegistry: gateway.registry,
           });
-          try {
-            return await acquirePluginRegistryForInspection({
-              ...options,
-              previousRegistry: previous?.registry,
-              borrowRegistry: gateway.registry,
-            });
-          } finally {
-            await previous?.release();
-          }
+        } finally {
+          await previous?.release();
         }
-        const prepared = await prepareWorkspacePluginRegistries(
-          { config, workspaceDir, agentDir: workspaceDir, allowGatewaySubagentBinding: true },
-          metadata,
-          (registry) => buildResources.retainRegistry(registry),
-          undefined,
-          true,
-          undefined,
-          () => [],
-          [channelId, freshId],
-          buildResources.load.bind(buildResources),
-        );
-        if (!prepared.runtimePluginRegistry) {
-          throw new Error("Expected a prepared registry");
-        }
-        return {
-          registry: prepared.runtimePluginRegistry,
-          release: () => buildResources[Symbol.asyncDispose](),
-        };
-      });
-      const resources = getPluginRegistryInspectionResources(acquired.registry)!;
-      const scope = resources.createInvocationScope(acquired.registry);
-      try {
-        // All producers borrow the exact A record, never a discovery copy or Gateway B.
-        expect(acquired.registry.plugins.find((record) => record.id === channelId)).toBe(
-          liveRecord,
-        );
-        expect(liveInstance.owner?.registry).toBe(gateway.registry);
-        const freshRecord = acquired.registry.plugins.find((record) => record.id === freshId)!;
-        expect(freshRecord.status).toBe("loaded");
-        const freshInstance = getPluginInstance(freshRecord)!;
-        const entry = acquired.registry.channels[0]!;
-        const capture = entry.captureReadAuthority!;
-        const grant = capture();
-        const send = entry.plugin.outbound!.sendText!;
-        const scopedCapture = scope.wrap(capture);
-        const scopedGrant = scopedCapture();
-        const scopedSend = scope.wrap(entry.plugin).outbound!.sendText!;
-        const resolveRuntime = scope.wrap(entry.resolveChannelRuntime);
-        const sendParams = { cfg: config, to: "fixture-room", text: "fixture message" };
-        expect(grant?.()).toBe(true);
-        expect(scopedGrant?.()).toBe(true);
-        await expect(scopedSend(sendParams)).resolves.toMatchObject({
-          messageId: "fixture/gateway-a",
-        });
-        scope.release();
-        expect(() => scopedSend(sendParams)).toThrow("consumer is closed");
-        expect.soft(() => scopedCapture()).toThrow("consumer is closed");
-        expect.soft(() => scopedGrant?.()).toThrow("consumer is closed");
-        expect.soft(() => resolveRuntime?.()).toThrow();
-        await acquired.release();
-        expect.soft(() => capture()).toThrow();
-        expect.soft(() => grant?.()).toThrow();
-        expect.soft(() => send(sendParams)).toThrow();
-        expect(freshInstance.acceptingCalls).toBe(false);
-        expect(liveInstance.owner?.registry).toBe(gateway.registry);
-        expect(liveInstance.acceptingCalls).toBe(true);
-        expect(liveInstance.disposing).toBe(false);
-        expect(liveInstance.hasRetainedConsumers).toBe(false);
-        expect(liveEntry.captureReadAuthority?.()?.()).toBe(true);
-        await expect(liveEntry.plugin.outbound!.sendText!(sendParams)).resolves.toMatchObject({
-          messageId: "fixture/gateway-a",
-        });
-      } finally {
-        scope.release();
-        await acquired.release();
       }
-    } finally {
-      await other?.close();
-      await gateway.close();
-    }
+      const prepared = await prepareWorkspacePluginRegistries(
+        { config, workspaceDir, agentDir: workspaceDir, allowGatewaySubagentBinding: true },
+        metadata,
+        (loaded) => buildResources.retainRegistry(loaded),
+        undefined,
+        true,
+        undefined,
+        () => [],
+        [channelId, freshId],
+        buildResources.load.bind(buildResources),
+      );
+      if (!prepared.runtimePluginRegistry) {
+        throw new Error("Expected a prepared registry");
+      }
+      return {
+        registry: prepared.runtimePluginRegistry,
+        release: () => buildResources[Symbol.asyncDispose](),
+      };
+    });
+    cleanup.defer(() => acquired.release());
+    const resources = getPluginRegistryInspectionResources(acquired.registry)!;
+    const scope = resources.createInvocationScope(acquired.registry);
+    cleanup.defer(() => scope.release());
+    expect(acquired.registry.plugins.find((record) => record.id === channelId)).toBe(liveRecord);
+    expect(liveInstance.owner?.registry).toBe(gateway.registry);
+    const freshRecord = acquired.registry.plugins.find((record) => record.id === freshId)!;
+    expect(freshRecord.status).toBe("loaded");
+    const freshInstance = getPluginInstance(freshRecord)!;
+    const entry = acquired.registry.channels[0]!;
+    const capture = entry.captureReadAuthority!;
+    const grant = capture();
+    const send = entry.plugin.outbound!.sendText!;
+    const scopedCapture = scope.wrap(capture);
+    const scopedGrant = scopedCapture();
+    const scopedSend = scope.wrap(entry.plugin).outbound!.sendText!;
+    const resolveRuntime = scope.wrap(entry.resolveChannelRuntime);
+    const sendParams = { cfg: config, to: "fixture-room", text: "fixture message" };
+    expect(grant?.()).toBe(true);
+    expect(scopedGrant?.()).toBe(true);
+    await expect(scopedSend(sendParams)).resolves.toMatchObject({
+      messageId: "fixture/gateway",
+    });
+    scope.release();
+    expect(() => scopedSend(sendParams)).toThrow("consumer is closed");
+    expect.soft(() => scopedCapture()).toThrow("consumer is closed");
+    expect.soft(() => scopedGrant?.()).toThrow("consumer is closed");
+    expect.soft(() => resolveRuntime?.()).toThrow();
+    await acquired.release();
+    expect.soft(() => capture()).toThrow();
+    expect.soft(() => grant?.()).toThrow();
+    expect.soft(() => send(sendParams)).toThrow();
+    expect(freshInstance.acceptingCalls).toBe(false);
+    expect(liveInstance.owner?.registry).toBe(gateway.registry);
+    expect(liveInstance).toMatchObject({
+      acceptingCalls: true,
+      disposing: false,
+      hasRetainedConsumers: false,
+    });
+    expect(liveEntry.captureReadAuthority?.()?.()).toBe(true);
+    await expect(liveEntry.plugin.outbound!.sendText!(sendParams)).resolves.toMatchObject({
+      messageId: "fixture/gateway",
+    });
   },
 );

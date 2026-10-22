@@ -1,91 +1,121 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
-import type { Context, Model } from "../types.js";
+import { streamOpenAICodexResponses } from "./openai-chatgpt-responses.js";
 import {
-  closeOpenAICodexWebSocketSessions,
-  resetOpenAICodexWebSocketStateForTest,
-  streamOpenAICodexResponses,
-} from "./openai-chatgpt-responses.js";
+  chatgptContext as context,
+  createJwt,
+  resetChatgptTransport,
+  sseResponse,
+} from "./openai-chatgpt-responses.test-helpers.js";
+import { makeOpenAIProviderModel } from "./openai-provider.test-support.js";
 
-function createJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${header}.${body}.signature`;
+const apiKey = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } });
+const sseOptions = { apiKey, transport: "sse" as const };
+
+function installSse(payload: object) {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(sseResponse(payload));
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function responseEvent(type: string, id: string, fields: object) {
+  return { type: `response.${type}`, response: { id, ...fields } };
+}
+
+function message(id: string, text: string) {
+  return { type: "message", id, role: "assistant", content: [{ type: "output_text", text }] };
+}
+
+function refusal(category: string, review?: object) {
+  return {
+    type: "provider_refusal",
+    details: { provider: "openai", category, ...(review ? { review } : {}) },
+  };
+}
+
+function transportMetadata(stopReason: "error" | "aborted", transport: string) {
+  return {
+    api: "openai-chatgpt-responses",
+    model: "gpt-5.6-luna",
+    provider: "openai",
+    elapsedMs: expect.any(Number),
+    stopReason,
+    transport,
+    failureKind: stopReason === "aborted" ? "caller-abort" : "provider-failure",
+  };
+}
+
+function transportWarning(logWarn: ReturnType<typeof vi.fn>) {
+  const warnings = logWarn.mock.calls.filter(([category]) => category === "openai-transport");
+  expect(warnings).toHaveLength(1);
+  return warnings[0]?.[2];
+}
+
+function installWebSocket(payload: object, onSend?: () => void) {
+  class FixtureWebSocket extends EventTarget {
+    constructor() {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("open")));
+    }
+    send(): void {
+      if (onSend) {
+        onSend();
+        return;
+      }
+      queueMicrotask(() =>
+        this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(payload) })),
+      );
+    }
+    close(): void {}
+  }
+  const fetchMock = vi.fn();
+  vi.stubGlobal("WebSocket", FixtureWebSocket);
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+async function collectEvents(stream: ReturnType<typeof streamOpenAICodexResponses>) {
+  const events = [];
+  for await (const event of stream) {
+    events.push(event);
+  }
+  return events;
 }
 
 describe("OpenAI ChatGPT Responses inference streaming", () => {
-  afterEach(() => {
-    closeOpenAICodexWebSocketSessions();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-    resetOpenAICodexWebSocketStateForTest();
-    configureAiTransportHost({});
-  });
+  afterEach(resetChatgptTransport);
 
-  const model = {
+  const model = makeOpenAIProviderModel("openai-chatgpt-responses", {
     id: "gpt-5.6-luna",
     name: "GPT-5.6 Luna",
-    api: "openai-chatgpt-responses",
-    provider: "openai",
     baseUrl: "https://chatgpt.test/backend-api",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
     maxTokens: 16_000,
-  } satisfies Model<"openai-chatgpt-responses">;
-
-  const context = {
-    messages: [{ role: "user", content: "hi", timestamp: 1 }],
-  } satisfies Context;
+  });
 
   it("preserves incomplete SSE terminals without exposing truncated tool calls", async () => {
-    const terminal = {
-      type: "response.incomplete",
-      response: {
-        id: "resp_incomplete",
-        incomplete_details: { reason: "max_output_tokens" },
-        output: [
-          {
-            type: "message",
-            id: "msg_partial",
-            role: "assistant",
-            content: [{ type: "output_text", text: "TERMINAL_PARTIAL" }],
-          },
-          {
-            type: "function_call",
-            id: "fc_truncated",
-            call_id: "call_truncated",
-            name: "write",
-            arguments: '{"path":"unfinished',
-          },
-        ],
-        usage: {
-          input_tokens: 21,
-          output_tokens: 4,
-          total_tokens: 25,
-          input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
+    const payload = responseEvent("incomplete", "resp_incomplete", {
+      incomplete_details: { reason: "max_output_tokens" },
+      output: [
+        message("msg_partial", "TERMINAL_PARTIAL"),
+        {
+          type: "function_call",
+          id: "fc_truncated",
+          call_id: "call_truncated",
+          name: "write",
+          arguments: '{"path":"unfinished',
         },
+      ],
+      usage: {
+        input_tokens: 21,
+        output_tokens: 4,
+        total_tokens: 25,
+        input_tokens_details: { cached_tokens: 6, cache_write_tokens: 2 },
       },
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(`data: ${JSON.stringify(terminal)}\n\n`, {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        }),
-      ),
-    );
+    });
+    installSse(payload);
 
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
+    const result = await streamOpenAICodexResponses(model, context, sseOptions).result();
 
     expect(result).toMatchObject({
       stopReason: "length",
@@ -96,101 +126,60 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     expect(result.content.some((block) => block.type === "toolCall")).toBe(false);
   });
 
-  it("emits an error for content-filtered incomplete SSE turns without a status", async () => {
-    const terminal = {
-      type: "response.incomplete",
-      response: {
-        id: "resp_filtered",
+  it.each(["sse", "websocket"] as const)(
+    "emits an error for content-filtered incomplete %s turns without a status",
+    async (transport) => {
+      const id = transport === "sse" ? "resp_filtered" : "resp_ws_filtered";
+      const usage = { input_tokens: 12, output_tokens: 3, total_tokens: 15 };
+      const payload = responseEvent("incomplete", id, {
         incomplete_details: { reason: "content_filter" },
-        output: [
-          {
-            type: "message",
-            id: "msg_filtered",
-            role: "assistant",
-            content: [{ type: "output_text", text: "FILTERED_PARTIAL" }],
-          },
-        ],
-        usage: { input_tokens: 12, output_tokens: 3, total_tokens: 15 },
-      },
-    };
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(`data: ${JSON.stringify(terminal)}\n\n`, {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        }),
-      ),
-    );
-
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
-
-    expect(events.map((event) => event.type)).toEqual(["start", "error"]);
-    expect(events.at(-1)).toMatchObject({
-      type: "error",
-      reason: "error",
-      error: {
-        stopReason: "error",
-        responseId: "resp_filtered",
-        errorMessage: "Provider incomplete_reason: content_filter",
-        content: [],
-        usage: { input: 12, output: 3, totalTokens: 15 },
-      },
-    });
-  });
+        output: transport === "sse" ? [message("msg_filtered", "FILTERED_PARTIAL")] : [],
+        usage,
+      });
+      const fetchMock = transport === "sse" ? installSse(payload) : installWebSocket(payload);
+      const events = await collectEvents(
+        streamOpenAICodexResponses(model, context, { apiKey, transport }),
+      );
+      expect(events.map((event) => event.type)).toEqual(["start", "error"]);
+      expect(events.at(-1)).toMatchObject({
+        type: "error",
+        reason: "error",
+        error: {
+          stopReason: "error",
+          responseId: id,
+          errorMessage: "Provider incomplete_reason: content_filter",
+          ...(transport === "sse"
+            ? { content: [], usage: { input: 12, output: 3, totalTokens: 15 } }
+            : {}),
+        },
+      });
+      if (transport === "websocket") {
+        expect(fetchMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("projects a structured ChatGPT cyber-policy error as a provider refusal", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue(
-        new Response(
-          `data: ${JSON.stringify({
-            type: "error",
-            message: "This request was blocked by the provider's cyber policy.",
-            codexErrorInfo: "cyberPolicy",
-          })}\n\n`,
-          { status: 200, headers: { "content-type": "text/event-stream" } },
-        ),
-      ),
-    );
-
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
+    installSse({
+      type: "error",
+      message: "This request was blocked by the provider's cyber policy.",
+      codexErrorInfo: "cyberPolicy",
     });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+
+    const stream = streamOpenAICodexResponses(model, context, sseOptions);
+    const events = await collectEvents(stream);
 
     expect(events.at(-1)).toMatchObject({
       type: "error",
       error: {
         stopReason: "error",
-        diagnostics: [
-          {
-            type: "provider_refusal",
-            details: { provider: "openai", category: "cyber" },
-          },
-        ],
+        diagnostics: [refusal("cyber")],
       },
     });
   });
 
   it("keeps the raw misalignment terminal error without retrying", async () => {
     const code = "misalignment_policy_violation";
-    const category = "misalignment";
 
     const error = {
       code,
@@ -203,24 +192,10 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
       },
     };
     const payload = { type: "error", error };
-    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      new Response(`data: ${JSON.stringify(payload)}\n\n`, {
-        status: 200,
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = installSse(payload);
 
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+    const stream = streamOpenAICodexResponses(model, context, sseOptions);
+    const events = await collectEvents(stream);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(events.filter((event) => event.type === "error" || event.type === "done")).toMatchObject(
@@ -232,18 +207,11 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
             stopReason: "error",
             errorCode: code,
             diagnostics: [
-              {
-                type: "provider_refusal",
-                details: {
-                  provider: "openai",
-                  category,
-                  review: {
-                    explanation: error.misalignment.detailed_explanation,
-                    continuation: error.misalignment.steer,
-                    errorType: error.misalignment.error_type,
-                  },
-                },
-              },
+              refusal("misalignment", {
+                explanation: error.misalignment.detailed_explanation,
+                continuation: error.misalignment.steer,
+                errorType: error.misalignment.error_type,
+              }),
             ],
           },
         },
@@ -252,48 +220,19 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
   });
 
   it("reports acceptance before the default WebSocket stream starts", async () => {
-    class AcceptedWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("message"), {
-              data: JSON.stringify({
-                type: "response.completed",
-                response: {
-                  id: "resp_ws_accepted",
-                  status: "completed",
-                  output: [],
-                  usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-                },
-              }),
-            }),
-          );
-        });
-      }
-
-      close(): void {}
-    }
+    const fetchMock = installWebSocket(
+      responseEvent("completed", "resp_ws_accepted", {
+        status: "completed",
+        output: [],
+        usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+      }),
+    );
 
     const order: string[] = [];
     const acceptanceObserver = vi.fn(() => {
       order.push("accepted");
     });
-    const fetchMock = vi.fn();
-    vi.stubGlobal("WebSocket", AcceptedWebSocket);
-    vi.stubGlobal("fetch", fetchMock);
-    const options = withProviderAcceptanceObserver(
-      {
-        apiKey: createJwt({
-          "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-        }),
-      },
-      acceptanceObserver,
-    );
+    const options = withProviderAcceptanceObserver({ apiKey }, acceptanceObserver);
 
     const stream = streamOpenAICodexResponses(model, context, options);
     for await (const event of stream) {
@@ -305,86 +244,16 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("emits an error for a content-filtered incomplete WebSocket turn", async () => {
-    class ContentFilteredWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("message"), {
-              data: JSON.stringify({
-                type: "response.incomplete",
-                response: {
-                  id: "resp_ws_filtered",
-                  incomplete_details: { reason: "content_filter" },
-                  output: [],
-                  usage: { input_tokens: 12, output_tokens: 3, total_tokens: 15 },
-                },
-              }),
-            }),
-          );
-        });
-      }
-
-      close(): void {}
-    }
-
-    const fetchMock = vi.fn();
-    vi.stubGlobal("WebSocket", ContentFilteredWebSocket);
-    vi.stubGlobal("fetch", fetchMock);
-
-    const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "websocket",
-    });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
-
-    expect(events.map((event) => event.type)).toEqual(["start", "error"]);
-    expect(events.at(-1)).toMatchObject({
-      type: "error",
-      reason: "error",
-      error: {
-        stopReason: "error",
-        responseId: "resp_ws_filtered",
-        errorMessage: "Provider incomplete_reason: content_filter",
-      },
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("logs the caller abort reason with bounded ChatGPT transport metadata", async () => {
     const logWarn = vi.fn();
     configureAiTransportHost({ logWarn });
     const controller = new AbortController();
-    class AbortedWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        controller.abort(new Error("Compaction timed out"));
-      }
-
-      close(): void {}
-    }
-    vi.stubGlobal("WebSocket", AbortedWebSocket);
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = installWebSocket({}, () => {
+      controller.abort(new Error("Compaction timed out"));
+    });
 
     const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
+      apiKey,
       signal: controller.signal,
     }).result();
 
@@ -392,42 +261,42 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     expect(logWarn).toHaveBeenCalledWith(
       "openai-transport",
       "ChatGPT Responses stream terminated",
-      {
-        api: "openai-chatgpt-responses",
-        elapsedMs: expect.any(Number),
-        failureKind: "caller-abort",
-        model: "gpt-5.6-luna",
-        provider: "openai",
-        stopReason: "aborted",
-        transport: "auto",
-      },
+      transportMetadata("aborted", "auto"),
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("classifies a direct HTTP rejection as a provider failure without logging its text", async () => {
+  it("logs HTTP rejection details separately from transport failure metadata", async () => {
     const logWarn = vi.fn();
     configureAiTransportHost({ logWarn });
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
       new Response(
         JSON.stringify({
-          error: { message: "hostile prompt echo in a 400 body", code: "invalid_request" },
+          error: {
+            message: "hostile prompt echo in a 400 body",
+            code: "invalid_request",
+            type: "invalid_request_error",
+          },
         }),
         { status: 400, statusText: "Bad Request" },
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
-      transport: "sse",
-    }).result();
+    const result = await streamOpenAICodexResponses(model, context, sseOptions).result();
 
-    expect(result.stopReason).toBe("error");
-    expect(logWarn).toHaveBeenCalledTimes(1);
-    const logged = logWarn.mock.calls[0]?.[2];
+    expect(result).toMatchObject({ stopReason: "error", errorType: "invalid_request_error" });
+    expect(logWarn).toHaveBeenCalledWith(
+      "provider-error",
+      "Model request failed",
+      expect.objectContaining({
+        status: 400,
+        code: "invalid_request",
+        type: "invalid_request_error",
+      }),
+    );
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain("hostile prompt echo in a 400 body");
+    const logged = transportWarning(logWarn);
     expect(logged).toMatchObject({ stopReason: "error", failureKind: "provider-failure" });
     const serialized = JSON.stringify(logged);
     for (const hostile of ["hostile", "invalid_request", "400 body"]) {
@@ -457,37 +326,13 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     };
     const logWarn = vi.fn();
     configureAiTransportHost({ logWarn });
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-
-    class FailedResponseWebSocket extends EventTarget {
-      constructor() {
-        super();
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-
-      send(): void {
-        queueMicrotask(() => {
-          this.dispatchEvent(
-            Object.assign(new Event("message"), { data: JSON.stringify(failedResponse) }),
-          );
-        });
-      }
-
-      close(): void {}
-    }
-    vi.stubGlobal("WebSocket", FailedResponseWebSocket);
+    const fetchMock = installWebSocket(failedResponse);
 
     const stream = streamOpenAICodexResponses(model, context, {
-      apiKey: createJwt({
-        "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-      }),
+      apiKey,
       transport,
     });
-    const events = [];
-    for await (const event of stream) {
-      events.push(event);
-    }
+    const events = await collectEvents(stream);
 
     expect(events.map((event) => event.type)).toEqual(["start", "error"]);
     expect(events.at(-1)).toMatchObject({
@@ -500,30 +345,18 @@ describe("OpenAI ChatGPT Responses inference streaming", () => {
     });
     const result = await stream.result();
     expect(result.diagnostics).toMatchObject([
-      {
-        type: "provider_refusal",
-        details: {
-          category: "misalignment",
-          review: {
-            explanation: failedResponse.response.error.misalignment.detailed_explanation,
-            continuation: failedResponse.response.error.misalignment.steer,
-          },
-        },
-      },
+      refusal("misalignment", {
+        explanation: failedResponse.response.error.misalignment.detailed_explanation,
+        continuation: failedResponse.response.error.misalignment.steer,
+      }),
     ]);
-    // Provider message text reaches the stream consumer only; the transport
-    // log keeps timing and classification and never the message body.
-    expect(logWarn).toHaveBeenCalledTimes(1);
-    const logged = logWarn.mock.calls[0]?.[2];
-    expect(logged).toEqual({
-      api: "openai-chatgpt-responses",
-      elapsedMs: expect.any(Number),
-      failureKind: "provider-failure",
-      model: "gpt-5.6-luna",
-      provider: "openai",
-      stopReason: "error",
-      transport,
-    });
+    expect(logWarn).toHaveBeenCalledWith(
+      "provider-error",
+      "Model request failed",
+      expect.objectContaining({ responseId: "resp_failed" }),
+    );
+    const logged = transportWarning(logWarn);
+    expect(logged).toEqual(transportMetadata("error", transport));
     const serialized = JSON.stringify(logged);
     for (const hostile of ["rejected", "invalid_prompt", "hostile type", "echoed"]) {
       expect(serialized).not.toContain(hostile);

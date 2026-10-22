@@ -9,21 +9,27 @@ import { vi } from "vitest";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 
 export function observePublishedReservations(publishedDb: DatabaseSync, onReserved: () => void) {
-  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
-  vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+  const observe =
+    <Args extends unknown[], Result>(run: (...args: Args) => Result) =>
+    (...args: Args) => {
+      const result = run(...args);
+      onReserved();
+      return result;
+    };
+  const publishedPath = publishedDb.location();
+  const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2;
+  vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStoreV2").mockImplementation(
     async (...args) => {
       const worker = await open(...args);
       if (
-        args[1] === publishedDb &&
+        args[0].path === publishedPath &&
         args[2].moduleUrl.href ===
           resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
       ) {
         const run = worker.run.bind(worker);
-        vi.spyOn(worker, "run").mockImplementation((...runArgs) => {
-          const result = run(...runArgs);
-          onReserved();
-          return result;
-        });
+        vi.spyOn(worker, "run").mockImplementation(observe(run));
+        const execute = worker.execute.bind(worker);
+        vi.spyOn(worker, "execute").mockImplementation(observe(execute));
       }
       return worker;
     },
@@ -40,39 +46,23 @@ export function observePublishedSql(publishedDb: DatabaseSync) {
     statements.set(statement, sql);
     return statement;
   });
-  const executions = [
-    ["get", vi.spyOn(StatementSync.prototype, "get")],
-    ["all", vi.spyOn(StatementSync.prototype, "all")],
-    ["run", vi.spyOn(StatementSync.prototype, "run")],
-    ["iterate", vi.spyOn(StatementSync.prototype, "iterate")],
-  ] as const;
+  const executions = (["get", "all", "run", "iterate"] as const).map(
+    (method) => [method, vi.spyOn(StatementSync.prototype, method)] as const,
+  );
   const exec = vi.spyOn(publishedDb, "exec");
+  const executionSpies = [...executions.map(([, spy]) => spy), exec];
   return {
     calls: () => [
       ...executions.flatMap(([method, observed]) =>
         observed.mock.contexts.flatMap((statement) => {
-          if (!(statement instanceof StatementSync)) {
-            return [];
-          }
-          const sql = statements.get(statement);
+          const sql = statement instanceof StatementSync ? statements.get(statement) : undefined;
           return sql === undefined ? [] : [{ method, sql }];
         }),
       ),
       ...exec.mock.calls.map(([sql]) => ({ method: "exec", sql })),
     ],
-    clear() {
-      for (const [, observed] of executions) {
-        observed.mockClear();
-      }
-      exec.mockClear();
-    },
-    restore() {
-      preparing.mockRestore();
-      for (const [, observed] of executions) {
-        observed.mockRestore();
-      }
-      exec.mockRestore();
-    },
+    clear: () => executionSpies.forEach((spy) => spy.mockClear()),
+    restore: () => [preparing, ...executionSpies].forEach((spy) => spy.mockRestore()),
   };
 }
 

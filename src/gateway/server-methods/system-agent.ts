@@ -8,7 +8,9 @@ import {
   validateSystemAgentSetupActivateParams,
   validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
+  validateSystemAgentSetupRuntimeStartParams,
   validateSystemAgentSetupDetectParams,
+  validateSystemAgentSetupAutoParams,
   validateSystemAgentSetupVerifyParams,
   type SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -39,7 +41,10 @@ import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
-import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import {
+  readGatewayRequestMutationAuthority,
+  retainGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
@@ -69,6 +74,7 @@ import {
 } from "./system-agent-setup-wizard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { startWizardLogin } from "./wizard-login.js";
 
 export type { SystemAgentChatSession };
 
@@ -149,7 +155,26 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     validateSystemAgentSetupDetectParams,
     async ({ params, respond }) => {
       const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(true, await detectSetupInference({}, params.agentId), undefined);
+      respond(true, await detectSetupInference(params.agentId), undefined);
+    },
+  ),
+  "openclaw.setup.auto": defineValidatedGatewayHandler(
+    "openclaw.setup.auto",
+    validateSystemAgentSetupAutoParams,
+    async (options) => {
+      const { context, respond } = options;
+      const authority = retainGatewayRequestMutationAuthority(options);
+      try {
+        const { runGatewayAutomaticSetup } = await import("./system-agent-setup-auto.js");
+        respond(true, await runGatewayAutomaticSetup(context, authority.assertCurrent), undefined);
+      } catch (error) {
+        if (!(error instanceof SetupAdmissionBusyError)) {
+          throw error;
+        }
+        respondSetupAdmissionBusy(respond);
+      } finally {
+        authority.release();
+      }
     },
   ),
   "openclaw.setup.verify": defineValidatedGatewayHandler(
@@ -163,6 +188,48 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
           ...params,
         });
         respond(true, result, undefined);
+      });
+    },
+  ),
+  "openclaw.setup.runtime.start": defineValidatedGatewayHandler(
+    "openclaw.setup.runtime.start",
+    validateSystemAgentSetupRuntimeStartParams,
+    async (options) => {
+      const { params, context, respond, client } = options;
+      if (rejectExistingSetupWizardSession({ sessionId: params.sessionId, context, respond })) {
+        return;
+      }
+      if (!client) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Client required"));
+        return;
+      }
+      await startWizardLogin({
+        client,
+        context,
+        sessionId: params.sessionId,
+        respond,
+        assertCurrent: readGatewayRequestMutationAuthority(options).assertCurrent,
+        createSession: () =>
+          new WizardSession(
+            async (prompter, signal, runnerSession) => {
+              const authority = retainGatewayRequestMutationAuthority(options);
+              try {
+                // Keep installed plugin runtime loading off Gateway startup.
+                const { setupNativeRuntime } =
+                  await import("../../system-agent/setup-native-runtime.js");
+                await setupNativeRuntime({
+                  ...params,
+                  prompter,
+                  signal,
+                  assertCurrent: authority.assertCurrent,
+                  onCommitStarted: () => runnerSession.lockCancellation(),
+                });
+              } finally {
+                authority.release();
+              }
+            },
+            { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
+          ),
       });
     },
   ),
@@ -462,16 +529,14 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
             assertCurrent();
             greetingAuditSequence = facts.auditSequence;
             persistWelcome ||= facts.recentExternalEdit;
-            welcome = (
-              await resolveSystemAgentGreeting({
-                overview,
-                facts,
-                planner: (plannerParams) => engine.planGreeting(plannerParams),
-                allowInference: welcomeOnly,
-                cacheStore: greetingCache,
-                cacheOwner: sessions,
-              })
-            ).text;
+            welcome = await resolveSystemAgentGreeting({
+              overview,
+              facts,
+              planner: (plannerParams) => engine.planGreeting(plannerParams),
+              allowInference: welcomeOnly,
+              cacheStore: greetingCache,
+              cacheOwner: sessions,
+            });
             assertCurrent();
             welcomeQuestion = buildSystemAgentGreetingQuestion(overview, facts);
             engine.noteAssistantMessage(welcome);

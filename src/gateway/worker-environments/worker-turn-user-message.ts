@@ -10,9 +10,12 @@ import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import type { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -79,6 +82,7 @@ type WorkerTurnInputParams = {
   modelRef: { provider: string; model: string };
   startedAt: number;
   assertCurrent: () => void;
+  assertSourceCurrent: SessionSourceAssertion;
   onBlocked: () => void;
 };
 
@@ -89,6 +93,7 @@ export async function gateWorkerTurnInput({
   modelRef,
   startedAt,
   assertCurrent,
+  assertSourceCurrent,
   onBlocked,
 }: WorkerTurnInputParams) {
   const recorder = turn.userTurnTranscriptRecorder;
@@ -127,9 +132,11 @@ export async function gateWorkerTurnInput({
   }
   onBlocked();
   const message = buildAgentRunBlockedUserMessage(turn.runId, block);
-  await withSessionTranscriptWriteAssertion(transcriptTarget, assertCurrent, async () => {
+  await withSessionTranscriptWriteAssertion(transcriptTarget, assertSourceCurrent, async () => {
     if (recorder) {
-      const persisted = await recorder.persistBlocked(message);
+      const persisted = await recorder.persistBlocked(message, {
+        storageTarget: transcriptTarget,
+      });
       assertCurrent();
       if (persisted) {
         turn.onUserMessagePersisted?.(persisted.message);
@@ -175,13 +182,48 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     provider: modelRef.provider,
     model: modelRef.model,
   });
-  const manager = userMessageAlreadyPersisted
+  let manager = userMessageAlreadyPersisted
     ? await SessionManager.openModelContextAsync(transcriptTarget, {
         admission,
         signal: turn.abortSignal,
       })
     : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
   assertCurrent();
+  let baseLeafId = admission?.entryId ?? manager.getLeafId();
+  // Reuse the fenced read's source watermark. Later writes still face the commit fence.
+  if (admission && manager.getTranscriptSnapshotVersion()?.rawSeq !== admission.rawSeq) {
+    const current = await withoutSessionTranscriptReadFence(() =>
+      SessionManager.openModelContextAsync(transcriptTarget, { signal: turn.abortSignal }),
+    );
+    assertCurrent();
+    const branch = current.getBranch();
+    const admittedIndex = branch.findIndex((entry) => entry.id === admission.entryId);
+    const suffix = branch.slice(admittedIndex + 1);
+    let hasRunOutput = false;
+    const isRunContinuation = suffix.every((entry) => {
+      if (entry.type !== "message") {
+        return false;
+      }
+      const { message } = entry;
+      const runId = readSessionTranscriptRunId(message);
+      if (runId !== undefined) {
+        const ownedOutput =
+          runId === turn.runId && (message.role === "assistant" || message.role === "toolResult");
+        hasRunOutput ||= ownedOutput;
+        return ownedOutput;
+      }
+      return (
+        message.role === "custom" &&
+        (message.customType === "openclaw.runtime-context" ||
+          message.customType === "openclaw.system-update")
+      );
+    });
+    // Untagged runtime context may accompany this run's output, but cannot establish ownership.
+    if (admittedIndex >= 0 && hasRunOutput && isRunContinuation) {
+      manager = current;
+      baseLeafId = current.getLeafId();
+    }
+  }
   const contextMessages = manager.buildSessionContext().messages;
   const leaf = manager.getLeafEntry();
   const history =
@@ -195,6 +237,6 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     manager,
     history,
     userMessageAlreadyPersisted,
-    baseLeafId: admission?.entryId ?? manager.getLeafId(),
+    baseLeafId,
   };
 }

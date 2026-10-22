@@ -30,7 +30,6 @@ type CurrentPluginMetadataCacheState = {
   agentWorkspaceFingerprint: string | undefined;
   envFingerprint: string | undefined;
   defaultDiscoveryCompatible: boolean;
-  compatiblePolicyHashes: readonly string[] | undefined;
   compatibleConfigFingerprints: readonly string[] | undefined;
   revision: symbol;
   configIdentities: WeakSet<OpenClawConfig>;
@@ -48,13 +47,16 @@ export type PluginCacheMetadata = {
       cwd: string | undefined;
       value: string | undefined;
     };
-    bundledProviderPolicySurfaces: Map<
-      string,
-      {
-        version: number | undefined;
-        selection: PluginCacheMetadata["metadata"]["bundledPluginsDir"];
-        read: () => BundledProviderPolicySurface | null;
-      }
+    bundledProviderPolicySurfaces: WeakMap<
+      object,
+      Map<
+        string,
+        {
+          version: number | undefined;
+          selection: PluginCacheMetadata["metadata"]["bundledPluginsDir"];
+          read: () => BundledProviderPolicySurface | null;
+        }
+      >
     >;
     current: CurrentPluginMetadataCacheState;
     snapshots: Map<string, PluginMetadataSnapshot>;

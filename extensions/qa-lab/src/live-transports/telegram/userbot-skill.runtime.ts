@@ -26,7 +26,6 @@ export type TelegramTestCredential = TelegramUserCredential & {
 type RestoredTelegramTestCredential = TelegramTestCredential & {
   driverEnv: Record<string, string>;
   stateRoot: string;
-  userDriverDir: string;
 };
 
 type TelegramTestApiProxy = {
@@ -88,12 +87,9 @@ function parseRestoredCredential(value: unknown): RestoredTelegramTestCredential
       return [key, entry];
     }),
   );
-  return {
-    ...credential,
-    driverEnv,
-    stateRoot: requireString(value, "stateRoot"),
-    userDriverDir: requireString(value, "userDriverDir"),
-  };
+  const stateRoot = requireString(value, "stateRoot");
+  requireString(value, "userDriverDir");
+  return { ...credential, driverEnv, stateRoot };
 }
 
 export async function loadTelegramUserbotSkillRuntime(params?: {

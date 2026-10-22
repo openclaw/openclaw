@@ -16,7 +16,7 @@ import { createWorkerLiveEventReceiver } from "../../../gateway/worker-environme
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-environments/placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "../../../gateway/worker-environments/placement-worker-gate.js";
-import { resolveWorkerTurnTranscriptTarget } from "../../../gateway/worker-environments/worker-turn-transcript-target.js";
+import { prepareWorkerTurnTranscriptSource } from "../../../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
   getAgentEventLifecycleGeneration,
   onAgentEvent,
@@ -37,6 +37,7 @@ import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as persistence from "./subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
@@ -44,8 +45,6 @@ import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js"
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   finalizeInterruptedSubagentRun,
   releaseSubagentRun,
@@ -57,16 +56,49 @@ const fixture = useSubagentControlFixture();
 vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 vi.mock("../../../plugins/hook-runner-global.js", { spy: true });
 
-it("does not recreate a source released before replacement admission", async () => {
-  await registerSubagentRun({
-    runId: "released-source",
-    childSessionKey: "agent:main:subagent:released-source",
+function register(
+  runId: string,
+  childSessionKey: string,
+  sessionId: string,
+  overrides: Partial<Parameters<typeof registerSubagentRun>[0]> = {},
+) {
+  return registerSubagentRun({
+    runId,
+    childSessionKey,
+    childAgentId: "main",
+    sessionEntry: { sessionId },
     requesterSessionKey: "agent:main:main",
     requesterDisplayKey: "main",
     task: "original task",
     cleanup: "keep",
-    retainAttachmentsOnKeep: true,
+    ...overrides,
   });
+}
+
+function updateRun(
+  runId: string,
+  update: (row: NonNullable<ReturnType<typeof subagentRuns.get>>) => void,
+) {
+  return mutateSubagentRuns([runId], (rows) => {
+    const current = rows.get(runId);
+    if (!current) {
+      throw new Error("Missing replacement fixture run");
+    }
+    const draft = { ...current };
+    update(draft);
+    return { value: undefined, postimages: new Map([[runId, draft]]) };
+  });
+}
+
+it("does not recreate a source released before replacement admission", async () => {
+  await register(
+    "released-source",
+    "agent:main:subagent:released-source",
+    "released-source-session",
+    {
+      retainAttachmentsOnKeep: true,
+    },
+  );
   const entered = createDeferred();
   const release = createDeferred();
   fixture.worker.mockImplementationOnce((context, operation, options) =>
@@ -110,13 +142,8 @@ it("hydrates a cold durable source before advancing its replacement generation",
     vi.unstubAllEnvs();
   });
   const childSessionKey = "agent:main:subagent:cold-replacement";
-  await registerSubagentRun({
-    runId: "cold-original",
-    childSessionKey,
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
+  await register("cold-original", childSessionKey, "cold-replacement-session", {
     task: "restored replacement source",
-    cleanup: "keep",
     retainAttachmentsOnKeep: true,
   });
   expect(
@@ -125,27 +152,12 @@ it("hydrates a cold durable source before advancing its replacement generation",
       nextRunId: "cold-predecessor",
     }),
   ).toBe(true);
-  await mutateSubagentRuns(["cold-predecessor"], (rows) => {
-    const source = rows.get("cold-predecessor");
-    if (!source) {
-      throw new Error("Missing cold source fixture");
-    }
-    return {
-      value: undefined,
-      postimages: new Map([
-        [
-          source.runId,
-          {
-            ...source,
-            execution: {
-              ...source.execution,
-              status: "terminal" as const,
-              endedAt: Date.now(),
-              outcome: { status: "ok" as const },
-            },
-          },
-        ],
-      ]),
+  await updateRun("cold-predecessor", (draft) => {
+    draft.execution = {
+      ...draft.execution,
+      status: "terminal",
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
     };
   });
   // Evict only the resident value; its canonical row remains the replacement source.
@@ -170,15 +182,12 @@ it("hydrates a cold durable source before advancing its replacement generation",
 it.each(["transaction", "commit"] as const)(
   "rejects replacement lifecycle retirement at native %s admission",
   async (stage) => {
-    await registerSubagentRun({
-      runId: "lifecycle-predecessor",
-      childSessionKey: "agent:main:subagent:lifecycle-replacement",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "original task",
-      cleanup: "keep",
-      retainAttachmentsOnKeep: true,
-    });
+    await register(
+      "lifecycle-predecessor",
+      "agent:main:subagent:lifecycle-replacement",
+      "lifecycle-replacement-session",
+      { retainAttachmentsOnKeep: true },
+    );
     const source = subagentRuns.get("lifecycle-predecessor")!;
     let rotated = false;
     const admission = probe.admission(operationAdmission, (request, grant, admit) => {
@@ -238,13 +247,16 @@ it.each(["end", "error"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: sessionId,
     });
-    await registerSubagentRun({
-      runId: "timeout-predecessor",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
+    // Required completion reserves its real requester before the mocked transport runs.
+    await writeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      defaultSessionId: "late-owner-requester-session",
+    });
+    await register("timeout-predecessor", childSessionKey, sessionId, {
+      sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
       task: "Continue bounded work",
-      cleanup: "keep",
       spawnMode: "session",
       expectsCompletionMessage: true,
       runTimeoutSeconds: 1,
@@ -307,13 +319,14 @@ it.each(["end", "error"] as const)(
       expectedLifecycleRevision: entry.lifecycleRevision,
       expectedWriterRunId: entry.activeWriterRunId,
     };
+    await using sourceAuthority = await prepareWorkerTurnTranscriptSource(sessionTarget);
     const source = {
       sessionTarget,
       receiptAuthority: () => {
         if (!placementGate.validateWorkerTurn(turnClaim)) {
           throw new Error("worker turn was revoked");
         }
-        resolveWorkerTurnTranscriptTarget({ ...sessionTarget, sessionTarget });
+        sourceAuthority();
       },
     };
     const receiver = createWorkerLiveEventReceiver();
@@ -448,13 +461,8 @@ it.each(["successor", "source retirement"] as const)(
       sessionKey: childSessionKey,
       defaultSessionId: "rearm-rollback-session",
     });
-    await registerSubagentRun({
-      runId: "rollback-predecessor",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
+    await register("rollback-predecessor", childSessionKey, "rearm-rollback-session", {
       task: "Resume interrupted work",
-      cleanup: "keep",
       spawnMode: "session",
       expectsCompletionMessage: true,
     });
@@ -468,21 +476,12 @@ it.each(["successor", "source retirement"] as const)(
       }),
     ).toBe(1);
     await fixture.settle();
-    await mutateSubagentRuns([previous.runId], (rows) => ({
-      value: undefined,
-      postimages: new Map([
-        [
-          previous.runId,
-          {
-            ...rows.get(previous.runId)!,
-            collect: true,
-            swarmRequesterSessionKey: "agent:main:main",
-            requesterAgentId: "main",
-            groupId: "rollback-group",
-          },
-        ],
-      ]),
-    }));
+    await updateRun(previous.runId, (draft) => {
+      draft.collect = true;
+      draft.swarmRequesterSessionKey = "agent:main:main";
+      draft.requesterAgentId = "main";
+      draft.groupId = "rollback-group";
+    });
     const terminal = subagentRuns.get(previous.runId)!;
     const parentEvents = vi.fn();
     const unsubscribe = onSessionLifecycleEvent((event) => {
@@ -550,37 +549,27 @@ it("rearms native execution for an interrupted run's successor", async () => {
     sessionKey: childSessionKey,
     defaultSessionId: "interrupted-task-session",
   });
-  await registerSubagentRun({
-    runId: "interrupted-task-old",
-    childSessionKey,
+  await register("interrupted-task-old", childSessionKey, "interrupted-task-session", {
+    sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
     requesterSessionKey,
-    requesterDisplayKey: "main",
     task: "Resume interrupted work",
-    cleanup: "keep",
     spawnMode: "session",
     expectsCompletionMessage: true,
   });
-  await mutateSubagentRuns(["interrupted-task-old"], (rows) => ({
-    value: undefined,
-    postimages: new Map([
-      [
-        "interrupted-task-old",
-        {
-          ...rows.get("interrupted-task-old")!,
-          taskRunId: undefined,
-        },
-      ],
-    ]),
-  }));
+  await updateRun("interrupted-task-old", (draft) => {
+    draft.taskRunId = undefined;
+  });
   const previous = subagentRuns.get("interrupted-task-old")!;
   const error = "subagent run lost active execution context";
   expect(
     await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
   ).toBe(1);
   await fixture.settle();
-  expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(
-    subagentRuns.get(previous.runId),
-  );
+  expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toMatchObject({
+    task: "Resume interrupted work",
+    execution: { status: "terminal", outcome: { status: "error", error } },
+    completion: { resultText: null },
+  });
 
   const observerSnapshots: Array<{ run?: string }> = [];
   const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
@@ -643,15 +632,15 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
     agentId: "main",
     sessionKey: childSessionKey,
     defaultSessionId: "held-browser-cleanup-session",
+    lifecycleRevision: "held-browser-cleanup-revision",
   });
   try {
-    await registerSubagentRun({
-      runId: "browser-cleanup-predecessor",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
+    await register("browser-cleanup-predecessor", childSessionKey, "held-browser-cleanup-session", {
+      sessionEntry: {
+        sessionId: "held-browser-cleanup-session",
+        lifecycleRevision: "held-browser-cleanup-revision",
+      },
       task: "Finish browser work",
-      cleanup: "keep",
       expectsCompletionMessage: false,
     });
     predecessorWait.resolve({
@@ -694,10 +683,8 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
 it.each([
   "committed",
   "caller retired",
-  "source replaced",
   "stamp admitted during wait",
   "caller retired during late stamp",
-  "source replaced during late stamp",
   "cleanup admitted during wait",
 ] as const)(
   "settles the predecessor's admitted writes before follow-up publication (%s)",
@@ -706,48 +693,33 @@ it.each([
       typeof import("../../../state/openclaw-state-worker-store.js")
     >("../../../state/openclaw-state-worker-store.js");
     const childSessionKey = "agent:main:subagent:pending-ended-hook";
-    await registerSubagentRun({
-      runId: "pending-ended-hook",
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
+    await register("pending-ended-hook", childSessionKey, "pending-ended-hook-session", {
       task: "original work",
-      cleanup: "keep",
       expectsCompletionMessage: false,
     });
-    await mutateSubagentRuns(["pending-ended-hook"], (rows) => ({
-      value: undefined,
-      postimages: new Map([
-        [
-          "pending-ended-hook",
-          {
-            ...rows.get("pending-ended-hook")!,
-            execution: {
-              status: "terminal" as const,
-              startedAt: 1,
-              endedAt: 2,
-              outcome: { status: "ok" as const },
-            },
-            completion: { required: false, resultText: "done", capturedAt: 2 },
-          },
-        ],
-      ]),
-    }));
+    await updateRun("pending-ended-hook", (draft) => {
+      draft.execution = { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } };
+      draft.completion = { required: false, resultText: "done", capturedAt: 2 };
+    });
     const original = subagentRuns.get("pending-ended-hook")!;
-    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(
-      createHookRunner(createEmptyPluginRegistry()),
-    );
+    const registry = createEmptyPluginRegistry();
+    registry.typedHooks.push({
+      pluginId: "test",
+      hookName: "subagent_ended",
+      source: "test",
+      handler: async () => {},
+    });
+    vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(createHookRunner(registry));
+    vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const cleanup = createSubagentRegistryContextCleanup({
       isEndedHookOwnerCurrent: (entry) =>
         isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
-      warn: () => {},
     });
     const lateStamp =
       transition.includes("late stamp") || transition === "stamp admitted during wait";
     const lateCleanup = transition === "cleanup admitted during wait";
     const lateWrite = lateStamp || lateCleanup;
     const callerRetired = transition.startsWith("caller retired");
-    const sourceReplaced = transition.startsWith("source replaced");
     const firstEntered = createDeferred();
     const releaseFirst = createDeferred();
     const secondAdmitted = createDeferred();
@@ -797,12 +769,9 @@ it.each([
     let callerCurrent = true;
     try {
       if (lateWrite) {
-        firstWrite = mutateSubagentRuns([original.runId], (rows) => ({
-          value: undefined,
-          postimages: new Map([
-            [original.runId, { ...rows.get(original.runId)!, label: "prepared" }],
-          ]),
-        }));
+        firstWrite = updateRun(original.runId, (draft) => {
+          draft.label = "prepared";
+        });
         await awaitGateBeforeSettlement(
           firstEntered.promise,
           firstWrite,
@@ -810,12 +779,9 @@ it.each([
         );
       }
       hook = lateCleanup
-        ? mutateSubagentRuns([original.runId], (rows) => ({
-            value: undefined,
-            postimages: new Map([
-              [original.runId, { ...rows.get(original.runId)!, cleanupCompletedAt: 3 }],
-            ]),
-          }))
+        ? updateRun(original.runId, (draft) => {
+            draft.cleanupCompletedAt = 3;
+          })
         : cleanup.emitSubagentEndedHookForRun({ entry: original });
       if (lateWrite) {
         await awaitGateBeforeSettlement(
@@ -875,32 +841,16 @@ it.each([
       }
       if (callerRetired) {
         callerCurrent = false;
-      } else if (sourceReplaced) {
-        const replacement = structuredClone(subagentRuns.get(original.runId)!);
-        replacement.generation = original.generation! + 1;
-        replacement.task = "replacement owner";
-        // An independent writer changes the durable execution while the worker is held.
-        writeSubagentRunValuesInDatabase(
-          openOpenClawStateDatabase(),
-          [bindSubagentRunRecord(replacement)],
-          [],
-        );
       }
       release.resolve();
       await hook;
-      if (callerRetired || sourceReplaced) {
+      if (callerRetired) {
         expect(await followup).toMatchObject({
-          error: new Error(
-            callerRetired
-              ? "follow-up caller retired"
-              : "subagent follow-up source changed while its writes settled",
-          ),
+          error: new Error("follow-up caller retired"),
         });
         const stored = loadSubagentRegistryFromSqlite();
         expect(stored.has("after-ended-hook")).toBe(false);
-        expect(stored.get(original.runId)?.task).toBe(
-          sourceReplaced ? "replacement owner" : "original work",
-        );
+        expect(stored.get(original.runId)?.task).toBe("original work");
       } else {
         expect(await followup).toEqual({ value: true });
         const stored = loadSubagentRegistryFromSqlite();

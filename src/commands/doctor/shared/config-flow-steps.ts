@@ -1,6 +1,6 @@
-// Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { note } from "../../../../packages/terminal-core/src/note.js";
 import {
   getDeferredPluginMigrationConfigFacts,
   setDeferredPluginMigrationConfigFacts,
@@ -12,10 +12,14 @@ import { formatConfigIssueLines } from "../../../config/issue-format.js";
 import { createMergePatch } from "../../../config/merge-patch.js";
 import { cloneConfigWithResolutionFacts } from "../../../config/resolution-facts.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolvePluginDoctorProviderRenames } from "../../../plugins/doctor-contract-registry.js";
 import { migratePluginConfigId } from "../../../plugins/update-config.js";
 import { protectActiveAuthProfileConfig } from "../../doctor-auth-profile-config.js";
 import { stripUnknownConfigKeys } from "../../doctor-config-analysis.js";
-import type { DoctorConfigMutationState } from "./config-mutation-state.js";
+import {
+  applyDoctorConfigMutation,
+  type DoctorConfigMutationState,
+} from "./config-mutation-state.js";
 import {
   classifyOtelGrpcMigrationOwnership,
   containsAuthoredInclude,
@@ -23,8 +27,8 @@ import {
 import type { InstalledPluginIdRecovery } from "./installed-plugin-id-recovery.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
+import { applyProviderRenames, planProviderRenames } from "./provider-rename.js";
 
-/** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
   snapshot: ConfigFileSnapshot;
   state: DoctorConfigMutationState;
@@ -114,17 +118,18 @@ export function applyLegacyCompatibilityStep(params: {
 }
 
 /** Strip unknown config keys while preserving active auth profile settings. */
-export function applyUnknownConfigKeyStep(params: {
+function applyUnknownConfigKeyStep(params: {
   state: DoctorConfigMutationState;
   shouldRepair: boolean;
   doctorFixCommand: string;
+  preservedPaths?: readonly (readonly string[])[];
 }): {
   state: DoctorConfigMutationState;
   removed: string[];
   repairs: string[];
   warnings: string[];
 } {
-  const unknown = stripUnknownConfigKeys(params.state.candidate);
+  const unknown = stripUnknownConfigKeys(params.state.candidate, params.preservedPaths);
   if (unknown.removed.length === 0) {
     return { state: params.state, removed: [], repairs: [], warnings: [] };
   }
@@ -134,18 +139,71 @@ export function applyUnknownConfigKeyStep(params: {
   });
 
   return {
-    state: {
-      cfg: params.shouldRepair ? protectedAuth.config : params.state.cfg,
-      candidate: protectedAuth.config,
-      pendingChanges: true,
-      fixHints: params.shouldRepair
-        ? params.state.fixHints
-        : [...params.state.fixHints, `Run "${params.doctorFixCommand}" to remove these keys.`],
-    },
+    state: applyDoctorConfigMutation({
+      state: params.state,
+      mutation: { config: protectedAuth.config, changes: unknown.removed },
+      shouldRepair: params.shouldRepair,
+      fixHint: `Run "${params.doctorFixCommand}" to remove these keys.`,
+    }),
     removed: unknown.removed,
     repairs: protectedAuth.repairs,
     warnings: protectedAuth.warnings,
   };
+}
+
+/** Retire heartbeat data before removing unknown configuration keys. */
+export async function applyRetiredConfigStep(params: {
+  state: DoctorConfigMutationState;
+  shouldRepair: boolean;
+  doctorFixCommand: string;
+  sourceConfig: OpenClawConfig;
+  emitChanges: (changeLines: readonly string[]) => void;
+}): Promise<DoctorConfigMutationState> {
+  let state = params.state;
+  if (params.shouldRepair) {
+    const { tryProjectRetiredHeartbeatConfig } = await import("../../doctor-heartbeat-legacy.js");
+    const { retireHeartbeatWithDoctor } = await import("../../doctor-heartbeat-retirement.js");
+    const retiredConfig = tryProjectRetiredHeartbeatConfig(state.candidate)
+      ? await retireHeartbeatWithDoctor(state.candidate)
+      : undefined;
+    if (retiredConfig && JSON.stringify(retiredConfig) !== JSON.stringify(state.candidate)) {
+      const mutation = {
+        config: retiredConfig,
+        changes: ["Retired heartbeat configuration after ordinary automation data was verified."],
+      };
+      params.emitChanges(mutation.changes);
+      state = applyDoctorConfigMutation({
+        state,
+        mutation,
+        shouldRepair: params.shouldRepair,
+        fixHint: `Run "${params.doctorFixCommand}" to finish the heartbeat migration.`,
+      });
+    }
+  }
+
+  const unknownStep = applyUnknownConfigKeyStep({
+    state,
+    shouldRepair: params.shouldRepair,
+    doctorFixCommand: params.doctorFixCommand,
+    preservedPaths: getDeferredPluginMigrationConfigFacts(params.sourceConfig)?.flatMap((pending) =>
+      (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
+    ),
+  });
+  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
+    const lines = [
+      ...unknownStep.removed.map((pathLocal) => `- ${pathLocal}`),
+      ...unknownStep.repairs.map((change) => `- ${change}`),
+    ];
+    if (params.shouldRepair) {
+      params.emitChanges(lines);
+    } else {
+      note(lines.join("\n"), "Unknown config keys");
+    }
+  }
+  if (unknownStep.warnings.length > 0) {
+    note(unknownStep.warnings.join("\n"), "Doctor warnings");
+  }
+  return unknownStep.state;
 }
 
 export type DoctorConfigReferenceSource = {
@@ -238,8 +296,8 @@ export function restoreDoctorConfigEnvRefs(
       rootAuthoredConfig,
       sourceConfigBeforeMigrations: source.resolved,
     });
-  const canonicalAuthored = projectRoster(source.authored);
-  const canonicalResolved = projectRoster(source.resolved);
+  const canonicalAuthored = coerceConfig(projectRoster(source.authored));
+  const canonicalResolved = coerceConfig(projectRoster(source.resolved));
   const unchanged = restoreEnvVarRefsFromResolved(
     candidate,
     canonicalAuthored,
@@ -250,10 +308,17 @@ export function restoreDoctorConfigEnvRefs(
     sourceConfigBeforeMigrations: source.resolved,
     context: { authoredRaw: source.parsed, resolvedRaw: source.resolved },
   };
-  const migratedAuthored = applyLegacyDoctorMigrations(canonicalAuthored, options);
-  const migratedResolved = applyLegacyDoctorMigrations(canonicalResolved, options);
-  const authoredView = migratedAuthored.next ?? canonicalAuthored;
-  const resolvedView = migratedResolved.next ?? canonicalResolved;
+  // Replay the resolved routing decision on authored templates before plugin cleanup.
+  const providerRenames = planProviderRenames(
+    canonicalResolved,
+    resolvePluginDoctorProviderRenames({ config: canonicalResolved }),
+  );
+  const authoredProviderConfig = applyProviderRenames(canonicalAuthored, providerRenames).config;
+  const migratedAuthored = applyLegacyDoctorMigrations(authoredProviderConfig, options);
+  const resolvedProviderConfig = applyProviderRenames(canonicalResolved, providerRenames).config;
+  const migratedResolved = applyLegacyDoctorMigrations(resolvedProviderConfig, options);
+  const authoredView = migratedAuthored.next ?? authoredProviderConfig;
+  const resolvedView = migratedResolved.next ?? resolvedProviderConfig;
   if (!isRecord(authoredView) || !isRecord(resolvedView)) {
     throw new Error("Doctor reference migrations must preserve config object roots.");
   }

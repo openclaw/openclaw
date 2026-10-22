@@ -1,13 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  cancelExecRequestOwners,
-  captureExecRequestOwners,
-  withExecRequestTurn,
-} from "../infra/exec-request-context.js";
+import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { captureExecRequestCancellation } from "./bash-process-control.js";
+import { readBackgroundProcesses } from "./bash-process-observation.js";
+import type { ProcessSession } from "./bash-process-registry.js";
 import {
   acknowledgeNotifyOnExit,
   deleteSession,
@@ -17,6 +15,7 @@ import {
   waitForExecScope,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { runExecFixture } from "./bash-tools.exec-fixture.test-support.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 import { createRunExit, runtimeManagedRun } from "./bash-tools.exec-runtime.test-support.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
@@ -25,6 +24,10 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+// mock-isolation: Process lifecycle tests use synthetic destinations; durable notification behavior has its own owner suite.
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  patchSessionEntryCore: async () => null,
+}));
 const enqueueSessionEventMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventWithReceiptMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
@@ -53,71 +56,87 @@ beforeEach(() => {
   enqueueSystemEventWithReceiptMock.mockReturnValue(vi.fn(() => true));
   supervisorMock.spawn.mockReset();
 });
-afterEach(() => {
-  resetProcessRegistryForTests();
-});
+afterEach(resetProcessRegistryForTests);
+
+function completedReceipt(cancel = vi.fn(() => true)) {
+  return {
+    id: "exec-event",
+    cancel,
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+  };
+}
 
 function runTestExecProcess(params: Partial<Parameters<typeof runExecProcess>[0]>) {
-  return runExecProcess({
-    command: "sandbox-fixture",
-    workdir: "/tmp",
-    env: {},
-    usePty: false,
-    warnings: [],
-    maxOutput: 1000,
-    pendingMaxOutput: 1000,
-    notifyOnExit: false,
-    timeoutSec: null,
-    ...params,
+  return runExecFixture({ command: "sandbox-fixture", ...params });
+}
+
+function queueRun(
+  wait: (() => Promise<RunExit>) | undefined,
+  output = "",
+  overrides: Partial<ManagedRun> = {},
+) {
+  supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
+    ...runtimeManagedRun(input, output),
+    ...(wait ? { wait } : {}),
+    ...overrides,
+  }));
+}
+
+function createExecOperatorSource(profileId = "exec-guest") {
+  const controller = new AbortController();
+  const release = vi.fn();
+  const retain = vi.fn(() => release);
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId,
+    scopes: ["operator.write"],
+    signal: controller.signal,
+    assertCurrent: () => controller.signal.throwIfAborted(),
+    retain,
   });
+  return { controller, authority, retain, release };
+}
+
+const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
+const notificationRouting = {
+  agentId: "main",
+  eventRouting: { mainKey: "main", sessionScope: "per-sender" },
+  notifyDeliveryContext: deliveryContext,
+  notifyOnExit: true,
+  notifyOnExitEmptySuccess: false,
+} satisfies Partial<Parameters<typeof runExecProcess>[0]>;
+
+function expectRoutingReleased(session: ProcessSession | undefined) {
+  for (const field of [
+    "sessionKey",
+    "eventRouting",
+    "notifyDeliveryContext",
+    "notifySessionTarget",
+    "notifyOnExit",
+    "notifyOnExitEmptySuccess",
+  ] as const) {
+    expect(session?.[field], field).toBeUndefined();
+  }
 }
 
 it.each([
-  {
-    reason: "manual-cancel" as const,
-    cleanupFails: false,
-    duringFinalize: false,
-    requestStop: "none" as const,
-  },
-  {
-    reason: "overall-timeout" as const,
-    cleanupFails: true,
-    duringFinalize: false,
-    requestStop: "none" as const,
-  },
-  {
-    reason: "manual-cancel" as const,
-    cleanupFails: false,
-    duringFinalize: true,
-    requestStop: "none" as const,
-  },
-  {
-    reason: "manual-cancel" as const,
-    cleanupFails: false,
-    duringFinalize: true,
-    requestStop: "capture" as const,
-  },
-  {
-    reason: "manual-cancel" as const,
-    cleanupFails: true,
-    duringFinalize: true,
-    requestStop: "capture" as const,
-  },
-  {
-    reason: "manual-cancel" as const,
-    cleanupFails: true,
-    duringFinalize: true,
-    requestStop: "direct" as const,
-  },
-])(
-  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize, requestStop=$requestStop, cleanupFails=$cleanupFails)",
-  async ({ reason, cleanupFails, duringFinalize, requestStop }) => {
+  ["manual-cancel", false, false, "none"],
+  ["overall-timeout", true, false, "none"],
+  ["manual-cancel", false, true, "none"],
+  ["manual-cancel", false, true, "capture"],
+  ["manual-cancel", true, true, "capture"],
+] as const)(
+  "starts and joins targeted sandbox cleanup for %s (cleanupFails=%s, duringFinalize=%s, requestStop=%s)",
+  async (reason, cleanupFails, duringFinalize, requestStop) => {
     const termination = createDeferred();
     const artifactFinalization = createDeferred();
     const artifactsEntered = createDeferred();
     const guestExit = createDeferred<ReturnType<typeof createRunExit>>();
     const otherExit = createDeferred<ReturnType<typeof createRunExit>>();
-    const releaseSource = vi.fn();
+    const {
+      controller: originalSource,
+      release: releaseSource,
+      authority,
+    } = createExecOperatorSource("guest");
     const cleanupError = new Error("targeted process cleanup failed");
     const makeSandbox = (marker: string) => {
       const terminate = vi.fn(async () => {
@@ -170,7 +189,6 @@ it.each([
         cancel: cancelOther,
         wait: () => otherExit.promise,
       }));
-    const originalSource = new AbortController();
     const requestIdentity = {
       runId: "sandbox-request-stop",
       sessionKey: "agent:main:targeted-cleanup",
@@ -185,13 +203,6 @@ it.each([
             return { owner, cancellation: captureExecRequestCancellation(requestIdentity) };
           })
         : undefined;
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "guest",
-      scopes: ["operator.write"],
-      signal: originalSource.signal,
-      assertCurrent: () => originalSource.signal.throwIfAborted(),
-      retain: () => releaseSource,
-    });
     const guest = await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:targeted-cleanup", operatorAuthority: authority },
       () =>
@@ -214,11 +225,7 @@ it.each([
         guestExit.resolve(createRunExit());
         await artifactsEntered.promise;
         if (request) {
-          if (requestStop === "capture") {
-            expect(request.cancellation.cancel()).toBe(true);
-          } else {
-            cancelExecRequestOwners([request.owner]);
-          }
+          expect(request.cancellation.cancel()).toBe(true);
           expect(originalSource.signal.aborted).toBe(false);
           expect(guest.session.requestCancelled).toBe(true);
         } else {
@@ -304,21 +311,14 @@ it.each([
     const entered = createDeferred();
     const cleanupScope = createAgentCleanupScope();
     const scopeKey = "scope:sandbox-artifact-cleanup";
-    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput): Promise<ManagedRun> => ({
-      activity: { resultSettled: true, lastOutputAtMs: Date.now() },
-      runId: input.runId ?? "test-run",
-      pid: 1234,
-      startedAtMs: Date.now(),
-      stdin: { write: vi.fn(), end: vi.fn(), destroy: vi.fn() },
-      cancel: vi.fn(),
-      wait: async () => createRunExit({ exitCode: commandCode }),
-    }));
+    const cleanupFailure = "sandbox artifact cleanup failed";
+    queueRun(async () => createRunExit({ exitCode: commandCode }));
     let run: Awaited<ReturnType<typeof runExecProcess>> | undefined;
     const finalizeExec = vi.fn(async () => {
       entered.resolve();
       await finalization.promise;
       if (fails) {
-        throw new Error("sandbox artifact cleanup failed");
+        throw new Error(cleanupFailure);
       }
     });
     try {
@@ -356,6 +356,10 @@ it.each([
         await join;
         const outcome = await run.promise;
         expect(outcome.status).toBe(fails || commandCode !== 0 ? "failed" : "completed");
+        if (fails) {
+          expect(outcome.aggregated).toContain(cleanupFailure);
+          expect(run.session.aggregated).toContain(cleanupFailure);
+        }
         expect(finalizeExec).toHaveBeenCalledOnce();
       });
       expect(cleanupScope.outcome).toBe(fails ? "uncertain" : "closed");
@@ -366,223 +370,262 @@ it.each([
   },
 );
 
-describe("terminal execution-context release", () => {
-  it.each([
-    { path: "notify", trace: ["task", "enqueue"] },
-    { path: "quiet", trace: ["task"] },
-    { path: "unrouted", trace: ["task"] },
-    { path: "observed", trace: ["task"] },
-  ])(
-    "releases routing after $path without changing notification order",
-    async ({ path, trace }) => {
-      const exit = createDeferred<RunExit>();
-      const observed: string[] = [];
-      const removal = vi.fn(() => true);
-      const deliveryContext = { channel: "telegram", to: "synthetic-chat" };
-      enqueueSessionEventMock.mockImplementation((_text, options) => {
-        observed.push("enqueue");
-        expect(options.deliveryContext).toEqual(deliveryContext);
-        return {
-          id: "exec-event",
-          cancel: removal,
-          settled: Promise.resolve({
-            status: "completed",
-            executionStarted: true,
-            delivered: false,
-          }),
-        };
-      });
-      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-        ...runtimeManagedRun(input, path === "quiet" ? "" : "retained output\n"),
-        wait: () => exit.promise,
-      }));
-      const run = await runTestExecProcess({
-        command: "context-release",
-        scopeKey: "process-scope",
-        sessionKey: path === "unrouted" ? undefined : "agent:main:main",
-        agentId: "main",
-        eventRouting: { mainKey: "main", sessionScope: "per-sender" },
-        notifyDeliveryContext: deliveryContext,
-        notifyOnExit: true,
-        notifyOnExitEmptySuccess: false,
-        onSettledBeforeNotify: () => {
-          observed.push("task");
-        },
-      });
-      markBackgrounded(run.session);
-      if (path === "observed") {
-        acknowledgeNotifyOnExit(run.session);
-      }
-      exit.resolve(createRunExit());
-      const outcome = await run.promise;
-      expect(observed).toEqual(trace);
-      expect(outcome.status).toBe("completed");
-      const retained = getFinishedSession(run.session.id);
-      expect(retained).toMatchObject({ scopeKey: "process-scope", terminalStatus: "completed" });
-      for (const field of [
-        "sessionKey",
-        "agentId",
-        "eventRouting",
-        "notifyDeliveryContext",
-        "notifySessionTarget",
-        "notifyOnExit",
-        "notifyOnExitEmptySuccess",
-        "stdin",
-      ] as const) {
-        expect(retained?.[field], field).toBeUndefined();
-      }
-      expect(retained?.notifyOnExitRemoval).toBe(trace.includes("enqueue") ? removal : undefined);
-      expect(removal).not.toHaveBeenCalled();
-    },
-  );
+it.each([
+  { path: "notify", trace: ["task", "enqueue"] },
+  { path: "quiet", trace: ["task"] },
+  { path: "unrouted", trace: ["task"] },
+  { path: "observed", trace: ["task"] },
+])("releases routing after $path without changing notification order", async ({ path, trace }) => {
+  const exit = createDeferred<RunExit>();
+  const observed: string[] = [];
+  const removal = vi.fn(() => true);
+  enqueueSessionEventMock.mockImplementation((_text, options) => {
+    observed.push("enqueue");
+    expect(options.deliveryContext).toEqual(deliveryContext);
+    return completedReceipt(removal);
+  });
+  queueRun(() => exit.promise, path === "quiet" ? "" : "retained output\n");
+  const run = await runTestExecProcess({
+    ...notificationRouting,
+    command: "context-release",
+    scopeKey: "global",
+    sessionKey: path === "unrouted" ? undefined : "agent:main:main",
+    onSettledBeforeNotify: () => void observed.push("task"),
+  });
+  markBackgrounded(run.session);
+  const scope = { scopeKeys: ["global"], agentId: "main" };
+  const running = readBackgroundProcesses(scope).processes[0];
+  expect(running).toMatchObject({ processId: run.session.id, status: "running" });
+  if (path === "observed") {
+    acknowledgeNotifyOnExit(run.session);
+  }
+  exit.resolve(createRunExit());
+  const outcome = await run.promise;
+  expect(observed).toEqual(trace);
+  expect(outcome.status).toBe("completed");
+  const retained = getFinishedSession(run.session.id);
+  expect(retained).toMatchObject({ scopeKey: "global", terminalStatus: "completed" });
+  expect(readBackgroundProcesses(scope).processes).toEqual([
+    expect.objectContaining({
+      processId: run.session.id,
+      instanceId: running?.instanceId,
+      status: "completed",
+      canStop: false,
+    }),
+  ]);
+  expect(readBackgroundProcesses({ ...scope, agentId: "other" }).processes).toEqual([]);
+  expectRoutingReleased(retained);
+  expect(retained?.stdin).toBeUndefined();
+  expect(retained?.notifyOnExitRemoval).toBe(trace.includes("enqueue") ? removal : undefined);
+  expect(removal).not.toHaveBeenCalled();
 });
-
-describe("exec settlement recovery", () => {
-  it.each([
-    { boundary: "task", asynchronous: true },
-    { boundary: "persistent task", asynchronous: true },
-    { boundary: "stdin", asynchronous: true },
-  ])(
-    "settles $boundary failure with asynchronous=$asynchronous before releasing the exec scope",
-    async ({ boundary, asynchronous }) => {
-      const exit = createDeferred<RunExit>();
-      const settlementStarted = createDeferred();
-      const settlement = createDeferred();
-      const correctionStarted = createDeferred();
-      const correction = createDeferred();
-      const observed: string[] = [];
-      const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
-      const scopeKey = `settlement-recovery:${boundary}:${asynchronous}`;
-      const failure = new Error("process settlement failed");
-      enqueueSessionEventMock.mockImplementation(() => {
-        observed.push("enqueue");
-        if (boundary === "enqueue") {
-          throw failure;
-        }
-        return {
-          id: "exec-event",
-          cancel: vi.fn(() => true),
-          settled: Promise.resolve({
-            status: "completed",
-            executionStarted: true,
-            delivered: false,
-          }),
-        };
-      });
-      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => ({
-        ...runtimeManagedRun(input, "process output\n"),
-        wait: () => exit.promise,
-      }));
-      const run = await withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
-        () =>
-          runTestExecProcess({
-            command: "settlement-recovery",
-            scopeKey,
-            sessionKey: "agent:main:settlement-recovery",
-            agentId: "main",
-            eventRouting: { mainKey: "main", sessionScope: "per-sender" },
-            notifyDeliveryContext: { channel: "telegram", to: "synthetic-chat" },
-            notifyOnExit: true,
-            notifyOnExitEmptySuccess: false,
-            onSettledBeforeNotify: (outcome) => {
-              observed.push(`task:${outcome.status}`);
-              identities.push(getGatewayToolCallerIdentity());
-              if (!asynchronous) {
-                if (
-                  boundary === "persistent task" ||
-                  (boundary === "task" && observed.length === 1)
-                ) {
-                  throw failure;
-                }
-                return undefined;
-              }
-              if (outcome.status === "failed") {
-                correctionStarted.resolve();
-                return correction.promise.then(() => {
-                  if (boundary === "persistent task") {
-                    throw failure;
-                  }
-                });
-              }
-              settlementStarted.resolve();
-              const pending = settlement.promise.then(() => {
-                if (boundary === "task" || boundary === "persistent task") {
+it.each(["task", "persistent task", "stdin"])(
+  "settles asynchronous %s failure before releasing the exec scope",
+  async (boundary) => {
+    const exit = createDeferred<RunExit>();
+    const settlementStarted = createDeferred();
+    const settlement = createDeferred();
+    const correctionStarted = createDeferred();
+    const correction = createDeferred();
+    const observed: string[] = [];
+    const identities: Array<ReturnType<typeof getGatewayToolCallerIdentity>> = [];
+    const scopeKey = `settlement-recovery:${boundary}:true`;
+    const failure = new Error("process settlement failed");
+    enqueueSessionEventMock.mockImplementation(() => {
+      observed.push("enqueue");
+      return completedReceipt();
+    });
+    queueRun(() => exit.promise, "process output\n");
+    const run = await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey: "agent:main:settlement-recovery" },
+      () =>
+        runTestExecProcess({
+          ...notificationRouting,
+          command: "settlement-recovery",
+          scopeKey,
+          sessionKey: "agent:main:settlement-recovery",
+          onSettledBeforeNotify: (outcome) => {
+            observed.push(`task:${outcome.status}`);
+            identities.push(getGatewayToolCallerIdentity());
+            if (outcome.status === "failed") {
+              correctionStarted.resolve();
+              return correction.promise.then(() => {
+                if (boundary === "persistent task") {
                   throw failure;
                 }
               });
-              void pending.catch(() => {});
-              return pending;
-            },
-          }),
-      );
-      if (boundary === "stdin") {
-        run.session.stdin = {
-          write: vi.fn(),
-          end: vi.fn(),
-          destroy() {
-            observed.push("stdin");
-            throw failure;
+            }
+            settlementStarted.resolve();
+            const pending = settlement.promise.then(() => {
+              if (boundary === "task" || boundary === "persistent task") {
+                throw failure;
+              }
+            });
+            void pending.catch(() => {});
+            return pending;
           },
-        };
+        }),
+    );
+    if (boundary === "stdin") {
+      run.session.stdin = {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy() {
+          observed.push("stdin");
+          throw failure;
+        },
+      };
+    }
+    markBackgrounded(run.session);
+    const joined = waitForExecScope(scopeKey).then(() => observed.push("scope-released"));
+    exit.resolve(createRunExit());
+    try {
+      await settlementStarted.promise;
+      expect(run.session).toMatchObject({ finalizing: true, exited: false });
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+      expect(observed).toEqual(["task:completed"]);
+      settlement.resolve();
+      await correctionStarted.promise;
+      expect(run.session.finalizing).toBe(true);
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+      expect(observed).not.toContain("scope-released");
+      correction.resolve();
+      if (boundary === "persistent task") {
+        await expect(run.promise).rejects.toBe(failure);
+      } else {
+        await expect(run.promise).resolves.toMatchObject({ status: "failed" });
       }
-      markBackgrounded(run.session);
-      const joined = waitForExecScope(scopeKey).then(() => observed.push("scope-released"));
-      exit.resolve(createRunExit());
-      try {
-        if (asynchronous) {
-          await settlementStarted.promise;
-          expect(run.session.finalizing).toBe(true);
-          expect(run.session.exited).toBe(false);
-          expect(getActiveBackgroundExecSessionCount()).toBe(1);
-          expect(observed).toEqual(["task:completed"]);
-          settlement.resolve();
-          await correctionStarted.promise;
-          expect(run.session.finalizing).toBe(true);
-          expect(getActiveBackgroundExecSessionCount()).toBe(1);
-          expect(observed).not.toContain("scope-released");
-          correction.resolve();
-        }
-        if (boundary === "persistent task") {
-          await expect(run.promise).rejects.toBe(failure);
-        } else {
-          await expect(run.promise).resolves.toMatchObject({
-            status: boundary === "enqueue" ? "completed" : "failed",
-          });
-        }
-        await joined;
-        expect(observed).toEqual([
-          "task:completed",
-          ...(boundary === "stdin" ? ["stdin"] : []),
-          ...(boundary === "enqueue" ? ["enqueue"] : ["task:failed"]),
-          "scope-released",
-        ]);
-        expect(identities).toEqual(boundary === "enqueue" ? [undefined] : [undefined, undefined]);
-        expect(getActiveBackgroundExecSessionCount()).toBe(0);
-        expect(run.session.finalizing).toBe(false);
-        expect(run.session.terminalStatus).toBe("completed");
-        if (boundary !== "stdin") {
-          expect(getFinishedSession(run.session.id)).toMatchObject({
-            terminalStatus: "completed",
-            aggregated: "process output\n",
-          });
-        }
-        for (const field of [
-          "sessionKey",
-          "agentId",
-          "eventRouting",
-          "notifyDeliveryContext",
-          "notifySessionTarget",
-          "notifyOnExit",
-          "notifyOnExitEmptySuccess",
-        ] as const) {
-          expect(run.session[field], field).toBeUndefined();
-        }
-      } finally {
-        settlement.resolve();
-        correction.resolve();
-        await Promise.allSettled([run.promise, joined]);
+      await joined;
+      expect(observed).toEqual([
+        "task:completed",
+        ...(boundary === "stdin" ? ["stdin"] : []),
+        "task:failed",
+        "scope-released",
+      ]);
+      expect(identities).toEqual([undefined, undefined]);
+      expect(getActiveBackgroundExecSessionCount()).toBe(0);
+      expect(run.session).toMatchObject({
+        finalizing: false,
+        terminalStatus: "completed",
+        agentId: "main",
+      });
+      if (boundary !== "stdin") {
+        expect(getFinishedSession(run.session.id)).toMatchObject({
+          terminalStatus: "completed",
+          aggregated: "process output\n",
+        });
       }
+      expectRoutingReleased(run.session);
+    } finally {
+      settlement.resolve();
+      correction.resolve();
+      await Promise.allSettled([run.promise, joined]);
+    }
+  },
+);
+
+describe("operator source lifetime", () => {
+  afterEach(() => {
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventWithReceiptMock).not.toHaveBeenCalled();
+  });
+  const caller = (source: ReturnType<typeof createExecOperatorSource>, sessionKey: string) => ({
+    agentId: "main",
+    sessionKey,
+    operatorAuthority: source.authority,
+  });
+
+  it("retains the original operator source through background cancellation and finalization", async () => {
+    const source = createExecOperatorSource();
+    const turn = new AbortController();
+    const guestExit = createDeferred<RunExit>();
+    const staffExit = createDeferred<RunExit>();
+    const cleanupStarted = createDeferred();
+    const cleanup = createDeferred();
+    const cancelGuest = vi.fn(() => {
+      guestExit.resolve(createRunExit({ reason: "manual-cancel", exitCode: null }));
+    });
+    const cancelStaff = vi.fn();
+    queueRun(undefined, "saved guest output\n", {
+      cancel: cancelGuest,
+      wait: () => guestExit.promise,
+      waitForExtinction: () => {
+        cleanupStarted.resolve();
+        return cleanup.promise;
+      },
+    });
+    queueRun(undefined, "independent output\n", {
+      cancel: cancelStaff,
+      wait: () => staffExit.promise,
+    });
+    const guest = await withGatewayToolCallerIdentity(
+      {
+        ...caller(source, "agent:main:retained-exec"),
+        receiptAuthority: () => !turn.signal.aborted,
+      },
+      () => runTestExecProcess({ command: "retained-source-command", startupSignal: turn.signal }),
+    );
+    const staff = await runTestExecProcess({ command: "retained-source-command" });
+    markBackgrounded(guest.session);
+    markBackgrounded(staff.session);
+    try {
+      turn.abort();
+      guest.disableUpdates();
+      expect(cancelGuest).not.toHaveBeenCalled();
+      expect(guest.session.exited).toBe(false);
+
+      source.controller.abort(new Error("original invitation revoked"));
+      expect(cancelGuest).toHaveBeenCalledWith("manual-cancel");
+      expect(cancelStaff).not.toHaveBeenCalled();
+      await cleanupStarted.promise;
+      expect(guest.session).toMatchObject({ finalizing: true, exited: false });
+      expect(source.release).not.toHaveBeenCalled();
+
+      expect(() => source.authority.assertCurrent()).toThrow("original invitation revoked");
+      expect(staff.session.exited).toBe(false);
+      cleanup.resolve();
+      await expect(guest.promise).resolves.toMatchObject({
+        status: "failed",
+        exitReason: "manual-cancel",
+        aggregated: expect.stringContaining("saved guest output"),
+      });
+      expect(source.retain).toHaveBeenCalledOnce();
+      expect(source.release).toHaveBeenCalledOnce();
+      staffExit.resolve(createRunExit());
+      await expect(staff.promise).resolves.toMatchObject({ status: "completed" });
+      expect(cancelStaff).not.toHaveBeenCalled();
+    } finally {
+      cleanup.resolve();
+      guestExit.resolve(createRunExit());
+      staffExit.resolve(createRunExit());
+      await Promise.all([guest.promise, staff.promise]);
+    }
+  });
+
+  it.each([false, true])(
+    "releases the original operator source after startup failure=%s",
+    async (fails) => {
+      const source = createExecOperatorSource();
+      const cancel = vi.fn();
+      if (fails) {
+        supervisorMock.spawn.mockRejectedValueOnce(new Error("process startup failed"));
+      } else {
+        queueRun(undefined, "", { cancel });
+      }
+      const pending = withGatewayToolCallerIdentity(
+        caller(source, "agent:main:source-release"),
+        () => runTestExecProcess({ command: "source-release-command" }),
+      );
+      if (fails) {
+        await expect(pending).rejects.toThrow("process startup failed");
+      } else {
+        const run = await pending;
+        await expect(run.promise).resolves.toMatchObject({ status: "completed" });
+      }
+      expect(source.retain).toHaveBeenCalledOnce();
+      expect(source.release).toHaveBeenCalledOnce();
+      source.controller.abort();
+      expect(cancel).not.toHaveBeenCalled();
     },
   );
 });

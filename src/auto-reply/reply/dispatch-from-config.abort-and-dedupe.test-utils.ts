@@ -42,7 +42,7 @@ import {
   messageAuditEvents,
   globalBeforeAll0,
   describe0BeforeEach0,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -588,7 +588,7 @@ describe("dispatchReplyFromConfig", () => {
         state: "idle",
         lastActivityAt: Date.now(),
       },
-    };
+    } satisfies NonNullable<ReturnType<typeof acpMocks.readAcpSessionEntry>>;
     acpMocks.readAcpSessionEntry.mockImplementation(() => currentAcpEntry);
     acpMocks.upsertAcpSessionMeta.mockImplementation(async (paramsUnknown: unknown) => {
       const params = paramsUnknown as {
@@ -966,14 +966,6 @@ describe("dispatchReplyFromConfig", () => {
       (_configuredPath?: unknown, options?: { agentId?: string }) =>
         options?.agentId === "opencode" ? targetStorePath : sourceStorePath,
     );
-    sessionStoreMocks.loadSessionStore.mockImplementation(
-      (storePath?: string) => (storePath ? stores[storePath] : undefined) ?? {},
-    );
-    sessionStoreMocks.resolveSessionStoreEntry.mockImplementation(
-      (params?: { store: Record<string, Record<string, unknown>>; sessionKey: string }) => ({
-        existing: params?.store[params.sessionKey],
-      }),
-    );
     sessionStoreMocks.loadSessionEntry.mockImplementation((paramsUnknown: unknown) => {
       const params = paramsUnknown as { sessionKey: string; storePath: string };
       return stores[params.storePath]?.[params.sessionKey];
@@ -989,8 +981,8 @@ describe("dispatchReplyFromConfig", () => {
               sessionKey: boundSessionKey,
               storeSessionKey: boundSessionKey,
               cfg: {},
-              storePath: "/tmp/mock-sessions.json",
-              entry: {},
+              storePath: targetStorePath,
+              entry: targetEntry,
               acp: {
                 backend: "acpx",
                 agent: "opencode",
@@ -1077,6 +1069,7 @@ describe("dispatchReplyFromConfig", () => {
       agentId: "main",
       demand: "interactive",
       onRuntimeLease: expect.any(Function),
+      abortSignal: expect.any(AbortSignal),
     });
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
       channel: "discord",

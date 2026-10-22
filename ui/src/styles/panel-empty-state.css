@@ -1,0 +1,124 @@
+openclaw-panel-empty-state {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+
+  .empty-state {
+    display: grid;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 0;
+    flex: 1 1 auto;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: center;
+    justify-items: center;
+    padding: 24px;
+    color: var(--muted);
+    text-align: center;
+    transform: translateY(-10px);
+  }
+
+  .empty-state__icon {
+    display: contents;
+  }
+
+  .empty-state::before,
+  .empty-state__icon > :not([slot="action"]) {
+    grid-area: 1 / 1;
+    width: 32px;
+    height: 32px;
+    margin-bottom: 18px;
+    color: var(--muted);
+
+    stroke-width: 1.5px;
+  }
+
+  .empty-state::before {
+    content: "";
+  }
+
+  .empty-state__title {
+    grid-area: 2 / 1;
+    color: var(--text);
+    font-size: calc(16px * var(--control-ui-text-scale, 1));
+    font-weight: 500;
+    line-height: 1.25;
+  }
+
+  .empty-state__description {
+    grid-area: 3 / 1;
+    max-width: 320px;
+    margin: 8px 0 0;
+    color: var(--muted);
+    font-size: calc(13px * var(--control-ui-text-scale, 1));
+    line-height: 1.45;
+  }
+
+  .empty-state > [slot="action"] {
+    grid-area: 4 / 1;
+    margin-top: 16px;
+  }
+}
+
+/* Session opt-ins only. The host owns available space and scrolling; the
+   desktop frame keeps Portal's proportional placement without moving content. */
+openclaw-panel-empty-state:has(> .empty-state[data-presentation]) {
+  flex-direction: column;
+  overflow: auto;
+}
+
+openclaw-panel-empty-state:has(> .empty-state[data-presentation="desktop"]) {
+  padding: 12px;
+}
+
+openclaw-panel-empty-state .empty-state[data-presentation="desktop"] {
+  min-height: 220px;
+  max-height: 100%;
+  flex: none;
+  aspect-ratio: 8 / 5;
+  align-content: safe center;
+  transform: none;
+
+  &::before,
+  .empty-state__icon > :not([slot="action"]) {
+    margin-bottom: var(--space-3);
+  }
+}
+
+openclaw-panel-empty-state .empty-state[data-presentation="mobile"] {
+  min-height: min-content;
+  align-content: safe center;
+  padding: 36px 24px;
+  transform: none;
+
+  &::before,
+  .empty-state__icon > :not([slot="action"]) {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 24px;
+    opacity: 0.8;
+  }
+
+  .empty-state__title {
+    font-size: calc(20px * var(--control-ui-text-scale, 1));
+    line-height: 1.3;
+  }
+
+  .empty-state__description {
+    max-width: 340px;
+    margin-top: 10px;
+    font-size: calc(14px * var(--control-ui-text-scale, 1));
+    line-height: 1.4286;
+  }
+
+  .empty-state__icon > [slot="action"] {
+    display: block;
+    width: 100%;
+    max-width: 440px;
+    margin-top: 24px;
+  }
+}

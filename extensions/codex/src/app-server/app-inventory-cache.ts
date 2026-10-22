@@ -34,38 +34,23 @@ export type CodexAppInventoryCacheKeyInput = {
   appServerVersion?: string;
 };
 
-type CodexAppInventoryCacheDiagnostic = {
-  message: string;
-  atMs: number;
-};
-
 export type CodexAppInventorySnapshot = {
-  key: string;
   apps: CodexAppServerRequestResult<"app/read">["apps"];
   installedApps: readonly v2.InstalledApp[];
   /** Absent for complete inventory; present for plugin-targeted snapshots. */
   targetAppIds?: readonly string[];
-  fetchedAtMs: number;
   expiresAtMs: number;
-  revision: number;
-  lastError?: CodexAppInventoryCacheDiagnostic;
 };
 
 type CodexAppInventoryReadState = "fresh" | "stale" | "missing";
 
 export type CodexAppInventoryCacheRead = {
   state: CodexAppInventoryReadState;
-  key: string;
-  revision: number;
   snapshot?: CodexAppInventorySnapshot;
-  refreshScheduled: boolean;
-  diagnostic?: CodexAppInventoryCacheDiagnostic;
 };
 
 type CacheEntry = CodexAppInventorySnapshot & {
   invalidated: boolean;
-  /** Present while invalidated: the app ids the invalidation concerns. Absent = whole inventory. */
-  invalidatedAppIds?: readonly string[];
 };
 
 type RefreshParams = {
@@ -83,17 +68,8 @@ type InFlightRefresh = {
 };
 
 export class CodexAppInventoryCache {
-  private readonly ttlMs: number;
   private readonly entries = new Map<string, CacheEntry>();
   private readonly inFlight = new Map<string, InFlightRefresh>();
-  // Identity tokens cannot be reused by a refresh started after clear().
-  private readonly refreshTokens = new Map<string, symbol>();
-  private readonly diagnostics = new Map<string, CodexAppInventoryCacheDiagnostic>();
-  private revision = 0;
-
-  constructor(options: { ttlMs?: number } = {}) {
-    this.ttlMs = options.ttlMs ?? CODEX_APP_INVENTORY_CACHE_TTL_MS;
-  }
 
   read(params: RefreshParams): CodexAppInventoryCacheRead {
     const nowMs = resolveDateTimestampMs(params.nowMs);
@@ -103,77 +79,30 @@ export class CodexAppInventoryCache {
       : entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
         ? "stale"
         : "fresh";
-    const refreshScheduled =
-      (state === "missing"
+    if (
+      state === "missing"
         ? !params.suppressRefresh
-        : state === "stale" || Boolean(params.forceRefetch)) && this.scheduleRefresh(params);
-    let snapshot: CodexAppInventorySnapshot | undefined;
-    if (entry) {
-      const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...rest } = entry;
-      snapshot = rest;
+        : state === "stale" || Boolean(params.forceRefetch)
+    ) {
+      void this.refreshNow(params).catch(() => undefined);
     }
-    const diagnostic = entry ? entry.lastError : this.diagnostics.get(params.key);
     return {
       state,
-      key: params.key,
-      revision: entry?.revision ?? this.revision,
-      ...(snapshot ? { snapshot } : {}),
-      refreshScheduled,
-      ...(diagnostic ? { diagnostic } : {}),
+      ...(entry ? { snapshot: entry } : {}),
     };
   }
 
-  /**
-   * Marks a key stale and records the reason as a diagnostic. A scope names
-   * the app ids the invalidation concerns so a covering targeted refresh can
-   * clear it; without one, only a complete refresh revalidates the entry.
-   */
-  invalidate(
-    key: string,
-    reason: string,
-    nowMs = Date.now(),
-    invalidatedAppIds?: readonly string[],
-  ): number {
-    this.revision += 1;
-    // Invalidation outranks in-flight refreshes: retire their publish token so
-    // pre-invalidation reads cannot republish as fresh, and drop the shared
-    // in-flight slot so the next read starts a post-invalidation refresh.
-    this.refreshTokens.delete(key);
-    this.inFlight.delete(key);
-    const diagnostic = { message: reason, atMs: nowMs };
+  /** Marks a key stale until its next successful refresh. */
+  invalidate(key: string): void {
     const entry = this.entries.get(key);
     if (entry) {
-      const scope = invalidatedAppIds?.filter(Boolean).map(codexAppIdentityKey) ?? [];
-      if (!entry.invalidated) {
-        entry.invalidatedAppIds = scope.length ? [...scope].toSorted() : undefined;
-      } else if (entry.invalidatedAppIds && scope.length) {
-        // Stacked scoped invalidations widen; an unscoped one stays whole-inventory.
-        entry.invalidatedAppIds = Array.from(
-          new Set([...entry.invalidatedAppIds, ...scope]),
-        ).toSorted();
-      } else {
-        entry.invalidatedAppIds = undefined;
-      }
       entry.invalidated = true;
-      entry.lastError = diagnostic;
-      entry.revision = this.revision;
-    } else {
-      this.diagnostics.set(key, diagnostic);
     }
-    return this.revision;
   }
 
   clear(): void {
     this.entries.clear();
     this.inFlight.clear();
-    this.refreshTokens.clear();
-    this.diagnostics.clear();
-    this.revision = 0;
-  }
-
-  private scheduleRefresh(params: RefreshParams): boolean {
-    void this.refreshNow(params).catch(() => undefined);
-    return true;
   }
 
   /** Forces or joins an immediate refresh for a cache key. */
@@ -183,10 +112,8 @@ export class CodexAppInventoryCache {
       return existing.promise;
     }
 
-    const refreshToken = Symbol("app-inventory-refresh");
-    this.refreshTokens.set(params.key, refreshToken);
     const previousRefresh = params.forceRefetch ? undefined : existing?.promise;
-    const promise = this.refreshUncoalesced(params, refreshToken, previousRefresh);
+    const promise = this.refreshUncoalesced(params, previousRefresh);
     const currentRefresh = {
       promise,
       targetAppIds: targetAppIdSet(params.targetAppIds),
@@ -203,7 +130,6 @@ export class CodexAppInventoryCache {
 
   private async refreshUncoalesced(
     params: RefreshParams,
-    refreshToken: symbol,
     previousRefresh?: Promise<CodexAppInventorySnapshot>,
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = resolveDateTimestampMs(params.nowMs);
@@ -219,17 +145,18 @@ export class CodexAppInventoryCache {
         }
       }
       const inventory = await readInstalledApps(params.request, {
-        // A cold upstream connector cache is empty until it is deliberately
-        // seeded. Later reads reuse its committed snapshot unless requested.
+        // A missing thread-local entry does not mean Codex's shared snapshot is
+        // cold. Honor an explicit reuse request; unspecified cold reads still seed it.
         forceRefresh:
           params.forceRefetch === true ||
-          (!this.entries.has(params.key) && !previousRefreshSucceeded),
+          (params.forceRefetch !== false &&
+            !this.entries.has(params.key) &&
+            !previousRefreshSucceeded),
         targetAppIds: params.targetAppIds,
       });
-      this.revision += 1;
-      const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
+      const expiresAtMs =
+        resolveExpiresAtMsFromDurationMs(CODEX_APP_INVENTORY_CACHE_TTL_MS, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
-        key: params.key,
         apps: inventory.apps,
         installedApps: inventory.installedApps,
         ...(params.targetAppIds?.some(Boolean)
@@ -237,40 +164,16 @@ export class CodexAppInventoryCache {
               targetAppIds: Array.from(targetAppIdSet(params.targetAppIds)).toSorted(),
             }
           : {}),
-        fetchedAtMs: nowMs,
         expiresAtMs,
-        revision: this.revision,
       };
-      // Only publish this snapshot if no newer refresh started for the same key
-      // while this request was in flight.
-      if (this.refreshTokens.get(params.key) === refreshToken) {
-        const existingEntry = this.entries.get(params.key);
-        const published = resolvePublishedInventorySnapshot(existingEntry, snapshot, nowMs);
-        // An uncovered invalidation keeps its remaining scope and diagnostic
-        // until covering or complete refreshes prove the entry current again.
-        const remaining = resolveRemainingInvalidationScope(existingEntry, snapshot);
-        this.entries.set(params.key, {
-          ...published,
-          ...remaining,
-          ...(remaining.invalidated && existingEntry?.lastError
-            ? { lastError: existingEntry.lastError }
-            : {}),
-        });
-        this.diagnostics.delete(params.key);
-      }
+      // Invalidation during a pending read is best effort; the next refresh or TTL
+      // repairs a snapshot that raced an install or cache clear.
+      this.entries.set(params.key, {
+        ...resolvePublishedInventorySnapshot(this.entries.get(params.key), snapshot, nowMs),
+        invalidated: false,
+      });
       return snapshot;
     } catch (error) {
-      if (this.refreshTokens.get(params.key) === refreshToken) {
-        const diagnostic = {
-          message: sanitizeErrorMessage(error instanceof Error ? error.message : String(error)),
-          atMs: nowMs,
-        };
-        this.diagnostics.set(params.key, diagnostic);
-        const entry = this.entries.get(params.key);
-        if (entry) {
-          entry.lastError = diagnostic;
-        }
-      }
       embeddedAgentLog.warn("codex app inventory refresh failed", {
         forceRefetch: params.forceRefetch === true,
         keyFingerprint: fingerprintInventoryCacheKey(params.key),
@@ -310,7 +213,6 @@ function resolvePublishedInventorySnapshot(
     ...snapshotBase,
     // Freshness belongs to the still-valid prior fetch: the merge must not
     // renew rows it never re-read.
-    fetchedAtMs: existing.fetchedAtMs,
     expiresAtMs: existing.expiresAtMs,
     apps: mergeRefreshedRows(existing.apps, snapshot.apps, refreshedTargetIds),
     installedApps: mergeRefreshedRows(
@@ -347,29 +249,6 @@ function mergeRefreshedRows<Row extends { id: string }>(
     }),
     ...refreshedRows.filter((row) => !existingIds.has(codexAppIdentityKey(row.id))),
   ];
-}
-
-/**
- * A refresh retires exactly the invalidation scope it re-read: a complete
- * refresh clears everything; a targeted one subtracts its target ids so
- * separate covering refreshes accumulate until no scope remains. Unscoped
- * invalidations require a complete refresh.
- */
-function resolveRemainingInvalidationScope(
-  existing: CacheEntry | undefined,
-  snapshot: CodexAppInventorySnapshot,
-): { invalidated: false } | { invalidated: true; invalidatedAppIds?: readonly string[] } {
-  if (!existing?.invalidated || !snapshot.targetAppIds?.length) {
-    return { invalidated: false };
-  }
-  if (!existing.invalidatedAppIds) {
-    return { invalidated: true };
-  }
-  const refreshedTargetIds = new Set(snapshot.targetAppIds);
-  const remaining = existing.invalidatedAppIds.filter((appId) => !refreshedTargetIds.has(appId));
-  return remaining.length > 0
-    ? { invalidated: true, invalidatedAppIds: remaining }
-    : { invalidated: false };
 }
 
 function targetAppIdSet(appIds: readonly string[] | undefined): Set<string> {

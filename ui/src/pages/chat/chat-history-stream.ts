@@ -6,14 +6,17 @@ import {
   isHiddenAssistantStreamText,
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
-import { isChatRunStartupPhase, reconcileChatRunStartup } from "./chat-run-startup.ts";
+import {
+  isChatRunStartupPhase,
+  isChatRunRecoveryStatus,
+  reconcileChatRunStartup,
+} from "./chat-run-startup.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatRunOwner,
   getChatSessionProjection,
-  observeChatRunModel,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
   setChatRunOwner,
@@ -148,7 +151,7 @@ export function applyHistoryRun(params: {
         sessionInfo.status === "killed" ||
         sessionInfo.status === "timeout") &&
       sessionInfo.hasActiveRun !== true &&
-      !isSessionRunActive(sessionInfo) &&
+      !isSessionRunStateActive(sessionInfo) &&
       (!state.chatRunId || state.chatRunId === terminalRunId) &&
       !hasOtherSendingRun(terminalRunId) &&
       ((sessionInfo.status !== "killed" && !knownRun) ||
@@ -184,6 +187,7 @@ export function applyHistoryRun(params: {
             : sessionInfo.status === "timeout"
               ? "timeout"
               : "error",
+        suppressErrorNotice: sessionInfo.suppressErrorNotice,
         errorMessage:
           sessionInfo.status === "failed" || sessionInfo.status === "timeout"
             ? (failureMessage ?? sessionInfo.lastRunError)
@@ -218,7 +222,7 @@ export function applyHistoryRun(params: {
     runProjectionsUnchanged(previousRunProjections, currentRunProjections, inFlightRunId);
   const activeRunIds = sessionInfo?.activeRunIds;
   const inFlightRunIsActive =
-    isSessionRunActive(sessionInfo ?? {}) &&
+    isSessionRunStateActive(sessionInfo ?? {}) &&
     (!Array.isArray(activeRunIds) || activeRunIds.includes(inFlightRunId)) &&
     (!projectedInFlightRun || projectedInFlightRun.status === "streaming");
   // Only a read issued while this pane still owned the old run can replace it.
@@ -241,14 +245,10 @@ export function applyHistoryRun(params: {
       runProjectionsUnchanged(previousRunProjections, runProjectionsBeforeApply)) ||
       sameRunContinued);
   if (canAdoptInFlightRun) {
-    const recoveringRun = state.chatRunId !== inFlightRunId;
     // Canonical run projections change on every live delta or terminal.
     // Their identity fences ABA races where a run starts and finishes while
     // history is pending; the same live run retains its ordered text baseline.
     adoptStartedChatRun(state, inFlightRunId, Date.now());
-    if (recoveringRun && sessionInfo) {
-      observeChatRunModel(state, inFlightRunId, sessionInfo);
-    }
     state.chatRunSessionAbortable = run?.sessionAbortable === true;
   }
   if (!inFlightRunIsActive || state.chatRunId !== inFlightRunId) {
@@ -275,7 +275,8 @@ export function applyHistoryRun(params: {
   const startupPhase = startup?.data.phase;
   if (
     run.text &&
-    !(state.chatRunStartup?.state === "status" && state.chatRunStartup.phase === "retrying")
+    startupPhase !== "waiting_for_model" &&
+    !isChatRunRecoveryStatus(state.chatRunStartup)
   ) {
     reconcileChatRunStartup(state, { state: "activity", runId: inFlightRunId });
   } else if (startup && isChatRunStartupPhase(startupPhase)) {
@@ -283,6 +284,9 @@ export function applyHistoryRun(params: {
       state: "status",
       runId: inFlightRunId,
       phase: startupPhase,
+      ...(startupPhase === "waiting_for_model"
+        ? { waitReason: startup.data.reason === "slot" ? ("slot" as const) : ("response" as const) }
+        : {}),
       seq: startup.seq,
     });
   }
@@ -293,7 +297,7 @@ export function applyHistoryRun(params: {
     for (const event of run.events) {
       if (event?.runId === run.runId) {
         // SAFETY: history replays the same agent events against the pane that owns live tool state.
-        handleAgentEvent(state as never, event as never);
+        handleAgentEvent(state as never, event as never, "history");
       }
     }
   }

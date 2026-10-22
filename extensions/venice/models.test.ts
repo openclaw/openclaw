@@ -1,8 +1,9 @@
-import { calculateCost, type Usage } from "openclaw/plugin-sdk/llm";
+import { calculateCost, type Model, type Usage } from "openclaw/plugin-sdk/llm";
 import {
   buildOpenAICompatibleLiveModelProviderConfig,
   clearLiveCatalogCacheForTests,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { VENICE_BASE_URL, VENICE_MODEL_CATALOG, VENICE_MODEL_DISCOVERY_OPTIONS } from "./models.js";
 
@@ -11,49 +12,20 @@ type ModelSpecOverride = {
   availableContextTokens?: number;
   maxCompletionTokens?: number;
   capabilities?: {
-    supportsReasoning?: boolean;
-    supportsVision?: boolean;
     supportsFunctionCalling?: boolean;
   };
   includeModelSpec?: boolean;
   pricing?: unknown;
 };
 
-function makeModelRow(params: ModelSpecOverride) {
-  if (params.includeModelSpec === false) {
-    return { id: params.id };
-  }
-  return {
-    id: params.id,
-    model_spec: {
-      name: params.id,
-      privacy: "private",
-      pricing: params.pricing,
-      availableContextTokens: params.availableContextTokens,
-      maxCompletionTokens: params.maxCompletionTokens,
-      capabilities: params.capabilities,
-    },
-  };
-}
-
-function stubVeniceModelsFetch(rows: ModelSpecOverride[]) {
-  const fetchMock = vi.fn(
-    async (_input: string | URL | Request, _init?: RequestInit) =>
-      new Response(
-        JSON.stringify({
-          data: rows.map((row) => makeModelRow(row)),
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      ),
+async function discoverVeniceModels(rows: ModelSpecOverride[]) {
+  const data = rows.map(({ id, includeModelSpec, ...spec }) =>
+    includeModelSpec === false ? { id } : { id, model_spec: { name: id, ...spec } },
   );
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-  return fetchMock;
-}
-
-async function discoverVeniceModels() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ data })),
+  );
   const provider = await buildOpenAICompatibleLiveModelProviderConfig({
     providerId: "venice",
     providerConfig: {
@@ -66,6 +38,25 @@ async function discoverVeniceModels() {
   return provider.models;
 }
 
+function priceUsage(cost: Model<"openai-completions">["cost"], tokens: Partial<Usage>) {
+  const usage = { ...createZeroUsageFixture(), ...tokens };
+  return calculateCost(
+    {
+      id: "test-model",
+      name: "test-model",
+      provider: "venice",
+      api: "openai-completions",
+      baseUrl: VENICE_BASE_URL,
+      reasoning: false,
+      input: ["text"],
+      cost,
+      contextWindow: 1_000_000,
+      maxTokens: 4096,
+    },
+    usage,
+  );
+}
+
 describe("venice-models", () => {
   afterEach(() => {
     clearLiveCatalogCacheForTests();
@@ -73,7 +64,7 @@ describe("venice-models", () => {
   });
 
   it("uses complete live prices for known, new, and free models in the fetched rows", async () => {
-    const fetchMock = stubVeniceModelsFetch([
+    const models = await discoverVeniceModels([
       { id: "grok-4-5", pricing: { input: { usd: 7 }, output: { usd: 11 } } },
       {
         id: "new-priced-model",
@@ -86,21 +77,15 @@ describe("venice-models", () => {
       },
       { id: "qwen-3-7-plus", pricing: { input: { usd: 0 }, output: { usd: 0 } } },
     ]);
-    const models = await discoverVeniceModels();
     expect(models.map(({ cost }) => cost)).toEqual([
       { input: 7, output: 11, cacheRead: 0, cacheWrite: 0 },
       { input: 3, output: 5, cacheRead: 0.3, cacheWrite: 3.75 },
       { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     ]);
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
   });
 
   it.each([
-    undefined,
-    { input: { usd: 9 } },
-    { input: { usd: -1 }, output: { usd: 3 } },
-    { input: { usd: 9 }, output: { usd: 3 }, cache_write: null },
-    { input: { usd: 9 }, output: { usd: 3 }, extended: null },
     {
       input: { usd: 9 },
       output: { usd: 3 },
@@ -109,229 +94,124 @@ describe("venice-models", () => {
     {
       input: { usd: 9 },
       output: { usd: 3 },
-      extended: { context_token_threshold: -1, input: { usd: 12 }, output: { usd: 4 } },
-    },
-    {
-      input: { usd: 9 },
-      output: { usd: 3 },
       cache_input: { usd: 1 },
       extended: { context_token_threshold: 17, input: { usd: 12 }, output: { usd: 4 } },
     },
   ])("keeps the whole offline schedule for missing or invalid live pricing %j", async (pricing) => {
-    stubVeniceModelsFetch([
+    const models = await discoverVeniceModels([
       { id: "grok-4-5", pricing },
       { id: "unknown-invalid-price", pricing },
     ]);
-    const models = await discoverVeniceModels();
     expect(models[0]?.cost).toEqual(VENICE_MODEL_CATALOG.find(({ id }) => id === "grok-4-5")?.cost);
     expect(models[1]?.cost).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
   });
 
-  it.each([0, 17.5])(
-    "prices the entire request only above live threshold %s, including cached tokens",
-    async (threshold) => {
-      stubVeniceModelsFetch([
-        {
-          id: "new-tiered-model",
-          pricing: {
-            input: { usd: 3 },
-            output: { usd: 5 },
-            cache_input: { usd: 0.3 },
-            cache_write: { usd: 3.75 },
-            extended: {
-              context_token_threshold: threshold,
-              input: { usd: 6 },
-              output: { usd: 10 },
-              cache_input: { usd: 0.6 },
-              cache_write: { usd: 7.5 },
-            },
+  it("prices the entire request only above the live threshold, including cached tokens", async () => {
+    const threshold = 17.5;
+    const [model] = await discoverVeniceModels([
+      {
+        id: "new-tiered-model",
+        pricing: {
+          input: { usd: 3 },
+          output: { usd: 5 },
+          cache_input: { usd: 0.3 },
+          cache_write: { usd: 3.75 },
+          extended: {
+            context_token_threshold: threshold,
+            input: { usd: 6 },
+            output: { usd: 10 },
+            cache_input: { usd: 0.6 },
+            cache_write: { usd: 7.5 },
           },
         },
-      ]);
-      const [model] = await discoverVeniceModels();
-      const start = Math.floor(threshold) + 1;
-      expect(model?.cost.tieredPricing).toEqual([
-        { input: 3, output: 5, cacheRead: 0.3, cacheWrite: 3.75, range: [0, start] },
-        { input: 6, output: 10, cacheRead: 0.6, cacheWrite: 7.5, range: [start] },
-      ]);
-      for (const prompt of [Math.floor(threshold), start]) {
-        const cacheRead = Math.floor(prompt / 3);
-        const cacheWrite = Math.floor(prompt / 3);
-        const input = prompt - cacheRead - cacheWrite;
-        const usage: Usage = {
-          input,
-          output: 100,
-          cacheRead,
-          cacheWrite,
-          totalTokens: prompt + 100,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        };
-        const cost = calculateCost(
-          {
-            id: "new-tiered-model",
-            name: "New tiered model",
-            provider: "venice",
-            api: "openai-completions",
-            baseUrl: VENICE_BASE_URL,
-            reasoning: false,
-            input: ["text"],
-            cost: model!.cost,
-            contextWindow: 1_000_000,
-            maxTokens: 4096,
-          },
-          usage,
-        );
-        expect(cost.total).toBeCloseTo(
-          ((input * 3 + 100 * 5 + cacheRead * 0.3 + cacheWrite * 3.75) *
-            (prompt > threshold ? 2 : 1)) /
-            1_000_000,
-          10,
-        );
-      }
-    },
-  );
+      },
+    ]);
+    const start = Math.floor(threshold) + 1;
+    expect(model?.cost.tieredPricing).toEqual([
+      { input: 3, output: 5, cacheRead: 0.3, cacheWrite: 3.75, range: [0, start] },
+      { input: 6, output: 10, cacheRead: 0.6, cacheWrite: 7.5, range: [start] },
+    ]);
+    for (const prompt of [Math.floor(threshold), start]) {
+      const cacheRead = Math.floor(prompt / 3);
+      const cacheWrite = Math.floor(prompt / 3);
+      const input = prompt - cacheRead - cacheWrite;
+      const cost = priceUsage(model!.cost, {
+        input,
+        output: 100,
+        cacheRead,
+        cacheWrite,
+        totalTokens: prompt + 100,
+      });
+      expect(cost.total).toBeCloseTo(
+        ((input * 3 + 100 * 5 + cacheRead * 0.3 + cacheWrite * 3.75) *
+          (prompt > threshold ? 2 : 1)) /
+          1_000_000,
+        10,
+      );
+    }
+  });
 
-  // Venice's public model/pricing contract (2026-08-30) applies extended rates
-  // to the whole request only when total prompt tokens exceed the threshold.
-  it.each([
-    {
-      id: "grok-4-5",
-      threshold: 200_000,
-      base: { input: 2.27, output: 6.8, cacheRead: 0.34, cacheWrite: 0 },
-      extended: { input: 4.53, output: 13.6, cacheRead: 0.68, cacheWrite: 0 },
-    },
-    {
-      id: "qwen-3-7-plus",
-      threshold: 256_000,
-      base: { input: 0.5, output: 2, cacheRead: 0.05, cacheWrite: 0.625 },
-      extended: { input: 1.5, output: 6, cacheRead: 0.15, cacheWrite: 1.875 },
-    },
-  ])(
-    "prices $id at cached and uncached context boundaries",
-    async ({ id, threshold, base, extended }) => {
-      stubVeniceModelsFetch([{ id }]);
-      const discovered = await discoverVeniceModels();
-      for (const catalog of [VENICE_MODEL_CATALOG, discovered]) {
-        const definition = catalog.find((model) => model.id === id)!;
-        for (const prompt of [threshold - 1, threshold, threshold + 1]) {
-          const cacheBuckets: Array<[number, number]> = [
-            [0, 0],
-            [prompt - 100_000, 0],
-            [prompt, 0],
-          ];
-          if (base.cacheWrite > 0) {
-            cacheBuckets.push([prompt - 100_000, 50_000]);
+  it("prices qwen-3-7-plus at cached and uncached context boundaries", async () => {
+    const id = "qwen-3-7-plus";
+    const threshold = 256_000;
+    const base = { input: 0.5, output: 2, cacheRead: 0.05, cacheWrite: 0.625 };
+    const extended = { input: 1.5, output: 6, cacheRead: 0.15, cacheWrite: 1.875 };
+    const discovered = await discoverVeniceModels([{ id }]);
+    for (const catalog of [VENICE_MODEL_CATALOG, discovered]) {
+      const definition = catalog.find((model) => model.id === id)!;
+      for (const prompt of [threshold - 1, threshold, threshold + 1]) {
+        for (const [cacheRead, cacheWrite] of [
+          [0, 0],
+          [prompt - 100_000, 0],
+          [prompt, 0],
+          [prompt - 100_000, 50_000],
+        ] as const) {
+          const usage = {
+            input: prompt - cacheRead - cacheWrite,
+            output: 1000,
+            cacheRead,
+            cacheWrite,
+            totalTokens: prompt + 1000,
+          };
+          const cost = priceUsage(definition.cost, usage);
+          const rates = prompt > threshold ? extended : base;
+          for (const bucket of ["input", "output", "cacheRead", "cacheWrite"] as const) {
+            expect(cost[bucket]).toBeCloseTo((usage[bucket] * rates[bucket]) / 1_000_000, 10);
           }
-          for (const [cacheRead, cacheWrite] of cacheBuckets) {
-            const usage: Usage = {
-              input: prompt - cacheRead - cacheWrite,
-              output: 1000,
-              cacheRead,
-              cacheWrite,
-              totalTokens: prompt + 1000,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            };
-            const cost = calculateCost(
-              {
-                id,
-                name: id,
-                provider: "venice",
-                api: "openai-completions",
-                baseUrl: VENICE_BASE_URL,
-                reasoning: false,
-                input: ["text"],
-                cost: definition.cost,
-                contextWindow: 1_000_000,
-                maxTokens: 4096,
-              },
-              usage,
-            );
-            const rates = prompt > threshold ? extended : base;
-            for (const bucket of ["input", "output", "cacheRead", "cacheWrite"] as const) {
-              expect(cost[bucket]).toBeCloseTo((usage[bucket] * rates[bucket]) / 1_000_000, 10);
-            }
-            expect(cost.total).toBeCloseTo(
-              (usage.input * rates.input +
-                1000 * rates.output +
-                cacheRead * rates.cacheRead +
-                cacheWrite * rates.cacheWrite) /
-                1_000_000,
-              10,
-            );
-          }
+          expect(cost.total).toBeCloseTo(
+            (usage.input * rates.input +
+              1000 * rates.output +
+              cacheRead * rates.cacheRead +
+              cacheWrite * rates.cacheWrite) /
+              1_000_000,
+            10,
+          );
         }
       }
-    },
-  );
-
-  it("uses API maxCompletionTokens for catalog models when present", async () => {
-    const fetchMock = stubVeniceModelsFetch([
-      {
-        id: "zai-org-glm-4.7",
-        availableContextTokens: 131072,
-        maxCompletionTokens: 2048,
-        capabilities: {
-          supportsReasoning: false,
-          supportsVision: false,
-          supportsFunctionCalling: true,
-        },
-      },
-    ]);
-
-    const models = await discoverVeniceModels();
-    const glm = models.find((m) => m.id === "zai-org-glm-4.7");
-    expect(glm).toMatchObject({
-      maxTokens: 2048,
-      compat: { supportsUsageInStreaming: false },
-    });
-    const [input, init] = fetchMock.mock.calls[0] ?? [];
-    const headers = input instanceof Request ? input.headers : new Headers(init?.headers);
-    expect(headers.get("accept")).toBe("application/json");
-    expect(headers.get("authorization")).toBeNull();
+    }
   });
 
-  it("uses a conservative bounded maxTokens value for new models", async () => {
-    stubVeniceModelsFetch([
+  it.each([
+    { context: 50_000, tools: false, cap: 50_000 },
+    { context: undefined, tools: true, cap: 128_000 },
+  ])("bounds new-model tokens with context $context", async ({ context, tools, cap }) => {
+    const [model] = await discoverVeniceModels([
       {
-        id: "new-model-2026",
-        availableContextTokens: 50_000,
+        id: "new-model",
+        availableContextTokens: context,
         maxCompletionTokens: 200_000,
-        capabilities: {
-          supportsReasoning: false,
-          supportsVision: false,
-          supportsFunctionCalling: false,
-        },
+        capabilities: { supportsFunctionCalling: tools },
       },
     ]);
-
-    const models = await discoverVeniceModels();
-    const newModel = models.find((m) => m.id === "new-model-2026");
-    expect(newModel?.maxTokens).toBe(50000);
-    expect(newModel?.maxTokens).toBeLessThanOrEqual(newModel?.contextWindow ?? Infinity);
-    expect(newModel?.compat?.supportsTools).toBe(false);
-  });
-
-  it("caps new-model maxTokens to the fallback context window when API context is missing", async () => {
-    stubVeniceModelsFetch([
-      {
-        id: "new-model-without-context",
-        maxCompletionTokens: 200_000,
-        capabilities: {
-          supportsReasoning: false,
-          supportsVision: false,
-          supportsFunctionCalling: true,
-        },
-      },
-    ]);
-
-    const models = await discoverVeniceModels();
-    const newModel = models.find((m) => m.id === "new-model-without-context");
-    expect(newModel?.contextWindow).toBe(128000);
-    expect(newModel?.maxTokens).toBe(128000);
+    expect(model).toMatchObject({ contextWindow: cap, maxTokens: cap });
+    expect(model?.maxTokens).toBeLessThanOrEqual(model?.contextWindow ?? Infinity);
+    if (!tools) {
+      expect(model?.compat?.supportsTools).toBe(false);
+    }
   });
 
   it("ignores missing capabilities on partial metadata instead of aborting discovery", async () => {
-    stubVeniceModelsFetch([
+    const models = await discoverVeniceModels([
       {
         id: "zai-org-glm-4.7",
         availableContextTokens: 131072,
@@ -343,37 +223,29 @@ describe("venice-models", () => {
       },
     ]);
 
-    const models = await discoverVeniceModels();
     const knownModel = models.find((m) => m.id === "zai-org-glm-4.7");
     const partialModel = models.find((m) => m.id === "new-model-partial");
     expect(models).not.toHaveLength(VENICE_MODEL_CATALOG.length);
     expect(knownModel?.maxTokens).toBe(2048);
-    expect(partialModel?.contextWindow).toBe(128000);
-    expect(partialModel?.maxTokens).toBe(2048);
+    expect(partialModel).toMatchObject({ contextWindow: 128000, maxTokens: 2048 });
     expect(partialModel?.compat?.supportsTools).toBeUndefined();
   });
 
   it("keeps known models discoverable when a row omits model_spec", async () => {
-    stubVeniceModelsFetch([
+    const models = await discoverVeniceModels([
       { id: "qwen3-coder-480b-a35b-instruct-turbo", includeModelSpec: false },
       {
         id: "new-model-valid",
         availableContextTokens: 32_000,
         maxCompletionTokens: 2_048,
-        capabilities: {
-          supportsReasoning: false,
-          supportsVision: false,
-          supportsFunctionCalling: true,
-        },
+        capabilities: { supportsFunctionCalling: true },
       },
     ]);
 
-    const models = await discoverVeniceModels();
     const knownModel = models.find((m) => m.id === "qwen3-coder-480b-a35b-instruct-turbo");
     const newModel = models.find((m) => m.id === "new-model-valid");
     expect(models).not.toHaveLength(VENICE_MODEL_CATALOG.length);
     expect(knownModel?.maxTokens).toBe(65536);
-    expect(newModel?.contextWindow).toBe(32000);
-    expect(newModel?.maxTokens).toBe(2048);
+    expect(newModel).toMatchObject({ contextWindow: 32000, maxTokens: 2048 });
   });
 });

@@ -1,48 +1,25 @@
-import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN } from "../agents/internal-runtime-context.js";
-import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { broadcastFor, createBroadcastPeer } from "./server-broadcast.test-support.js";
 import { chatWireProjection } from "./server-chat-live-text.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
-import { GatewayClientRegistry } from "./server/client-registry.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 const key = "agent:main:narrated";
-type Frame = {
-  event: string;
-  seq: number;
-  payload: { runId: string; sessionKey?: string; agentId?: string; text?: string; state?: string };
-};
-
-function peer(connId: string) {
-  const frames: Frame[] = [];
-  const socket = Object.assign(new EventEmitter(), {
-    readyState: 1,
-    bufferedAmount: 0,
-    close: vi.fn(),
-    terminate: vi.fn(),
-    send: (
-      wire: string | Buffer,
-      options?: { binary: false } | (() => void),
-      done?: () => void,
-    ) => {
-      frames.push(JSON.parse(String(wire)));
-      (typeof options === "function" ? options : done)?.();
-    },
-  });
-  const client: GatewayWsClient = {
-    connId,
-    socket: socket as unknown as GatewayWsClient["socket"],
-    connect: {
-      role: "operator",
-      scopes: ["operator.read"],
-      caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS],
-    } as GatewayWsClient["connect"],
-    usesSharedGatewayAuth: false,
-  };
-  return { client, socket, frames };
-}
+const peer = (id: string) =>
+  createBroadcastPeer<{
+    runId: string;
+    sessionKey?: string;
+    agentId?: string;
+    text?: string;
+    state?: string;
+  }>(id, true, { caps: [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS] });
+const activity = (stream: string, data: unknown, runId = "run") => ({
+  sessionKey: key,
+  runId,
+  stream,
+  data,
+});
 
 function chat(text: string, state = "delta", runId = "run") {
   return {
@@ -59,13 +36,11 @@ function harness() {
   vi.setSystemTime(0);
   const narration = peer("narration");
   const foreground = peer("foreground");
-  const clients = new GatewayClientRegistry([narration.client, foreground.client]);
   const subscribers = createSessionMessageSubscriberRegistry();
   subscribers.subscribe("narration", key, { mode: "narration" });
   subscribers.subscribe("foreground", key);
   let allowed = true;
-  const broadcaster = createGatewayBroadcaster({
-    clients,
+  const broadcaster = broadcastFor([narration, foreground], {
     sessionMessageSubscribers: subscribers,
     canReceiveSessionEvent: () => allowed,
   });
@@ -74,7 +49,6 @@ function harness() {
     narration,
     foreground,
     subscribers,
-    clients,
     revoke: () => {
       allowed = false;
     },
@@ -84,6 +58,54 @@ function harness() {
 afterEach(() => vi.useRealTimers());
 
 describe("narration delivery through the Gateway broadcaster", () => {
+  it.each(["agent", "session.tool"])(
+    "omits unused tool bodies from %s narration while preserving full subscribers",
+    (event) => {
+      const h = harness();
+      const data = {
+        phase: "result",
+        name: "exec",
+        toolCallId: "tool-1",
+        parentToolCallId: "parent-1",
+        hideFromChannelProgress: true,
+        isError: true,
+        args: { command: "synthetic command" },
+        diff: "streamed input",
+        partialResult: { content: [{ type: "text", text: "partial output" }] },
+        result: { content: [{ type: "text", text: "complete output" }] },
+      };
+      const payload = { sessionKey: key, runId: "run", stream: "tool", data };
+      const publish = () => h.broadcast(event, payload);
+      publish();
+      expect(h.narration.frames[0]?.payload).toEqual({
+        ...payload,
+        data: {
+          phase: "result",
+          name: "exec",
+          toolCallId: "tool-1",
+          parentToolCallId: "parent-1",
+          hideFromChannelProgress: true,
+          isError: true,
+        },
+      });
+      expect(h.foreground.frames[0]?.payload).toEqual(payload);
+      // Opening chat admits full delivery before its history snapshot; closing
+      // it restores narration while the sidebar's independent lease remains.
+      h.subscribers.subscribe("narration", key, { subscriptionId: "chat" });
+      publish();
+      expect(h.narration.frames[1]?.payload).toEqual(payload);
+      h.subscribers.unsubscribe("narration", key, "chat");
+      publish();
+      expect(h.narration.frames[2]?.payload).toEqual(h.narration.frames[0]?.payload);
+      expect(h.narration.frames.map(({ seq }) => seq)).toEqual([1, 2, 3]);
+      expect(h.foreground.frames.map(({ payload: received }) => received)).toEqual([
+        payload,
+        payload,
+        payload,
+      ]);
+    },
+  );
+
   it("paces background snapshots while preserving full foreground and lifecycle streams", () => {
     const h = harness();
     const deadlines = vi.spyOn(globalThis, "setTimeout");
@@ -98,21 +120,11 @@ describe("narration delivery through the Gateway broadcaster", () => {
               : undefined,
         },
       });
-    h.broadcast("agent", {
-      sessionKey: key,
-      runId: "run",
-      stream: "lifecycle",
-      data: { phase: "start" },
-    });
+    h.broadcast("agent", activity("lifecycle", { phase: "start" }));
     publish("First sentence.");
     for (let index = 1; index <= 19; index += 1) {
       vi.advanceTimersByTime(100);
-      h.broadcast("agent", {
-        sessionKey: key,
-        runId: "run",
-        stream: "assistant",
-        data: { text: `Raw ${index}` },
-      });
+      h.broadcast("agent", activity("assistant", { text: `Raw ${index}` }));
       publish(`Latest sentence ${index}.`);
     }
     expect(h.narration.frames.map(({ event }) => event)).toEqual(["agent", "session.narration"]);
@@ -159,13 +171,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
 
   it("retires text superseded by tool activity without restarting its pacing window", () => {
     const h = harness();
-    const tool = () =>
-      h.broadcast("agent", {
-        sessionKey: key,
-        runId: "run",
-        stream: "tool",
-        data: { phase: "start", name: "read" },
-      });
+    const tool = () => h.broadcast("agent", activity("tool", { phase: "start", name: "read" }));
     h.broadcast("chat", chat("First."));
     vi.advanceTimersByTime(100);
     h.broadcast("chat", chat("Before the tool."));
@@ -197,12 +203,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
     vi.advanceTimersByTime(100);
     h.broadcast("chat", chat("Queued from the previous run."));
     vi.advanceTimersByTime(100);
-    h.broadcast("agent", {
-      stream: "lifecycle",
-      data: { phase: "start" },
-      sessionKey: key,
-      runId: "next-run",
-    });
+    h.broadcast("agent", activity("lifecycle", { phase: "start" }, "next-run"));
     vi.advanceTimersByTime(1_800);
     expect(h.narration.frames.map((frame) => [frame.event, frame.payload.runId])).toEqual([
       ["session.narration", "run"],
@@ -217,24 +218,24 @@ describe("narration delivery through the Gateway broadcaster", () => {
 
   it("omits token previews while retaining item completion, status, and tool events", () => {
     const h = harness();
-    for (const payload of [
-      { stream: "thinking", data: { delta: "Private reasoning" } },
-      { stream: "item", data: { phase: "update", kind: "preamble", progressText: "Working" } },
-      {
-        stream: "item",
-        data: {
-          phase: "update",
-          kind: "answer_candidate",
-          status: "candidate",
-          progressText: "Draft",
-        },
-      },
-      { stream: "item", data: { phase: "end", kind: "preamble" } },
-      { stream: "item", data: { phase: "update", kind: "answer_candidate", status: "selected" } },
-      { stream: "run_status", data: { phase: "starting_model" } },
-      { stream: "tool", data: { phase: "start", name: "read" } },
-    ]) {
-      h.broadcast("agent", { ...payload, sessionKey: key, runId: "run" });
+    const hidden = [
+      activity("thinking", { delta: "Private reasoning" }),
+      activity("item", { phase: "update", kind: "preamble", progressText: "Working" }),
+      activity("item", {
+        phase: "update",
+        kind: "answer_candidate",
+        status: "candidate",
+        progressText: "Draft",
+      }),
+    ];
+    const visible = [
+      activity("item", { phase: "end", kind: "preamble" }),
+      activity("item", { phase: "update", kind: "answer_candidate", status: "selected" }),
+      activity("run_status", { phase: "starting_model" }),
+      activity("tool", { phase: "start", name: "read" }),
+    ];
+    for (const payload of [...hidden, ...visible]) {
+      h.broadcast("agent", payload);
     }
     expect(h.foreground.frames).toHaveLength(7);
     expect(h.narration.frames).toMatchObject([
@@ -351,15 +352,21 @@ describe("narration delivery through the Gateway broadcaster", () => {
     publish(mainKey, "main", "Literal retired.");
     publish("global", "ops", "Ops retained.");
     h.subscribers.unsubscribe("narration", mainKey, "raw");
-    h.subscribers.unsubscribe("narration", mainKey, "literal");
     vi.advanceTimersByTime(1_900);
-    expect(h.narration.frames).toHaveLength(8);
-    expect(h.narration.frames.at(-1)?.payload.text).toBe("Ops retained.");
+    expect(h.narration.frames.slice(-3).map(({ payload }) => payload.text)).toEqual([
+      "Raw retired.",
+      "Literal retired.",
+      "Ops retained.",
+    ]);
+    expect(h.narration.frames).toHaveLength(10);
 
+    publish("global", "main", "Raw retired on final release.");
+    publish(mainKey, "main", "Literal retired on final release.");
+    h.subscribers.unsubscribe("narration", mainKey, "literal");
     publish("global", "ops", "Retired on foreground admission.");
     h.subscribers.subscribe("narration", opsKey, { subscriptionId: "ops" });
     vi.advanceTimersByTime(2_000);
-    expect(h.narration.frames).toHaveLength(8);
+    expect(h.narration.frames).toHaveLength(10);
     publish("global", "ops", "Full transcript.");
     expect(h.narration.frames.at(-1)?.event).toBe("chat");
   });

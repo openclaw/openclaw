@@ -1,4 +1,3 @@
-// Covers provider-key canonicalization plus secret marker persistence safeguards.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -7,6 +6,7 @@ import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
 import { ModelsConfigSchema } from "../config/zod-schema.core.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { configForProviders, modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { normalizeProviderCatalogModelsForConfig } from "./models-config.providers.catalog.js";
 import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
@@ -19,62 +19,60 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 
 describe("normalizeProviders", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const createModel = (
-    overrides: Partial<
-      NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["models"][number]
-    > = {},
-  ) => ({
-    // Compact default model row reused by normalization cases that only vary ids.
-    id: "config-model",
-    name: "Config model",
-    input: ["text"] as Array<"text" | "image">,
-    reasoning: false,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
-    maxTokens: 2048,
+  type Providers = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+  type ConfigModel = Providers[string]["models"][number];
+  const provider = (overrides: Partial<Providers[string]> = {}): Providers[string] => ({
+    baseUrl: "https://api.openai.com/v1",
+    api: "openai-completions",
+    models: [],
     ...overrides,
   });
+  const normalize = (
+    providers: Providers,
+    options: Partial<Parameters<typeof normalizeProviders>[0]> = {},
+  ) =>
+    normalizeProviders({
+      providers,
+      ...options,
+      agentDir: options.agentDir ?? tempDirs.make("provider-normalize-"),
+    });
 
-  it("keeps the latest provider config when duplicate keys only differ by whitespace", () => {
-    const agentDir = tempDirs.make("provider-normalize-");
-    const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-      openai: {
-        baseUrl: "https://api.openai.com/v1",
-        api: "openai-completions",
-        apiKey: "OPENAI_API_KEY", // pragma: allowlist secret
-        models: [],
-      },
-      " openai ": {
+  it("keeps the latest provider config when duplicate keys only differ by whitespace", async () => {
+    const providers = {
+      openai: provider({ apiKey: "OPENAI_API_KEY" }), // pragma: allowlist secret
+      " openai ": provider({
         baseUrl: "https://example.com/v1",
-        api: "openai-completions",
         apiKey: "CUSTOM_OPENAI_API_KEY", // pragma: allowlist secret
-        models: [createModel({ id: "gpt-4.1-mini" })],
-      },
+        models: [modelDefinition("gpt-4.1-mini")],
+      }),
     };
-
-    const normalized = normalizeProviders({ providers, agentDir });
+    const normalized = await normalize(providers);
     expect(Object.keys(normalized ?? {})).toEqual(["openai"]);
-    expect(normalized?.openai?.baseUrl).toBe("https://example.com/v1");
-    expect(normalized?.openai?.apiKey).toBe("CUSTOM_OPENAI_API_KEY");
-    expect(normalized?.openai?.models?.[0]?.id).toBe("gpt-4.1-mini");
+    expect(normalized?.openai).toMatchObject({
+      baseUrl: "https://example.com/v1",
+      apiKey: "CUSTOM_OPENAI_API_KEY",
+      models: [{ id: "gpt-4.1-mini" }],
+    });
   });
 
-  it("deduplicates model rows and keeps repeated publication stable with secret ownership", () => {
+  it("deduplicates model rows and keeps repeated publication stable with secret ownership", async () => {
     const agentDir = tempDirs.make("provider-normalize-");
+    const pinned = modelDefinition("gemini-3-pro-preview", {
+      name: "Pinned Gemini",
+      contextWindow: 12345,
+      maxTokens: 2048,
+      reasoning: false,
+      cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+    });
+    const expected = { ...structuredClone(pinned), id: "gemini-3.1-pro-preview" };
     const providers = {
       google: {
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
         api: "google-generative-ai",
         apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
         models: [
-          createModel({
-            id: "gemini-3-pro-preview",
-            name: "Pinned Gemini",
-            contextWindow: 12345,
-            cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
-          }),
-          createModel({
-            id: "gemini-3.1-pro-preview",
+          pinned,
+          modelDefinition("gemini-3.1-pro-preview", {
             name: "Discovered Gemini",
             contextWindow: 1_048_576,
             maxTokens: 65536,
@@ -83,25 +81,18 @@ describe("normalizeProviders", () => {
         ],
       },
       custom: { baseUrl: "https://models.example/v1", models: [] },
-    } satisfies NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+    } satisfies Providers;
 
-    const normalized = normalizeProviders({ providers, agentDir, env: {} });
+    const normalized = await normalize(providers, { agentDir, env: {} });
     expect(normalized?.google?.models).toBe(providers.google.models);
     const published = normalizeProviderCatalogModelsForConfig(normalized);
 
-    expect(published?.google?.models).toHaveLength(1);
     // The first normalized row wins so explicit config details are not replaced by discovery.
-    const model = published?.google?.models?.[0];
-    expect(model?.id).toBe("gemini-3.1-pro-preview");
-    expect(model?.name).toBe("Pinned Gemini");
-    expect(model?.contextWindow).toBe(12345);
-    expect(model?.maxTokens).toBe(2048);
-    expect(model?.reasoning).toBe(false);
-    expect(model?.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+    expect(published?.google?.models).toEqual([expected]);
 
     expect(normalizeProviderCatalogModelsForConfig(published)).toBe(published);
     const secretRefManagedProviders = new Set<string>();
-    const repeated = normalizeProviders({
+    const repeated = await normalizeProviders({
       providers: published,
       agentDir,
       env: {},
@@ -113,8 +104,7 @@ describe("normalizeProviders", () => {
     expect(secretRefManagedProviders.has("google")).toBe(true);
   });
 
-  it("replaces resolved env var value with env var name to prevent plaintext persistence", () => {
-    const agentDir = tempDirs.make("provider-normalize-");
+  it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
     const env = {
       ...process.env,
       OPENAI_API_KEY: "sk-test-secret-value-12345", // pragma: allowlist secret
@@ -124,63 +114,43 @@ describe("normalizeProviders", () => {
       OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
     };
     const secretRefManagedProviders = new Set<string>();
-    const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-      openai: {
-        baseUrl: "https://api.openai.com/v1",
+    const providers = {
+      openai: provider({
         apiKey: "sk-test-secret-value-12345", // pragma: allowlist secret; simulates resolved ${OPENAI_API_KEY}
-        api: "openai-completions",
-        models: [createModel({ id: "gpt-4.1" })],
-      },
+        models: [modelDefinition("gpt-4.1")],
+      }),
     };
-    const normalized = normalizeProviders({
-      providers,
-      agentDir,
-      env,
-      secretRefManagedProviders,
-    });
+    const normalized = await normalize(providers, { env, secretRefManagedProviders });
     expect(normalized?.openai?.apiKey).toBe("OPENAI_API_KEY");
     expect(secretRefManagedProviders.has("openai")).toBe(true);
   });
 
-  it("normalizes SecretRef-backed provider headers to non-secret marker values", () => {
-    const agentDir = tempDirs.make("provider-normalize-");
-    const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
-      openai: {
-        baseUrl: "https://api.openai.com/v1",
-        api: "openai-completions",
+  it("normalizes SecretRef-backed provider headers to non-secret marker values", async () => {
+    const providers = {
+      openai: provider({
         headers: {
           Authorization: { source: "env", provider: "default", id: "OPENAI_HEADER_TOKEN" },
           "X-Tenant-Token": { source: "file", provider: "vault", id: "/openai/token" },
         },
-        models: [],
-      },
+      }),
     };
-
-    const normalized = normalizeProviders({
-      providers,
-      agentDir,
-    });
+    const normalized = await normalize(providers);
     // Env refs persist the env-name marker; non-env refs collapse to a non-secret sentinel.
     expect(normalized?.openai?.headers?.Authorization).toBe("secretref-env:OPENAI_HEADER_TOKEN");
     expect(normalized?.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
   });
 
   it.each([
-    {
-      label: "substituted literal",
-      authored: "${HEADER_SOURCE}",
-      env: { HEADER_SOURCE: "${HEADER_LITERAL}" },
-      expected: "${HEADER_LITERAL}",
-    },
-    {
-      label: "pending reference",
-      authored: "$HEADER_PENDING",
-      env: {},
-      expected: "secretref-env:HEADER_PENDING",
-    },
-  ])(
-    "preserves loader $label headers through normalization and source enforcement",
-    async ({ authored, env, expected }) => {
+    [
+      "substituted literal",
+      "${HEADER_SOURCE}",
+      { HEADER_SOURCE: "${HEADER_LITERAL}" },
+      "${HEADER_LITERAL}",
+    ],
+    ["pending reference", "$HEADER_PENDING", {}, "secretref-env:HEADER_PENDING"],
+  ] satisfies Array<[string, string, NodeJS.ProcessEnv, string]>)(
+    "preserves loader %s headers through normalization and source enforcement",
+    async (_label, authored, env, expected) => {
       await withOpenClawTestState(
         {
           label: "catalog-header-facts",
@@ -189,17 +159,13 @@ describe("normalizeProviders", () => {
         async (state) => {
           await state.writeConfig({
             plugins: { enabled: false },
-            models: {
-              providers: {
-                custom: {
-                  baseUrl: "https://provider.example/v1",
-                  api: "openai-completions",
-                  apiKey: "plain-fixture-key",
-                  models: [],
-                  headers: { "X.Trace": authored },
-                },
-              },
-            },
+            ...configForProviders({
+              custom: provider({
+                baseUrl: "https://provider.example/v1",
+                apiKey: "plain-fixture-key",
+                headers: { "X.Trace": authored },
+              }),
+            }),
           });
           const snapshot = await readConfigFileSnapshotFromContext(
             createConfigIoContext({
@@ -214,7 +180,7 @@ describe("normalizeProviders", () => {
             providers: snapshot.config.models?.providers,
             sourceConfigForSecrets: snapshot.sourceConfig,
           };
-          const normalized = normalizeProviders({
+          const normalized = await normalizeProviders({
             ...params,
             agentDir: state.agentDir(),
             env: state.env,
@@ -230,11 +196,8 @@ describe("normalizeProviders", () => {
   );
 
   it("publishes schema-complete costs after duplicate model rows merge", () => {
-    type ConfigModel = NonNullable<
-      NonNullable<OpenClawConfig["models"]>["providers"]
-    >[string]["models"][number];
     const modelWithPartialCost = (id: string, cost: Partial<NonNullable<ConfigModel["cost"]>>) =>
-      ({ ...createModel({ id }), cost }) as ConfigModel;
+      ({ ...modelDefinition(id), cost }) as ConfigModel;
     const tieredPricing = [
       {
         input: 8,
@@ -244,27 +207,25 @@ describe("normalizeProviders", () => {
         range: [0, 1_000_000] as [number, number],
       },
     ];
-    const providers = {
+    const providers: Providers = {
       custom: {
         baseUrl: "https://models.example/v1",
         models: [
           modelWithPartialCost("partial", { input: 10, output: 50, tieredPricing }),
-          createModel({ id: "unknown", cost: undefined }),
+          modelDefinition("unknown", { cost: undefined }),
           modelWithPartialCost("duplicate", { input: 3, output: 15 }),
           modelWithPartialCost("duplicate", { cacheRead: 0.3, cacheWrite: 3.75 }),
         ],
       },
-    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+    };
 
     expect(ModelsConfigSchema.safeParse({ providers }).success).toBe(true);
     expect(normalizeProviderCatalogModelsForConfig(providers)?.custom?.models).toEqual([
-      createModel({
-        id: "partial",
+      modelDefinition("partial", {
         cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0, tieredPricing },
       }),
-      createModel({ id: "unknown", cost: undefined }),
-      createModel({
-        id: "duplicate",
+      modelDefinition("unknown", { cost: undefined }),
+      modelDefinition("duplicate", {
         cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
       }),
     ]);

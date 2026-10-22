@@ -1,24 +1,21 @@
-import type { ActionGate } from "openclaw/plugin-sdk/channel-actions";
-import type { DiscordActionConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { clearGateways, registerGateway } from "../monitor/gateway-registry.js";
 import { handleDiscordAction } from "./runtime.js";
-import { handleDiscordPresenceAction } from "./runtime.presence.js";
 
 const mockUpdatePresence = vi.fn();
-const presenceEnabled: ActionGate<DiscordActionConfig> = (key) => key === "presence";
 const defaultDiscordConfig: OpenClawConfig = {
   channels: { discord: { token: "test-token", actions: { presence: true } } },
 };
 function createMockGateway(connected = true): GatewayPlugin {
   return { isConnected: connected, updatePresence: mockUpdatePresence } as unknown as GatewayPlugin;
 }
-function setPresence(params: Record<string, unknown>, gate = presenceEnabled) {
-  return handleDiscordPresenceAction("setPresence", params, gate, defaultDiscordConfig);
+function setPresence(params: Record<string, unknown>) {
+  return handleDiscordAction({ ...params, action: "setPresence" }, defaultDiscordConfig);
 }
 
-describe("handleDiscordPresenceAction", () => {
+describe("handleDiscordAction presence", () => {
   beforeEach(() => {
     mockUpdatePresence.mockClear();
     clearGateways();
@@ -34,11 +31,6 @@ describe("handleDiscordPresenceAction", () => {
         activityUrl: "https://twitch.tv/example",
       },
       activities: [{ name: "My Stream", type: 1, url: "https://twitch.tv/example" }],
-    },
-    {
-      name: "streaming activity without URL",
-      params: { accountId: "default", activityType: "streaming", activityName: "My Stream" },
-      activities: [{ name: "My Stream", type: 1 }],
     },
     {
       name: "custom activity using state",
@@ -70,7 +62,12 @@ describe("handleDiscordPresenceAction", () => {
   });
 
   it("respects presence gating", async () => {
-    await expect(setPresence({ status: "online" }, () => false)).rejects.toThrow(/disabled/);
+    await expect(
+      handleDiscordAction(
+        { action: "setPresence", status: "online" },
+        { channels: { discord: { actions: { presence: false } } } },
+      ),
+    ).rejects.toThrow(/disabled/);
   });
 
   it.each([false, true])("rejects an unavailable gateway (registered: %s)", async (registered) => {
@@ -106,9 +103,9 @@ describe("handleDiscordPresenceAction", () => {
     });
   });
 
-  it("rejects unknown presence actions", async () => {
+  it("rejects unknown actions", async () => {
     await expect(
-      handleDiscordPresenceAction("unknownAction", {}, presenceEnabled, defaultDiscordConfig),
-    ).rejects.toThrow(/Unknown presence action/);
+      handleDiscordAction({ action: "unknownAction" }, defaultDiscordConfig),
+    ).rejects.toThrow(/Unknown action/);
   });
 });

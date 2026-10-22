@@ -1,7 +1,23 @@
-// Qa Lab Matrix tests cover request behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
+import { mockMatrixQaHttp } from "./http.test-support.js";
+import { requestMatrixJson } from "./request.js";
+
+const request = <T = unknown>(params: Partial<Parameters<typeof requestMatrixJson>[0]> = {}) =>
+  requestMatrixJson<T>({
+    baseUrl: "https://matrix.example.test",
+    endpoint: "/_matrix/client/v3/account/whoami",
+    method: "GET",
+    ...params,
+  });
+
+function mockResponse(body: BodyInit, status = 200) {
+  return mockMatrixQaHttp(
+    vi.fn<typeof fetch>(
+      async () => new Response(body, { status, headers: { "content-type": "application/json" } }),
+    ),
+  );
+}
 
 describe("requestMatrixJson", () => {
   afterEach(() => {
@@ -11,18 +27,18 @@ describe("requestMatrixJson", () => {
   it("caps oversized request timeouts before creating the abort signal", async () => {
     const signal = AbortSignal.abort();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(signal);
-    const fetchImpl = vi.fn<MatrixQaFetchLike>(async () => Response.json({ ok: true }));
+    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
 
-    await requestMatrixJson({
-      baseUrl: "https://matrix.example.test",
-      endpoint: "/_matrix/client/v3/account/whoami",
-      fetchImpl,
-      method: "GET",
-      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
-    });
+    const http = mockMatrixQaHttp(fetchImpl);
+
+    await request({ timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000 });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(fetchImpl).toHaveBeenCalledWith(expect.any(URL), expect.objectContaining({ signal }));
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://matrix.example.test/_matrix/client/v3/account/whoami",
+      expect.objectContaining({ signal }),
+    );
+    expect(http.release).toHaveBeenCalledOnce();
   });
 
   it.each([200, 500])("cancels an over-cap response before handling HTTP %s", async (status) => {
@@ -43,66 +59,30 @@ describe("requestMatrixJson", () => {
         canceled = true;
       },
     });
-    const fetchImpl = vi.fn<MatrixQaFetchLike>(
-      async () =>
-        new Response(stream, {
-          status,
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    const http = mockResponse(stream, status);
 
-    await expect(
-      requestMatrixJson({
-        baseUrl: "https://matrix.example.test",
-        endpoint: "/_matrix/client/v3/sync",
-        fetchImpl,
-        method: "GET",
-      }),
-    ).rejects.toThrow(/Matrix homeserver response exceeds 16777216 bytes/);
+    await expect(request({ endpoint: "/_matrix/client/v3/sync" })).rejects.toThrow(
+      /Matrix homeserver response exceeds 16777216 bytes/,
+    );
 
     expect(canceled).toBe(true);
     expect(reads).toBeLessThan(chunkCount);
+    expect(http.release).toHaveBeenCalledOnce();
   });
 
   it("still falls back to an empty body for malformed in-bounds JSON", async () => {
-    const fetchImpl = vi.fn<MatrixQaFetchLike>(
-      async () =>
-        new Response("{ not valid json", {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    mockResponse("{ not valid json");
+    const result = await request<{ ok?: boolean }>();
 
-    const result = await requestMatrixJson<{ ok?: boolean }>({
-      baseUrl: "https://matrix.example.test",
-      endpoint: "/_matrix/client/v3/account/whoami",
-      fetchImpl,
-      method: "GET",
-    });
-
-    expect(result.status).toBe(200);
-    expect(result.body).toEqual({});
+    expect(result).toEqual({ status: 200, body: {} });
   });
 
   it("reads a large in-bounds JSON body unchanged", async () => {
     const filler = "x".repeat(8 * 1024 * 1024);
     const payload = JSON.stringify({ data: filler });
-    const fetchImpl = vi.fn<MatrixQaFetchLike>(
-      async () =>
-        new Response(payload, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    );
+    mockResponse(payload);
+    const result = await request<{ data: string }>({ endpoint: "/_matrix/client/v3/sync" });
 
-    const result = await requestMatrixJson<{ data: string }>({
-      baseUrl: "https://matrix.example.test",
-      endpoint: "/_matrix/client/v3/sync",
-      fetchImpl,
-      method: "GET",
-    });
-
-    expect(result.status).toBe(200);
-    expect(result.body).toEqual({ data: filler });
+    expect(result).toEqual({ status: 200, body: { data: filler } });
   });
 });

@@ -32,10 +32,7 @@ import type {
   ChannelTurnDurableDeliveryOptions,
 } from "./types.js";
 
-export type DurableInboundReplyDeliveryOptions = ChannelTurnDurableDeliveryOptions & {
-  /** Optional: validate the admitted sender and pin its resolved credential before a registry handoff. */
-  prepareRuntimeHandoff?: (cfg: OpenClawConfig) => OpenClawConfig;
-};
+export type DurableInboundReplyDeliveryOptions = ChannelTurnDurableDeliveryOptions;
 
 export type DurableInboundReplyDeliveryParams = DurableInboundReplyDeliveryOptions & {
   cfg: OpenClawConfig;
@@ -231,6 +228,7 @@ async function deliverAdmittedInboundReply(
     to,
     accountId: params.accountId,
     payloads: [params.payload],
+    retryAmbiguousFinalText: params.retryAmbiguousFinalText,
     ...((params.runId ?? params.executionIdentityToken?.runId)
       ? { runId: params.runId ?? params.executionIdentityToken?.runId }
       : {}),

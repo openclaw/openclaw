@@ -1,6 +1,6 @@
-// Session checkout diff collection and session-start baseline filtering.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import nodePath from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { root as openFsRoot, type Root } from "@openclaw/fs-safe/root";
@@ -10,14 +10,11 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { runGit, runGitBuffered } from "../agents/worktrees/git.js";
 import type { SessionDiffBaseline } from "../config/sessions/types.js";
-import { GIT_TIMEOUT_MS } from "../infra/git-exec.js";
+import { normalizeGitPathForFilesystem } from "../infra/git-exec.js";
 import type { GitCheckoutDiffInput, GitReadOperations } from "../infra/git-read-operations.js";
-import {
-  parseDiffInventoryZ,
-  parseNameStatusZ,
-  parseNumstatZ,
-  splitPatchByFile,
-} from "./session-diff-parser.js";
+import { hasGitWorkerContext, requestGitWorkerEffect } from "../infra/git-worker-context.js";
+import { isSqliteFilePath } from "../infra/sqlite-file-path.js";
+import { parseDiffInventoryZ, parseNameStatusZ, splitPatchByFile } from "./session-diff-parser.js";
 import {
   loadSessionDiffBranchMetadata,
   resolveSessionDiffBase,
@@ -158,11 +155,16 @@ async function collectUntrackedFiles(
   root: string,
   realRoot: string,
   budget: PatchBudget,
+  summaryOnly: boolean,
 ): Promise<{ files: SessionDiffFile[]; truncated: boolean }> {
   const listing = await gitOut(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  const paths = (listing ?? "").split("\0").filter(Boolean);
+  if (listing === null) {
+    throw new Error("Unable to read untracked Git changes");
+  }
+  const paths = listing.split("\0").filter(Boolean);
   const truncated = paths.length > MAX_UNTRACKED_FILES;
   const files: SessionDiffFile[] = [];
+  const safePaths: string[] = [];
   for (const filePath of paths.slice(0, MAX_UNTRACKED_FILES)) {
     const file: SessionDiffFile = {
       path: filePath,
@@ -172,54 +174,128 @@ async function collectUntrackedFiles(
       untracked: true,
     };
     files.push(file);
-    // Hardlink/escape guard before git reads the file contents.
-    if (!(await isPatchableWorkingTreePath(realRoot, filePath))) {
+    if (await isPatchableWorkingTreePath(realRoot, filePath)) {
+      safePaths.push(filePath);
+    } else {
       file.truncated = true;
-      continue;
     }
-    const result = await runGitBuffered(
+  }
+  if (safePaths.length === 0) {
+    return { files, truncated };
+  }
+  const directory = hasGitWorkerContext()
+    ? await requestGitWorkerEffect({ type: "git.temporary-directory", input: {} })
+    : await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-diff-"));
+  try {
+    const objectsPath = await gitOut(root, ["rev-parse", "--git-path", "objects"]);
+    if (objectsPath === null) {
+      throw new Error("Unable to prepare untracked Git changes");
+    }
+    const resolveGitPath = (value: string) =>
+      nodePath.resolve(root, normalizeGitPathForFilesystem(value.replace(/\r?\n$/, "")));
+    const index = nodePath.join(directory, "index");
+    // Like --no-index, start without tracked entries or index-backed attributes.
+    // Intent-to-add writes only to this private index/object store, never the checkout.
+    const objects = nodePath.join(directory, "objects");
+    await fs.mkdir(nodePath.join(objects, "info"), { recursive: true });
+    // Keep inherited alternate stores while adding the checkout's primary store.
+    const alternate = [...Buffer.from(resolveGitPath(objectsPath))]
+      .map((byte) => `\\${byte.toString(8).padStart(3, "0")}`)
+      .join("");
+    await fs.writeFile(nodePath.join(objects, "info", "alternates"), `"${alternate}"\n`);
+    const env = {
+      GIT_INDEX_FILE: index,
+      GIT_OBJECT_DIRECTORY: objects,
+    };
+    const args = [
+      "--literal-pathspecs",
+      "-c",
+      "core.quotePath=false",
+      "-c",
+      "core.filemode=true",
+      "-c",
+      "core.splitIndex=false",
+    ];
+    const added = await runGit(
       root,
       [
-        "-c",
-        "core.quotePath=false",
-        "diff",
-        ...PATCH_DIFF_ARGS,
-        "--no-index",
-        "--",
-        "/dev/null",
-        filePath,
+        ...args,
+        "add",
+        "--intent-to-add",
+        "--sparse",
+        "--ignore-errors",
+        "--pathspec-from-file=-",
+        "--pathspec-file-nul",
       ],
-      {
-        timeoutMs: GIT_TIMEOUT_MS,
-        maxOutputBytes: MAX_PATCH_BYTES_PER_FILE,
-        // This RPC does not consume Git diagnostics. Verbose converters must
-        // not abort otherwise valid diff output by filling an unused stream.
-        discardOutput: { stderr: true },
-      },
+      { env, input: safePaths.join("\0") + "\0" },
     );
-    const patchTruncated =
-      result.termination === "output-limit" && result.outputLimitStream === "stdout";
-    // --no-index exits 1 for differences, but also for missing input, which
-    // has no patch. A complete first hunk retains counts even when its body clips.
-    if (
-      !patchTruncated &&
-      (result.termination !== "exit" || (result.code !== 0 && result.code !== 1))
-    ) {
-      file.truncated = true;
-      continue;
+    if (added.termination !== "exit" || (added.code !== 0 && added.code !== 1)) {
+      throw new Error("Unable to prepare untracked Git changes");
     }
-    const patch = result.stdout.toString("utf8");
-    if (!patch.startsWith("diff --git ")) {
-      file.truncated = true;
-      continue;
+    const read = (selected: string[]) =>
+      runGit(
+        root,
+        [
+          ...args,
+          "diff",
+          ...(summaryOnly
+            ? ["--numstat", "-z", "--no-color", "--no-ext-diff", "--no-textconv"]
+            : PATCH_DIFF_ARGS),
+          "--ita-invisible-in-index",
+          "--",
+          ...selected,
+        ],
+        { env, ...(!summaryOnly ? { maxPatchBytes: MAX_PATCH_BYTES_PER_FILE } : {}) },
+      );
+    const result = await read(safePaths);
+    const output: string[] = [];
+    const failed = new Set<string>();
+    if (result.termination === "exit" && result.code === 0) {
+      output.push(result.stdout);
+    } else {
+      // A required clean filter can fail one file. Preserve the RPC's partial-result
+      // contract with isolated retries only after a failed batch, never on healthy polls.
+      for (const filePath of safePaths) {
+        const single = await read([filePath]);
+        if (single.termination === "exit" && single.code === 0) {
+          output.push(single.stdout);
+        } else {
+          failed.add(filePath);
+        }
+      }
     }
-    const header = readPatchHeader(patch);
-    file.additions = header.additions ?? 0;
-    if (header.binary) {
-      file.binary = true;
-      continue;
+    const text = output.join("");
+    const stats = summaryOnly ? parseDiffInventoryZ(text).numstat : undefined;
+    const patches = summaryOnly ? undefined : splitPatchByFile(text);
+    for (const file of files) {
+      if (failed.has(file.path)) {
+        file.truncated = true;
+      }
+      if (file.truncated) {
+        continue;
+      }
+      if (stats) {
+        const stat = stats.get(file.path);
+        if (stat) {
+          file.additions = stat.additions;
+          file.deletions = stat.deletions;
+          if (stat.binary) {
+            file.binary = true;
+          }
+        }
+      } else {
+        const patch = patches?.get(file.path);
+        const header = readPatchHeader(patch ?? "");
+        file.additions = header.additions ?? 0;
+        if (header.binary) {
+          file.binary = true;
+        } else {
+          Object.assign(file, takePatch(patch, budget));
+        }
+      }
     }
-    Object.assign(file, takePatch(patchTruncated ? undefined : patch, budget));
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
   }
   return { files, truncated };
 }
@@ -229,23 +305,17 @@ async function collectTrackedFiles(
   realRoot: string,
   revisions: readonly [base: string] | readonly [base: string, target: string],
   budget: PatchBudget,
+  summaryOnly: boolean,
 ): Promise<{ files: SessionDiffFile[]; truncated: boolean }> {
   const diffArgs = (options: string[]) => ["diff", "-M", ...options, ...revisions, "--"];
-  const inventoryText = await gitOut(root, diffArgs(["--raw", "--numstat", "--no-color", "-z"]));
-  let inventory: ReturnType<typeof parseDiffInventoryZ>;
-  if (inventoryText !== null) {
-    inventory = parseDiffInventoryZ(inventoryText);
-  } else {
-    // Preserve filename-only results when Git cannot compute line counts.
-    const nameStatus = await gitOut(root, diffArgs(["--name-status", "-z"]));
-    const entries = parseNameStatusZ(nameStatus ?? "");
-    if (entries.length === 0) {
-      return { files: [], truncated: false };
-    }
-    const numstatText = (await gitOut(root, diffArgs(["--numstat", "-z"]))) ?? "";
-    inventory = { entries, numstat: parseNumstatZ(numstatText) };
+  const inventoryText = await gitOut(
+    root,
+    diffArgs(["--raw", "--numstat", "--no-color", "--no-ext-diff", "--no-textconv", "-z"]),
+  );
+  if (inventoryText === null) {
+    throw new Error("Unable to read tracked Git changes");
   }
-  const { entries, numstat } = inventory;
+  const { entries, numstat } = parseDiffInventoryZ(inventoryText);
   if (entries.length === 0) {
     return { files: [], truncated: false };
   }
@@ -254,7 +324,7 @@ async function collectTrackedFiles(
     0,
   );
   const patchText =
-    totalChangedLines > MAX_TOTAL_CHANGED_LINES
+    summaryOnly || totalChangedLines > MAX_TOTAL_CHANGED_LINES
       ? null
       : await gitOut(root, diffArgs(PATCH_DIFF_ARGS));
   const chunks = patchText === null ? new Map<string, string>() : splitPatchByFile(patchText);
@@ -275,6 +345,8 @@ async function collectTrackedFiles(
     }
     if (binary) {
       file.binary = true;
+    }
+    if (binary || summaryOnly) {
       files.push(file);
       continue;
     }
@@ -322,7 +394,7 @@ export async function collectCheckoutDiff(
       ? await resolveSessionDiffBase({ branch, gitOut, head, root })
       : await resolveSessionDiffEmptyTree(root, objectFormat);
   const metadata =
-    head && branchBase
+    head && branchBase && !params.summaryOnly
       ? await loadSessionDiffBranchMetadata({ base: branchBase.base, gitOut, head, root })
       : {};
   const repositoryFields = {
@@ -377,12 +449,12 @@ export async function collectCheckoutDiff(
   }
   const budget: PatchBudget = { remaining: MAX_TOTAL_PATCH_BYTES };
   const tracked = revisions
-    ? await collectTrackedFiles(root, realRoot, revisions, budget)
+    ? await collectTrackedFiles(root, realRoot, revisions, budget, params.summaryOnly === true)
     : { files: [], truncated: false };
   const untracked =
     scope === "commit"
       ? { files: [], truncated: false }
-      : await collectUntrackedFiles(root, realRoot, budget);
+      : await collectUntrackedFiles(root, realRoot, budget, params.summaryOnly === true);
   const files = [...tracked.files, ...untracked.files].toSorted((a, b) =>
     a.path.localeCompare(b.path),
   );
@@ -460,6 +532,11 @@ async function fingerprintBaselineCandidate(params: {
       ? undefined
       : hashBaselineDescriptor(candidate, `symlink:${target}`);
   }
+  // Even a raw close in a Worker releases the Gateway's SQLite POSIX locks.
+  // Skip before opening: fs-safe's hardlink rejection also closes its descriptor.
+  if (initial.nlink !== 1 || isSqliteFilePath(absolutePath)) {
+    return undefined;
+  }
   const opened = await params.directory
     ?.open(`.${nodePath.sep}${relativePath}`)
     .catch(() => undefined);
@@ -504,21 +581,12 @@ async function collectBaselineCandidates(params: {
   const baseInfo = head
     ? await resolveSessionDiffBase({ branch, gitOut, head, root })
     : await resolveSessionDiffEmptyTree(root, objectFormat);
-  const [trackedResult, untrackedResult] = await Promise.allSettled([
+  const [trackedText, untrackedText] = await Promise.all([
     baseInfo
       ? gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
       : Promise.resolve(""),
     gitOutForBaseline(root, ["ls-files", "--others", "--exclude-standard", "-z"]),
   ]);
-  // Join both command lifetimes before returning a failure to the capture owner.
-  if (trackedResult.status === "rejected") {
-    throw trackedResult.reason;
-  }
-  if (untrackedResult.status === "rejected") {
-    throw untrackedResult.reason;
-  }
-  const trackedText = trackedResult.value;
-  const untrackedText = untrackedResult.value;
   if (trackedText === null || untrackedText === null) {
     return { root, candidates: [], truncated: true };
   }
@@ -595,6 +663,10 @@ async function applySessionDiffBaseline(params: {
     return diff;
   }
   const fingerprints = new Map(baseline.files.map((file) => [file.path, file.fingerprint]));
+  // No returned path can be hidden by this baseline; avoid another checkout scan.
+  if (!diff.files.some((file) => fingerprints.has(file.path))) {
+    return diff;
+  }
   const candidates =
     params.scope === "uncommitted"
       ? ((await collectBaselineCandidates({ cwd: diff.root }))?.candidates ?? [])

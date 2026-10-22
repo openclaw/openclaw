@@ -58,7 +58,7 @@ export function createPluginReloadServices(
       // A retained instance must reacquire managers only after registry adoption
       // and memory admission resume; startup is part of this reload's completion.
       await start(runtime.pluginRuntime.registry, config, (handle) =>
-        generation.publishServices(generation.currentClaim(), handle),
+        generation.setServices(handle),
       );
     },
   };

@@ -45,6 +45,8 @@ The variables below are the supported environment contract for operators. Undocu
 | `OPENCLAW_INCLUDE_ROOTS`  | Allow `$include` to resolve from additional roots.                                                   |
 | `OPENCLAW_SQLITE_LIBRARY` | Override the SQLite library for [Bun on macOS](/install/bun-compatibility#sqlite-library-selection). |
 
+A named `OPENCLAW_PROFILE` uses `~/.openclaw-<profile>` for state and config defaults, even before that profile has a config file. Explicit `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` values take precedence. An explicit CLI `--profile` selects the requested profile as described in [Global flags](/cli#global-flags).
+
 #### `OPENCLAW_HOME`
 
 When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.
@@ -73,24 +75,36 @@ Explicit path variables such as `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, an
 
 Packaged OpenClaw uses `NODE_COMPILE_CACHE/openclaw/<version>/<build>` when
 `NODE_COMPILE_CACHE` is set, or `node-compile-cache/openclaw` under the OS temporary
-directory otherwise. Child processes reuse the same build namespace. Source
-checkouts keep their existing cache-disable policy.
+directory otherwise. Gateway workers and child processes reuse the same build
+namespace, including when running a built source checkout. The Gateway main
+thread stays uncached: Node's synchronous cache flush can stall its event loop
+at startup or shutdown. Workers retain their existing flush boundaries on their
+own threads. An inherited active cache requires a startup respawn; on platforms
+with `execve`, the serving process keeps its PID. Node permission mode retains
+an already-active caller cache because it can forbid process replacement.
+
+Short-lived CLI commands keep their existing policy: caching is opt-in through
+`NODE_COMPILE_CACHE`, and source CLI entrypoints remain uncached. Explicit release
+prewarming still populates the cache. `NODE_DISABLE_COMPILE_CACHE` disables caching
+for both the Gateway and its workers.
 
 Release builds use a stable 16-character hash of the build ID. On Windows,
 OpenClaw skips cache paths longer than 200 characters with a warning and disables
 unsafe inherited caches for child processes, avoiding a Node startup hang.
 
-The compile-cache bootstrap owner starts best-effort maintenance in a background
-worker that does not keep CLI commands alive. Node permission mode skips this
-maintenance because workers do not inherit its filesystem restrictions; cache
-entries remain until removed by an unrestricted invocation or by the operator.
-Cleanup stops when the command exits; long-lived processes give it time to
-complete. It removes superseded build directories as units. At most once an hour, or after retiring another build, it removes bytecode older than seven days
-and trims the current cache to 512 MiB, oldest files first. This is a maintenance
-target, not a hard disk quota: concurrent writes and processes that exit before
-cleanup completes can temporarily exceed it. Interrupted maintenance is eligible
-for another attempt after an hour. Other applications' caches outside
-the `openclaw` subtree are preserved.
+The compile-cache bootstrap owner starts best-effort maintenance in a detached
+process, so cleanup can finish after a short CLI command exits. Node permission
+mode skips maintenance because a child process cannot inherit its filesystem
+restrictions. Other applications' caches outside the `openclaw` subtree are preserved.
+
+Cleanup streams the combined release caches in bounded passes, evicting the oldest
+observed files to target 512 MiB and 4,096 files, and removing bytecode older than
+seven days. Each pass visits at most 16,384 entries and stops scheduling filesystem
+work after 30 seconds. A filesystem lock serializes cleanup; an abandoned lock
+can be reclaimed after five minutes. Only a completed pass advances the hourly
+maintenance timestamp. An incomplete pass leaves the next invocation eligible to
+continue pruning. These are maintenance targets, not hard disk quotas: concurrent
+writes can temporarily exceed them, and a large backlog may need several invocations.
 
 ### Gateway and authentication
 
@@ -117,7 +131,7 @@ Installed third-party plugins may declare additional credential variables in the
 | `OPENCLAW_LOG_LEVEL`                 | Override file and console log levels.                         |
 | `OPENCLAW_DEBUG_MODEL_TRANSPORT`     | Enable model transport timing diagnostics.                    |
 | `OPENCLAW_DEBUG_MODEL_PAYLOAD`       | Select redacted model payload diagnostics.                    |
-| `OPENCLAW_DEBUG_SSE`                 | Select SSE timing or event-peek diagnostics.                  |
+| `OPENCLAW_DEBUG_SSE`                 | Select content-free SSE timing diagnostics.                   |
 | `OPENCLAW_DEBUG_CODE_MODE`           | Enable code-mode surface diagnostics.                         |
 | `OPENCLAW_DIAGNOSTICS`               | Enable named diagnostic flags, or disable all flags with `0`. |
 | `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` | Select the JSONL path for timeline diagnostics.               |
@@ -174,6 +188,18 @@ examined entries per scan, including excluded entries. Larger trees also fall
 back to refresh-on-search after observation retries are exhausted.
 Skills refreshes during agent preparation after capacity exhaustion, and the
 development supervisor stops its child if observation fails.
+
+## ClawHub install telemetry
+
+Authenticated skill or plugin installs from ClawHub send a best-effort install report.
+See [ClawHub telemetry](/clawhub/telemetry) for what is sent, when it is sent, and
+what is never included.
+
+| Variable                    | Purpose                                                             |
+| --------------------------- | ------------------------------------------------------------------- |
+| `CLAWHUB_DISABLE_TELEMETRY` | Disable ClawHub install reporting with `1`, `true`, `yes`, or `on`. |
+
+`CLAWDHUB_DISABLE_TELEMETRY` is accepted when `CLAWHUB_DISABLE_TELEMETRY` is unset or blank.
 
 ## Provider credentials and workspace `.env`
 
@@ -360,8 +386,8 @@ unavailable instead of triggering a network request.
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `OPENCLAW_LOG_LEVEL`             | Override log level for both file and console (e.g. `debug`, `trace`). Takes precedence over `logging.level` and `logging.consoleLevel` in config. Invalid values are ignored with a warning. |
 | `OPENCLAW_DEBUG_MODEL_TRANSPORT` | Emit targeted model request/response timing diagnostics at `info` level without enabling global debug logs.                                                                                  |
-| `OPENCLAW_DEBUG_MODEL_PAYLOAD`   | Model payload diagnostics: `summary`, `tools`, or `full-redacted`. `full-redacted` is capped and redacted but may include prompt/message text.                                               |
-| `OPENCLAW_DEBUG_SSE`             | Streaming diagnostics: `events` for first/done timing, `peek` to include the first five redacted SSE events.                                                                                 |
+| `OPENCLAW_DEBUG_MODEL_PAYLOAD`   | Content-free model request diagnostics: `summary`, `tools`, or `full-redacted`. `tools` and `full-redacted` include the complete tool-name list, never prompts, messages, or tool content.   |
+| `OPENCLAW_DEBUG_SSE`             | Streaming timing diagnostics: `events` or `peek`. Neither mode logs SSE event bodies.                                                                                                        |
 | `OPENCLAW_DEBUG_CODE_MODE`       | Code-mode model-surface diagnostics, including provider-tool hiding and compact control/direct enforcement.                                                                                  |
 
 ## nvm users: web_fetch TLS failures

@@ -24,16 +24,15 @@ import {
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
 } from "../../../plugins/official-external-plugin-catalog.js";
-import { safeRealpathSync } from "../../../plugins/path-safety.js";
-import { isPayloadMissing } from "../../../plugins/payload-verification.js";
-import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
-import { resolveUserPath } from "../../../utils.js";
-import { resolveCompatibilityHostVersion } from "../../../version.js";
 import {
   CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES,
   VERSION_BOUND_RUNTIME_PLUGIN_IDS,
-} from "./configured-runtime-plugin-installs.js";
+} from "../../../plugins/official-runtime-plugins.js";
+import { safeRealpathSync } from "../../../plugins/path-safety.js";
+import { isPayloadMissing } from "../../../plugins/payload-verification.js";
+import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
+import { resolveUserPath } from "../../../utils.js";
+import { resolveCompatibilityHostVersion } from "../../../version.js";
 import { collectInstalledPluginMissingRequiredDependencies } from "./missing-configured-plugin-install.dependency-health.js";
 import { collectEffectiveConfiguredChannelOwnerPluginIds } from "./missing-configured-plugin-install.ids.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
@@ -107,12 +106,25 @@ export async function resolveConfiguredPluginInstallContext(params: {
         : [];
     }),
   );
-  const configuredPluginIdsWithStaleDescriptors =
-    collectConfiguredPluginIdsWithMissingChannelConfigDescriptors({
-      snapshot,
-      configuredPluginIds: params.configuredPluginIds,
-      configuredChannelIds: params.configuredChannelIds,
-    });
+  const { configuredPluginIds, configuredChannelIds } = params;
+  const configuredPluginIdsWithStaleDescriptors = ((): Set<string> => {
+    const stalePluginIds = new Set<string>();
+    const pluginsById = new Map(snapshot.plugins.map((plugin) => [plugin.id, plugin]));
+    for (const diagnostic of snapshot.diagnostics) {
+      const pluginId = diagnostic.pluginId?.trim();
+      if (!pluginId || !diagnostic.message.includes(MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC)) {
+        continue;
+      }
+      const plugin = pluginsById.get(pluginId);
+      const ownsConfiguredChannel = plugin?.channels.some((channelId) =>
+        configuredChannelIds.has(channelId),
+      );
+      if (configuredPluginIds.has(pluginId) || ownsConfiguredChannel) {
+        stalePluginIds.add(pluginId);
+      }
+    }
+    return stalePluginIds;
+  })();
   const records =
     params.baselineRecords ?? (await loadInstalledPluginIndexInstallRecords({ env: params.env }));
   const operatorManagedPluginIds = new Set<string>();
@@ -136,21 +148,64 @@ export async function resolveConfiguredPluginInstallContext(params: {
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
     currentVersion,
   });
-  const installedPluginIdsWithRepairablePackageDiagnostics =
-    collectInstalledPluginIdsWithRepairablePackageDiagnostics({
-      snapshot,
-      installRecords: records,
-      resolvePathIdentity,
-    });
-  const installedPluginIdsWithStaleVersionBoundRuntimePackages =
-    collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages({
-      snapshot,
-      installRecords: records,
-      configuredPluginIds: params.configuredPluginIds,
-      currentVersion,
-    });
+  const installedPluginIdsWithRepairablePackageDiagnostics = ((): Set<string> => {
+    const pluginIds = new Set<string>();
+    for (const diagnostic of snapshot.diagnostics) {
+      const pluginId = diagnostic.pluginId?.trim();
+      if (!pluginId || !Object.hasOwn(records, pluginId)) {
+        continue;
+      }
+      const installPath = records[pluginId]?.installPath;
+      // A same-id source copy must never authorize replacing the recorded package.
+      if (
+        installPath &&
+        diagnostic.source &&
+        resolvePathIdentity(diagnostic.source) === resolvePathIdentity(installPath) &&
+        REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS.some((marker) =>
+          diagnostic.message.includes(marker),
+        )
+      ) {
+        pluginIds.add(pluginId);
+      }
+    }
+    return pluginIds;
+  })();
+  const runtimeConfiguredPluginIds = params.configuredPluginIds;
+  const installedPluginIdsWithStaleVersionBoundRuntimePackages = ((): Set<string> => {
+    const pluginIds = new Set<string>();
+    const normalizedCurrentVersion = normalizeOptionalLowercaseString(currentVersion);
+    if (!normalizedCurrentVersion) {
+      return pluginIds;
+    }
+    for (const candidate of CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES) {
+      if (
+        !VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(candidate.pluginId) ||
+        !runtimeConfiguredPluginIds.has(candidate.pluginId)
+      ) {
+        continue;
+      }
+      const record = records[candidate.pluginId];
+      if (!record) {
+        continue;
+      }
+      const plugin =
+        snapshot.byPluginId?.get(candidate.pluginId) ??
+        snapshot.plugins.find((entry) => entry.id === candidate.pluginId);
+      const installedVersion = normalizeOptionalLowercaseString(
+        record.resolvedVersion ?? record.version ?? plugin?.packageVersion ?? plugin?.version,
+      );
+      if (!installedVersion) {
+        continue;
+      }
+      const comparison = compareOpenClawReleaseVersions(installedVersion, normalizedCurrentVersion);
+      if (comparison === null ? installedVersion !== normalizedCurrentVersion : comparison < 0) {
+        pluginIds.add(candidate.pluginId);
+      }
+    }
+    return pluginIds;
+  })();
   const installedPluginMissingRequiredDependencies =
-    await collectInstalledPluginMissingRequiredDependencies({
+    collectInstalledPluginMissingRequiredDependencies({
       cfg: params.cfg,
       isRepairTarget,
       snapshot,
@@ -467,95 +522,6 @@ export function collectUpdateDeferredPluginIds(
     missingPluginIds: new Set(),
   })) {
     pluginIds.add(candidate.pluginId);
-  }
-  return pluginIds;
-}
-
-function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
-  snapshot: PluginMetadataSnapshot;
-  configuredPluginIds: ReadonlySet<string>;
-  configuredChannelIds: ReadonlySet<string>;
-}): Set<string> {
-  const stalePluginIds = new Set<string>();
-  const pluginsById = new Map(params.snapshot.plugins.map((plugin) => [plugin.id, plugin]));
-  for (const diagnostic of params.snapshot.diagnostics) {
-    const pluginId = diagnostic.pluginId?.trim();
-    if (!pluginId || !diagnostic.message.includes(MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC)) {
-      continue;
-    }
-    const plugin = pluginsById.get(pluginId);
-    const ownsConfiguredChannel = plugin?.channels.some((channelId) =>
-      params.configuredChannelIds.has(channelId),
-    );
-    if (params.configuredPluginIds.has(pluginId) || ownsConfiguredChannel) {
-      stalePluginIds.add(pluginId);
-    }
-  }
-  return stalePluginIds;
-}
-
-function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
-  snapshot: PluginMetadataSnapshot;
-  installRecords: Record<string, PluginInstallRecord>;
-  resolvePathIdentity: (value: string) => string;
-}): Set<string> {
-  const pluginIds = new Set<string>();
-  for (const diagnostic of params.snapshot.diagnostics) {
-    const pluginId = diagnostic.pluginId?.trim();
-    if (!pluginId || !Object.hasOwn(params.installRecords, pluginId)) {
-      continue;
-    }
-    const installPath = params.installRecords[pluginId]?.installPath;
-    // A same-id source copy must never authorize replacing the recorded package.
-    if (
-      installPath &&
-      diagnostic.source &&
-      params.resolvePathIdentity(diagnostic.source) === params.resolvePathIdentity(installPath) &&
-      REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS.some((marker) =>
-        diagnostic.message.includes(marker),
-      )
-    ) {
-      pluginIds.add(pluginId);
-    }
-  }
-  return pluginIds;
-}
-
-function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
-  snapshot: PluginMetadataSnapshot;
-  installRecords: Record<string, PluginInstallRecord>;
-  configuredPluginIds: ReadonlySet<string>;
-  currentVersion: string;
-}): Set<string> {
-  const pluginIds = new Set<string>();
-  const currentVersion = normalizeOptionalLowercaseString(params.currentVersion);
-  if (!currentVersion) {
-    return pluginIds;
-  }
-  for (const candidate of CONFIGURED_RUNTIME_PLUGIN_INSTALL_CANDIDATES) {
-    if (
-      !VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(candidate.pluginId) ||
-      !params.configuredPluginIds.has(candidate.pluginId)
-    ) {
-      continue;
-    }
-    const record = params.installRecords[candidate.pluginId];
-    if (!record) {
-      continue;
-    }
-    const plugin =
-      params.snapshot.byPluginId?.get(candidate.pluginId) ??
-      params.snapshot.plugins.find((entry) => entry.id === candidate.pluginId);
-    const installedVersion = normalizeOptionalLowercaseString(
-      record.resolvedVersion ?? record.version ?? plugin?.packageVersion ?? plugin?.version,
-    );
-    if (!installedVersion) {
-      continue;
-    }
-    const comparison = compareOpenClawReleaseVersions(installedVersion, currentVersion);
-    if (comparison === null ? installedVersion !== currentVersion : comparison < 0) {
-      pluginIds.add(candidate.pluginId);
-    }
   }
   return pluginIds;
 }

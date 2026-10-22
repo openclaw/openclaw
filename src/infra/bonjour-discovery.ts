@@ -31,9 +31,7 @@ export type GatewayBonjourBeacon = {
 export type GatewayDiscoveryResolvedEndpoint = {
   host: string;
   port: number;
-  gatewayTls: boolean;
   gatewayTlsFingerprintSha256?: string;
-  scheme: "ws" | "wss";
   wsUrl: string;
 };
 
@@ -51,25 +49,31 @@ export function resolveGatewayDiscoveryEndpoint(
   ) {
     return null;
   }
-  const gatewayTls = beacon.gatewayTls === true;
-  const scheme = gatewayTls ? "wss" : "ws";
+  const scheme = beacon.gatewayTls === true ? "wss" : "ws";
   return {
     host,
     port,
-    gatewayTls,
     gatewayTlsFingerprintSha256: beacon.gatewayTlsFingerprintSha256,
-    scheme,
     wsUrl: `${scheme}://${host}:${port}`,
   };
 }
 
 type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
-  domains?: string[];
   wideAreaDomain?: string | null;
-  platform?: NodeJS.Platform;
-  run?: typeof runCommandWithTimeout;
+  /** Optional monotonic deadline shared with the calling check. */
+  deadlineMs?: number;
+  signal?: AbortSignal;
 };
+
+function remainingDiscoveryMs(timeoutMs: number, opts: GatewayBonjourDiscoverOpts): number {
+  return opts.signal?.aborted
+    ? 0
+    : Math.max(
+        0,
+        Math.min(timeoutMs, Math.ceil((opts.deadlineMs ?? Infinity) - performance.now())),
+      );
+}
 
 const DEFAULT_TIMEOUT_MS = 2000;
 const GATEWAY_SERVICE_TYPE = "_openclaw-gw._tcp";
@@ -260,17 +264,27 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
 async function discoverViaDnsSd(
   domain: string,
   timeoutMs: number,
-  run: typeof runCommandWithTimeout,
+  opts: GatewayBonjourDiscoverOpts,
 ): Promise<GatewayBonjourBeacon[]> {
-  const browse = await run(["dns-sd", "-B", GATEWAY_SERVICE_TYPE, domain], {
-    timeoutMs,
+  const browseBudget = remainingDiscoveryMs(timeoutMs, opts);
+  if (browseBudget <= 0) {
+    return [];
+  }
+  const browse = await runCommandWithTimeout(["dns-sd", "-B", GATEWAY_SERVICE_TYPE, domain], {
+    timeoutMs: browseBudget,
+    signal: opts.signal,
   });
   const instances = parseDnsSdBrowse(browse.stdout);
   const results: GatewayBonjourBeacon[] = [];
   for (const instance of instances) {
-    const resolved = await run(["dns-sd", "-L", instance, GATEWAY_SERVICE_TYPE, domain], {
-      timeoutMs,
-    });
+    const budget = remainingDiscoveryMs(timeoutMs, opts);
+    if (budget <= 0) {
+      break;
+    }
+    const resolved = await runCommandWithTimeout(
+      ["dns-sd", "-L", instance, GATEWAY_SERVICE_TYPE, domain],
+      { timeoutMs: budget, signal: opts.signal },
+    );
     results.push({ ...parseDnsSdResolve(resolved.stdout, instance), domain });
   }
   return results;
@@ -279,20 +293,24 @@ async function discoverViaDnsSd(
 async function discoverWideAreaViaTailnetDns(
   domain: string,
   timeoutMs: number,
-  run: typeof runCommandWithTimeout,
+  opts: GatewayBonjourDiscoverOpts,
 ): Promise<GatewayBonjourBeacon[]> {
   if (!domain || domain === "local.") {
     return [];
   }
   const startedAt = Date.now();
-  const remainingMs = () => timeoutMs - (Date.now() - startedAt);
+  const remainingMs = () => remainingDiscoveryMs(timeoutMs - (Date.now() - startedAt), opts);
 
   const tailscaleCandidates = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
   let ips: string[] = [];
   for (const candidate of tailscaleCandidates) {
+    if (remainingMs() <= 0) {
+      break;
+    }
     try {
-      const res = await run([candidate, "status", "--json"], {
+      const res = await runCommandWithTimeout([candidate, "status", "--json"], {
         timeoutMs: Math.max(1, Math.min(700, remainingMs())),
+        signal: opts.signal,
       });
       ips = parseTailscaleStatusIPv4s(res.stdout);
       if (ips.length > 0) {
@@ -326,9 +344,9 @@ async function discoverWideAreaViaTailnetDns(
       return;
     }
     try {
-      const probe = await run(
+      const probe = await runCommandWithTimeout(
         ["dig", "+short", "+time=1", "+tries=1", `@${ip}`, probeName, "PTR"],
-        { timeoutMs: Math.max(1, Math.min(250, budget)) },
+        { timeoutMs: Math.max(1, Math.min(250, budget)), signal: opts.signal },
       );
       const lines = normalizeStringEntries(probe.stdout.split("\n"));
       if (lines.length > 0) {
@@ -360,9 +378,10 @@ async function discoverWideAreaViaTailnetDns(
     }
     const instanceName = ptrName.replace(/\.?_openclaw-gw\._tcp\..*$/, "");
 
-    const srv = await run(["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "SRV"], {
-      timeoutMs: Math.max(1, Math.min(350, budget)),
-    }).catch(() => null);
+    const srv = await runCommandWithTimeout(
+      ["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "SRV"],
+      { timeoutMs: Math.max(1, Math.min(350, budget)), signal: opts.signal },
+    ).catch(() => null);
     const srvParsed = srv ? parseDigSrv(srv.stdout) : null;
     if (!srvParsed) {
       continue;
@@ -381,9 +400,10 @@ async function discoverWideAreaViaTailnetDns(
       continue;
     }
 
-    const txt = await run(["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "TXT"], {
-      timeoutMs: Math.max(1, Math.min(350, txtBudget)),
-    }).catch(() => null);
+    const txt = await runCommandWithTimeout(
+      ["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "TXT"],
+      { timeoutMs: Math.max(1, Math.min(350, txtBudget)), signal: opts.signal },
+    ).catch(() => null);
     const txtTokens = txt ? parseDigTxt(txt.stdout) : [];
     const txtMap = txtTokens.length > 0 ? parseTxtTokens(txtTokens) : {};
 
@@ -468,14 +488,18 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
 async function discoverViaAvahi(
   domain: string,
   timeoutMs: number,
-  run: typeof runCommandWithTimeout,
+  opts: GatewayBonjourDiscoverOpts,
 ): Promise<GatewayBonjourBeacon[]> {
   const args = ["avahi-browse", "-rt", GATEWAY_SERVICE_TYPE];
   if (domain && domain !== "local.") {
     // avahi-browse wants a plain domain (no trailing dot)
     args.push("-d", domain.replace(/\.$/, ""));
   }
-  const browse = await run(args, { timeoutMs });
+  const budget = remainingDiscoveryMs(timeoutMs, opts);
+  if (budget <= 0) {
+    return [];
+  }
+  const browse = await runCommandWithTimeout(args, { timeoutMs: budget, signal: opts.signal });
   return parseAvahiBrowse(browse.stdout).map((beacon) => Object.assign({}, beacon, { domain }));
 }
 
@@ -483,14 +507,9 @@ export async function discoverGatewayBeacons(
   opts: GatewayBonjourDiscoverOpts = {},
 ): Promise<GatewayBonjourBeacon[]> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const platform = opts.platform ?? process.platform;
-  const run = opts.run ?? runCommandWithTimeout;
+  const platform = process.platform;
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: opts.wideAreaDomain });
-  const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
-  const defaultDomains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
-  const domains = normalizeStringEntries(domainsRaw.length > 0 ? domainsRaw : defaultDomains).map(
-    (d) => (d.endsWith(".") ? d : `${d}.`),
-  );
+  const domains = ["local.", ...(wideAreaDomain ? [wideAreaDomain] : [])];
 
   const discover =
     platform === "darwin" ? discoverViaDnsSd : platform === "linux" ? discoverViaAvahi : undefined;
@@ -498,7 +517,7 @@ export async function discoverGatewayBeacons(
     return [];
   }
   const perDomain = await Promise.allSettled(
-    domains.map((domain) => discover(domain, timeoutMs, run)),
+    domains.map((domain) => discover(domain, timeoutMs, opts)),
   );
   const discovered = perDomain.flatMap((result) =>
     result.status === "fulfilled" ? result.value : [],
@@ -506,10 +525,9 @@ export async function discoverGatewayBeacons(
   if (
     platform === "darwin" &&
     wideAreaDomain &&
-    domains.includes(wideAreaDomain) &&
     !discovered.some((beacon) => beacon.domain === wideAreaDomain)
   ) {
-    const fallback = await discoverWideAreaViaTailnetDns(wideAreaDomain, timeoutMs, run).catch(
+    const fallback = await discoverWideAreaViaTailnetDns(wideAreaDomain, timeoutMs, opts).catch(
       () => [],
     );
     return [...discovered, ...fallback];

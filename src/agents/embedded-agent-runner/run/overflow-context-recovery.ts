@@ -4,17 +4,18 @@ import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coer
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { CONTEXT_OVERFLOW_ERROR_MESSAGE } from "../../../shared/assistant-error-format.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../../agent-compaction-constants.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import {
   extractObservedOverflowTokenCount,
   isCompactionFailureError,
-  isLikelyContextOverflowError,
-  isProviderRequestSizeCeilingError,
-} from "../../embedded-agent-helpers.js";
+} from "../../embedded-agent-helpers/context-overflow-observation.js";
+import { isLikelyContextOverflowError } from "../../failover/context-overflow.js";
+import { isProviderRequestSizeCeilingError } from "../../failover/message-patterns.js";
 import type { FailoverClassification } from "../../failover/signal.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
-import { classifyCompactionReason } from "../compact-reasons.js";
+import { classifyCompactionReason, isBenignCompactionSkipResult } from "../compact-reasons.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
 import {
@@ -46,16 +47,6 @@ function renderRecoverySideEffectCaution(
   return replayMetadata.hadPotentialSideEffects
     ? " Completed tool actions were not replayed; verify their effects before retrying."
     : "";
-}
-
-function renderOverflowResetGuidance(
-  attempt: EmbeddedRunCompactionRecoveryInput["attempt"],
-): string {
-  return (
-    "Context overflow: prompt too large for the model. " +
-    "Try /reset (or /new) to start a fresh session, or use a larger-context model." +
-    renderRecoverySideEffectCaution(attempt)
-  );
 }
 
 type EmbeddedRunOverflowRecoveryOutcome =
@@ -154,6 +145,17 @@ export async function recoverEmbeddedRunOverflow(
   const preflightRecovery = input.attempt.preflightRecovery;
   const requiresTranscriptContinuation =
     preflightRecovery?.source === "mid-turn" || !isCurrentAttemptReplaySafe(input.attempt);
+  if ((input.state.compactionRequestBudget?.fixedTokens ?? 0) >= contextTokenBudget) {
+    return {
+      action: "surface",
+      kind: "context_overflow",
+      errorText,
+      userText:
+        "Context overflow: the system prompt, injected context, or tool definitions exceed the model's context window before chat history. " +
+        "Reduce plugin-provided system context or other fixed instructions (inspect /context detail), or use a larger-context model. Resetting the session will not shrink this context." +
+        renderRecoverySideEffectCaution(input.attempt),
+    };
+  }
   // Compaction cannot shrink pending input; rewriting history cannot make this retry fit.
   if (
     !requiresTranscriptContinuation &&
@@ -234,15 +236,6 @@ export async function recoverEmbeddedRunOverflow(
   );
 
   const isCompactionFailure = isCompactionFailureError(errorText);
-  const logCompactionDecision = (branch: "compact" | "give_up", attempt: number) => {
-    if (log.isEnabled("debug")) {
-      log.debug(
-        `[compaction-diag] decision diagId=${overflowDiagId} branch=${branch} ` +
-          `isCompactionFailure=${isCompactionFailure} hasOversizedToolResults=unknown ` +
-          `attempt=${attempt} maxAttempts=${MAX_OVERFLOW_COMPACTION_ATTEMPTS}`,
-      );
-    }
-  };
 
   // Compaction here budgets against the model's context window, so it cannot make the request fit
   // under the provider's own ceiling, and every retry re-sends a payload already rejected. Stop
@@ -258,7 +251,7 @@ export async function recoverEmbeddedRunOverflow(
       action: "surface",
       kind: isCompactionFailure ? "compaction_failure" : "context_overflow",
       errorText,
-      userText: renderOverflowResetGuidance(input.attempt),
+      userText: CONTEXT_OVERFLOW_ERROR_MESSAGE + renderRecoverySideEffectCaution(input.attempt),
     };
   }
 
@@ -268,6 +261,7 @@ export async function recoverEmbeddedRunOverflow(
   // maintenance still run); only the mid-turn continuation is withheld.
   let parkedWorkBlocksContinuation = false;
   let failedCompactionReason: string | undefined;
+  let compactionSkippedBenignly = false;
   if (
     !isCompactionFailure &&
     input.attemptCompactionCount > 0 &&
@@ -286,7 +280,6 @@ export async function recoverEmbeddedRunOverflow(
     input.attemptCompactionCount === 0 &&
     input.state.overflowCompactionAttempts < MAX_OVERFLOW_COMPACTION_ATTEMPTS
   ) {
-    logCompactionDecision("compact", input.state.overflowCompactionAttempts + 1);
     input.state.overflowCompactionAttempts += 1;
     log.warn(
       `${pressureDescription} detected (attempt ${input.state.overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); attempting auto-compaction for ${input.modelSelection.provider}/${input.modelSelection.model}`,
@@ -402,6 +395,7 @@ export async function recoverEmbeddedRunOverflow(
       }
     } else {
       failedCompactionReason = formatErrorMessage(compactResult.reason ?? "nothing to compact");
+      compactionSkippedBenignly = isBenignCompactionSkipResult(compactResult);
       log.warn(
         `auto-compaction failed for ${input.modelSelection.provider}/${input.modelSelection.model}: ${failedCompactionReason}`,
       );
@@ -437,25 +431,28 @@ export async function recoverEmbeddedRunOverflow(
     }
   }
 
-  if (
-    isCompactionFailure ||
-    input.state.overflowCompactionAttempts >= MAX_OVERFLOW_COMPACTION_ATTEMPTS
-  ) {
-    logCompactionDecision("give_up", input.state.overflowCompactionAttempts);
-  }
-  const preflightCompactionFailed = isPreflightRecovery && failedCompactionReason !== undefined;
-  const kind =
-    isCompactionFailure || preflightCompactionFailed ? "compaction_failure" : "context_overflow";
-  const failureText = preflightCompactionFailed
-    ? `Auto-compaction failed before the next model request: ${failedCompactionReason}`
+  // A benign skip after a provider rejection leaves that overflow as the accurate cause.
+  const recoveryCompactionFailed =
+    failedCompactionReason !== undefined && (isPreflightRecovery || !compactionSkippedBenignly);
+  const reasonClass = classifyCompactionReason(failedCompactionReason);
+  const unshrinkableRequest = reasonClass === "unshrinkable_request";
+  const compactionFailed = recoveryCompactionFailed || unshrinkableRequest;
+  const kind = isCompactionFailure || compactionFailed ? "compaction_failure" : "context_overflow";
+  const failurePhase = isPreflightRecovery
+    ? "before the next model request"
+    : "after the provider rejected the prompt";
+  const failureText = compactionFailed
+    ? `Auto-compaction failed ${failurePhase}: ${failedCompactionReason}`
     : errorText;
-  const userText = preflightCompactionFailed
-    ? `${classifyCompactionReason(failedCompactionReason) === "timeout" ? "Auto-compaction timed out" : "Auto-compaction failed"} before the next model request. Try again or run /compact.` +
-      renderRecoverySideEffectCaution(input.attempt)
-    : renderOverflowResetGuidance(input.attempt);
+  const userText = unshrinkableRequest
+    ? `${failedCompactionReason}` + renderRecoverySideEffectCaution(input.attempt)
+    : recoveryCompactionFailed
+      ? `${reasonClass === "timeout" ? "Auto-compaction timed out" : "Auto-compaction failed"} ${failurePhase}. Try again or run /compact.` +
+        renderRecoverySideEffectCaution(input.attempt)
+      : CONTEXT_OVERFLOW_ERROR_MESSAGE + renderRecoverySideEffectCaution(input.attempt);
   log.warn(
     `[context-overflow-recovery] exhausted ${isPreflightRecovery ? "context budget" : "provider overflow"} recovery for ${input.modelSelection.provider}/${input.modelSelection.model}; ` +
-      `livenessState=blocked suggestedAction=${preflightCompactionFailed ? "retry_or_compact" : "reset_or_new"} kind=${kind}`,
+      `livenessState=blocked suggestedAction=${unshrinkableRequest ? "reduce_context" : recoveryCompactionFailed ? "retry_or_compact" : "reset_or_new"} kind=${kind}`,
   );
   return { action: "surface", kind, errorText: failureText, userText };
 }

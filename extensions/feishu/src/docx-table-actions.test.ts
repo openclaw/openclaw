@@ -6,18 +6,8 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
-const toolAccountModule = await import("./tool-account.js");
 const clientModule = await import("./client.js");
 vi.spyOn(clientModule, "createFeishuClient").mockImplementation(() => createFeishuClientMock());
-vi.spyOn(toolAccountModule, "resolveAnyEnabledFeishuToolsConfig").mockReturnValue({
-  doc: true,
-  chat: false,
-  wiki: false,
-  drive: false,
-  perm: false,
-  scopes: false,
-  bitable: false,
-});
 const { registerFeishuDocTools } = await import("./docx.js");
 
 type Patch = Lark.Client["docx"]["documentBlock"]["patch"];
@@ -115,6 +105,41 @@ describe("registered feishu_doc table patches", () => {
   });
   beforeEach(() => {
     createFeishuClientMock.mockReset();
+  });
+
+  it("preserves existing table cell content when replacement Markdown conversion fails", async () => {
+    const client = createClient();
+    vi.spyOn(client.docx.documentBlock, "get").mockResolvedValue({
+      code: 0,
+      data: {
+        block: {
+          block_type: 31,
+          table: { property: { row_size: 1, column_size: 1 }, cells: ["cell_existing"] },
+        },
+      },
+    });
+    vi.spyOn(client.docx.documentBlockChildren, "get").mockResolvedValue({
+      code: 0,
+      data: { items: [{ block_id: "text_existing", block_type: 2 }] },
+    });
+    const remove = vi
+      .spyOn(client.docx.documentBlockChildren, "batchDelete")
+      .mockResolvedValue({ code: 0 });
+    vi.spyOn(client.docx.document, "convert").mockResolvedValue({
+      code: 999,
+      msg: "replacement Markdown rejected",
+    });
+
+    expectResult(
+      await resolveTool(client).execute("replace-table-cell", {
+        action: "write_table_cells",
+        doc_token: "doc_table",
+        table_block_id: "table_target",
+        values: [["Replacement content"]],
+      }),
+      { error: "replacement Markdown rejected" },
+    );
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it("captures delete counts before PATCH settles", async () => {

@@ -18,8 +18,8 @@ import {
 } from "../managed-image-attachments.js";
 import { hasAssistantDisplayMediaContent } from "../server-methods/chat-assistant-content.js";
 import {
+  captureWebchatReplyMediaAuthority,
   prepareWebchatReplyMediaForDisplay,
-  webchatReplyMediaAuthority,
 } from "../server-methods/chat-reply-media.js";
 import type { createAssistantCommentaryMediaCustody } from "../server-methods/chat-send-commentary-media.js";
 import {
@@ -27,7 +27,10 @@ import {
   publishAssistantTranscriptRewrite,
 } from "../server-methods/chat-transcript-persistence.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
-import { prepareSessionPlacementRead } from "../worker-environments/placement-turn-authority.js";
+import {
+  capturePlacementReplicaRead,
+  prepareSessionPlacementRead,
+} from "../worker-environments/placement-turn-authority.js";
 
 /** Materialize one visible agent final before its Gateway run releases custody. */
 export async function finalizeAgentRunMedia(
@@ -63,16 +66,24 @@ export async function finalizeAgentRunMedia(
   let releaseSource: (() => void) | undefined;
   let releasePlacement: (() => void) | undefined;
   let work: Promise<void> | undefined;
+  const release = () => {
+    active = false;
+    predicate?.release();
+    releaseSource?.();
+    releasePlacement?.();
+  };
   try {
     const state = captureOpenClawStateWorkerContext();
     const placement = await prepareSessionPlacementRead(
       state.admission.databasePath,
       reply.sessionId,
       async () => {
+        const publish = capturePlacementReplicaRead(state.admission.identity);
         const records = await executeOpenClawStateWorker(state, {
           type: "workerPlacements.read",
           input: { sessionIds: [reply.sessionId] },
         });
+        publish(records, [reply.sessionId]);
         return records[0];
       },
     );
@@ -101,14 +112,12 @@ export async function finalizeAgentRunMedia(
           requesterContext: params.requesterContext,
           accountId: params.accountId,
         };
-        const expected = webchatReplyMediaAuthority(scope, initialPlacement);
+        const authority = captureWebchatReplyMediaAuthority(scope, initialPlacement);
         predicate = retainPreparedSessionEntryPredicate({
           databaseIdentity,
           sessionKey: selected.legacyKey ?? selected.canonicalKey,
           entry: selected.entry,
-          matches: (_before, after) =>
-            webchatReplyMediaAuthority({ ...scope, sessionEntry: after }, initialPlacement).key ===
-            expected.key,
+          matches: (_before, after) => authority.matches(after, initialPlacement),
         });
         releaseSource = registerOpenClawAgentDatabaseAsyncResource({
           agentId: source.agentId,
@@ -124,15 +133,16 @@ export async function finalizeAgentRunMedia(
         return {
           ...scope,
           readSource: source,
-          workspace: expected.workspace,
+          workspace: authority.workspace,
+          prepareRead: predicate.prepareRead,
+          release,
           assertCurrent: () => {
             assertCurrent();
             assertExistingDatabaseIdentity(source.path, databaseIdentity, source.databaseBirthtime);
             if (
               !active ||
               !predicate?.isCurrent() ||
-              webchatReplyMediaAuthority({ ...scope, cfg: getRuntimeConfig() }, placement.current())
-                .key !== expected.key
+              !authority.matches(scope.sessionEntry, placement.current(), getRuntimeConfig())
             ) {
               throw new SessionTranscriptWriterClaimReboundError();
             }
@@ -148,14 +158,15 @@ export async function finalizeAgentRunMedia(
         sessionId: reply.sessionId,
         storePath: reply.storePath,
       };
-      const { persistedAssistantContent: content } = await prepareWebchatReplyMediaForDisplay({
-        scope: prepared,
-        storePath: scope.storePath,
-        inputs: plan.map((entry) => ({ kind: "prepared", plan: entry })),
-        abortSignal: params.abortSignal,
-        includeSensitiveMedia: false,
-        includeSensitiveDisplay: false,
-      });
+      const { persistedAssistantContent: content, mediaBySource } =
+        await prepareWebchatReplyMediaForDisplay({
+          scope: prepared,
+          storePath: scope.storePath,
+          inputs: plan.map((entry) => ({ kind: "prepared", plan: entry })),
+          abortSignal: params.abortSignal,
+          includeSensitiveMedia: false,
+          includeSensitiveDisplay: false,
+        });
       if (!content || !hasAssistantDisplayMediaContent(content)) {
         throw new Error("WebChat final media could not be prepared");
       }
@@ -171,6 +182,7 @@ export async function finalizeAgentRunMedia(
               runId,
               expectedLifecycleRevision: reply.lifecycleRevision ?? null,
               content,
+              mediaBySource,
               mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
             }),
         );
@@ -210,9 +222,6 @@ export async function finalizeAgentRunMedia(
     })();
     await work;
   } finally {
-    active = false;
-    predicate?.release();
-    releaseSource?.();
-    releasePlacement?.();
+    release();
   }
 }

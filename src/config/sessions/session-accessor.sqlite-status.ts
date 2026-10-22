@@ -13,8 +13,10 @@ import {
 } from "./session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
-  sessionEntrySnapshotColumnsForKeys,
   type SessionEntryProjection,
+} from "./session-entry-snapshot-values.js";
+import {
+  sessionEntrySnapshotColumnsForKeys,
   type SessionEntrySnapshotRow,
 } from "./session-entry-snapshots.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
@@ -24,8 +26,6 @@ export function selectSessionEntryRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   projection: SessionEntryProjection,
   fullEntryKeys: readonly string[] = [],
-  // Prepared readers pass the column shape from this operation's fresh schema check.
-  ownerColumns?: boolean,
 ) {
   return getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
     .selectFrom("session_nodes")
@@ -38,7 +38,7 @@ export function selectSessionEntryRows(
           : sessionEntrySnapshotColumnsForKeys(undefined, projection),
       ),
     )
-    .$if(ownerColumns ?? hasSqliteSessionOwnerColumns(database.db), (query) =>
+    .$if(hasSqliteSessionOwnerColumns(database.db), (query) =>
       query.select([
         "owner_actor_type",
         "owner_actor_id",

@@ -18,7 +18,6 @@ it.skipIf(process.platform !== "linux")(
       expect(cold).toMatchObject({
         scope: "file-sample",
         sizeBytes,
-        residentPages: 0,
         residentRatio: 0,
       });
       expect(cold.sampledPages).toBeGreaterThan(2);
@@ -29,7 +28,6 @@ it.skipIf(process.platform !== "linux")(
       fs.writeSync(fd, page, 0, page.length, 0);
       fs.writeSync(fd, page, 0, page.length, sizeBytes - page.length);
       expect(readSqlitePageCacheResidency(pathname)).toMatchObject({
-        residentPages: 2,
         residentRatio: 2 / cold.sampledPages,
       });
     } finally {
@@ -40,7 +38,6 @@ it.skipIf(process.platform !== "linux")(
     expect(readSqlitePageCacheResidency(pathname)).toMatchObject({
       sizeBytes: 0,
       sampledPages: 0,
-      residentPages: 0,
       residentRatio: 1,
     });
   },

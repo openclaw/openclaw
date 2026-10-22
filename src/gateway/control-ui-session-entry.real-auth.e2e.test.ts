@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { get, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -11,16 +10,16 @@ import {
 } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
-  replaceTranscriptEvents,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS,
   ensureControlUiAssetsBuilt,
 } from "../infra/control-ui-assets.js";
-import * as commandProcess from "../process/exec.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
@@ -38,10 +37,8 @@ import { makeContextParams } from "./server-request-context.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
-// Keyless opt-in Gateway E2E, not the default unit lane. One actual HTTP server,
-// real SQLite profile/session/membership owners, and the existing built UI bundle.
-// Only document transport is delayed; authentication and access decisions are never mocked.
-// This models an already-authenticated trusted proxy, NOT Cloudflare login or its policy.
+// Real HTTP, SQLite identity/access owners and built UI; only document delivery is delayed.
+// Models an authenticated trusted proxy, not Cloudflare login or its policy.
 const basePath = "/control";
 const privatePath = "/control/chat/main/dashboard/12345678-aaaa-4000-8000-000000000001";
 const publicPath = "/control/chat/main/dashboard/87654321-aaaa-4000-8000-000000000002";
@@ -112,10 +109,9 @@ function readHttp(
 }
 
 function expectNoApp(response: HttpResult) {
-  expect(response.body).not.toContain("<openclaw-app");
-  expect(response.body).not.toContain('type="module"');
-  expect(response.body).not.toContain(privateTitle);
-  expect(response.body).not.toContain(privateMessage);
+  for (const privateContent of ["<openclaw-app", 'type="module"', privateTitle, privateMessage]) {
+    expect(response.body).not.toContain(privateContent);
+  }
 }
 
 function holdPreparedDocument() {
@@ -125,8 +121,7 @@ function holdPreparedDocument() {
   const spy = vi
     .spyOn(documentTransport, "sendControlUiHtmlBody")
     .mockImplementationOnce(async (req, res, body, isCurrent) => {
-      // Real file-worker read and index/path/CSP preparation have finished.
-      // The production encoder and final live-authority check still own delivery.
+      // Pause after real preparation, before encoding and final live-authority delivery.
       entered.resolve({ body, res, current: isCurrent?.() === true });
       await resume.promise;
       await send(req, res, body, isCurrent);
@@ -149,45 +144,23 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
   let auth: ResolvedGatewayAuth;
 
   beforeAll(async () => {
-    // qaRuntime snapshots omit UI assets. The existing owner builds the real bundle
-    // once inside the admitted isolated checkout; no host artifacts or fake shell.
-    const run = commandProcess.runCommandWithTimeout;
-    const diagnostics = vi
-      .spyOn(commandProcess, "runCommandWithTimeout")
-      .mockImplementation(async (...args) => {
-        const result = await run(...args);
-        if (result.code !== 0 || result.termination !== "exit") {
-          console.error("Control UI build process failure:", result);
-        }
-        return result;
-      });
-    try {
-      const assets = await ensureControlUiAssetsBuilt(undefined, { root: process.cwd() });
-      if (!assets.ok) {
-        throw new Error(assets.message);
-      }
-    } finally {
-      diagnostics.mockRestore();
+    const assets = await ensureControlUiAssetsBuilt(undefined, { root: process.cwd() });
+    if (!assets.ok) {
+      throw new Error(assets.message);
     }
   }, CONTROL_UI_ASSETS_BUILD_TIMEOUT_MS);
 
   beforeAll(async () => {
-    // The build owner above validates all startup assets, not just an HTML sentinel.
     const root = path.resolve("dist/control-ui");
     index = await readFile(path.join(root, "index.html"), "utf8");
     expect(index).toContain("<openclaw-app");
     expect(index).toContain('type="module"');
-    console.info("HTTP handoff UI index sha256:", createHash("sha256").update(index).digest("hex"));
     state = await createOpenClawTestState({
       scenario: "minimal",
       label: "session-entry-real-auth",
     });
     const trustedProxy = { userHeader: "x-forwarded-user", allowLoopback: true };
-    auth = {
-      mode: "trusted-proxy",
-      trustedProxy,
-      allowTailscale: false,
-    };
+    auth = { mode: "trusted-proxy", trustedProxy, allowTailscale: false };
     const cfg: OpenClawConfig = {
       agents: { entries: { main: {} } },
       gateway: {
@@ -212,41 +185,33 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     await setCanonicalUserProfileRole(deniedId, "denied", {
       onCommitted: invalidateOperatorRolePolicy,
     });
-    await upsertSessionEntryCore(privateScope, {
-      sessionId: "private-http-instance",
-      updatedAt: 1,
-      displayName: privateTitle,
-      visibility: "read-only",
-      createdActor: { type: "human", source: "profile", id: ownerId },
-    });
-    await replaceTranscriptEvents(privateScope, [
-      { type: "session", version: 3, id: "private-http-instance" },
-      {
-        type: "message",
-        id: "private-message",
-        message: { role: "user", content: privateMessage },
-      },
-    ]);
+    for (const [scope, displayName, content, fields] of [
+      [privateScope, privateTitle, privateMessage, { visibility: "read-only" }],
+      [
+        publicScope,
+        "Public HTTP handoff conversation",
+        publishedMessage,
+        {
+          publicShare: { id: "a".repeat(48), sessionId: publicScope.sessionId, createdAt: 1 },
+        },
+      ],
+    ] as const) {
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: scope === privateScope ? 1 : 2,
+        displayName,
+        createdActor: { type: "human", source: "profile", id: ownerId },
+        ...fields,
+      });
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        { type: "message", id: `${scope.sessionId}-message`, message: { role: "user", content } },
+      ]);
+    }
     await addSessionMember(privateScope, { identityId: memberId, addedBy: ownerId });
-    await upsertSessionEntryCore(publicScope, {
-      sessionId: "public-http-instance",
-      updatedAt: 2,
-      displayName: "Public HTTP handoff conversation",
-      createdActor: { type: "human", source: "profile", id: ownerId },
-      publicShare: { id: "a".repeat(48), sessionId: "public-http-instance", createdAt: 1 },
-    });
-    await replaceTranscriptEvents(publicScope, [
-      { type: "session", version: 3, id: "public-http-instance" },
-      {
-        type: "message",
-        id: "public-message",
-        message: { role: "user", content: publishedMessage },
-      },
-    ]);
     projection = await createSessionRowProjection({ cfg, getConfig: () => cfg, modelCatalog: [] });
     await projection.ensureMaterialized();
-    // Reuse the suite context fixture only for unrelated scheduler/WS services.
-    // The bound resident projection and every HTTP auth/profile/access owner are real.
+    // Context stubs unrelated scheduler/WS services, not projection/auth/access owners.
     const context = createGatewayRequestContext(makeContextParams());
     context.resolveGatewayContext = () => context;
     bindSessionRowProjection(context, () => projection);
@@ -311,6 +276,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
           const app = await readHttp(port, entry, undefined, signal, headers);
           expect(app.status).toBe(200);
           expect(app.body).toContain("<openclaw-app");
+          expect(app.headers["x-openclaw-session-entry"]).toBeUndefined();
         }
         const nonSecure = await readHttp(port, privatePath, undefined, signal, {
           host: "gateway.lan",
@@ -342,13 +308,15 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
       expect(moduleSource).toBeTruthy();
       expect(response.body).toContain(moduleSource!.replace("./assets/", basePath + "/assets/"));
       expect(response.body).toContain(
-        'history.replaceState(null,"",' + JSON.stringify(privatePath),
+        `history.replaceState(null,"","${privatePath}"+location.hash)`,
       );
       expect(response.body.indexOf("history.replaceState")).toBeLessThan(
         response.body.indexOf('type="module"'),
       );
-      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers["cache-control"]).toBe("private, no-store");
       expect(response.headers["content-encoding"]).toBe("gzip");
+      expect(response.headers["x-openclaw-session-entry"]).toBe("1");
+      expect(response.headers["content-security-policy"]).toContain("connect-src 'self' ws: wss:");
       for (const hash of computeInlineScriptHashes(response.body)) {
         expect(response.headers["content-security-policy"]).toContain(hash);
       }
@@ -364,12 +332,11 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     expect(probe.status).toBe(403);
     expectNoApp(probe);
     const document = await readHttp(port, entry, deniedEmail, signal);
-    expect(document.status).toBe(303);
-    expect(document.headers.location).toBe(privatePath);
+    expect(document.status).toBe(403);
+    expect(document.headers.location).toBeUndefined();
+    expect(document.headers["x-openclaw-session-entry"]).toBeUndefined();
     expectNoApp(document);
-    const unavailable = await readHttp(port, document.headers.location!, deniedEmail, signal);
-    expect(unavailable.status).toBe(404);
-    expectNoApp(unavailable);
+    expect(document.body).toContain("Session unavailable");
   });
 
   it("ignores spoofed identity on anonymous canonical documents while protecting the handoff", async ({
@@ -399,7 +366,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
     }
   });
 
-  for (const change of ["membership", "role"] as const) {
+  for (const change of ["visibility", "role"] as const) {
     it(`withholds all app bytes when ${change} changes after real document preparation`, async ({
       signal,
     }) => {
@@ -419,8 +386,9 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         expect(prepared.current).toBe(true);
         expect(prepared.body).toContain("<openclaw-app");
         expect(prepared.res.headersSent).toBe(false);
-        if (change === "membership") {
-          expect(await removeSessionMember(privateScope, memberId)).not.toBeNull();
+        if (change === "visibility") {
+          // Membership alone does not grant or revoke this role's read access.
+          await patchSessionEntryCore(privateScope, () => ({ visibility: "draft" }));
         } else {
           await setCanonicalUserProfileRole(memberId, "denied", {
             onCommitted: invalidateOperatorRolePolicy,
@@ -430,13 +398,20 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
         held.resume();
         const response = await pending;
         expect(response.status).toBe(403);
+        expect(response.headers.location).toBeUndefined();
+        expect(response.headers["cache-control"]).toBe("no-store");
         expect(response.headers["content-encoding"]).toBeUndefined();
-        expect(response.body).toBe("Session access changed. Reload the conversation.");
+        expect(response.headers["content-type"]).toBe("text/plain; charset=utf-8");
+        expect(response.headers["content-security-policy"]).toBeUndefined();
+        expect(response.body).toContain("Session access changed");
         expectNoApp(response);
       } finally {
         held.resume();
         await Promise.allSettled([pending]);
         held.restore();
+        if (change === "visibility") {
+          await patchSessionEntryCore(privateScope, () => ({ visibility: "read-only" }));
+        }
         await setCanonicalUserProfileRole(memberId, null, {
           onCommitted: invalidateOperatorRolePolicy,
         });

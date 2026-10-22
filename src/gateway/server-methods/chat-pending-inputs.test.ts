@@ -1,44 +1,236 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import {
   appendTranscriptMessage,
+  appendTranscriptMessages,
   bindSessionPendingInputSources,
   listSessionPendingInputs,
   stageSessionPendingInput,
   upsertSessionEntryCore,
   loadTranscriptEvents,
+  type SessionPendingInputReceipt,
 } from "../../config/sessions/session-accessor.js";
 import { saveCronJobsStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
+import { retireSessionControllerSourceCancellation } from "../../sessions/session-controller.mailbox.js";
+import { requestRpcSourceCancellation } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
 import { setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  abortQueuedChatTurnById,
-  registerQueuedChatTurn,
-  retireQueuedChatTurnCancellation,
-} from "../chat-queued-turns.js";
+import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
+import { createChatMetadataHarness } from "./chat-metadata-runtime.test-support.js";
 import { readChatPendingInputs } from "./chat-pending-inputs.js";
+import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
+import type { GatewayRequestContext } from "./types.js";
+
+async function createScope(name: string, sessionId = name) {
+  await captureRuntimeConfigAsyncReader()();
+  const scope = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId };
+  await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
+  return scope;
+}
+
+function pendingInputs(scope: Parameters<typeof stageSessionPendingInput>[0]) {
+  const receipts: SessionPendingInputReceipt[] = [];
+  return {
+    receipts,
+    async stage(
+      runId: string,
+      message: Partial<Parameters<typeof stageSessionPendingInput>[1]["message"]> = {},
+    ) {
+      const idempotencyKey = `${runId}:user`;
+      const receipt = expectDefined(
+        await stageSessionPendingInput(scope, {
+          runId,
+          assertCurrent: () => {},
+          message: { role: "user", content: runId, timestamp: 1, idempotencyKey, ...message },
+        }),
+        "pending input receipt",
+      );
+      receipts.push(receipt);
+      return receipt;
+    },
+    async [Symbol.asyncDispose]() {
+      for (const receipt of receipts) {
+        receipt.finish("interrupted");
+        await receipt.settled?.();
+      }
+    },
+  };
+}
+
+async function read(
+  context: GatewayRequestContext,
+  params: Record<string, unknown>,
+  method: "chat.history" | "chat.startup" | "chat.message.get" = "chat.history",
+) {
+  const handler =
+    method === "chat.message.get" ? chatMessageGetHandlers[method] : chatHistoryHandlers[method];
+  let result: unknown;
+  const handle = expectDefined(handler, "read handler");
+  await handle({
+    params,
+    context,
+    respond: (ok, payload, error) => {
+      expect([ok, error]).toEqual([true, undefined]);
+      result = payload;
+    },
+    req: { type: "req", id: "history", method },
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return expectDefined(asOptionalRecord(result), "read response");
+}
 
 describe("pending input read boundary", () => {
-  it("prepares automation names once per pending page from the Gateway's selected partition", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:pending-automation",
-        sessionId: "pending-automation",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  it("omits retained startup state while delivering changed pending inputs and session metadata", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("warm-metadata");
+      await upsertSessionEntryCore(scope, {
+        displayName: "Synthetic warm conversation",
+        goal: {
+          schemaVersion: 1,
+          id: "warm-goal",
+          objective: "Review the synthetic project and its pending followups. ".repeat(30),
+          status: "complete",
+          createdAt: 1,
+          updatedAt: 1,
+          tokenStart: 0,
+          tokensUsed: 0,
+          continuationTurns: 0,
+        },
+      });
+      await appendTranscriptMessages(scope, {
+        messages: Array.from({ length: 820 }, (_, index) => ({
+          message: { role: index % 2 ? "assistant" : "user", content: `Message ${index}` },
+        })),
+      });
+      const context = await createHistoryReadContext();
+      const metadata = createChatMetadataHarness();
+      onTestFinished(metadata.runtime.stop);
+      const commands = Array.from({ length: 150 }, (_, index) => ({
+        name: `synthetic_command_${index}`,
+        description: "Synthetic skill or plugin command description. ".repeat(6),
+        source: index % 2 ? ("skill" as const) : ("plugin" as const),
+        scope: "text" as const,
+        acceptsArgs: true,
+      }));
+      metadata.buildCommands.mockResolvedValue({ commands });
+      await metadata.refresh();
+      await metadata.read();
+      context.readChatStartupProjection = metadata.runtime.readStartup;
+      const call = (params: Record<string, unknown> = {}) =>
+        read(
+          context,
+          { sessionKey: scope.sessionKey, limit: 80, knownState: {}, ...params },
+          "chat.startup",
+        );
+      await using inputs = pendingInputs(scope);
+      for (const runId of [
+        "followup",
+        "steer",
+        "review",
+        "build",
+        "docs",
+        "tests",
+        "assets",
+        "verify",
+      ]) {
+        await inputs.stage(runId, {
+          content: "Synthetic pending project instructions. ".repeat(780),
+          __openclaw: {
+            media: [{ url: "media://inbound/fixture.txt", fileName: "fixture.txt", kind: "file" }],
+          },
+        });
+      }
+      const first = await call();
+      expect(first.metadata).toMatchObject({ commands });
+      const legacy = await call({ cursor: first.deltaCursor, knownState: undefined });
+      expect(legacy).toMatchObject({ kind: "delta", messages: [], pendingInputs: { total: 8 } });
+      expect(Buffer.byteLength(JSON.stringify(legacy))).toBeGreaterThan(60_000);
+      const warm = await call({ cursor: first.deltaCursor, knownState: first.stateRevision });
+      expect(warm).toMatchObject({
+        kind: "delta",
+        messages: [],
+        stateRevision: first.stateRevision,
+      });
+      expect(warm.pendingInputs).toBeUndefined();
+      expect(warm.sessionInfo).toBeUndefined();
+      expect(warm.sessionInfoSnapshotAt).toBeTypeOf("number");
+      expect(asOptionalRecord(warm.metadata)?.commands).toBeUndefined();
+      expect(Buffer.byteLength(JSON.stringify(warm))).toBeLessThan(2_500);
+
+      metadata.setSkillsVersion(2);
+      metadata.buildCommands.mockResolvedValue({
+        commands: [{ ...expectDefined(commands[0], "command"), name: "replacement_skill" }],
+      });
+      await metadata.refresh();
+      await metadata.read();
+      const refreshed = await call({ cursor: warm.deltaCursor, knownState: warm.stateRevision });
+      expect(refreshed.metadata).toMatchObject({ commands: [{ name: "replacement_skill" }] });
+      expect(refreshed.stateRevision).not.toEqual(warm.stateRevision);
+
+      const source = createRpcSourceForTest(
+        {},
+        {
+          ...scope,
+          runId: "followup",
+          storeScope: captureRpcTargetForTest(scope).storeScope,
+          phase: "waiting",
+        },
+      );
+      rpcSourceTesting.set("followup", source);
+      const queued = await call({ cursor: warm.deltaCursor, knownState: warm.stateRevision });
+      expect(queued.pendingInputs).toMatchObject({
+        queuedCount: 1,
+        items: expect.arrayContaining([
+          expect.objectContaining({ runId: "followup", queued: true }),
+        ]),
+      });
+      expect(queued.sessionInfo).toMatchObject({
+        hasActiveRun: true,
+        activeRunIds: ["followup"],
+        status: "queued",
+      });
+      requestRpcSourceCancellation(source);
+      for (const receipt of inputs.receipts) {
+        await receipt.run(() => appendTranscriptMessage(scope, { message: receipt.message }));
+      }
+      const consumed = await call({ cursor: queued.deltaCursor, knownState: queued.stateRevision });
+      expect(consumed.pendingInputs).toMatchObject({ items: [], total: 0, queuedCount: 0 });
+      expect(consumed.messages).toHaveLength(8);
+      await upsertSessionEntryCore(scope, { displayName: "Renamed synthetic conversation" });
+      const renamed = await call({
+        cursor: consumed.deltaCursor,
+        knownState: consumed.stateRevision,
+      });
+      expect(renamed.sessionInfo).toMatchObject({ displayName: "Renamed synthetic conversation" });
+      expect(renamed.pendingInputs).toBeUndefined();
+      // A receipt alone cannot suppress the baseline required after a cursor reset.
+      const full = await call({ knownState: renamed.stateRevision });
+      expect(full.pendingInputs).toMatchObject({ items: [], total: 0 });
+      expect(full.sessionInfo).toBeDefined();
+      expect(await call({ cursor: "invalid", knownState: renamed.stateRevision })).toEqual({
+        kind: "reset",
+      });
+    }));
+
+  it("prepares automation names once per pending page from the Gateway's selected partition", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = await createScope("pending-automation");
       const job: CronJob = {
         id: "report",
         name: "Wrong partition",
@@ -54,138 +246,77 @@ describe("pending input read boundary", () => {
       await saveCronJobsStore(state.statePath("cron", "jobs.json"), { version: 1, jobs: [job] });
       const cronStorePath = state.statePath("selected-cron", "jobs.json");
       const context = await createHistoryReadContext({ cronStorePath });
-      const receipts = [];
-      try {
-        for (let index = 0; index < 20; index += 1) {
-          receipts.push(
-            expectDefined(
-              await stageSessionPendingInput(scope, {
-                runId: `automation-${index}`,
-                assertCurrent: () => {},
-                message: {
-                  role: "user",
-                  content: "The queue is clear.",
-                  timestamp: 1,
-                  idempotencyKey: `automation-${index}:user`,
-                  provenance: {
-                    kind: "inter_session",
-                    sourceTool: "sessions_send",
-                    sourceSessionKey: "agent:main:cron:report:run:finished",
-                  },
-                },
-              }),
-              "pending automation receipt",
-            ),
-          );
-        }
-        for (const name of ["Selected automation", "Renamed automation", undefined]) {
-          await saveCronJobsStore(cronStorePath, {
-            version: 1,
-            jobs: name ? [{ ...job, name }] : [],
+      await using inputs = pendingInputs(scope);
+      const { receipts } = inputs;
+      for (let index = 0; index < 20; index += 1) {
+        await inputs.stage(`automation-${index}`, {
+          content: "The queue is clear.",
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: "agent:main:cron:report:run:finished",
+          },
+        });
+      }
+      for (const name of ["Selected automation", "Renamed automation", undefined]) {
+        await saveCronJobsStore(cronStorePath, {
+          version: 1,
+          jobs: name ? [{ ...job, name }] : [],
+        });
+        const counter = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
+          ["names", "selection"],
+          (sql) =>
+            /\bfrom\s+"?cron_jobs"?\b/iu.test(sql)
+              ? "names"
+              : sql.includes('"config_machine_state"')
+                ? "selection"
+                : null,
+        );
+        try {
+          const expectedMessage = {
+            role: "assistant",
+            senderSession: expect.objectContaining({ label: name ?? "Automation" }),
+          };
+          const page = await read(context, { sessionKey: scope.sessionKey });
+          expect(counter.counts).toEqual({ names: 0, selection: 0 });
+          expect(page.pendingInputs).toMatchObject({
+            total: 20,
+            items: Array.from({ length: 20 }, () => ({ message: expectedMessage })),
           });
-          const counter = trackSqliteStatementExecutions(
-            openOpenClawStateDatabase().db,
-            ["names", "selection"],
-            (sql) =>
-              /\bfrom\s+"?cron_jobs"?\b/iu.test(sql)
-                ? "names"
-                : sql.includes('"config_machine_state"')
-                  ? "selection"
-                  : null,
+          const message = await read(
+            context,
+            {
+              sessionKey: scope.sessionKey,
+              messageId: `pending:${expectDefined(receipts[0], "first automation receipt").inputId}`,
+            },
+            "chat.message.get",
           );
-          try {
-            const expectedMessage = {
-              role: "assistant",
-              senderSession: expect.objectContaining({ label: name ?? "Automation" }),
-            };
-            const respond = vi.fn();
-            await expectDefined(
-              chatHistoryHandlers["chat.history"],
-              "history handler",
-            )({
-              params: { sessionKey: scope.sessionKey },
-              context,
-              req: { type: "req", id: "history", method: "chat.history" },
-              client: null,
-              isWebchatConnect: () => false,
-              respond,
-            });
-            expect(counter.counts).toEqual({ names: 0, selection: 0 });
-            expect(respond).toHaveBeenLastCalledWith(
-              true,
-              expect.objectContaining({
-                pendingInputs: expect.objectContaining({
-                  total: 20,
-                  items: Array.from({ length: 20 }, () =>
-                    expect.objectContaining({ message: expect.objectContaining(expectedMessage) }),
-                  ),
-                }),
-              }),
-            );
-            await expectDefined(
-              chatMessageGetHandlers["chat.message.get"],
-              "message handler",
-            )({
-              params: {
-                sessionKey: scope.sessionKey,
-                messageId: `pending:${expectDefined(receipts[0], "first automation receipt").inputId}`,
-              },
-              context,
-              req: { type: "req", id: "message", method: "chat.message.get" },
-              client: null,
-              isWebchatConnect: () => false,
-              respond,
-            });
-            expect(respond).toHaveBeenLastCalledWith(true, {
-              ok: true,
-              message: expect.objectContaining(expectedMessage),
-            });
-            expect(counter.counts).toEqual({ names: 0, selection: 0 });
-          } finally {
-            counter.restore();
-          }
-        }
-      } finally {
-        for (const receipt of receipts) {
-          receipt.finish("interrupted");
-          await receipt.settled?.();
+          expect(message).toEqual({ ok: true, message: expect.objectContaining(expectedMessage) });
+          expect(counter.counts).toEqual({ names: 0, selection: 0 });
+        } finally {
+          counter.restore();
         }
       }
-    });
-  });
+    }));
 
-  it("projects pending input acceptance times with fresh page-scoped sender displays", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("projects pending input acceptance times with fresh page-scoped sender displays", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("pending-display-time");
       const profile = ensureProfileForEmail("pending-sender@example.test");
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:pending-display-time",
-        sessionId: "pending-display-time",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const receipts = [];
-      const readDisplay = vi.spyOn(userProfileList, "getUserProfileDisplay");
+      await using inputs = pendingInputs(scope);
+      const { receipts } = inputs;
+      const readDisplay = vi.spyOn(userProfileList, "getResidentUserProfileDisplay");
       try {
         for (let index = 0; index < 20; index += 1) {
-          receipts.push(
-            expectDefined(
-              await stageSessionPendingInput(scope, {
-                runId: `pending-display-run-${index}`,
-                assertCurrent: () => {},
-                message: {
-                  role: "user",
-                  content: `Pending input ${index}`,
-                  timestamp: 1_000 + index,
-                  idempotencyKey: `pending-display-run-${index}:user`,
-                  __openclaw: {
-                    senderIdentity: { type: "profile", id: profile.id },
-                    senderName: "Historical sender",
-                  },
-                },
-              }),
-              "pending input receipt",
-            ),
-          );
+          await inputs.stage(`pending-display-run-${index}`, {
+            content: `Pending input ${index}`,
+            timestamp: 1_000 + index,
+            __openclaw: {
+              senderIdentity: { type: "profile", id: profile.id },
+              senderName: "Historical sender",
+            },
+          });
         }
         // Acceptance belongs to the writer worker, independently of the display projection.
         const storedInputs = await listSessionPendingInputs(scope);
@@ -201,45 +332,29 @@ describe("pending input read boundary", () => {
           {},
           {},
         ].entries()) {
-          const controller = new AbortController();
           const runId = index === 5 ? "external-run-".repeat(30) : `pending-display-run-${index}`;
-          expect(
-            registerQueuedChatTurn({
-              chatQueuedTurns: context.chatQueuedTurns,
+          const ref = createRpcSourceForTest(
+            {},
+            {
+              runId,
+              storeScope: captureRpcTargetForTest(scope).storeScope,
+              phase: "waiting",
               ...scope,
               ...overrides,
-              runId,
-              controller,
-            }),
-          ).toBe(true);
+            },
+          );
+          rpcSourceTesting.set(runId, ref);
           if (index === 3) {
-            retireQueuedChatTurnCancellation(context.chatQueuedTurns, runId, controller);
+            retireSessionControllerSourceCancellation(ref.input);
           } else if (index === 4) {
-            controller.abort();
+            requestRpcSourceCancellation(ref);
           }
         }
         const readPage = async () => {
           readDisplay.mockClear();
-          let result: unknown;
-          await expectDefined(
-            chatHistoryHandlers["chat.history"],
-            "history handler",
-          )({
-            params: { sessionKey: scope.sessionKey },
-            context,
-            req: { type: "req", id: "history", method: "chat.history" },
-            client: null,
-            isWebchatConnect: () => false,
-            respond: (ok, payload, error) => {
-              expect(error).toBeUndefined();
-              expect(ok).toBe(true);
-              result = payload;
-            },
-          });
-          const page = expectDefined(asOptionalRecord(result), "history response");
+          const page = await read(context, { sessionKey: scope.sessionKey });
           const pending = expectDefined(asOptionalRecord(page.pendingInputs), "pending inputs");
-          expect(pending.total).toBe(20);
-          expect(pending.queuedCount).toBe(1);
+          expect(pending).toMatchObject({ total: 20, queuedCount: 1 });
           expect(readDisplay.mock.calls.filter(([id]) => id === profile.id)).toHaveLength(1);
           return pending.items as Array<Record<string, unknown>>;
         };
@@ -273,15 +388,11 @@ describe("pending input read boundary", () => {
         expect(initialBytes).not.toContain("idempotencyKey");
         expect(setAvatar(profile.id, Buffer.from("updated avatar"), "image/png").ok).toBe(true);
         const updated = await readPage();
-        const initialMessage = asOptionalRecord(initial[0]?.message);
-        const updatedMessage = asOptionalRecord(updated[0]?.message);
-        const initialAvatar = asOptionalRecord(
-          initialMessage?.["__openclaw"],
-        )?.senderProfileAvatarUrl;
-        const updatedAvatar = asOptionalRecord(
-          updatedMessage?.["__openclaw"],
-        )?.senderProfileAvatarUrl;
-        expect(updatedAvatar).not.toBe(initialAvatar);
+        const avatar = (items: typeof initial) =>
+          asOptionalRecord(asOptionalRecord(items[0]?.message)?.["__openclaw"])
+            ?.senderProfileAvatarUrl;
+        const updatedAvatar = avatar(updated);
+        expect(updatedAvatar).not.toBe(avatar(initial));
         expect(updated).toEqual(
           initial.map((item) => {
             const message = expectDefined(asOptionalRecord(item.message), "pending message");
@@ -300,286 +411,159 @@ describe("pending input read boundary", () => {
         expect(JSON.stringify(initial)).toBe(initialBytes);
       } finally {
         readDisplay.mockRestore();
-        for (const receipt of receipts) {
-          receipt.finish("interrupted");
-          await receipt.settled?.();
-        }
       }
-    });
-  });
+    }));
 
-  it("keeps cancelled input readable and sanitized without changing the transcript or crossing a reset", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:accepted",
-        sessionId: "accepted-session",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const receipt = expectDefined(
-        await stageSessionPendingInput(scope, {
-          runId: "r".repeat(300),
-          assertCurrent: () => {},
-          message: {
-            role: "user",
-            content: "Accepted input ".repeat(2000),
-            timestamp: 1,
-            idempotencyKey: "queued:user",
-            __openclaw: {
-              media: [
-                {
-                  kind: "image",
-                  data: "synthetic-inline-payload",
-                  url: "https://example.test/image?credential=synthetic",
-                },
-              ],
+  it("keeps cancelled input readable and sanitized without changing the transcript or crossing a reset", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("accepted", "accepted-session");
+      await using inputs = pendingInputs(scope);
+      const receipt = await inputs.stage("r".repeat(300), {
+        content: "Accepted input ".repeat(2000),
+        idempotencyKey: "queued:user",
+        __openclaw: {
+          media: [
+            {
+              kind: "image",
+              data: "synthetic-inline-payload",
+              url: "https://example.test/image?credential=synthetic",
             },
-          },
-        }),
-        "pending receipt",
-      );
-      try {
-        receipt.finish("cancelled");
-        await receipt.settled?.();
-        const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
-        const displayId = `pending:${receipt.inputId}`;
-        expect(page).toMatchObject({
-          total: 1,
-          items: [
-            { state: "cancelled", message: { __openclaw: { id: displayId, truncated: true } } },
           ],
-        });
-        expect(page.items[0]).not.toHaveProperty("runId");
-        expect(JSON.stringify(page)).not.toContain("synthetic-inline-payload");
-        expect(JSON.stringify(page)).not.toContain("credential=");
-        expect(await loadTranscriptEvents(scope)).toEqual([]);
-        const respond = vi.fn();
-        const context = await createHistoryReadContext();
-        const lookup = () =>
-          expectDefined(
-            chatMessageGetHandlers["chat.message.get"],
-            "message handler",
-          )({
-            params: { sessionKey: scope.sessionKey, messageId: displayId },
-            respond,
-            context,
-            req: {} as never,
-            client: null,
-            isWebchatConnect: () => false,
-          });
-        const sql = observeHostDataSql();
-        try {
-          await lookup();
-          expect(sql.queries).toEqual([]);
-        } finally {
-          sql.restore();
-        }
-        expect(respond).toHaveBeenLastCalledWith(
-          true,
-          expect.objectContaining({
-            ok: true,
-            message: expect.objectContaining({ content: receipt.message.content }),
-          }),
-        );
-        await upsertSessionEntryCore(scope, { sessionId: "replacement-session", updatedAt: 2 });
-        await lookup();
-        expect(respond).toHaveBeenLastCalledWith(true, {
-          ok: false,
-          unavailableReason: "not_found",
-        });
-      } finally {
-        receipt.finish("interrupted");
-        await receipt.settled?.();
-      }
-    });
-  });
-
-  it("does not reveal an input hidden by the canonical history visibility policy", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:hidden-input",
-        sessionId: "hidden-session",
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const receipt = expectDefined(
-        await stageSessionPendingInput(scope, {
-          runId: "hidden-run",
-          assertCurrent: () => {},
-          message: {
-            role: "user",
-            display: false,
-            content: "Internal continuation",
-            timestamp: 1,
-            idempotencyKey: "hidden:user",
-          },
-        }),
-        "hidden pending receipt",
-      );
-      try {
-        expect((await readChatPendingInputs(scope, { limit: 20, maxChars: 100 })).items).toEqual(
-          [],
-        );
-        const respond = vi.fn();
-        await expectDefined(
-          chatMessageGetHandlers["chat.message.get"],
-          "message handler",
-        )({
-          params: { sessionKey: scope.sessionKey, messageId: `pending:${receipt.inputId}` },
-          respond,
-          context: await createHistoryReadContext(),
-          req: {} as never,
-          client: null,
-          isWebchatConnect: () => false,
-        });
-        expect(respond).toHaveBeenCalledWith(true, { ok: false, unavailableReason: "not_visible" });
-      } finally {
-        receipt.finish("interrupted");
-        await receipt.settled?.();
-      }
-    });
-  });
-});
-
-describe("pending input consumption receipts", () => {
-  it.each(["chat.history", "chat.startup"] as const)(
-    "%s returns only requested current-session receipts in pages and empty deltas",
-    async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:collected",
-          sessionId: "collected",
-        };
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-        const context = await createHistoryReadContext();
-        const handler = expectDefined(chatHistoryHandlers[method], "history handler");
-        const call = async (params: Record<string, unknown> = {}) => {
-          let result: unknown;
-          await handler({
-            params: { sessionKey: scope.sessionKey, ...params },
-            context,
-            req: { type: "req", id: "history", method },
-            client: null,
-            isWebchatConnect: () => false,
-            respond: (ok, payload, error) => {
-              expect(error).toBeUndefined();
-              expect(ok).toBe(true);
-              result = payload;
-            },
-          });
-          return expectDefined(asOptionalRecord(result), "history response");
-        };
-        const sources = [];
-        for (const runId of ["source-a", "source-b"]) {
-          sources.push(
-            expectDefined(
-              await stageSessionPendingInput(scope, {
-                runId,
-                assertCurrent: () => {},
-                message: {
-                  role: "user",
-                  content: runId,
-                  timestamp: 1,
-                  idempotencyKey: `${runId}:user`,
-                },
-              }),
-              "source receipt",
-            ),
-          );
-        }
-        const aggregate = expectDefined(
-          bindSessionPendingInputSources(sources, {
-            role: "user",
-            content: "Collected inputs",
-            timestamp: 2,
-            idempotencyKey: "collect:batch",
-          }),
-          "aggregate receipt",
-        );
-        const retained = [];
-        try {
-          await aggregate.run(() => appendTranscriptMessage(scope, { message: aggregate.message }));
-          await appendTranscriptMessage(scope, {
-            message: { role: "assistant", content: "Later reply" },
-          });
-          const inputRunIds = ["source-a", "missing"];
-          const page = await call({ inputRunIds, limit: 1 });
-          const expected = [
-            { runId: "source-a", state: "consumed", consumedByEventId: aggregate.inputId },
-          ];
-          expect(page.inputReceipts).toEqual(expected);
-          expect(page.inputConsumptions).toEqual([
-            { runId: "source-a", consumedByEventId: aggregate.inputId },
-          ]);
-          expect(page.pendingInputs).toEqual({ items: [], total: 0, queuedCount: 0 });
-          expect(JSON.stringify(page.messages)).not.toContain("Collected inputs");
-          const delta = await call({ inputRunIds, cursor: page.deltaCursor });
-          expect(delta).toMatchObject({ kind: "delta", messages: [], inputReceipts: expected });
-          for (let index = 0; index < 21; index += 1) {
-            retained.push(
-              expectDefined(
-                await stageSessionPendingInput(scope, {
-                  runId: `retained-${index}`,
-                  assertCurrent: () => {},
-                  message: {
-                    role: "user",
-                    content: `retained-${index}`,
-                    timestamp: index + 3,
-                    idempotencyKey: `retained-${index}:user`,
-                  },
-                }),
-                "retained receipt",
-              ),
-            );
-          }
-          expect(
-            registerQueuedChatTurn({
-              chatQueuedTurns: context.chatQueuedTurns,
-              ...scope,
-              runId: "retained-0",
-              controller: new AbortController(),
-            }),
-          ).toBe(true);
-          const retainedPage = await call({ inputRunIds: ["retained-0", "retained-1"], limit: 1 });
-          expect(retainedPage.inputReceipts).toEqual([
-            { runId: "retained-0", state: "pending", queued: true },
-            { runId: "retained-1", state: "pending" },
-          ]);
-          expect(retainedPage.inputConsumptions).toEqual([]);
-          expect(retainedPage.pendingInputs).toMatchObject({
-            total: 21,
-            queuedCount: 1,
-            items: [{ runId: "retained-20" }],
-          });
-          expect(
-            abortQueuedChatTurnById(context.chatQueuedTurns, {
-              runId: "retained-0",
-              sessionKey: scope.sessionKey,
-            }).aborted,
-          ).toBe(true);
-          retained[0]?.finish("cancelled");
-          await retained[0]?.settled?.();
-          const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
-          expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });
-          expect(cancelledPage.inputReceipts).toEqual([
-            { runId: "retained-0", state: "pending", cancelled: true },
-          ]);
-          const anchor = await call({
-            inputRunIds,
-            messageId: aggregate.inputId,
-            sessionId: scope.sessionId,
-          });
-          expect(anchor.inputReceipts).toEqual([]);
-          await upsertSessionEntryCore(scope, { sessionId: "replacement", updatedAt: 2 });
-          expect((await call({ inputRunIds })).inputReceipts).toEqual([]);
-        } finally {
-          for (const receipt of [aggregate, ...sources, ...retained]) {
-            receipt.finish("interrupted");
-            await receipt.settled?.();
-          }
-        }
+        },
       });
-    },
-  );
+      receipt.finish("cancelled");
+      await receipt.settled?.();
+      const page = await readChatPendingInputs(scope, { limit: 1, maxChars: 50 });
+      const displayId = `pending:${receipt.inputId}`;
+      expect(page).toMatchObject({
+        total: 1,
+        items: [
+          { state: "cancelled", message: { __openclaw: { id: displayId, truncated: true } } },
+        ],
+      });
+      expect(page.items[0]).not.toHaveProperty("runId");
+      expect(JSON.stringify(page)).not.toMatch(/synthetic-inline-payload|credential=/);
+      expect(await loadTranscriptEvents(scope)).toEqual([]);
+      const context = await createHistoryReadContext();
+      const lookup = () =>
+        read(context, { sessionKey: scope.sessionKey, messageId: displayId }, "chat.message.get");
+      const sql = observeHostDataSql();
+      let message: Awaited<ReturnType<typeof read>>;
+      try {
+        message = await lookup();
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+      expect(message).toMatchObject({ ok: true, message: { content: receipt.message.content } });
+      await upsertSessionEntryCore(scope, { sessionId: "replacement-session", updatedAt: 2 });
+      expect(await lookup()).toEqual({ ok: false, unavailableReason: "not_found" });
+    }));
+
+  it("does not reveal an input hidden by the canonical history visibility policy", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("hidden-input", "hidden-session");
+      await using inputs = pendingInputs(scope);
+      const receipt = await inputs.stage("hidden-run", {
+        display: false,
+        content: "Internal continuation",
+        idempotencyKey: "hidden:user",
+      });
+      expect((await readChatPendingInputs(scope, { limit: 20, maxChars: 100 })).items).toEqual([]);
+      const message = await read(
+        await createHistoryReadContext(),
+        {
+          sessionKey: scope.sessionKey,
+          messageId: `pending:${receipt.inputId}`,
+        },
+        "chat.message.get",
+      );
+      expect(message).toEqual({ ok: false, unavailableReason: "not_visible" });
+    }));
 });
+
+it.each(["chat.history", "chat.startup"] as const)(
+  "%s returns only requested current-session receipts in pages and empty deltas",
+  (method) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const scope = await createScope("collected");
+      const context = await createHistoryReadContext();
+      const call = (params: Record<string, unknown> = {}) =>
+        read(context, { sessionKey: scope.sessionKey, ...params }, method);
+      await using inputs = pendingInputs(scope);
+      const sources = [];
+      for (const runId of ["source-a", "source-b"]) {
+        sources.push(await inputs.stage(runId));
+      }
+      const aggregate = expectDefined(
+        bindSessionPendingInputSources(sources, {
+          role: "user",
+          content: "Collected inputs",
+          timestamp: 2,
+          idempotencyKey: "collect:batch",
+        }),
+        "aggregate receipt",
+      );
+      const retained = [];
+      inputs.receipts.unshift(aggregate);
+      await aggregate.run(() => appendTranscriptMessage(scope, { message: aggregate.message }));
+      await appendTranscriptMessage(scope, {
+        message: { role: "assistant", content: "Later reply" },
+      });
+      const inputRunIds = ["source-a", "missing"];
+      const page = await call({ inputRunIds, limit: 1 });
+      const expected = [
+        { runId: "source-a", state: "consumed", consumedByEventId: aggregate.inputId },
+      ];
+      expect([page.inputReceipts, page.inputConsumptions, page.pendingInputs]).toEqual([
+        expected,
+        [{ runId: "source-a", consumedByEventId: aggregate.inputId }],
+        { items: [], total: 0, queuedCount: 0 },
+      ]);
+      expect(JSON.stringify(page.messages)).not.toContain("Collected inputs");
+      const delta = await call({ inputRunIds, cursor: page.deltaCursor });
+      expect(delta).toMatchObject({ kind: "delta", messages: [], inputReceipts: expected });
+      for (let index = 0; index < 21; index += 1) {
+        retained.push(await inputs.stage(`retained-${index}`, { timestamp: index + 3 }));
+      }
+      const retainedSource = createRpcSourceForTest(
+        {},
+        {
+          runId: "retained-0",
+          storeScope: captureRpcTargetForTest(scope).storeScope,
+          phase: "waiting",
+          ...scope,
+        },
+      );
+      rpcSourceTesting.set("retained-0", retainedSource);
+      const retainedPage = await call({ inputRunIds: ["retained-0", "retained-1"], limit: 1 });
+      expect([retainedPage.inputReceipts, retainedPage.inputConsumptions]).toEqual([
+        [
+          { runId: "retained-0", state: "pending", queued: true },
+          { runId: "retained-1", state: "pending" },
+        ],
+        [],
+      ]);
+      expect(retainedPage.pendingInputs).toMatchObject({
+        total: 21,
+        queuedCount: 1,
+        items: [{ runId: "retained-20" }],
+      });
+      expect(requestRpcSourceCancellation(retainedSource)).toBe(true);
+      retained[0]?.finish("cancelled");
+      await retained[0]?.settled?.();
+      const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
+      expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });
+      expect(cancelledPage.inputReceipts).toEqual([
+        { runId: "retained-0", state: "pending", cancelled: true },
+      ]);
+      const anchor = await call({
+        inputRunIds,
+        messageId: aggregate.inputId,
+        sessionId: scope.sessionId,
+      });
+      expect(anchor.inputReceipts).toEqual([]);
+      await upsertSessionEntryCore(scope, { sessionId: "replacement", updatedAt: 2 });
+      expect((await call({ inputRunIds })).inputReceipts).toEqual([]);
+    }),
+);

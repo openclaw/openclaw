@@ -7,6 +7,7 @@ export const MODEL_SETTINGS_TARGET_IDS = { behavior: "settings-model-behavior" }
 export const APPEARANCE_SETTINGS_TARGET_IDS = {
   language: "settings-language",
   theme: "settings-appearance-theme",
+  background: "settings-appearance-background",
   accent: "settings-appearance-accent",
   typography: "settings-appearance-typography",
   tabIcon: "settings-appearance-tab-icon",
@@ -33,6 +34,11 @@ export const SETTINGS_ROUTE_TARGETS = {
 export type ConfigRouteData = ReturnType<typeof configRouteData> & {
   /** Memory URL intent is applied only if a newer sidebar choice has not superseded it. */
   agentSelectionIntent?: { owner: AgentSelectionCapability; revision: number };
+};
+
+export type ConfigRouteSource = {
+  read(): ConfigRouteData | null;
+  subscribe(listener: () => void): () => void;
 };
 
 export function configTargetIdFromHash(hash: string): string | null {

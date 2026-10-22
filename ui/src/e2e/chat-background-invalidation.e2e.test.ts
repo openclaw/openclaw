@@ -1,8 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { ApplicationContext } from "../app/context.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -21,60 +21,60 @@ type MeasuredPane = HTMLElement & {
     ChatPageHost,
     "sessionKey" | "chatMessages" | "chatAvatarStatus" | "modelAuthStatusResult"
   >;
-  presencePayload?: PresencePayload;
+  presence: { readonly snapshot: PresencePayload | undefined };
   render: () => unknown;
   updateComplete: Promise<boolean>;
 };
 
 async function observePaneRenders(page: Page) {
-  return page.evaluateHandle(
-    async ({ foreignKey: observedKey }) => {
-      const app = document.querySelector<
-        HTMLElement & { runtime?: { context: ApplicationContext } }
-      >("openclaw-app");
-      const pane = document.querySelector<MeasuredPane>(
-        "openclaw-chat-pane.chat-pane-cache__pane--active",
-      );
-      const sidebar = document.querySelector<
-        HTMLElement & {
-          updateComplete: Promise<boolean>;
-          sessionData: { presencePayload?: PresencePayload };
+  const context = await getControlUiContextHandle(page);
+  try {
+    return await context.evaluateHandle(
+      async (appContext, { foreignKey: observedKey }) => {
+        const pane = document.querySelector<MeasuredPane>(
+          "openclaw-chat-pane.chat-pane-cache__pane--active",
+        );
+        const sidebar = document.querySelector<
+          HTMLElement & {
+            updateComplete: Promise<boolean>;
+          }
+        >("openclaw-app-sidebar");
+        const sessions = appContext.sessions;
+        if (!pane || !sidebar || !sessions) {
+          throw new Error("The mounted conversation and shared roster must be ready");
         }
-      >("openclaw-app-sidebar");
-      const sessions = app?.runtime?.context.sessions;
-      if (!pane || !sidebar || !sessions) {
-        throw new Error("The mounted conversation and shared roster must be ready");
-      }
-      await Promise.all([pane.updateComplete, sidebar.updateComplete]);
-      const originalRender = pane.render;
-      let renders = 0;
-      pane.render = function () {
-        renders += 1;
-        return originalRender.call(this);
-      };
-      return {
-        pane,
-        async read() {
-          await Promise.all([pane.updateComplete, sidebar.updateComplete]);
-          const count = renders;
-          renders = 0;
-          return {
-            renders: count,
-            sharedLabel: sessions.state.result?.sessions.find((row) => row.key === observedKey)
-              ?.label,
-            selectedKey: pane.state.sessionKey,
-            messages: pane.state.chatMessages.length,
-            panePresenceTs: pane.presencePayload?.presence[0]?.ts,
-            sidebarPresenceTs: sidebar.sessionData.presencePayload?.presence[0]?.ts,
-          };
-        },
-        restore() {
-          pane.render = originalRender;
-        },
-      };
-    },
-    { foreignKey },
-  );
+        await Promise.all([pane.updateComplete, sidebar.updateComplete]);
+        const originalRender = pane.render;
+        let renders = 0;
+        pane.render = function () {
+          renders += 1;
+          return originalRender.call(this);
+        };
+        return {
+          pane,
+          async read() {
+            await Promise.all([pane.updateComplete, sidebar.updateComplete]);
+            const count = renders;
+            renders = 0;
+            return {
+              renders: count,
+              sharedLabel: sessions.state.result?.sessions.find((row) => row.key === observedKey)
+                ?.label,
+              selectedKey: pane.state.sessionKey,
+              messages: pane.state.chatMessages.length,
+              panePresenceTs: pane.presence.snapshot?.presence[0]?.ts,
+            };
+          },
+          restore() {
+            pane.render = originalRender;
+          },
+        };
+      },
+      { foreignKey },
+    );
+  } finally {
+    await context.dispose();
+  }
 }
 
 suite.define(() => {
@@ -174,7 +174,7 @@ suite.define(() => {
         expect.soft(counts.foreign.slice(1)).toEqual([0, 0]);
 
         const heartbeat = await probe.evaluate((owner) => ({
-          presence: owner.pane.presencePayload!.presence.map((entry) =>
+          presence: owner.pane.presence.snapshot!.presence.map((entry) =>
             Object.assign({}, entry, {
               ts: 1_900_000_000_010,
               lastInputSeconds: (entry.lastInputSeconds ?? 0) + 10,
@@ -187,7 +187,6 @@ suite.define(() => {
         counts.presence = presence.renders;
         expect(presence).toMatchObject({
           panePresenceTs: baseTime + 10,
-          sidebarPresenceTs: baseTime + 10,
         });
         expect.soft(counts.presence).toBe(0);
 
@@ -226,6 +225,15 @@ suite.define(() => {
         expect(
           await page.locator('.chat-pane__presence [data-viewer-id="collaborator"]').count(),
         ).toBe(1);
+        await expect
+          .poll(() =>
+            page
+              .locator(
+                `openclaw-app-sidebar [data-session-key="${selectedKey}"] [data-viewer-id="collaborator"]`,
+              )
+              .count(),
+          )
+          .toBe(1);
         console.info(JSON.stringify({ proof: "idle-conversation-event-renders", ...counts }));
       } finally {
         await probe.evaluate((owner) => owner.restore());

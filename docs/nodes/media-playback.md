@@ -67,6 +67,11 @@ or video byte cap. Cached playback renditions use a fixed seven-day retention
 that Gateway maintenance enforces at startup and hourly, independently of
 `attachments.ttlHours`.
 
+Filesystem errors while scanning or evicting cached renditions are reported in
+Gateway logs. Missing cache entries are harmless; other errors do not count as
+successful cleanup. Check the media directory's permissions and storage health
+when cleanup fails.
+
 ## Managed attachments and access
 
 To attach a local file in an assistant reply, put `MEDIA:/absolute/path/movie.mp4`
@@ -90,6 +95,11 @@ Managed download tickets check current session access and the selected message's
 attachment reference in visible history. For indexed messages, issuing a ticket
 does not read the original file or validate unrelated transcript payloads. The
 HTTP request transfers the file separately.
+
+Managed media cleanup reads transcript history in bounded pages. If a single
+message exceeds the 8 MiB page limit, cleanup retains that session's media and
+logs a warning while continuing to clean other sessions. Incomplete history
+is never treated as proof that an attachment is unreferenced.
 
 Download filenames preserve Unicode characters and literal percent sequences
 such as `%20`.

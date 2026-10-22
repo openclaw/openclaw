@@ -31,6 +31,7 @@ const {
   sessionTabRegistryMocks: sessionTabs,
   toolCommonMocks: runtime,
   resetBrowserToolMocks,
+  mockSingleBrowserProxyNode,
 } = await import("./browser-tool.test-support.js");
 
 // mock-isolation: Keep registration lazy without starting the real browser service.
@@ -69,18 +70,6 @@ function durableOwnership(nativeTargetId: string) {
 
 function nodeReply(result: Record<string, unknown>, route?: BrowserProxyRoute) {
   return { ok: true, payload: { result, ...(route ? { route } : {}) } };
-}
-
-function mockSingleBrowserProxyNode() {
-  nodes.listNodes.mockResolvedValue([
-    {
-      nodeId: "node-1",
-      displayName: "Browser Node",
-      connected: true,
-      caps: ["browser"],
-      commands: ["browser.proxy", "browser.proxy.upload.v1"],
-    },
-  ]);
 }
 
 function setResolvedBrowserProfiles(
@@ -264,12 +253,30 @@ it.each<{
   doctor?: true;
 }>([
   {
+    name: "requested open navigation",
+    input: { action: "open", url: "https://example.com/slow", timeoutMs: 60_000 },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 195_000,
+    nodeTimeout: 190_000,
+    params: { path: "/tabs/open", timeoutMs: 65_000 },
+    exactBody: { url: "https://example.com/slow", timeoutMs: 60_000 },
+  },
+  {
+    name: "default open navigation",
+    input: { action: "open", url: "https://example.com/slow" },
+    replies: [{ targetId: "tab-1", url: "https://example.com/slow" }],
+    gatewayTimeout: 190_000,
+    nodeTimeout: 185_000,
+    params: { path: "/tabs/open", timeoutMs: 60_000 },
+    exactBody: { url: "https://example.com/slow" },
+  },
+  {
     name: "requested download wait",
     input: { action: "waitfordownload", path: "export.csv", targetId: "tab-1", timeoutMs: 30_000 },
     replies: [
       { ok: true, targetId: "tab-1", download: { path: "/tmp/openclaw/downloads/export.csv" } },
     ],
-    gatewayTimeout: 45_000,
+    gatewayTimeout: 165_000,
     params: { path: "/wait/download", timeoutMs: 35_000 },
     exactBody: { path: "export.csv", targetId: "tab-1", timeoutMs: 30_000 },
   },
@@ -279,20 +286,20 @@ it.each<{
     replies: [
       { ok: true, targetId: "tab-1", download: { path: "/tmp/openclaw/downloads/report.pdf" } },
     ],
-    gatewayTimeout: 135_000,
+    gatewayTimeout: 255_000,
     params: { path: "/download", timeoutMs: 125_000, body: { ref: "e12", path: "report.pdf" } },
   },
   {
     name: "existing-session status",
     input: { action: "status", profile: "user" },
     profile: "user",
-    gatewayTimeout: 55_000,
+    gatewayTimeout: 175_000,
     params: { method: "GET", path: "/", profile: "user", timeoutMs: 45_000 },
   },
   {
     name: "doctor",
     input: { action: "doctor" },
-    gatewayTimeout: 30_000,
+    gatewayTimeout: 150_000,
     params: { method: "GET", path: "/doctor", timeoutMs: 20_000 },
     doctor: true,
   },
@@ -314,8 +321,8 @@ it.each<{
         snapshot: "slow page",
       },
     ],
-    gatewayTimeout: 135_000,
-    nodeTimeout: 130_000,
+    gatewayTimeout: 255_000,
+    nodeTimeout: 250_000,
     params: { timeoutMs: 125_000 },
     exactBody: { url: "https://example.com/slow", targetId: "tab-1", timeoutMs: 120_000 },
   },
@@ -325,7 +332,7 @@ it.each<{
       action: "act",
       request: { kind: "wait", timeMs: "20000", text: "ready", timeoutMs: "45000" },
     },
-    gatewayTimeout: 126_250,
+    gatewayTimeout: 246_250,
     params: { path: "/act", timeoutMs: 116_250 },
     exactBody: { kind: "wait", timeMs: "20000", text: "ready", timeoutMs: "45000" },
   },
@@ -349,8 +356,8 @@ it.each<{
         ],
       },
     },
-    gatewayTimeout: 133_500,
-    nodeTimeout: 128_500,
+    gatewayTimeout: 253_500,
+    nodeTimeout: 248_500,
     params: { timeoutMs: 123_500 },
   },
 ])("keeps $name within the nested node watchdogs", async (scenario) => {
@@ -799,7 +806,7 @@ it("returns a transcript-safe screenshot path on the node", async () => {
   );
 
   expect(nodeInvokeCall(-1)).toMatchObject({
-    options: { timeoutMs: 22_345 },
+    options: { timeoutMs: 142_345 },
     request: {
       params: {
         method: "POST",
@@ -871,11 +878,11 @@ it("falls back to role refs when a node snapshot cannot provide aria refs", asyn
     maxChars: 12_000,
     timeoutMs: 7777,
   });
-  expect(firstCall.options.timeoutMs).toBe(17_777);
+  expect(firstCall.options.timeoutMs).toBe(137_777);
   expect(firstCall.request.params?.path).toBe("/snapshot");
   expect(firstCall.request.params?.query?.refs).toBe("aria");
   const secondCall = nodeInvokeCall(1);
-  expect(secondCall.options.timeoutMs).toBe(17_777);
+  expect(secondCall.options.timeoutMs).toBe(137_777);
   expect(secondCall.request.params?.path).toBe("/snapshot");
   expect(secondCall.request.params?.query?.refs).toBe("role");
 });
@@ -1095,16 +1102,6 @@ it.each([
     expect(client.browserCloseTab).not.toHaveBeenCalled();
   },
 );
-
-it("preserves disconnected node tab availability in the tool result", async () => {
-  mockSingleBrowserProxyNode();
-  gateway.callGatewayTool.mockResolvedValueOnce(nodeReply({ running: false, tabs: [] }));
-
-  const result = await execute({ action: "tabs", target: "node" });
-
-  expect(result?.details).toMatchObject({ running: false, tabCount: 0, tabs: [] });
-  expect(firstResultText(result)).toContain('"running": false');
-});
 
 it("touches the canonical dialog target after automatic host fallback", async () => {
   mockSingleBrowserProxyNode();

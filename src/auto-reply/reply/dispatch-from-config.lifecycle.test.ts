@@ -12,7 +12,7 @@ import {
   dispatchReplyFromConfig,
   messageAuditEvents,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -65,6 +65,10 @@ describe("dispatchReplyFromConfig", () => {
           reason: "reply_operation_aborted",
         }),
       );
+      const preparedSignal = preparedLookup.mock.calls[0]?.[0].abortSignal;
+      expect(preparedSignal).toBeInstanceOf(AbortSignal);
+      expect(preparedSignal?.aborted).toBe(true);
+      expect(preparedSignal?.reason).toBe(abort.signal.reason);
       expect(preparedLookup).toHaveBeenCalledWith({
         agentId: "main",
         demand: "interactive",

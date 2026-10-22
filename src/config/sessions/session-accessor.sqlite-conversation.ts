@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   encodeSqliteStringSet,
@@ -21,6 +22,7 @@ import {
   type ConversationPublication,
 } from "./session-accessor.sqlite-conversation-publication.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionConversationRole = "participant" | "primary" | "related";
@@ -98,9 +100,31 @@ export function prepareSessionConversationForWrite(params: {
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
   previousEntry?: SessionEntry | null;
+  canonicalPreviousEntry?: SessionEntry;
+  previousWindow?: SessionEntryWindowRow | null;
+  observeConversation?: boolean;
   routeContext?: ConversationRouteContext | null;
   sessionScope: string;
-}): PreparedSessionConversation | null {
+}): { conversation: PreparedSessionConversation | null; primaryConversationId: string | null } {
+  // Bookkeeping is not a new route observation. Its committed association owns
+  // the canonical peer and route context until a route or lifecycle changes.
+  if (
+    !params.observeConversation &&
+    params.routeContext === undefined &&
+    params.canonicalPreviousEntry?.sessionId === params.entry.sessionId &&
+    params.canonicalPreviousEntry.lifecycleRevision === params.entry.lifecycleRevision &&
+    params.previousWindow?.session_id === params.entry.sessionId &&
+    params.previousWindow.session_scope === params.sessionScope &&
+    isDeepStrictEqual(
+      conversationIdentityFromSessionEntry(params.entry),
+      conversationIdentityFromSessionEntry(params.canonicalPreviousEntry),
+    )
+  ) {
+    return {
+      conversation: null,
+      primaryConversationId: params.previousWindow.primary_conversation_id,
+    };
+  }
   const routeContext =
     params.routeContext === null
       ? null
@@ -112,9 +136,9 @@ export function prepareSessionConversationForWrite(params: {
   }
   const identity = conversationIdentityFromSessionEntry(params.entry, routeContext);
   if (!identity) {
-    return null;
+    return { conversation: null, primaryConversationId: null };
   }
-  return {
+  const conversation: PreparedSessionConversation = {
     identity:
       routeContext === undefined
         ? preserveSessionConversationIdentity({
@@ -130,6 +154,11 @@ export function prepareSessionConversationForWrite(params: {
         ? "participant"
         : "primary",
     ...(routeContext !== undefined ? { routeContext } : {}),
+  };
+  return {
+    conversation,
+    primaryConversationId:
+      conversation.role === "primary" ? conversation.identity.conversationRef : null,
   };
 }
 
@@ -208,8 +237,11 @@ export function upsertConversationIdentities(
             eb.val(updatedAt).as("updated_at"),
           ])
           .where("field.key", ">=", 0)
-          .groupBy((eb) => eb.cast<number>(eb("field.key", "/", columns.length), "integer"))
-          .orderBy((eb) => eb.cast<number>(eb("field.key", "/", columns.length), "integer")),
+          // Separate bound divisors do not identify the same PostgreSQL grouping expression.
+          .groupBy((eb) => eb.cast<number>(eb("field.key", "/", eb.lit(columns.length)), "integer"))
+          .orderBy((eb) =>
+            eb.cast<number>(eb("field.key", "/", eb.lit(columns.length)), "integer"),
+          ),
       )
       .onConflict((conflict) =>
         conflict.column("conversation_id").doUpdateSet((eb) => ({
@@ -254,10 +286,12 @@ export function linkSessionConversation(params: {
         .limit(1),
     ).rows[0];
   const existingAssociation =
-    readAssociation(sessionId) ??
-    (params.previousSessionId && params.previousSessionId !== sessionId
-      ? readAssociation(params.previousSessionId)
-      : undefined);
+    conversation.routeContext === undefined
+      ? (readAssociation(sessionId) ??
+        (params.previousSessionId && params.previousSessionId !== sessionId
+          ? readAssociation(params.previousSessionId)
+          : undefined))
+      : undefined;
   const routeContextJson =
     conversation.routeContext === undefined
       ? existingAssociation
@@ -274,11 +308,11 @@ export function linkSessionConversation(params: {
     const stalePrimaryRows = executeSqliteQuerySync(
       database.db,
       db
-        .selectFrom("session_conversations")
-        .select(["conversation_id", "first_seen_at", "last_seen_at", "route_context_json"])
+        .deleteFrom("session_conversations")
         .where("session_id", "=", sessionId)
         .where("role", "=", "primary")
-        .where("conversation_id", "!=", conversation.identity.conversationRef),
+        .where("conversation_id", "!=", conversation.identity.conversationRef)
+        .returningAll(),
     ).rows;
     if (stalePrimaryRows.length > 0) {
       const related = executeSqliteQuerySync(
@@ -308,16 +342,7 @@ export function linkSessionConversation(params: {
           .returningAll(),
       ).rows;
       associations.push(...related);
-      const removed = executeSqliteQuerySync(
-        database.db,
-        db
-          .deleteFrom("session_conversations")
-          .where("session_id", "=", sessionId)
-          .where("role", "=", "primary")
-          .where("conversation_id", "!=", conversation.identity.conversationRef)
-          .returningAll(),
-      ).rows;
-      removedAssociations.push(...removed);
+      removedAssociations.push(...stalePrimaryRows);
     }
   }
 

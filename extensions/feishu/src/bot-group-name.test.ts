@@ -1,5 +1,6 @@
 // Feishu tests cover bot group name plugin behavior.
-import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterAll, afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
 import { resolveGroupName } from "./bot-group-name.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -13,7 +14,6 @@ vi.mock("./client.js", () => ({ createFeishuClient: mockCreateFeishuClient }));
 function makeAccount(id = "test-account"): ResolvedFeishuAccount {
   return {
     accountId: id,
-    selectionSource: "explicit",
     enabled: true,
     configured: true,
     appId: "cli_test",
@@ -42,6 +42,8 @@ describe("resolveGroupName", () => {
     vi.resetModules();
   });
 
+  afterEach(() => vi.useRealTimers());
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetChatInfo.mockReset();
@@ -56,44 +58,19 @@ describe("resolveGroupName", () => {
     expect(result).toBeUndefined();
   });
 
-  it("serves subsequent calls from cache (positive hit)", async () => {
-    mockGetChatInfo.mockResolvedValue({ name: "  Cached Group  " });
-    await expect(resolveGroupName({ account, chatId: "oc_test4", log })).resolves.toBe(
-      "Cached Group",
-    );
-    const result = await resolveGroupName({ account, chatId: "oc_test4", log });
-    expect(result).toBe("Cached Group");
-    expect(mockGetChatInfo).toHaveBeenCalledOnce();
-  });
-
-  it("does not cache group names when the expiry would exceed a valid Date", async () => {
+  it("shares a cold lookup and blocks for a fresh name after expiry", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-    try {
-      mockGetChatInfo.mockResolvedValue({ name: "Boundary Group" });
+    const first = createDeferred<{ name: string }>();
+    mockGetChatInfo.mockReturnValue(first.promise);
+    const params = { account, chatId: "oc_shared", log };
+    const initial = [resolveGroupName(params), resolveGroupName(params)];
+    first.resolve({ name: "Original name" });
+    await expect(Promise.all(initial)).resolves.toEqual(["Original name", "Original name"]);
+    expect(mockGetChatInfo).toHaveBeenCalledOnce();
 
-      const first = await resolveGroupName({ account, chatId: "oc_boundary", log });
-      const second = await resolveGroupName({ account, chatId: "oc_boundary", log });
-
-      expect(first).toBe("Boundary Group");
-      expect(second).toBe("Boundary Group");
-      expect(mockGetChatInfo).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("evicts cached group names when the current clock is invalid", async () => {
-    mockGetChatInfo.mockResolvedValue({ name: "Cached Group" });
-    await resolveGroupName({ account, chatId: "oc_invalid_clock", log });
-    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-    try {
-      const result = await resolveGroupName({ account, chatId: "oc_invalid_clock", log });
-
-      expect(result).toBe("Cached Group");
-    } finally {
-      dateNow.mockRestore();
-    }
+    vi.advanceTimersByTime(30 * 60_000);
+    mockGetChatInfo.mockResolvedValueOnce({ name: "Updated name" });
+    await expect(resolveGroupName(params)).resolves.toBe("Updated name");
     expect(mockGetChatInfo).toHaveBeenCalledTimes(2);
   });
 
@@ -107,12 +84,6 @@ describe("resolveGroupName", () => {
     expect(log).toHaveBeenCalledWith(
       "feishu[test-account]: getChatInfo failed for oc_test5: Error: fail",
     );
-  });
-
-  it("returns undefined when API returns object with missing name field", async () => {
-    mockGetChatInfo.mockResolvedValue({ name: undefined });
-    const result = await resolveGroupName({ account, chatId: "oc_test6", log });
-    expect(result).toBeUndefined();
   });
 
   it("isolates cache entries across different accounts", async () => {

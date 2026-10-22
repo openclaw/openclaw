@@ -1,5 +1,6 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Pointer } from "typebox/schema";
@@ -71,10 +72,7 @@ function getSchemaTypes(initialSchema: JsonSchemaObject, root?: JsonSchemaObject
   if (typeof schema.type === "string") {
     return [schema.type];
   }
-  if (Array.isArray(schema.type)) {
-    return schema.type.filter((type): type is string => typeof type === "string");
-  }
-  return [];
+  return filterStringEntries(schema.type);
 }
 
 function matchesJsonType(value: unknown, type: string): boolean {
@@ -230,19 +228,10 @@ function coerceWithUnionSchema(
   root: JsonSchemaObject | undefined,
   refs: ReadonlySet<JsonSchemaObject> | undefined,
 ): unknown {
-  // When value is null, check if any union member accepts null directly
-  // (type: "null") before falling through to coercion.  Without this check,
-  // anyOf [{type: "string"}, {type: "null"}] coerces null → "" via the
-  // string branch and never reaches the null branch.
-  if (value === null) {
-    for (const schema of schemas) {
-      const types = getSchemaTypes(schema, root);
-      if (types.includes("null")) {
-        const validator = getSubSchemaValidator(schema, root);
-        if (!validator || validator.Check(value)) {
-          return value;
-        }
-      }
+  // Preserve accepted values before trying a conversion to another union branch.
+  for (const schema of schemas) {
+    if (getSubSchemaValidator(schema, root)?.Check(value)) {
+      return value;
     }
   }
   for (const schema of schemas) {

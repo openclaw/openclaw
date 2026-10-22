@@ -34,12 +34,12 @@ export function retainDiscordProgressDraft(params: {
   };
   const compositor = createChannelProgressDraftCompositor({
     preparedItems: true,
-    showWorkStatus: true,
     entry: params.entry,
     mode: "progress",
     active: true,
     seed: params.seed,
     reasoningGate: false,
+    toolIcons: true,
     initialSnapshot: params.snapshot,
     update: async (text, options) => {
       if (retired) {

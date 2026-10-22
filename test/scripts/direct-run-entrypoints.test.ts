@@ -35,7 +35,33 @@ import {
   withShimFixture,
   writeEsmPluginFixture,
 } from "./direct-run-entrypoints.test-support.js";
-import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
+import {
+  preparedScriptWrapperEnv,
+  testRunnerFixtureEnv,
+} from "./prepared-script-wrapper.test-support.js";
+
+const installedModulesDir = path.dirname(
+  path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
+);
+const jsonLines = (output: string): unknown[] =>
+  output
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+function shimEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...testRunnerFixtureEnv(),
+    PNPM_CONFIG_MODULES_DIR: installedModulesDir,
+    ...overrides,
+  };
+  delete env.NODE_OPTIONS;
+  return env;
+}
+function expectExit(result: Awaited<ReturnType<typeof runNodeScript>>, code: number) {
+  const details = formatShimResult(result);
+  expect(result.error, details).toBeUndefined();
+  expect(result.status, details).toBe(code);
+}
 
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
@@ -118,7 +144,7 @@ function runShimFixture(
       writeTsxFixture(path.join(checkoutRoot, "node_modules"), "checkout");
       const modulesEnv = configureModules({ checkoutRoot, fixtureRoot });
 
-      const env = { ...process.env };
+      const env = testRunnerFixtureEnv();
       delete env.NODE_OPTIONS;
       delete env.NODE_PATH;
       delete env.PNPM_CONFIG_MODULES_DIR;
@@ -193,7 +219,7 @@ sendReceipt(${JSON.stringify(ownerPath)}, "ready");
         const completion = runNode(
           [wrapperPath],
           {
-            ...process.env,
+            ...testRunnerFixtureEnv(),
             NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(clockPath).href}`]
               .filter(Boolean)
               .join(" "),
@@ -217,16 +243,8 @@ sendReceipt(${JSON.stringify(ownerPath)}, "ready");
     await withShimFixture(TSX_SHIM_WRAPPERS[0], async (fixture) => {
       const { fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
       writeFileSync(implementationPath, writeEsmPluginFixture(fixtureRoot));
-      const env: NodeJS.ProcessEnv = {
-        ...process.env,
-        PNPM_CONFIG_MODULES_DIR: path.dirname(
-          path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
-        ),
-      };
-      delete env.NODE_OPTIONS;
-      const result = await runNode([wrapperPath], env, process.cwd());
-      expect(result.error, formatShimResult(result)).toBeUndefined();
-      expect(result.status, formatShimResult(result)).toBe(0);
+      const result = await runNode([wrapperPath], shimEnv(), process.cwd());
+      expectExit(result, 0);
       expect(JSON.parse(result.stdout)).toEqual({
         value: "import-only",
         evaluations: 1,
@@ -270,17 +288,12 @@ process.exitCode = await new Promise((resolve, reject) => {
         const preload = equals ? ["--import=./scripts/tsx.mjs"] : ["--import", "./scripts/tsx.mjs"];
         const bootstrapUrl = pathToFileURL(path.join(checkoutRoot, "scripts/tsx.mjs")).href;
         const expectedPreload = equals ? [`--import=${bootstrapUrl}`] : ["--import", bootstrapUrl];
-        const env: NodeJS.ProcessEnv = {
-          ...process.env,
+        const env = shimEnv({
           TMPDIR: fixtureRoot,
           TMP: fixtureRoot,
           TEMP: fixtureRoot,
-          PNPM_CONFIG_MODULES_DIR: path.dirname(
-            path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
-          ),
-        };
+        });
         delete env.TSX_DISABLE_CACHE;
-        delete env.NODE_OPTIONS;
         const result = await runNode(
           [
             ...nodeFlags,
@@ -293,14 +306,8 @@ process.exitCode = await new Promise((resolve, reject) => {
           env,
           checkoutRoot,
         );
-        expect(result.error, formatShimResult(result)).toBeUndefined();
-        expect(result.status, formatShimResult(result)).toBe(17);
-        expect(
-          result.stdout
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line)),
-        ).toEqual(
+        expectExit(result, 17);
+        expect(jsonLines(result.stdout)).toEqual(
           [checkoutRoot, forkCwd].map((cwd) => ({
             transformed: "transformed",
             preload: "preserved",
@@ -316,8 +323,6 @@ process.exitCode = await new Promise((resolve, reject) => {
   it("keeps root package preloads and raw tsx children off disk caches without changing other cache settings", async () => {
     await withShimFixture(TSX_SHIM_WRAPPERS[0], async (fixture) => {
       const { fixtureRoot, implementationPath, runNode } = fixture;
-      const require = createRequire(import.meta.url);
-      const modulesDir = path.dirname(path.dirname(require.resolve("tsx/package.json")));
       const tempRoot = path.join(fixtureRoot, "temp");
       const cacheRoots = ["tsx", `tsx-${process.geteuid?.() ?? userInfo().username}`].map((name) =>
         path.join(tempRoot, name),
@@ -390,9 +395,9 @@ process.exitCode = child.status ?? 1;
       const launches = preloads.map((preload) => ["--import", preload, implementationPath]);
       for (const cacheFlag of [undefined, ""]) {
         const env: NodeJS.ProcessEnv = {
-          ...process.env,
+          ...testRunnerFixtureEnv(),
           ...preservedEnv,
-          PNPM_CONFIG_MODULES_DIR: modulesDir,
+          PNPM_CONFIG_MODULES_DIR: installedModulesDir,
           NODE_OPTIONS: `--require ${JSON.stringify(guard)}`,
         };
         delete env.TSX_DISABLE_CACHE;
@@ -405,14 +410,8 @@ process.exitCode = child.status ?? 1;
             env,
             process.cwd(),
           );
-          expect(result.error, formatShimResult(result)).toBeUndefined();
-          expect(result.status, formatShimResult(result)).toBe(17);
-          expect(
-            result.stdout
-              .trim()
-              .split("\n")
-              .map((line) => JSON.parse(line)),
-          ).toEqual(
+          expectExit(result, 17);
+          expect(jsonLines(result.stdout)).toEqual(
             Array.from({ length: 2 }, () => ({
               transformed: "transformed",
               args: ["argument with spaces", "--proof"],
@@ -455,6 +454,7 @@ process.exitCode = child.status ?? 1;
       const state = path.join(fixtureRoot, "state");
       const invocationLog = path.join(fixtureRoot, "invocations.jsonl");
       mkdirSync(binDir);
+      mkdirSync(home);
       mkdirSync(state);
       // A failed version probe must fail before managed installation can download anything.
       writeFileSync(path.join(state, "tools"), "managed installation disabled for this fixture\n");
@@ -578,7 +578,7 @@ record("stdout-write-returned");
   it("boots scripts/e2e/kitchen-sink-rpc-walk.mjs from a relative PNPM_CONFIG_MODULES_DIR", async () => {
     const nodeArgs = ["--no-maglev", "--maglev", "--no-concurrent-sparkplug"];
     const result = await runShimFixture(
-      TSX_SHIM_WRAPPERS[2],
+      TSX_SHIM_WRAPPERS[1],
       ({ checkoutRoot, fixtureRoot }) => {
         const modulesDir = path.join(fixtureRoot, "hydrated-modules");
         writeTsxFixture(modulesDir, "hydrated");
@@ -603,8 +603,7 @@ record("stdout-write-returned");
       expect(initialized.status, initialized.stderr).toBe(0);
       return {};
     });
-    expect(result.error, formatShimResult(result)).toBeUndefined();
-    expect(result.status, formatShimResult(result)).toBe(1);
+    expectExit(result, 1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(
       "Run pnpm install --frozen-lockfile in an independently owned checkout.",
@@ -660,7 +659,7 @@ it("retains fixture evidence when command cleanup is unconfirmed", async () => {
       writeFileSync(path.join(root, "evidence"), "keep");
       await runNode(
         ["-e", 'process.stdout.write("retained stdout"); process.stderr.write("retained stderr");'],
-        process.env,
+        testRunnerFixtureEnv(),
         root,
       );
     }).catch((cause: unknown) => cause);
@@ -729,16 +728,9 @@ child.once("message", () => {
 });
 `,
         );
-        const env: NodeJS.ProcessEnv = {
-          ...process.env,
-          PNPM_CONFIG_MODULES_DIR: path.dirname(
-            path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
-          ),
-        };
-        delete env.NODE_OPTIONS;
         command = runNode(
           ["--import", pathToFileURL(wrapperPidProbe).href, wrapperPath],
-          env,
+          shimEnv(),
           fixtureRoot,
         ).then((result) => {
           fixturePresentAtCommandSettlement = existsSync(fixtureRoot);

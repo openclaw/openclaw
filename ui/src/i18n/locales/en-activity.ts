@@ -11,11 +11,15 @@ const enActivity = {
       incomplete: "Images too large to preview here",
     },
     pulse: {
+      sessionsOne: "session",
       sessions: "sessions",
       started: "started",
+      peopleOne: "person",
       people: "people",
       running: "running now",
+      bucketOne: "{period} · {count} session",
       bucket: "{period} · {count} sessions",
+      descriptionOne: "{window}: {count} session; busiest {period}",
       description: "{window}: {count} sessions; busiest {period}",
     },
     git: {
@@ -47,7 +51,7 @@ const enActivity = {
     toolCallId: "Tool call",
     runId: "Run",
     session: "Session",
-    outputTruncated: "Preview redacted and truncated.",
+    outputTruncated: "Preview truncated.",
     noOutputPreview: "No output preview.",
     currentWork: {
       title: "Active sessions",
@@ -175,6 +179,9 @@ const enActivity = {
         occurredAtLabel: "Recorded at",
         ownerHeading: "Display provenance",
         durableOwnerLabel: "Verified producer",
+        representedSubjectHeading: "Recorded authority subject",
+        representedSubjectNote:
+          "This records whose authority the operation selected. It does not prove that the person requested or approved it, or that the operation was authorized.",
         boundaryLabel: "Decision boundary",
         ownerNote:
           "The Gateway exposes explanations only from a verified owning call path. Receipt-controlled explanations and next steps are hidden; the Control UI does not infer trust from receipt metadata.",

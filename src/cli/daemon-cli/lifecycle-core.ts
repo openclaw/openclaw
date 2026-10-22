@@ -1,4 +1,3 @@
-// Gateway service lifecycle command core: install, uninstall, start, stop, restart.
 import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
@@ -24,7 +23,7 @@ import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js
 import { GatewayRestartPreparationError } from "../../infra/restart-intent-error.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { isWSL } from "../../infra/wsl.js";
-import { defaultRuntime } from "../../runtime.js";
+import { defaultRuntime, ExitError } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigRecoveryHint } from "../config-recovery-hints.js";
 import { resolveGatewayTokenForDriftCheck } from "./gateway-token-drift.js";
@@ -270,7 +269,7 @@ export async function runServiceStart(params: {
         return;
       }
     } catch (err) {
-      if (postCheckFailed) {
+      if (postCheckFailed || err instanceof ExitError) {
         throw err;
       }
       fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
@@ -341,7 +340,7 @@ export async function runServiceStart(params: {
           return;
         }
       } catch (err) {
-        if (postCheckFailed) {
+        if (postCheckFailed || err instanceof ExitError) {
           throw err;
         }
         fail(`${params.serviceNoun} repair failed: ${String(err)}`, params.renderStartHints());
@@ -356,7 +355,7 @@ export async function runServiceStart(params: {
     const serviceLoaded = startResult.state.loadState.status === "loaded";
     await emitStarted({ loaded: serviceLoaded });
   } catch (err) {
-    if (postCheckFailed) {
+    if (postCheckFailed || err instanceof ExitError) {
       throw err;
     }
     fail(`${params.serviceNoun} start failed: ${String(err)}`, params.renderStartHints());
@@ -399,6 +398,9 @@ export async function runServiceStop(params: {
         return;
       }
     } catch (err) {
+      if (err instanceof ExitError) {
+        throw err;
+      }
       fail(`${params.serviceNoun} stop failed: ${String(err)}`);
       return;
     }
@@ -512,6 +514,9 @@ export async function runServiceRestart(params: {
     try {
       handledRecovery = await params.restartOwnedProcess({ json, stdout, warn, fail });
     } catch (err) {
+      if (err instanceof ExitError) {
+        throw err;
+      }
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
     }
@@ -527,6 +532,9 @@ export async function runServiceRestart(params: {
     try {
       handledRecovery = (await params.onNotLoaded?.({ json, stdout, warn, fail })) ?? null;
     } catch (err) {
+      if (err instanceof ExitError) {
+        throw err;
+      }
       fail(`${params.serviceNoun} restart failed: ${String(err)}`);
       return false;
     }
@@ -573,6 +581,9 @@ export async function runServiceRestart(params: {
       }
     } catch (err) {
       clearPreparedRestartIntent();
+      if (err instanceof ExitError) {
+        throw err;
+      }
       const hints = renderRestartFailureHints(err);
       fail(`${params.serviceNoun} repair failed: ${String(err)}`, hints);
       return false;
@@ -669,7 +680,7 @@ export async function runServiceRestart(params: {
     return true;
   } catch (err) {
     // A non-exiting runtime unwinds after emission; never replace that result.
-    if (postCheckFailed) {
+    if (postCheckFailed || err instanceof ExitError) {
       throw err;
     }
     const hints = renderRestartFailureHints(err);

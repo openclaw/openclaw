@@ -1,5 +1,4 @@
 // Core root-command descriptor catalog used for help placeholders and lazy registration.
-import { isExperimentalClawsEnabled } from "../../claws/experimental.js";
 import { isConfigMachineOutput } from "../config-output-mode.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { hasMachineOutputOption } from "../machine-output-argv.js";
@@ -33,15 +32,18 @@ export const CORE_CLI_COMMAND_DESCRIPTORS: readonly NamedCommandDescriptor[] = [
     true,
     { machineOutput: ({ argv }) => isConfigMachineOutput(argv) },
   ),
-  command("claws", "Inspect and add experimental OpenClaw Claws", true, {
+  command("claws", "Author and add OpenClaw Claws", true, {
     parentDefaultHelp: true,
   }),
   command("backup", "Create, verify, and restore backup archives and SQLite snapshots", true),
   command(
     "database",
-    "Inspect database schema compatibility and shared-state write ownership",
+    "Inspect database compatibility, manage ownership, and port database stores",
     true,
-    { parentDefaultHelp: true },
+    {
+      parentDefaultHelp: true,
+      machineOutput: ({ argv }) => hasMachineOutputOption(argv, "--json"),
+    },
   ),
   command("migrate", "Import state from another agent system", true),
   command("storage", "List, initialize, and test configured storage locations", true, {
@@ -76,23 +78,9 @@ export const CORE_CLI_COMMAND_DESCRIPTORS: readonly NamedCommandDescriptor[] = [
 ];
 
 export function getCoreCliCommandDescriptors(): ReadonlyArray<NamedCommandDescriptor> {
-  return isExperimentalClawsEnabled()
-    ? CORE_CLI_COMMAND_DESCRIPTORS
-    : CORE_CLI_COMMAND_DESCRIPTORS.filter((descriptor) => descriptor.name !== "claws");
+  return CORE_CLI_COMMAND_DESCRIPTORS;
 }
 
 export function getCoreCliCommandNamesCore(): string[] {
   return getCoreCliCommandDescriptors().map((descriptor) => descriptor.name);
-}
-
-export function getCoreCliCommandsWithSubcommands(): string[] {
-  return getCoreCliCommandDescriptors()
-    .filter((descriptor) => descriptor.hasSubcommands)
-    .map((descriptor) => descriptor.name);
-}
-
-export function getCoreCliParentDefaultHelpCommands(): string[] {
-  return getCoreCliCommandDescriptors()
-    .filter((descriptor) => descriptor.parentDefaultHelp)
-    .map((descriptor) => descriptor.name);
 }

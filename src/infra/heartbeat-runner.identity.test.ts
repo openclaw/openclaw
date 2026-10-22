@@ -9,6 +9,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -93,25 +94,22 @@ describe("runHeartbeatOnce identity", () => {
           },
         );
       }
+      bindHeartbeatReply(replySpy);
       const mainStoreBefore = readSessionStoreForTest(mainStorePath);
       replySpy.mockResolvedValue({ text: "needs attention" });
       const sendSlack = vi.fn().mockResolvedValue({ messageId: "m1", channelId: "HISTORIAN" });
 
-      const result = await runHeartbeatOnce({
-        cfg,
-        agentId: "historian2",
-        deps: {
-          getReplyFromConfig: replySpy,
-          slack: sendSlack,
-          getQueueSize: () => 0,
-        },
-      });
+      bindHeartbeatSend("slack", sendSlack);
+      const result = await runHeartbeatOnce({ cfg, agentId: "historian2" });
 
       expect(result.status).toBe("ran");
       expect(replySpy).toHaveBeenCalledTimes(1);
       expect(replySpy.mock.calls[0]?.[0]).toMatchObject({
         AgentId: "historian2",
         SessionKey: "agent:historian2:global:heartbeat",
+      });
+      expect(getReplySystemEventContext(replySpy.mock.calls[0]?.[1])).toMatchObject({
+        heartbeatEventQueueSessionKey: "agent:historian2:global",
       });
       expect(sendSlack).toHaveBeenCalledWith(
         "channel:HISTORIAN",
@@ -130,6 +128,39 @@ describe("runHeartbeatOnce identity", () => {
       expect(sendSlack).toHaveBeenCalledOnce();
     });
   });
+
+  it.each([false, true])(
+    "preserves the queue of a session named heartbeat with isolation %s",
+    async (isolatedSession) => {
+      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: { every: "5m", target: "none", session: "heartbeat", isolatedSession },
+            },
+          },
+          session: { store: storePath },
+        };
+        bindHeartbeatReply(replySpy);
+        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+        const result = await runHeartbeatOnce({
+          cfg,
+        });
+
+        expect(result.status).toBe("ran");
+        expect(replySpy).toHaveBeenCalledOnce();
+        const [context, options] = replySpy.mock.calls[0]!;
+        expect(context.SessionKey).toBe(
+          isolatedSession ? "agent:main:heartbeat:heartbeat" : "agent:main:heartbeat",
+        );
+        expect(getReplySystemEventContext(options)).toMatchObject({
+          heartbeatEventQueueSessionKey: "agent:main:heartbeat",
+        });
+      });
+    },
+  );
 
   it("keeps a global hook event owned by another agent queued for its owner", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, replySpy }) => {
@@ -152,6 +183,7 @@ describe("runHeartbeatOnce identity", () => {
           withSystemEventOwner({ sessionKey: "global" }, agentId),
         );
       }
+      bindHeartbeatReply(replySpy);
       const systemEventBlocks = mockReplyWithSystemEvents(replySpy, cfg);
 
       const run = (agentId: string) =>
@@ -161,7 +193,6 @@ describe("runHeartbeatOnce identity", () => {
           source: "hook",
           intent: "immediate",
           reason: "hook:wake",
-          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0 },
         });
       for (const [index, agentId] of ["alpha", "beta"].entries()) {
         expect((await run(agentId)).status).toBe("ran");
@@ -209,6 +240,7 @@ describe("runHeartbeatOnce", () => {
           lastTo: "1644620762",
         });
 
+        bindHeartbeatReply(replySpy);
         replySpy.mockImplementation(async (ctx: { To?: string; From?: string }) => {
           expect(ctx.To).toBe("C0A9P2N8QHY");
           expect(ctx.From).toBe("C0A9P2N8QHY");
@@ -220,15 +252,8 @@ describe("runHeartbeatOnce", () => {
           channelId: "C0A9P2N8QHY",
         });
 
-        await runHeartbeatOnce({
-          cfg,
-          deps: {
-            getReplyFromConfig: replySpy,
-            slack: sendSlack,
-            getQueueSize: () => 0,
-            nowMs: () => 0,
-          },
-        });
+        bindHeartbeatSend("slack", sendSlack);
+        await runHeartbeatOnce({ cfg });
 
         expect(sendSlack).toHaveBeenCalled();
       },

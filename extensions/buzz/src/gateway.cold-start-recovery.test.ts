@@ -95,7 +95,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
             handlers.onevent(event);
           }
         }
-        handlers.oneose?.();
+        queueMicrotask(() => handlers.oneose?.());
         if (carriesMessages && relayMocks.dropSubscriptionReason) {
           const reason = relayMocks.dropSubscriptionReason;
           relayMocks.dropSubscriptionReason = undefined;
@@ -121,6 +121,13 @@ vi.mock("./inbound.js", () => ({
   handleBuzzInbound: inboundMocks.handleBuzzInbound,
 }));
 
+// Reconnect scenarios wait on produced state; the real 1-1.2s backoff would spend
+// most of waitForSettled's budget before the reconnect even starts.
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  computeBackoff: () => 0,
+}));
+
 import { startBuzzGatewayAccount } from "./gateway.js";
 import { openBuzzRecoveryWatermarkStore, resolveBuzzRecoverySince } from "./recovery-watermark.js";
 import { setBuzzRuntime } from "./runtime.js";
@@ -140,7 +147,8 @@ const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "he
 const SENDER_PUBLIC_KEY = getPublicKey(SENDER_SECRET);
 const RELAY_PUBLIC_KEY = "f".repeat(64);
 const LOOKBACK_SECONDS = 24 * 60 * 60;
-const START_SECONDS = 1_800_000_000;
+// Worker-backed replay expiry uses the real clock; keep the scenario epoch aligned.
+const START_SECONDS = Math.floor(Date.now() / 1_000);
 
 let tempDir: string | undefined;
 let previousStateDir: string | undefined;

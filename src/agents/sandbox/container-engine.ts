@@ -18,6 +18,8 @@ export type SandboxContainerEngine = {
   command: "docker" | "podman";
   displayName: "Docker" | "Podman";
   globalArgs?: readonly string[];
+  /** A captured transport must not follow later ambient Docker context changes. */
+  baseEnv?: NodeJS.ProcessEnv;
 };
 
 export type SandboxContainerEngineTarget = {
@@ -41,9 +43,9 @@ export type ExecDockerRawResult = SandboxBackendCommandResult;
 
 function missingContainerEngineMessage(engine: SandboxContainerEngine): string {
   if (engine.id === "docker") {
-    return 'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and ensure "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.';
+    return 'Sandbox mode requires Docker, but the "docker" command was not found in PATH. Install Docker (and check that "docker" is available), or set `agents.defaults.sandbox.mode=off` to disable sandboxing.';
   }
-  return 'Sandbox mode requires Podman, but the "podman" command was not found in PATH. Install Podman (and ensure "podman" is available), choose another sandbox backend, or set `agents.defaults.sandbox.mode=off` to disable sandboxing.';
+  return 'Sandbox mode requires Podman, but the "podman" command was not found in PATH. Install Podman (and check that "podman" is available), choose another sandbox backend, or set `agents.defaults.sandbox.mode=off` to disable sandboxing.';
 }
 
 export async function execContainerRaw(
@@ -54,6 +56,7 @@ export async function execContainerRaw(
   let result;
   try {
     result = await spawnCommand([engine.command, ...(engine.globalArgs ?? []), ...args], {
+      baseEnv: engine.baseEnv,
       cancelSignal: opts?.signal,
       encoding: "buffer",
       input: opts?.input ?? Buffer.alloc(0),

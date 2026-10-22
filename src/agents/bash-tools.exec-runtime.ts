@@ -1,14 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
-  type ExecTarget,
 } from "../infra/exec-approvals.js";
 import {
   execRequestAbortSignal,
@@ -19,9 +19,9 @@ import {
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
-import type { ManagedRun } from "../process/supervisor/index.js";
-import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput, TerminationReason } from "../process/supervisor/types.js";
 import type {
   SecretEgressProcessGrant,
@@ -29,7 +29,6 @@ import type {
 } from "../secrets/egress-proxy/proxy-server.js";
 import { registerSecretEgressProxyProcess } from "../secrets/egress-proxy/registry.js";
 /**
- * Bash exec runtime.
  * Spawns host/sandbox processes, manages session updates/backgrounding,
  * approval messaging constants, environment safety, and exit outcome shaping.
  */
@@ -39,17 +38,21 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "./agent-tool-source-execution-guard.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
   appendOutput,
   isProcessSessionIdTaken,
+  markCancellationRequested,
   resolveProcessCleanupMs,
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
-import { prepareHostExecSpawn } from "./bash-tools.exec-host-spawn.js";
+import { prepareHostExecSpawn, resolveExecLaunchEnv } from "./bash-tools.exec-host-spawn.js";
 import { createExecLaunchLifecycle } from "./bash-tools.exec-launch.js";
 import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exec-notify.js";
 import {
@@ -58,7 +61,6 @@ import {
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
-import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import type {
   ExecExitFailureKind,
   ExecProcessOutcome,
@@ -70,7 +72,6 @@ import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { createSessionSlug } from "./session-slug.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
-import { registerTrustedToolNoStartError } from "./tool-result-error.js";
 import {
   getGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -101,7 +102,6 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 /** Fallback PATH used when the process environment has no PATH. */
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-/** Default time an approval can remain pending. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 /** Gateway request timeout for approval registration/wait calls. */
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
@@ -118,84 +118,6 @@ export type ExecProcessHandle = {
   /** Immediately suppress all future `onUpdate` calls for this handle. */
   disableUpdates: () => void;
 };
-
-/** Renders an exec target label, preserving `auto`. */
-export function renderExecTargetLabel(target: ExecTarget) {
-  return target;
-}
-
-/** Resolves configured/requested/elevated exec target into an effective host. */
-export function resolveExecTarget(params: {
-  configuredTarget?: ExecTarget;
-  requestedTarget?: ExecTarget | null;
-  elevatedRequested: boolean;
-  sandboxAvailable: boolean;
-  sandboxRequired?: boolean;
-}) {
-  const sandboxRequired = params.sandboxRequired === true;
-  if (sandboxRequired && !params.sandboxAvailable) {
-    throw registerTrustedToolNoStartError(
-      new Error("This session requires a sandbox, but its sandbox runtime is unavailable."),
-    );
-  }
-  if (sandboxRequired && params.elevatedRequested) {
-    throw registerTrustedToolNoStartError(
-      new Error("Elevated execution is unavailable because this session requires a sandbox."),
-    );
-  }
-  // Session isolation outranks every agent, session, and request-scoped host preference.
-  const configuredTarget = sandboxRequired ? "auto" : (params.configuredTarget ?? "auto");
-  const requestedTarget =
-    params.requestedTarget === "auto" ? null : (params.requestedTarget ?? null);
-  if (sandboxRequired && (requestedTarget === "gateway" || requestedTarget === "node")) {
-    throw registerTrustedToolNoStartError(
-      new Error(
-        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; this session requires a sandbox).`,
-      ),
-    );
-  }
-  if (
-    requestedTarget &&
-    !isRequestedExecTargetAllowed({
-      configuredTarget,
-      requestedTarget,
-      sandboxAvailable: params.sandboxAvailable,
-    })
-  ) {
-    const allowedConfig = Array.from(
-      new Set(
-        configuredTarget === "auto" &&
-          params.sandboxAvailable &&
-          (requestedTarget === "gateway" || requestedTarget === "node")
-          ? [renderExecTargetLabel(requestedTarget)]
-          : requestedTarget === "gateway" && !params.sandboxAvailable
-            ? ["gateway", "auto"]
-            : [renderExecTargetLabel(requestedTarget), "auto"],
-      ),
-    ).join(" or ");
-    throw registerTrustedToolNoStartError(
-      new Error(
-        `exec host not allowed (requested ${renderExecTargetLabel(requestedTarget)}; ` +
-          `configured host is ${renderExecTargetLabel(configuredTarget)}; ` +
-          `set tools.exec.host=${allowedConfig} to allow this override).`,
-      ),
-    );
-  }
-  const selectedTarget = requestedTarget ?? configuredTarget;
-  const resolvedTarget = params.elevatedRequested
-    ? selectedTarget === "node"
-      ? "node"
-      : "gateway"
-    : selectedTarget;
-  const effectiveHost =
-    resolvedTarget === "auto" ? (params.sandboxAvailable ? "sandbox" : "gateway") : resolvedTarget;
-  return {
-    configuredTarget,
-    requestedTarget,
-    selectedTarget: resolvedTarget,
-    effectiveHost,
-  };
-}
 
 /** Merges shell-discovered PATH entries into an exec environment. */
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
@@ -262,7 +184,6 @@ export function buildApprovalPendingMessage(params: {
   return lines.join("\n");
 }
 
-/** Normalizes the delay before showing a running approval notice. */
 export function resolveApprovalRunningNoticeMs(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_APPROVAL_RUNNING_NOTICE_MS;
@@ -298,7 +219,6 @@ function classifyExecFailureKind(params: {
   return "aborted";
 }
 
-/** Formats a user-facing reason for a failed exec process exit. */
 function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
   exitSignal: NodeJS.Signals | number | null;
@@ -333,7 +253,6 @@ function formatExecFailureReason(params: {
   throw new Error("Unsupported exec failure kind");
 }
 
-/** Converts a supervisor exit record into a normalized exec process outcome. */
 function buildExecExitOutcome(params: {
   exit: RunExit;
   aggregated: string;
@@ -386,7 +305,6 @@ function buildExecExitOutcome(params: {
   };
 }
 
-/** Converts spawn/runtime errors into a normalized failed exec outcome. */
 export function buildExecRuntimeErrorOutcome(params: {
   error: unknown;
   aggregated: string;
@@ -465,7 +383,7 @@ export async function runExecProcess({
     requestSignal && initialStartupSignal
       ? AbortSignal.any([requestSignal, initialStartupSignal])
       : (requestSignal ?? initialStartupSignal);
-  let assertSourceActive: (() => void) | undefined =
+  let assertSourceActive: SessionSourceAssertion | undefined =
     captureAgentToolSourceExecutionGuard(startupSignal);
   let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
@@ -571,7 +489,6 @@ export async function runExecProcess({
   let sandboxFinalizeToken: unknown;
   let assertSandboxCurrent: (() => void) | undefined;
   let sandboxPrepared = false;
-  let sandboxFinalized = false;
   let terminateSandboxProcess: (() => Promise<void>) | undefined;
   let sandboxTermination: Promise<{ error: unknown } | undefined> | undefined;
   let secretEgressGrant: SecretEgressProcessGrant | undefined;
@@ -594,10 +511,9 @@ export async function runExecProcess({
     exitCode: number | null;
     timedOut: boolean;
   }) => {
-    if (!sandboxPrepared || sandboxFinalized || !opts.sandbox?.finalizeExec) {
+    if (!sandboxPrepared || !opts.sandbox?.finalizeExec) {
       return;
     }
-    sandboxFinalized = true;
     await opts.sandbox.finalizeExec({
       ...params,
       token: sandboxFinalizeToken,
@@ -643,11 +559,13 @@ export async function runExecProcess({
         errors.push(artifacts.reason);
       }
       if (errors.length > 0) {
-        throw new AggregateError(errors, errors.map(formatErrorMessage).join("\n"));
+        const message = errors.map((error) => formatErrorMessage(error)).join("\n");
+        throw new AggregateError(errors, message);
       }
     } catch (error) {
       session.finalizationFailed = true;
       recordAgentCleanupFailure();
+      // Mask host cleanup diagnostics before they enter retained process output.
       const detail = redactToolPayloadText(formatErrorMessage(error));
       if (outcome.status === "completed") {
         finalOutcome = runtimeErrorOutcome(detail);
@@ -655,7 +573,7 @@ export async function runExecProcess({
         finalOutcome = { ...outcome, reason: joinExecFailureOutput(outcome.reason, detail) };
         logWarn(`exec: finalization after process failure failed (${detail}).`);
       }
-      // Failed commands must retain cleanup failures in the same bounded, redacted output.
+      // Failed commands retain cleanup failures in the same bounded tool output.
       appendOutput(session, "stderr", `\n${detail}\n`);
       finalOutcome.aggregated = session.aggregated.trim();
     } finally {
@@ -703,7 +621,7 @@ export async function runExecProcess({
   let managedRun: ManagedRun | null = null;
   const onRequestCancelled = () => {
     session.requestCancelled = true;
-    session.cancellationRequested = true;
+    markCancellationRequested(session);
     onUpdate = undefined;
     if (managedRun) {
       managedRun.cancel("manual-cancel");
@@ -727,43 +645,54 @@ export async function runExecProcess({
     requestSignal?.removeEventListener("abort", onRequestCancelled);
   };
   let usingPty = opts.usePty && !opts.sandbox;
+  const emitCompleted = (outcome: ExecProcessOutcome) =>
+    emitExecProcessCompleted({
+      command: opts.command,
+      mode: usingPty ? "pty" : "child",
+      outcome,
+      sessionKey: opts.sessionKey,
+      target: diagnosticTarget,
+    });
   const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
-  const spawn = async (input: SpawnInput) => {
-    const assertSourceCurrent = assertSourceActive;
-    const assertOperatorCurrent = operatorAuthority?.assertCurrent;
-    const assertRuntimeCurrent = assertSandboxCurrent;
-    const assertHostPolicyCurrent = assertPolicyCurrent;
-    const assertCurrent = () => {
-      assertSourceCurrent?.();
-      assertOperatorCurrent?.();
-      assertRuntimeCurrent?.();
-    };
-    // Source authority covers construction; approval policy ends at native launch.
-    assertCurrent();
-    assertHostPolicyCurrent?.();
-    const grant = opts.secretEgressBindings
-      ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
-      : undefined;
-    secretEgressGrant = grant;
-    try {
-      return await withoutGatewayToolCallerIdentity(() =>
-        supervisor.spawn({
-          ...input,
-          ...(grant ? { env: { ...input.env, ...grant.env } } : {}),
-          onCancel: () => {
-            beginSandboxTermination();
-            grant?.revoke();
-          },
-          assertCurrent,
-          beforeSpawn: assertHostPolicyCurrent,
-          initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
-        }),
-      );
-    } catch (error) {
-      grant?.revoke();
-      throw error;
-    }
-  };
+  const spawn = (input: SpawnInput) =>
+    runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {
+      const assertSourceCurrent = assertSourceActive;
+      const assertOperatorCurrent = operatorAuthority?.assertCurrent;
+      const assertRuntimeCurrent = assertSandboxCurrent;
+      const assertHostPolicyCurrent = assertPolicyCurrent;
+      const assertCurrent = () => {
+        assertSourceCurrent?.();
+        assertOperatorCurrent?.();
+        assertRuntimeCurrent?.();
+      };
+      // Source authority covers construction; approval policy ends at native launch.
+      assertCurrent();
+      assertHostPolicyCurrent?.();
+      const grant = opts.secretEgressBindings
+        ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
+        : undefined;
+      secretEgressGrant = grant;
+      try {
+        return await withChildProcessOperation("agent.exec", () =>
+          withoutGatewayToolCallerIdentity(() =>
+            supervisor.spawn({
+              ...input,
+              env: resolveExecLaunchEnv(input.env, Boolean(opts.sandbox), grant?.env),
+              onCancel: () => {
+                beginSandboxTermination();
+                grant?.revoke();
+              },
+              assertCurrent,
+              beforeSpawn: assertHostPolicyCurrent,
+              initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+            }),
+          ),
+        );
+      } catch (error) {
+        grant?.revoke();
+        throw error;
+      }
+    });
 
   try {
     assertSourceActive?.();
@@ -825,13 +754,7 @@ export async function runExecProcess({
     const outcome = await finalizeAndSettleSession(runtimeErrorOutcome(error)).finally(
       releaseExecutionContext,
     );
-    emitExecProcessCompleted({
-      command: opts.command,
-      mode: usingPty ? "pty" : "child",
-      outcome,
-      sessionKey: opts.sessionKey,
-      target: diagnosticTarget,
-    });
+    emitCompleted(outcome);
     throw error;
   } finally {
     launchLifecycle.dispose();
@@ -866,13 +789,7 @@ export async function runExecProcess({
         onUpdate = undefined;
       }
       const finalOutcome = await finalizeAndSettleSession(outcome);
-      emitExecProcessCompleted({
-        command: opts.command,
-        mode: usingPty ? "pty" : "child",
-        outcome: finalOutcome,
-        sessionKey: opts.sessionKey,
-        target: diagnosticTarget,
-      });
+      emitCompleted(finalOutcome);
       return finalOutcome;
     } finally {
       releaseExecutionContext();

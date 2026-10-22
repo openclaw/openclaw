@@ -51,6 +51,7 @@ import {
   migrateLegacyRuntimeModelRef,
   resolveLegacyRuntimeModelProviderAlias,
 } from "./legacy-runtime-model-providers.js";
+import { rewriteRenamedSessionRoutes, type ProviderRename } from "./provider-rename.js";
 import type { SessionModelRetirement } from "./retired-model-ref-repair.js";
 import { createRetiredModelRefRepairResolver } from "./retired-model-ref-repair.js";
 import { repairRetiredSessionModelRef } from "./retired-session-model-repair.js";
@@ -220,17 +221,11 @@ function repairProviderlessCodexSessionOverride(
 
   entry.providerOverride = "openai";
   entry.modelOverrideRouteResolution = "resolved";
-  if (entry.model !== undefined || entry.modelProvider !== undefined) {
-    delete entry.model;
-    delete entry.modelProvider;
-  }
-  if (entry.contextTokens !== undefined || entry.contextTokensSource !== undefined) {
-    delete entry.contextTokens;
-    delete entry.contextTokensSource;
-  }
-  if (entry.contextBudgetStatus !== undefined) {
-    delete entry.contextBudgetStatus;
-  }
+  delete entry.model;
+  delete entry.modelProvider;
+  delete entry.contextTokens;
+  delete entry.contextTokensSource;
+  delete entry.contextBudgetStatus;
   return true;
 }
 
@@ -262,7 +257,9 @@ function repairCodexSessionStoreRoutes(params: {
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   authProfileIdMap?: ReadonlyMap<string, string>;
   authProfileOnly?: boolean;
+  providerRenameOnly?: boolean;
   retirement?: SessionModelRetirement;
+  providerRenames?: readonly ProviderRename[];
   warnings?: string[];
 }): string[] {
   const now = params.now ?? Date.now();
@@ -281,7 +278,9 @@ function repairCodexSessionStoreRoutes(params: {
       }
       continue;
     }
-    const changedCliBinding = migrateLegacyClaudeSessionField(entry, sessionKey, params.warnings);
+    const changedCliBinding = params.providerRenameOnly
+      ? false
+      : migrateLegacyClaudeSessionField(entry, sessionKey, params.warnings);
     if (isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       // Only the binding representation changes; locked identity, route and recency stay owned.
       if (changedCliBinding) {
@@ -296,6 +295,19 @@ function repairCodexSessionStoreRoutes(params: {
     const runtimeWasExplicit =
       entry.agentRuntimeOverride !== undefined &&
       normalizeOptionalAgentRuntimeId(entry.agentRuntimeOverride) !== "auto";
+    const changedProviderRoute = params.providerRenames?.length
+      ? rewriteRenamedSessionRoutes({
+          entry,
+          renames: params.providerRenames,
+        })
+      : false;
+    if (params.providerRenameOnly) {
+      if (changedProviderRoute) {
+        entry.updatedAt = now;
+        sessionKeys.push(sessionKey);
+      }
+      continue;
+    }
     const runtimeModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "modelProvider",
@@ -353,6 +365,7 @@ function repairCodexSessionStoreRoutes(params: {
         )
       : false;
     if (
+      !changedProviderRoute &&
       !changedModelRoute &&
       !changedFallbackNotice &&
       !changedRuntimePins &&
@@ -455,11 +468,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
   authProfileOnly?: boolean;
+  providerRenameOnly?: boolean;
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
   authProfileIdMap?: ReadonlyMap<string, string>;
+  providerRenames?: readonly ProviderRename[];
 }): Promise<CodexSessionRouteRepairSummary> {
   const env = params.env ?? process.env;
-  const authProfileOnly = !params.shouldRepair && params.authProfileOnly === true;
+  const authProfileOnly =
+    !params.providerRenameOnly && !params.shouldRepair && params.authProfileOnly === true;
   const shouldRepair = params.shouldRepair || authProfileOnly;
   const warnings: string[] = [];
   const pending = readDeferredPluginMigrations({ env });
@@ -469,16 +485,18 @@ export async function maybeRepairCodexSessionRoutes(params: {
   const sessionTargets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }).filter(
     (target) => !isRetained(target.storePath, target.agentId),
   );
-  const resolveRetired = authProfileOnly
-    ? undefined
-    : createRetiredModelRefRepairResolver({
-        cfg: params.cfg,
-        checkModelPolicy: true,
-        retiredModelRefConfig: params.retiredModelRefConfig,
-        env,
-        warnings,
-        agentIds: [...new Set(sessionTargets.map((target) => target.agentId))],
-      });
+  const providerRenames = params.providerRenames;
+  const resolveRetired =
+    authProfileOnly || params.providerRenameOnly
+      ? undefined
+      : createRetiredModelRefRepairResolver({
+          cfg: params.cfg,
+          checkModelPolicy: true,
+          retiredModelRefConfig: params.retiredModelRefConfig,
+          env,
+          warnings,
+          agentIds: [...new Set(sessionTargets.map((target) => target.agentId))],
+        });
   const targets = sessionTargets.flatMap((target) => {
     const defaultModelRef = resolveRetired
       ? resolveAgentEffectiveModelPrimary(params.cfg, target.agentId)
@@ -502,12 +520,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
       agentId: target.agentId,
       env,
     };
-    const authProfileIdMap = resolveVerifiedSessionAuthProfileIdMap({
-      agentId: target.agentId,
-      cfg: params.cfg,
-      env,
-      authProfileIdMap: params.authProfileIdMap,
-    });
+    const authProfileIdMap = params.providerRenameOnly
+      ? undefined
+      : resolveVerifiedSessionAuthProfileIdMap({
+          agentId: target.agentId,
+          cfg: params.cfg,
+          env,
+          authProfileIdMap: params.authProfileIdMap,
+        });
     if (authProfileOnly && !authProfileIdMap?.size) {
       return [];
     }
@@ -517,7 +537,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
         blockedModelIdentities: params.blockedModelIdentities,
         authProfileIdMap,
         authProfileOnly,
+        providerRenameOnly: params.providerRenameOnly,
         retirement,
+        providerRenames,
         warnings,
       });
     // Preview uses the same owner-bound repair against copies, preserving persisted entries.

@@ -5,11 +5,12 @@ import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
+import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export const TOOL_SEARCH_RAW_TOOL_NAME = "tool_search";
 export const TOOL_DESCRIBE_RAW_TOOL_NAME = "tool_describe";
-export const TOOL_CALL_RAW_TOOL_NAME = "tool_call";
+export { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
 // One model-visible search response, including a batch, may expose at most this many candidates.
 export const MAX_TOOL_SEARCH_RESULTS = 50;
 export const MAX_TOOL_SEARCH_BATCH_QUERIES = 16;
@@ -52,7 +53,7 @@ export type ToolSearchCallOptions = CatalogVisibilityOptions &
     onUpdate?: AgentToolUpdateCallback;
     /**
      * Code Mode's MCP namespace guest expects a thrown denial for resource and
-     * prompt operations. Ordinary `tool_call` keeps the blocked result envelope.
+     * prompt operations. Ordinary `dispatch_action` keeps the blocked result envelope.
      */
     mcpNamespaceGuest?: boolean;
   };
@@ -128,8 +129,6 @@ export type ToolSearchCatalogRef = {
   directOnlyToolNames?: ReadonlySet<string>;
   baselineDirectOnlyToolNames?: ReadonlySet<string>;
   closedTelemetry?: ToolSearchCatalogTelemetry;
-  onChange?: () => void;
-  disposeObserver?: () => void;
   onDispose?: Set<() => void>;
 };
 
@@ -142,6 +141,7 @@ export type ToolSearchCatalogApplyResult = {
 };
 
 export type ToolSearchCatalogCompactionParams = {
+  config?: OpenClawConfig;
   tools: AnyAgentTool[];
   enabled: boolean;
   catalogRef?: ToolSearchCatalogRef;

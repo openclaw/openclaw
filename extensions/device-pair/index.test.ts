@@ -16,7 +16,6 @@ const pluginApiMocks = vi.hoisted(() => ({
     expiresAtMs: Date.now() + 10 * 60_000,
   })),
   revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
-  renderQrPngDataUrl: vi.fn(async () => "data:image/png;base64,ZmFrZXBuZw=="),
   resolvePreferredOpenClawTmpDir: vi.fn(() => path.join(os.tmpdir(), "openclaw-device-pair-tests")),
   writeQrPngTempFile: vi.fn(async (dataValue: string, opts: { tmpRoot: string }) => {
     const dirPath = await fs.mkdtemp(path.join(opts.tmpRoot, "device-pair-qr-"));
@@ -26,9 +25,8 @@ const pluginApiMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./api.js", async () => ({
-  resolvePairingGatewayUrl: (await import("openclaw/plugin-sdk/device-bootstrap"))
-    .resolvePairingGatewayUrl,
+vi.mock("./api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./api.js")>()),
   PAIRING_SETUP_BOOTSTRAP_PROFILE: {
     roles: ["node", "operator"],
     scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
@@ -38,7 +36,6 @@ vi.mock("./api.js", async () => ({
   definePluginEntry: vi.fn((entry) => entry),
   issueDeviceBootstrapToken: pluginApiMocks.issueDeviceBootstrapToken,
   listDevicePairing: vi.fn(async () => ({ pending: [] })),
-  renderQrPngDataUrl: pluginApiMocks.renderQrPngDataUrl,
   revokeDeviceBootstrapToken: pluginApiMocks.revokeDeviceBootstrapToken,
   resolvePreferredOpenClawTmpDir: pluginApiMocks.resolvePreferredOpenClawTmpDir,
   runPluginCommandWithTimeout: vi.fn(),
@@ -324,7 +321,6 @@ describe("device-pair /pair qr", () => {
     };
     const text = requireText(result);
 
-    expect(pluginApiMocks.renderQrPngDataUrl).toHaveBeenCalledTimes(1);
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith(FULL_SETUP_REQUEST);
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
     expect(payload.mediaUrl).toBeUndefined();
@@ -349,25 +345,6 @@ describe("device-pair /pair qr", () => {
       untouched: pluginApiMocks.issueDeviceBootstrapToken,
       text: TALK_SECRETS_REQUIRED,
     });
-  });
-
-  it("reissues the bootstrap token if webchat QR rendering fails before falling back", async () => {
-    pluginApiMocks.issueDeviceBootstrapToken
-      .mockResolvedValueOnce({ token: "first-token", expiresAtMs: Date.now() + 10 * 60_000 })
-      .mockResolvedValueOnce({ token: "second-token", expiresAtMs: Date.now() + 10 * 60_000 });
-    pluginApiMocks.renderQrPngDataUrl.mockRejectedValueOnce(new Error("render failed"));
-
-    const text = requireText(
-      await runPair({ channel: "webchat", gatewayClientScopes: INTERNAL_SETUP_SCOPES }),
-    );
-    expect(pluginApiMocks.revokeDeviceBootstrapToken).toHaveBeenCalledWith({
-      token: "first-token",
-    });
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(2);
-    expect(text).toContain(
-      "QR image delivery is not available on this channel right now, so I generated a pasteable setup code instead.",
-    );
-    expect(text).toContain("Pairing setup code generated.");
   });
 
   it.each`

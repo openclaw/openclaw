@@ -1,17 +1,20 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import { i18n } from "../../../i18n/index.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
-import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createClient,
   createContext,
   createGateway,
 } from "../../plugins/plugins-page.test-support.ts";
-import "./chat-clawhub-card.ts";
+import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
 
 const iconFetch = vi.hoisted(() => ({ catalog: vi.fn(), plugin: vi.fn() }));
 vi.mock("../../plugins/icon-loader.ts", () => ({
@@ -42,16 +45,25 @@ function detail(installed: boolean) {
 function mount(
   handler: (method: string, params: unknown) => Promise<unknown>,
   initialRecommendation: ClawHubRecommendation = recommendation,
+  agentId = "main",
 ) {
   const { client, request } = createClient(handler);
   const harness = createGateway(client);
   const context = createContext(harness.gateway);
-  const provider = createApplicationContextProvider(context);
-  const card = document.createElement("openclaw-chat-clawhub-card");
-  Object.assign(card, { recommendation: initialRecommendation, agentId: "main" });
-  provider.append(card);
-  document.body.append(provider);
-  return { card, context, request, harness, client };
+  const provider = createSolidApplicationContextProvider(context);
+  const [currentRecommendation, setRecommendation] = createSignal(initialRecommendation);
+  const mounted = mountSolid(
+    () =>
+      createComponent(ChatClawHubCard, {
+        get recommendation() {
+          return currentRecommendation();
+        },
+        agentId,
+      }),
+    { wrapper: provider.wrapper },
+  );
+  const card = mounted.container.querySelector<HTMLElement>("openclaw-chat-clawhub-card")!;
+  return { card, context, request, harness, client, unmount: mounted.unmount, setRecommendation };
 }
 
 describe("ClawHub chat recommendations", () => {
@@ -65,6 +77,35 @@ describe("ClawHub chat recommendations", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it("refreshes translated actions without reloading catalog status", async () => {
+    const translate = i18n.t.bind(i18n);
+    const subscribe = i18n.subscribe.bind(i18n);
+    let notifyLocale: Parameters<typeof i18n.subscribe>[0] | undefined;
+    let translated = false;
+    vi.spyOn(i18n, "t").mockImplementation((key, params) =>
+      translated && key === "common.dismiss" ? "Ausblenden" : translate(key, params),
+    );
+    vi.spyOn(i18n, "subscribe").mockImplementation((listener) => {
+      notifyLocale = listener;
+      return subscribe(listener);
+    });
+    const { card, request } = mount(async () => detail(false));
+    await waitForSolid(() =>
+      expect(card.querySelector(".chat-clawhub-card__dismiss")?.textContent?.trim()).toBe(
+        "Dismiss",
+      ),
+    );
+    const reads = request.mock.calls.length;
+    translated = true;
+    notifyLocale!(i18n.getLocale());
+    await waitForSolid(() =>
+      expect(card.querySelector(".chat-clawhub-card__dismiss")?.textContent?.trim()).toBe(
+        "Ausblenden",
+      ),
+    );
+    expect(request).toHaveBeenCalledTimes(reads);
   });
 
   it.each(["live generation", "reconnect"] as const)(
@@ -146,13 +187,13 @@ describe("ClawHub chat recommendations", () => {
   it("does not present a stale installed badge when status fails, and retries visibly", async () => {
     let fail = true;
     const retry = deferred<ReturnType<typeof detail>>();
-    const { card } = mount(async () => {
+    const { card, setRecommendation } = mount(async () => {
       if (fail) {
         throw new Error("Catalog unavailable");
       }
       return retry.promise;
     });
-    Object.assign(card, { recommendation: { ...recommendation, installed: true } });
+    setRecommendation({ ...recommendation, installed: true });
     await vi.waitFor(() => expect(card.textContent).toContain("Status unavailable"));
     expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
     fail = false;
@@ -235,20 +276,20 @@ describe("ClawHub chat recommendations", () => {
     },
   );
 
-  it("retains detail-only decoded artwork through a pending and failed status refresh", async () => {
+  it("retains detail-only decoded artwork through pending, failed, and retried status refreshes", async () => {
     vi.useFakeTimers();
     const refresh = deferred<ReturnType<typeof detail>>();
+    const retry = deferred<ReturnType<typeof detail>>();
     const result = detail(true);
     Object.assign(result.plugin.catalog, { imageUrl: "https://example.com/detail.png" });
     iconFetch.catalog.mockResolvedValue("blob:detail-artwork");
-    let refreshing = false;
-    const { card, harness, client } = mount(() =>
-      refreshing ? refresh.promise : Promise.resolve(result),
-    );
+    let response = Promise.resolve(result);
+    const { card, harness, client } = mount(() => response);
     await vi.advanceTimersByTimeAsync(0);
-    card.querySelector("img")!.dispatchEvent(new Event("load"));
+    const image = card.querySelector("img")!;
+    image.dispatchEvent(new Event("load"));
     await vi.advanceTimersByTimeAsync(0);
-    refreshing = true;
+    response = refresh.promise;
     harness.emit(client, true, {
       pluginCapabilities: {
         ok: true,
@@ -272,6 +313,25 @@ describe("ClawHub chat recommendations", () => {
     expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:detail-artwork");
     expect(card.querySelector("img")?.hidden).toBe(false);
     expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
+    expect(iconFetch.catalog).toHaveBeenCalledOnce();
+
+    response = retry.promise;
+    card.querySelector<HTMLButtonElement>(".chat-clawhub-card__dismiss")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card.querySelector(".chat-clawhub-card__status-skeleton")).not.toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__dismiss")).toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__installed")).toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__install")).toBeNull();
+    expect(card.querySelector("img")).toBe(image);
+    expect(image.hidden).toBe(false);
+    expect(iconFetch.catalog).toHaveBeenCalledOnce();
+
+    retry.resolve(result);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(card.querySelector(".chat-clawhub-card__status-skeleton")).toBeNull();
+    expect(card.querySelector(".chat-clawhub-card__installed")?.textContent).toContain("Installed");
+    expect(card.querySelector("img")).toBe(image);
+    expect(image.hidden).toBe(false);
     expect(iconFetch.catalog).toHaveBeenCalledOnce();
   });
 
@@ -324,21 +384,19 @@ describe("ClawHub chat recommendations", () => {
       const oldResult = detail(false);
       Object.assign(oldResult.plugin.catalog, { imageUrl: "https://example.com/old.png" });
       let current = oldResult;
-      const { card, harness } = mount(async () => current);
+      const { card, harness, unmount, setRecommendation } = mount(async () => current);
       await vi.advanceTimersByTimeAsync(0);
       const { signal } = iconFetch.catalog.mock.calls[0]![0] as { signal: AbortSignal };
       if (boundary === "recommendation") {
         current = detail(false);
         current.plugin.id = "ch_cmVwbGFjZW1lbnQ";
         current.plugin.catalog.name = "Replacement";
-        Object.assign(card, {
-          recommendation: { ...recommendation, id: current.plugin.id, name: "Replacement" },
-        });
+        setRecommendation({ ...recommendation, id: current.plugin.id, name: "Replacement" });
       } else if (boundary === "gateway") {
         const next = createClient(async () => detail(false));
         harness.emit(next.client, true);
       } else {
-        card.remove();
+        unmount();
       }
       await vi.advanceTimersByTimeAsync(0);
       expect(signal.aborted).toBe(true);
@@ -498,25 +556,27 @@ describe("ClawHub chat recommendations", () => {
         official: true,
         installed: false,
       };
-      const { card, context } = mount(async (method) =>
-        method === "skills.detail"
-          ? { skill: { displayName: "Calendar", isOfficial: true } }
-          : {
-              skills: [
-                {
-                  clawhub: {
-                    status: "linked",
-                    valid: true,
-                    registry,
-                    requestedReference,
-                    ownerHandle: "openclaw",
-                    slug: "calendar",
+      const { card, context } = mount(
+        async (method) =>
+          method === "skills.detail"
+            ? { skill: { displayName: "Calendar", isOfficial: true } }
+            : {
+                skills: [
+                  {
+                    clawhub: {
+                      status: "linked",
+                      valid: true,
+                      registry,
+                      requestedReference,
+                      ownerHandle: "openclaw",
+                      slug: "calendar",
+                    },
                   },
-                },
-              ],
-            },
+                ],
+              },
+        skill,
+        "research",
       );
-      Object.assign(card, { recommendation: skill, agentId: "research" });
       await vi.waitFor(() =>
         expect(
           card.querySelector(

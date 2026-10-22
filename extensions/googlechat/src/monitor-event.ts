@@ -1,30 +1,17 @@
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type {
   GoogleChatAction,
-  GoogleChatActionParameter,
   GoogleChatEvent,
   GoogleChatMessage,
   GoogleChatSpace,
   GoogleChatUser,
 } from "./types.js";
 
-export class GoogleChatEventPayloadError extends Error {
+class GoogleChatEventPayloadError extends Error {
   constructor() {
     super("invalid payload");
     this.name = "GoogleChatEventPayloadError";
   }
-}
-
-function recordParamsToActionParameters(
-  params?: Record<string, string>,
-): GoogleChatActionParameter[] | undefined {
-  if (!params) {
-    return undefined;
-  }
-  const entries = Object.entries(params)
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-    .map(([key, value]) => ({ key, value }));
-  return entries.length > 0 ? entries : undefined;
 }
 
 /** Normalize only at authenticated dispatch; durable admission stores the untouched envelope. */
@@ -68,7 +55,13 @@ export function parseGoogleChatInboundPayload(raw: unknown): GoogleChatEvent {
     const buttonClickedPayload = chatPayload?.buttonClickedPayload;
     if (buttonClickedPayload) {
       const invokedFunction = rawObj.commonEventObject.invokedFunction;
-      const actionParameters = recordParamsToActionParameters(rawObj.commonEventObject.parameters);
+      const parameters = rawObj.commonEventObject.parameters;
+      const entries = parameters
+        ? Object.entries(parameters)
+            .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+            .map(([key, value]) => ({ key, value }))
+        : [];
+      const actionParameters = entries.length > 0 ? entries : undefined;
       eventPayload = {
         type: "CARD_CLICKED",
         space: buttonClickedPayload.space,

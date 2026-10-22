@@ -157,7 +157,7 @@ export async function handleSlackMessageAction(params: {
         action: "sendMessage",
         to,
         content: content ?? "",
-        mediaUrl: mediaUrl ?? undefined,
+        mediaUrl,
         ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
         threadTs: resolveSlackThreadTsValue({ replyToId: replyTo, threadId }),
         ...(topLevel ? { topLevel: true } : {}),
@@ -291,7 +291,7 @@ export async function handleSlackMessageAction(params: {
         "download-file requires fileId (the Slack file id, for example F0B0LTT8M36 from event.files[].id), not messageId. Did you mean to pass fileId? messageId is the Slack message timestamp and is used by react / reactions / edit / delete / pin / unpin actions, not download-file.",
       );
     }
-    const fileId = readStringParam(actionParams, "fileId", { required: true });
+    const fileId = fileIdParam ?? readStringParam(actionParams, "fileId", { required: true });
     const channelId =
       readStringParam(actionParams, "channelId") ?? readStringParam(actionParams, "to");
     const threadId =
@@ -299,8 +299,8 @@ export async function handleSlackMessageAction(params: {
     return await invokeSlackAction({
       action: "downloadFile",
       fileId,
-      channelId: channelId ?? undefined,
-      threadId: threadId ?? undefined,
+      channelId,
+      threadId,
     });
   }
 
@@ -335,7 +335,7 @@ export async function handleSlackMessageAction(params: {
         "",
       filename: readStringParam(actionParams, "filename"),
       title: readStringParam(actionParams, "title"),
-      threadTs: threadId ?? undefined,
+      threadTs: threadId,
       ...(readSlackForceDocument(actionParams) ? { forceDocument: true } : {}),
       ...(topLevel ? { topLevel: true } : {}),
     });

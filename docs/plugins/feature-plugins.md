@@ -63,7 +63,7 @@ uses the custom-plugin setting.
 ## Create a feature plugin
 
 Enable the [Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui) before opening the
-scaffold's browser views.
+generated plugin's browser views.
 
 ```bash
 openclaw plugins init draft-review --name "Draft Review" --type feature
@@ -74,7 +74,7 @@ npm run validate
 openclaw plugins install .
 ```
 
-The scaffold includes a draft-analysis operation, an agent tool, a native page,
+The starter plugin includes a draft-analysis operation, an agent tool, a native page,
 and a composer replacement. Open Draft Review from the Control UI sidebar, or
 open **Plugins → Advanced → Customize UI** and choose Draft composer. Choose Built-in to
 restore a view. Replacement selection belongs to the current browser runtime;
@@ -159,7 +159,7 @@ Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
 right-click, **Shift+F10**, or the context-menu key on the focused link, including
 nested and pinned entries. Selecting an action closes the menu; **Escape** or an
 outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
-pin and `host.ui.unpinNavigation(id)` to remove it idempotently. Plugins choose
+pin and `host.ui.unpinNavigation(id)` to remove it; repeated calls have no additional effect. Plugins choose
 which actions to offer and own confirmation for destructive actions.
 
 For a dashboard widget, also register a backend
@@ -207,7 +207,7 @@ does not expose a separate headless chat service for a completely independent
 workspace.
 
 A composer replacement receives the current draft, admission state, disabled
-reason, and canonical `setDraft`, `send`, and optional `abort` operations. Use
+reason, and standard `setDraft`, `send`, and optional `abort` operations. Use
 these operations instead of issuing a raw chat RPC. `send()` resolves `true`
 when admitted, `false` when rejected, or `undefined` for a local command or no
 submission. Show rejected submissions rather than clearing the draft. Composer
@@ -230,6 +230,15 @@ Use the host for shared application behavior:
 | `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
 | `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
 | `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+
+`onEvent("session.message", listener)` listeners receive complete messages;
+delivery begins once the Gateway confirms full-body delivery for this connection.
+The host requests complete roster bodies when the first such listener registers
+and releases that preference when the last listener is removed. Listeners
+registered before connect include the preference in the initial handshake.
+During runtime registration, bodyless roster frames already in flight still
+update core UI consumers but are never delivered to plugin listeners. Other
+event subscriptions are unchanged, and no reconnect is required.
 
 Session and agent `refresh()` operations fetch new snapshots and reject on failure, so a plugin
 can display an error and offer Retry. `host.sessions.rows` is the current
@@ -315,13 +324,148 @@ under `dist/control-ui/<content-hash>/`, then publishes their paths in
 and assets usable. `plugins validate` and `plugins build --check` detect stale
 source, assets, or generated metadata.
 
+Host runtime builds keep the authored root manifest unchanged and publish their
+browser declaration in `dist/openclaw.plugin.json`. That generated declaration
+replaces only `controlUi`; config schemas and activation still come from the root
+manifest. Explicit `plugins build` publishes the root declaration and retires
+the previous generated pointer. Both layouts keep asset paths relative to the
+plugin root.
+
+### Solid views
+
+Solid 2 is supported for native plugin views. Use a `.tsx` browser entry and
+declare `solid-js` and `@solidjs/web` as your plugin's runtime dependencies,
+with matching versions. Add `@solidjs/compiler` and `esbuild` to its development
+dependencies. Put `/** @jsxImportSource @solidjs/web */` before the imports in
+each Solid `.tsx` file. This standard JSX pragma selects the plugin's own Solid
+compiler; other JSX files retain esbuild's existing renderer semantics. The
+builder bundles the renderer, and the host does not supply a shared runtime.
+For typechecking, set `jsx: "preserve"` and `jsxImportSource: "@solidjs/web"`.
+
+The framework-neutral view contract stays the same:
+
+```tsx
+import { render } from "@solidjs/web";
+import type { ControlUiView } from "openclaw/plugin-sdk/control-ui";
+/** @jsxImportSource @solidjs/web */
+import { createSignal } from "solid-js";
+
+const mount: ControlUiView = (container, context) => {
+  const [label, setLabel] = createSignal(context.props.label ?? "Ready");
+  const dispose = render(() => <p>{label()}</p>, container);
+  return {
+    update(next) {
+      setLabel(next.props.label ?? "Ready");
+    },
+    dispose,
+  };
+};
+```
+
+Keep one renderer responsible for each container's children and dispose its root
+when the view ends. Solid 2 batches reactive writes; keep synchronous request
+authority and mutation guards with their existing owners.
+
+### Packaged Settings presentations
+
+A bundled presentation can render a host-owned Settings placement without
+activating the plugin's runtime UI. Memory Core uses this for the Memory overview and indexed-search panel,
+including when memory is off, another engine is selected, or the Gateway is offline.
+Declare the placement alongside the built entry:
+
+```json
+{
+  "controlUi": {
+    "entry": "dist/control-ui/<content-hash>/index.js",
+    "activation": "settings-only",
+    "settingsViews": [
+      { "section": "memory", "panel": "overview" },
+      { "section": "memory", "panel": "memories" }
+    ]
+  }
+}
+```
+
+The browser module exports `pluginId` and a `settingsViews` array of
+`ControlUiSettingsView` from `openclaw/plugin-sdk/control-ui`. Each view declares
+its `placement` and a `mount(container, context)` that returns `update(snapshot)`
+and `dispose()`. Memory views support the overview and Memories panel. A channel plugin can instead declare
+`{ "section": "channels", "panel": "detail", "channelId": "<owned-channel>" }` and export a
+`ControlUiChannelSettingsView`. The channel must appear in the declaring manifest's `channels`.
+These placements do not register arbitrary Settings routes.
+
+The host supplies the selected Settings agent, engine availability, connection
+state, advertised Gateway methods, locale, shared Settings components, and bounded navigation. Authenticated
+operator RPC remains trusted native UI authority, bound to the mounted view's
+lifetime. A memory view stays mounted through a same-client reconnect: `connected` and
+`connectionEpoch` arrive through `update(snapshot)`, and a reply to a request sent in an earlier
+epoch rejects. Agent, engine, route, advertised method catalog, Gateway client, account or
+recovery identity, and operator-access changes end the view; retained callbacks then reject.
+An absent method catalog means the method is unavailable. The host keeps
+routing, agent selection, engine decisions, and config writes; the plugin owns
+its presentation, status requests, and indexed-memory search. Search and full-file
+reads remain agent-scoped through the existing Gateway methods. Only an explicit
+user action searches memory or probes embedding readiness.
+
+A channel view receives status/account metadata, locale, connection state, and a
+`presented` flag. Its draft belongs to the Channels page: closing or switching the
+detail modal detaches its DOM without disposing the view. Same-client reconnects
+retain the draft but retire in-flight requests. Gateway/client, channel owner,
+plugin runtime, config owner, or administrator-access replacement ends the view.
+Keep pending-operation identity synchronous and stop rendering hidden updates
+until the view is presented again.
+
+`context.mountConfig(container)` mounts the real host-owned channel schema editor;
+its returned disposer releases that slot. `context.refresh(probe)` refreshes channel
+status. The channel context's `request` accepts an account ID, relative path
+segments, `PUT` or `POST`, a JSON body, and a caller cancellation signal. The host
+encodes the path once under `/api/channels/<owned-channel>/<account>/`, retains
+credentials, and checks connected administrator authority before dispatch, before
+credential retry, and after consuming the response body. Plugins never receive
+arbitrary credentialed URLs, headers, or tokens. A plugin may add its own operation
+deadline, which also covers retries and response-body consumption. The context
+returns parsed JSON plus HTTP status and a sanitized error message; backend route
+validation and mutation authority remain unchanged.
+
+The optional `login` capability connects a channel presentation to an existing
+application-owned login flow shared with setup. Its snapshot exposes the current
+message, QR image, connected state, and busy state; opaque login session keys stay
+with the host. `start(force)` and `wait()` retain the setup account selection.
+`captureLogout()` returns the selected account and a guarded logout callback;
+capture it before awaiting the host's `confirm` dialog. Account or linked-state
+changes, lost administrator access, replaced owners, and ended connection epochs
+invalidate that callback. Closing the detail does not reset the shared login flow.
+The host confirmation retains normal dialog admission and cancels when its view
+or transport lifetime ends. Optional phone and duration formatters preserve the
+host's locale conventions.
+
+The normal plugin builder preserves this declaration. The Control UI build
+loads it from the completed bundled distribution with the same package identity,
+asset revision, and immutable JavaScript/CSS generation. A Settings-only entry
+is excluded from runtime UI activation; existing `defineControlUiPlugin` entries
+keep their required `activate(host)` contract.
+
+Source-checkout `pnpm ui:build` and `pnpm ui:dev` prepare declared Settings
+presentations through the same plugin builder before reading that distribution.
+The dev server serves the validated generated JavaScript and CSS without runtime
+plugin activation. Restart the dev server after editing plugin presentation
+sources to rebuild their immutable generation.
+
+### Bundle boundaries
+
 The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy
 imports. The content hash covers the complete generation, including its chunks.
 CSS remains attached to the entry; loading a JavaScript chunk does not attach
-stylesheets. Embed other static assets in the bundle; arbitrary files are
+stylesheets. Authenticated bootstrap advertises the entry, stylesheets, and static
+JavaScript dependencies so the browser can preload them together before the
+Gateway connection completes. Activation still waits for the current catalog,
+asset grants, and all stylesheets; dynamic imports remain lazy.
+Embed other static assets in the bundle; arbitrary files are
 outside this build contract. Imports must be analyzable by esbuild: literal
 paths and supported glob imports work; unresolved dynamic imports, indirect
-`require` calls, and `require.resolve` are rejected. Each asset is limited to
+`require` calls, and `require.resolve` are rejected. Import validation checks the
+emitted chunks after tree-shaking: unused dependency loaders may be removed, but
+every retained browser import must resolve to a bundled chunk. Each asset is limited to
 4 MiB, with an 8 MiB and 128-asset limit for the whole plugin browser build.
 
 Plugins with prebuilt browser bundles can omit `package.json.openclaw.controlUi`
@@ -428,6 +572,9 @@ activation reports from currently connected Control UI clients. A report names t
 revision and either `activated` or `failed`; it is a browser activation receipt,
 not proof that every feature operation has been exercised. No connected browser
 means no browser activation receipt yet.
+Each catalog refresh sends its activation receipts together after the plugins
+finish initializing or reach their activation deadline. Healthy plugins become
+available immediately while other plugins are still initializing.
 
 For the underlying manifest fields, see [Plugin manifest](/plugins/manifest).
 For install, update, and removal, see [Manage plugins](/plugins/manage-plugins).

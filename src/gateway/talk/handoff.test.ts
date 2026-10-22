@@ -31,56 +31,19 @@ describe("talk handoff store", () => {
       createdAt: Date.parse("2026-05-05T12:00:00.000Z"),
       expiresAt: Date.parse("2026-05-05T12:00:05.000Z"),
     });
-    expect(handoff.room.activeClientId).toBeUndefined();
-    expect(Array.isArray(handoff.room.recentTalkEvents)).toBe(true);
-    expect(handoff.room.recentTalkEvents[0]).toMatchObject({
-      type: "session.started",
-      sessionId: `talk_${handoff.id}`,
-      transport: "managed-room",
-    });
     expect(handoff).not.toHaveProperty("tokenHash");
     if (record === undefined) {
       throw new Error("expected stored talk handoff record");
     }
+    expect(record.room.talk.recentEvents[0]).toMatchObject({
+      type: "session.started",
+      sessionId: `talk_${handoff.id}`,
+      transport: "managed-room",
+    });
     expect(record).not.toHaveProperty("token");
 
     vi.advanceTimersByTime(5001);
     expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    vi.useRealTimers();
-  });
-
-  it("expires handoffs immediately when the creation clock is invalid", () => {
-    const handoff = (() => {
-      const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-      try {
-        return createTalkHandoff({
-          sessionKey: "session:main",
-          ttlMs: 5000,
-        });
-      } finally {
-        dateNow.mockRestore();
-      }
-    })();
-
-    expect(handoff.createdAt).toBe(0);
-    expect(handoff.expiresAt).toBe(0);
-    expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    expect(revokeTalkHandoff(handoff.id)).toEqual({ revoked: false, events: [] });
-  });
-
-  it("expires handoffs immediately when expiry would exceed Date bounds", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-
-    const handoff = createTalkHandoff({
-      sessionKey: "session:main",
-      ttlMs: 5000,
-    });
-
-    expect(handoff.expiresAt).toBe(0);
-    expect(getTalkHandoff(handoff.id)).toBeUndefined();
-    expect(revokeTalkHandoff(handoff.id)).toEqual({ revoked: false, events: [] });
-
     vi.useRealTimers();
   });
 

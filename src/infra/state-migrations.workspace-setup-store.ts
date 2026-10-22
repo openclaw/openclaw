@@ -1,5 +1,3 @@
-// SQLite import and receipt semantics for retired workspace state.
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
@@ -20,7 +18,9 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+// SQLite import and receipt semantics for retired workspace state.
+import type { EngineConnection } from "./sql-connection.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
@@ -29,7 +29,6 @@ import type { LegacyMigrationSourceSnapshot as SourceSnapshot } from "./state-mi
 import {
   createWorkspaceSetupFingerprint,
   resolveWorkspaceMigrationSourceKey,
-  type MigrationReceipt,
 } from "./state-migrations.workspace-setup-receipts.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
@@ -152,7 +151,10 @@ export function parseSource(
   return source.kind === "setup" ? parseSetup(snapshot.raw) : parseAttestation(snapshot);
 }
 
-function readGeneratedHashes(database: DatabaseSync, workspaceKey: string): Map<string, string> {
+function readGeneratedHashes(
+  database: EngineConnection,
+  workspaceKey: string,
+): Map<string, string> {
   return new Map(
     executeSqliteQuerySync(
       database,
@@ -235,7 +237,7 @@ export function canonicalCoversParsedSource(params: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   const { db } = openOpenClawStateDatabase({ env: params.env });
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     db,
     () => {
       const kysely = getNodeSqliteKysely<WorkspaceMigrationDatabase>(db);
@@ -292,7 +294,6 @@ export function importAndRecordReceipt(params: {
   snapshot: SourceSnapshot;
   parsed: ParsedSource;
   env: NodeJS.ProcessEnv;
-  previousReceipt?: MigrationReceipt;
   archivePath?: string;
 }): { sourceKey: string; imported: boolean; differences: string[] } {
   const key = resolveWorkspaceMigrationSourceKey(params.source);
@@ -311,14 +312,6 @@ export function importAndRecordReceipt(params: {
             .where("workspace_key", "=", params.source.workspaceKey),
         );
       const existingReceipt = readLegacyMigrationReceiptFromDatabase(db, key);
-      // Revalidate the observed receipt before publishing a new backup or generation.
-      if (
-        existingReceipt &&
-        (existingReceipt.sourceSha256 !== params.previousReceipt?.sha256 ||
-          existingReceipt.removedSource !== params.previousReceipt?.removedSource)
-      ) {
-        throw new Error("workspace migration receipt appeared concurrently; retry Doctor");
-      }
 
       let imported = false;
       const differences: string[] = [];
@@ -379,16 +372,6 @@ export function importAndRecordReceipt(params: {
           resolution = existing ? "merged" : "inserted";
           verifiedFingerprint = createWorkspaceSetupFingerprint(setupColumns);
         }
-        const verified = readWorkspace();
-        // Every setup import branch writes the source path, so a NULL path
-        // here is a verification failure, not an attestation-only row.
-        const actualFingerprint =
-          verified && verified.workspace_path != null
-            ? createWorkspaceSetupFingerprint(verified)
-            : null;
-        if (actualFingerprint !== verifiedFingerprint) {
-          throw new Error("SQLite verification failed for workspace setup state");
-        }
       } else {
         const parsedAttestation = params.parsed.value;
         const insertGeneratedHashes = () => {
@@ -412,6 +395,10 @@ export function importAndRecordReceipt(params: {
           attestedAtMs: parsedAttestation.attestedAtMs,
           generatedHashes: parsedAttestation.generatedHashes,
         });
+        const attestationColumns = {
+          attested_at_ms: parsedAttestation.attestedAtMs,
+          attestation_updated_at_ms: now,
+        };
         const existingRow = readWorkspace();
         if (existingRow?.attested_at_ms != null) {
           const existingHashes = readGeneratedHashes(db, params.source.workspaceKey);
@@ -445,10 +432,7 @@ export function importAndRecordReceipt(params: {
               db,
               kysely
                 .updateTable("workspace_setup_state")
-                .set({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                })
+                .set(attestationColumns)
                 .where("workspace_key", "=", params.source.workspaceKey),
             );
             executeSqliteQuerySync(
@@ -472,38 +456,16 @@ export function importAndRecordReceipt(params: {
                 // Orphan hashed-key attestation files carry no path; the row
                 // heals its NULL path when the workspace next appears live.
                 workspace_path: params.source.workspaceDir ?? null,
-                attested_at_ms: parsedAttestation.attestedAtMs,
-                attestation_updated_at_ms: now,
+                ...attestationColumns,
               })
               .onConflict((conflict) =>
-                conflict.column("workspace_key").doUpdateSet({
-                  attested_at_ms: parsedAttestation.attestedAtMs,
-                  attestation_updated_at_ms: now,
-                }),
+                conflict.column("workspace_key").doUpdateSet(attestationColumns),
               ),
           );
           insertGeneratedHashes();
           imported = true;
           resolution = "inserted";
           verifiedFingerprint = incomingFingerprint;
-        }
-        const verifiedRow = executeSqliteQueryTakeFirstSync(
-          db,
-          kysely
-            .selectFrom("workspace_setup_state")
-            .select("attested_at_ms")
-            .where("workspace_key", "=", params.source.workspaceKey),
-        );
-        const verifiedHashes = readGeneratedHashes(db, params.source.workspaceKey);
-        const actualFingerprint =
-          verifiedRow?.attested_at_ms != null
-            ? attestationFingerprint({
-                attestedAtMs: verifiedRow.attested_at_ms,
-                generatedHashes: verifiedHashes,
-              })
-            : null;
-        if (actualFingerprint !== verifiedFingerprint) {
-          throw new Error("SQLite verification failed for workspace attestation state");
         }
       }
 

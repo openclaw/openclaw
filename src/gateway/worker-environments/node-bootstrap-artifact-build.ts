@@ -31,10 +31,7 @@ import {
   composePackagePlugins,
   type DistributionPackageManifest,
 } from "../../infra/package-plugin-composition.js";
-import {
-  DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-  readWorkerBundleArchiveManifest,
-} from "../../shared/worker-bundle-archive.js";
+import { DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS } from "../../shared/worker-bundle-archive.js";
 import {
   compareWorkerBundlePaths,
   hashWorkerBundleManifest,
@@ -59,7 +56,9 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "node-sqlite.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
+  "cli-parent-lifetime.mjs",
   "node-runtime-env.mjs",
+  "cli-invocation.mjs",
   "cli-root-options.mjs",
   "gateway-run-argv.mjs",
   "gateway-shutdown-budget.mjs",
@@ -131,7 +130,6 @@ function requireRunningBuild(
 }
 
 // Observe creation policy without process.umask(), whose getter mutates process-wide state.
-// Probe again before publication: a changed policy must not silently change archive modes.
 async function observeBootstrapModes(root: string): Promise<readonly number[]> {
   const modes: number[] = [];
   for (const requested of [0o644, 0o755]) {
@@ -160,15 +158,21 @@ type BootstrapEntry = {
   scope: BootstrapImportScope;
 } & ({ source: { root: string; relative: string } } | { contents: Buffer });
 
-async function collectInstalledBundledFiles(root: string): Promise<string[]> {
-  const included = ({ name }: { name: string }) => name !== "node_modules" && !name.startsWith(".");
+async function collectBootstrapFiles(root: string, plugin = false): Promise<string[]> {
+  // Published plugins alone use dist/.setup; private descendants remain excluded.
+  const included = ({ name, relativePath }: { name: string; relativePath: string }) =>
+    (plugin && relativePath.split(path.sep).join("/") === PLUGIN_DIST_SHARED_CHUNK_PREFIX) ||
+    (!name.startsWith(".") &&
+      !(plugin ? IGNORED_PLUGIN_DIRECTORIES.has(name) : name === "node_modules"));
   const { entries, failedDirs, truncated } = await walkDirectory(root, {
     maxEntries: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS.maxEntries,
     symlinks: "include",
     include: included,
     descend: (entry) => {
       if (entry.depth >= 64) {
-        throw new Error("Node bootstrap dependency exceeds its directory depth limit");
+        throw new Error(
+          `Node bootstrap ${plugin ? "plugin" : "dependency"} exceeds its directory depth limit`,
+        );
       }
       return included(entry);
     },
@@ -180,7 +184,12 @@ async function collectInstalledBundledFiles(root: string): Promise<string[]> {
     throw new Error("Node bootstrap distribution exceeds its artifact limits");
   }
   return entries.flatMap((entry) => {
-    if (entry.kind === "directory" || entry.relativePath === "package.json") {
+    if (
+      entry.kind === "directory" ||
+      (plugin
+        ? !/\.(?:[cm]?js|json|wasm)$/u.test(entry.name)
+        : entry.relativePath === "package.json")
+    ) {
       return [];
     }
     if (entry.kind !== "file") {
@@ -269,8 +278,7 @@ export async function prepareNodeBootstrapArtifact(
   };
   let expandedBytes = 0;
   let reservedEntries = 0;
-  const reserveFile = (relative: string, bytes: number) => {
-    bootstrapPath(relative);
+  const reserveFile = (bytes: number) => {
     expandedBytes += bytes;
     reservedEntries += 1;
     if (
@@ -281,16 +289,15 @@ export async function prepareNodeBootstrapArtifact(
     }
   };
   const addGeneratedFile = (relative: string, contents: string, scope = mainScope) => {
-    reserveFile(relative, Buffer.byteLength(contents));
+    reserveFile(Buffer.byteLength(contents));
     planEntry(relative, { contents: Buffer.from(contents), scope });
   };
   const addFiles = (root: string, files: readonly string[], prefix = "", scope = mainScope) => {
     for (const relative of new Set(files)) {
-      bootstrapPath(relative);
       planEntry(`${prefix}${relative}`, { source: { root, relative }, scope });
     }
   };
-  const readEntry = async (destination: string, entry: BootstrapEntry) => {
+  const readEntry = async (entry: BootstrapEntry) => {
     if ("contents" in entry) {
       return { contents: entry.contents, mode: modes[0]! };
     }
@@ -305,7 +312,7 @@ export async function prepareNodeBootstrapArtifact(
       if (!before.isFile()) {
         throw new Error(`Invalid node distribution file: ${relative}`);
       }
-      reserveFile(destination, before.size);
+      reserveFile(before.size);
       const contents = await readFileHandleBounded(handle, before.size);
       const current = await fs.lstat(source);
       if (
@@ -346,6 +353,7 @@ export async function prepareNodeBootstrapArtifact(
     [...BOOTSTRAP_LAUNCHER_FILES, ...publicFiles, ...scripts].filter(
       (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
     ),
+    packageJson.files ?? [],
   );
   if (!files.includes("dist/entry.js") && !files.includes("dist/entry.mjs")) {
     throw new Error(
@@ -364,32 +372,7 @@ export async function prepareNodeBootstrapArtifact(
     if (plugin.bundled) {
       continue;
     }
-    const pluginFiles: string[] = [];
-    const visit = async (directory: string, relativeRoot = ""): Promise<void> => {
-      for (const child of await fs.readdir(directory, { withFileTypes: true })) {
-        const relative = relativeRoot ? `${relativeRoot}/${child.name}` : child.name;
-        // Published npm plugins keep shared runtime chunks under the hidden dist/.setup
-        // directory. Only that directory itself is exempt from the dot-entry check:
-        // hidden children below it (and ignored directories at every depth, including
-        // inside dist/.setup) keep the private-file exclusions of the host installation.
-        const isSharedChunkDirectory = relative === PLUGIN_DIST_SHARED_CHUNK_PREFIX;
-        if (
-          !isSharedChunkDirectory &&
-          (child.name.startsWith(".") || IGNORED_PLUGIN_DIRECTORIES.has(child.name))
-        ) {
-          continue;
-        }
-        if (relative.split("/").length > 64) {
-          throw new Error("Node bootstrap plugin exceeds its directory depth limit");
-        }
-        if (child.isDirectory()) {
-          await visit(path.join(directory, child.name), relative);
-        } else if (/\.(?:[cm]?js|json|wasm)$/u.test(child.name)) {
-          pluginFiles.push(relative);
-        }
-      }
-    };
-    await visit(plugin.root);
+    const pluginFiles = await collectBootstrapFiles(plugin.root, true);
     addFiles(plugin.root, pluginFiles, `dist/extensions/${plugin.id}/`);
   }
 
@@ -423,7 +406,7 @@ export async function prepareNodeBootstrapArtifact(
       !root.endsWith(`${path.sep}node_modules${path.sep}${name.split("/").join(path.sep)}`);
     const bundledFiles = workspace
       ? await collectPackageDistInventory(root)
-      : await collectInstalledBundledFiles(root);
+      : await collectBootstrapFiles(root);
     if (bundledFiles.length === 0) {
       throw new Error(
         `Bundled node dependency ${name} needs its compiled distribution; rebuild the Gateway`,
@@ -510,9 +493,9 @@ export async function prepareNodeBootstrapArtifact(
       const batch = ordered.slice(offset, offset + READ_CONCURRENCY);
       const read = await runTasksWithConcurrency({
         tasks: batch.map(
-          ([relative, entry]) =>
+          ([, entry]) =>
             () =>
-              readEntry(relative, entry),
+              readEntry(entry),
         ),
         limit: READ_CONCURRENCY,
         errorMode: "stop",
@@ -536,9 +519,6 @@ export async function prepareNodeBootstrapArtifact(
           sha256: createHash("sha256").update(contents).digest("hex"),
         };
         const inspected = sourceFacts.get(relative);
-        if (inspected && identity.sha256 !== inspected.sha256) {
-          throw new Error(`Node distribution changed after import inspection: ${relative}`);
-        }
         if (entry.scope.patchedMcp) {
           entry.scope.patchedMcp.hashes.set(importerPath, identity.sha256);
         } else {
@@ -583,17 +563,6 @@ export async function prepareNodeBootstrapArtifact(
         );
       }
     }
-    if (!isDeepStrictEqual(await observeBootstrapModes(temporaryRoot), modes)) {
-      throw new Error("Node bootstrap file creation policy changed while packaging");
-    }
-    if (
-      (await fs.readFile(buildInfoPath, "utf8")) !== buildInfo ||
-      !isDeepStrictEqual(await readPackageManifest(packageRoot), sourcePackage)
-    ) {
-      throw new Error(
-        "Gateway build changed while preparing cloud bootstrap; restart the Gateway and retry",
-      );
-    }
     pack?.end();
     await archiveDone;
   } catch (error) {
@@ -609,27 +578,23 @@ export async function prepareNodeBootstrapArtifact(
   if (tarballBytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
     throw new Error("Node bootstrap archive exceeds the transfer limit");
   }
-  const archiveManifest =
-    prebuiltManifest ??
-    (await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS));
   manifest.sort((left, right) => compareWorkerBundlePaths(left.path, right.path));
-  if (hashWorkerBundleManifest(manifest) !== hashWorkerBundleManifest(archiveManifest)) {
-    if (prebuiltManifest) {
+  if (prebuiltManifest) {
+    if (hashWorkerBundleManifest(manifest) !== hashWorkerBundleManifest(prebuiltManifest)) {
       // Different builds or execution modes can select different plugin bytes. Re-enter the
       // canonical builder once with fresh source checks; never trust an adjacent checksum.
       await fs.rm(tarballPath);
       return await prepareNodeBootstrapArtifact(options, temporaryRoot, false);
     }
-    throw new Error("Node bootstrap archive does not match the verified distribution");
   }
   await using handle = await fs.open(tarballPath, "r");
   const { digest: tarballSha256 } = await sha256File(handle);
-  return Object.freeze({
+  return {
     tarballPath,
     tarballSha256,
     tarballBytes,
     openclawVersion: packageJson.version,
     buildId,
-    enabledPluginIds: Object.freeze(plugins.map(({ id }) => id).toSorted()),
-  });
+    enabledPluginIds: plugins.map(({ id }) => id).toSorted(),
+  };
 }

@@ -17,6 +17,7 @@ import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-reques
 import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "./node-registry-private.js";
 import { NodeRegistry } from "./node-registry.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
+import { gatewayTestTextTransport } from "./server/connection-transport.test-support.js";
 import {
   createNodeWorkerLaunchAdapter,
   measureNodeWorkerLaunchBytes,
@@ -49,7 +50,7 @@ describe("private worker launch wire", () => {
     nodeRegistry.register(
       {
         connId,
-        socket,
+        socket: gatewayTestTextTransport(socket),
         usesSharedGatewayAuth: false,
         connect: {
           minProtocol: 1,

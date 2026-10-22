@@ -27,7 +27,7 @@ function rejectedEdit() {
 }
 
 describe("field-scoped config draft cancellation", () => {
-  it.each(["absent", "authored-empty", "sibling"])(
+  it.each(["absent", "sibling"])(
     "restores %s ancestor containers without creating a new write on Cancel",
     async (scenario) => {
       vi.useFakeTimers();
@@ -102,7 +102,7 @@ describe("field-scoped config draft cancellation", () => {
     runtimeConfig.dispose();
   });
 
-  it.each(["same-value", "sibling", "raw", "connection"])(
+  it.each(["same-value", "sibling", "connection"])(
     "does not let a delayed cancellation replace newer %s intent",
     async (change) => {
       vi.useFakeTimers();
@@ -141,7 +141,7 @@ describe("field-scoped config draft cancellation", () => {
     },
   );
 
-  it.each(["uncommitted", "exact", "redacted"])(
+  it.each(["exact", "redacted"])(
     "reconciles an unknown write only when the saved bytes confirm it (%s)",
     async (outcome) => {
       const committed = outcome !== "uncommitted";

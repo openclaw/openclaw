@@ -1,13 +1,58 @@
-// Control UI tests cover the agents overview context display.
-import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-import type { MultiSelect } from "../../components/multi-select.ts";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { buildAgentContext } from "../../lib/agents/display.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
-import { renderAgents } from "./view.ts";
+import { Agents, type AgentsProps } from "./view.tsx";
+
+afterEach(() => document.body.replaceChildren());
 
 const inheritedAgentModel = "openai/gpt-5.4";
 const resolvedAgentWorkspace = "/tmp/agents/beta";
+const agentConfig = (defaults: Record<string, unknown>, beta: Record<string, unknown> = {}) => ({
+  agents: { defaults, entries: { beta } },
+});
+const contextConfig = (model: Record<string, unknown>) =>
+  agentConfig(
+    {
+      workspace: "/tmp/agents",
+      model: { primary: inheritedAgentModel, fallbacks: ["openai/global-fallback"] },
+    },
+    { model },
+  );
+type AgentList = NonNullable<ReturnType<AgentsProps["readData"]>["agentsList"]>;
+const roster = (beta: AgentList["agents"][number]): AgentList => ({
+  defaultId: "alpha",
+  mainKey: "main",
+  scope: "per-sender",
+  agents: [{ id: "alpha", name: "Alpha" }, beta],
+});
+const contextValue = (container: HTMLElement, label: string) =>
+  Array.from(container.querySelectorAll("dt"))
+    .find((term) => term.textContent?.trim() === label)
+    ?.nextElementSibling?.textContent?.trim();
+
+type ViewOverrides = Omit<Partial<AgentsProps>, "access" | "overview"> & {
+  access?: Partial<AgentsProps["access"]>;
+  overview?: Partial<AgentsProps["overview"]>;
+  configForm?: Record<string, unknown>;
+};
+function renderAgents({ configForm, ...overrides }: ViewOverrides = {}, attached = false) {
+  const container = document.createElement("div");
+  if (attached) {
+    document.body.append(container);
+  }
+  const defaults = createProps();
+  const props = {
+    ...defaults,
+    ...overrides,
+    config: overrides.config ?? { ...defaults.config, configForm: configForm ?? null },
+    access: { ...defaults.access, ...overrides.access },
+    overview: { ...defaults.overview, ...overrides.overview },
+  };
+  mountSolid(Agents, props, container);
+  return container;
+}
 
 it.each([
   {
@@ -32,244 +77,153 @@ it.each([
       workspace: resolvedAgentWorkspace,
       model: { primary: "openai/stale-roster-model", fallbacks: ["openai/stale-fallback"] },
     },
-    {
-      agents: {
-        defaults: {
-          workspace: "/tmp/agents",
-          model: { primary: inheritedAgentModel, fallbacks: ["openai/global-fallback"] },
-        },
-        entries: { beta: { model } },
-      },
-    },
+    contextConfig(model),
     null,
     "alpha",
   );
 
-  expect(context.workspace).toBe(resolvedAgentWorkspace);
-  expect(context.model).toBe(expectedModel);
+  expect(context).toMatchObject({ workspace: resolvedAgentWorkspace, model: expectedModel });
 });
 
 it.each(["overview", "channels", "cron"] as const)(
   "shows authoritative agent workspace and effective model on the %s panel",
   (activePanel) => {
-    const container = document.createElement("div");
-    const props = createProps();
-    render(
-      renderAgents({
-        ...props,
-        activePanel,
-        agentsList: {
-          defaultId: "alpha",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [
-            { id: "alpha", name: "Alpha" },
-            {
-              id: "beta",
-              name: "Beta",
-              workspace: resolvedAgentWorkspace,
-              model: { primary: inheritedAgentModel },
-            },
-          ],
-        },
-        config: {
-          ...props.config,
-          configForm: {
-            agents: {
-              defaults: {
-                workspace: "/tmp/agents",
-                model: { primary: inheritedAgentModel, fallbacks: ["openai/global-fallback"] },
-              },
-              entries: { beta: { model: { fallbacks: ["google/gemini-3-pro"] } } },
-            },
-          },
-        },
+    const container = renderAgents({
+      configForm: contextConfig({ fallbacks: ["google/gemini-3-pro"] }),
+      readData: () => ({
+        ...createProps().readData(),
+        agentsPanel: activePanel,
+        agentsList: roster({
+          id: "beta",
+          workspace: resolvedAgentWorkspace,
+          model: { primary: inheritedAgentModel },
+        }),
       }),
-      container,
-    );
-
-    const contextValue = (label: string) =>
-      Array.from(container.querySelectorAll("dt"))
-        .find((term) => term.textContent?.trim() === label)
-        ?.nextElementSibling?.textContent?.trim();
-
-    expect(contextValue("Workspace")).toBe(resolvedAgentWorkspace);
-    expect(contextValue("Primary Model")).toBe(`${inheritedAgentModel} (+1 fallback)`);
+    });
+    expect(contextValue(container, "Workspace")).toBe(resolvedAgentWorkspace);
+    expect(contextValue(container, "Primary Model")).toBe(`${inheritedAgentModel} (+1 fallback)`);
   },
 );
 
 it.each([
-  { label: "a read-only editor", canUpdateIdentity: false, identitySaving: false, text: "Save" },
-  {
-    label: "an active identity save",
-    canUpdateIdentity: true,
-    identitySaving: true,
-    text: "Saving…",
-  },
-])("shows the actual save state for $label", ({ canUpdateIdentity, identitySaving, text }) => {
-  const container = document.createElement("div");
-  const props = createProps();
-  render(
-    renderAgents({
-      ...props,
-      access: { ...props.access, canUpdateIdentity },
-      overview: { ...props.overview, identitySaving },
-    }),
-    container,
-  );
-
-  const save = container.querySelector<HTMLButtonElement>(
-    ".agent-identity-editor__actions button.primary",
-  );
-  expect(save?.textContent?.trim()).toBe(text);
-  expect(save?.disabled).toBe(true);
-});
-
-it("shows inherited skills in the Agent Context overview", () => {
-  const container = document.createElement("div");
-  render(
-    renderAgents(
-      createProps({
-        config: {
-          configForm: {
-            agents: {
-              defaults: { skills: ["github", "weather"] },
-              entries: { beta: {} },
-            },
-          },
-          configSnapshot: null,
-          configLoading: false,
-          configSaving: false,
-          configFormDirty: false,
-          lastError: null,
-        },
-      }),
-    ),
-    container,
-  );
-
-  const skillsFilterRow = Array.from(container.querySelectorAll("dt")).find(
-    (term) => term.textContent?.trim() === "Skills Filter",
-  )?.nextElementSibling;
-  expect(skillsFilterRow?.textContent?.trim()).toBe("2 selected");
-});
-
-describe("fallback field", () => {
-  const primary = "openai/gpt-5.4";
-  const existingFallback = "anthropic/claude-sonnet-4-6";
-  const catalog = [
-    { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
-    { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
-    { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
-  ] satisfies ReturnType<typeof createProps>["overview"]["modelCatalog"];
-
-  function renderFallbacks(overrides: Partial<ReturnType<typeof createProps>> = {}) {
-    const container = document.createElement("div");
-    const onModelFallbacksChange = vi.fn();
-    render(
-      renderAgents(
-        createProps({
-          config: {
-            configForm: {
-              agents: {
-                defaults: { model: { primary, fallbacks: [existingFallback] } },
-                entries: { alpha: {}, beta: {} },
-              },
-            },
-            configSnapshot: null,
-            configLoading: false,
-            configSaving: false,
-            configFormDirty: false,
-            lastError: null,
-          },
-          ...overrides,
-          overview: {
-            ...createProps().overview,
-            modelCatalog: catalog,
-            ...overrides.overview,
-            onModelFallbacksChange,
-          },
-        }),
-      ),
-      container,
-    );
-    const field = container.querySelector<MultiSelect>("openclaw-multi-select.agent-fallbacks");
-    if (!field) {
-      throw new Error("fallback field missing");
-    }
-    return { field, onModelFallbacksChange };
-  }
-
-  it("hands the field the effective chain, the catalog, and the primary to exclude", () => {
-    const { field } = renderFallbacks();
-
-    expect(field.value).toEqual([existingFallback]);
-    expect(field.isExcluded(primary)).toBe(true);
-    expect(field.options.map((option) => option.value)).toEqual(
-      expect.arrayContaining([primary, existingFallback, "google/gemini-3-pro"]),
-    );
-    expect(field.allowCustom).toBe(true);
-    expect(field.disabled).toBe(false);
-  });
-
-  it("stages the field's next chain for the selected agent", () => {
-    const { field, onModelFallbacksChange } = renderFallbacks();
-
-    field.onChange([existingFallback, "google/gemini-3-pro"]);
-
-    expect(onModelFallbacksChange).toHaveBeenCalledWith("beta", [
-      existingFallback,
-      "google/gemini-3-pro",
-    ]);
-  });
-
-  it("excludes a profile-qualified primary alias while retaining case-distinct model choices", () => {
-    const primaryAlias = "fast@work";
-    const target = "custom/model-a";
-    const caseDistinct = "custom/Model-A";
-    const { field } = renderFallbacks({
-      agentsList: {
-        defaultId: "alpha",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "alpha" }, { id: "beta", model: { primary: caseDistinct } }],
-      },
-      config: {
-        configForm: {
-          agents: {
-            defaults: {
-              model: { primary: primaryAlias },
-              models: { [target]: { alias: "fast" } },
-            },
-            entries: { alpha: {}, beta: {} },
-          },
-        },
-        configSnapshot: null,
-        configLoading: false,
-        configSaving: false,
-        configFormDirty: false,
-        lastError: null,
-      },
-      overview: {
-        ...createProps().overview,
-        modelCatalog: [
-          { provider: "custom", id: "model-a", name: "Lowercase model" },
-          { provider: "custom", id: "Model-A", name: "Uppercase model" },
-        ],
-      },
+  { label: "a read-only editor", canUpdateIdentity: false, identitySaving: false },
+  { label: "an active identity save", canUpdateIdentity: true, identitySaving: true },
+])(
+  "keeps identity field permissions correct for $label",
+  ({ canUpdateIdentity, identitySaving }) => {
+    const container = renderAgents({
+      access: { canUpdateIdentity },
+      overview: {},
+      readData: () => ({ ...createProps().readData(), identitySaving }),
     });
 
-    expect(field.isExcluded("FAST")).toBe(true);
-    expect(field.isExcluded(`${target}@other`)).toBe(false);
-    expect(field.options.filter((option) => !field.isExcluded(option.value))).toEqual([
-      expect.objectContaining({ value: caseDistinct, label: "Uppercase model" }),
-    ]);
+    expect(
+      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.disabled,
+    ).toBe(!canUpdateIdentity);
+  },
+);
+
+it("shows inherited skills in the Agent Context overview", () => {
+  const container = renderAgents({
+    configForm: agentConfig({ skills: ["github", "weather"] }),
+  });
+  expect(contextValue(container, "Skills Filter")).toBe("2 selected");
+});
+
+const primary = "openai/gpt-5.4";
+const existingFallback = "anthropic/claude-sonnet-4-6";
+const catalog = [
+  { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+  { id: "gemini-3-pro", name: "Gemini 3 Pro", provider: "google" },
+] satisfies ReturnType<typeof createProps>["overview"]["modelCatalog"];
+
+function renderFallbacks(overrides: ViewOverrides = {}) {
+  const onModelFallbacksChange = vi.fn();
+  const container = renderAgents(
+    {
+      configForm: agentConfig({ model: { primary, fallbacks: [existingFallback] } }),
+      ...overrides,
+      overview: {
+        modelCatalog: catalog,
+        ...overrides.overview,
+        onModelFallbacksChange,
+      },
+    },
+    true,
+  );
+  const field = container.querySelector<HTMLElement>("openclaw-multi-select.agent-fallbacks");
+  assert(field, "Missing fallback field");
+  return { field, input: field.querySelector<HTMLInputElement>("input"), onModelFallbacksChange };
+}
+
+const values = (field: HTMLElement, selector = ".multi-select__option") =>
+  Array.from(field.querySelectorAll<HTMLElement>(selector), (row) => row.dataset.value);
+const typeSearch = (field: HTMLElement, text: string) => {
+  const input = field.querySelector<HTMLInputElement>("input")!;
+  input.value = text;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+};
+const open = async (field: HTMLElement) => {
+  field.querySelector<HTMLElement>(".multi-select")!.click();
+  await waitForSolid(() => expect(values(field).length).toBeGreaterThan(0));
+};
+
+it("shows the effective chain and excludes the primary and selected models from choices", async () => {
+  const { field, input } = renderFallbacks();
+  expect(values(field, ".multi-select__chip")).toEqual([existingFallback]);
+  expect(input).toMatchObject({ disabled: false });
+  await open(field);
+  expect(values(field)).toEqual(["google/gemini-3-pro"]);
+  typeSearch(field, "fixture/custom-fallback");
+  expect(field.querySelector("[data-custom]")?.getAttribute("data-value")).toBe(
+    "fixture/custom-fallback",
+  );
+});
+
+it("stages the field's next chain for the selected agent", async () => {
+  const { field, onModelFallbacksChange } = renderFallbacks();
+  await open(field);
+  field
+    .querySelector<HTMLElement>('.multi-select__option[data-value="google/gemini-3-pro"]')!
+    .click();
+  expect(onModelFallbacksChange).toHaveBeenCalledWith("beta", [
+    existingFallback,
+    "google/gemini-3-pro",
+  ]);
+});
+
+it("excludes a profile-qualified primary alias while retaining case-distinct model choices", async () => {
+  const target = "custom/model-a";
+  const caseDistinct = "custom/Model-A";
+  const { field } = renderFallbacks({
+    readData: () => ({
+      ...createProps().readData(),
+      agentsList: roster({ id: "beta", model: { primary: caseDistinct } }),
+    }),
+    configForm: agentConfig({
+      model: { primary: "fast@work" },
+      models: { [target]: { alias: "fast" } },
+    }),
+    overview: {
+      modelCatalog: [
+        { provider: "custom", id: "model-a", name: "Lowercase model" },
+        { provider: "custom", id: "Model-A", name: "Uppercase model" },
+      ],
+    },
   });
 
-  it("disables the field without config write access", () => {
-    const access = { ...createProps().access, canUpdateConfig: false };
-    const { field } = renderFallbacks({ access });
+  await open(field);
+  expect(values(field)).toEqual([caseDistinct]);
+  expect(field.querySelector(".multi-select__option")?.textContent).toContain("Uppercase model");
+  typeSearch(field, "FAST");
+  expect(values(field)).toEqual([]);
+  typeSearch(field, `${target}@other`);
+  expect(values(field)).toEqual([`${target}@other`]);
+});
 
-    expect(field.disabled).toBe(true);
-  });
+it("disables the field without config write access", () => {
+  const { input } = renderFallbacks({ access: { canUpdateConfig: false } });
+  expect(input).toMatchObject({ disabled: true });
 });

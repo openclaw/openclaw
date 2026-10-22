@@ -22,10 +22,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
-  clearIMessageApprovalReactionPollTargetsForTest,
   deleteIMessageApprovalReactionPollTargets,
   recordIMessageApprovalReactionPollTarget,
   resolveIMessageApprovalReactionPollExpiry,
@@ -53,12 +53,7 @@ type IMessageApprovalReactionResolution = {
 };
 type IMessageApprovalReactionHandleResult =
   | { handled: false; stopPolling: false }
-  | { handled: true; stopPolling: false }
-  | {
-      handled: true;
-      stopPolling: true;
-      stopPollingReason: "resolved" | "not-found";
-    };
+  | { handled: true; stopPolling: boolean };
 
 type IMessageApprovalReactionTarget = ApprovalReactionTargetRecord & {
   approvalKind: ChannelApprovalKind;
@@ -101,7 +96,7 @@ const imessageApprovalReactionTargets =
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
     defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
-    openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStore(params),
+    openStore: (params) => getOptionalIMessageRuntime()?.state.openKeyedStoreV2(params),
     logPersistentError: reportPersistentApprovalReactionError,
     readPersistedTarget: readApprovalReactionTargetRecord,
   });
@@ -443,7 +438,6 @@ export async function handleIMessageApprovalReaction(params: {
   bodyText: string;
   gatewayUrl?: string;
   gatewayRuntime?: IMessageApprovalGatewayRuntime;
-  logVerboseMessage?: (message: string) => void;
 }): Promise<IMessageApprovalReactionHandleResult> {
   const event = readApprovalReactionEvent(params.message, params.bodyText);
   if (!event) {
@@ -501,7 +495,7 @@ export async function handleIMessageApprovalReaction(params: {
     },
     onResolved: (result) => {
       const outcome = result.applied ? "resolved" : "already resolved";
-      params.logVerboseMessage?.(
+      logVerbose(
         `imessage: approval reaction ${outcome} id=${target.approvalId} sender=${event.actorHandle} ${formatCanonicalApprovalTerminalState(result.approval)} via messageId=${matchedMessageId ?? event.messageId}`,
       );
     },
@@ -518,27 +512,7 @@ export async function handleIMessageApprovalReaction(params: {
         // Optional logging must not mask a replayable resolver failure.
       }
     },
-    logVerboseMessage: params.logVerboseMessage,
+    logVerboseMessage: logVerbose,
   });
-  return settlement === "denied"
-    ? { handled: true, stopPolling: false }
-    : { handled: true, stopPolling: true, stopPollingReason: settlement };
-}
-
-export async function maybeResolveIMessageApprovalReaction(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  message: IMessagePayload;
-  bodyText: string;
-  gatewayUrl?: string;
-  gatewayRuntime?: IMessageApprovalGatewayRuntime;
-  logVerboseMessage?: (message: string) => void;
-}): Promise<boolean> {
-  return (await handleIMessageApprovalReaction(params)).handled;
-}
-
-export function clearIMessageApprovalReactionTargetsForTest(): void {
-  imessageApprovalReactionTargets.clearForTest();
-  clearIMessageApprovalReactionPollTargetsForTest();
-  loadResolveApprovalOverGateway.clear();
+  return { handled: true, stopPolling: settlement !== "denied" };
 }

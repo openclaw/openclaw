@@ -1,11 +1,17 @@
 import type { callGateway } from "../../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../../infra/agent-events.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { assertionSucceeds } from "../../../shared/assertion.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import {
+  resolveSubagentChildAgentId,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
   mutateSubagentRuns,
@@ -15,7 +21,6 @@ import { isSuspendedPendingFinalDelivery } from "./subagent-registry-suspended-d
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import { loadSubagentSessionEntry } from "./subagent-session-reconciliation.js";
 
 export function createSubagentSweepReadScope(
   runs: Map<string, SubagentRunRecord>,
@@ -31,6 +36,7 @@ export function createSubagentSweepReadScope(
   }
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const gatewayRuntime = getGatewayRuntime();
+  const gatewayResolver = getGatewayContextResolver(runs);
   const retiredRead = new Error("Subagent sweep read lost its selected run");
   let readsStarted = false;
   const assertCurrent = () => {
@@ -43,20 +49,15 @@ export function createSubagentSweepReadScope(
     }
     if (
       !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-      getGatewayRuntime() !== gatewayRuntime
+      getGatewayRuntime() !== gatewayRuntime ||
+      getGatewayContextResolver(runs) !== gatewayResolver
     ) {
       throw new Error("Subagent sweep read lost its Gateway owner");
     }
   };
-  const isHostCurrent = () => {
-    try {
-      assertCurrent();
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const isHostCurrent = () => assertionSucceeds(assertCurrent);
   return {
+    gatewayResolver,
     assertCurrent,
     retiredRead,
     completionCurrent: { isHostCurrent, prepare: async () => isHostCurrent() },
@@ -73,14 +74,9 @@ export function createSubagentSweepReadScope(
 
 export type FrozenSessionIdentity = { sessionId: string; lifecycleRevision: string };
 
-export async function freezeSessionIdentity(
-  entry: Pick<SubagentRunRecord, "childSessionKey" | "childAgentId">,
-  assertCurrent: () => void,
-): Promise<FrozenSessionIdentity | undefined> {
-  const sessionEntry = await loadSubagentSessionEntry({ ...entry, assertCurrent });
-  const sessionId = sessionEntry?.sessionId?.trim();
-  const lifecycleRevision = sessionEntry?.lifecycleRevision?.trim();
-  return sessionId && lifecycleRevision ? { sessionId, lifecycleRevision } : undefined;
+export function freezeSessionIdentity(entry: SubagentRunRecord): FrozenSessionIdentity | undefined {
+  const authority = resolveSubagentChildAuthority(entry);
+  return authority.status === "verified" ? authority.sessionIdentity : undefined;
 }
 
 export const sweptContext = (entry: SubagentRunRecord) => ({
@@ -110,6 +106,7 @@ export function isCleanupCurrent(
 ): current is SubagentRunRecord {
   return (
     current !== undefined &&
+    resolveSubagentChildAuthority(current).status !== "mismatch" &&
     isSameSubagentRunOwner(current, expected) &&
     current.execution.status === expected.execution.status &&
     current.execution.endedAt === expected.execution.endedAt &&
@@ -128,14 +125,22 @@ export async function deleteSweptSession(
   identity: FrozenSessionIdentity,
   runs: Map<string, SubagentRunRecord>,
   call: typeof callGateway,
+  assertCurrent: () => void,
+  gatewayResolver: GatewayContextResolver | undefined,
 ): Promise<"deleted" | "changed"> {
   let failure: unknown;
   const outcome = await deleteSubagentSessionForCleanup({
     callGateway: call,
-    gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
-    isCurrent: () => isCleanupCurrent(runs.get(entry.runId), entry),
+    // Settled history has no per-run binding; retain this sweep's Gateway for deletion.
+    gatewayBinding: {
+      resolveGatewayContext: getGatewayContextResolver(entry) ?? gatewayResolver,
+    },
+    isCurrent: () => {
+      assertCurrent();
+      return isCleanupCurrent(runs.get(entry.runId), entry);
+    },
     childSessionKey: entry.childSessionKey,
-    childAgentId: entry.childAgentId,
+    childAgentId: resolveSubagentChildAgentId(entry),
     expectedSessionId: identity.sessionId,
     expectedLifecycleRevision: identity.lifecycleRevision,
     onError: (error) => {

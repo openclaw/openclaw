@@ -45,12 +45,24 @@
           - "extensions/typesafe/**"
           - "docs/plugins/typesafe.md"
           - "docs/plugins/reference/typesafe.md"
+"plugin: subq":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/subq/**"
+          - "docs/plugins/subq.md"
+          - "docs/plugins/reference/subq.md"
 "plugin: onnx":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/onnx/**"
           - "docs/plugins/onnx.md"
           - "docs/plugins/reference/onnx.md"
+"plugin: levanto":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/levanto/**"
+          - "docs/providers/levanto.md"
+          - "docs/plugins/reference/levanto.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:
@@ -161,6 +173,23 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mcp-events":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mcp-events/**"
+          - "docs/automation/mcp-events.md"
+"plugin: mcp-relay":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mcp-relay/**"
+          - "docs/plugins/mcp-relay.md"
+          - "docs/plugins/reference/mcp-relay.md"
+"plugin: muse":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/muse/**"
+          - "docs/plugins/muse.md"
+          - "docs/plugins/reference/muse.md"
 "plugin: mxc":
   - changed-files:
       - any-glob-to-any-file:
@@ -451,6 +480,18 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llama-cpp/**"
+"extensions: advisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/advisor/**"
+"extensions: agent-guidance":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agent-guidance/**"
+"extensions: autoreview":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/autoreview/**"
 "extensions: active-memory":
   - changed-files:
       - any-glob-to-any-file:
@@ -640,6 +681,11 @@
       - any-glob-to-any-file:
           - "extensions/litellm/**"
           - "docs/providers/litellm.md"
+"extensions: bifrost":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bifrost/**"
+          - "docs/providers/bifrost.md"
 "extensions: agentsapi":
   - changed-files:
       - any-glob-to-any-file:
@@ -895,6 +941,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/ollama/**"
+"extensions: omlx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/omlx/**"
 "extensions: opencode":
   - changed-files:
       - any-glob-to-any-file:

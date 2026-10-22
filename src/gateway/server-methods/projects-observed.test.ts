@@ -4,20 +4,57 @@ import {
   PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT,
   PROJECTS_LIST_MAX_IDENTITY_PROBES,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
+import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
-import { createProjectsHandlers } from "./projects.js";
+import { projectsHandlers } from "./projects.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const seededSessions = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
 }));
 
+function session(name: string, updatedAt: number, fields: Partial<SessionEntry>) {
+  return [`agent:main:${name}`, { sessionId: name, updatedAt, ...fields }] as const;
+}
+
+function worktree(
+  name: string,
+  ownerId: string | undefined,
+  lastActiveAt: number,
+): ManagedWorktreeRecord {
+  return {
+    id: name,
+    name,
+    branch: `openclaw/${name}`,
+    baseRef: "HEAD",
+    createdAt: lastActiveAt,
+    repoFingerprint: name,
+    repoRoot: `/repos/${name}`,
+    path: `/worktrees/${name}`,
+    ownerKind: ownerId ? "session" : "manual",
+    ownerId,
+    lastActiveAt,
+  };
+}
+
 // mock-isolation: Supply observed session rows without opening real session stores.
-vi.mock("./projects-session-store.js", () => ({
-  loadProjectSessionStore: () => seededSessions.store,
+vi.mock("./projects-session-store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./projects-session-store.js")>()),
+  loadProjectSessionStore: () => ({
+    store: seededSessions.store,
+    agentId: () => undefined,
+    assertCurrent() {},
+  }),
+}));
+
+vi.mock("../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-profile-list.js")>()),
+  readResidentUserProfileAliases: (profileId: string) => new Set([profileId]),
 }));
 
 vi.mock("../../projects/project-registry.js", () => ({
@@ -51,57 +88,68 @@ function authenticatedClient(user: string, scopes = ["operator.write"]): Gateway
   };
 }
 
-function assertObservedProjectsPayload(
-  payload: unknown,
-): asserts payload is { observedProjects: unknown[] } {
-  if (!isRecord(payload) || !Array.isArray(payload.observedProjects)) {
-    throw new TypeError("projects.list response is missing observedProjects");
-  }
+type IdentityResolver = (checkoutPath: string) => Promise<{
+  checkoutRoot: string;
+  repoRoot: string;
+  originUrl: string;
+  fingerprint: string;
+}>;
+
+function identity(
+  checkoutPath: string,
+  overrides: Partial<Awaited<ReturnType<IdentityResolver>>> = {},
+) {
+  return {
+    checkoutRoot: checkoutPath,
+    repoRoot: checkoutPath,
+    originUrl: `https://example.test${checkoutPath}.git`,
+    fingerprint: checkoutPath,
+    ...overrides,
+  };
 }
 
-async function listObservedProjects(params: {
-  service: {
-    listRegistryRecords: () => Promise<unknown[]>;
-    resolveRepositoryIdentity: (checkoutPath: string) => Promise<{
-      checkoutRoot: string;
-      repoRoot: string;
-      originUrl: string;
-      fingerprint: string;
-    }>;
-  };
-  client?: GatewayClient;
-}) {
-  const handlers = createProjectsHandlers({
-    listRegistryRecords: params.service.listRegistryRecords,
-    resolveRepositoryIdentities: (roots: string[]) =>
-      Promise.all(
-        roots.map((root) => params.service.resolveRepositoryIdentity(root).catch(() => undefined)),
-      ),
-  } as never);
-  const responses: Parameters<RespondFn>[] = [];
-  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-  const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
-  try {
-    await handlers["projects.list"]?.({
-      params: { includeObserved: true },
-      respond: (...response: Parameters<RespondFn>) => responses.push(response),
-      context: bindSessionRowProjection(
-        { getRuntimeConfig: () => cfg },
-        () => projection,
-      ) as GatewayRequestContext,
-      client: params.client ?? authenticatedClient("operator@example.com"),
-    } as never);
-  } finally {
-    projection.dispose();
-  }
-  expect(responses).toHaveLength(1);
-  const response = responses[0];
-  if (!response) {
-    throw new Error("projects.list did not respond");
-  }
-  expect(response[0]).toBe(true);
-  assertObservedProjectsPayload(response[1]);
-  return response[1].observedProjects;
+function seedSessions(entries: ReturnType<typeof session>[]) {
+  seededSessions.store = Object.fromEntries(entries);
+}
+
+async function listObservedProjects(
+  resolveRepositoryIdentity: IdentityResolver,
+  {
+    worktrees = [],
+    client = authenticatedClient("operator@example.com"),
+  }: { worktrees?: ManagedWorktreeRecord[]; client?: GatewayClient } = {},
+) {
+  const registry = vi.spyOn(managedWorktrees, "listRegistryRecords").mockResolvedValue(worktrees);
+  const identities = vi
+    .spyOn(managedWorktrees, "resolveRepositoryIdentities")
+    .mockImplementation((roots) =>
+      Promise.all(roots.map((root) => resolveRepositoryIdentity(root).catch(() => undefined))),
+    );
+  return await withRestoredMocks([registry, identities], async () => {
+    const responses: Parameters<RespondFn>[] = [];
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
+    try {
+      await projectsHandlers["projects.list"]?.({
+        params: { includeObserved: true },
+        respond: (...response: Parameters<RespondFn>) => responses.push(response),
+        context: bindSessionRowProjection(
+          { getRuntimeConfig: () => cfg },
+          () => projection,
+        ) as GatewayRequestContext,
+        client,
+      } as never);
+    } finally {
+      projection.dispose();
+    }
+    expect(responses).toHaveLength(1);
+    const [ok, payload] = responses[0]!;
+    expect(ok).toBe(true);
+    if (!isRecord(payload) || !Array.isArray(payload.observedProjects)) {
+      throw new TypeError("projects.list response is missing observedProjects");
+    }
+    return payload.observedProjects;
+  });
 }
 
 beforeEach(() => {
@@ -110,29 +158,24 @@ beforeEach(() => {
 
 describe("projects.list observed projects", () => {
   it("deduplicates admitted paths and preserves result order when a checkout is unavailable", async () => {
-    seededSessions.store = Object.fromEntries(
-      Array.from({ length: 5_000 }, (_, index) => [
-        `agent:main:session-${index}`,
-        { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index % 8}` },
-      ]),
+    seedSessions(
+      Array.from({ length: 5_000 }, (_, index) =>
+        session(`session-${index}`, index, { execCwd: `/repos/${index % 8}` }),
+      ),
     );
     const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => {
       if (checkoutPath === "/repos/3") {
         throw new Error("checkout unavailable");
       }
-      return {
+      return identity(checkoutPath, {
         checkoutRoot: checkoutPath.replace("/repos/", "/physical/"),
         repoRoot: "/physical/main",
         originUrl: "https://example.test/project.git",
         fingerprint: "project",
-      };
+      });
     });
 
-    await expect(
-      listObservedProjects({
-        service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
-      }),
-    ).resolves.toEqual([
+    await expect(listObservedProjects(resolveRepositoryIdentity)).resolves.toEqual([
       {
         name: "7",
         originUrl: "https://example.test/project.git",
@@ -149,124 +192,41 @@ describe("projects.list observed projects", () => {
     );
   });
 
-  it.each([["operator.write"], ["operator.admin"]])(
-    "returns detailed observed projects to %s callers",
-    async (scope) => {
-      seededSessions.store = {
-        "agent:main:old": {
-          sessionId: "old",
-          updatedAt: 100,
-          execCwd: "/links/alpha-old",
-        },
-        "agent:main:new": {
-          sessionId: "new",
-          updatedAt: 300,
-          execCwd: "/links/alpha-new",
-        },
-        "agent:main:device": {
-          sessionId: "device",
-          updatedAt: 400,
-          execCwd: "/device/alpha",
-          execNode: "paired-mac",
-        },
-      };
-      const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => ({
-        checkoutRoot: checkoutPath.replace("/links/", "/physical/"),
-        repoRoot: "/physical/alpha",
-        originUrl: "https://github.com/openclaw/alpha.git",
-        fingerprint: "alpha-fingerprint",
-      }));
+  it("excludes device-owned checkouts before identity resolution", async () => {
+    seedSessions([session("device", 400, { execCwd: "/device/alpha", execNode: "paired-mac" })]);
+    const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => identity(checkoutPath));
+    await expect(listObservedProjects(resolveRepositoryIdentity)).resolves.toEqual([]);
+    expect(resolveRepositoryIdentity).not.toHaveBeenCalled();
+  });
 
-      await expect(
-        listObservedProjects({
-          service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
-          client: authenticatedClient(`${scope}@example.com`, [scope]),
-        }),
-      ).resolves.toEqual([
-        {
-          name: "alpha-new",
-          originUrl: "https://github.com/openclaw/alpha.git",
-          checkouts: [
-            { runnerId: "gateway", path: "/physical/alpha-new" },
-            { runnerId: "gateway", path: "/physical/alpha-old" },
-          ],
-          lastUsedAt: 300,
-        },
-      ]);
-      expect(resolveRepositoryIdentity).not.toHaveBeenCalledWith("/device/alpha");
-    },
-  );
-
-  it("admits managed worktrees only when their owning session is visible", async () => {
-    seededSessions.store = {
-      "agent:main:visible": {
-        sessionId: "visible",
-        updatedAt: 200,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-      },
-      "agent:main:private": {
-        sessionId: "private",
-        updatedAt: 300,
-        visibility: "draft",
-        createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-      },
-    };
-    const worktree = (name: string, ownerId: string, lastActiveAt: number) => ({
-      id: name,
-      name,
-      repoFingerprint: name,
-      repoRoot: `/repos/${name}`,
-      path: `/worktrees/${name}`,
-      branch: `openclaw/${name}`,
-      baseRef: "main",
-      ownerKind: "session",
-      ownerId,
-      createdAt: 100,
-      lastActiveAt,
-    });
+  it.each<[string, string[], string[]]>([
+    ["viewer", ["operator.write"], ["visible"]],
+    ["admin", ["operator.admin"], ["visible", "private", "orphan", "manual"]],
+  ])("admits managed worktrees visible to %s", async (user, scopes, names) => {
+    const createdActor = { type: "human", source: "profile", id: "owner@example.com" } as const;
+    seedSessions([
+      session("visible", 200, { visibility: "shared", createdActor }),
+      session("private", 300, { visibility: "draft", createdActor }),
+    ]);
     const worktrees = [
       worktree("visible", "agent:main:visible", 500),
       worktree("private", "agent:main:private", 490),
       worktree("orphan", "agent:main:missing", 480),
-      {
-        ...worktree("manual", "ignored", 470),
-        ownerKind: "manual",
-        ownerId: undefined,
-      },
+      worktree("manual", undefined, 470),
     ];
-    const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => ({
-      checkoutRoot: checkoutPath,
-      repoRoot: checkoutPath,
-      originUrl: `https://example.test${checkoutPath}.git`,
-      fingerprint: checkoutPath,
-    }));
-    const service = { listRegistryRecords: async () => worktrees, resolveRepositoryIdentity };
-
-    const viewer = (await listObservedProjects({
-      service,
-      client: authenticatedClient("viewer@example.com"),
-    })) as Array<{ name: string }>;
-    expect(viewer.map((project) => project.name)).toEqual(["visible"]);
-
-    const admin = (await listObservedProjects({
-      service,
-      client: authenticatedClient("admin@example.com", ["operator.admin"]),
-    })) as Array<{ name: string }>;
-    expect(admin.map((project) => project.name)).toEqual([
-      "visible",
-      "private",
-      "orphan",
-      "manual",
-    ]);
+    await expect(
+      listObservedProjects(async (checkoutPath) => identity(checkoutPath), {
+        worktrees,
+        client: authenticatedClient(`${user}@example.com`, scopes),
+      }),
+    ).resolves.toMatchObject(names.map((name) => ({ name })));
   });
 
   it("redacts URL and SCP-style userinfo and omits unknown remote forms", async () => {
-    seededSessions.store = Object.fromEntries(
-      ["url", "token-scp", "git-scp", "unknown"].map((name, index) => [
-        `agent:main:${name}`,
-        { sessionId: name, updatedAt: 400 - index, execCwd: `/repos/${name}` },
-      ]),
+    seedSessions(
+      ["url", "token-scp", "git-scp", "unknown"].map((name, index) =>
+        session(name, 400 - index, { execCwd: `/repos/${name}` }),
+      ),
     );
     const origins: Record<string, string> = {
       "/repos/url": ["https://user", ":placeholder", "@host/repo.git?visible=value#branch"].join(
@@ -277,17 +237,9 @@ describe("projects.list observed projects", () => {
       "/repos/unknown": "opaque credential-shaped remote",
     };
 
-    const projects = (await listObservedProjects({
-      service: {
-        listRegistryRecords: async () => [],
-        resolveRepositoryIdentity: async (checkoutPath: string) => ({
-          checkoutRoot: checkoutPath,
-          repoRoot: checkoutPath,
-          originUrl: origins[checkoutPath] ?? "",
-          fingerprint: checkoutPath,
-        }),
-      },
-    })) as Array<{ name: string; originUrl?: string }>;
+    const projects = (await listObservedProjects(async (checkoutPath) =>
+      identity(checkoutPath, { originUrl: origins[checkoutPath] ?? "" }),
+    )) as Array<{ name: string; originUrl?: string }>;
 
     expect(projects.map(({ name, originUrl }) => ({ name, originUrl }))).toEqual([
       { name: "url", originUrl: "https://host/repo.git" },
@@ -301,31 +253,20 @@ describe("projects.list observed projects", () => {
     const worktrees = Array.from(
       { length: PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT + 3 },
       (_, index) => ({
-        id: `worktree-${index}`,
-        name: `worktree-${index}`,
+        ...worktree(`worktree-${index}`, undefined, index),
         repoFingerprint: "alpha-fingerprint",
         repoRoot: "/repos/alpha",
         path: `/worktrees/${String(index).padStart(2, "0")}`,
-        branch: `openclaw/worktree-${index}`,
-        baseRef: "main",
-        ownerKind: "manual",
-        createdAt: 1,
-        lastActiveAt: index,
       }),
     );
 
-    const projects = (await listObservedProjects({
-      service: {
-        listRegistryRecords: async () => worktrees,
-        resolveRepositoryIdentity: async (checkoutPath: string) => ({
-          checkoutRoot: checkoutPath,
-          repoRoot: checkoutPath,
+    const projects = (await listObservedProjects(
+      async (checkoutPath) =>
+        identity(checkoutPath, {
           originUrl: "https://github.com/openclaw/alpha.git",
-          fingerprint: "alpha-fingerprint",
         }),
-      },
-      client: authenticatedClient("admin@example.com", ["operator.admin"]),
-    })) as Array<{ checkouts: Array<{ path: string }> }>;
+      { worktrees, client: authenticatedClient("admin@example.com", ["operator.admin"]) },
+    )) as Array<{ checkouts: Array<{ path: string }> }>;
 
     expect(projects[0]?.checkouts).toHaveLength(PROJECTS_LIST_MAX_CHECKOUTS_PER_PROJECT);
     expect(projects[0]?.checkouts[0]?.path).toBe("/worktrees/52");
@@ -338,23 +279,16 @@ describe("projects.list observed projects", () => {
       PROJECTS_LIST_MAX_IDENTITY_PROBES,
       50,
     );
-    seededSessions.store = Object.fromEntries(
-      Array.from({ length: rawCandidateLimit + 5 }, (_, index) => [
-        `agent:main:session-${index}`,
-        { sessionId: `session-${index}`, updatedAt: index, execCwd: `/repos/${index}` },
-      ]),
+    seedSessions(
+      Array.from({ length: rawCandidateLimit + 5 }, (_, index) =>
+        session(`session-${index}`, index, { execCwd: `/repos/${index}` }),
+      ),
     );
-    const resolveRepositoryIdentity = vi.fn<
-      Parameters<typeof listObservedProjects>[0]["service"]["resolveRepositoryIdentity"]
-    >(async (_checkoutPath) => {
+    const resolveRepositoryIdentity = vi.fn<IdentityResolver>(async (_checkoutPath) => {
       throw new Error("checkout unavailable");
     });
 
-    await expect(
-      listObservedProjects({
-        service: { listRegistryRecords: async () => [], resolveRepositoryIdentity },
-      }),
-    ).resolves.toEqual([]);
+    await expect(listObservedProjects(resolveRepositoryIdentity)).resolves.toEqual([]);
     expect(resolveRepositoryIdentity).toHaveBeenCalledTimes(PROJECTS_LIST_MAX_IDENTITY_PROBES);
     expect(resolveRepositoryIdentity.mock.calls.length).toBeLessThanOrEqual(rawCandidateLimit);
     expect(resolveRepositoryIdentity).toHaveBeenCalledWith(`/repos/${rawCandidateLimit + 4}`);

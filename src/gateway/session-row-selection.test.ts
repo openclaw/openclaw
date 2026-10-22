@@ -7,11 +7,14 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
+  assignSessionOwner,
   deleteSessionEntryLifecycle,
+  patchSessionEntryCore,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import * as sessionKeys from "../sessions/session-key-utils.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -23,13 +26,20 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
-import { registerChatAbortController } from "./chat-abort.js";
+import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { create as createSessionRow } from "./session-row-projection-record.js";
+import { indexSessionRow } from "./session-row-projection-identities.js";
+import {
+  create as createSessionRow,
+  identity,
+  type Query,
+  type Row,
+} from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
+import { createSessionRowEntrySelector, selectMatchingSessionRows } from "./session-row-scope.js";
 import * as childOwners from "./session-utils-core.js";
 import {
   filterAndSortSessionEntries,
@@ -37,6 +47,7 @@ import {
   prepareProjectedSessionList,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
@@ -44,6 +55,109 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+it("preserves scoped key and ID selection against a scan over randomized federated rows", () => {
+  let seed = 1467;
+  const random = (bound: number) => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed % bound;
+  };
+  const cfg = { agents: { entries: { main: {}, work: {}, other: {} } } };
+  const agents = Object.keys(cfg.agents.entries);
+  const paths = ["/synthetic/a", "/synthetic/b", "/synthetic/c"];
+  const scope = {
+    physicalPaths: (locator: string, agentId?: string) =>
+      locator === "/synthetic/shared"
+        ? agentId
+          ? [paths[agents.indexOf(agentId)]!]
+          : paths
+        : [locator],
+  };
+  for (let fixture = 0; fixture < 20; fixture++) {
+    const rows = new Map<string, Row>();
+    for (let index = 0; index < 80; index++) {
+      const agentId = agents[random(agents.length)]!;
+      const key = ["global", "unknown", `agent:${agentId}:key-${random(12)}`][random(3)]!;
+      const entry = { sessionId: `id-${random(12)}`, updatedAt: random(10) };
+      const row = {
+        ...createSessionRow({
+          key,
+          agentId,
+          storeTarget: {
+            agentId: agents[random(agents.length)]!,
+            storePath: paths[random(paths.length)]!,
+          },
+        }),
+        entry,
+      };
+      rows.set(identity(row), row);
+    }
+    const indexes = {
+      byKey: new Map<string, Set<string>>(),
+      byAgent: new Map<string, Set<string>>(),
+      byStore: new Map<string, Set<string>>(),
+      byParent: new Map<string, Set<string>>(),
+    };
+    for (const row of rows.values()) {
+      indexSessionRow(row, indexes);
+    }
+    const matching = (query: Query, kind?: string) =>
+      selectMatchingSessionRows({ rows, indexes, scope }, query, kind);
+    const select = createSessionRowEntrySelector({
+      isActive: () => true,
+      runAsOwner: (read) => read(),
+      prepare: () => true,
+      state: () => ({
+        cfg,
+        scope,
+        ...indexes,
+        rows,
+        dirty: new Set<string>(),
+        hasUnresolvedCategories: false,
+        matching,
+        acquire: (row) => row,
+        referenced: () => undefined,
+      }),
+    });
+    // The reference scans rows, independent of the production candidate indexes.
+    const scan = (query: Query, kind = "key") => {
+      const selectedPaths = query.storePath
+        ? scope.physicalPaths(query.storePath, query.agentId)
+        : undefined;
+      const candidates =
+        !query.key && selectedPaths
+          ? selectedPaths.flatMap((pathname) =>
+              [...rows.values()].filter((row) => row.storeTarget.storePath === pathname),
+            )
+          : [...rows.values()];
+      return candidates.filter(
+        (row) =>
+          (!query.key || (kind === "id" ? row.entry?.sessionId : row.key) === query.key) &&
+          (!query.agentId ||
+            row.agentId === query.agentId ||
+            ((query.key || selectedPaths) && row.storeTarget.agentId === query.agentId)) &&
+          (!selectedPaths || selectedPaths.includes(row.storeTarget.storePath)),
+      );
+    };
+    for (let sample = 0; sample < 40; sample++) {
+      const query: Query = {
+        agentId: [...agents, undefined][random(4)],
+        storePath: [...paths, "/synthetic/shared", undefined][random(5)],
+        sortBy: null,
+        ...(random(2)
+          ? { sessionIdOrKey: random(2) ? `id-${random(12)}` : "global" }
+          : { key: random(2) ? `agent:main:key-${random(12)}` : undefined }),
+      };
+      expect(matching(query).map(identity)).toEqual(scan(query).map(identity));
+      const indexed = { ...query, key: query.sessionIdOrKey };
+      const keys = new Set([...scan(indexed, "id"), ...scan(indexed)].map((row) => row.key));
+      const expected = (
+        query.sessionIdOrKey ? [...keys].flatMap((key) => scan({ ...query, key })) : scan(query)
+      ).filter((row) => !query.agentId || row.agentId === query.agentId);
+      expect(select(query).map(identity)).toEqual(expected.map(identity));
+    }
+  }
 });
 
 it("maintains list order across metadata changes and archived-row rematerialization", async () => {
@@ -103,6 +217,24 @@ it("maintains list order across metadata changes and archived-row rematerializat
       expect((await list())[0]?.key).toBe(second);
       const archived = await listProjectedSessions({ projection, opts: { archived: true } });
       expect(archived.sessions.map((row) => row.key)).toEqual([third]);
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3 },
+      );
+      expect((await list())[0]?.key).toBe(third);
+      expect(await listProjectedSessions({ projection, opts: { archived: true } })).toMatchObject({
+        sessions: [],
+        totalCount: 0,
+      });
+      // Archive membership is presence, including a zero timestamp.
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: third },
+        { sessionId: third, updatedAt: 4, lastInteractionAt: 3, archivedAt: 0 },
+      );
+      expect((await list())[0]?.key).toBe(second);
+      expect(
+        await listProjectedSessions({ projection, opts: { archived: true, limit: 1 } }),
+      ).toMatchObject({ sessions: [{ key: third }], totalCount: 1, hasMore: false });
       const archivedQuery = { agentId: "main", key: third };
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
@@ -137,6 +269,26 @@ it("maintains list order across metadata changes and archived-row rematerializat
       expect((await list())[0]?.key).toBe(first);
       expect((await list("activity"))[0]?.key).toBe(second);
       expect((await list("lastInteractionAt"))[0]?.key).toBe(first);
+      // A retained pin becomes effective only when the child is a sidebar root.
+      for (const sidebarRoot of [false, true, false]) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: first },
+          {
+            sessionId: first,
+            updatedAt: 2,
+            lastInteractionAt: 1,
+            pinnedAt: 10,
+            parentSessionKey: second,
+            sidebarRoot,
+          },
+        );
+        expect((await list())[0]?.key).toBe(sidebarRoot ? first : second);
+        expect(
+          (await listProjectedSessions({ projection, opts: { pinned: true } })).sessions.map(
+            (row) => row.key,
+          ),
+        ).toEqual(sidebarRoot ? [first] : []);
+      }
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: first },
         { sessionId: first, updatedAt: 2, lastInteractionAt: 1, label: "Unpinned" },
@@ -160,6 +312,72 @@ it("maintains list order across metadata changes and archived-row rematerializat
       scan.mockRestore();
       projection.dispose();
       release();
+    }
+  });
+});
+
+it("refreshes agent owner facets when the sidebar roster changes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    let cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, owner: {} } },
+      acp: { allowedAgents: ["transport"] },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const key = "agent:main:owned";
+    const entry = {
+      sessionId: "owned",
+      updatedAt: 1,
+    };
+    replaceSessionEntrySync({ agentId: "main", sessionKey: key }, entry);
+    assignSessionOwner(
+      { agentId: "main", sessionKey: key },
+      { owner: { type: "agent", id: "owner" }, assignedBy: { type: "system", id: "test" } },
+    );
+    const acpKey = "agent:main:acp-owner";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: acpKey },
+      { sessionId: "acp-owner", updatedAt: 2, archivedAt: 3 },
+    );
+    assignSessionOwner(
+      { agentId: "main", sessionKey: acpKey },
+      { owner: { type: "agent", id: "transport" }, assignedBy: { type: "system", id: "test" } },
+    );
+    const projection = await createSessionRowProjection({
+      cfg,
+      getConfig: () => cfg,
+      modelCatalog: [],
+    });
+    try {
+      const list = (scoped = true) =>
+        listProjectedSessions({
+          projection,
+          opts: {
+            agentId: scoped ? "main" : undefined,
+            configuredAgentsOnly: true,
+            includeGlobal: true,
+            includeUnknown: true,
+            rowMode: "sidebar",
+            limit: 200,
+            archived: "all",
+          },
+        });
+      // Read the cold ACP row before a scoped read can populate its owner projection.
+      expect((await list(false)).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      await patchSessionEntryCore({ agentId: "main", sessionKey: key }, () => ({
+        label: "Metadata changed",
+      }));
+      expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      cfg = { ...cfg, agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      expect((await list()).owners).toEqual([]);
+      expect((await list(false)).owners).toEqual([]);
+      cfg = { ...cfg, agents: { entries: { main: {}, owner: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      expect((await list(false)).owners?.map(({ id }) => id)).toEqual(["owner"]);
+    } finally {
+      projection.dispose();
     }
   });
 });
@@ -371,6 +589,7 @@ it.each([false, true])(
         path: "(multiple)",
         agentId: undefined,
         configuredAgentIds: new Set(["main", "ops"]),
+        ownerAgentIds: new Set(["main", "ops"]),
       });
       try {
         const prepared = prepareSessionRowSelection(projection, {
@@ -379,12 +598,12 @@ it.each([false, true])(
           includeGlobal: true,
           includeUnknown: true,
         });
-        expect(prepared.entries.map(([, entry]) => entry.sessionId)).toEqual(
+        expect(prepared.entries("all").map(([, entry]) => entry.sessionId)).toEqual(
           activeOnly
             ? ["ordinary", "main-global", "ops-global", "unknown-winner", "unknown-shadow"]
             : ["ordinary", "main-global", "unknown-winner"],
         );
-        for (const [key, entry] of prepared.entries) {
+        for (const [key, entry] of prepared.entries("all")) {
           const target = prepared.getTarget(key)!;
           const original = rows.find((row) => row.entry === entry)!;
           expect(target.entry).toBe(entry);
@@ -412,18 +631,21 @@ it.each([false, true])(
         expect(children.map(([, entry]) => entry.sessionId)).toEqual(["ordinary"]);
         if (activeOnly) {
           const context = requestContext(cfg);
-          const registrations = [
-            ["main", "shadow-global"],
-            ["ops", "ops-global"],
-            ["main", "unknown-shadow"],
-          ].map(([agentId, sessionId]) =>
-            registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
-              runId: sessionId!,
-              agentId,
-              sessionId: sessionId!,
-              sessionKey: `agent:${agentId}:run-alias`,
-              timeoutMs: 60_000,
+          const registrations = await Promise.all(
+            [
+              ["main", "shadow-global"],
+              ["ops", "ops-global"],
+              ["main", "unknown-shadow"],
+            ].map(async ([agentId, sessionId]) => {
+              const registration = registerRpcSourceForTest({
+                storeScope: samples.find(([sampleId]) => sampleId === sessionId)![3],
+                runId: sessionId!,
+                agentId,
+                sessionId: sessionId!,
+                sessionKey: `agent:${agentId}:run-alias:${sessionId}`,
+              });
+              const release = await claimRpcSourceForTest(registration.entry!);
+              return Object.assign({}, registration, { release });
             }),
           );
           try {
@@ -441,6 +663,7 @@ it.each([false, true])(
             ).toEqual(["ops-global", "unknown-shadow"]);
           } finally {
             for (const registration of registrations) {
+              registration.release();
               registration.cleanup();
             }
           }

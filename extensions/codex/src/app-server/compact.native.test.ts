@@ -4,6 +4,10 @@ import path from "node:path";
 import type { AgentHarnessCompactParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -35,7 +39,6 @@ const transport = vi.hoisted(() => ({
     requestKind: string;
     threadId: string;
     turnId: string;
-    hasCompactionTrigger: boolean;
   }>,
 }));
 
@@ -52,12 +55,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
       const metadata: unknown = JSON.parse(headers.get("x-codex-turn-metadata") ?? "{}");
       assert(isJsonObject(body) && isJsonObject(metadata));
       expect(body.model).toBe(MODEL);
-      expect(metadata.request_kind).toBe(transport.phase);
-      assert(
-        typeof metadata.request_kind === "string" &&
-          typeof metadata.thread_id === "string" &&
-          typeof metadata.turn_id === "string",
-      );
+      assert(metadata.request_kind === transport.phase, "Expected the current request phase");
+      assert(typeof metadata.thread_id === "string" && typeof metadata.turn_id === "string");
       assert(transport.requests.length < 2, "Unexpected additional native model request");
       const compaction = metadata.request_kind === "compaction";
       const hasCompactionTrigger =
@@ -69,7 +68,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
         requestKind: metadata.request_kind,
         threadId: metadata.thread_id,
         turnId: metadata.turn_id,
-        hasCompactionTrigger,
       });
       const id = `synthetic-compaction-${transport.requests.length}`;
       const item = compaction
@@ -225,6 +223,8 @@ it(
       params.permissionMode = "full";
       setCodexTestModelSupportsTools(params, true);
       setAgentWorkspaceForTest(params, native.cwd);
+      assert(params.config);
+      setRuntimeConfigSnapshot(params.config);
       closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
       const pluginConfig = { appServer: { homeScope: "user", args: ["app-server"] } };
       const setup = await runCodexAppServerAttempt(params, {
@@ -301,6 +301,7 @@ it(
         }
       } finally {
         closeHost?.();
+        clearRuntimeConfigSnapshot();
       }
     }
   },
