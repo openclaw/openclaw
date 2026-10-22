@@ -672,13 +672,25 @@ export function assertScheduledCodexAppAuthorityRuntime(
 export function buildLegacyScheduledCodexAppRecoveryPrompt(
   params: Pick<
     EmbeddedRunAttemptParams,
-    "trigger" | "scheduledRuntimeAuthority" | "scheduledRuntimeAuthorityRecoveryRequired"
+    | "trigger"
+    | "scheduledRuntimeAuthority"
+    | "scheduledRuntimeAuthorityRecoveryRequired"
+    | "toolsAllow"
   >,
 ): string | undefined {
   if (
     params.trigger !== "cron" ||
     !params.scheduledRuntimeAuthorityRecoveryRequired ||
     params.scheduledRuntimeAuthority
+  ) {
+    return undefined;
+  }
+  // A finite allow-list that names no Codex app tool has nothing this recovery
+  // note can restore, and the note reads as all external access being down.
+  // `undefined` and `*` leave the tool set unrestricted, so keep the note there.
+  if (
+    params.toolsAllow !== undefined &&
+    !params.toolsAllow.some((name) => name === "*" || name.startsWith("codex_apps."))
   ) {
     return undefined;
   }

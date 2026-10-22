@@ -947,6 +947,35 @@ describe("scheduled Codex app authority", () => {
     ).toBeUndefined();
   });
 
+  it("skips the legacy recovery note when the scheduled allow-list names no Codex app tool", () => {
+    expect(
+      buildLegacyScheduledCodexAppRecoveryPrompt({
+        trigger: "cron",
+        scheduledRuntimeAuthorityRecoveryRequired: true,
+        toolsAllow: ["notion__notion-search", "message"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps the legacy recovery note while the scheduled tool set can reach Codex apps", () => {
+    const params = {
+      trigger: "cron" as const,
+      scheduledRuntimeAuthorityRecoveryRequired: true,
+    };
+    expect(
+      buildLegacyScheduledCodexAppRecoveryPrompt({
+        ...params,
+        toolsAllow: ["codex_apps.slack.slack_send"],
+      }),
+    ).toContain("Scheduled Codex app access is unavailable");
+    expect(buildLegacyScheduledCodexAppRecoveryPrompt(params)).toContain(
+      "Scheduled Codex app access is unavailable",
+    );
+    expect(buildLegacyScheduledCodexAppRecoveryPrompt({ ...params, toolsAllow: ["*"] })).toContain(
+      "Scheduled Codex app access is unavailable",
+    );
+  });
+
   it("requires a deny-default app config for scheduled authority even when native tools are enabled", () => {
     const startup = resolveCodexPluginThreadConfigStartupPolicy({
       pluginConfig: {},
