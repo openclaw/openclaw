@@ -540,8 +540,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         usage: createUsageRecorders(recorderRuntime),
         operations: createOperationsRecorders(recorderRuntime),
         harness: createHarnessRecorders(recorderRuntime),
-        ...createModelRecorders(recorderRuntime),
-        ...createToolAndSystemRecorders(recorderRuntime),
+        model: createModelRecorders(recorderRuntime),
+        tools: createToolAndSystemRecorders(recorderRuntime),
       };
 
       active.unsubscribe = subscribe(
@@ -579,9 +579,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             },
             prepareEvent(event, metadata) {
               if (event.type === "model.call.started") {
-                recorders.recordModelCallStarted(event, metadata);
+                recorders.model["model.call.started"](event, metadata);
               } else if (event.type === "tool.execution.started") {
-                recorders.recordToolExecutionStarted(event, metadata);
+                recorders.tools["tool.execution.started"](event, metadata);
               }
             },
             resolveTraceContext(traceContext) {
