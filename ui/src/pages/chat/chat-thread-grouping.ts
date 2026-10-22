@@ -638,6 +638,26 @@ export function collapseCompletedTurnWork(
       }
       segmentEnd += 1;
     }
+    // The last-visible-reply policy applies per run. A later run in the same
+    // turn, such as a subagent completion the agent answered without new user
+    // input, must not demote an earlier run's reply to work. A run that ended
+    // in failure has no reply; the later answer recovers it.
+    const earlierRunReplies = new Set<MessageGroup>();
+    if (terminalReply.runId !== undefined) {
+      const answeredRuns = new Set([terminalReply.runId]);
+      for (let index = finalReplyIndex - 1; index >= segmentStart; index -= 1) {
+        const item = turn[index]!;
+        if (item.kind !== "group" || !item.runId || answeredRuns.has(item.runId)) {
+          continue;
+        }
+        if (groupEndsRunInFailure(item)) {
+          answeredRuns.add(item.runId);
+        } else if (isFinalReplyGroup(item)) {
+          answeredRuns.add(item.runId);
+          earlierRunReplies.add(item);
+        }
+      }
+    }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
     const previewAfterGroup = new Map<string, string>();
@@ -649,6 +669,7 @@ export function collapseCompletedTurnWork(
       if (
         index !== finalReplyIndex &&
         isCollapsibleWorkGroup(item) &&
+        !earlierRunReplies.has(item) &&
         (index < finalReplyIndex || !groupHasFailedResult(item))
       ) {
         groups.push(item);

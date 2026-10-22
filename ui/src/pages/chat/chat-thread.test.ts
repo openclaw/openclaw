@@ -478,6 +478,36 @@ describe("collapseCompletedTurnWork", () => {
     expect(requireGroup(items[3]).messages.map(({ message }) => message)).toContain(trailing);
   });
 
+  it("keeps each run's reply visible when completions answer without new user input", () => {
+    const run = (runId: string) => ({ __openclaw: { runId } });
+    const items = collapsedItems({
+      messages: [
+        userMessage("Start two subagents", 1_000),
+        assistantMessage("Spawning both.", 1_500, run("run-user")),
+        { ...toolResult("spawn", 2_000), ...run("run-user") },
+        assistantMessage("Both started.", 3_000, run("run-user")),
+        assistantMessage("Child A finished.", 4_000, run("announce:v1:child-a")),
+        { ...toolResult("lookup", 4_500), ...run("announce:v1:child-b") },
+        assistantMessage("Child B finished.", 5_000, run("announce:v1:child-b")),
+        assistantMessage("All children settled.", 6_000, run("announce:requester-settle:a,b")),
+      ],
+    });
+    const visibleText = items
+      .filter((item) => item.kind === "group")
+      .map((group) => messageRecord(group).content);
+    expect(visibleText).toEqual([
+      "Start two subagents",
+      "Both started.",
+      "Child A finished.",
+      "Child B finished.",
+      "All children settled.",
+    ]);
+    const work = requireWorkGroup(items[1]);
+    expect(work.groups.map((group) => group.role)).toEqual(["assistant", "tool", "tool"]);
+    expect(messageRecord(work.groups[0]!).content).toBe("Spawning both.");
+    expect(work.durationMs).toBeNull();
+  });
+
   it("collapses a trailing failure only after a subsequent answer", () => {
     const failed = toolResult("failed", 4_000, true);
     const messages = [

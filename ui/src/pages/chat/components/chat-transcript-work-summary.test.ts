@@ -61,3 +61,45 @@ it("keeps the focused work summary toggle through expansion updates", async () =
     expect(document.activeElement).toBe(toggle);
   }
 });
+
+it("shows every run's reply below completed work when completions arrive without user input", async () => {
+  const run = (runId: string) => ({ __openclaw: { runId } });
+  const props = {
+    ...threadProps("pane-work-runs", "agent:main:dashboard:work-runs", [
+      { role: "user", content: "Start two subagents", timestamp: 1_000 },
+      { role: "assistant", content: "Spawning both.", timestamp: 1_500, ...run("run-user") },
+      {
+        role: "toolResult",
+        toolCallId: "work-runs-spawn",
+        toolName: "sessions_spawn",
+        content: "accepted",
+        timestamp: 2_000,
+        ...run("run-user"),
+      },
+      { role: "assistant", content: "Both started.", timestamp: 3_000, ...run("run-user") },
+      { role: "assistant", content: "Child A finished.", timestamp: 4_000, ...run("announce:a") },
+      { role: "assistant", content: "Child B finished.", timestamp: 5_000, ...run("announce:b") },
+      { role: "assistant", content: "All settled.", timestamp: 6_000, ...run("announce:settle") },
+    ]),
+    showToolCalls: true,
+  };
+  const transcript = createTestTranscript();
+  const container = document.body.appendChild(document.createElement("div"));
+  onTestFinished(() => {
+    render(nothing, container);
+    transcript.hostDisconnected();
+  });
+  render(renderChatThread(props, transcript), container);
+  transcript.hostConnected();
+  transcript.hostUpdated();
+  await waitForSolid(() =>
+    expect(
+      container.querySelector(".chat-work-group > button")?.getAttribute("aria-expanded"),
+    ).toBe("false"),
+  );
+  const text = container.textContent ?? "";
+  for (const reply of ["Both started.", "Child A finished.", "Child B finished.", "All settled."]) {
+    expect(text).toContain(reply);
+  }
+  expect(text).not.toContain("Spawning both.");
+});
