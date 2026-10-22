@@ -85,8 +85,8 @@ it("joins registry cleanup when its startup is cancelled", async () => {
 });
 
 it.each([
-  ["loaded", true, "loaded"],
-  ["disabled", false, "disabled"],
+  ["loaded", true, "loaded", undefined],
+  ["disabled", false, "disabled", undefined],
   [
     "disabled but loaded",
     false,
@@ -94,7 +94,7 @@ it.each([
     "expected lifecycle-claw inspect status disabled, got loaded",
   ],
   ["missing", true, undefined, "missing"],
-] as const)("validates %s inspect JSON", (_name, enabled, status, error = undefined) => {
+] as const)("validates %s inspect JSON", (_name, enabled, status, error) => {
   const check = enabled ? assertInspectLoaded : assertInspectDisabled;
   const file = inspectFile(status === undefined ? undefined : { enabled, status });
   const result = expect(() => check("lifecycle-claw", file));
