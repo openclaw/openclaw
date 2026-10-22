@@ -160,7 +160,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
           this.mobilePresentation.reservedHeight = reservedHeight;
         }
       },
-      keyboardVisible: shellViewport.snapshot?.keyboardVisible,
+      keyboardVisible:
+        this.mobilePresentation.publishedKeyboard ?? shellViewport.snapshot?.keyboardVisible,
       onComposerEditingChange: this.onMobileComposerEditingChange,
       onViewportChange: this.onMobileViewportChange,
     };
