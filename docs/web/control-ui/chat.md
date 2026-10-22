@@ -1009,7 +1009,9 @@ accounts with session-only access do not request that inventory.
 Running and scheduled states update from automation events. If an inventory
 refresh is already running, later changes share one follow-up refresh.
 Compact activity controls can open related details without duplicating the full
-lists above the composer.
+lists above the composer. The mobile **Publish PR** control appears only for an
+undismissed branch with publishable work or a retained publication result or
+recovery state. An empty workspace or account discovery alone does not show it.
 
 The progress header shows the current step, not a completed-step total. On desktop,
 its options menu stays available when the card is expanded or collapsed and contains
