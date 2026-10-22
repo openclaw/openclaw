@@ -247,6 +247,26 @@ describe("Matrix auth/config live surfaces", () => {
     );
   });
 
+  it('uses the injected env-backed "default" Matrix account when implicit selection is available', () => {
+    const cfg = matrixConfig({});
+    const env = {
+      MATRIX_HOMESERVER: "https://matrix.example.org",
+      MATRIX_ACCESS_TOKEN: "default-token",
+      MATRIX_OPS_HOMESERVER: "https://matrix.example.org",
+      MATRIX_OPS_ACCESS_TOKEN: "ops-token",
+    };
+
+    expect(resolveDefaultMatrixAuthContext(cfg, env).accountId).toBe("default");
+  });
+
+  it("keeps implicit selection for env-backed accounts that can use cached credentials", () => {
+    expect(
+      resolveDefaultMatrixAuthContext(matrixConfig({ homeserver: "https://matrix.example.org" }), {
+        MATRIX_OPS_USER_ID: "@ops:example.org",
+      }).accountId,
+    ).toBe("ops");
+  });
+
   it.each([
     ["typo", /Matrix account "typo" is not configured/i],
     ["!!!", /Matrix account id "!!!" is invalid/i],

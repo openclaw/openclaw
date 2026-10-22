@@ -6,7 +6,7 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import * as panels from "./desktop-panel.test-support.ts";
 
-async function setup(mode: "mirror" | "pending" | "denied" = "mirror") {
+async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = false) {
   const frames = new Map<number, FrameRequestCallback>();
   let id = 0;
   const popup = Object.assign(new EventTarget(), {
@@ -56,8 +56,15 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror") {
   const panel = await panels.mountDesktop(
     { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
     connect,
-    { embedded: true, presented: true, requestedSource: "gateway" },
+    { embedded: !docked, presented: true, requestedSource: "gateway" },
   );
+  if (docked) {
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:desktop-toggle", {
+        detail: { open: true, environmentId: "gateway" },
+      }),
+    );
+  }
   await panels.waitForConnections(panel, connect);
   const button = () =>
     panel.querySelector<HTMLButtonElement>(".desktop-picture-in-picture-button")!;
@@ -65,6 +72,7 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror") {
   return {
     panel,
     popup,
+    request,
     connect,
     requestWindow,
     drawImage,
@@ -102,6 +110,25 @@ it("accepts a native close before the Solid panel mounts", () => {
       new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
     ),
   ).not.toThrow();
+});
+
+it("mirrors dock without reconnecting or changing control; browser close preserves the viewer", async () => {
+  const f = await setup("mirror", true);
+  const source = f.panel.querySelector("canvas")!;
+  f.button().click();
+  expect(f.requestWindow).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(f.state()).toMatchObject({ pressed: "true" }));
+  f.tick(0);
+  f.tick(40);
+  expect(f.drawImage).toHaveBeenCalledTimes(2);
+  expect(f.drawImage).toHaveBeenLastCalledWith(source, 0, 0, 300, 150);
+  expect(source.isConnected).toBe(true);
+  expect(f.canvas()?.getAttribute("role")).toBe("img");
+  expect(panels.rpcCalls(f.request, "desktop.observe")).toHaveLength(1);
+  expect([f.connect.mock.calls.length, f.disconnect.mock.calls.length]).toEqual([1, 0]);
+  f.popup.dispatchEvent(new Event("pagehide"));
+  await waitForSolid(() => expect(f.state()).toMatchObject({ pressed: "false" }));
+  expect([f.frames.size, f.canvas(), f.disconnect.mock.calls.length]).toEqual([0, null, 0]);
 });
 
 it("mirrors the published opener palette only while PiP is open", async () => {
