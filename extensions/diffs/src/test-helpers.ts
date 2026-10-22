@@ -86,7 +86,7 @@ export function registerDiffsForTest(params: {
       assert.ok(tool && !Array.isArray(tool), "Diffs must return one tool");
       return tool;
     },
-    async stop() {
+    stop: async () => {
       for (const [service] of registerService.mock.calls) {
         if (service.apiVersion !== 2) {
           await service.stop?.({

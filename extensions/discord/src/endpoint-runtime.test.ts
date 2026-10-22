@@ -285,19 +285,21 @@ describe("fetchPluralKitMessageInfo", () => {
   });
   it("relays parent cancellation to the PluralKit request", async () => {
     const parent = new AbortController();
+    const cancellationReason = new Error("preflight stopped");
     let observedSignal: AbortSignal | undefined;
     const fetcher: typeof fetch = async (_url, init) => {
       observedSignal = init?.signal ?? undefined;
       return new Promise<Response>((_resolve, reject) => {
-        observedSignal?.addEventListener("abort", () => reject(observedSignal?.reason), {
+        observedSignal?.addEventListener("abort", () => reject(cancellationReason), {
           once: true,
         });
       });
     };
     const pending = lookup(fetcher, { signal: parent.signal });
-    parent.abort(new Error("preflight stopped"));
+    parent.abort(cancellationReason);
     await expect(pending).rejects.toThrow("preflight stopped");
     expect(observedSignal?.aborted).toBe(true);
+    expect(observedSignal?.reason).toBe(cancellationReason);
   });
   it("redacts reflected PluralKit credentials from a real HTTP error body", async () => {
     const uniqueSecret = "pluralkit-loopback-secret";
