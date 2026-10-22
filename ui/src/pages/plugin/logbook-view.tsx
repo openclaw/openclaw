@@ -111,28 +111,43 @@ function StatusChips(props: { status: LogbookStatusPayload }) {
 }
 
 function LogbookKeyframe(props: { model: LogbookModel; id: number }) {
+  const [completion, setCompletion] = createSignal<Promise<void>>();
+  const frameRead = createMemo(() => completion());
+  const readFrame = () => {
+    latest(frameRead);
+    return null;
+  };
   // An expanded image keeps its decoded source when the bounded shared cache evicts it.
   const preview = createMemo<string | undefined>(
     (previous) => props.model.state.framePreviews.get(props.id) ?? previous,
   );
   onSettled(() => {
     if (!preview()) {
-      void props.model.loadFrame(props.id);
+      void setCompletion(props.model.loadFrame(props.id));
     }
   });
   return (
-    <Show
-      when={preview()}
+    <Loading
       fallback={
         <div class="logbook-card__keyframe logbook-card__keyframe--loading">
           {t("common.loading")}
         </div>
       }
     >
-      {(src) => (
-        <img class="logbook-card__keyframe" src={src()} alt={t("logbook.card.keyframeAlt")} />
-      )}
-    </Show>
+      {readFrame()}
+      <Show
+        when={preview()}
+        fallback={
+          <div class="logbook-card__keyframe logbook-card__keyframe--loading">
+            {t("common.loading")}
+          </div>
+        }
+      >
+        {(src) => (
+          <img class="logbook-card__keyframe" src={src()} alt={t("logbook.card.keyframeAlt")} />
+        )}
+      </Show>
+    </Loading>
   );
 }
 
