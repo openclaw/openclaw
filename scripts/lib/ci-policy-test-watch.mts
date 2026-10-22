@@ -58,6 +58,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
   })),
   {
+    testFile: "test/scripts/lint-suppressions.test.ts",
+    // The inventory includes JavaScript test suffixes that sourceOnly would exclude.
+    watchGlobs: ["{src,extensions,scripts,ui}/**/*.{ts,tsx,js,jsx,mjs,cjs}"],
+  },
+  {
     testFile: "test/vitest-pr-exempt-retention.test.ts",
     watchGlobs: [
       ".github/workflows/ci.yml",
