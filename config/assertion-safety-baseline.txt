@@ -1945,7 +1945,6 @@ src/infra/outbound/deliver-channel.ts	3
 src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
 src/infra/outbound/delivery-queue-storage.ts	3
-src/infra/outbound/format.ts	1
 src/infra/outbound/message-account-selection.ts	1
 src/infra/outbound/message-action-execution.ts	3
 src/infra/outbound/message-action-runner.ts	1
