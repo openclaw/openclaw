@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
+import { Errored, For, Loading, Show, createMemo } from "solid-js";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
@@ -12,7 +12,7 @@ import {
   SettingsSection,
 } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -38,6 +38,7 @@ import {
   renderPluginRowMessage,
   type PluginRowMessage,
 } from "./plugin-row-message.tsx";
+import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import {
   flattenPluginSettingsFields,
@@ -96,7 +97,7 @@ export type DetailProps = SharedProps &
     onOpenTool?: (name: string) => void;
     settingsHref?: string;
     inspection: PluginsInspectResult | null;
-    inspectionError: string | null;
+    inspectionRead: PluginDetailRead;
     catalog?: PluginDiscoveryDetailResult;
     catalogLoading?: boolean;
     catalogIconUrls?: Readonly<Record<string, string>>;
@@ -405,6 +406,39 @@ function permissionSettings(options: DetailProps): PluginSettingsEditorProps["pe
     fields,
   };
 }
+function PluginInspectionStatus(props: DetailProps) {
+  const source = createMemo(() => props.inspectionRead);
+  const receipt = createMemo(() => source().receipt());
+  const read = () => source().value();
+  const placeholder = () =>
+    !props.inspection && !props.catalog ? (
+      <SettingsLoadingSkeleton rows={2} carapace={true} />
+    ) : null;
+  return (
+    <Loading on={receipt()} fallback={placeholder()}>
+      <Errored
+        fallback={(error, reset) => (
+          <div class="callout danger plugins-settings-error oc-banner oc-banner-error" role="alert">
+            <span>{formatUiError(error())}</span>
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              onClick={() => {
+                props.onRetryInspection();
+                reset();
+              }}
+            >
+              {t("pluginsPage.tryAgain")}
+            </button>
+          </div>
+        )}
+      >
+        {read()}
+      </Errored>
+    </Loading>
+  );
+}
+
 function PluginNotices(props: DetailProps) {
   const plugin = createMemo(() =>
     props.result?.plugins.find((entry) => entry.id === props.pluginId),
@@ -412,9 +446,7 @@ function PluginNotices(props: DetailProps) {
   return (
     <>
       {props.error ? renderRetryError(props.error, props.onRefresh) : null}
-      {props.inspectionError
-        ? renderRetryError(props.inspectionError, props.onRetryInspection)
-        : null}
+      <PluginInspectionStatus {...props} />
       {plugin()?.error ? (
         <div class="callout danger oc-banner oc-banner-error" role="alert">
           {formatUiExternalText(plugin()!.error!)}
@@ -567,9 +599,6 @@ function PluginOverview(props: DetailProps): JSX.Element {
         panel={
           <>
             <PluginNotices {...props} />
-            {!props.inspection && !catalog() && !props.inspectionError ? (
-              <SettingsLoadingSkeleton rows={2} carapace={true} />
-            ) : null}
             {renderPluginCapabilitySection(
               t("pluginsPage.auth.accounts"),
               (props.inspection?.mcpAuth ?? []).map((server) => ({

@@ -1,6 +1,5 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -24,13 +23,12 @@ export const page = definePage({
     resolveWorkboardRouteLocation(location, context.basePath),
   component: () =>
     import("../plugin/plugin-page.tsx").then((module) => ({
-      renderSolid: (props: SolidRouteProps<WorkboardRouteData>) =>
-        createComponent(module.PluginPage, {
-          pluginId: "workboard",
-          tabId: "workboard",
-          get params() {
-            return { boardId: props.data?.boardFilter ?? "__all__" };
-          },
-        }),
+      renderSolid: (props: SolidRouteProps<WorkboardRouteData>) => (
+        <module.PluginPage
+          pluginId="workboard"
+          tabId="workboard"
+          params={{ boardId: props.data?.boardFilter ?? "__all__" }}
+        />
+      ),
     })),
 });
