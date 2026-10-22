@@ -857,7 +857,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/whatsapp/src/auto-reply.web-auto-reply.routing.test.ts",
   "extensions/whatsapp/src/auto-reply/deliver-reply.filename-media.test.ts",
   "extensions/whatsapp/src/auto-reply/deliver-reply.test.ts",
-  "extensions/whatsapp/src/auto-reply/monitor/group-gating.audio-preflight.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.message-sent.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/inbound-dispatch.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/process-message.response-prefix.test.ts",

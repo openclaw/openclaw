@@ -57,10 +57,9 @@ const baseRoute = {
 };
 
 const boundSessionKey = "agent:sandboxed-agent:acp:binding:whatsapp:work:abc123";
-const directConversationId = "+15551234567";
 const groupConversationId = "120363001234567890@g.us";
 
-function configuredBinding(conversationId: string, kind: "direct" | "group") {
+function configuredBinding(conversationId: string) {
   const conversation = { channel: "whatsapp", accountId: "work", conversationId };
   const record = {
     bindingId: `config:acp:whatsapp:work:${conversationId}`,
@@ -93,7 +92,7 @@ function configuredBinding(conversationId: string, kind: "direct" | "group") {
         match: {
           channel: "whatsapp",
           accountId: "work",
-          peer: { kind, id: conversationId },
+          peer: { kind: "group", id: conversationId },
         },
       },
       bindingConversationId: conversationId,
@@ -116,8 +115,7 @@ function configuredBinding(conversationId: string, kind: "direct" | "group") {
     statefulTarget,
   } as const;
 }
-const configuredBindingResolution = configuredBinding(directConversationId, "direct");
-const configuredGroupBindingResolution = configuredBinding(groupConversationId, "group");
+const configuredBindingResolution = configuredBinding(groupConversationId);
 
 type ConfiguredBindingResolution = NonNullable<ConfiguredBindingRouteResult["bindingResolution"]>;
 
@@ -137,35 +135,19 @@ function resolvedConfiguredRoute(
   });
 }
 
-function createCfg(kind: "direct" | "group" = "direct"): Record<string, unknown> {
-  const resolution =
-    kind === "direct" ? configuredBindingResolution : configuredGroupBindingResolution;
-  return { bindings: [resolution.compiledBinding.binding] };
-}
-
-function createGroupCfg(): Record<string, unknown> {
-  return {
-    messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
-    channels: { whatsapp: { groupPolicy: "open", accounts: { work: {} } } },
-    broadcast: { "120363001234567890@g.us": ["main", "backup"] },
-    agents: { entries: { main: {}, backup: {}, "sandboxed-agent": {} } },
-    ...createCfg("group"),
-  };
-}
-
-function createHandler(group = false) {
-  if (group) {
-    resolveConfiguredBindingRouteMock.mockImplementationOnce(
-      resolvedConfiguredRoute(configuredGroupBindingResolution),
-    );
-  }
-  const cfg = group ? createGroupCfg() : createCfg();
+function createHandler() {
   const context = createMonitorContext();
   return {
     groupHistories: context.groupHistories,
     handler: createWebOnMessageHandler({
       ...context,
-      cfg: cfg as never,
+      cfg: {
+        messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+        channels: { whatsapp: { groupPolicy: "open", accounts: { work: {} } } },
+        broadcast: { [groupConversationId]: ["main", "backup"] },
+        agents: { entries: { main: {}, backup: {}, "sandboxed-agent": {} } },
+        bindings: [configuredBindingResolution.compiledBinding.binding],
+      },
       groupHistoryLimit: 20,
     }),
   };
@@ -248,7 +230,7 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
 
   it("waits for group admission before ensuring a configured ACP binding target", async () => {
     resolveGroupActivationForMock.mockResolvedValueOnce("mention");
-    const { handler, groupHistories } = createHandler(true);
+    const { handler, groupHistories } = createHandler();
 
     await handler(createMessage({ group: true, body: "ambient group message" }));
 
@@ -278,7 +260,7 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
       ok: false,
       error: "acpx backend unavailable",
     });
-    const { handler } = createHandler(true);
+    const { handler } = createHandler();
 
     await handler(createMessage({ group: true, audio: true }));
 
@@ -289,7 +271,7 @@ describe("createWebOnMessageHandler configured ACP bindings", () => {
   });
 
   it("records configured ACP group routes after admission and readiness", async () => {
-    const { handler } = createHandler(true);
+    const { handler } = createHandler();
 
     await handler(createMessage({ group: true }));
 
