@@ -37,7 +37,7 @@ import {
   createPanelRefreshStatus,
   failPanelRefresh,
   type PanelRefreshStatus,
-} from "./panel-refresh-status.ts";
+} from "./panel-refresh-status-state.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
 
 export interface SessionDataInputs {

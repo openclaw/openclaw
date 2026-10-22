@@ -4,7 +4,7 @@ import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
-import type { AgentSelectOption } from "./agent-select.ts";
+import type { AgentSelectOption } from "./agent-select-types.ts";
 import "./agent-select-registration.ts";
 
 type AgentScopeControlProps = {

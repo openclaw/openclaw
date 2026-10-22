@@ -2,7 +2,7 @@ import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-r
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
-import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
+import { isCloudWorkerPlacementState } from "../../components/session-row-badge-presentation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   areUiSessionKeysEquivalent,

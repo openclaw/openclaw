@@ -251,7 +251,7 @@ const dockedCases = [
     name: `Home ${dock}`,
     label: "Assistant sidebar",
     tag: "openclaw-assistant-panel-content",
-    modulePath: "ui/src/components/assistant-panel-content.ts",
+    modulePath: "ui/src/components/assistant-panel-content-solid.tsx",
     dock,
     frame: (page: Page) => page.locator(".assistant-panel"),
     close: (page: Page) => button(page, "Close assistant sidebar"),
@@ -331,7 +331,7 @@ async function installDockedScenario(
 suite.define(() => {
   it("recovers the login gate after its chunk fails without loading it during admission", async () => {
     await suite.withPage(pageOptions, async ({ page }) => {
-      const failure = await installChunkFailure(page, "ui/src/components/login-gate.ts");
+      const failure = await installChunkFailure(page, "ui/src/components/login-gate-solid.tsx");
       const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
       const rejectLogin = async () => {
         await gateway.waitForRequest("connect");

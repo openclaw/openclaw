@@ -14,7 +14,7 @@ import {
 import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
 import "../../components/sparkline-tile.tsx";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
-import "../../components/desktop/desktop-panel.ts";
+import "../../components/desktop/desktop-panel-solid.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
