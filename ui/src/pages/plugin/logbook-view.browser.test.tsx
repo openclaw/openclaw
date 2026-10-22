@@ -1,25 +1,15 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { i18n } from "../../i18n/index.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import "../../styles/base.css";
 import { Logbook } from "./logbook-view.tsx";
 import { logbookClient, logbookStatus, logbookTimeline } from "./logbook.test-support.ts";
 const neverRetired = new Promise<void>(() => {});
 
-let container: HTMLDivElement;
-let dispose: (() => void) | undefined;
-
-beforeEach(() => {
-  container = document.createElement("div");
-  document.body.append(container);
-});
-
 afterEach(() => {
-  dispose?.();
-  dispose = undefined;
-  container.remove();
+  cleanupSolid();
   vi.restoreAllMocks();
 });
 
@@ -47,9 +37,7 @@ it.each([
       method === "logbook.status" ? status : timeline,
     );
     const client = logbookClient(request);
-    dispose = mountSolid(() => <Logbook initialClient={client} getRetired={() => neverRetired} />, {
-      container,
-    }).unmount;
+    const { container } = mountSolid(() => <Logbook initialClient={client} getRetired={() => neverRetired} />);
     await waitForSolid(() =>
       expect(container.querySelector(".logbook-card__header")).not.toBeNull(),
     );

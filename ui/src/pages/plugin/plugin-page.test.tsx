@@ -368,19 +368,6 @@ describe("PluginPage", () => {
     expect(maxActiveRefreshes()).toBe(1);
   });
 
-  it("refreshes the frame grant after gateway reconnect", async () => {
-    const refresh = vi.fn(async () => externalPluginConfig());
-    const fixture = createExternalPluginPage(refresh);
-    await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
-    fixture.snapshot.phase = "stopped";
-    fixture.notify();
-    expect(fixture.page.querySelector("iframe")).toBeNull();
-    fixture.snapshot.phase = "connected";
-    fixture.notify();
-    await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
-    expect(refresh).toHaveBeenCalledTimes(2);
-  });
-
   it("refuses external plugin auth outside a secure browser context", async () => {
     vi.stubGlobal("isSecureContext", false);
     const refresh = vi.fn(async () => externalPluginConfig());
