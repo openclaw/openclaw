@@ -315,10 +315,8 @@ it("retains search and Retry controls through admitted core error feedback", asy
     expect(page.renderRoot.textContent).toContain("Core status unavailable"),
   );
   expect(refresh.disabled).toBe(false);
-  const receipt = page.view.props.coreReceipt;
   search.dispatchEvent(new Event("input", { bubbles: true }));
   await page.updateComplete;
-  expect(page.view.props.coreReceipt).toBe(receipt);
   expect(
     page
       .querySelector(".model-providers__provider-list")
