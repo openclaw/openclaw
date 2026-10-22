@@ -47,7 +47,7 @@ vi.mock("../gateway/mcp-app-operations.js", () => ({
   prepareModelCreatedAppToolCall: mocks.approve,
   executeMcpAppOperation: vi.fn(),
   parseMcpAppOperation: vi.fn(),
-  requireMcpAppInteraction: vi.fn(),
+  supportsMcpAppInteraction: vi.fn(),
   withMcpAppActiveView: vi.fn(),
 }));
 vi.mock("../gateway/http-common.js", () => ({
