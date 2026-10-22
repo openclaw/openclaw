@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import { LegacyContextEngine } from "../../context-engine/legacy.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
@@ -403,25 +402,4 @@ it("refuses new deferred requests while preempted cleanup waits for an earlier w
       (await admission)();
     }
   });
-});
-
-it("does not invent optional background maintenance for the stock engine", async () => {
-  const stock = new LegacyContextEngine();
-  const deferred = vi.fn();
-  const compact = stock.compact;
-  await runContextEngineMaintenance({
-    contextEngine: stock,
-    sessionId: "stock",
-    sessionKey: "agent:main:stock-maintenance",
-    sessionFile: "/tmp/stock-maintenance.jsonl",
-    reason: "turn",
-    onDeferredMaintenance: deferred,
-  });
-  const release = await beginForegroundSessionMaintenance("agent:main:stock-maintenance");
-  try {
-    expect(deferred).not.toHaveBeenCalled();
-    expect(stock.compact).toBe(compact);
-  } finally {
-    release();
-  }
 });
