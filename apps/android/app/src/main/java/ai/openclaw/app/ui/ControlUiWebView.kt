@@ -191,7 +191,14 @@ internal fun ControlUiWebView(
           webView.loadUrl(client.authenticatedUrl(currentUrl))
         } else {
           // Never silently create a separately paired browser identity for an invalid route.
-          webView.loadData("Reconnect the app to reopen this gateway page.", "text/plain", "UTF-8")
+          // A pinned connection is an intentional restriction, so reconnecting cannot clear it.
+          val message =
+            if (client.refusesPinnedGateway) {
+              nativeString("Embedded pages are unavailable on certificate-pinned gateways. Use the native screens instead.")
+            } else {
+              "Reconnect the app to reopen this gateway page."
+            }
+          webView.loadData(message, "text/plain", "UTF-8")
         }
         webView
       },
@@ -333,13 +340,17 @@ private class ControlUiWebViewClient(
       .toString()
   }
 
+  /** True when the native connection enforces a TLS pin that this WebView cannot honor. */
+  val refusesPinnedGateway: Boolean
+    get() = page.tlsFingerprintSha256 != null
+
   fun installAuth(view: WebView): Boolean {
     // Successful platform-CA-trusted handshakes and the page's own WebSockets
     // never invoke onReceivedSslError, so a WebView cannot enforce the native
     // pin across every document and connection. Refuse to install embedded
     // auth, evaluate credentials, or load any remote page while the native
     // connection actually enforces that pin.
-    if (page.tlsFingerprintSha256 != null) return false
+    if (refusesPinnedGateway) return false
     val origin = controlUiOriginRule(page.baseUrl) ?: return false
     val root = basePath ?: return false
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {

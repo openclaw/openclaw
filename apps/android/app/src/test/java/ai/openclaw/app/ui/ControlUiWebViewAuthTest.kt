@@ -111,6 +111,10 @@ class ControlUiWebViewAuthTest {
         try {
           // Successful platform TLS need not invoke onReceivedSslError at all.
           assertNull(shadowOf(mounted.view).lastLoadedUrl)
+          // The intentional restriction must not tell users to reconnect: the same pin repeats it.
+          val refusal = requireNotNull(shadowOf(mounted.view).lastLoadData).data
+          assertTrue(refusal, refusal.contains("certificate-pinned"))
+          assertFalse(refusal, refusal.contains("Reconnect"))
           assertFalse(ControlUiAuthCompatShadow.registrations.containsKey(mounted.view))
           assertFalse(ControlUiAuthCompatShadow.scripts.containsKey(mounted.view))
           val client = mounted.view.webViewClient
