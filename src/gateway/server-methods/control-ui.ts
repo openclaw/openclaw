@@ -8,22 +8,24 @@ import {
 } from "../../agents/subagents/registry/subagent-registry-state.js";
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import type { ControlUiLinkReaderSection } from "../../shared/control-ui-link-reader.js";
+import { truncateOptionalText } from "../../shared/text-truncate.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
-import type {
-  ControlUiSessionPullRequestChecksParams,
-  loadControlUiSessionPullRequestChecks,
-} from "../control-ui-session-pr-check-details.js";
+import { withControlUiSessionGitHubRead } from "../control-ui-session-github-read.js";
+import type { ControlUiSessionPullRequestChecksParams } from "../control-ui-session-pr-check-details.js";
 import {
-  prepareControlUiSessionPrRead,
+  createControlUiSessionPrRead,
   resolveControlUiSessionPrTarget,
-  type ControlUiSessionPrReadContext,
   type ControlUiSessionPrTarget,
 } from "../control-ui-session-pr-read.js";
 import { withControlUiSessionPrSource } from "../control-ui-session-pr-source.js";
 import { parseControlUiSessionPullRequestsSubscribeParams } from "../control-ui-session-pr-subscriptions.js";
-import { gitHubPublicApi, type ControlUiGitHubPreviewIdentity } from "../github-public-api.js";
+import {
+  gitHubPublicApi,
+  type ControlUiGitHubPreviewIdentity,
+  type ControlUiGitHubSessionIdentity,
+} from "../github-public-api.js";
 import { prepareGitHubReaderIdentity } from "../github-reader-identity.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
@@ -37,8 +39,6 @@ import type {
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "./types.js";
-
-type LoadGitHubPreview = typeof gitHubPublicApi.loadControlUiGitHubPreview;
 
 class GitHubReadRequestInactiveError extends Error {
   constructor() {
@@ -65,7 +65,9 @@ async function prepareControlUiGitHubIdentity(
   return prepareGitHubReaderIdentity(context, agentId, assertActive);
 }
 
-function createGitHubReadHandler<T>(
+function createGitHubReadHandler<
+  T extends NonNullable<ReturnType<typeof gitHubPublicApi.parseGitHubTarget>>,
+>(
   method: string,
   parseTarget: (params: unknown) => T | null,
   load: (
@@ -73,12 +75,30 @@ function createGitHubReadHandler<T>(
     identity?: ControlUiGitHubPreviewIdentity,
     fetchImpl?: typeof fetch,
     refresh?: boolean,
+    section?: ControlUiLinkReaderSection,
+  ) => Promise<unknown>,
+  loadSession: (
+    target: T,
+    identity: ControlUiGitHubSessionIdentity,
+    fetchImpl?: typeof fetch,
+    refresh?: boolean,
+    section?: ControlUiLinkReaderSection,
   ) => Promise<unknown>,
 ): GatewayRequestHandlers[string] {
   return async (options) => {
     const { params, respond, context } = options;
     const target = parseTarget(params);
-    if (!target || (params.refresh !== undefined && typeof params.refresh !== "boolean")) {
+    const section = params.section;
+    if (
+      !target ||
+      (params.refresh !== undefined && typeof params.refresh !== "boolean") ||
+      (section !== undefined &&
+        (method !== "controlUi.githubDetail" ||
+          (section !== "overview" &&
+            section !== "checks" &&
+            section !== "files" &&
+            section !== "discussion")))
+    ) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params`));
       return;
     }
@@ -93,21 +113,33 @@ function createGitHubReadHandler<T>(
     const startedAt = performance.now();
     let preparedAt: number | undefined;
     try {
+      if (params.sessionKey !== undefined || params.githubHost !== undefined) {
+        await withControlUiSessionGitHubRead(
+          options,
+          resolved.agentId,
+          target,
+          (identity) => loadSession(target, identity, undefined, params.refresh === true, section),
+          (result) => respond(true, result, undefined),
+        );
+        return;
+      }
       const { identity, assertSelected } = await prepareControlUiGitHubIdentity(
         options,
         resolved.agentId,
       );
       assertSelected();
       preparedAt = performance.now();
-      const result = await load(target, identity, undefined, params.refresh === true);
+      const result = await load(target, identity, undefined, params.refresh === true, section);
       assertSelected();
       respond(true, result, undefined);
     } catch (error) {
       const { message, ...details } =
         error instanceof GitHubReadRequestInactiveError
-          ? { message: error.message, retryable: true }
+          ? { message: error.message, retryable: false }
           : error instanceof GitHubIdentityError
-            ? { message: error.message, retryable: error.reason !== "unavailable" }
+            ? // Retained reader content requires current authority, even when a
+              // later identity-verification attempt could succeed.
+              { message: error.message, retryable: false }
             : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
     } finally {
@@ -136,11 +168,6 @@ type SessionPreviewSource = {
 
 const SESSION_PREVIEW_TEXT_MAX_CHARS = 200;
 
-function boundedPreviewText(value: string | undefined, maxChars = SESSION_PREVIEW_TEXT_MAX_CHARS) {
-  const trimmed = value?.trim();
-  return trimmed ? truncateUtf16Safe(trimmed, maxChars) : undefined;
-}
-
 function parseSessionPreviewKey(params: unknown): string | null {
   if (!isRecord(params) || Object.keys(params).some((key) => key !== "sessionKey")) {
     return null;
@@ -153,11 +180,14 @@ function projectSessionPreview(source: SessionPreviewSource | null): ControlUiSe
   if (!source) {
     return { status: "unavailable" };
   }
-  const lastMessagePreview = boundedPreviewText(source.lastMessagePreview || undefined);
-  const title = boundedPreviewText(source.title);
-  const derivedTitle = boundedPreviewText(source.derivedTitle);
-  const kind = boundedPreviewText(source.kind, 64);
-  const channel = boundedPreviewText(source.channel, 80);
+  const lastMessagePreview = truncateOptionalText(
+    source.lastMessagePreview,
+    SESSION_PREVIEW_TEXT_MAX_CHARS,
+  );
+  const title = truncateOptionalText(source.title, SESSION_PREVIEW_TEXT_MAX_CHARS);
+  const derivedTitle = truncateOptionalText(source.derivedTitle, SESSION_PREVIEW_TEXT_MAX_CHARS);
+  const kind = truncateOptionalText(source.kind, 64);
+  const channel = truncateOptionalText(source.channel, 80);
   return {
     status: "ok",
     sessionKey: source.sessionKey,
@@ -183,6 +213,18 @@ async function withControlUiSessionPreview(
   const projection = getSessionRowProjection(context);
   if (!projection) {
     consume(null);
+    return;
+  }
+  const previewConfig = context.getRuntimeConfig();
+  const previewOwner = resolveRequestedGlobalAgentId(previewConfig, sessionKey);
+  const preview = previewOwner.ok
+    ? projection.readPreview({ key: sessionKey, agentId: previewOwner.agentId })
+    : null;
+  if (preview !== undefined) {
+    const entryFilter = createSessionListEntryFilter({ client, cfg: previewConfig });
+    consume(
+      preview && (!entryFilter || entryFilter(preview.sessionKey, preview.entry)) ? preview : null,
+    );
     return;
   }
   await withReadySessionRows(
@@ -323,244 +365,236 @@ async function prepareCheckDetailsSession(
   }
 }
 
-type LoadSessionCheckDetails = (
-  params: ControlUiSessionPullRequestChecksParams,
-  deps: Omit<Parameters<typeof loadControlUiSessionPullRequestChecks>[1], "loadPullRequests"> & {
-    read: ControlUiSessionPrReadContext;
+export const controlUiHandlers: GatewayRequestHandlers = {
+  "controlUi.linkPreview": async ({
+    params,
+    client,
+    context,
+    respond,
+    signal,
+    hasCurrentClientAuthority,
+  }) => {
+    const revision = () =>
+      JSON.stringify([
+        getRuntimeConfigSnapshotMetadata()?.revision,
+        client?.authenticatedUserId,
+        client?.authenticatedUserProfile?.profileId,
+      ]);
+    const scope = { principal: client ?? context, revision: revision() };
+    const isEnabled = () =>
+      !client?.connectionSignal?.aborted &&
+      hasCurrentClientAuthority?.() !== false &&
+      revision() === scope.revision &&
+      context.getRuntimeConfig().gateway?.controlUi?.automaticallyFetchFavicons !== false;
+    if (signal?.aborted || !isEnabled()) {
+      respond(true, {}, undefined);
+      return;
+    }
+    const { parseControlUiLinkPreviewUrl, loadControlUiLinkPreview } =
+      await import("../control-ui-link-preview.js");
+    const url = Object.keys(params).every((key) => key === "url")
+      ? parseControlUiLinkPreviewUrl(params.url)
+      : null;
+    if (!url) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params"),
+      );
+      return;
+    }
+    const preview = await loadControlUiLinkPreview(url, isEnabled, scope);
+    respond(true, !signal?.aborted && isEnabled() ? preview : {}, undefined);
   },
-) => ReturnType<typeof loadControlUiSessionPullRequestChecks>;
-
-const loadSessionCheckDetails: LoadSessionCheckDetails = async (params, deps) => {
-  deps.assertCurrent();
-  const { loadControlUiSessionPullRequestChecks } =
-    await import("../control-ui-session-pr-check-details.js");
-  const { loadControlUiSessionPullRequests } = await import("../control-ui-session-prs.js");
-  return loadControlUiSessionPullRequestChecks(params, {
-    ...deps,
-    loadPullRequests: (request, options) =>
-      loadControlUiSessionPullRequests(request, {
-        ...options,
-        read: deps.read,
-      }),
-  });
-};
-
-export function createControlUiHandlers(
-  loadGitHubPreview: LoadGitHubPreview = (...args) =>
-    gitHubPublicApi.loadControlUiGitHubPreview(...args),
-  loadChecks: LoadSessionCheckDetails = loadSessionCheckDetails,
-): GatewayRequestHandlers {
-  return {
-    "controlUi.linkPreview": async ({
-      params,
-      client,
-      context,
-      respond,
-      signal,
-      hasCurrentClientAuthority,
-    }) => {
-      const revision = () =>
-        JSON.stringify([
-          getRuntimeConfigSnapshotMetadata()?.revision,
-          client?.authenticatedUserId,
-          client?.authenticatedUserProfile?.profileId,
-        ]);
-      const scope = { principal: client ?? context, revision: revision() };
-      const isEnabled = () =>
-        !client?.connectionSignal?.aborted &&
-        hasCurrentClientAuthority?.() !== false &&
-        revision() === scope.revision &&
-        context.getRuntimeConfig().gateway?.controlUi?.automaticallyFetchFavicons !== false;
-      if (signal?.aborted || !isEnabled()) {
-        respond(true, {}, undefined);
-        return;
+  "controlUi.githubPreview": createGitHubReadHandler(
+    "controlUi.githubPreview",
+    (params) => gitHubPublicApi.parseControlUiGitHubPreviewTarget(params),
+    (...args: Parameters<typeof gitHubPublicApi.loadControlUiGitHubPreview>) =>
+      gitHubPublicApi.loadControlUiGitHubPreview(...args),
+    (target, identity, fetchImpl) =>
+      gitHubPublicApi.loadSessionGitHubPreview(target, identity, fetchImpl),
+  ),
+  "controlUi.githubDetail": createGitHubReadHandler(
+    "controlUi.githubDetail",
+    (params) => gitHubPublicApi.parseGitHubTarget(params),
+    (target, identity, fetchImpl, refresh, section) =>
+      gitHubPublicApi.loadGitHubDetail(target, identity, fetchImpl, refresh, undefined, section),
+    (...args) => gitHubPublicApi.loadSessionGitHubDetail(...args),
+  ),
+  "controlUi.sessionPreview": async ({
+    params,
+    client,
+    context,
+    respond,
+    signal,
+    hasCurrentClientAuthority,
+  }) => {
+    const sessionKey = parseSessionPreviewKey(params);
+    if (!sessionKey) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.sessionPreview params"),
+      );
+      return;
+    }
+    try {
+      while (!getSubagentSessionListReadSnapshotIdentity()) {
+        await prepareSubagentSessionListReadCache();
       }
-      const { parseControlUiLinkPreviewUrl, loadControlUiLinkPreview } =
-        await import("../control-ui-link-preview.js");
-      const url = Object.keys(params).every((key) => key === "url")
-        ? parseControlUiLinkPreviewUrl(params.url)
-        : null;
-      if (!url) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params"),
-        );
-        return;
-      }
-      const preview = await loadControlUiLinkPreview(url, isEnabled, scope);
-      respond(true, !signal?.aborted && isEnabled() ? preview : {}, undefined);
-    },
-    "controlUi.githubPreview": createGitHubReadHandler(
-      "controlUi.githubPreview",
-      (params) => gitHubPublicApi.parseControlUiGitHubPreviewTarget(params),
-      loadGitHubPreview,
-    ),
-    "controlUi.githubDetail": createGitHubReadHandler(
-      "controlUi.githubDetail",
-      (params) => gitHubPublicApi.parseGitHubTarget(params),
-      (...args) => gitHubPublicApi.loadGitHubDetail(...args),
-    ),
-    "controlUi.sessionPreview": async ({
-      params,
-      client,
-      context,
-      respond,
-      signal,
-      hasCurrentClientAuthority,
-    }) => {
-      const sessionKey = parseSessionPreviewKey(params);
-      if (!sessionKey) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.sessionPreview params"),
-        );
-        return;
-      }
-      try {
-        while (!getSubagentSessionListReadSnapshotIdentity()) {
-          await prepareSubagentSessionListReadCache();
-        }
+      signal?.throwIfAborted();
+      const consume = (preview: SessionPreviewSource | null) => {
         signal?.throwIfAborted();
-        const consume = (preview: SessionPreviewSource | null) => {
-          signal?.throwIfAborted();
-          if (hasCurrentClientAuthority?.() === false) {
-            throw new Error("Session preview request is no longer active");
-          }
-          respond(true, projectSessionPreview(preview), undefined);
-        };
-        await withControlUiSessionPreview(sessionKey, context, client, consume);
-      } catch {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "Session preview unavailable"),
-        );
-      }
-    },
-    "controlUi.sessionPullRequests.checks": async ({
-      params,
-      client,
-      context,
-      respond,
-      signal,
-    }) => {
-      const parsed = parseCheckDetailsParams(params);
-      if (!parsed) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "invalid controlUi.sessionPullRequests.checks params",
-          ),
-        );
-        return;
-      }
-      let preparedSession: Awaited<ReturnType<typeof prepareCheckDetailsSession>> = null;
-      try {
-        const reader = client
-          ? await prepareControlUiSessionPrRead({
-              client,
-              sessionKey: parsed.sessionKey,
-              getRuntimeConfig: context.getRuntimeConfig,
-              getSessionRowProjection: () => getSessionRowProjection(context),
-              isCurrentClient: () =>
-                !client.connId ||
-                context
-                  .getClientConnIds?.((candidate) => candidate === client)
-                  .has(client.connId) === true,
-            })
-          : undefined;
-        const binding = client
-          ? ((await reader?.()) ?? null)
-          : (preparedSession = await prepareCheckDetailsSession(parsed.sessionKey, context, () =>
-              signal?.throwIfAborted(),
-            ));
-        if (!binding) {
-          throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
+        if (hasCurrentClientAuthority?.() === false) {
+          throw new Error("Session preview request is no longer active");
         }
-        const assertCurrent = () => {
-          let identityCurrent = false;
-          try {
-            binding.assertCurrent?.();
-            identityCurrent = true;
-          } catch {
-            // The read owner reports retired selections and grants as assertion failures.
-          }
-          if (signal?.aborted || !identityCurrent) {
-            throw new gitHubPublicApi.ControlUiGitHubError(
-              409,
-              "Session changed; reopen CI details",
-            );
-          }
-        };
-        await withControlUiSessionPrSource(
-          binding.readSource,
-          async (assertSourceCurrent, sourceIdentity) => {
-            const assertReadCurrent = () => {
-              assertSourceCurrent();
-              assertCurrent();
-            };
-            const result = await loadChecks(
-              { ...parsed, agentId: binding.params.agentId },
-              {
-                sessionScope: binding.identity,
-                assertCurrent: assertReadCurrent,
-                read: { target: binding, sourceIdentity, assertCurrent: assertReadCurrent },
-              },
-            );
-            assertReadCurrent();
-            respond(true, result, undefined);
-          },
-        );
-      } catch (error) {
-        const message =
-          error instanceof gitHubPublicApi.ControlUiGitHubError &&
-          (error.statusCode === 404 || error.statusCode === 409)
-            ? error.message
-            : gitHubPublicApi.formatControlUiGitHubPreviewError(error).message;
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
-      } finally {
-        preparedSession?.release();
+        respond(true, projectSessionPreview(preview), undefined);
+      };
+      await withControlUiSessionPreview(sessionKey, context, client, consume);
+    } catch {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "Session preview unavailable"));
+    }
+  },
+  "controlUi.sessionPullRequests.checks": async ({ params, client, context, respond, signal }) => {
+    const parsed = parseCheckDetailsParams(params);
+    if (!parsed) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid controlUi.sessionPullRequests.checks params",
+        ),
+      );
+      return;
+    }
+    let preparedSession: Awaited<ReturnType<typeof prepareCheckDetailsSession>> = null;
+    try {
+      const reader = client
+        ? createControlUiSessionPrRead({
+            allowOwnImportedPullRequest: true,
+            client,
+            sessionKey: parsed.sessionKey,
+            getRuntimeConfig: context.getRuntimeConfig,
+            getSessionRowProjection: () => getSessionRowProjection(context),
+            isCurrentClient: () =>
+              !client.connId ||
+              context.getClientConnIds?.((candidate) => candidate === client).has(client.connId) ===
+                true,
+          })
+        : undefined;
+      const binding = client
+        ? ((await reader?.()) ?? null)
+        : (preparedSession = await prepareCheckDetailsSession(parsed.sessionKey, context, () =>
+            signal?.throwIfAborted(),
+          ));
+      if (!binding) {
+        throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
       }
-    },
-    "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
-      const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
-      if (!parsed) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "invalid controlUi.sessionPullRequests.subscribe params",
-          ),
+      let assertReadAuthority: (() => void) | undefined;
+      let readCredential:
+        | import("../control-ui-session-pr-request.js").SessionPullRequestReadCredential
+        | undefined;
+      const assertCurrent = () => {
+        let identityCurrent = false;
+        try {
+          binding.assertCurrent?.();
+          assertReadAuthority?.();
+          identityCurrent = true;
+        } catch {
+          // The read owner reports retired selections and grants as assertion failures.
+        }
+        if (signal?.aborted || !identityCurrent) {
+          throw new gitHubPublicApi.ControlUiGitHubError(409, "Session changed; reopen CI details");
+        }
+      };
+      await withControlUiSessionPrSource(
+        binding.readSource,
+        async (assertSourceCurrent, sourceIdentity) => {
+          const assertReadCurrent = () => {
+            assertSourceCurrent();
+            assertCurrent();
+          };
+          assertReadCurrent();
+          const { loadControlUiSessionPullRequestChecks } =
+            await import("../control-ui-session-pr-check-details.js");
+          const { loadControlUiSessionPullRequests } = await import("../control-ui-session-prs.js");
+          const result = await loadControlUiSessionPullRequestChecks(
+            { ...parsed, agentId: binding.params.agentId },
+            {
+              sessionScope: binding.identity,
+              credential: () => readCredential,
+              assertCurrent: assertReadCurrent,
+              loadPullRequests: (request) =>
+                loadControlUiSessionPullRequests(request, {
+                  read: {
+                    target: binding,
+                    sourceIdentity,
+                    assertCurrent: assertReadCurrent,
+                    retainReadAuthority: (guard, credential) => {
+                      assertReadAuthority = guard;
+                      readCredential = credential;
+                    },
+                  },
+                }),
+            },
+          );
+          assertReadCurrent();
+          respond(true, result, undefined);
+        },
+      );
+    } catch (error) {
+      const message =
+        error instanceof gitHubPublicApi.ControlUiGitHubError &&
+        (error.statusCode === 404 || error.statusCode === 409)
+          ? error.message
+          : gitHubPublicApi.formatControlUiGitHubPreviewError(error).message;
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+    } finally {
+      preparedSession?.release();
+    }
+  },
+  "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
+    const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
+    if (!parsed) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "invalid controlUi.sessionPullRequests.subscribe params",
+        ),
+      );
+      return;
+    }
+    const connId = client?.connId?.trim();
+    const subscriptions = context.controlUiSessionPullRequests;
+    if (!connId || !subscriptions) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "session pull request subscriptions unavailable"),
+      );
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const replacement = subscriptions.replace(
+        connId,
+        parsed.sessionKeys,
+        parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
+        resolve,
+        parsed.passiveSessionKeys ? new Set(parsed.passiveSessionKeys) : undefined,
+      );
+      void replacement.catch((error: unknown) => {
+        context.logGateway.warn(
+          `Failed to prepare Control UI pull request subscriptions; retry the subscription: ${String(error)}`,
         );
-        return;
-      }
-      const connId = client?.connId?.trim();
-      const subscriptions = context.controlUiSessionPullRequests;
-      if (!connId || !subscriptions) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, "session pull request subscriptions unavailable"),
-        );
-        return;
-      }
-      await new Promise<void>((resolve) => {
-        const replacement = subscriptions.replace(
-          connId,
-          parsed.sessionKeys,
-          parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
-          resolve,
-        );
-        void replacement.catch(() => {});
       });
-      respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
-    },
-  };
-}
-
-export const controlUiHandlers = createControlUiHandlers();
+    });
+    respond(
+      true,
+      { subscribed: parsed.sessionKeys.length > 0 || Boolean(parsed.passiveSessionKeys?.length) },
+      undefined,
+    );
+  },
+};

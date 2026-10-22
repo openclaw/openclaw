@@ -15,20 +15,11 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 type OpenAICompletionsModel = Model<"openai-completions">;
 
 const registerTencentPlugin = () =>
-  registerProviderPlugin({
-    plugin: tencentPlugin,
-    id: "tencent",
-    name: "Tencent Cloud Provider",
-  });
+  registerProviderPlugin({ plugin: tencentPlugin, id: "tencent", name: "Tencent Cloud Provider" });
 
-async function getTokenHubProvider() {
+async function getProvider(id = "tencent-tokenhub") {
   const { providers } = await registerTencentPlugin();
-  return requireRegisteredProvider(providers, "tencent-tokenhub");
-}
-
-async function getTokenPlanProvider() {
-  const { providers } = await registerTencentPlugin();
-  return requireRegisteredProvider(providers, "tencent-tokenplan");
+  return requireRegisteredProvider(providers, id);
 }
 
 function hyReasoningModel(
@@ -57,11 +48,11 @@ function hyReasoningModel(
   } as OpenAICompletionsModel;
 }
 
-function captureTencentPayload(params: {
-  provider: Pick<Awaited<ReturnType<typeof getTokenHubProvider>>, "wrapStreamFn">;
-  model: OpenAICompletionsModel;
-  reasoning: string;
-}) {
+function capturePayload(
+  provider: Awaited<ReturnType<typeof getProvider>>,
+  model: OpenAICompletionsModel,
+  reasoning: string,
+) {
   let captured: Record<string, unknown> | undefined;
   const baseStreamFn: StreamFn = (_model, context, options) => {
     const payload = buildOpenAICompletionsParams(
@@ -73,52 +64,35 @@ function captureTencentPayload(params: {
     captured = payload;
     return {} as ReturnType<StreamFn>;
   };
-  const wrapped = params.provider.wrapStreamFn?.({
+  const wrapped = provider.wrapStreamFn?.({
     streamFn: baseStreamFn,
-    provider: params.model.provider,
-    modelId: params.model.id,
-    model: params.model,
+    provider: model.provider,
+    modelId: model.id,
+    model,
     thinkingLevel: "high",
   });
   if (!wrapped) {
     throw new Error("expected Tencent provider stream wrapper");
   }
-  void wrapped(
-    params.model,
-    { messages: [] } as never,
-    {
-      reasoning: params.reasoning,
-    } as never,
-  );
+  void wrapped(model, { messages: [] } as never, { reasoning } as never);
   return captured;
 }
 
 describe("tencent provider plugin", () => {
   it.each([
-    {
-      providerId: "tencent-tokenhub",
-      choiceId: "tokenhub-api-key",
-      flagValue: "tokenhub-test-key",
-      envVar: "TOKENHUB_API_KEY",
-      aliases: {
-        "tencent-tokenhub/hy4-preview": { alias: "Hy4 preview (TokenHub)" },
-        "tencent-tokenhub/hy3": { alias: "Hy3 (TokenHub)" },
-        "tencent-tokenhub/hy3-preview": { alias: "Hy3 preview (TokenHub)" },
-      },
-    },
-    {
-      providerId: "tencent-tokenplan",
-      choiceId: "tokenplan-api-key",
-      flagValue: "tokenplan-test-key",
-      envVar: "TOKENPLAN_API_KEY",
-      aliases: {
-        "tencent-tokenplan/hy4-preview": { alias: "Hy4 preview (TokenPlan)" },
-        "tencent-tokenplan/hy3": { alias: "Hy3 (TokenPlan)" },
-      },
-    },
+    ["tokenhub", "TokenHub", ["hy4-preview", "hy3", "hy3-preview"]],
+    ["tokenplan", "TokenPlan", ["hy4-preview", "hy3"]],
   ] as const)(
-    "configures only $providerId through its registered auth choice in replace mode",
-    async ({ providerId, choiceId, flagValue, envVar, aliases }) => {
+    "configures only %s through its registered auth choice in replace mode",
+    async (endpoint, label, modelIds) => {
+      const providerId = `tencent-${endpoint}` as const;
+      const choiceId = `${endpoint}-api-key`;
+      const aliases = Object.fromEntries(
+        modelIds.map((id) => [
+          `${providerId}/${id}`,
+          { alias: `${id.replace("hy", "Hy").replace("-", " ")} (${label})` },
+        ]),
+      );
       const { providers } = await registerTencentPlugin();
       const resolved = resolveProviderPluginChoice({ providers, choice: choiceId });
       expect(resolved?.provider.id).toBe(providerId);
@@ -143,9 +117,9 @@ describe("tencent provider plugin", () => {
 
       expect(resolveApiKey).toHaveBeenCalledExactlyOnceWith({
         provider: providerId,
-        flagValue,
+        flagValue: `${endpoint}-test-key`,
         flagName: `--${choiceId}`,
-        envVar,
+        envVar: `${endpoint.toUpperCase()}_API_KEY`,
       });
       expect(toApiKeyCredential).not.toHaveBeenCalled();
       expect(Object.keys(config?.models?.providers ?? {})).toEqual([providerId]);
@@ -158,23 +132,15 @@ describe("tencent provider plugin", () => {
   );
 
   it.each(["tencent-tokenhub", "tencent-tokenplan"])(
-    "isolates %s static and augmented catalog results",
+    "projects %s static ids and isolates augmented model inputs",
     async (providerId) => {
-      const { providers } = await registerTencentPlugin();
-      const provider = requireRegisteredProvider(providers, providerId);
+      const provider = await getProvider(providerId);
       const first = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
-      const expected = structuredClone(first);
-      const model = first.models[0];
-      if (!model) {
-        throw new Error("expected Tencent static model");
-      }
-      model.input.push("image");
-      model.cost.input = 999;
-      expect(await runSingleProviderCatalog({ catalog: provider.staticCatalog })).toEqual(expected);
+      expect(first.models.every((model) => model.api === "openai-completions")).toBe(true);
 
       const context = { env: {}, entries: [] };
       const augmented = await provider.augmentModelCatalog?.(context);
-      expect(augmented?.map((entry) => entry.id)).toEqual(expected.models.map((entry) => entry.id));
+      expect(augmented?.map((entry) => entry.id)).toEqual(first.models.map((entry) => entry.id));
       if (!augmented?.[0]?.input) {
         throw new Error("expected Tencent model input modalities");
       }
@@ -185,48 +151,28 @@ describe("tencent provider plugin", () => {
   );
 
   it("keeps TokenHub hy3 explicit high and none reasoning_effort unchanged", async () => {
-    const provider = await getTokenHubProvider();
+    const provider = await getProvider();
     const model = hyReasoningModel();
 
     model.compat = { ...model.compat, supportsStore: false };
-    const highPayload = captureTencentPayload({
-      provider,
-      model,
-      reasoning: "high",
-    });
-    const nonePayload = captureTencentPayload({
-      provider,
-      model,
-      reasoning: "none",
-    });
-
-    expect(JSON.stringify(highPayload)).toBe(
+    expect(JSON.stringify(capturePayload(provider, model, "high"))).toBe(
       '{"model":"hy3","messages":[],"stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":64000,"reasoning_effort":"high"}',
     );
-    expect(JSON.stringify(nonePayload)).toBe(
+    expect(JSON.stringify(capturePayload(provider, model, "none"))).toBe(
       '{"model":"hy3","messages":[],"stream":true,"stream_options":{"include_usage":true},"max_completion_tokens":64000,"reasoning_effort":"none"}',
     );
   });
 
-  it.each(["constructor"])(
-    "does not treat inherited object key %s as a Tencent effort override",
-    async (reasoning) => {
-      const provider = await getTokenHubProvider();
-      const model = hyReasoningModel();
-      const payload = captureTencentPayload({ provider, model, reasoning });
-      expect(payload?.reasoning_effort).toBe("none");
-    },
-  );
+  it("does not treat inherited constructor as a Tencent effort override", async () => {
+    const payload = capturePayload(await getProvider(), hyReasoningModel(), "constructor");
+    expect(payload?.reasoning_effort).toBe("none");
+  });
 
   it("collapses hy4-preview onto its two-rung ladder on both endpoints", async () => {
-    const tokenHubProvider = await getTokenHubProvider();
-    const tokenPlanProvider = await getTokenPlanProvider();
-    const tokenHubModel = hyReasoningModel("hy4-preview");
-    const tokenPlanModel = hyReasoningModel("hy4-preview", "tencent-tokenplan");
+    const tokenHubProvider = await getProvider();
+    const tokenPlanProvider = await getProvider("tencent-tokenplan");
 
-    // Preserve OpenClaw's none/high policy: intermediate efforts become high
-    // and off becomes none. Raw API acceptance of low alone does not establish
-    // a distinct low reasoning mode.
+    // Preserve the two-rung policy even when the raw API accepts low.
     const expected: Record<string, string> = {
       off: "none",
       none: "none",
@@ -237,25 +183,19 @@ describe("tencent provider plugin", () => {
       xhigh: "high",
     };
     for (const [provider, model] of [
-      [tokenHubProvider, tokenHubModel],
-      [tokenPlanProvider, tokenPlanModel],
+      [tokenHubProvider, hyReasoningModel("hy4-preview")],
+      [tokenPlanProvider, hyReasoningModel("hy4-preview", "tencent-tokenplan")],
     ] as const) {
       for (const [reasoning, rung] of Object.entries(expected)) {
         expect(
-          captureTencentPayload({ provider, model, reasoning })?.reasoning_effort,
-          `${(model as { provider: string }).provider}/hy4-preview ${reasoning}`,
+          capturePayload(provider, model, reasoning)?.reasoning_effort,
+          `${model.provider}/hy4-preview ${reasoning}`,
         ).toBe(rung);
       }
     }
 
-    // hy3-preview keeps its three-rung ladder and stays on shared handling.
-    const hy3PreviewModel = hyReasoningModel("hy3-preview");
     expect(
-      captureTencentPayload({
-        provider: tokenHubProvider,
-        model: hy3PreviewModel,
-        reasoning: "low",
-      })?.reasoning_effort,
+      capturePayload(tokenHubProvider, hyReasoningModel("hy3-preview"), "low")?.reasoning_effort,
     ).toBe("low");
   });
 });

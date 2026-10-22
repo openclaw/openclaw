@@ -1,5 +1,3 @@
-// Shared outbound target test fixtures provide deterministic channel plugins,
-// target parsing, and session-route behavior.
 import { parseTelegramTargetForTest } from "../../../test/helpers/infra/telegram-targets.js";
 import type {
   ChannelMessagingAdapter,
@@ -10,23 +8,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
-// Target fixtures keep normalization deterministic while exercising plugin-owned seams.
-function readTestDefaultTo(cfg: OpenClawConfig, channelId: string): string | undefined {
-  const channels = cfg.channels as Record<string, { defaultTo?: unknown }> | undefined;
-  const value = channels?.[channelId]?.defaultTo;
-  return typeof value === "string" ? value : undefined;
-}
-
 function stripTestPrefix(raw: string, channelId: string): string {
   return raw.replace(new RegExp(`^${channelId}:`, "i"), "").trim();
 }
 
-/** Parses forum test targets with optional topic/thread suffixes. */
-function parseForumTargetForTest(raw: string): {
-  roomId: string;
-  threadId?: number;
-  chatType: "direct" | "group" | "unknown";
-} {
+function parseForumTargetForTest(raw: string) {
   const trimmed = stripTestPrefix(raw.trim(), "forum");
   const topicMatch = /^(.*):topic:(\d+)$/i.exec(trimmed);
   const roomId = topicMatch?.[1]?.trim() || trimmed;
@@ -36,28 +22,7 @@ function parseForumTargetForTest(raw: string): {
     : roomId.startsWith("room:")
       ? "group"
       : "unknown";
-  return { roomId, threadId, chatType };
-}
-
-function normalizeGenericTargetForTest(raw: string, channelId: string): string | null {
-  const normalized = stripTestPrefix(raw, channelId).toLowerCase().replace(/\s+/gu, "-");
-  if (!normalized || normalized === "invalid") {
-    return null;
-  }
-  return normalized;
-}
-
-function createGenericResolveTarget(
-  channelId: string,
-  label: string,
-): ChannelOutboundAdapter["resolveTarget"] {
-  return ({ to }) => {
-    const normalized = to ? normalizeGenericTargetForTest(to, channelId) : null;
-    if (!normalized) {
-      return { ok: false, error: new Error(`${label} target is required`) };
-    }
-    return { ok: true, to: normalized };
-  };
+  return { roomId, threadId, chatType } as const;
 }
 
 export const telegramMessagingForTest: ChannelMessagingAdapter = {
@@ -81,10 +46,7 @@ export const telegramMessagingForTest: ChannelMessagingAdapter = {
       agentId,
       channel: "telegram",
       accountId,
-      peer: {
-        kind: isGroup ? "group" : "direct",
-        id: peerId,
-      },
+      peer: { kind: isGroup ? "group" : "direct", id: peerId },
       chatType: isGroup ? "group" : "direct",
       from: isGroup ? `telegram:group:${peerId}` : `telegram:${parsed.chatId}`,
       to: parsed.chatId,
@@ -99,9 +61,7 @@ export const forumMessagingForTest: ChannelMessagingAdapter = {
     const target = parseForumTargetForTest(to);
     return target.chatType === "unknown" ? undefined : target.chatType;
   },
-  targetResolver: {
-    hint: "<room|dm target>",
-  },
+  targetResolver: { hint: "<room|dm target>" },
   resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target, threadId }) => {
     const parsed = parseForumTargetForTest(target);
     const resolvedThreadId = parsed.threadId ?? threadId ?? undefined;
@@ -111,10 +71,7 @@ export const forumMessagingForTest: ChannelMessagingAdapter = {
       agentId,
       channel: "forum",
       accountId,
-      peer: {
-        kind: chatType,
-        id: parsed.roomId,
-      },
+      peer: { kind: chatType, id: parsed.roomId },
       chatType,
       from: chatType === "direct" ? `forum:${parsed.roomId}` : `forum:group:${parsed.roomId}`,
       to: parsed.roomId,
@@ -144,11 +101,7 @@ export function createTestChannelPlugin(params: {
     config: {
       listAccountIds: () => [],
       resolveAccount: () => ({}),
-      ...(params.resolveDefaultTo
-        ? {
-            resolveDefaultTo: params.resolveDefaultTo,
-          }
-        : {}),
+      ...(params.resolveDefaultTo ? { resolveDefaultTo: params.resolveDefaultTo } : {}),
     },
     ...(params.outbound ? { outbound: params.outbound } : {}),
     ...(params.messaging ? { messaging: params.messaging } : {}),
@@ -165,30 +118,29 @@ export function createGenericTargetTestPlugin(
     outbound: {
       deliveryMode: "direct",
       sendText: async () => ({ channel: id, messageId: `${id}-msg` }),
-      resolveTarget: createGenericResolveTarget(String(id), label),
+      resolveTarget: ({ to }) => {
+        const normalized =
+          to && stripTestPrefix(to, String(id)).toLowerCase().replace(/\s+/gu, "-");
+        return !normalized || normalized === "invalid"
+          ? { ok: false, error: new Error(`${label} target is required`) }
+          : { ok: true, to: normalized };
+      },
     },
     messaging: {
       targetPrefixes: [String(id)],
-      // Owner-route tests need positive direct classification; syntax alone
-      // never admits an implicit owner destination.
+      // Syntax alone never admits an implicit owner destination.
       inferTargetChatType: ({ to }) => (/^user:/i.test(to) ? "direct" : undefined),
     },
-    resolveDefaultTo: ({ cfg }) => readTestDefaultTo(cfg, String(id)),
+    resolveDefaultTo: ({ cfg }) => {
+      const channels = cfg.channels as Record<string, { defaultTo?: unknown }> | undefined;
+      const value = channels?.[id]?.defaultTo;
+      return typeof value === "string" ? value : undefined;
+    },
   });
 }
 
 export function createForumTargetTestPlugin(): ChannelPlugin {
-  return createTestChannelPlugin({
-    id: "forum",
-    label: "Forum",
-    outbound: {
-      deliveryMode: "direct",
-      sendText: async () => ({ channel: "forum", messageId: "forum-msg" }),
-      resolveTarget: createGenericResolveTarget("forum", "Forum"),
-    },
-    messaging: forumMessagingForTest,
-    resolveDefaultTo: ({ cfg }) => readTestDefaultTo(cfg, "forum"),
-  });
+  return { ...createGenericTargetTestPlugin("forum", "Forum"), messaging: forumMessagingForTest };
 }
 
 export function createTargetsTestRegistry(
@@ -199,10 +151,6 @@ export function createTargetsTestRegistry(
   ],
 ) {
   return createTestRegistry(
-    plugins.map((plugin) => ({
-      pluginId: plugin.id,
-      plugin,
-      source: "test",
-    })),
+    plugins.map((plugin) => ({ pluginId: plugin.id, plugin, source: "test" })),
   );
 }

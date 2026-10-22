@@ -3,6 +3,7 @@ import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
+import { captureRequesterOrigin, type RequesterOrigin } from "../../agents/requester-origin.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
@@ -31,6 +32,7 @@ import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connec
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
+import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
 import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
 
 type TurnClaimReleaseWaiter = (error?: Error) => void;
@@ -63,6 +65,8 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Authenticated requester facts remain on the host and confer no worker authority. */
+  requesterOrigin?: RequesterOrigin;
   /** Original presence reader, retained on the Gateway without a worker-writable claim. */
   assertPresenceSourceCurrent?: () => void;
   receiptAuthority: () => void;
@@ -102,6 +106,7 @@ type BoundWorkerTurnOwner = {
     toolSurface?: WorkerGatewayToolRuntime;
     inference?: WorkerInferenceExecutor;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
+    githubGrant?: WorkerGitHubBindingGrant;
     delegatedAuthority: AgentRunDelegatedAuthority;
     approvalLifetime: AbortController;
     finishing?: {
@@ -160,6 +165,7 @@ export async function bindWorkerTurnOwner(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   assertPresenceSourceCurrent?: () => void,
   promptCacheContext?: WorkerTurnPromptCacheContext,
+  requesterOrigin?: RequesterOrigin,
 ): Promise<
   Readonly<{
     capability: WorkerTurnExecutionIdentityCapability;
@@ -167,6 +173,9 @@ export async function bindWorkerTurnOwner(
   }>
 > {
   let claim = structuredClone(requestedClaim);
+  const preparedRequesterOrigin = requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin })
+    : undefined;
   const sessionTarget = Object.freeze(captureSessionTranscriptTargetBinding(requestedSource));
   const preparedPromptCacheContext = promptCacheContext
     ? Object.freeze({ ...promptCacheContext })
@@ -241,6 +250,7 @@ export async function bindWorkerTurnOwner(
     ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
     ...(operatorAuthority ? { operatorAuthority } : {}),
+    ...(preparedRequesterOrigin ? { requesterOrigin: preparedRequesterOrigin } : {}),
     ...(assertPresenceSourceCurrent ? { assertPresenceSourceCurrent } : {}),
     receiptAuthority: assertActive,
     sessionKey: sessionTarget.sessionKey,
@@ -429,6 +439,41 @@ export function getWorkerTurnToolSurface(identity: Parameters<typeof resolveWork
   return resolveWorkerTurnRuntime(identity)?.toolSurface;
 }
 
+/** The exact admitted turn retains the grant; reconnects cannot elect another issuer. */
+export function bindWorkerTurnGitHubGrant(
+  store: WorkerTurnExecutionIdentityStore,
+  claim: WorkerSessionTurnClaim,
+  grant: WorkerGitHubBindingGrant,
+): void {
+  const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
+  const owner = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
+  if (
+    !owner ||
+    owner.claimKey !== claimKey(claim) ||
+    !owner.runtime.claimAuthority.isCurrent() ||
+    !validateAgentRunDelegatedAuthority(owner.runtime.delegatedAuthority) ||
+    owner.runtime.githubGrant
+  ) {
+    throw new Error("Worker GitHub grant lost its admitted turn owner");
+  }
+  owner.runtime.githubGrant = grant;
+}
+
+export function getWorkerTurnGitHubGrant(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.githubGrant;
+}
+
+/** Publication consumes both the retained grant and its current turn/profile authority. */
+export function assertWorkerTurnGitHubGrantCurrent(
+  identity: WorkerConnectionIdentity,
+  expected: WorkerGitHubBindingGrant | undefined,
+): void {
+  if (getWorkerTurnGitHubGrant(identity) !== expected) {
+    throw new Error("Worker GitHub grant owner changed");
+  }
+  expected?.assertCurrent?.();
+}
+
 export function getWorkerTurnInference(identity: WorkerConnectionIdentity) {
   return resolveWorkerTurnRuntime(identity)?.inference;
 }
@@ -584,6 +629,7 @@ export function registerWorkerTurnClaimClosedHandler(
 }
 
 function closeBoundOwner(owner: BoundWorkerTurnOwner): void {
+  void owner.runtime.githubGrant?.revoke();
   owner.runtime.toolSurface?.abort();
   owner.runtime.approvalLifetime.abort();
   owner.runtime.finishing = undefined;

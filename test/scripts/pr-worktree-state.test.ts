@@ -11,20 +11,101 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { restoreDoctorMigrationBackup } from "../../src/commands/doctor-migration-backup-restore.js";
+import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../../src/infra/client-credential-schema.js";
+import { generateStoredDeviceIdentity } from "../../src/infra/device-identity-material.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createProvisionOwnerFixture,
-  expectProvisionLeaseReleased,
-  expectProvisionSeed,
+  expectProvisionComplete,
 } from "./pr-worktree-owner.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 describePosix("repository-owned PR provisioning state", () => {
+  it.each([28, 29])("preserves private schema v%i state while provisioning", async (version) => {
+    const f = createProvisionOwnerFixture(tempDirs.make("openclaw-pr-schema-"));
+    const stateDir = join(f.canonical, ".local", "pr-state");
+    const databasePath = join(stateDir, "state", "openclaw.sqlite");
+    mkdirSync(join(stateDir, "state"), { recursive: true });
+    const identity = generateStoredDeviceIdentity();
+    const identityRow = {
+      identity_key: "primary",
+      device_id: identity.deviceId,
+      public_key_pem: identity.publicKeyPem,
+      private_key_pem: identity.privateKeyPem,
+      created_at_ms: identity.createdAtMs,
+      updated_at_ms: identity.createdAtMs,
+    };
+    {
+      using database = new DatabaseSync(databasePath);
+      database.exec(OPENCLAW_STATE_SCHEMA_SQL);
+      database.exec(`PRAGMA user_version=${version}`);
+      database
+        .prepare("INSERT INTO schema_meta VALUES ('primary','global',?,NULL,NULL,1,1)")
+        .run(version);
+      database
+        .prepare("INSERT INTO config_machine_state VALUES ('fixture.preserved','\"unchanged\"',1)")
+        .run();
+      if (version === 28) {
+        database.exec(CLIENT_CREDENTIAL_LEGACY_TABLES_SQL);
+        database
+          .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
+          .run(...Object.values(identityRow));
+      }
+    }
+    const result = f.run();
+    expect(result.status, result.stderr).toBe(0);
+    expectProvisionComplete(f);
+    const backups = readdirSync(join(stateDir, "state")).filter((name) =>
+      name.endsWith(".scoped.bak"),
+    );
+    expect(backups).toHaveLength(version === 28 ? 1 : 0);
+    {
+      using database = new DatabaseSync(databasePath, { readOnly: true });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
+      expect(
+        database
+          .prepare(
+            "SELECT value_json FROM config_machine_state WHERE state_key='fixture.preserved'",
+          )
+          .get(),
+      ).toEqual({ value_json: '"unchanged"' });
+      if (version === 28) {
+        using local = new DatabaseSync(join(stateDir, "client", "credentials.sqlite"), {
+          readOnly: true,
+        });
+        expect(local.prepare("SELECT * FROM device_identities").get()).toEqual(identityRow);
+        expect(local.prepare("SELECT phase FROM client_credential_migration").get()).toEqual({
+          phase: "complete",
+        });
+        expect(
+          database.prepare("SELECT 1 FROM sqlite_schema WHERE name='device_identities'").get(),
+        ).toBeUndefined();
+      }
+    }
+    if (version === 28) {
+      await restoreDoctorMigrationBackup({
+        sourcePath: databasePath,
+        backupPath: join(stateDir, "state", backups[0]!),
+        env: { ...f.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      using restored = new DatabaseSync(databasePath, { readOnly: true });
+      expect(restored.prepare("SELECT * FROM device_identities").all()).toEqual([identityRow]);
+      expect(restored.prepare("PRAGMA user_version").get()).toEqual({ user_version: 28 });
+    }
+    expect(existsSync(join(f.home, ".openclaw"))).toBe(false);
+  });
+
   it.runIf(process.platform === "linux")(
     "releases its completed operation after exited loader descendants await reaping",
     () => {
@@ -34,10 +115,7 @@ describePosix("repository-owned PR provisioning state", () => {
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toMatch(/successfully reaped: [1-9]/u);
       f.isolation.assertProvisioner();
-      expectProvisionSeed(f);
-      expectProvisionLeaseReleased(f);
-      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
-      expect(existsSync(join(f.home, ".openclaw"))).toBe(false);
+      expectProvisionComplete(f);
     },
   );
   it.each([
@@ -68,13 +146,10 @@ describePosix("repository-owned PR provisioning state", () => {
       const result = f.run();
       expect(result.status, result.stderr).toBe(0);
       f.isolation.assertProvisioner();
-      expectProvisionSeed(f);
-      expect(existsSync(join(f.home, ".openclaw"))).toBe(false);
+      expectProvisionComplete(f);
       expect(existsSync(join(f.canonical, ".local", "pr-state", "state", "openclaw.sqlite"))).toBe(
         true,
       );
-      expectProvisionLeaseReleased(f);
-      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
       if (override) {
         expect(readdirSync(operator)).toEqual(["operator-evidence"]);
         expect(readFileSync(join(operator, "operator-evidence"), "utf8")).toBe("leave untouched");

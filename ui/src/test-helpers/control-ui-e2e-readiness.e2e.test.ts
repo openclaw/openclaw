@@ -1,3 +1,4 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { openChatSidePanelType } from "../e2e/chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "../e2e/control-ui-built-module.test-support.ts";
@@ -10,6 +11,16 @@ import {
 } from "./control-ui-e2e.ts";
 
 const suite = createControlUiE2eSuite({ name: "Initial roster navigation readiness" });
+function trackReadinessRequests(page: Page) {
+  const requests: string[] = [];
+  const module = controlUiE2eBuiltModuleRequest("ui/src/app/control-ui-readiness-solid.ts");
+  page.on("request", (request) => {
+    if (module.test(request.url())) {
+      requests.push(request.url());
+    }
+  });
+  return requests;
+}
 
 suite.define(() => {
   it("resolves navigation only after a delayed roster has rendered", async () => {
@@ -67,15 +78,7 @@ suite.define(() => {
   it("navigates through a lazily loaded readiness hook after reload", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
       const key = "agent:main:lazy-readiness-navigation";
-      const requests: string[] = [];
-      const readinessModule = controlUiE2eBuiltModuleRequest(
-        "ui/src/app/control-ui-readiness-solid.ts",
-      );
-      page.on("request", (request) => {
-        if (readinessModule.test(request.url())) {
-          requests.push(request.url());
-        }
-      });
+      const requests = trackReadinessRequests(page);
       await installMockGateway(page, {
         awaitInitialRoster: false,
         sessions: [{ key, label: "Lazy navigation target", kind: "direct", updatedAt: 1 }],
@@ -97,15 +100,7 @@ suite.define(() => {
     async (offline) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         const key = "agent:main:late-readiness";
-        const requests: string[] = [];
-        const readinessModule = controlUiE2eBuiltModuleRequest(
-          "ui/src/app/control-ui-readiness-solid.ts",
-        );
-        page.on("request", (request) => {
-          if (readinessModule.test(request.url())) {
-            requests.push(request.url());
-          }
-        });
+        const requests = trackReadinessRequests(page);
         const gateway = await installMockGateway(page, {
           awaitInitialRoster: false,
           sessionKey: key,
@@ -119,11 +114,15 @@ suite.define(() => {
         await page.locator(`[data-session-key="${key}"] .sidebar-recent-session__link`).click();
         await page.getByText("Ready before diagnostics.", { exact: true }).waitFor();
         await openChatSidePanelType(page, "Terminal");
-        await page.locator("openclaw-terminal-panel .tp-host canvas").waitFor();
+        const terminal = page.locator("openclaw-terminal-panel");
+        await terminal.locator(".tp-session.is-current").click();
+        await terminal.locator(".tp-host canvas").waitFor();
         if (offline) {
           await gateway.setOnline(false);
-          // The rail exposes status on the visible profile control, not its clipped text.
-          await page.getByRole("button", { name: /Reconnecting…/ }).waitFor();
+          await page
+            .locator(".sidebar-shell__footer .gateway-status")
+            .getByText("Reconnecting…", { exact: true })
+            .waitFor();
         }
         expect(requests).toEqual([]);
 
@@ -136,7 +135,7 @@ suite.define(() => {
           booted: true,
           gatewayPhase: offline ? "reconnecting" : "connected",
           sessionKey: key,
-          terminalActivationReady: !offline,
+          terminalActivationReady: true,
           route: { matches: [{ routeId: "chat" }] },
         });
         if (!offline) {

@@ -1,58 +1,45 @@
-import { createEffect, createUniqueId, onCleanup, onSettled, untrack } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createEffect, createUniqueId, onSettled } from "solid-js";
 import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/solid/overlay.css";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import {
-  PRESENTATION_CHANGED_EVENT,
-  type PresentationValue,
-} from "../../../lit/presentation-binding.ts";
-import { LitContent } from "../../../lit/solid-content.tsx";
 
 export function ChatPullRequestChecks(props: {
   label: string;
   showLabel?: boolean;
   checksState: string;
-  presented: PresentationValue;
+  presented: boolean;
   dismissed?: boolean;
-  content: unknown;
+  children: JSX.Element;
 }) {
   let details!: HTMLDetailsElement;
   let trigger!: HTMLElement;
   let surface!: HTMLElement;
   let mounted = false;
-  const presented = () => {
-    const value = props.presented;
-    return typeof value === "boolean" ? value : value.isPresented();
-  };
+  let presented = false;
   const overlay = createOverlay(`chat-pr-checks-${createUniqueId()}`, undefined, {
     interactionElements: () => [details],
     // Keyboard session switching preserves the retained disclosure's open intent.
     dismissOutsideFocus: false,
     acquireOcclusion: acquireNativeOverlaySurface,
   });
-  onCleanup(() => overlay.dispose());
-  const sync = () => {
+  const sync = (nextPresented: boolean, dismissed?: boolean) => {
+    presented = nextPresented;
     if (mounted) {
       // Explicit Details dismissal clears intent; parking only hides the surface.
-      if (props.dismissed) {
+      if (dismissed) {
         details.open = false;
       }
-      overlay.request(presented() && details.open);
+      overlay.request(presented && details.open);
     }
   };
+  // Synchronize the native disclosure with the pane presentation and overlay owner.
   createEffect(
-    () => [props.presented, props.dismissed] as const,
-    ([value]) => {
-      sync();
-      if (typeof value === "boolean") {
-        return undefined;
-      }
-      value.owner.addEventListener(PRESENTATION_CHANGED_EVENT, sync);
-      return () => value.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, sync);
-    },
+    () => ({ presented: props.presented, dismissed: props.dismissed }),
+    (next) => sync(next.presented, next.dismissed),
   );
   onSettled(() => {
     overlay.bindSurface(surface);
@@ -60,33 +47,30 @@ export function ChatPullRequestChecks(props: {
     overlay.setParent(findOverlayParent(trigger));
     const anchor = createOverlayAnchor(surface);
     anchor.update(trigger, "top-end");
-    // Parking hides the native surface while preserving disclosure intent.
+    // Apply each native close edge synchronously; parking preserves disclosure intent.
     const stop = overlay.subscribe((open) => {
-      if (untrack(presented)) {
+      if (presented) {
         details.open = open;
       }
     });
     mounted = true;
-    sync();
+    sync(props.presented, props.dismissed);
     return () => {
       mounted = false;
       stop();
       anchor.dispose();
+      overlay.dispose();
     };
   });
   return (
     <details
-      ref={(node) => {
-        details = node;
-      }}
+      ref={(node) => (details = node)}
       class="chat-pr__checks"
       data-checks={props.checksState}
-      onToggle={sync}
+      onToggle={() => sync(props.presented, props.dismissed)}
     >
       <summary
-        ref={(node) => {
-          trigger = node;
-        }}
+        ref={(node) => (trigger = node)}
         class="chat-pr__checks-pill"
         aria-label={props.label}
         title={props.label}
@@ -98,14 +82,12 @@ export function ChatPullRequestChecks(props: {
         </span>
       </summary>
       <div
-        ref={(node) => {
-          surface = node;
-        }}
+        ref={(node) => (surface = node)}
         class="oc-overlay chat-pr__checks-overlay"
         data-anchored-overlay
         popover="manual"
       >
-        <LitContent value={props.content} />
+        {props.children}
       </div>
     </details>
   );

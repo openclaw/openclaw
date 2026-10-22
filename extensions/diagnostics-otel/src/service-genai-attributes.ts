@@ -101,11 +101,24 @@ export function assignModelCallUsageAttrs(
   attrs: Record<string, string | number | boolean>,
   evt: Pick<ModelCallLifecycleDiagnosticEvent, "usage">,
 ): void {
-  const usage = evt.usage;
+  assignModelUsageAttrs(attrs, evt.usage, evt.usage && modelCallPromptTokens(evt.usage));
+}
+
+export function assignModelResponseUsageAttrs(
+  attrs: Record<string, string | number | boolean>,
+  evt: Pick<Extract<DiagnosticEventPayload, { type: "model.response.observed" }>, "usage">,
+): void {
+  assignModelUsageAttrs(attrs, evt.usage, evt.usage?.promptTokens);
+}
+
+function assignModelUsageAttrs(
+  attrs: Record<string, string | number | boolean>,
+  usage: ModelCallLifecycleDiagnosticEvent["usage"],
+  promptTokens: number | undefined,
+): void {
   if (!usage) {
     return;
   }
-  const promptTokens = modelCallPromptTokens(usage);
   for (const [key, value] of [
     ["openclaw.model_call.usage.input_tokens", usage.input],
     ["openclaw.model_call.usage.output_tokens", usage.output],

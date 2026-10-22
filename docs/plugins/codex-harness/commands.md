@@ -89,6 +89,14 @@ a fresh native thread while keeping the selected model and provider. This
 recovery preserves pending manual attachments and native-model-owned threads.
 It does not replay a turn whose native outcome is uncertain.
 
+For a `/codex bind` conversation, an app-server restart can unload the bound
+thread without deleting its history. If Codex rejects the next turn before
+accepting its input, OpenClaw resumes that same thread and submits the message
+once more. It does not create a replacement thread. Deleted history,
+authentication failures, and uncertain turn outcomes stay visible instead of
+triggering automatic replay. If recovery reports unavailable history, rebind
+the conversation and resend the message.
+
 ### Shared Fast mode and Codex fast mode
 
 `/fast` controls the shared OpenClaw policy. A directive-only `/fast off`

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -11,11 +12,7 @@ import {
 } from "./persistence.test-support.js";
 
 async function send(
-  message:
-    | PersistenceReply
-    | { kind: "ready" | "booted" }
-    | { kind: "error"; error: string }
-    | { kind: "phase"; phase: string },
+  message: PersistenceReply | { kind: "ready" | "booted" } | { kind: "error"; error: string },
 ) {
   await new Promise<void>((resolve, reject) => {
     assert.ok(typeof process.send === "function");
@@ -23,34 +20,20 @@ async function send(
   });
 }
 
-async function phase(label: string) {
-  await send({ kind: "phase", phase: label });
-}
-
 async function beginOperation() {
-  // Readiness means imports are complete. The parent observes this phase before
-  // releasing the operation gate, independently of the publication reply.
-  const start = new Promise<void>((resolve) => {
-    process.once("message", () => resolve());
-  });
+  // Install the gate before readiness; publication replies cannot satisfy this handshake.
+  const start = hold();
   await send({ kind: "ready" });
   await start;
-  await phase("operation-start");
 }
 
-async function hold() {
-  // The IPC listener keeps the publisher alive without a sleep or production testing flag.
-  await new Promise<void>((resolve) => {
-    process.once("message", () => resolve());
-  });
-}
+// The IPC listener keeps publishers alive without sleeps or production test flags.
+const hold = () => once(process, "message");
 
 async function runCandidate(command: PersistenceCommand, root: string): Promise<PersistenceReply> {
-  await phase("bundle-import");
   const bundle = await import("./bundle.js");
   if (command.action === "stage-hold") {
     await beginOperation();
-    await phase("stage-operation");
     const staged = await bundle.stageSkillLibraryBundle(
       command.pin.skillId,
       bundle.prepareSkillLibraryBundle(persistenceFiles(command.version)),
@@ -64,56 +47,57 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
     }
     return { kind: "complete" };
   }
-  await phase("state-import");
   const state = await import("../../state/openclaw-state-db.js");
-  await phase("profiles-import");
   const { ensureProfileForEmail } = await import("../../state/user-profiles.js");
-  await phase("service-import");
   const service = await import("./service.js");
   const usesSessions = ["seed", "read", "update-remove"].includes(command.action);
-  await phase("session-imports");
   const sessions = usesSessions
     ? await import("../../config/sessions/session-accessor.sqlite-entry.js")
     : undefined;
   const agent = usesSessions ? await import("../../state/openclaw-agent-db.js") : undefined;
   const selection = usesSessions ? await import("./selection.js") : undefined;
   const uploads = command.action === "seed" ? await import("./import.js") : undefined;
-  await phase("imports-complete");
   await beginOperation();
   const options = { env: process.env, path: path.join(root, "state", "openclaw.sqlite") };
   const scope = { env: process.env, agentId: "main", sessionKey: PERSISTENCE_SESSION_KEY };
-  const draft = (version: "old" | "new" | "orphan", slug: string) => {
-    const [instructions, ...files] = persistenceFiles(version);
-    return { slug, content: instructions!.content, files };
-  };
   try {
-    await phase("profile-open");
     const profile = ensureProfileForEmail("persistence@example.test", options);
-    await phase("profile-ready");
     const authority = {
       profileId: profile.id,
       scopes: ["operator.admin"],
       getConfig: () => ({}),
       assertCurrent: () => {},
     };
+    const save = (
+      version: "old" | "new" | "orphan",
+      slug: string,
+      pin?: { skillId: string; revision: string },
+    ) => {
+      const [instructions, ...files] = persistenceFiles(version);
+      return service.saveSkillLibrary(
+        authority,
+        {
+          slug,
+          content: instructions!.content,
+          files,
+          skillId: pin?.skillId,
+          expectedRevision: pin?.revision ?? null,
+        },
+        options,
+      );
+    };
+    const mutate = (skillId: string, revision: string, action: "transfer" | "remove") =>
+      service.mutateSkillLibrary(
+        authority,
+        { skillId, expectedRevision: revision, action },
+        options,
+      );
     if (command.action === "seed") {
       assert.ok(sessions && selection && uploads);
       for (const ownership of ["personal", "team"]) {
-        const result = await service.saveSkillLibrary(
-          authority,
-          { ...draft("old", `persistence-${ownership}`), expectedRevision: null },
-          options,
-        );
+        const result = await save("old", `persistence-${ownership}`);
         if (ownership === "team") {
-          await service.mutateSkillLibrary(
-            authority,
-            {
-              skillId: result.entry.skillId,
-              expectedRevision: result.entry.revision,
-              action: "transfer",
-            },
-            options,
-          );
+          await mutate(result.entry.skillId, result.entry.revision, "transfer");
         }
       }
       const pins = await selection.seedSkillLibrarySelection(authority, options);
@@ -145,7 +129,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
         },
         options,
       );
-      return { kind: "seeded", profileId: profile.id, pins };
+      return { kind: "seeded" };
     }
     const pins = sessions?.loadSessionEntry(scope)?.skillLibrarySelections;
     if (command.action === "read") {
@@ -166,20 +150,8 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
     if (command.action === "update-remove") {
       assert.ok(pins);
       for (const pin of pins) {
-        const saved = await service.saveSkillLibrary(
-          authority,
-          {
-            ...draft("new", "renamed-procedure"),
-            skillId: pin.skillId,
-            expectedRevision: pin.revision,
-          },
-          options,
-        );
-        await service.mutateSkillLibrary(
-          authority,
-          { skillId: pin.skillId, expectedRevision: saved.entry.revision, action: "remove" },
-          options,
-        );
+        const saved = await save("new", "renamed-procedure", pin);
+        await mutate(pin.skillId, saved.entry.revision, "remove");
       }
       return { kind: "complete" };
     }
@@ -215,16 +187,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
       };
     }
     try {
-      await phase("save-operation");
-      await service.saveSkillLibrary(
-        authority,
-        {
-          ...draft(command.version, "revised-procedure"),
-          skillId: command.pin.skillId,
-          expectedRevision: command.pin.revision,
-        },
-        options,
-      );
+      await save(command.version, "revised-procedure", command.pin);
     } finally {
       fs.open = originalOpen;
       fs.rename = originalRename;
@@ -236,24 +199,23 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
   }
 }
 
+async function handleCommand(command: PersistenceCommand) {
+  try {
+    const root = process.env.OPENCLAW_STATE_DIR;
+    assert.ok(root);
+    await send(await runCandidate(command, root));
+  } catch (error) {
+    process.exitCode = 1;
+    await send({
+      kind: "error",
+      error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+    });
+  } finally {
+    assert.ok(typeof process.disconnect === "function");
+    process.disconnect();
+  }
+}
 process.once("message", (command: PersistenceCommand) => {
-  void (async () => {
-    try {
-      await phase("command-received");
-      const root = process.env.OPENCLAW_STATE_DIR;
-      assert.ok(root);
-      const reply = await runCandidate(command, root);
-      await send(reply);
-    } catch (error) {
-      process.exitCode = 1;
-      await send({
-        kind: "error",
-        error: error instanceof Error ? (error.stack ?? error.message) : String(error),
-      });
-    } finally {
-      assert.ok(typeof process.disconnect === "function");
-      process.disconnect();
-    }
-  })();
+  void handleCommand(command);
 });
 await send({ kind: "booted" });

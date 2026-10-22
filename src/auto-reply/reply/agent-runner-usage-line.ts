@@ -10,6 +10,7 @@ import {
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import { resolveEffectiveResponseUsage } from "../thinking.js";
@@ -29,17 +30,16 @@ const formatResponseUsageLine = (
   }
   const input = usage.input;
   const output = usage.output;
-  const hasSplitTokens = typeof input === "number" || typeof output === "number";
-  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
-  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
+  const hasSplitTokens = input !== undefined || output !== undefined;
+  const inputLabel = input !== undefined ? formatTokenCount(input) : "?";
+  const outputLabel = output !== undefined ? formatTokenCount(output) : "?";
   const totalLabel =
-    !hasSplitTokens && typeof usage.total === "number"
+    !hasSplitTokens && usage.total !== undefined
       ? `${formatTokenCount(usage.total)} total`
       : undefined;
-  const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : undefined;
-  const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
-  const canPriceUsage =
-    usage.cost !== undefined || (typeof input === "number" && typeof output === "number");
+  const cacheRead = usage.cacheRead;
+  const cacheWrite = usage.cacheWrite;
+  const canPriceUsage = usage.cost !== undefined || (input !== undefined && output !== undefined);
   const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
   const cacheSuffix =
@@ -96,8 +96,32 @@ export const resolveResponseUsageLine = (params: {
   return rendered || formatted || undefined;
 };
 
-export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
-  const index = payloads.findLastIndex((payload) => payload?.text);
+export const appendUsageLine = (
+  payloads: ReplyPayload[],
+  line: string,
+  options?: { completedSourceReply?: boolean },
+): ReplyPayload[] => {
+  const sourceReplyIndex = options?.completedSourceReply
+    ? payloads.findLastIndex((payload) => {
+        const metadata = getReplyPayloadMetadata(payload);
+        return (
+          Boolean(payload?.text) &&
+          Boolean(metadata?.sourceReplyTranscriptMirror) &&
+          metadata?.deliverDespiteSourceReplySuppression === true
+        );
+      })
+    : -1;
+  if (options?.completedSourceReply && sourceReplyIndex === -1) {
+    // The source reply is already visible; keep private final text suppressed.
+    const footer = markReplyPayloadForSourceSuppressionDelivery({
+      text: line,
+      isStatusNotice: true,
+    });
+    setReplyPayloadMetadata(footer, { responseUsageLine: line });
+    return [...payloads, footer];
+  }
+  const index =
+    sourceReplyIndex >= 0 ? sourceReplyIndex : payloads.findLastIndex((payload) => payload?.text);
   if (index === -1) {
     return [...payloads, { text: line, isStatusNotice: true }];
   }
@@ -108,6 +132,7 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
     ...existing,
     text: `${existingText}${separator}${line}`,
   });
+  setReplyPayloadMetadata(next, { responseUsageLine: line });
   const mirror = getReplyPayloadMetadata(existing)?.sourceReplyTranscriptMirror;
   // Transcript mirrors must track the mutated text or source-reply delivery drifts.
   if (mirror) {

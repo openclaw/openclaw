@@ -1,14 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
-  jsonArrayElements,
   jsonArrayValue,
   jsonObjectValue,
-  jsonOrderedArray,
   jsonPathValue,
   jsonPickObject,
   jsonRemovePaths,
@@ -17,6 +14,7 @@ import {
   jsonValid,
 } from "../../infra/database-engine/json-values.js";
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { MODEL_CONTEXT_PRIVATE_METADATA_KEYS } from "../../shared/model-context-message.js";
 import {
@@ -27,12 +25,22 @@ import {
 
 /** Exclude storage-only fields in SQLite, before a row's JSON crosses into JavaScript. */
 export function projectModelContextEventSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string | Uint8Array>,
   omitCheckpoint: Expression<number>,
   toolResultOmission?: Expression<string | null>,
   role: Expression<unknown> = jsonPathValue(db, event, sql.lit("$.message.role")),
 ): RawBuilder<string> {
+  if (isPostgresSqlConnection(db)) {
+    const model = postgresModelEventSql(event, role);
+    const bounded = toolResultOmission
+      ? /* kysely-allow-raw: Replace only an explicitly omitted tool body in native JSONB. */ sql`CASE WHEN ${toolResultOmission} IS NOT NULL AND ${role} = 'toolResult'
+          THEN jsonb_set(${model}, '{message,content}', jsonb_build_array(jsonb_build_object('type', 'text', 'text', ${toolResultOmission}::text)))
+          ELSE ${model} END`
+      : model;
+    return /* kysely-allow-raw: Serialize once at the model payload boundary. */ sql<string>`(CASE WHEN ${omitCheckpoint} = 1
+      THEN ${bounded} #- '{message,providerReplay}' ELSE ${bounded} END)::text`;
+  }
   const paths = MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => `$.message.__openclaw.${key}`);
   const projected = jsonRemovePaths(
     db,
@@ -90,7 +98,7 @@ function jsonMemberValue(alias: JsonMemberAlias): RawBuilder<unknown> {
 
 /** Stored navigation serves SQL's first-key lookup and JavaScript's last-key parse. */
 export function projectTranscriptPayloadNavigationSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string | Uint8Array>,
 ): RawBuilder<string> {
   const memberValue =
@@ -116,7 +124,7 @@ export function projectTranscriptPayloadNavigationSql(
 
 /** Cursor resolution needs only tree facts, even when a row has an opaque body. */
 export function projectTranscriptNavigationSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string>,
 ): RawBuilder<string> {
   return jsonPickObject(db, event, TRANSCRIPT_NAVIGATION_KEYS);
@@ -124,7 +132,7 @@ export function projectTranscriptNavigationSql(
 
 /** Reset boundaries select ancestry and replay roles without loading message bodies. */
 export function projectResetBoundaryNavigationSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string>,
 ): RawBuilder<string> {
   const entry = jsonPickObject(db, event, [
@@ -151,7 +159,7 @@ export function projectResetBoundaryNavigationSql(
 }
 
 function systemUpdateKindSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<unknown>,
 ): RawBuilder<string | null> {
   return /* kysely-allow-raw: only bounded operator kinds cross the navigation boundary. */ sql<
@@ -164,13 +172,33 @@ function systemUpdateKindSql(
 
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
 export function projectModelContextNavigationSql(
-  db: DatabaseSync,
+  db: EngineConnection,
   event: Expression<string | Uint8Array>,
-  entryType: Expression<unknown> = jsonPathValue(db, event, sql.lit("$.type")),
+  entryType?: Expression<unknown>,
 ): RawBuilder<string> {
   if (isPostgresSqlConnection(db)) {
-    return postgresModelNavigationSql(db, event, entryType);
+    const source =
+      /* kysely-allow-raw: Fixed column in the materialized navigation input below. */ sql.ref<string>(
+        "nav_parts.event",
+      );
+    const message =
+      /* kysely-allow-raw: Fixed message column from the materialized input below. */ sql.ref(
+        "nav_parts.message",
+      );
+    const content =
+      /* kysely-allow-raw: Fixed content column from the materialized input below. */ sql.ref(
+        "nav_parts.content",
+      );
+    const type =
+      entryType ??
+      /* kysely-allow-raw: Discriminant lookup from the once-parsed event. */ sql`${source} ->> 'type'`;
+    return /* kysely-allow-raw: Parse the event once and keep navigation intermediates native. */ sql<string>`(
+      WITH nav_input AS MATERIALIZED (SELECT ${event}::jsonb AS event),
+      nav_parts AS MATERIALIZED (SELECT event, event -> 'message' AS message,
+        event #> '{message,content}' AS content FROM nav_input)
+      SELECT ${postgresModelNavigationSql(source, message, content, type)}::text FROM nav_parts)`;
   }
+  const sqliteEntryType = entryType ?? jsonPathValue(db, event, sql.lit("$.type"));
   const entry = jsonPickObject(db, event, MODEL_CONTEXT_NAVIGATION_KEYS);
   // Binary intermediates avoid serializing and reparsing the entire message.
   const message = supportsNodeSqliteJsonb()
@@ -188,7 +216,7 @@ export function projectModelContextNavigationSql(
   const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${event}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
     SELECT 1 FROM json_each(${event}, '$.message.content') WHERE type = 'object'
     AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${LEGACY_MISSING_TOOL_RESULT_TEXT})`;
-  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE ${entryType}
+  return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE ${sqliteEntryType}
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',
       '$.providerReplay', json_object('type', json_extract(${event}, '$.message.providerReplay.type')),
@@ -205,55 +233,101 @@ export function projectModelContextNavigationSql(
     ELSE ${entry} END`;
 }
 
+/** Project only the caller's bounded page; no write path uses this relation. */
+export function projectPostgresModelContextRowsSql(
+  rows: Expression<{ seq: number; event_json: string | null; navigation_json: string | null }>,
+): RawBuilder<{
+  seq: number;
+  navigation_json: string;
+  model_bytes: number;
+  retained_bytes: number;
+}> {
+  const event =
+    /* kysely-allow-raw: Fixed parsed-event column from this page projection. */ sql.ref<string>(
+      "context_projected.event",
+    );
+  const message =
+    /* kysely-allow-raw: Fixed message column derived once for the selected page. */ sql.ref<string>(
+      "context_projected.message",
+    );
+  const content =
+    /* kysely-allow-raw: Fixed content column derived once for the selected page. */ sql.ref<string>(
+      "context_projected.content",
+    );
+  const type = /* kysely-allow-raw: Native lookup of the parsed entry discriminant. */ sql`${event} ->> 'type'`;
+  const model = postgresModelEventSql(
+    /* kysely-allow-raw: Fixed event column from the materialized page input. */ sql.ref(
+      "context_parts.event",
+    ),
+    /* kysely-allow-raw: Native role lookup in the once-derived message. */ sql`context_parts.message ->> 'role'`,
+  );
+  return /* kysely-allow-raw: One bounded read shares parsed JSONB and native model bytes across its projections. */ sql`(
+    WITH context_input AS MATERIALIZED (
+      SELECT seq, CASE WHEN navigation_json IS NULL THEN event_json::jsonb END AS event,
+        navigation_json::jsonb AS metadata FROM (${rows}) AS selected
+    ), context_parts AS MATERIALIZED (
+      SELECT *, event -> 'message' AS message, event #> '{message,content}' AS content FROM context_input
+    ), context_projected AS MATERIALIZED (
+      SELECT *, ${model} AS model FROM context_parts
+    ) SELECT seq,
+      CASE WHEN metadata IS NULL THEN ${postgresModelNavigationSql(event, message, content, type)}::text
+        ELSE (metadata -> 'model')::text END AS navigation_json,
+      CASE WHEN metadata IS NULL THEN octet_length(model::text)
+        ELSE (metadata ->> 'modelBytes')::double precision END AS model_bytes,
+      CASE WHEN metadata IS NULL THEN octet_length((model #- '{message,providerReplay}')::text)
+        ELSE (metadata ->> 'modelWithoutCheckpointBytes')::double precision END AS retained_bytes
+    FROM context_projected ORDER BY seq
+  )`;
+}
+
+function postgresModelEventSql(event: Expression<unknown>, role: Expression<unknown>) {
+  let projected = event;
+  for (const key of MODEL_CONTEXT_PRIVATE_METADATA_KEYS) {
+    projected = /* kysely-allow-raw: Closed private metadata paths retain the existing model projection. */ sql`(${projected}::jsonb #- ${sql.lit(`{message,__openclaw,${key}}`)}::text[])`;
+  }
+  return /* kysely-allow-raw: Keep the model payload binary until byte accounting or hydration. */ sql`CASE WHEN ${role} = 'toolResult'
+    THEN ${projected} #- '{message,details}' ELSE ${projected} END`;
+}
+
+function postgresNavigationObjectSql(event: Expression<unknown>, keys: readonly string[]) {
+  return /* kysely-allow-raw: Closed navigation keys preserve missing versus explicit null values. */ sql`(
+    SELECT coalesce(jsonb_object_agg(key, value), '{}'::jsonb)
+    FROM jsonb_each(CASE WHEN jsonb_typeof(${event}) = 'object' THEN ${event} ELSE '{}'::jsonb END)
+    WHERE key IN (${sql.join(keys.map((key) => sql.lit(key)))})
+  )`;
+}
+
 function postgresModelNavigationSql(
-  db: DatabaseSync,
   event: Expression<unknown>,
+  message: Expression<unknown>,
+  content: Expression<unknown>,
   entryType: Expression<unknown>,
 ): RawBuilder<string> {
-  const get = (path: string) => jsonPathValue(db, event, sql.lit(path));
-  const entry = jsonPickObject(db, event, MODEL_CONTEXT_NAVIGATION_KEYS);
-  const message = jsonPathValue(db, event, sql.lit("$.message"), "json");
-  const content = jsonPathValue(db, event, sql.lit("$.message.content"), "json");
-  const elements = jsonArrayElements(
-    db,
-    sql`CASE WHEN ${jsonType(db, content)} = 'array' THEN ${content} ELSE '[]' END`,
-  );
-  const value =
-    /* kysely-allow-raw: Closed value column from the array expansion above. */ sql.ref<string>(
-      "value",
-    );
-  const property = (key: string) => jsonPathValue(db, value, sql.lit(`$.${key}`));
-  const calls = /* kysely-allow-raw: Project ordered tool identities without their argument bodies. */ sql<string>`(SELECT ${jsonOrderedArray(db, jsonObjectValue(db, { type: property("type"), id: property("id"), name: property("name") }), [])}
-    FROM ${elements} WHERE ${jsonType(db, value)} = 'object'
-    AND ${property("type")} IN ('toolCall', 'toolUse', 'functionCall'))`;
-  const synthetic = sql`coalesce(${jsonPathValue(db, event, sql.lit(`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`), "json")}, 'false') IN ('true', '1') OR EXISTS (
-    SELECT 1 FROM ${elements} WHERE ${property("type")} = 'text' AND ${property("text")} = ${LEGACY_MISSING_TOOL_RESULT_TEXT})`;
-  const kind = systemUpdateKindSql(db, message);
-  const missing = { [SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY]: synthetic };
-  let projectedMessage = jsonPickObject(db, message, MODEL_MESSAGE_NAVIGATION_KEYS);
-  for (const [path, replacement, json] of [
-    ["content", calls, true],
-    ["command", sql.lit(""), false],
-    ["output", sql.lit(""), false],
-    ["providerReplay", jsonObjectValue(db, { type: get("$.message.providerReplay.type") }), true],
-    [
-      "details",
-      /* kysely-allow-raw: Optional operator kind preserves the JSON object shape. */ sql<string>`CASE WHEN ${kind} IS NULL THEN ${jsonObjectValue(db, missing)} ELSE ${jsonObjectValue(db, { ...missing, kind })} END`,
-      true,
-    ],
-  ] as const) {
-    projectedMessage = jsonSetPath(db, projectedMessage, sql.lit(`$.${path}`), replacement, json);
-  }
-  const custom = jsonSetPath(db, entry, sql.lit("$.content"), sql.lit("[]"), true);
-  const customKind = systemUpdateKindSql(db, event);
-  return /* kysely-allow-raw: Discriminated model navigation projection excludes opaque payloads. */ sql<string>`CASE ${entryType}
-    WHEN 'message' THEN ${jsonSetPath(db, entry, sql.lit("$.message"), projectedMessage, true)}
-    WHEN 'custom_message' THEN CASE WHEN ${customKind} IS NULL THEN ${custom}
-      ELSE ${jsonSetPath(db, custom, sql.lit("$.details"), jsonObjectValue(db, { kind: customKind }), true)} END
-    WHEN 'custom' THEN CASE WHEN ${get("$.customType")} = 'openclaw.system-prompt'
-      THEN ${jsonSetPath(db, entry, sql.lit("$.data"), jsonObjectValue(db, { restart: sql`coalesce(${jsonPathValue(db, event, sql.lit("$.data.restart"), "json")}, 'false') = 'true'` }), true)}
+  const entry = postgresNavigationObjectSql(event, MODEL_CONTEXT_NAVIGATION_KEYS);
+  const messageFacts = postgresNavigationObjectSql(message, MODEL_MESSAGE_NAVIGATION_KEYS);
+  const elements = /* kysely-allow-raw: Only array content contributes tool identities and legacy markers. */ sql`jsonb_array_elements(
+    CASE WHEN jsonb_typeof(${content}) = 'array' THEN ${content} ELSE '[]'::jsonb END)`;
+  const calls = /* kysely-allow-raw: Preserve content order and legacy text-valued call identifiers. */ sql`(
+    SELECT coalesce(jsonb_agg(jsonb_build_object('type', value ->> 'type', 'id', value ->> 'id', 'name', value ->> 'name')), '[]'::jsonb)
+    FROM ${elements} WHERE jsonb_typeof(value) = 'object' AND value ->> 'type' IN ('toolCall', 'toolUse', 'functionCall'))`;
+  const synthetic = /* kysely-allow-raw: The textual marker comparison preserves numeric-scale behavior. */ sql`coalesce((${message} #> ${sql.lit(`{details,${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}}`)}::text[])::text, 'false') IN ('true', '1') OR EXISTS (
+    SELECT 1 FROM ${elements} WHERE value ->> 'type' = 'text' AND value ->> 'text' = ${LEGACY_MISSING_TOOL_RESULT_TEXT})`;
+  const kind = /* kysely-allow-raw: Only the existing two system-update kinds enter navigation. */ sql`CASE WHEN ${message} ->> 'customType' = 'openclaw.system-update'
+    AND ${message} #>> '{details,kind}' IN ('prompt-update', 'runtime-context') THEN ${message} #>> '{details,kind}' END`;
+  const customKind = /* kysely-allow-raw: Root custom messages use the same bounded operator kinds. */ sql`CASE WHEN ${event} ->> 'customType' = 'openclaw.system-update'
+    AND ${event} #>> '{details,kind}' IN ('prompt-update', 'runtime-context') THEN ${event} #>> '{details,kind}' END`;
+  return /* kysely-allow-raw: Build each navigation object once, merging only projected fields. */ sql<string>`CASE ${entryType}
+    WHEN 'message' THEN ${entry} || jsonb_build_object('message', ${messageFacts} || jsonb_build_object(
+      'content', ${calls}, 'command', '', 'output', '',
+      'providerReplay', jsonb_build_object('type', ${message} #>> '{providerReplay,type}'),
+      'details', jsonb_build_object(${sql.lit(SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY)}, (${synthetic})) ||
+        CASE WHEN ${kind} IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('kind', ${kind}) END))
+    WHEN 'custom_message' THEN ${entry} || jsonb_build_object('content', '[]'::jsonb) ||
+      CASE WHEN ${customKind} IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('details', jsonb_build_object('kind', ${customKind})) END
+    WHEN 'custom' THEN CASE WHEN ${event} ->> 'customType' = 'openclaw.system-prompt'
+      THEN ${entry} || jsonb_build_object('data', jsonb_build_object('restart', coalesce((${event} #> '{data,restart}')::text, 'false') = 'true'))
       ELSE ${entry} END
-    WHEN 'compaction' THEN ${jsonSetPath(db, entry, sql.lit("$.summary"), sql.lit(""))}
-    WHEN 'branch_summary' THEN ${jsonSetPath(db, entry, sql.lit("$.summary"), sql.lit(""))}
+    WHEN 'compaction' THEN ${entry} || jsonb_build_object('summary', '')
+    WHEN 'branch_summary' THEN ${entry} || jsonb_build_object('summary', '')
     ELSE ${entry} END`;
 }

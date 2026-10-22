@@ -31,13 +31,13 @@ import {
   type SidebarRecentSession,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 
 type AgentSessionRowsHost = {
   readonly sessionDataContext:
     | Pick<ApplicationContext, "agents" | "gateway" | "sessions">
     | undefined;
-  readonly sessionData: SessionDataController;
+  readonly sessionData: SessionDataOwner;
   visibleSessionCatalogs(): readonly SessionCatalog[];
   selectedAgentMainSessionKey(agentId: string): string;
   readonly sessionsShowCron: boolean;
@@ -93,17 +93,8 @@ export function projectSidebarAgentSessionRows({
     archivedFilter: host.sessionsStatusFilter,
   } as const;
   const visibility = projectSidebarArchiveVisibility({
-    sessionData: grouped
-      ? {
-          sessionsAgentId: selected,
-          sessionsResult: result,
-          sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
-          childSessionRowsByParent: host.sessionData.childSessionRowsByParent,
-          loadedChildSessionKeys: host.sessionData.loadedChildSessionKeys,
-          loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
-          childSessionErrorsByParent: host.sessionData.childSessionErrorsByParent,
-        }
-      : host.sessionData,
+    sessionData: host.sessionData,
+    sourceRows: (grouped ? result : host.sessionData.resultForAgent(selected))?.sessions ?? [],
     selectedAgentId: selected,
     statusFilter: host.sessionsStatusFilter,
     now: Date.now(),
@@ -267,6 +258,7 @@ export function projectSidebarAgentSessionRows({
     rowsByKey: visibleRowsByKey,
     loadingChildKeys: host.sessionData.loadingChildSessionKeys,
     isChildSessionVisible,
+    compareSessions,
     resolveAttention,
     toSidebarSession: navigationState.toSidebarSession,
   });
@@ -303,18 +295,9 @@ export function projectSidebarHomeSession({
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
 }): SidebarHomeSession {
   const visibility = projectSidebarArchiveVisibility({
-    sessionData:
-      result !== undefined
-        ? {
-            childSessionRowsByParent: host.sessionData.childSessionRowsByParent,
-            loadedChildSessionKeys: host.sessionData.loadedChildSessionKeys,
-            loadingChildSessionKeys: host.sessionData.loadingChildSessionKeys,
-            childSessionErrorsByParent: host.sessionData.childSessionErrorsByParent,
-            sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
-            sessionsAgentId: agentId,
-            sessionsResult: result,
-          }
-        : host.sessionData,
+    sessionData: host.sessionData,
+    sourceRows:
+      (result !== undefined ? result : host.sessionData.resultForAgent(agentId))?.sessions ?? [],
     selectedAgentId: agentId,
     statusFilter: host.sessionsStatusFilter,
     now: Date.now(),

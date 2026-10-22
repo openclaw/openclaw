@@ -1,26 +1,42 @@
 import { expect, it } from "vitest";
+import { configureMerge, expectExit as expectStatus } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, reuseCompletedSetup, outcomeRef, describePosix } =
   createMergeOutcomeFixtureHarness();
+type Fixture = ReturnType<typeof fixture>;
+type State = ReturnType<Fixture["state"]>;
+function update(f: Fixture, changes: Partial<State> = {}, pr: Partial<State["pr"]> = {}) {
+  configureMerge(f, { ...changes, pr: { ...changes.pr, ...pr } });
+}
+function expectEffects(f: Fixture, mutations: number, cancellations = 0, posts = 0) {
+  expect(f.state()).toMatchObject({ mutations, cancellations, posts });
+}
+const receipt = (f: Fixture) => f.git(["rev-parse", outcomeRef]);
+const savedRecord = (f: Fixture, oid: string) => JSON.parse(f.git(["show", `${oid}:outcome.json`]));
+const settled = [
+  { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
+  { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
+];
+
+function autoFixture(mode = "pending", cancellation = "success") {
+  const f = fixture();
+  update(f, { mode, cancellation }, { mergeStateStatus: "BLOCKED" });
+  return f;
+}
 
 const changedAutoHead = reuseCompletedSetup(function (variant: string) {
   const f = fixture();
-  f.save({
-    ...f.state(),
-    mode:
-      variant === "unaccepted" ? "pending-error" : variant === "non-auto" ? "unapplied" : "pending",
-    pr: { ...f.state().pr, mergeStateStatus: variant === "non-auto" ? "CLEAN" : "BLOCKED" },
-  });
-  const result = f.run(variant !== "non-auto");
-  expect(result.status, result.output).toBe(["unaccepted", "non-auto"].includes(variant) ? 1 : 0);
+  const mode =
+    variant === "unaccepted" ? "pending-error" : variant === "non-auto" ? "unapplied" : "pending";
+  update(f, { mode }, { mergeStateStatus: variant === "non-auto" ? "CLEAN" : "BLOCKED" });
+  expectStatus(f.run(variant !== "non-auto"), ["unaccepted", "non-auto"].includes(variant) ? 1 : 0);
   if (variant === "cancelled") {
-    const cancelled = f.cancel(f.git(["rev-parse", outcomeRef]));
-    expect(cancelled.status, cancelled.output).toBe(0);
+    expectStatus(f.cancel(receipt(f)));
   }
-  const oid = f.git(["rev-parse", outcomeRef]);
+  const oid = receipt(f);
   const selected = f.commit(f.tree("observed replacement\n"), [f.base]);
-  f.save({ ...f.state(), pr: { ...f.state().pr, headRefOid: selected, autoMergeRequest: null } });
+  update(f, {}, { headRefOid: selected, autoMergeRequest: null });
   return { f, oid, selected };
 });
 
@@ -50,30 +66,21 @@ describePosix("native auto-merge recovery", () => {
     );
     const original = f.record();
     const before = f.state();
-    let explicit = selected;
+    const heads: Record<string, string> = {
+      unselected: "",
+      "wrong selection": f.base,
+      "same head": f.head,
+      "unavailable commit": "f".repeat(40),
+    };
+    const explicit = heads[fault] ?? selected;
     const next = f.state();
-    if (fault === "unselected") {
-      explicit = "";
-    }
-    if (fault === "wrong selection") {
-      explicit = f.base;
-    }
-    if (fault === "same head") {
-      explicit = f.head;
-    }
-    if (fault === "unavailable commit") {
-      next.pr.headRefOid = explicit = "f".repeat(40);
-    }
-    if (fault === "armed") {
-      next.pr.autoMergeRequest = { mergeMethod: "SQUASH" };
-    }
-    if (fault === "queue") {
-      next.pr.isMergeQueueEnabled = true;
-    }
-    if (fault === "MERGED") {
-      next.pr.state = "MERGED";
-      next.pr.mergeCommit = { oid: f.head };
-    }
+    const prChanges: Record<string, Partial<typeof next.pr>> = {
+      "unavailable commit": { headRefOid: explicit },
+      armed: { autoMergeRequest: { mergeMethod: "SQUASH" } },
+      queue: { isMergeQueueEnabled: true },
+      MERGED: { state: "MERGED", mergeCommit: { oid: f.head } },
+    };
+    Object.assign(next.pr, prChanges[fault]);
     if (fault === "CAS collision") {
       next.crash = "successor";
     }
@@ -92,7 +99,7 @@ describePosix("native auto-merge recovery", () => {
     }
     f.save(next);
     const refused = f.cancel(oid, explicit);
-    expect(refused.status, refused.output).toBe(1);
+    expectStatus(refused, 1);
     const expectedGuard = fault.startsWith("reread ")
       ? "observed-head retirement requires stable transport, policy, and PR/main facts"
       : fault === "CAS collision"
@@ -105,85 +112,65 @@ describePosix("native auto-merge recovery", () => {
               ? "accepted uncancelled auto intent"
               : "selected open PR/head/base";
     expect(refused.output).toContain(expectedGuard);
-    expect(f.state()).toMatchObject({
-      mutations: before.mutations,
-      cancellations: before.cancellations,
-      posts: before.posts,
-    });
-    expect(JSON.parse(f.git(["show", `${oid}:outcome.json`]))).toEqual(original);
+    expectEffects(f, before.mutations, before.cancellations, before.posts);
+    expect(savedRecord(f, oid)).toEqual(original);
     if (fault === "CAS collision") {
       expect(f.git(["cat-file", "blob", outcomeRef])).toBe("successor");
     } else {
-      expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
+      expect(receipt(f)).toBe(oid);
     }
   });
 
   it("refuses observed-head retirement when transport changes the policy evidence", () => {
     const { f, oid, selected } = changedAutoHead("");
-    f.save({
-      ...f.state(),
-      restPolicy: "ruleset",
-      quotaAt: "observe",
-      quotaAfterObservations: f.state().observationReads + 1,
-      pr: { ...f.state().pr, mergeStateStatus: "CLEAN" },
-    });
+    update(
+      f,
+      {
+        restPolicy: "ruleset",
+        quotaAt: "observe",
+        quotaAfterObservations: f.state().observationReads + 1,
+      },
+      { mergeStateStatus: "CLEAN" },
+    );
     const refused = f.cancel(oid, selected);
     expect(f.state().quotaTriggered).toBe(true);
     expect(f.state().restMainReads).toBeGreaterThan(0);
-    expect(refused.status, refused.output).toBe(1);
+    expectStatus(refused, 1);
     expect(refused.output).toContain(
       "observed-head retirement requires stable transport, policy, and PR/main facts",
     );
-    expect(f.git(["rev-parse", outcomeRef])).toBe(oid);
-    expect(f.state()).toMatchObject({ mutations: 1, cancellations: 0, posts: 0 });
+    expect(receipt(f)).toBe(oid);
+    expectEffects(f, 1);
   });
 
   it("loads an observed-head retirement after the original head is restored and merged", () => {
     const { f, oid, selected } = changedAutoHead("");
-    const cancelled = f.cancel(oid, selected);
-    expect(cancelled.status, cancelled.output).toBe(0);
-    const landed = f.commit(
-      f.git(["rev-parse", `${f.head}^{tree}`]),
-      [f.base],
-      "Landed original head\n",
-    );
+    expectStatus(f.cancel(oid, selected));
+    const landedTree = f.git(["rev-parse", `${f.head}^{tree}`]);
+    const landed = f.commit(landedTree, [f.base], "Landed original head\n");
     f.git(["push", "-q", "origin", `${landed}:refs/heads/main`]);
-    f.save({
-      ...f.state(),
-      pr: { ...f.state().pr, state: "MERGED", headRefOid: f.head, mergeCommit: { oid: landed } },
-    });
-    const reconciled = f.run();
-    expect(reconciled.status, reconciled.output).toBe(0);
+    update(f, {}, { state: "MERGED", headRefOid: f.head, mergeCommit: { oid: landed } });
+    expectStatus(f.run());
     expect(f.record()).toMatchObject({
       phase: "merged",
       landed,
       cancellation: { observedHead: selected },
     });
-    const reloaded = f.run();
-    expect(reloaded.status, reloaded.output).toBe(0);
-    expect(f.state()).toMatchObject({ mutations: 1, cancellations: 0, posts: 0 });
+    expectStatus(f.run());
+    expectEffects(f, 1);
   });
 
   it("retires an absent request at an explicitly observed changed head without dispatch", () => {
-    const f = fixture();
-    f.save({ ...f.state(), mode: "pending", pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" } });
-    expect(f.run(true).status).toBe(0);
-    const accepted = f.git(["rev-parse", outcomeRef]);
+    const f = autoFixture();
+    expectStatus(f.run(true));
+    const accepted = receipt(f);
     const original = f.record();
     const captures = f.captures();
     // A collaborator can rewrite the head; retirement does not require ancestry.
     const selected = f.commit(f.tree("collaborator replacement\n"), [f.base]);
-    f.save({
-      ...f.state(),
-      pr: { ...f.state().pr, headRefOid: selected, autoMergeRequest: null },
-      observations: [
-        { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
-        { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
-      ],
-    });
-    const result = f.cancel(accepted, selected);
-    expect(result.status, result.output).toBe(0);
-    const retired = f.git(["rev-parse", outcomeRef]);
+    update(f, { observations: settled }, { headRefOid: selected, autoMergeRequest: null });
+    expectStatus(f.cancel(accepted, selected));
+    const retired = receipt(f);
     expect(f.record()).toEqual({
       ...original,
       cancellation: {
@@ -195,47 +182,34 @@ describePosix("native auto-merge recovery", () => {
     });
     expect(f.git(["rev-list", "--count", "--ancestry-path", `${accepted}..${retired}`])).toBe("1");
     expect(f.git(["show", "-s", "--format=%P", retired]).split(" ")).toContain(selected);
-    expect(f.state()).toMatchObject({ mutations: 1, cancellations: 0, posts: 0 });
+    expectEffects(f, 1);
     for (const [name, contents] of captures) {
       expect(f.git(["show", `${retired}:${name}`])).toBe(contents.trim());
     }
     expect(f.cancel(accepted, selected).status).toBe(1);
-    expect(f.git(["rev-parse", outcomeRef])).toBe(retired);
+    expect(receipt(f)).toBe(retired);
     f.git(["reflog", "expire", "--expire=now", "--all"]);
     f.git(["gc", "--prune=now"]);
     expect(f.git(["cat-file", "-t", selected])).toBe("commit");
-    const stale = f.run(false, f.repo, "squash", retired, selected);
-    expect(stale.status, stale.output).toBe(1);
-    expect(f.git(["rev-parse", outcomeRef])).toBe(retired);
+    expectStatus(f.run(false, f.repo, "squash", retired, selected), 1);
+    expect(receipt(f)).toBe(retired);
     const replacement = f.replacePreparedHead();
-    f.save({ ...f.state(), mode: "success", pr: { ...f.state().pr, mergeStateStatus: "CLEAN" } });
-    const recovered = f.run(false, f.repo, "squash", retired, replacement);
-    expect(recovered.status, recovered.output).toBe(0);
+    update(f, { mode: "success" }, { mergeStateStatus: "CLEAN" });
+    expectStatus(f.run(false, f.repo, "squash", retired, replacement));
     expect(f.record()).toMatchObject({ phase: "complete", head: replacement });
-    expect(f.state()).toMatchObject({ mutations: 2, cancellations: 0, posts: 1 });
+    expectEffects(f, 2, 0, 1);
   });
   it.each(["before cancellation", "after cancellation"])(
     "retires the original auto request when mergeability settles %s",
     (phase) => {
-      const f = fixture();
-      f.save({
-        ...f.state(),
-        mode: "pending",
-        pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
+      const f = autoFixture();
+      expectStatus(f.run(true));
+      const accepted = receipt(f);
+      update(f, {
+        observations: [...(phase === "after cancellation" ? [{}, {}] : []), ...settled],
       });
-      expect(f.run(true).status).toBe(0);
-      const accepted = f.git(["rev-parse", outcomeRef]);
-      f.save({
-        ...f.state(),
-        observations: [
-          ...(phase === "after cancellation" ? [{}, {}] : []),
-          { pr: { mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" } },
-          { pr: { mergeable: "MERGEABLE", mergeStateStatus: "BLOCKED" } },
-        ],
-      });
-      const result = f.cancel(accepted);
-      expect(result.status, result.output).toBe(0);
-      expect(f.state()).toMatchObject({ cancellations: 1, mutations: 1, posts: 0 });
+      expectStatus(f.cancel(accepted));
+      expectEffects(f, 1, 1);
       expect(f.record()).toMatchObject({
         phase: "intent",
         accepted: true,
@@ -254,17 +228,10 @@ describePosix("native auto-merge recovery", () => {
   ])(
     "retires auto before recovering a reviewed replacement (submission=$mode, cancellation=$cancellation, absent=$absent)",
     ({ mode, cancellation, absent }) => {
-      const f = fixture();
-      f.save({
-        ...f.state(),
-        mode,
-        cancellation,
-        pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
-      });
-      const pending = f.run(true);
+      const f = autoFixture(mode, cancellation);
       const acknowledged = mode === "pending";
-      expect(pending.status, pending.output).toBe(acknowledged ? 0 : 1);
-      const attempt = f.git(["rev-parse", outcomeRef]);
+      expectStatus(f.run(true), acknowledged ? 0 : 1);
+      const attempt = receipt(f);
       const attemptRecord = f.record();
       const captures = f.captures();
       if (!acknowledged) {
@@ -272,47 +239,43 @@ describePosix("native auto-merge recovery", () => {
         expect(f.recover()).toBe(false);
       }
       if (absent) {
-        f.save({ ...f.state(), pr: { ...f.state().pr, autoMergeRequest: null } });
+        update(f, {}, { autoMergeRequest: null });
       }
-      const cancelled = f.cancel(attempt);
-      expect(cancelled.status, cancelled.output).toBe(0);
+      expectStatus(f.cancel(attempt));
       expect(f.state().pr.autoMergeRequest).toBeNull();
-      expect(f.state()).toMatchObject({
-        mutations: 1,
-        cancellations: absent ? 0 : 1,
-        posts: 0,
-      });
+      expectEffects(f, 1, absent ? 0 : 1);
       expect(f.record()).toMatchObject({
         accepted: acknowledged,
         route: "auto",
         cancellation: { state: "confirmed", outcome: attempt, actor: "fixture-operator" },
       });
-      const retired = f.git(["rev-parse", outcomeRef]);
+      const retired = receipt(f);
       const retiredRecord = f.record();
       expect(retiredRecord).not.toHaveProperty("transport");
       const retirement = f
         .git(["rev-list", "--ancestry-path", "--reverse", `${attempt}..${retired}`])
         .split("\n")[0]!;
       const replacement = f.replacePreparedHead();
-      f.save({
-        ...f.state(),
-        mode: "success",
-        pooledMergeBlocked: true,
-        quotaAt: "observe",
-        quotaFailuresRemaining: 0,
-        pr: { ...f.state().pr, mergeStateStatus: "CLEAN" },
-      });
-      const recovered = f.run(false, f.repo, "squash", retired, replacement);
-      expect(recovered.status, recovered.output).toBe(0);
-      expect(f.state()).toMatchObject({ mutations: 2, cancellations: absent ? 0 : 1, posts: 1 });
+      update(
+        f,
+        {
+          mode: "success",
+          pooledMergeBlocked: true,
+          quotaAt: "observe",
+          quotaFailuresRemaining: 0,
+        },
+        { mergeStateStatus: "CLEAN" },
+      );
+      expectStatus(f.run(false, f.repo, "squash", retired, replacement));
+      expectEffects(f, 2, absent ? 0 : 1, 1);
       expect(f.record()).toMatchObject({
         phase: "complete",
         head: replacement,
         recovery: { outcome: retired, replacementHead: replacement },
       });
       expect(f.record()).not.toHaveProperty("transport");
-      expect(JSON.parse(f.git(["show", `${attempt}:outcome.json`]))).toEqual(attemptRecord);
-      expect(JSON.parse(f.git(["show", `${retired}:outcome.json`]))).toEqual(retiredRecord);
+      expect(savedRecord(f, attempt)).toEqual(attemptRecord);
+      expect(savedRecord(f, retired)).toEqual(retiredRecord);
       expect(f.state().restMergePayload).toBeNull();
       expect(f.state().graphqlMergePayloads).toEqual([
         {
@@ -330,43 +293,27 @@ describePosix("native auto-merge recovery", () => {
     },
   );
   it("never repeats an uncertain auto cancellation and confirms its later observed retirement", () => {
-    const f = fixture();
-    f.save({
-      ...f.state(),
-      mode: "pending-error",
-      cancellation: "rejected",
-      pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
-    });
-    expect(f.run(true).status).toBe(1);
+    const f = autoFixture("pending-error", "rejected");
+    expectStatus(f.run(true), 1);
     expect(f.recover()).toBe(false);
-    const first = f.cancel(f.git(["rev-parse", outcomeRef]));
-    expect(first.status, first.output).toBe(1);
+    expectStatus(f.cancel(receipt(f)), 1);
     expect(f.record().cancellation.state).toBe("requested");
     f.recover();
-    const requested = f.git(["rev-parse", outcomeRef]);
-    const retry = f.cancel(requested);
-    expect(retry.status, retry.output).toBe(1);
+    const requested = receipt(f);
+    expectStatus(f.cancel(requested), 1);
     expect(f.state().cancellations).toBe(1);
     f.recover();
-    f.save({ ...f.state(), pr: { ...f.state().pr, autoMergeRequest: null } });
-    const confirmed = f.cancel(requested);
-    expect(confirmed.status, confirmed.output).toBe(0);
+    update(f, {}, { autoMergeRequest: null });
+    expectStatus(f.cancel(requested));
     expect(f.state()).toMatchObject({ cancellations: 1, mutations: 1 });
     expect(f.record()).toMatchObject({ accepted: false, cancellation: { state: "confirmed" } });
   });
   it("reconciles a concurrent merge during auto cancellation without a second merge", () => {
-    const f = fixture();
-    f.save({
-      ...f.state(),
-      mode: "pending",
-      cancellation: "merged",
-      pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
-    });
-    expect(f.run(true).status).toBe(0);
-    const result = f.cancel(f.git(["rev-parse", outcomeRef]));
-    expect(result.status, result.output).toBe(0);
+    const f = autoFixture("pending", "merged");
+    expectStatus(f.run(true));
+    expectStatus(f.cancel(receipt(f)));
     expect(f.record()).toMatchObject({ phase: "merged", landed: f.state().pr.mergeCommit?.oid });
-    expect(f.state()).toMatchObject({ cancellations: 1, mutations: 1, posts: 0 });
+    expectEffects(f, 1, 1);
   });
   it.each([
     ["head", "during"],
@@ -378,14 +325,9 @@ describePosix("native auto-merge recovery", () => {
   ] as const)(
     "preserves auto cancellation authority when %s changes %s dispatch",
     (change, stage) => {
-      const f = fixture();
-      f.save({
-        ...f.state(),
-        mode: "pending",
-        pr: { ...f.state().pr, mergeStateStatus: "BLOCKED" },
-      });
-      expect(f.run(true).status).toBe(0);
-      const accepted = f.git(["rev-parse", outcomeRef]);
+      const f = autoFixture();
+      expectStatus(f.run(true));
+      const accepted = receipt(f);
       const next = f.state();
       if (stage === "before") {
         if (change === "head") {
@@ -400,11 +342,10 @@ describePosix("native auto-merge recovery", () => {
         next.observations = [{}, {}, ...(stage === "reread" ? [{}] : []), { pr: changed }];
       }
       f.save(next);
-      const result = f.cancel(accepted);
-      expect(result.status, result.output).toBe(1);
+      expectStatus(f.cancel(accepted), 1);
       expect(f.state()).toMatchObject({ cancellations: stage === "before" ? 0 : 1, mutations: 1 });
       if (stage === "before") {
-        expect(f.git(["rev-parse", outcomeRef])).toBe(accepted);
+        expect(receipt(f)).toBe(accepted);
       } else {
         expect(f.record().cancellation.state).toBe("requested");
       }

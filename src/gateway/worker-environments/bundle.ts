@@ -27,6 +27,11 @@ import {
 import { VERSION } from "../../version.js";
 import type { ExpectedWorkerBuild } from "../../worker/worker-build-identity.js";
 import { collectWorkerBundleManifest } from "./bundle-staging.js";
+import type {
+  WorkerBundleArtifact,
+  WorkerBundleBuildOptions,
+} from "./node-bootstrap-artifact-contract.js";
+import { prepareNodeArtifactInWorker } from "./node-bootstrap-artifact-worker.js";
 
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
@@ -36,13 +41,6 @@ const BUNDLE_STAGING_NAME_PATTERN = /^\.staging-[A-Za-z0-9_-]+$/u;
 const BUNDLE_TEMP_NAME_PATTERN = /^[a-f0-9]{64}\.tgz\.[0-9]+\.[0-9a-f-]{36}\.tmp$/u;
 const PACKAGED_BUNDLE_NAME_PATTERN = /^([a-f0-9]{64})\.tar\.gz$/u;
 const PACKAGED_BUNDLE_DIRECTORY = "dist/worker-artifacts";
-type WorkerBundleArtifact = ExpectedWorkerBuild & {
-  install: "bundle";
-  tarballBytes: number;
-  tarballSha256: string;
-  tarballPath: string;
-};
-
 export type WorkerNpmArtifact = ExpectedWorkerBuild & {
   install: "npm";
   packageIntegrity: string;
@@ -63,11 +61,9 @@ type WorkerBundleProducerOptions = {
   cacheDir?: string;
   openclawVersion?: string;
   protocolFeatures?: readonly string[];
-  cacheOwnership?: "exclusive";
   onCacheCleanupError?: (error: unknown) => void;
 };
 
-type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
 type WorkerNpmReleaseVerifier = (params: {
   bundleHash: string;
   version: string;
@@ -244,10 +240,11 @@ async function verifyPublishedNpmRelease(params: {
       strict: true,
       strip: 1,
     });
-    const packedBundle = await prepareWorkerBundle({
+    const packedBundle = await prepareNodeArtifactInWorker("bundle", {
       packageRoot: extractedRoot,
       cacheDir: path.join(temporaryRoot, "bundle-cache"),
       openclawVersion: params.version,
+      protocolFeatures: [],
     });
     if (packedBundle.bundleHash !== params.bundleHash) {
       throw new Error(
@@ -405,15 +402,10 @@ async function pruneWorkerBundleCache(params: {
   }
 }
 
-async function prepareWorkerBundle(
-  options: WorkerBundleProducerOptions,
+export async function prepareWorkerBundle(
+  options: WorkerBundleBuildOptions,
 ): Promise<WorkerBundleArtifact> {
-  const packageRoot = resolvePackageRoot(options.packageRoot);
-  const openclawVersion = (options.openclawVersion ?? VERSION).trim();
-  if (!openclawVersion) {
-    throw new Error("Worker bundle requires a non-empty OpenClaw version");
-  }
-  const protocolFeatures = normalizeProtocolFeatures(options.protocolFeatures ?? []);
+  const { packageRoot, cacheDir, openclawVersion, protocolFeatures } = options;
   const packaged = await resolvePackagedWorkerBundle({
     packageRoot,
     openclawVersion,
@@ -422,7 +414,6 @@ async function prepareWorkerBundle(
   if (packaged) {
     return packaged;
   }
-  const cacheDir = resolveBundleCacheDir(options.cacheDir);
   await fs.mkdir(cacheDir, { recursive: true });
   const stagingRoot = await fs.mkdtemp(path.join(cacheDir, ".staging-"));
   try {
@@ -520,12 +511,21 @@ export function createWorkerBundleProducer(
   let pruning = Promise.resolve();
   return {
     prepare: createLazyPromise(async () => {
-      currentArtifact = await prepareWorkerBundle(options);
+      const openclawVersion = (options.openclawVersion ?? VERSION).trim();
+      if (!openclawVersion) {
+        throw new Error("Worker bundle requires a non-empty OpenClaw version");
+      }
+      currentArtifact = await prepareNodeArtifactInWorker("bundle", {
+        packageRoot: resolvePackageRoot(options.packageRoot),
+        cacheDir: resolveBundleCacheDir(options.cacheDir),
+        openclawVersion,
+        protocolFeatures: normalizeProtocolFeatures(options.protocolFeatures ?? []),
+      });
       return currentArtifact;
     }),
     async prune(readRetainedBundleHashes) {
       const artifact = currentArtifact;
-      if (options.cacheOwnership !== "exclusive" || !artifact) {
+      if (!artifact) {
         return;
       }
       const operation = pruning.then(async () => {
@@ -549,7 +549,6 @@ export function createWorkerBundleProducer(
 export async function resolveWorkerNpmInstallationArtifact(params: {
   bundle: WorkerBundleArtifact;
   packageRoot?: string;
-  isPackageInstall?: WorkerNpmPackageInstallCheck;
   verifyRelease?: WorkerNpmReleaseVerifier;
 }): Promise<WorkerNpmArtifact> {
   const version = params.bundle.openclawVersion.trim();
@@ -559,9 +558,7 @@ export async function resolveWorkerNpmInstallationArtifact(params: {
     );
   }
   const packageRoot = resolvePackageRoot(params.packageRoot);
-  const packageInstall = params.isPackageInstall
-    ? await params.isPackageInstall(packageRoot)
-    : await isReleasedPackageInstall(packageRoot);
+  const packageInstall = await isReleasedPackageInstall(packageRoot);
   if (!packageInstall) {
     throw new Error(
       "Worker npm install requires the gateway to run from a packaged release install",

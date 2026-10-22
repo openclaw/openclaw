@@ -1,10 +1,11 @@
-import { createEffect, createMemo, createUniqueId, Show } from "solid-js";
+import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { Icon, type IconName } from "./solid/icon.tsx";
+import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "./solid/menu.tsx";
 
-export type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
+type CatalogSessionMenuAction = "viewer" | "import" | "terminal" | "delete";
 type Props = {
   x: number;
   y: number;
@@ -22,20 +23,13 @@ const actions: readonly [CatalogSessionMenuAction, string, IconName][] = [
   ["terminal", "chat.catalog.openInTerminal", "terminal"],
   ["delete", "chat.catalog.deleteSession", "trash"],
 ];
+const menus = new WeakMap<HTMLElement, MenuHandle>();
 
 export const CatalogSessionMenu = defineSolidBridge<Props>(
   "openclaw-catalog-session-menu",
   (props, host) => {
     const id = createUniqueId();
-    let menu: MenuHandle | undefined;
-    createEffect(
-      () => props.trigger,
-      (trigger) => {
-        if (trigger) {
-          menu?.overlay.setReturnTarget(trigger);
-        }
-      },
-    );
+    onSettled(() => () => menus.delete(host));
     const label = () => t("chat.catalog.sessionMenu");
     // Queued menu selections must reuse JSX descriptors created under this owner.
     const items = createMemo<MenuItem[]>(() =>
@@ -46,7 +40,7 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
         .map(([action, key, icon]) => ({
           id: action,
           label: t(key),
-          class: `session-menu__item${action === "delete" ? " session-menu__item--destructive" : ""}`,
+          class: ["session-menu__item", { "session-menu__item--destructive": action === "delete" }],
           variant: action === "delete" ? "danger" : undefined,
           disabled: action === "terminal" && props.terminalDisabled,
           attributes: {
@@ -72,7 +66,7 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
         label={label()}
         items={items()}
         ref={(handle) => {
-          menu = handle;
+          menus.set(host, handle);
           if (props.trigger) {
             handle.overlay.setReturnTarget(props.trigger);
           }
@@ -93,19 +87,16 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
             props.onClose();
           }
         }}
-        triggerAttributes={{
-          tabindex: -1,
-          "aria-hidden": "true",
-          style: {
-            position: "fixed",
-            left: `${Math.max(8, Math.min(props.x, window.innerWidth - 248))}px`,
-            top: `${Math.max(8, Math.min(props.y, window.innerHeight - 148 - (props.canDelete ? 40 : 0) - (props.canImport ? 40 : 0)))}px`,
-            width: "1px",
-            height: "1px",
-            opacity: "0",
-            "pointer-events": "none",
-          },
-        }}
+        triggerAttributes={pointMenuTriggerAttributes({
+          x: Math.max(8, Math.min(props.x, window.innerWidth - 248)),
+          y: Math.max(
+            8,
+            Math.min(
+              props.y,
+              window.innerHeight - 148 - (props.canDelete ? 40 : 0) - (props.canImport ? 40 : 0),
+            ),
+          ),
+        })}
       >
         <Show when={props.lastActive}>
           <div class="session-menu__info">
@@ -116,6 +107,11 @@ export const CatalogSessionMenu = defineSolidBridge<Props>(
     );
   },
   {
+    propertyChanged(host, key) {
+      if (key === "trigger" && host.trigger) {
+        menus.get(host)?.overlay.setReturnTarget(host.trigger);
+      }
+    },
     properties: {
       x: { default: 0, attribute: false },
       y: { default: 0, attribute: false },

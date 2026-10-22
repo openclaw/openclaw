@@ -82,47 +82,33 @@ it.each([true, false])(
   };`,
       );
     writeDiscovery("synthetic-before");
+    const owner = { id, rootDir, source, origin: "global" as const };
     const metadata = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id,
-          origin: "global",
-          rootDir,
-          source,
-          providers: [id],
-          providerDiscoverySource: discovery,
-        },
-      ],
+      plugins: [{ ...owner, providers: [id], providerDiscoverySource: discovery }],
     });
     const cache = getPluginMetadataSnapshotCache(metadata);
-    const registry = createEmptyPluginRegistry();
-    const record = createPluginRecord({ id, rootDir, source, origin: "global" });
-    registry.plugins.push(record);
+    const record = createPluginRecord(owner);
+    const registry = { ...createEmptyPluginRegistry(), plugins: [record] };
     const instance = new PluginInstance(id, { record, registry });
+    const inCapture = <T>(read: () => T) =>
+      withPluginSourceCaptureDirectory(captures, () => withPluginCache(cache, read));
     try {
-      withPluginSourceCaptureDirectory(captures, () =>
-        withPluginCache(cache, () =>
-          bindPluginInstanceModuleLoader({ instance, origin: "global", source, rootDir }),
-        ),
-      );
+      inCapture(() => bindPluginInstanceModuleLoader({ instance, ...owner }));
       instance.loadModule(source);
       writeDiscovery("synthetic-after");
-      const providers = withPluginSourceCaptureDirectory(captures, () =>
-        withPluginCache(cache, () =>
-          withPluginRuntimeRegistryScope(registry, () =>
-            withPluginRuntimeGenerationRegistryScope(
-              selected ? registry : createEmptyPluginRegistry(),
-              () =>
-                resolvePluginDiscoveryProvidersRuntime({
-                  config: { plugins: { allow: [id] } },
-                  env: {},
-                  onlyPluginIds: [id],
-                  pluginMetadataSnapshot: metadata,
-                  discoveryEntriesOnly: true,
-                  includeSyntheticAuthProviders: true,
-                }),
-            ),
-          ),
+      const discover = () =>
+        resolvePluginDiscoveryProvidersRuntime({
+          config: { plugins: { allow: [id] } },
+          env: {},
+          onlyPluginIds: [id],
+          pluginMetadataSnapshot: metadata,
+          discoveryEntriesOnly: true,
+          includeSyntheticAuthProviders: true,
+        });
+      const generation = selected ? registry : createEmptyPluginRegistry();
+      const providers = inCapture(() =>
+        withPluginRuntimeRegistryScope(registry, () =>
+          withPluginRuntimeGenerationRegistryScope(generation, discover),
         ),
       );
       expect(providers).toHaveLength(1);

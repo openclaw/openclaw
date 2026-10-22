@@ -1,9 +1,10 @@
-import { createSignal, flush } from "solid-js";
+import { createStore, flush } from "solid-js";
 import { afterEach } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { ModelSetupController } from "../model-setup-controller.ts";
-import { ModelSetupContent, type ModelSetupPageProps } from "../model-setup-page.tsx";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
+import type { ModelSetupPageProps } from "../model-setup-owner.ts";
+import { ModelSetupPageBody } from "../model-setup-page.tsx";
 
 type MountedPage = { mount: () => void; unmount: () => void };
 export type TestModelSetupPage = HTMLElement &
@@ -23,26 +24,9 @@ export function createPage(context: ApplicationContext): TestModelSetupPage {
   const root = Object.assign(document.createElement("div"), {
     updateComplete: Promise.resolve(true),
   });
-  const [revision, setRevision] = createSignal(0);
+  const [props, setProps] = createStore<ModelSetupPageProps>({});
   let mounted = false;
-  let queued = false;
   let dispose: (() => void) | undefined;
-  const controller = new ModelSetupController(root, context, () => {
-    if (!mounted || queued) {
-      return;
-    }
-    queued = true;
-    queueMicrotask(() => {
-      queued = false;
-      if (!mounted) {
-        return;
-      }
-      controller.beforeUpdate();
-      setRevision((value) => value + 1);
-      flush();
-      controller.afterUpdate();
-    });
-  });
   for (const key of [
     "routeData",
     "embedded",
@@ -51,32 +35,36 @@ export function createPage(context: ApplicationContext): TestModelSetupPage {
     "onClose",
   ] as const) {
     Object.defineProperty(root, key, {
-      get: () => controller[key],
-      set: (value) => {
-        Object.assign(controller, { [key]: value });
-        controller.requestUpdate();
-      },
+      get: () => props[key],
+      set: (value) =>
+        setProps((draft) => {
+          Object.assign(draft, { [key]: value });
+        }),
     });
   }
-  Object.defineProperty(root, "updateComplete", { get: () => controller.updateComplete });
+  Object.defineProperty(root, "updateComplete", {
+    get: () =>
+      Promise.resolve().then(() => {
+        flush();
+        return true;
+      }),
+  });
   pages.set(root, {
     mount: () => {
       if (mounted) {
         return;
       }
       mounted = true;
-      dispose = mountSolid(
-        () => <ModelSetupContent controller={controller} revision={revision} />,
-        { container: root },
-      ).unmount;
-      controller.connect();
+      dispose = mountSolid(() => <ModelSetupPageBody {...props} host={root} />, {
+        container: root,
+        wrapper: createSolidApplicationContextProvider(context).wrapper,
+      }).unmount;
     },
     unmount: () => {
       if (!mounted) {
         return;
       }
       mounted = false;
-      controller.disconnect();
       dispose?.();
       dispose = undefined;
     },

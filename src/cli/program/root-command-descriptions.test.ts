@@ -28,187 +28,57 @@ const PLUGIN_CATALOG_PATHS = {
   "memory status": "registered and covered by the memory-core plugin",
 } as const;
 
+function commandPaths(paths: string): string[] {
+  return paths.split("|").map((path) => path.trim());
+}
+
 const JSON_NOT_APPLICABLE = {
-  namespaces: {
-    reason: "command group only; reporting subcommands declare JSON output individually",
-    commands: [
-      "agents team",
-      "backup",
-      "backup git",
-      "backup sqlite",
-      "database",
-      "database ownership",
-      "message",
-      "message thread",
-      "message emoji",
-      "message sticker",
-      "message role",
-      "message channel",
-      "message member",
-      "message voice",
-      "message event",
-      "mcp",
-      "transcripts",
-      "gateway restart-handoff",
-      "gateway diagnostics",
-      "system",
-      "system heartbeat",
-      "promos",
-      "telemetry",
-      "infer",
-      "infer model",
-      "infer model auth",
-      "infer image",
-      "infer audio",
-      "infer tts",
-      "infer video",
-      "infer web",
-      "infer embedding",
-      "approvals",
-      "approvals allowlist",
-      "approvals grants",
-      "exec-policy",
-      "nodes",
-      "nodes camera",
-      "nodes screen",
-      "nodes location",
-      "devices",
-      "users",
-      "node",
-      "sandbox",
-      "worktrees",
-      "cron",
-      "dns",
-      "proxy",
-      "webhooks",
-      "webhooks gmail",
-      "clawbot",
-      "pairing",
-      "plugins",
-      "plugins marketplace",
-      "channels",
-      "channels dead-letters",
-      "directory",
-      "directory peers",
-      "directory groups",
-      "security",
-      "secrets",
-      "secrets store",
-      "models aliases",
-      "models fallbacks",
-      "models image-fallbacks",
-      "models auth",
-      "models auth order",
-      "skills workshop",
-    ],
-  },
-  interactive: {
-    reason: "interactive wizard, login, or terminal session has no single report document",
-    commands: [
-      "configure",
-      "config",
-      "acp client",
-      "gateway auth-token",
-      "promos claim",
-      "infer model auth login",
-      "models auth add",
-      "models auth login",
-      "models auth setup-token",
-      "models auth paste-token",
-      "models auth paste-api-key",
-      "models auth login-github-copilot",
-      "mcp configure",
-      "mcp login",
-      "attach",
-      "tui",
-      "resume",
-      "update wizard",
-    ],
-  },
-  longRunning: {
-    reason: "long-running server, worker, or live stream does not terminate with one JSON document",
-    commands: [
-      "acp",
-      "gateway",
-      "gateway run",
-      "mcp serve",
-      "node worker",
-      "node run",
-      "connect",
-      "worker",
-      "proxy start",
-      "proxy run",
-      "webhooks gmail run",
-      "hooks relay",
-      "sessions tail",
-    ],
-  },
-  mutations: {
-    reason: "pure side-effect command has no meaningful report payload",
-    commands: [
-      "reset",
-      "uninstall",
-      "backup enable",
-      "backup disable",
-      "telemetry on",
-      "telemetry off",
-      "config set",
-      "mcp add",
-      "mcp set",
-      "mcp tools",
-      "mcp logout",
-      "mcp reload",
-      "mcp unset",
-      "onboard recommendations acknowledge",
-      "onboard recommendations refresh",
-      "models set",
-      "models set-image",
-      "models aliases add",
-      "models aliases remove",
-      "models fallbacks add",
-      "models fallbacks remove",
-      "models fallbacks clear",
-      "models image-fallbacks add",
-      "models image-fallbacks remove",
-      "models image-fallbacks clear",
-      "models auth activate",
-      "models auth logout",
-      "models auth order set",
-      "models auth order clear",
-      "hooks enable",
-      "hooks disable",
-      "hooks install",
-      "hooks update",
-      "skills install",
-      "skills update",
-      "sandbox recreate",
-      "dns setup",
-      "proxy purge",
-      "pairing approve",
-      "plugins enable",
-      "plugins disable",
-      "plugins uninstall",
-      "plugins install",
-      "plugins update",
-      "plugins build",
-      "plugins init",
-      "channels add",
-      "channels remove",
-      "channels login",
-      "channels logout",
-      "secrets store set",
-      "secrets store rm",
-      "secrets store import",
-    ],
-  },
-  rawArtifacts: {
-    reason: "command streams a raw artifact whose bytes are already the machine contract",
-    commands: ["proxy blob"],
-  },
-  shellIntegration: {
-    reason: "shell integration output must remain executable shell source",
-    commands: ["completion"],
-  },
+  // command group only; reporting subcommands declare JSON output individually.
+  namespaces: commandPaths(`
+      agents team | claws | backup | backup git | backup sqlite | database | database ownership |
+      message | message thread | message emoji | message sticker | message role | message channel |
+      message member | message voice | message event | mcp | transcripts |
+      gateway restart-handoff | gateway diagnostics | system | system heartbeat | promos | telemetry |
+      infer | infer model | infer model auth | infer image | infer audio | infer tts | infer video |
+      infer web | infer embedding | approvals | approvals allowlist | approvals grants | exec-policy |
+      nodes | nodes camera | nodes screen | nodes location | devices | users | node | sandbox |
+      worktrees | cron | dns | proxy | webhooks | webhooks gmail | clawbot | pairing |
+      plugins | plugins marketplace | channels | channels dead-letters |
+      directory | directory peers | directory groups | security | secrets | secrets store |
+      models aliases | models fallbacks | models image-fallbacks | models auth | models auth order |
+      skills workshop
+  `),
+  // interactive wizard, login, or terminal session has no single report document.
+  interactive: commandPaths(`
+      configure | config | acp client | gateway auth-token | promos claim | infer model auth login |
+      models auth add | models auth login | models auth setup-token | models auth paste-token |
+      models auth paste-api-key | models auth login-github-copilot |
+      mcp configure | mcp login | attach | tui | resume | update wizard
+  `),
+  // long-running server, worker, or live stream does not terminate with one JSON document.
+  longRunning: commandPaths(`
+      acp | gateway | gateway run | mcp serve | node worker | node run | connect | worker |
+      proxy start | proxy run | webhooks gmail run | hooks relay | sessions tail
+  `),
+  // pure side-effect command has no meaningful report payload.
+  mutations: commandPaths(`
+      reset | uninstall | backup enable | backup disable | telemetry on | telemetry off | config set |
+      mcp add | mcp set | mcp tools | mcp logout | mcp reload | mcp unset |
+      onboard recommendations acknowledge | onboard recommendations refresh |
+      models set | models set-image | models aliases add | models aliases remove |
+      models fallbacks add | models fallbacks remove | models fallbacks clear |
+      models image-fallbacks add | models image-fallbacks remove | models image-fallbacks clear |
+      models auth activate | models auth logout | models auth order set | models auth order clear |
+      hooks enable | hooks disable | hooks install | hooks update | skills install | skills update |
+      sandbox recreate | dns setup | proxy purge | pairing approve |
+      plugins enable | plugins disable | plugins uninstall | plugins install | plugins update |
+      plugins build | plugins init | channels add | channels remove | channels login | channels logout |
+      secrets store set | secrets store rm | secrets store import
+  `),
+  // Raw artifacts already have a machine-readable byte contract.
+  rawArtifacts: ["proxy blob"],
+  // Completion output must remain executable shell source.
+  shellIntegration: ["completion"],
 } as const;
 
 // These commands own JSON output without an optional --json flag.
@@ -292,40 +162,23 @@ describe("root command descriptions", () => {
   it("keeps catalog placeholders and registered commands in sync", async () => {
     const program = await registerAllBuiltInCommands();
 
-    const registeredCommands = new Map<string, { command: Command; registeredAsAlias: boolean }>();
-    for (const command of program.commands) {
-      registeredCommands.set(command.name(), { command, registeredAsAlias: false });
-      for (const alias of command.aliases()) {
-        registeredCommands.set(alias, { command, registeredAsAlias: true });
+    const commands = new Map(
+      program.commands.flatMap((command) =>
+        [command.name(), ...command.aliases()].map((name) => [name, command] as const),
+      ),
+    );
+    expect(commands.has("tasks")).toBe(false);
+    for (const descriptor of [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()]) {
+      const command = commands.get(descriptor.name);
+      expect(command, descriptor.name).toBeDefined();
+      if (command?.name() === descriptor.name) {
+        expect(command.description(), descriptor.name).toBe(descriptor.description);
       }
     }
-
-    const descriptors = [...getCoreCliCommandDescriptors(), ...getSubCliEntriesCore()];
-    const missing: string[] = [];
-    const mismatches: string[] = [];
-    for (const descriptor of descriptors) {
-      const registered = registeredCommands.get(descriptor.name);
-      if (!registered) {
-        missing.push(descriptor.name);
-        continue;
-      }
-      if (
-        !registered.registeredAsAlias &&
-        registered.command.description() !== descriptor.description
-      ) {
-        mismatches.push(
-          `${descriptor.name}\n  catalog:    ${descriptor.description}\n  registered: ${registered.command.description()}`,
-        );
-      }
-    }
-
-    expect(registeredCommands.has("tasks")).toBe(false);
-    expect(missing, "catalog entries with no registered command or alias").toEqual([]);
-    expect(mismatches, "root help vs registered command description drift").toEqual([]);
   });
 
   it("keeps startup policy catalog paths registered or explicitly reserved", async () => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
+    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     const program = await registerAllBuiltInCommands();
 
     // Private QA is a lazy source-checkout command. Its root placeholder proves
@@ -339,40 +192,21 @@ describe("root command descriptions", () => {
     const reservedPaths = new Set(Object.keys(RESERVED_CATALOG_ROOTS));
     const pluginPaths = new Set(Object.keys(PLUGIN_CATALOG_PATHS));
 
-    expect(
-      Object.entries({ ...RESERVED_CATALOG_ROOTS, ...PLUGIN_CATALOG_PATHS }).filter(
-        ([, reason]) => reason.trim().length === 0,
-      ),
-      "every catalog exception must document why core has no command",
-    ).toEqual([]);
-
-    const missing = [...catalogPaths].filter(
-      (path) => !registeredPaths.has(path) && !reservedPaths.has(path) && !pluginPaths.has(path),
-    );
-    expect(missing, "catalog entries with no registered command or reserved-root decision").toEqual(
-      [],
-    );
-
-    const staleReservedRoots = [...reservedPaths].filter(
-      (path) => !catalogPaths.has(path) || !isReservedNonPluginCommandRoot(path),
-    );
-    expect(
-      staleReservedRoots,
-      "reserved catalog roots must remain cataloged and blocked from plugin registration",
-    ).toEqual([]);
-
-    const stalePluginPaths = [...pluginPaths].filter(
-      (path) => !catalogPaths.has(path) || registeredPaths.has(path),
-    );
-    expect(stalePluginPaths, "plugin catalog paths must remain plugin-owned").toEqual([]);
-
-    const reservedRootsThatNowRegister = [...reservedPaths].filter((path) =>
-      registeredPaths.has(path),
-    );
-    expect(
-      reservedRootsThatNowRegister,
-      "registered commands must leave the reserved-root exception list",
-    ).toEqual([]);
+    // The two exception groups are deliberate: reserved roots and plugin-owned paths.
+    for (const path of catalogPaths) {
+      expect(
+        registeredPaths.has(path) || reservedPaths.has(path) || pluginPaths.has(path),
+        path,
+      ).toBe(true);
+    }
+    for (const path of reservedPaths) {
+      expect(catalogPaths.has(path) && isReservedNonPluginCommandRoot(path), path).toBe(true);
+      expect(registeredPaths.has(path), path).toBe(false);
+    }
+    for (const path of pluginPaths) {
+      expect(catalogPaths.has(path), path).toBe(true);
+      expect(registeredPaths.has(path), path).toBe(false);
+    }
   });
 
   it("classifies every built-in command as JSON output or explicitly not applicable", async () => {
@@ -381,50 +215,23 @@ describe("root command descriptions", () => {
     const registered = new Map(
       contexts.map((context) => [context.pathVariants[0]?.join(" ") ?? "", context.command]),
     );
-    const notApplicableEntries = Object.values(JSON_NOT_APPLICABLE).flatMap((category) =>
-      category.commands.map((command) => ({ command, reason: category.reason })),
-    );
-    const notApplicable = new Map<string, string>(
-      notApplicableEntries.map(({ command, reason }) => [command, reason]),
-    );
+    const notApplicableEntries = Object.values(JSON_NOT_APPLICABLE).flat();
+    const notApplicable = new Set<string>(notApplicableEntries);
+    expect(notApplicable.size, "duplicate JSON N/A entries").toBe(notApplicableEntries.length);
 
-    expect(notApplicable.size, "a command must not appear in more than one JSON N/A category").toBe(
-      notApplicableEntries.length,
-    );
-    expect(
-      notApplicableEntries.filter(({ reason }) => reason.trim().length === 0),
-      "every JSON N/A category must document why JSON is meaningless",
-    ).toEqual([]);
-
-    const unclassified = [...registered]
-      .filter(([path, command]) => !supportsJsonOutput(path, command) && !notApplicable.has(path))
-      .map(([path]) => path);
-    expect(unclassified, "commands missing a deliberate JSON output decision").toEqual([]);
-
-    const staleExceptions = [...notApplicable]
-      .filter(([path]) => !registered.has(path))
-      .map(([path]) => path);
-    expect(staleExceptions, "JSON N/A entries for commands that no longer exist").toEqual([]);
-
-    const exceptionsThatNowSupportJson = [...notApplicable]
-      .filter(([path]) => {
-        const command = registered.get(path);
-        return command ? supportsJsonOutput(path, command) : false;
-      })
-      .map(([path]) => path);
-    expect(
-      exceptionsThatNowSupportJson,
-      "remove stale JSON N/A entries after adding output support",
-    ).toEqual([]);
-
-    const staleAlwaysJsonSupport = [...JSON_OUTPUT_WITHOUT_FLAG].filter((path) => {
+    for (const [path, command] of registered) {
+      expect(supportsJsonOutput(path, command) || notApplicable.has(path), path).toBe(true);
+    }
+    for (const path of notApplicable.keys()) {
       const command = registered.get(path);
-      return !command || hasOwnJsonOption(command);
-    });
-    expect(
-      staleAlwaysJsonSupport,
-      "always-JSON entries must exist and remain absent from Commander options",
-    ).toEqual([]);
+      expect(command, path).toBeDefined();
+      expect(command && supportsJsonOutput(path, command), path).toBe(false);
+    }
+    for (const path of JSON_OUTPUT_WITHOUT_FLAG) {
+      const command = registered.get(path);
+      expect(command, path).toBeDefined();
+      expect(command && hasOwnJsonOption(command), path).toBe(false);
+    }
   });
 
   it("accepts declared JSON output options through the registered command parsers", async () => {

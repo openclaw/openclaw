@@ -17,163 +17,166 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
+type Margin = Awaited<ReturnType<typeof measureMargin>>;
+function expectMediaInside({ media }: Margin, label: string) {
+  expect(
+    media.filter((item) => item.width > 0 && !(Math.min(item.left, item.right) >= -1)),
+    `${label} media stays inside its surface`,
+  ).toEqual([]);
+}
+function expectActivityEdges(margin: Margin, label: string) {
+  expect(margin, label).toMatchObject({ closed: expect.closeTo(0, 0), open: expect.closeTo(0, 0) });
+}
+
 suite.define(() => {
   it.each(marginCases)(
-    "preserves $id layout at 390 and 430 px in both themes and restores desktop geometry",
-    async (testCase) => {
-      await suite.withPage(
+    "preserves $id gutters across viewports and themes, restoring desktop geometry",
+    (testCase) =>
+      suite.withPage(
         { viewport: { width: 1440, height: 1200 }, colorScheme: "light", reducedMotion: "reduce" },
         async ({ page }) => {
+          const measure = () => measureMargin(page, testCase);
           const imageSize = "imageSize" in testCase ? testCase.imageSize : undefined;
           const image = await createMarginImage(page, imageSize);
           const video = await readFile(new URL("./fixtures/video-poster.mp4", import.meta.url));
           await page.route("https://media.example/**", (route) => {
-            if (route.request().url().endsWith("png")) {
+            const request = route.request();
+            if (request.url().endsWith("png")) {
               return route.fulfill({ contentType: "image/png", body: image });
             }
-            const isVideo = route.request().url().endsWith("mp4");
-            const start = Number(
-              route
-                .request()
-                .headers()
-                .range?.match(/bytes=(\d+)/)?.[1] ?? 0,
-            );
+            if (!request.url().endsWith("mp4")) {
+              return route.fulfill({
+                contentType: "audio/mpeg",
+                headers: { "access-control-allow-origin": "*" },
+                body: createPlaybackMediaFixture("mp3"),
+              });
+            }
+            const start = Number(request.headers().range?.match(/bytes=(\d+)/)?.[1] ?? 0);
             return route.fulfill({
-              status: isVideo ? 206 : 200,
-              contentType: isVideo ? "video/mp4" : "audio/mpeg",
+              status: 206,
+              contentType: "video/mp4",
               headers: {
                 "access-control-allow-origin": "*",
-                ...(isVideo
-                  ? {
-                      "accept-ranges": "bytes",
-                      "content-range": `bytes ${start}-${video.length - 1}/${video.length}`,
-                    }
-                  : {}),
+                "accept-ranges": "bytes",
+                "content-range": `bytes ${start}-${video.length - 1}/${video.length}`,
               },
-              body: isVideo ? video.subarray(start) : createPlaybackMediaFixture("mp3"),
+              body: video.subarray(start),
             });
           });
           await installMockGateway(page, marginScenario(testCase));
           await page.bringToFront();
           await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
-          // Reuse the rendered transcript; each theme starts with its own desktop baseline.
+          if (testCase.id === "clawhub") {
+            await expectBrowser(page.locator(".chat-thread .chat-clawhub-card")).toHaveAttribute(
+              "aria-busy",
+              "false",
+            );
+          }
           for (const theme of ["light", "dark"] as const) {
             await page.emulateMedia({ colorScheme: theme });
             await expectBrowser(page.locator("html")).toHaveAttribute("data-theme-mode", theme);
             if (testCase.id === "user-video" || testCase.id === "user-mixed") {
-              await expectBrowser(page.locator(".chat-video-preview img")).toBeVisible();
+              const poster = page.locator(".chat-video-preview img");
+              await expectBrowser(poster).toBeVisible();
               await expect
                 .poll(() =>
-                  page
-                    .locator(".chat-video-preview img")
-                    .evaluate(
-                      (element) =>
-                        element instanceof HTMLImageElement &&
-                        element.complete &&
-                        element.naturalWidth > 0,
-                    ),
+                  poster.evaluate(
+                    (element) =>
+                      element instanceof HTMLImageElement &&
+                      element.complete &&
+                      element.naturalWidth > 0,
+                  ),
                 )
                 .toBe(true);
             }
-            const desktop = await measureMargin(page, testCase);
-            // Each width starts from the verified desktop geometry in the same fixture.
+            if (testCase.id === "assistant-video") {
+              // Metadata replaces the video's initial 150px height with its intrinsic ratio.
+              const videoElement = page.locator(".chat-assistant-video-frame video");
+              await expectBrowser(videoElement).toBeVisible();
+              await expect
+                .poll(() =>
+                  videoElement.evaluate(
+                    (element) =>
+                      element instanceof HTMLVideoElement &&
+                      element.readyState >= HTMLMediaElement.HAVE_METADATA &&
+                      element.videoWidth > 0 &&
+                      element.videoHeight > 0,
+                  ),
+                )
+                .toBe(true);
+            }
+            if (testCase.id === "clawhub") {
+              // Compare settled catalog content, not the transient loading card.
+              await expectBrowser(page.locator(".chat-clawhub-card")).toHaveAttribute(
+                "aria-busy",
+                "false",
+              );
+            }
+            const desktop = await measure();
             for (const width of [390, 430]) {
               const label = `${testCase.id} at ${width} px in ${theme}`;
+              const pollMargin = <T>(project: (margin: Margin) => T) =>
+                expect.poll(async () => project(await measure()), { message: label });
               await resizeMarginViewport(page, width);
               if (testCase.selector === ".chat-session-activity") {
                 const activity = page.locator(".chat-thread .chat-session-activity");
-                const summary = activity.locator("summary");
-                // The expanded summary's source link navigates instead of toggling.
-                const chevron = summary.locator(".chat-session-activity__chevron");
-                await expectBrowser(summary, label).toBeVisible();
+                const chevron = activity.locator("summary .chat-session-activity__chevron");
+                await expectBrowser(activity.locator("summary"), label).toBeVisible();
                 await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
-                const collapsed = await measureMargin(page, testCase);
-                expect(collapsed.closed, `${label} collapsed left edge`).toBeCloseTo(0, 0);
-                expect(collapsed.open, `${label} collapsed right edge`).toBeCloseTo(0, 0);
+                const collapsed = await measure();
+                expectActivityEdges(collapsed, label);
                 await chevron.click();
                 await expectBrowser(activity.locator(".chat-bubble"), label).toBeVisible();
                 await expectBrowser(
                   activity.locator(".chat-message-disclosure__toggle"),
-                  `${label} originals need no second disclosure`,
+                  label,
                 ).toHaveCount(0);
-                const expanded = await measureMargin(page, testCase);
-                expect(expanded.closed, `${label} expanded left edge`).toBeCloseTo(0, 0);
-                expect(expanded.open, `${label} expanded right edge`).toBeCloseTo(0, 0);
-                expect(expanded.height, `${label} reveals original content`).toBeGreaterThan(
-                  collapsed.height,
-                );
-                expect(expanded.overflow, `${label} no horizontal overflow`).toBe(0);
-                for (const media of expanded.media.filter((item) => item.width > 0)) {
-                  expect(
-                    Math.min(media.left, media.right),
-                    `${label} media stays inside the activity`,
-                  ).toBeGreaterThanOrEqual(-1);
-                }
+                const expanded = await measure();
+                expectActivityEdges(expanded, label);
+                expect(expanded.height, label).toBeGreaterThan(collapsed.height);
+                expect(expanded.overflow, label).toBe(0);
+                expectMediaInside(expanded, label);
                 await chevron.click();
-                // A click that navigates away removes the row, which also satisfies the next count.
                 await expectBrowser(activity, label).toHaveJSProperty("open", false);
                 await expectBrowser(activity.locator(".chat-bubble"), label).toHaveCount(0);
               } else if (!("excluded" in testCase)) {
-                await expect
-                  .poll(
-                    async () => {
-                      const box = await measureMargin(page, testCase);
-                      return box.open - box.columnWidth * 0.1;
-                    },
-                    { message: label },
-                  )
-                  .toBeGreaterThanOrEqual(-1);
-                await expect
-                  .poll(async () => (await measureMargin(page, testCase)).closed, {
-                    message: `${label} closed edge`,
-                  })
-                  .toBeCloseTo(testCase.id === "user-audio" ? 17 : 0, 0);
-                const mobile = await measureMargin(page, testCase);
+                await pollMargin((box) => box.open - box.columnWidth * 0.1).toBeGreaterThanOrEqual(
+                  -1,
+                );
+                await pollMargin((box) => box.closed).toBeCloseTo(
+                  testCase.id === "user-audio" ? 17 : 0,
+                  0,
+                );
+                const mobile = await measure();
                 if (imageSize) {
                   const expectedWidth = Math.min(imageSize.width, mobile.columnWidth * 0.9);
-                  expect(mobile.width, `${label} fits the column once`).toBeCloseTo(
-                    expectedWidth,
-                    1,
-                  );
-                  expect(mobile.height, `${label} preserves its aspect ratio`).toBeCloseTo(
-                    expectedWidth * (imageSize.height / imageSize.width),
-                    1,
-                  );
+                  expect(mobile, label).toMatchObject({
+                    width: expect.closeTo(expectedWidth, 1),
+                    height: expect.closeTo((expectedWidth * imageSize.height) / imageSize.width, 1),
+                  });
                 }
-                for (const media of mobile.media.filter((item) => item.width > 0)) {
-                  expect(
-                    Math.min(media.left, media.right),
-                    `${label} media stays inside its surface`,
-                  ).toBeGreaterThanOrEqual(-1);
-                }
+                expectMediaInside(mobile, label);
                 const toggle = page.locator(".chat-message-disclosure__toggle");
                 if (await toggle.count()) {
                   await toggle.first().click();
-                  const expanded = await measureMargin(page, testCase);
-                  expect(expanded.open, `${label} expanded`).toBeGreaterThanOrEqual(
+                  const expanded = await measure();
+                  expect(expanded.open, label).toBeGreaterThanOrEqual(
                     expanded.columnWidth * 0.1 - 1,
                   );
                   await toggle.first().click();
                 }
               }
               await resizeMarginViewport(page, 1440);
-              await expect
-                .poll(
-                  async () => {
-                    const restored = await measureMargin(page, testCase);
-                    return Math.max(
-                      ...(["x", "y", "width", "height"] as const).map((key) =>
-                        Math.abs(restored[key] - desktop[key]),
-                      ),
-                    );
-                  },
-                  { message: `${label} desktop geometry` },
-                )
-                .toBeLessThanOrEqual(0.5);
+              await pollMargin((restored) =>
+                Math.max(
+                  ...(["x", "y", "width", "height"] as const).map((key) =>
+                    Math.abs(restored[key] - desktop[key]),
+                  ),
+                ),
+              ).toBeLessThanOrEqual(0.5);
             }
           }
         },
-      );
-    },
+      ),
   );
 });

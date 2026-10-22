@@ -16,6 +16,8 @@ import type { ChannelManager } from "../../../../src/gateway/server-channels.js"
 import { GatewayScheduler } from "../../../../src/infra/gateway-scheduler.js";
 import { resetLogger, setLoggerOverride } from "../../../../src/logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../../../../src/logging/test-helpers/diagnostic-log-capture.js";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
+import { createGatewaySchedulerClock } from "../../../../src/test-utils/gateway-scheduler-clock.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SOURCE_PATH = "test/e2e/qa-lab/runtime/channel-health-monitor-lifecycle-runtime.ts";
@@ -29,27 +31,10 @@ type MonitorProof = {
   singleFlight: boolean;
   settledRearmed: boolean;
   cooldownBounded: boolean;
-  hourlyCapLogged: boolean;
+  exactCadenceThrottled: boolean;
   failureRecovered: boolean;
   shutdownStoppedChecks: boolean;
 };
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-async function waitFor(predicate: () => boolean, label: string, timeoutMs = 1_500) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (predicate()) {
-      return;
-    }
-    await sleep(5);
-  }
-  throw new Error(`timed out waiting for ${label}`);
-}
 
 function snapshot(account: ChannelAccountSnapshot): ChannelRuntimeSnapshot {
   return {
@@ -62,9 +47,7 @@ function policyReason(value: Record<string, unknown>, policy: ChannelHealthPolic
   return evaluateChannelHealth(value, policy).reason;
 }
 
-async function captureMonitorLogs(
-  run: () => Promise<Omit<MonitorProof, "restartLog" | "hourlyCapLogged">>,
-) {
+async function captureMonitorLogs(run: () => Promise<Omit<MonitorProof, "restartLog">>) {
   // openclaw-temp-dir: standalone producer removes this log root in its finally block
   const logDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-health-monitor-proof-"));
   const capture = createDiagnosticLogRecordCapture();
@@ -86,9 +69,6 @@ async function captureMonitorLogs(
     return {
       ...proof,
       restartLog,
-      hourlyCapLogged: messages.some((message) =>
-        message.includes("health-monitor: hit 1 restarts/hour limit, skipping"),
-      ),
     };
   } finally {
     capture.cleanup();
@@ -101,6 +81,9 @@ async function captureMonitorLogs(
 export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorProof> {
   return await captureMonitorLogs(async () => {
     const now = Date.now();
+    const clock = createGatewaySchedulerClock(now);
+    const stopGate = createDeferredCore();
+    let keepDisconnected = false;
     const policy = {
       channelId: "qa-channel" as ChannelId,
       now,
@@ -163,12 +146,12 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
       connected: false,
       enabled: true,
       configured: true,
-      lastStartAt: now - 1_000,
+      lastStartAt: now - 300_000,
     };
     const manager = {
       getRuntimeSnapshot() {
         snapshotCalls += 1;
-        firstSnapshotAt ??= Date.now();
+        firstSnapshotAt ??= clock.clock.now();
         activeSnapshots += 1;
         maxActiveSnapshots = Math.max(maxActiveSnapshots, activeSnapshots);
         try {
@@ -184,7 +167,7 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
       },
       async stopChannel(channelId: ChannelId, accountId: string, options: { manual: boolean }) {
         operations.push(`stop:${channelId}:${accountId}:${String(options.manual)}`);
-        await sleep(35);
+        await stopGate.promise;
       },
       resetRestartAttempts(channelId: ChannelId, accountId: string) {
         operations.push(`reset:${channelId}:${accountId}`);
@@ -194,9 +177,9 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
         account = {
           ...account,
           running: true,
-          connected: true,
-          lastStartAt: Date.now(),
-          lastTransportActivityAt: Date.now(),
+          connected: !keepDisconnected,
+          lastStartAt: clock.clock.now(),
+          lastTransportActivityAt: clock.clock.now(),
         };
       },
       getAutostartSuppression: () => null,
@@ -208,58 +191,65 @@ export async function runChannelHealthMonitorLifecycleProof(): Promise<MonitorPr
       isAutoRestartScheduled: () => false,
     } as unknown as ChannelManager;
 
-    const monitorStartupGraceMs = 250;
-    const monitorStartedAt = Date.now();
-    const scheduler = new GatewayScheduler();
-    const monitor = startChannelHealthMonitor({
-      scheduler,
-      channelManager: manager,
-      checkIntervalMs: 20,
-      cooldownCycles: 2,
-      maxRestartsPerHour: 1,
-      timing: {
-        monitorStartupGraceMs,
-        channelConnectGraceMs: 0,
-        staleEventThresholdMs: 100,
-      },
-    });
+    const monitorStartupGraceMs = 60_000;
+    const checkIntervalMs = 5 * 60_000;
+    const monitorStartedAt = clock.clock.now();
+    const scheduler = new GatewayScheduler({ clock: clock.clock });
+    const monitor = startChannelHealthMonitor({ scheduler, channelManager: manager });
 
     try {
-      await waitFor(() => operations.includes("start:qa-channel:monitored"), "first restart");
+      await clock.advanceBy(monitorStartupGraceMs - 1);
+      const noEarlySnapshot = snapshotCalls === 0;
+      await clock.advanceBy(1);
       const graceRespected =
+        noEarlySnapshot &&
         firstSnapshotAt !== undefined &&
         firstSnapshotAt - monitorStartedAt >= monitorStartupGraceMs;
-      await waitFor(() => snapshotCalls >= 3, "settled rearm");
-      const callsAfterRecovery = snapshotCalls;
-      await sleep(55);
-      const settledRearmed = snapshotCalls > callsAfterRecovery;
-      const failureRecovered = operations.filter((entry) => entry === "snapshot").length >= 2;
+      const restart = clock.advanceBy(checkIntervalMs);
+      const callsDuringRestart = snapshotCalls;
+      await clock.advanceBy(checkIntervalMs);
+      const singleFlight = maxActiveSnapshots === 1 && snapshotCalls === callsDuringRestart;
+      stopGate.resolve();
+      await restart;
 
+      keepDisconnected = true;
       account = {
         ...account,
         connected: false,
-        lastStartAt: Date.now() - 1_000,
+        lastStartAt: clock.clock.now() - 300_000,
       };
-      await sleep(90);
+      const callsAfterRecovery = snapshotCalls;
+      await clock.advanceBy(checkIntervalMs);
+      const settledRearmed = snapshotCalls > callsAfterRecovery;
+      const failureRecovered = operations.filter((entry) => entry === "snapshot").length >= 2;
       const startCount = operations.filter((entry) => entry.startsWith("start:")).length;
       const cooldownBounded = startCount === 1;
+      for (let check = 0; check < 9; check += 1) {
+        await clock.advanceBy(checkIntervalMs);
+      }
+      // These exact virtual wakes yield four restarts; ordinary timer jitter
+      // can allow the next retry just after the ten-minute cooldown.
+      const exactCadenceThrottled =
+        operations.filter((entry) => entry.startsWith("start:")).length === 4;
 
       monitor.shutdown();
       await monitor.waitForIdle();
       const callsAtShutdown = snapshotCalls;
-      await sleep(50);
+      await clock.advanceBy(checkIntervalMs);
 
       return {
         graceRespected,
         operationOrder: operations.filter((entry) => entry !== "snapshot"),
         policyReasons,
-        singleFlight: maxActiveSnapshots === 1,
+        singleFlight,
         settledRearmed,
         cooldownBounded,
+        exactCadenceThrottled,
         failureRecovered,
         shutdownStoppedChecks: snapshotCalls === callsAtShutdown,
       };
     } finally {
+      stopGate.resolve();
       monitor.shutdown();
       await scheduler.stop();
     }
@@ -310,8 +300,8 @@ export async function main(argv = process.argv.slice(2)) {
         `policy reasons were ${proof.policyReasons.join(",")}`,
       !proof.singleFlight && "checks overlapped",
       !proof.settledRearmed && "settled check did not rearm",
-      !proof.cooldownBounded && "cooldown/hour cap allowed another restart",
-      !proof.hourlyCapLogged && "hourly cap warning was not captured",
+      !proof.cooldownBounded && "cooldown allowed another restart",
+      !proof.exactCadenceThrottled && "exact-cadence cooldown was not respected",
       !proof.failureRecovered && "loop did not recover from snapshot failure",
       !proof.shutdownStoppedChecks && "checks continued after shutdown",
     ].filter((value): value is string => Boolean(value));

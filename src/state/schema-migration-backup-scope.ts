@@ -1,9 +1,16 @@
-import type { IncompatibleOpenClawDatabase } from "./openclaw-database-preflight.types.js";
+import type { SqliteIntegrityCheckOptions } from "../infra/sqlite-integrity.js";
 import { SCHEMA_MIGRATION_BACKUP_TABLES } from "./schema-migration-backup-tables.js";
+import { resolveSchemaMigrationIntegrityTables } from "./schema-migration-integrity-tables.js";
+
+type SchemaMigration = {
+  kind: "agent" | "state";
+  foundVersion: number;
+  supportedVersion: number;
+};
 
 /** Missing steps and same-version repairs retain the full-file recovery contract. */
 export function resolveSchemaMigrationBackupTables(
-  migration: Pick<IncompatibleOpenClawDatabase, "kind" | "foundVersion" | "supportedVersion">,
+  migration: SchemaMigration,
 ): readonly string[] | undefined {
   if (migration.foundVersion <= 0 || migration.foundVersion >= migration.supportedVersion) {
     return undefined;
@@ -23,4 +30,15 @@ export function resolveSchemaMigrationBackupTables(
     tables.add("config_machine_state");
   }
   return [...tables].toSorted();
+}
+
+/** Backup format does not select integrity coverage, including same-version repair. */
+export function resolveSchemaMigrationIntegrityCheck(
+  migration: SchemaMigration,
+  check: "quick" | "full" = "quick",
+): SqliteIntegrityCheckOptions {
+  if (check === "full") {
+    return { check: "full" };
+  }
+  return { check, tables: resolveSchemaMigrationIntegrityTables(migration) };
 }

@@ -1,8 +1,7 @@
 import { readdirSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { PerformanceEntry } from "node:perf_hooks";
 import { mock } from "node:test";
-import { getHeapStatistics, setFlagsFromString } from "node:v8";
+import { GCProfiler, getHeapStatistics, setFlagsFromString } from "node:v8";
 import vm from "node:vm";
 
 // The shared thread-watchdog fixture also runs on Bun; only the native-GC probe needs V8 GC.
@@ -10,7 +9,17 @@ let collectGarbage: () => void = () => {
   // Inject GC pressure that V8 does not retire first; native OOM uses the normal worker.
   setFlagsFromString("--expose_gc --no-detect-ineffective-gcs-near-heap-limit");
   // Cheap major collections must retire a near-limit worker regardless of GC time share.
-  mock.getter(PerformanceEntry.prototype, "duration", () => 0);
+  const profilerPrototype: {
+    stop: (this: GCProfiler) => ReturnType<GCProfiler["stop"]>;
+  } = GCProfiler.prototype;
+  const stop = profilerPrototype.stop;
+  mock.method(GCProfiler.prototype, "stop", function (this: GCProfiler) {
+    const result = stop.call(this);
+    for (const entry of result.statistics) {
+      entry.cost = 0;
+    }
+    return result;
+  });
   collectGarbage = vm.runInNewContext("gc");
   collectGarbage();
 };

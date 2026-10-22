@@ -1,11 +1,5 @@
 import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
-import type {
-  ChatAttachment,
-  ChatGoalDraftMode,
-  ChatReplyTarget,
-  DurableComposerDraftAttachment,
-  HumanMention,
-} from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, DurableComposerDraftAttachment } from "../../lib/chat/chat-types.ts";
 import type {
   DurableComposerDraft,
   DurableComposerDraftScope,
@@ -56,39 +50,6 @@ export function reportDurableComposerStorageError(
   onStorageError();
 }
 
-export function chatAttachmentDraftSignature(
-  text: string,
-  attachments: readonly ChatAttachment[],
-  goalMode?: ChatGoalDraftMode | null,
-  mentions?: readonly HumanMention[],
-  replyTarget?: ChatReplyTarget | null,
-): string {
-  // Admission and recovery mint a new ID for each payload. Preview URLs and
-  // moving the same bytes between Blob/data-URL storage do not change that owner.
-  return JSON.stringify([
-    text,
-    goalMode ?? null,
-    mentions ?? [],
-    replyTarget
-      ? [
-          replyTarget.messageId,
-          replyTarget.text,
-          replyTarget.senderLabel ?? null,
-          replyTarget.sourceMessageId ?? null,
-        ]
-      : null,
-    attachments.map((attachment) => [
-      attachment.id,
-      attachment.mimeType,
-      attachment.origin ?? null,
-      attachment.fileName ?? "",
-      attachment.sizeBytes ?? -1,
-      attachment.browserAnnotation ?? null,
-      attachment.selectionAnnotation ?? null,
-    ]),
-  ]);
-}
-
 export function captureDurableChatAttachments(
   attachments: readonly ChatAttachment[],
 ): DurableComposerDraftAttachment[] | null {
@@ -104,11 +65,9 @@ export function captureDurableChatAttachments(
       ...(attachment.origin ? { origin: attachment.origin } : {}),
       ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
       ...(typeof attachment.sizeBytes === "number" ? { sizeBytes: attachment.sizeBytes } : {}),
-      ...(attachment.browserAnnotation
-        ? { browserAnnotation: { ...attachment.browserAnnotation } }
-        : {}),
+      ...(attachment.browserAnnotation ? { browserAnnotation: attachment.browserAnnotation } : {}),
       ...(attachment.selectionAnnotation
-        ? { selectionAnnotation: { ...attachment.selectionAnnotation } }
+        ? { selectionAnnotation: attachment.selectionAnnotation }
         : {}),
     });
   }
@@ -127,9 +86,6 @@ export async function hydrateDurableComposerAttachments(
       return {
         ...metadata,
         id: generateAttachmentId(),
-        ...(metadata.browserAnnotation
-          ? { browserAnnotation: { ...metadata.browserAnnotation } }
-          : {}),
         ...(annotation ? { selectionAnnotation: annotation } : {}),
         dataUrl: await readBlobAsDataUrl(source),
       };

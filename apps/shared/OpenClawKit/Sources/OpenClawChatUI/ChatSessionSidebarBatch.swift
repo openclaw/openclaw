@@ -64,7 +64,7 @@ final class ChatSessionSidebarBatch {
             guard self.valid else { throw CocoaError(.coderReadCorrupt) }
             // ui/src/app-navigation.ts:59: absence uses page defaults; explicit [] hides them.
             return self.config.ui?.prefs?.sidebarEntries ??
-                ["route:agents-home", "route:dashboards", "route:systems", "route:cron", "route:plugins"]
+                ["route:dashboards", "route:systems", "route:cron", "route:plugins"]
         }
     }
 
@@ -359,14 +359,14 @@ final class ChatSessionSidebarBatch {
         target: OpenClawChatSessionEntry? = nil) -> Drop?
     {
         if section == "pinned" {
-            // ui/src/components/session-organizer-controller.ts:281 consumes self-drops before list unpinning.
+            // ui/src/components/session-organizer.ts handleSidebarZoneDrop consumes self-drops before bubbling.
             if let target, OpenClawChatSessionSidebarData.identity(row) ==
                 OpenClawChatSessionSidebarData.identity(target) { return .selfDrop }
             guard ChatSessionSidebarEligibility.canPin(row) else { return nil }
             return .mutation(row.pinned == true ? nil : ["pinned": .init(true)])
         }
-        // ui/src/components/session-organizer-controller.ts:656 unpins atomically with category assignment;
-        // dropping onto the broad list at :354 instead preserves category.
+        // Category patches: ui/src/components/session-organizer-operations.runtime.ts assignSessionCategory.
+        // Web drop entry points: session-organizer.ts sectionDrop and handleSessionListDrop.
         if section.hasPrefix("group:") || section == "recent" {
             let category = section == "recent" ? nil : String(section.dropFirst(6))
             guard row.category != category || row.pinned == true else { return nil }

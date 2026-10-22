@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
@@ -89,6 +90,59 @@ describe("AppSidebar live narration", () => {
     expect(row()?.querySelector(".sidebar-session-tool")).toBeNull();
     expect(row()?.querySelector(".sidebar-recent-session__subtitle")).toBeNull();
   });
+
+  it.each(["roster", "pages", "online", "collapsed", "hidden"] as const)(
+    "releases narration while %s hides its consumer and resumes visible previews",
+    async (hidden) => {
+      const key = "agent:main:visible-preview";
+      const gateway = createGatewayHarness({} as GatewayBrowserClient);
+      const sessions = createSessionsHarness("main", [key]);
+      let acquired = createDeferred();
+      sessions.subscribeMessages.mockImplementation((subscribedKey) => {
+        acquired.resolve();
+        return Promise.resolve({ key: subscribedKey, agentId: null });
+      });
+      sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
+      const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+      sidebar.sessionOrganizer.setSessionsShowPreview(true);
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await acquired.promise;
+      expect(sessions.subscribeMessages).toHaveBeenCalledTimes(1);
+
+      if (hidden === "roster") {
+        sidebar.sidebarAgentsMode = "roster";
+      } else if (hidden === "collapsed") {
+        sidebar.navigationCollapsed = true;
+      } else if (hidden === "hidden") {
+        sidebar.navigationVisible = false;
+      } else {
+        sidebar.navigationView = hidden;
+      }
+      sidebar.invalidate();
+      await sidebar.updateComplete;
+      expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1);
+
+      acquired = createDeferred();
+      sidebar.sidebarAgentsMode = "chip";
+      sidebar.navigationCollapsed = false;
+      sidebar.navigationVisible = true;
+      sidebar.navigationView = "sessions";
+      sidebar.invalidate();
+      await sidebar.updateComplete;
+      await acquired.promise;
+      expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2);
+      gateway.publishEvent("session.narration", {
+        sessionKey: key,
+        runId: "visible-run",
+        text: "Visible work resumed.",
+      });
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector(".sidebar-recent-session__subtitle")?.textContent).toBe(
+        "Visible work resumed.",
+      );
+    },
+  );
 
   it("subscribes for a running row, renders prose, and cleans up when the run ends", async () => {
     const key = "agent:main:narrated";

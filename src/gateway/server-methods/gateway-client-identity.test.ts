@@ -3,9 +3,11 @@ import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   createAttachments,
+  createClientInfo,
   createUserTurnInputController,
 } from "./chat-send-user-turn.test-support.js";
 import {
@@ -14,27 +16,27 @@ import {
   gatewayClientSessionCreator,
   resolveChatSendCallerContext,
 } from "./gateway-client-identity.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient } from "./types.js";
+
+function profile(profileId: string, displayName: string, updatedAt = 1) {
+  return { profileId, displayName, hasAvatar: false, updatedAt };
+}
 
 describe("gateway client identity", () => {
   it("sender provenance comes only from a live verified profile", () => {
-    const profile = {
-      profileId: "profile-id",
-      displayName: "Person",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
+    const person = profile("profile-id", "Person");
     expect(
       gatewayClientSenderFields({ authenticatedUserId: "profile-id" } as GatewayClient),
     ).toEqual({ sender: { id: "profile-id" } });
     expect(
-      gatewayClientSenderFields({ authenticatedUserProfile: profile } as GatewayClient),
+      gatewayClientSenderFields({ authenticatedUserProfile: person } as GatewayClient),
     ).toEqual({
       sender: { id: "profile-id", name: "Person", identity: { type: "profile", id: "profile-id" } },
     });
     expect(
       gatewayClientSenderFields({
-        authenticatedUserProfile: profile,
+        authenticatedUserProfile: person,
         internal: { syntheticClient: true },
       } as GatewayClient).sender,
     ).not.toHaveProperty("identity");
@@ -42,12 +44,7 @@ describe("gateway client identity", () => {
 
   it("overrides sender attribution without replacing the authorizing identity", () => {
     const client = {
-      authenticatedUserProfile: {
-        profileId: "owner",
-        displayName: "Owner",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: profile("owner", "Owner"),
       internal: {
         syntheticClient: true,
         senderAttribution: {
@@ -97,20 +94,9 @@ describe("gateway client identity", () => {
 describe("chat send command authority", () => {
   function createClient(overrides: Partial<GatewayClient> = {}): GatewayClient {
     return {
+      ...createSessionMutationTestClient(),
       authenticatedUserId: "ada@example.test",
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.write"],
-      },
+      authenticatedUserProfile: profile("profile-ada", "Ada"),
       ...overrides,
     };
   }
@@ -125,41 +111,34 @@ describe("chat send command authority", () => {
     });
   }
 
-  it.each([
-    { name: "verified human", overrides: {}, allowed: true },
-    {
-      name: "fallback owner attribution",
-      overrides: { authenticatedUserId: undefined },
-      allowed: false,
-    },
-    {
-      name: "unresolved profile",
-      overrides: { authenticatedUserProfile: undefined },
-      allowed: false,
-    },
-    {
-      name: "synthetic caller",
-      overrides: { internal: { syntheticClient: true as const } },
-      allowed: false,
-    },
-    {
-      name: "agent tool caller",
-      overrides: {
-        internal: { agentToolCaller: { agentId: "main", sessionKey: "agent:main:tool" } },
-      },
-      allowed: false,
-    },
-    { name: "revoked connection", overrides: { invalidated: true }, allowed: false },
-  ])("matches human allowlists only for $name", ({ overrides, allowed }) => {
-    const context = resolveChatSendCallerContext(createClient(overrides));
-    expect(authorize(context)).toMatchObject({
+  function expectAuthority(
+    context: ReturnType<typeof resolveChatSendCallerContext>,
+    allowed: boolean,
+    entry?: string,
+  ) {
+    expect(authorize(context, entry)).toMatchObject({
       senderIsOwner: allowed,
       isAuthorizedSender: allowed,
     });
-    expect(authorize(context, "profile-other")).toMatchObject({
-      senderIsOwner: false,
-      isAuthorizedSender: false,
-    });
+  }
+
+  it.each<[string, Partial<GatewayClient>, boolean]>([
+    ["verified human", {}, true],
+    ["fallback owner attribution", { authenticatedUserId: undefined }, false],
+    ["unresolved profile", { authenticatedUserProfile: undefined }, false],
+    ["synthetic caller", { internal: { syntheticClient: true } }, false],
+    [
+      "agent tool caller",
+      {
+        internal: { agentToolCaller: { agentId: "main", sessionKey: "agent:main:tool" } },
+      },
+      false,
+    ],
+    ["revoked connection", { invalidated: true }, false],
+  ])("matches human allowlists only for %s", (_name, overrides, allowed) => {
+    const context = resolveChatSendCallerContext(createClient(overrides));
+    expectAuthority(context, allowed);
+    expectAuthority(context, false, "profile-other");
     expect(context).not.toHaveProperty("SenderId");
   });
 
@@ -168,28 +147,21 @@ describe("chat send command authority", () => {
     (change) => {
       const lifetime = new AbortController();
       let current = true;
-      const actor = { kind: "operator" as const, profileId: "profile-ada" };
       const client = createClient({ authenticatedUserId: undefined });
-      const internal: NonNullable<GatewayClient["internal"]> = {
-        operatorRoleActor: actor,
-        remoteIngressPrincipal: {
-          bindingId: "synthetic-command-grant",
-          authenticatedUserProfile: { ...client.authenticatedUserProfile!, avatarRevision: "1" },
-          preparedSessionProfile: {
-            profileId: "profile-ada",
-            role: null,
-            githubLogin: null,
-            aliases: new Set(),
-          },
-          operatorRoleActor: actor,
-          scopes: ["operator.write"],
-          signal: lifetime.signal,
-          assertCurrent: () => {
-            if (!current) {
-              throw new Error("Grant revoked");
-            }
-          },
+      const principal = createRemoteControlUiIngressTestContext({
+        audienceId: "synthetic-command-grant",
+        principal: { kind: "person", profileId: "profile-ada" },
+        operatorScopeCeiling: ["operator.write"],
+        signal: lifetime.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Grant revoked");
+          }
         },
+      }).resolvePrincipal();
+      const internal: NonNullable<GatewayClient["internal"]> = {
+        operatorRoleActor: principal.operatorRoleActor,
+        remoteIngressPrincipal: principal,
       };
       client.internal = internal;
       const context = resolveChatSendCallerContext(client);
@@ -208,59 +180,32 @@ describe("chat send command authority", () => {
     },
   );
 
-  it.each([false])("preserves shipped CLI allowlists with profile=%s", (hasProfile) => {
-    const client = createClient(hasProfile ? {} : { authenticatedUserProfile: undefined });
-    client.connect.client = {
-      id: "cli",
-      version: "test",
-      platform: "test",
-      mode: "cli",
-      displayName: "CLI",
-    };
+  it("preserves shipped CLI allowlists without a profile", () => {
+    const client = createClient({ authenticatedUserProfile: undefined });
+    client.connect.client = createClientInfo({ displayName: "CLI" });
     const context = resolveChatSendCallerContext(client);
-    expect(authorize(context, "cli")).toMatchObject({
-      senderIsOwner: true,
-      isAuthorizedSender: true,
-    });
+    expectAuthority(context, true, "cli");
     expect(context).toMatchObject({ SenderId: "cli", SenderName: "CLI", SenderUsername: "CLI" });
-    expect(authorize(resolveChatSendCallerContext(createClient()), "cli")).toMatchObject({
-      senderIsOwner: false,
-      isAuthorizedSender: false,
-    });
+    expectAuthority(resolveChatSendCallerContext(createClient()), false, "cli");
   });
 
-  it.each([
-    {
-      name: "invalidation",
-      retire: (client: GatewayClient, _lifetime: AbortController) => {
+  it.each(["invalidation", "closure", "profile replacement"])(
+    "rechecks retained context after %s",
+    (change) => {
+      const lifetime = new AbortController();
+      const client = createClient({ connectionSignal: lifetime.signal });
+      const context = resolveChatSendCallerContext(client);
+      expect(authorize(context).isAuthorizedSender).toBe(true);
+      if (change === "invalidation") {
         client.invalidated = true;
-      },
-    },
-    {
-      name: "closure",
-      retire: (_client: GatewayClient, lifetime: AbortController) => {
+      } else if (change === "closure") {
         lifetime.abort();
-      },
+      } else {
+        client.authenticatedUserProfile = profile("profile-other", "Other", 2);
+      }
+      expectAuthority(context, false);
     },
-    {
-      name: "profile replacement",
-      retire: (client: GatewayClient, _lifetime: AbortController) => {
-        client.authenticatedUserProfile = {
-          profileId: "profile-other",
-          displayName: "Other",
-          hasAvatar: false,
-          updatedAt: 2,
-        };
-      },
-    },
-  ])("rechecks retained context after $name", ({ retire }) => {
-    const lifetime = new AbortController();
-    const client = createClient({ connectionSignal: lifetime.signal });
-    const context = resolveChatSendCallerContext(client);
-    expect(authorize(context).isAuthorizedSender).toBe(true);
-    retire(client, lifetime);
-    expect(authorize(context)).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
-  });
+  );
 
   it.each([
     "profile",
@@ -284,8 +229,6 @@ describe("chat send command authority", () => {
         inboundMessage: "Change my theme",
         clientInfo: client.connect.client,
         suppressCommandInterpretation: false,
-        systemInputProvenance: undefined,
-        systemProvenanceReceipt: undefined,
       },
       session: { agentId: "main", clientRunId: "owner-turn", sessionKey: "agent:main:main" },
       admission: {

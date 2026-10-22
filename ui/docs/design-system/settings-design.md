@@ -1,6 +1,6 @@
 # Settings Design Language
 
-Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Workspace styles live in `ui/src/styles/settings.css`, while controls shared with startup surfaces live in `ui/src/styles/settings-controls.css` and `settings-native-controls.css`. Solid views use `ui/src/components/solid/settings-ui.tsx`; unported Lit views retain only `renderSettingsRow` and `renderSettingsSegmented` in `ui/src/components/settings-ui.ts`.
+Every settings surface (the `/settings` takeover pages plus the Plugins/Skills hubs) uses one structural pattern. Workspace styles live in `ui/src/styles/settings.css`, while controls shared with startup surfaces live in `ui/src/styles/settings-controls.css` and `settings-native-controls.css`. Shared layout and control components live in `ui/src/components/solid/settings-ui.tsx`.
 
 ## Anatomy
 
@@ -71,7 +71,7 @@ Mount settings views inside `ShellLayoutProvider` from
 `ui/src/app/shell-layout-traits-solid.tsx`, passing the shell's `ShellLayoutOwner`
 and the connected route host. Settings layout boundaries publish their traits
 before evaluating descendant content, so measurements see the correct shell
-classes. Keep this owner shared with the Lit shell adapter during migration.
+classes.
 When a page body loads asynchronously, publish its column trait at the page-shell
 boundary, outside the loading branch. The Models shell reserves the narrow
 settings column before provider data arrives, keeping its heading in place.

@@ -143,8 +143,17 @@ export const SessionRowSchema = Type.Object(
     /** Shared dashboard default; absent means split. */
     boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
+    /** A title request is currently in flight; runtime-only, never persisted. */
+    titlePending: Type.Optional(Type.Boolean()),
     derivedTitle: Type.Optional(Type.String()),
     lastMessagePreview: Type.Optional(Type.String()),
+    /** Latest visible assistant text in the bounded transcript preview, with its message time. */
+    lastAssistantMessage: Type.Optional(
+      Type.Object(
+        { text: Type.String(), timestamp: Type.Number() },
+        { additionalProperties: false },
+      ),
+    ),
     channel: Type.Optional(Type.String()),
     /** Stable non-sensitive facts derived from the canonical session route. */
     classification: Type.Optional(SessionClassificationSchema),
@@ -182,10 +191,12 @@ export const SessionRowSchema = Type.Object(
     lastInteractionAt: Type.Optional(Type.Number()),
     status: Type.Optional(SessionRunStatusSchema),
     lastRunError: Type.Optional(Type.String()),
+    suppressErrorNotice: Type.Optional(Type.Boolean()),
     providerReview: Type.Optional(SessionProviderReviewProjectionSchema),
     /** Exact run that produced the latest terminal lifecycle projection. */
     lastRunId: Type.Optional(NonEmptyString),
     restartRecoveryStatus: Type.Optional(Type.Literal("tombstoned")),
+    restartRecoveryCycleId: Type.Optional(NonEmptyString),
     activeLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.String()),
     parentSessionKey: Type.Optional(Type.String()),

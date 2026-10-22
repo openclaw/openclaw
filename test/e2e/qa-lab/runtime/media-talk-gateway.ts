@@ -74,7 +74,7 @@ const SCENARIOS = {
       SOURCE_PATH,
       "src/agents/embedded-agent-runner/run/attempt-tool-run-context.ts",
       "extensions/codex/src/app-server/dynamic-tool-build.ts",
-      "src/infra/outbound/message-action-tts.ts",
+      "src/infra/outbound/message-action-send.ts",
     ],
   },
   "active-talk-agent-run-status": {

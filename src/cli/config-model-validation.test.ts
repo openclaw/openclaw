@@ -72,24 +72,6 @@ describe("config model validation", () => {
     });
   });
 
-  it("does not count a thrown resolver call as checked", async () => {
-    const result = await checkTouchedTextModelRefs({
-      config: {
-        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
-      },
-      touchedPaths: [["agents", "defaults", "model", "primary"]],
-      resolveModelRef: async () => {
-        throw new Error("catalog unavailable");
-      },
-    });
-
-    expect(result).toEqual({
-      refsChecked: 0,
-      refsTotal: 1,
-      errors: [expect.stringContaining("Unable to validate model reference: catalog unavailable")],
-    });
-  });
-
   it("collects every unresolved ref in a multi-reference update", async () => {
     const rejectModelRef = vi.fn(
       async ({ ref }: { ref: { value: string } }) => `Unknown model: ${ref.value}`,

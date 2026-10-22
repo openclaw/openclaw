@@ -1,24 +1,40 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createEffect, createMemo, onSettled } from "solid-js";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  action,
+  createEffect,
+  createMemo,
+  createOptimistic,
+  latest,
+  onSettled,
+} from "solid-js";
+import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
 import "../../components/sparkline-tile.tsx";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
+import "../../components/desktop/desktop-panel-solid.tsx";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
-import "../../components/desktop/desktop-panel.ts";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
-import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import { formatResourceBytes as bytes, formatTimeAgo } from "../../lib/format.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
+import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import type { SparklineSample } from "../../lib/sparkline-types.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { SystemsBackups } from "./systems-backups.tsx";
-import type { SystemsController, SystemsRouteData } from "./systems-controller.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
+import { createSystemsRead } from "./systems-read.ts";
 import { systemKind, systemName, systemPlatform, systemStatus } from "./systems-sidebar.tsx";
+import type { Systems } from "./systems-state.ts";
 import {
   SYSTEMS_GATEWAY_STALE_MS,
   SYSTEMS_NODE_STALE_MS,
@@ -29,15 +45,6 @@ import {
 import "../../styles/systems.css";
 
 registerEnglishCatalog(registerSystemsEnglish);
-
-function bytes(value: number): string {
-  return formatByteSize(value, {
-    style: "legacy-binary",
-    separator: " ",
-    maxUnit: "tera",
-    fractionDigits: (size, unit) => (unit === "tera" || size < 10 ? 1 : 0),
-  });
-}
 
 function metricSamples(
   history: readonly SystemsTelemetrySample[],
@@ -55,17 +62,17 @@ function metricSamples(
   return samples;
 }
 
-function SystemMeasurements(props: { row: SystemsInventoryRow; controller: SystemsController }) {
+function SystemMeasurements(props: { row: SystemsInventoryRow; controller: Systems }) {
   const row = () => props.row;
   const controller = () => props.controller;
   const stats = () => systemMeasurements(row());
 
-  const observedAt = () => row().node?.hostStats?.updatedAtMs ?? controller().sampledAtMs;
+  const observedAt = () => row().node?.hostStats?.updatedAtMs ?? controller().sampledAtMs();
   const gatewayHost = () => row()!.environment.id === "gateway";
   const lastKnown = () =>
-    !controller().connected ||
+    !controller().connected() ||
     row()!.environment.status !== "available" ||
-    Boolean(controller().inventory?.errors[gatewayHost() ? "systemInfo" : "nodes"]) ||
+    Boolean(controller().state.inventory?.errors[gatewayHost() ? "systemInfo" : "nodes"]) ||
     (observedAt() !== null &&
       Date.now() - observedAt()! >
         (gatewayHost() ? SYSTEMS_GATEWAY_STALE_MS : SYSTEMS_NODE_STALE_MS));
@@ -145,40 +152,38 @@ function SystemMeasurements(props: { row: SystemsInventoryRow; controller: Syste
   );
 }
 
-type SystemsPageProps = { routeData?: SystemsRouteData; presented: boolean };
-type SystemsPageElement = SolidBridgeElement<SystemsPageProps>;
-
-function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
-  const projection = createMemo(() => {
-    const controller = props.routeData?.controller;
-    return controller
-      ? projectSource(controller, {
-          read: (value) => value,
-          subscribe: (value, notify) => value.subscribe(notify),
-          equality: "revision",
-        })
-      : null;
-  });
-  const controller = () => projection()?.read();
+export function SystemsPage(props: { controller: Systems; presented: boolean }) {
+  let desktopPanel: HTMLElementTagNameMap["openclaw-desktop-panel"] | undefined;
+  const source = createMemo(() => props.controller);
+  const isPresented = createMemo(() => props.presented);
+  const projection = createMemo(() => projectOwner(source(), (value) => value));
+  const config = createMemo(() => projectRuntimeConfig(source().context.runtimeConfig));
+  const controller = () => {
+    config().revision();
+    return projection().read();
+  };
+  const inventoryRead = createSystemsRead(() => controller().inventoryRead);
+  // The systems owner starts and parks its Gateway polling with page visibility.
   createEffect(
-    () => ({ controller: props.routeData?.controller, presented: props.presented }),
+    () => ({ controller: source(), presented: isPresented() }),
     ({ controller: active, presented }) => {
-      active?.setPresented(presented);
-      return () => active?.setPresented(false);
+      active.setPresented(presented);
+      return () => active.setPresented(false);
     },
   );
   onSettled(() => {
     const tick = () => {
       const active = controller();
-      if (!props.presented || !active) {
+      if (!props.presented) {
         return;
       }
-      if (active.needsInventoryRefresh) {
+      const needsInventory = active.needsInventoryRefresh();
+      if (needsInventory) {
         void active.refresh();
-      } else if (active.showStats || active.showDetails) {
+      } else if (active.state.showStats || active.state.showDetails) {
         void active.refreshTelemetry();
       }
-      if ((!active.selected || active.selectedId === "gateway") && !active.needsInventoryRefresh) {
+      if ((!active.selected() || active.state.selectedId === "gateway") && !needsInventory) {
         void active.refreshBackups();
       }
     };
@@ -194,7 +199,7 @@ function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
     };
     const desktopToggle = (event: Event) => {
       const active = controller();
-      if (!props.presented || !active?.current || !(event instanceof CustomEvent)) {
+      if (!props.presented || !active.current() || !(event instanceof CustomEvent)) {
         return;
       }
       const detail = isRecord(event.detail) ? event.detail : {};
@@ -202,11 +207,11 @@ function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
         typeof detail.environmentId === "string" ? detail.environmentId : undefined;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (detail.open === false || environmentId === active.selectedId) {
-        host.querySelector("openclaw-desktop-panel")?.handleToggleRequest(event);
+      if (detail.open === false || environmentId === active.state.selectedId) {
+        desktopPanel?.handleToggleRequest(event);
       } else if (environmentId) {
         active.select(environmentId);
-        if (!active.rows.some((row) => row.environment.id === environmentId)) {
+        if (!active.state.rows.some((row) => row.environment.id === environmentId)) {
           void active.refresh();
         }
       }
@@ -214,29 +219,38 @@ function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
     if (document.visibilityState !== "hidden") {
       timer = setInterval(tick, 15_000);
     }
-    document.addEventListener("visibilitychange", visibility);
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, desktopToggle);
+    const stopVisibility = listen(document, "visibilitychange", visibility);
+    const stopToggle = listen(window, DESKTOP_PANEL_TOGGLE_EVENT, desktopToggle);
     return () => {
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", visibility);
-      window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, desktopToggle);
+      stopVisibility();
+      stopToggle();
     };
   });
   return (
-    <Show
-      when={controller()?.current}
-      fallback={
-        <p class="systems-state" role="status">
-          {t("systems.loading")}
-        </p>
-      }
-    >
-      <SystemsWorkspace controller={controller()!} presented={props.presented} />
-    </Show>
+    <openclaw-systems-page>
+      <Show
+        when={controller().current()}
+        fallback={
+          <p class="systems-state" role="status">
+            {t("systems.loading")}
+          </p>
+        }
+      >
+        <SystemsWorkspace
+          controller={controller()}
+          inventoryRead={inventoryRead}
+          presented={props.presented}
+          onDesktopPanel={(panel) => {
+            desktopPanel = panel;
+          }}
+        />
+      </Show>
+    </openclaw-systems-page>
   );
 }
 
-function SystemsDetails(props: { controller: SystemsController; row: SystemsInventoryRow }) {
+function SystemsDetails(props: { controller: Systems; row: SystemsInventoryRow }) {
   const controller = () => props.controller;
   const row = () => props.row;
   const environment = () => row()!.environment;
@@ -248,7 +262,7 @@ function SystemsDetails(props: { controller: SystemsController; row: SystemsInve
           class="systems-icon-button"
           aria-label={t("systems.closeDetails")}
           onClick={() =>
-            controller().updatePresentation({ showDetails: !controller().showDetails })
+            controller().updatePresentation({ showDetails: !controller().state.showDetails })
           }
         >
           <Icon name="x" />
@@ -258,7 +272,7 @@ function SystemsDetails(props: { controller: SystemsController; row: SystemsInve
         <dt>{t("systems.identifier")}</dt>
         <dd>{environment().id}</dd>
         <dt>{t("systems.status")}</dt>
-        <dd>{controller().connected ? systemStatus(row()) : t("systems.offline")}</dd>
+        <dd>{controller().connected() ? systemStatus(row()) : t("systems.offline")}</dd>
         <dt>{t("systems.platform")}</dt>
         <dd>{systemPlatform(row()) ?? t("systems.unknown")}</dd>
       </dl>
@@ -282,13 +296,11 @@ function SystemsDetails(props: { controller: SystemsController; row: SystemsInve
               <a
                 class="systems-session-link"
                 href={target().href}
-                onClick={(event: MouseEvent) => {
-                  if (!shouldHandleNavigationClick(event)) {
-                    return;
-                  }
-                  event.preventDefault();
-                  controller().context.navigate(face, target().options);
-                }}
+                onClick={(event: MouseEvent) =>
+                  handleNavigationClick(event, () => {
+                    controller().context.navigate(face, target().options);
+                  })
+                }
               >
                 <strong class="systems-session-link__title">
                   {session.displayName ?? session.label ?? session.key}
@@ -320,54 +332,57 @@ function SystemsDetails(props: { controller: SystemsController; row: SystemsInve
   );
 }
 
-function HostDesktopSetup(props: { controller: SystemsController; row: SystemsInventoryRow }) {
+function HostDesktopSetup(props: {
+  controller: Systems;
+  row: SystemsInventoryRow;
+  loading: boolean;
+}) {
   const controller = () => props.controller;
   const row = () => props.row;
   const setup = () => row()!.environment.desktopSetup;
-  const enabled = () => controller().hostDesktopEnabled;
+  const enabled = () => controller().hostDesktopEnabled();
   const isMac = () => systemPlatform(row())?.startsWith("macOS") === true;
   const ready = () => setup()?.state === "ready" || setup()?.state === "managed";
-  const title = () =>
-    enabled()
-      ? "systems.desktopSetupEnabled"
-      : ([
-          ["managed", "systems.managedDesktopConfigured"],
-          ["ready", isMac() ? "systems.screenSharingDetected" : "systems.desktopDetected"],
-          ["needs-server", isMac() ? "systems.screenSharingNeeded" : "systems.desktopServerNeeded"],
-        ].find(([kind]) => kind === setup()?.state)?.[1] ?? "systems.desktopSetupAttention");
-  const hint = () =>
-    enabled()
-      ? "systems.desktopSetupConnecting"
-      : ready()
-        ? "systems.desktopSetupEnableHint"
-        : isMac() && setup()?.state === "needs-server"
-          ? "systems.screenSharingSetupHint"
-          : "systems.desktopServerSetupHint";
+  const copy = () => hostDesktopSetupCopy(setup()?.state, isMac(), enabled());
+  const [enabling, setEnabling] = createOptimistic(false);
+  const presentEnable = action(function* (
+    operation: NonNullable<ReturnType<Systems["enableHostDesktop"]>>,
+  ) {
+    setEnabling(true);
+    yield Promise.race([operation.completion, operation.retired]);
+  });
+  const enable = async () => {
+    const operation = controller().enableHostDesktop();
+    if (!operation) {
+      return;
+    }
+    // Let the owner's admission publish before starting its optimistic presentation.
+    await Promise.resolve();
+    await presentEnable(operation);
+  };
   return (
     <div class="systems-state" role="status">
       <span class="systems-state__icon" aria-hidden="true">
         <Icon name="monitor" />
       </span>
-      <h2>{t(title())}</h2>
-      <p>{t(hint())}</p>
+      <h2>{t(copy().title)}</h2>
+      <p>{t(copy().hint)}</p>
       {setup()?.state === "unsupported" && setup()!.detail ? <p>{setup()!.detail}</p> : null}
-      {controller().desktopSetupError ? (
+      {controller().state.desktopSetupError ? (
         <p class="systems-callout--error" role="alert">
-          {controller().desktopSetupError}
+          {controller().state.desktopSetupError}
         </p>
       ) : null}
       {!enabled() && ready() ? (
         <>
           <button
             class="btn primary systems-text-button"
-            disabled={!controller().canEnableHostDesktop || controller().desktopSetupBusy}
-            onClick={() => void controller().enableHostDesktop()}
+            disabled={
+              enabling() || controller().desktopSetupBusy() || !controller().canEnableHostDesktop()
+            }
+            onClick={() => void enable()}
           >
-            {t(
-              controller().desktopSetupBusy
-                ? "systems.desktopSetupEnabling"
-                : "systems.enableDesktopAccess",
-            )}
+            {t(enabling() ? "systems.desktopSetupEnabling" : "systems.enableDesktopAccess")}
           </button>
           <p>
             {t(
@@ -381,7 +396,7 @@ function HostDesktopSetup(props: { controller: SystemsController; row: SystemsIn
       {!enabled() && !ready() ? (
         <button
           class="systems-text-button"
-          disabled={controller().loading || !controller().connected}
+          disabled={props.loading || !controller().connected()}
           onClick={() => void controller().refresh("manual")}
         >
           {t("systems.desktopSetupCheckAgain")}
@@ -391,24 +406,33 @@ function HostDesktopSetup(props: { controller: SystemsController; row: SystemsIn
   );
 }
 
-function SystemsWorkspace(props: { controller: SystemsController; presented: boolean }) {
+function SystemsWorkspace(props: {
+  controller: Systems;
+  inventoryRead: ReturnType<typeof createSystemsRead>;
+  presented: boolean;
+  onDesktopPanel: (panel: HTMLElementTagNameMap["openclaw-desktop-panel"] | undefined) => void;
+}) {
   const controller = () => props.controller;
-  const row = () => controller().selected;
+  const row = () => controller().selected();
+  const readStatus = () => {
+    latest(props.inventoryRead.read);
+    return null;
+  };
   const canView = () =>
     Boolean(
       row()?.environment.desktop &&
       row()!.environment.status === "available" &&
-      controller().desktopAvailable &&
+      controller().desktopAvailable() &&
       props.presented,
     );
-  const title = () => (row() ? systemName(row()!) : t("systems.title"));
-  const auxiliaryErrors = () => Object.values(controller().inventory?.errors ?? {});
+  const title = () => (row() ? systemName(row()!) : t("systems.select"));
+  const auxiliaryErrors = () => Object.values(controller().state.inventory?.errors ?? {});
   const emptyTitle = () =>
-    !controller().connected
+    !controller().connected()
       ? t("systems.offlineGateway")
-      : controller().loading && !controller().inventory
+      : props.inventoryRead.pending() && !controller().state.inventory
         ? t("systems.loading")
-        : controller().selectedId && !row()
+        : controller().state.selectedId && !row()
           ? t("systems.missingTitle")
           : !row()
             ? t("systems.select")
@@ -420,7 +444,7 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
                 ? t("systems.noDesktopTitle")
                 : t("systems.accessTitle");
   const emptyHint = () =>
-    controller().selectedId && !row()
+    controller().state.selectedId && !row()
       ? t("systems.missingHint")
       : !row()
         ? t("systems.selectHint")
@@ -433,30 +457,53 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
                   : "systems.noDesktopHint",
               )
             : t("systems.accessHint");
+  const Desktop = () => {
+    let panel!: HTMLElementTagNameMap["openclaw-desktop-panel"];
+    onSettled(() => {
+      props.onDesktopPanel(panel);
+      return () => props.onDesktopPanel(undefined);
+    });
+    return (
+      <openclaw-desktop-panel
+        ref={(element) => (panel = element)}
+        embedded
+        data-chat-autotype-exempt
+        prop:client={controller().context.gateway.snapshot.client}
+        prop:available={controller().desktopAvailable()}
+        prop:presented={props.presented}
+        prop:workspaceControls={true}
+        prop:suppliedEnvironments={controller().state.inventory?.environments ?? []}
+        prop:requestedSource={row()!.environment.id}
+        prop:basePath={controller().context.basePath}
+      />
+    );
+  };
   return (
     <section class="systems-workspace" aria-label={t("systems.title")}>
+      <HubPageHeader
+        active="systems"
+        wide
+        docsUrl="https://docs.openclaw.ai/web/control-ui/sessions-and-sidebar#systems-workspace"
+        class="systems-page-header"
+      />
       <header class="systems-toolbar">
         <div class="systems-heading">
-          <h1>{title()}</h1>
+          <h2>{title()}</h2>
           <span>{row() ? t("systems." + systemKind(row()!)) : t("systems.selectHint")}</span>
         </div>
         <select
           class="systems-mobile-picker"
           aria-label={t("systems.select")}
-          onChange={(event: Event) => {
-            if (event.currentTarget instanceof HTMLSelectElement) {
-              controller().select(event.currentTarget.value);
-            }
-          }}
+          onChange={(event) => controller().select(event.currentTarget.value)}
         >
           <option value="" disabled selected={!row()}>
             {t("systems.select")}
           </option>
-          <For each={controller().rows}>
+          <For each={controller().state.rows}>
             {(entry) => (
               <option
                 value={entry.environment.id}
-                selected={entry.environment.id === controller().selectedId}
+                selected={entry.environment.id === controller().state.selectedId}
               >
                 {systemName(entry)}
               </option>
@@ -465,10 +512,12 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
         </select>
         <button
           class="systems-icon-button"
-          title={t(controller().showStats ? "systems.hideStats" : "systems.stats")}
-          aria-label={t(controller().showStats ? "systems.hideStats" : "systems.stats")}
-          aria-pressed={controller().showStats ? "true" : "false"}
-          onClick={() => controller().updatePresentation({ showStats: !controller().showStats })}
+          title={t(controller().state.showStats ? "systems.hideStats" : "systems.stats")}
+          aria-label={t(controller().state.showStats ? "systems.hideStats" : "systems.stats")}
+          aria-pressed={controller().state.showStats ? "true" : "false"}
+          onClick={() =>
+            controller().updatePresentation({ showStats: !controller().state.showStats })
+          }
         >
           <Icon name="activity" />
         </button>
@@ -476,27 +525,35 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
           class="systems-icon-button"
           title={t("systems.details")}
           aria-label={t("systems.details")}
-          aria-pressed={controller().showDetails ? "true" : "false"}
+          aria-pressed={controller().state.showDetails ? "true" : "false"}
           disabled={!row()}
           onClick={() =>
-            controller().updatePresentation({ showDetails: !controller().showDetails })
+            controller().updatePresentation({ showDetails: !controller().state.showDetails })
           }
         >
           <Icon name="panelRightOpen" />
         </button>
       </header>
-      {controller().error ? (
-        <div class="systems-callout systems-callout--error" role="alert">
-          {controller().error}
-          <button
-            onClick={() => void controller().refresh("manual")}
-            disabled={controller().loading}
+      <Show when={props.inventoryRead.receipt()} keyed>
+        {(receipt) => (
+          <Errored
+            fallback={(error) => (
+              <div class="systems-callout systems-callout--error" role="alert">
+                {formatUiError(error())}
+                <button
+                  onClick={() => void controller().refresh("manual")}
+                  disabled={props.inventoryRead.pending()}
+                >
+                  {t("common.retry")}
+                </button>
+              </div>
+            )}
           >
-            {t("common.retry")}
-          </button>
-        </div>
-      ) : null}
-      {!controller().connected ? (
+            <Loading on={receipt}>{readStatus()}</Loading>
+          </Errored>
+        )}
+      </Show>
+      {!controller().connected() ? (
         <div class="systems-callout" role="status">
           {t("systems.offlineGateway")}
         </div>
@@ -507,7 +564,7 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
           <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
         </details>
       ) : null}
-      {controller().showStats && row() ? (
+      {controller().state.showStats && row() ? (
         <SystemMeasurements row={row()!} controller={controller()} />
       ) : null}
       {!row() || row()!.environment.id === "gateway" ? (
@@ -516,25 +573,19 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
       <div class="systems-body">
         <div class="systems-desktop">
           {canView() && row() ? (
-            <openclaw-desktop-panel
-              embedded
-              data-chat-autotype-exempt
-              prop:client={controller().context.gateway.snapshot.client}
-              prop:available={controller().desktopAvailable}
-              prop:presented={props.presented}
-              prop:workspaceControls={true}
-              prop:suppliedEnvironments={controller().inventory?.environments ?? []}
-              prop:requestedSource={row()!.environment.id}
-              prop:basePath={controller().context.basePath}
-            />
+            <Desktop />
           ) : row()?.environment.id === "gateway" &&
-            controller().connected &&
+            controller().connected() &&
             row()!.environment.status === "available" &&
             (row()!.environment.desktopSetup ||
               (row()!.environment.desktop &&
-                controller().hostDesktopEnabled &&
+                controller().hostDesktopEnabled() &&
                 controller().context.runtimeConfig.canPatch === true)) ? (
-            <HostDesktopSetup controller={controller()} row={row()!} />
+            <HostDesktopSetup
+              controller={controller()}
+              row={row()!}
+              loading={props.inventoryRead.pending()}
+            />
           ) : (
             <div class="systems-state" role="status">
               <span class="systems-state__icon" aria-hidden="true">
@@ -547,7 +598,7 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
                   class="systems-text-button"
                   onClick={() =>
                     controller().updatePresentation({
-                      showDetails: !controller().showDetails,
+                      showDetails: !controller().state.showDetails,
                     })
                   }
                 >
@@ -557,23 +608,10 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
             </div>
           )}
         </div>
-        {controller().showDetails && row() ? (
+        {controller().state.showDetails && row() ? (
           <SystemsDetails controller={controller()} row={row()!} />
         ) : null}
       </div>
     </section>
   );
-}
-
-defineSolidBridge<SystemsPageProps>("openclaw-systems-page", SystemsPageContent, {
-  properties: {
-    routeData: { default: undefined, attribute: false },
-    presented: { default: true, type: Boolean },
-  },
-});
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-systems-page": SystemsPageElement;
-  }
 }

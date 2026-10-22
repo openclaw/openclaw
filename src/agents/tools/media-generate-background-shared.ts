@@ -57,7 +57,6 @@ import { resolveRequesterStoreKey } from "../subagents/announce/subagent-request
 import { captureGatewayToolCallerAssertion } from "./gateway-caller-context.js";
 import {
   retainBlockedMediaCompletion,
-  retainBlockedMediaReferences,
   wakeMediaGenerationTaskCompletion,
   type MediaGenerationCompletionWakeOutcome,
   type MediaGenerationTaskHandle,
@@ -70,8 +69,6 @@ const MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS = [250, 500, 1_000, 2_
 const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
 
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
-
-export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
 
 function shouldDetachMediaGenerationTask(
   sessionKey: string | undefined,
@@ -96,8 +93,6 @@ function shouldDetachMediaGenerationTask(
 }
 
 export type MediaGenerationExecutionResult = {
-  provider: string;
-  model: string;
   count: number;
   wakeResult: string;
   attachments?: AgentGeneratedAttachment[];
@@ -122,15 +117,12 @@ type RecordMediaGenerationTaskProgressParams = {
 
 type CompleteMediaGenerationTaskRunParams = {
   handle: MediaGenerationTaskHandle | null;
-  provider: string;
-  model: string;
   count: number;
   terminalResult?: RequiredCompletionTerminalResult;
 };
 
 type FailMediaGenerationTaskRunParams = {
   handle: MediaGenerationTaskHandle | null;
-  error: unknown;
 };
 
 type WakeMediaGenerationTaskCompletionParams = Omit<
@@ -301,15 +293,12 @@ async function createMediaGenerationTaskRun(
     const task = createMediaGenerationOperation({
       taskId: runId,
       status: "running",
-      createdAt: Date.now(),
       taskKind: params.taskKind,
       sourceId: params.providerId ? `${params.toolName}:${params.providerId}` : params.toolName,
       requesterSessionKey: sessionKey,
       requesterAgentId: params.requesterAgentId,
       runId,
       task: params.prompt,
-      startedAt: Date.now(),
-      lastEventAt: Date.now(),
       progressSummary: params.queuedProgressSummary,
     });
     const handle = {
@@ -343,7 +332,6 @@ function recordMediaGenerationTaskProgress(params: RecordMediaGenerationTaskProg
   }
   touchMediaGenerationTaskRunContext(params.handle);
   updateMediaGenerationOperation(params.handle.runId, {
-    lastEventAt: Date.now(),
     progressSummary: params.progressSummary,
   });
 }
@@ -440,7 +428,7 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       } catch (wakeError) {
         reportFailure(`${params.toolName} failure wake failed`, { error: wakeError });
       }
-      params.lifecycle.failTaskRun({ handle: params.handle, error });
+      params.lifecycle.failTaskRun({ handle: params.handle });
       return;
     }
 
@@ -489,7 +477,6 @@ export function scheduleMediaGenerationTaskCompletion(params: {
         error,
       });
     }
-    terminalResult = retainBlockedMediaReferences(terminalResult, executed.attachments);
     try {
       await retainBlockedMediaCompletion({
         handle: params.handle,
@@ -503,8 +490,6 @@ export function scheduleMediaGenerationTaskCompletion(params: {
     try {
       params.lifecycle.completeTaskRun({
         handle: params.handle,
-        provider: executed.provider,
-        model: executed.model,
         count: executed.count,
         terminalResult,
       });
@@ -512,7 +497,6 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       reportFailure(`${params.toolName} completion state update failed`, { error });
       params.lifecycle.failTaskRun({
         handle: params.handle,
-        error,
       });
     }
   };
@@ -550,17 +534,12 @@ export function createMediaGenerationTaskLifecycle(kind: "image" | "music" | "vi
         return;
       }
       try {
-        const endedAt = Date.now();
         const generatedLabel = kind === "music" ? "track" : kind;
         const progressSummary = `Generated ${params.count} ${generatedLabel}${params.count === 1 ? "" : "s"}`;
         updateMediaGenerationOperation(params.handle.runId, {
           status: "succeeded",
-          endedAt,
-          lastEventAt: endedAt,
+          endedAt: Date.now(),
           progressSummary,
-          terminalSummary:
-            params.terminalResult?.terminalSummary ??
-            `${progressSummary} with ${params.provider}/${params.model}.`,
           terminalOutcome: params.terminalResult?.terminalOutcome,
         });
       } finally {
@@ -573,15 +552,10 @@ export function createMediaGenerationTaskLifecycle(kind: "image" | "music" | "vi
         return;
       }
       try {
-        const endedAt = Date.now();
-        const errorText = formatToolErrorMessage(params.error);
         updateMediaGenerationOperation(params.handle.runId, {
           status: "failed",
-          endedAt,
-          lastEventAt: endedAt,
-          error: errorText,
+          endedAt: Date.now(),
           progressSummary: `${title} generation failed`,
-          terminalSummary: errorText,
         });
       } finally {
         clearMediaGenerationTaskRunContext(params.handle);

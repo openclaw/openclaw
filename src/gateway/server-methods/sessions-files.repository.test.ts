@@ -8,14 +8,17 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -33,15 +36,15 @@ import {
   REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS,
 } from "../github-repository-publication-snapshot.js";
 import { nodeWorkerGatewayNamespace } from "../worker-environments/node-worker-gateway-namespace.js";
-import { createNodeWorkerTunnelManager } from "../worker-environments/node-worker-tunnel.js";
 import {
   BUILD,
+  createManager,
   environment,
   transport,
   workspaceTransfer,
 } from "../worker-environments/node-worker-tunnel.test-support.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
-import { seedAttachedPlacementEnvironment } from "../worker-environments/placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "../worker-environments/placement-test-fixtures.js";
 import { createRepositoryWorkspaceMutationService } from "../worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "../worker-environments/service.js";
 import {
@@ -60,51 +63,35 @@ import { loadSessionDiff } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
+  createSessionFilesClient,
+  createSessionFileDownloadClient,
+  fetchSessionFileDownload,
+  openSessionFileDownload,
   createWorkspaceFixture,
-  expectError,
   expectOkPayload,
   hashContent,
   removeWorkspaceFixture,
 } from "./sessions-files.test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  load: vi.fn(),
   workspace: vi.fn(),
   store: vi.fn(),
   open: vi.fn(),
+  beforeWrite: vi.fn<() => Promise<void>>(),
 }));
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    mocks.load(params.key, { agentId: params.agentId }),
-}));
-vi.mock("../../config/sessions/session-entry-read-facts.js", async (original) => {
-  const actual =
-    await original<typeof import("../../config/sessions/session-entry-read-facts.js")>();
+vi.mock("../../infra/fs-safe.js", async (original) => {
+  const actual = await original<typeof import("../../infra/fs-safe.js")>();
   return {
     ...actual,
-    readRetainedSessionEntryFacts: ((database, request, owner) => {
-      const loaded = mocks.load();
-      if (
-        !loaded ||
-        database.agentId !== loaded.agentId ||
-        database.path !== loaded.storePath ||
-        !request.sessionKeys?.includes(loaded.canonicalKey)
-      ) {
-        return actual.readRetainedSessionEntryFacts(database, request, owner);
-      }
-      return {
-        kind: "session-exact-entries",
-        entries: [{ sessionKey: loaded.canonicalKey, entry: loaded.entry }],
-        lifecycleTimestamps: {},
-        source: { ...database, databaseIdentity: "repository-files-fixture" },
-        databaseIdentity: {
-          identity: "repository-files-fixture",
-          incarnation: "repository-files-fixture",
-          filename: database.path,
-        },
+    root: async (...args: Parameters<typeof actual.root>) => {
+      const root = await actual.root(...args);
+      const write = root.write.bind(root);
+      root.write = async (...writeArgs) => {
+        await mocks.beforeWrite();
+        await write(...writeArgs);
       };
-    }) satisfies typeof actual.readRetainedSessionEntryFacts,
+      return root;
+    },
   };
 });
 vi.mock("../../agents/agent-scope.js", async (original) => ({
@@ -131,7 +118,8 @@ vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
 }));
 
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
-const sessionKey = "agent:main:repository";
+const files = createSessionFilesClient(invoke, () => ({ sessionKey, context }));
+let sessionKey = "agent:main:repository";
 const gatewayDeviceId = "repository-gateway";
 const identity = {
   gatewayNamespace: nodeWorkerGatewayNamespace(gatewayDeviceId),
@@ -159,6 +147,62 @@ let context: ReturnType<typeof requestContext>;
 
 function git(...args: string[]): string {
   return execFileSync("git", ["-C", workspace, ...args], { encoding: "utf8" }).trim();
+}
+
+const workspaceFile = (name: string) => path.join(workspace, name);
+const readFile = (name: string) => fs.readFileSync(workspaceFile(name), "utf8");
+const writeFile = (name: string, content: string | Buffer) =>
+  fs.writeFileSync(workspaceFile(name), content);
+const capture = (baseCommit = source.baseCommit) =>
+  captureWorkspaceManifest({ root: workspace, baseCommit });
+const edit = (content = "saved\n", expectedHash = hashContent("before\n")) => ({
+  path: "changed.txt",
+  content,
+  expectedHash,
+});
+const repositoryEntry = () => ({
+  sessionId,
+  repositoryWorkspaceId: source.workspaceId,
+  lifecycleRevision,
+  archivedAt,
+});
+const environmentRecord = () => ({
+  ...environment(),
+  environmentId: identity.environmentId,
+  ownerEpoch: identity.generation,
+  attachedSessionIds: [identity.sessionId],
+});
+
+function checkpointData(base: Awaited<ReturnType<typeof capture>>, current = base) {
+  return {
+    stagingRoot: workspace,
+    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
+    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
+    baseManifestRef: base.manifestRef,
+    currentManifestRef: current.manifestRef,
+  };
+}
+
+const createRepository = (url: string) =>
+  store.create({ agentId: "main", sessionKey, url, assertCurrent() {} });
+async function publishCheckpoint(base: Awaited<ReturnType<typeof capture>>, current = base) {
+  const staged = await stageSessionRepositoryCheckpoint({
+    store,
+    workspaceId: source.workspaceId,
+    expectedRevision: source.revision,
+    ...checkpointData(base, current),
+    assertCurrent() {},
+  });
+  source = await staged.publish();
+}
+async function bindBase(baseCommit: string, baseManifestHash: string) {
+  source = await store.bindBase({
+    workspaceId: source.workspaceId,
+    expectedRevision: source.revision,
+    baseCommit,
+    baseManifestHash,
+    assertCurrent() {},
+  });
 }
 
 function requestContext() {
@@ -200,6 +244,7 @@ function requestContext() {
 }
 
 beforeEach(async () => {
+  sessionKey = "agent:main:repository";
   vi.clearAllMocks();
   gatewayRoot = createWorkspaceFixture("repository-files-gateway-");
   vi.stubEnv("OPENCLAW_STATE_DIR", gatewayRoot);
@@ -220,53 +265,17 @@ beforeEach(async () => {
   git("config", "user.name", "Repository Test");
   git("config", "user.email", "repository@example.test");
   git("config", "commit.gpgsign", "false");
-  fs.writeFileSync(path.join(workspace, "README"), "untouched source\n");
-  fs.writeFileSync(path.join(workspace, "changed.txt"), "before\n");
+  writeFile("README", "untouched source\n");
+  writeFile("changed.txt", "before\n");
   git("add", ".");
   git("commit", "-qm", "base");
-  store = createSessionRepositoryWorkspaceStore({
-    path: path.join(gatewayRoot, "state.sqlite"),
-  });
-  source = await store.create({
-    agentId: "main",
-    sessionKey,
-    url: "https://example.test/repository.git",
-    assertCurrent: () => {},
-  });
-  const base = await captureWorkspaceManifest({
-    root: workspace,
-    baseCommit: git("rev-parse", "HEAD"),
-  });
-  source = await store.bindBase({
-    workspaceId: source.workspaceId,
-    expectedRevision: source.revision,
-    baseCommit: base.manifest.baseCommit!,
-    baseManifestHash: base.manifestRef,
-    assertCurrent: () => {},
-  });
-  // Repository startup accepts its first checkpoint before exposing an active editor.
-  const initial = await stageSessionRepositoryCheckpoint({
-    store,
-    workspaceId: source.workspaceId,
-    expectedRevision: source.revision,
-    stagingRoot: workspace,
-    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-    currentManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-    baseManifestRef: base.manifestRef,
-    currentManifestRef: base.manifestRef,
-    assertCurrent: () => {},
-  });
-  source = await initial.publish();
+  store = createSessionRepositoryWorkspaceStore({ path: path.join(gatewayRoot, "state.sqlite") });
+  source = await createRepository("https://example.test/repository.git");
+  const base = await capture(git("rev-parse", "HEAD"));
+  await bindBase(base.manifest.baseCommit!, base.manifestRef);
+  await publishCheckpoint(base);
   mocks.store.mockReturnValue(store);
   mocks.workspace.mockReturnValue(gatewayRoot);
-  mocks.load.mockImplementation(() => ({
-    agentId: "main",
-    canonicalKey: sessionKey,
-    cfg: {},
-    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-    storeKeys: [sessionKey],
-    entry: { sessionId, repositoryWorkspaceId: source.workspaceId, lifecycleRevision, archivedAt },
-  }));
   context = requestContext();
   setRuntimeConfigSnapshot(context.getRuntimeConfig());
   await persistSessionEntry();
@@ -293,59 +302,36 @@ afterEach(async () => {
 async function persistSessionEntry() {
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
-    {
-      sessionId,
-      updatedAt: Date.now(),
-      repositoryWorkspaceId: source.workspaceId,
-      lifecycleRevision,
-      archivedAt,
-    },
+    { ...repositoryEntry(), updatedAt: Date.now() },
   );
 }
 
 async function withCheckpointAcceptance(failCapture = false) {
   const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
   const placements = createWorkerSessionPlacementStore({ database });
-  seedAttachedPlacementEnvironment(database, {
-    environmentId: identity.environmentId,
-    sessionId: identity.sessionId,
-    ownerEpoch: identity.generation,
-  });
-  let placement = await placements.startDispatch({
-    sessionId: identity.sessionId,
-    sessionKey,
-    agentId: "main",
-    executionMode: "remote-exec",
-  });
-  for (const [from, to, patch] of [
-    ["requested", "provisioning", { environmentId: identity.environmentId }],
-    ["provisioning", "syncing", { workerBundleHash: BUILD.bundleHash }],
-    [
-      "syncing",
-      "starting",
-      { workspaceBaseManifestRef: source.baseManifestHash, remoteWorkspaceDir: workspace },
-    ],
-    ["starting", "active", { activeOwnerEpoch: identity.generation }],
-  ] as const) {
-    placement = await placements.transition({
+  const placement = await advancePlacementFixtureToActive(
+    placements,
+    database,
+    {
       sessionId: identity.sessionId,
-      from,
-      to,
-      expectedGeneration: placement.generation,
-      patch,
-    });
-  }
-  generation = placement.generation;
-  const base = await captureWorkspaceManifest({
-    root: workspace,
-    baseCommit: source.baseCommit,
-  });
-  const environments = {
-    get: (): ReturnType<WorkerEnvironmentService["get"]> => ({
-      ...environment(),
+      sessionKey,
+      agentId: "main",
+      executionMode: "remote-exec",
+    },
+    {
       environmentId: identity.environmentId,
       ownerEpoch: identity.generation,
-      attachedSessionIds: [identity.sessionId],
+      workerBundleHash: BUILD.bundleHash,
+      workspaceBaseManifestRef: source.baseManifestHash!,
+      remoteWorkspaceDir: workspace,
+      seedEnvironment: "before-dispatch",
+    },
+  );
+  generation = placement.generation;
+  const base = await capture();
+  const environments = {
+    get: (): ReturnType<WorkerEnvironmentService["get"]> => ({
+      ...environmentRecord(),
       desktopAvailable: false,
       desktopApps: [],
       tunnelStatus: "connected",
@@ -362,10 +348,7 @@ async function withCheckpointAcceptance(failCapture = false) {
         if (request.source.kind !== "repository") {
           throw new Error("expected repository capture");
         }
-        const current = await captureWorkspaceManifest({
-          root: workspace,
-          baseCommit: source.baseCommit,
-        });
+        const current = await capture();
         const publicationStagingRoot = path.join(nodeRoot, "publication");
         const publicationDigest = execFileSync(
           process.execPath,
@@ -379,26 +362,15 @@ async function withCheckpointAcceptance(failCapture = false) {
           { encoding: "utf8" },
         ).trim();
         const prepared = await request.source.prepareCheckpoint({
-          stagingRoot: workspace,
+          ...checkpointData(base, current),
           publicationStagingRoot,
           publicationDigest,
-          baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-          currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-          baseManifestRef: base.manifestRef,
-          currentManifestRef: current.manifestRef,
         });
         return {
           manifestRef: current.manifestRef,
           changed: current.manifestRef !== base.manifestRef,
           verifyStable: async () => {
-            expect(
-              (
-                await captureWorkspaceManifest({
-                  root: workspace,
-                  baseCommit: source.baseCommit,
-                })
-              ).manifestRef,
-            ).toBe(current.manifestRef);
+            expect((await capture()).manifestRef).toBe(current.manifestRef);
           },
           verifyLocalStable: () => prepared.verify(),
           publishStagedResult: async () => {
@@ -423,37 +395,21 @@ async function withCheckpointAcceptance(failCapture = false) {
 
 it("accepts editor bytes and Git-normalized publication before acknowledging the save", async () => {
   const accepted = await withCheckpointAcceptance();
-  fs.writeFileSync(path.join(workspace, ".gitattributes"), "changed.txt text eol=lf\n");
-  expectOkPayload(
-    await invoke(
-      "sessions.files.set",
-      {
-        sessionKey,
-        path: "changed.txt",
-        content: "saved\r\n",
-        expectedHash: hashContent("before\n"),
-      },
-      accepted.context,
-    ),
-  );
+  writeFile(".gitattributes", "changed.txt text eol=lf\n");
+  await files.ok("set", edit("saved\r\n"), accepted.context);
   await withSessionRepositoryCheckpoint(
-    { store, workspaceId: source.workspaceId, includePublication: true },
-    async (snapshot) => {
-      expect(fs.readFileSync(path.join(snapshot.stagingRoot, "changed.txt"), "utf8")).toBe(
-        "saved\r\n",
-      );
-      expect(snapshot.publicationDigest).toBeDefined();
+    { store, workspaceId: source.workspaceId },
+    async ({ stagingRoot, publicationDigest, publicationStagingRoot }) => {
+      expect(fs.readFileSync(path.join(stagingRoot, "changed.txt"), "utf8")).toBe("saved\r\n");
+      expect(publicationDigest).toBeDefined();
       const { snapshot: publication } = await readGitHubRepositoryPublicationMetadata(
-        snapshot.publicationStagingRoot!,
-        snapshot.publicationDigest!,
+        publicationStagingRoot!,
+        publicationDigest!,
       );
       const published = publication.entries.find((entry) => entry.path === "changed.txt")!;
       expect(
         (
-          await readGitHubRepositoryPublicationBlob(
-            snapshot.publicationStagingRoot!,
-            published.sha!,
-          )
+          await readGitHubRepositoryPublicationBlob(publicationStagingRoot!, published.sha!)
         ).toString(),
       ).toBe("saved\n");
     },
@@ -464,19 +420,10 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
 
 it("reports failed editor checkpoint capture and retains the durable recovery owner", async () => {
   const accepted = await withCheckpointAcceptance(true);
-  await expect(
-    invoke(
-      "sessions.files.set",
-      {
-        sessionKey,
-        path: "changed.txt",
-        content: "saved\n",
-        expectedHash: hashContent("before\n"),
-      },
-      accepted.context,
-    ),
-  ).rejects.toThrow("checkpoint capture failed");
-  expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("saved\n");
+  await expect(files.request("set", edit("saved\n"), accepted.context)).rejects.toThrow(
+    "checkpoint capture failed",
+  );
+  expect(readFile("changed.txt")).toBe("saved\n");
   expect(await store.get(source.workspaceId)).toMatchObject({
     checkpointRef: source.checkpointRef,
     manifestHash: source.manifestHash,
@@ -490,50 +437,121 @@ it("reports failed editor checkpoint capture and retains the durable recovery ow
   ]);
 });
 
+it("keeps incognito repository downloads alive after their RPC planning borrow ends", async () => {
+  using connection = createSessionFileDownloadClient();
+  const baseCommit = source.baseCommit!;
+  const baseManifestHash = source.baseManifestHash!;
+  sessionKey = "agent:main:dashboard:incognito-repository-download";
+  source = await createRepository("https://example.test/private.git");
+  await bindBase(baseCommit, baseManifestHash);
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+  onTestFinished(() =>
+    memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
+  );
+  await replaceSessionEntry(
+    { sessionKey, storePath },
+    {
+      sessionId,
+      updatedAt: 1,
+      incognito: true,
+      repositoryWorkspaceId: source.workspaceId,
+      lifecycleRevision,
+    },
+  );
+  const download = await files.ok("download", "README", undefined, connection);
+  const fetched = await fetchSessionFileDownload(connection.client, download.url);
+  expect(fetched.response.statusCode).toBe(200);
+  expect(Buffer.from(fetched.body as Uint8Array).toString()).toBe("untouched source\n");
+  memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+  expect(
+    (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+  ).toBe(404);
+});
+
+it("downloads original live repository bytes in bounded windows and rejects stale placement", async () => {
+  using connection = createSessionFileDownloadClient();
+  const bytes = Buffer.alloc(8 * 1024 * 1024 + 3, 0xff);
+  writeFile("binary.zip", bytes);
+  const download = await files.ok("download", "binary.zip", undefined, connection);
+  expect(download.filename).toBe("binary.zip");
+  // The RPC prepares metadata without reading any file bytes.
+  expect(run.mock.calls.every(([command]) => JSON.parse(command.input!).offset === undefined)).toBe(
+    true,
+  );
+  const nextWindow = createDeferredCore();
+  onTestFinished(() => nextWindow.resolve());
+  const readWindow = run.getMockImplementation()!;
+  run.mockImplementation(async (command) => {
+    const { offset } = JSON.parse(command.input!);
+    if (offset > 0) {
+      await nextWindow.promise;
+    }
+    return readWindow(command);
+  });
+  const response = await openSessionFileDownload(connection.client, download.url);
+  expect(response.status).toBe(200);
+  const reader = response.body!.getReader();
+  const first = await reader.read();
+  expect(first.value!.length).toBeGreaterThan(0);
+  expect(Buffer.from(first.value!).equals(bytes.subarray(0, first.value!.length))).toBe(true);
+  nextWindow.resolve();
+  const chunks = [first.value!];
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) {
+      break;
+    }
+    chunks.push(next.value);
+  }
+  expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
+  const windows = await Promise.all(run.mock.results.map((call) => call.value));
+  expect(windows.every((result) => Buffer.byteLength(result.stdout) < 2 * 1024 * 1024)).toBe(true);
+  for (const filePath of ["../outside", "/etc/passwd"]) {
+    await files.error("download", filePath, undefined, connection);
+  }
+  onResult = () => {
+    generation++;
+  };
+  expect(
+    (await fetchSessionFileDownload(connection.client, download.url)).response.statusCode,
+  ).toBe(404);
+  expect(mocks.workspace).not.toHaveBeenCalled();
+});
+
 it("browses, previews, edits and diffs only the live repository without a Gateway checkout", async () => {
-  const list = expectOkPayload(await invoke("sessions.files.list", { sessionKey }, context));
-  expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toContain("README");
-  expect(list.browser.entries.map((entry: { path: string }) => entry.path)).not.toContain(
-    "package.json",
-  );
+  const list = await files.ok("list");
+  const listedPaths = list.browser.entries.map((entry: { path: string }) => entry.path);
+  expect(listedPaths).toContain("README");
+  expect(listedPaths).not.toContain("package.json");
   expect(list.root).toBeUndefined();
-  const before = expectOkPayload(
-    await invoke("sessions.files.get", { sessionKey, path: "changed.txt" }, context),
-  );
+  const before = await files.ok("get", "changed.txt");
   const content = "x".repeat(192 * 1024);
-  expectOkPayload(
-    await invoke(
-      "sessions.files.set",
-      { sessionKey, path: "changed.txt", content, expectedHash: before.file.hash },
-      context,
-    ),
-  );
-  const saved = expectOkPayload(
-    await invoke("sessions.files.get", { sessionKey, path: "changed.txt" }, context),
-  );
-  expect(saved.file.content).toBe(content);
-  expect(saved.file.hash).toBe(hashContent(content));
+  await files.ok("set", edit(content, before.file.hash));
+  const saved = await files.ok("get", "changed.txt");
+  expect(saved.file).toMatchObject({ content, hash: hashContent(content) });
   expect(saved.root).toBeUndefined();
-  const stale = expectError(
-    await invoke(
-      "sessions.files.set",
-      { sessionKey, path: "changed.txt", content: "stale", expectedHash: before.file.hash },
-      context,
-    ),
-  );
+  const stale = await files.error("set", edit("stale", before.file.hash));
   expect(stale.details.type).toBe("session_file_conflict");
-  fs.writeFileSync(path.join(workspace, "changed.txt"), "after\n");
+  writeFile("changed.txt", "after\n");
   git("add", ".");
   git("commit", "-qm", "session change");
-  fs.writeFileSync(path.join(workspace, "second.txt"), "second edit\n");
+  writeFile("second.txt", "second edit\n");
   const diff = await loadSessionDiff({ sessionKey }, context as never);
   expect(diff.root).toBeUndefined();
-  expect(diff.files.map((file) => file.path)).toEqual(["changed.txt", "second.txt"]);
-  expect(diff.files[0]?.patch).toContain("+after");
-  expect(diff.files[1]?.patch).toContain("+second edit");
-  const reveal = expectOkPayload(
-    await invoke("sessions.files.reveal", { key: sessionKey }, context),
-  );
+  expect(diff.files).toMatchObject([
+    { path: "changed.txt", patch: expect.stringContaining("+after") },
+    { path: "second.txt", patch: expect.stringContaining("+second edit") },
+  ]);
+  const summary = await loadSessionDiff({ sessionKey, summaryOnly: true }, context as never);
+  expect(summary.root).toBeUndefined();
+  expect(summary.files).toEqual([
+    { path: "changed.txt", status: "modified", additions: 1, deletions: 1 },
+    { path: "second.txt", status: "added", additions: 1, deletions: 0, untracked: true },
+  ]);
+  expect(summary.additions).toBe(2);
+  expect(summary.deletions).toBe(1);
+  expect(summary.commits).toBeUndefined();
+  const reveal = await files.ok("reveal");
   expect(reveal).toMatchObject({
     ok: false,
     error: expect.stringContaining("no Gateway checkout"),
@@ -552,9 +570,7 @@ it.each(["tunnel", "result"])("rejects a replaced placement after %s work", asyn
       generation++;
     };
   }
-  await expect(
-    invoke("sessions.files.get", { sessionKey, path: "README" }, context),
-  ).rejects.toThrow("placement changed");
+  await expect(files.request("get", "README")).rejects.toThrow("placement changed");
   expect(mocks.workspace).not.toHaveBeenCalled();
 });
 
@@ -571,60 +587,83 @@ it.each(["reset", "archive", "lifecycle revision"])(
       }
       await persistSessionEntry();
     };
-    await expect(
-      invoke(
-        "sessions.files.set",
-        {
-          sessionKey,
-          path: "changed.txt",
-          content: "unowned",
-          expectedHash: hashContent("before\n"),
-        },
-        context,
-      ),
-    ).rejects.toThrow("owner changed");
+    await expect(files.request("set", edit("unowned"))).rejects.toMatchObject({
+      name: "SessionMutationAuthorizationChangedError",
+      error: {
+        code: "FORBIDDEN",
+        message: "Session workspace changed during file access",
+      },
+    });
     expect(run).not.toHaveBeenCalled();
-    expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("before\n");
+    expect(readFile("changed.txt")).toBe("before\n");
+  },
+);
+
+it.each(["stop", "reset"])(
+  "retains the editor owner through a delayed file commit before %s",
+  async (mutation) => {
+    const writing = createDeferredCore();
+    const releaseWrite = createDeferredCore();
+    mocks.beforeWrite.mockImplementationOnce(async () => {
+      writing.resolve();
+      await releaseWrite.promise;
+    });
+    const saving = invoke(
+      "sessions.files.set",
+      {
+        sessionKey,
+        path: "changed.txt",
+        content: "saved\n",
+        expectedHash: hashContent("before\n"),
+      },
+      context,
+    );
+    await writing.promise;
+    let mutationEntered = false;
+    let contentAtMutation: string | undefined;
+    const mutating = runSessionMutation({
+      scope: resolveDefaultSessionStorePath("main"),
+      identities: [sessionKey, identity.sessionId],
+      run: async () => {
+        mutationEntered = true;
+        contentAtMutation = fs.readFileSync(path.join(workspace, "changed.txt"), "utf8");
+        if (mutation === "stop") {
+          active = false;
+        } else {
+          sessionId = "replacement";
+        }
+      },
+    });
+    // Observe the independently queued lifecycle operation after its microtasks drain.
+    // The filesystem delay is explicit; no elapsed-time assumption controls the race.
+    try {
+      await setImmediate();
+      expect(mutationEntered).toBe(false);
+    } finally {
+      releaseWrite.resolve();
+      await Promise.allSettled([saving, mutating]);
+    }
+    expectOkPayload(await saving);
+    await mutating;
+    expect(mutationEntered).toBe(true);
+    expect(contentAtMutation).toBe("saved\n");
   },
 );
 
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
-  const base = await captureWorkspaceManifest({
-    root: workspace,
-    baseCommit: source.baseCommit,
-  });
-  fs.writeFileSync(path.join(workspace, "changed.txt"), "retained first\n");
-  fs.writeFileSync(path.join(workspace, "second.txt"), "retained second\n");
-  fs.writeFileSync(
-    path.join(workspace, "oversized.txt"),
-    Buffer.alloc(WORKSPACE_PREVIEW_MAX_BYTES + 1, 97),
-  );
-  const current = await captureWorkspaceManifest({
-    root: workspace,
-    baseCommit: source.baseCommit,
-  });
-  const staged = await stageSessionRepositoryCheckpoint({
-    store,
-    workspaceId: source.workspaceId,
-    expectedRevision: source.revision,
-    stagingRoot: workspace,
-    baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
-    currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
-    baseManifestRef: base.manifestRef,
-    currentManifestRef: current.manifestRef,
-    assertCurrent: () => {},
-  });
-  source = await staged.publish();
+  const changedPaths = ["changed.txt", "oversized.txt", "second.txt"];
+  const oversizedBytes = Buffer.alloc(8 * 1024 * 1024 + 1, 97);
+  const base = await capture();
+  writeFile("changed.txt", "retained first\n");
+  writeFile("second.txt", "retained second\n");
+  writeFile("oversized.txt", oversizedBytes);
+  await publishCheckpoint(base, await capture());
   active = false;
   const originalGitRead = worktreeGit.runGitBuffered;
   const hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
   onTestFinished(() => hostReads.mockRestore());
-  const list = expectOkPayload(await invoke("sessions.files.list", { sessionKey }, context));
-  expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual([
-    "changed.txt",
-    "oversized.txt",
-    "second.txt",
-  ]);
+  const list = await files.ok("list");
+  expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual(changedPaths);
   expect(hostReads.mock.calls.map(([, args]) => args.slice(0, 2))).toEqual([
     ["cat-file", "commit"],
     ["ls-tree", "-r"],
@@ -632,18 +671,21 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   for (const call of hostReads.mock.calls) {
     expect(call[2]).toMatchObject({ signal: expect.any(AbortSignal), killProcessTree: true });
   }
-  const retained = expectOkPayload(
-    await invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
-  );
+  const retained = await files.ok("get", "second.txt");
   expect(retained.file.content).toBe("retained second\n");
   expect(retained.file.hash).toBeUndefined();
   expect(retained.root).toBeUndefined();
   const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "--batch").length;
+  using connection = createSessionFileDownloadClient();
+  const download = await files.ok("download", "oversized.txt", undefined, connection);
+  const fetched = await fetchSessionFileDownload(connection.client, download.url);
+  expect(fetched.response.statusCode).toBe(200);
+  expect(Buffer.from(fetched.body as Uint8Array).equals(oversizedBytes)).toBe(true);
+  await files.error("download", "README", undefined, connection);
+  await files.error("download", "../changed.txt", undefined, connection);
   const beforeOversized = blobsRead();
   expect(beforeOversized).toBeGreaterThan(0);
-  const oversized = expectError(
-    await invoke("sessions.files.get", { sessionKey, path: "oversized.txt" }, context),
-  );
+  const oversized = await files.error("get", "oversized.txt");
   expect(oversized).toEqual({
     code: "INVALID_REQUEST",
     message: "session file is too large to preview",
@@ -651,20 +693,14 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
       type: "session_file_too_large",
       path: "oversized.txt",
       maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
-      size: WORKSPACE_PREVIEW_MAX_BYTES + 1,
+      size: oversizedBytes.length,
     },
   });
   expect(blobsRead()).toBe(beforeOversized);
-  await expect(
-    invoke("sessions.files.get", { sessionKey, path: "README" }, context),
-  ).rejects.toThrow("not a retained changed artifact");
+  await expect(files.request("get", "README")).rejects.toThrow("not a retained changed artifact");
   const diff = await loadSessionDiff({ sessionKey }, context as never);
   expect(diff.unavailableReason).toBe("workspace_stopped");
-  expect(diff.files.map((file) => file.path)).toEqual([
-    "changed.txt",
-    "oversized.txt",
-    "second.txt",
-  ]);
+  expect(diff.files.map((file) => file.path)).toEqual(changedPaths);
   expect(run).not.toHaveBeenCalled();
   expect(mocks.workspace).not.toHaveBeenCalled();
 
@@ -678,9 +714,9 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     stdout[contentStart] = stdout[contentStart]! ^ 0xff;
     return { ...result, stdout };
   });
-  await expect(
-    invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
-  ).rejects.toThrow("staged result payload is invalid");
+  await expect(files.request("get", "second.txt")).rejects.toThrow(
+    "staged result payload is invalid",
+  );
   hostReads.mockImplementation(async (...args) => {
     const result = await originalGitRead(...args);
     if (args[1][1] === "--batch") {
@@ -689,9 +725,10 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
     }
     return result;
   });
-  await expect(
-    invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
-  ).rejects.toThrow("workspace owner changed");
+  expect(await files.error("get", "second.txt")).toEqual({
+    code: "FORBIDDEN",
+    message: "Session workspace changed during file access",
+  });
 });
 
 it.each(["symlink", "hardlink"])(
@@ -704,10 +741,8 @@ it.each(["symlink", "hardlink"])(
     } else {
       fs.linkSync(outside, path.join(workspace, "link.txt"));
     }
-    expectError(await invoke("sessions.files.get", { sessionKey, path: "link.txt" }, context));
-    expectError(
-      await invoke("sessions.files.get", { sessionKey, path: "../outside.txt" }, context),
-    );
+    await files.error("get", "link.txt");
+    await files.error("get", "../outside.txt");
     const diff = await loadSessionDiff({ sessionKey }, context as never);
     expect(JSON.stringify(diff)).not.toContain("outside marker");
   },
@@ -728,12 +763,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     return await realRename(...args);
   });
   onTestFinished(() => renameSpy.mockRestore());
-  const record = {
-    ...environment(),
-    environmentId: identity.environmentId,
-    ownerEpoch: identity.generation,
-    attachedSessionIds: [identity.sessionId],
-  };
+  const record = environmentRecord();
   const nodeTransport = transport();
   let physicalWrite: Promise<unknown> | undefined;
   nodeTransport.invoke = async (request) => {
@@ -757,17 +787,10 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     }
     return { ok: true, payloadJSON: JSON.stringify(await runtime.exec(input, request.signal)) };
   };
-  const manager = createNodeWorkerTunnelManager({
+  const manager = createManager(record, {
     gatewayDeviceId,
-    getEnvironment: () => record,
-    listEnvironments: () => [record],
     getTransport: () => nodeTransport,
-    launchNodeWorker: vi.fn(),
-    validateWorkerTurn: () => true,
-    workspaceTransfer: {
-      ...workspaceTransfer(),
-      prepareRepository: vi.fn(async () => {}),
-    },
+    workspaceTransfer: { ...workspaceTransfer(), prepareRepository: vi.fn(async () => {}) },
   });
   manager.bindWorkspaceBindingResolver(async () => ({
     source: {
@@ -794,30 +817,25 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     },
   };
   let saveSettled = false;
-  const saving = invoke(
-    "sessions.files.set",
-    { sessionKey, path: "changed.txt", content: "saved\n", expectedHash: hashContent("before\n") },
-    managerContext,
-  ).then(
-    () => {
+  const saving = files
+    .request("set", edit(), managerContext)
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    .finally(() => {
       saveSettled = true;
-      return undefined;
-    },
-    (error: unknown) => {
-      saveSettled = true;
-      return error;
-    },
-  );
+    });
   await draining.promise;
   let stopEntered = false;
   let contentAtStop: string | undefined;
-  const stopping = runExclusiveSessionLifecycleMutation("drain", {
-    scope: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+  const stopping = runSessionMutation({
+    scope: resolveDefaultSessionStorePath("main"),
     identities: [sessionKey, identity.sessionId],
     run: async () => {
       stopEntered = true;
       await manager.stop(identity.environmentId, identity.generation);
-      contentAtStop = fs.readFileSync(path.join(workspace, "changed.txt"), "utf8");
+      contentAtStop = readFile("changed.txt");
       active = false;
     },
   });
@@ -825,7 +843,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     await setImmediate();
     expect(saveSettled).toBe(false);
     expect(stopEntered).toBe(false);
-    expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("before\n");
+    expect(readFile("changed.txt")).toBe("before\n");
   } finally {
     releaseWrite.resolve();
     await Promise.allSettled([saving, stopping, physicalWrite]);

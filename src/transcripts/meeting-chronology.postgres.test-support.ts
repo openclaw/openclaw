@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
+import { once } from "node:events";
 import { parentPort, setEnvironmentData, threadId, Worker, workerData } from "node:worker_threads";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -34,56 +35,37 @@ export type ChronologyProof = {
 async function runChronologyHost(input: { path: string; connection: string }): Promise<void> {
   assert.equal(threadId, 0);
   const anchor = openNodeSqliteDatabase(input.path);
-  let worker: Worker | undefined;
-  try {
-    admitSqliteSchema(anchor);
-    setEnvironmentData("openclaw.test.state.connection", input.connection);
-    const url = new URL(import.meta.url);
-    const activeWorker = new Worker(url, {
-      execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-      workerData: {
-        path: input.path,
-        admissions: captureSqliteDatabaseAdmissions(undefined, { location: input.path }),
-      },
-    });
-    worker = activeWorker;
-    activeWorker.on(
-      "message",
-      (message: ChronologyProof | { error: string } | { namespace: string }) => {
-        process.send?.(message);
-      },
-    );
-    await new Promise<void>((resolve, reject) => {
-      activeWorker.once("error", reject);
-      activeWorker.once("exit", (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Meeting chronology worker exited ${code}`));
-        }
-      });
-    });
-  } finally {
-    try {
-      await worker?.terminate();
-    } finally {
-      try {
-        anchor.close();
-      } finally {
-        retireSqliteDatabaseAdmissionForPath(input.path);
-      }
-    }
-  }
+  await using cleanup = new AsyncDisposableStack();
+  cleanup.defer(() => retireSqliteDatabaseAdmissionForPath(input.path));
+  cleanup.defer(() => anchor.close());
+  admitSqliteSchema(anchor);
+  setEnvironmentData("openclaw.test.state.connection", input.connection);
+  const url = new URL(import.meta.url);
+  const worker = new Worker(url, {
+    execArgv: resolveRuntimeWorkerThreadExecArgv(url),
+    workerData: {
+      path: input.path,
+      admissions: captureSqliteDatabaseAdmissions(undefined, { location: input.path }),
+    },
+  });
+  cleanup.defer(() => worker.terminate().then(() => undefined));
+  worker.on("message", (message: ChronologyProof | { error: string } | { namespace: string }) => {
+    process.send?.(message);
+  });
+  const [code] = await once(worker, "exit");
+  assert.equal(code, 0, `Meeting chronology worker exited ${code}`);
 }
 
 const input: { path: string; admissions: SqliteDatabaseAdmissions } = workerData;
 if (parentPort) {
   const port = parentPort;
+  using cleanup = new DisposableStack();
+  cleanup.defer(() => port.close());
+  cleanup.defer(() => openClawStateDatabaseCache.closeOpenClawStateDatabaseForTest());
   try {
     installSqliteDatabaseAdmissions(input.admissions);
     const options = { path: input.path };
-    const database = openOpenClawStateDatabase(options);
-    const postgresDb = database.db;
+    const { db: postgresDb } = openOpenClawStateDatabase(options);
     assert(isPostgresSqlConnection(postgresDb));
     const facts = getPostgresPhysicalFacts(postgresDb);
     assert(facts);
@@ -112,14 +94,16 @@ if (parentPort) {
       ["invalid-a", "invalid", "garbage-a", null],
       ["invalid-b", "invalid", "garbage-b", null],
     ] as const;
-    const write = (fixture: (typeof fixtures)[number], startedAtMs: number | null) => {
-      const [selector, sessionId, startedAt] = fixture;
-      return runOpenClawStateWriteTransaction(
+    const write = (
+      [selector, sessionId, startedAt]: (typeof fixtures)[number],
+      started_at_ms: number | null,
+    ) =>
+      runOpenClawStateWriteTransaction(
         ({ db }) =>
           writeMeetingTranscriptSessionInDatabase(db, {
             session: { sessionId, startedAt },
             sessionValues: {
-              started_at_ms: startedAtMs,
+              started_at_ms,
               selector,
               export_key: selector,
               session_slug: selector,
@@ -133,7 +117,6 @@ if (parentPort) {
           }),
         options,
       );
-    };
     for (const fixture of fixtures) {
       assert.equal(write(fixture, fixture[3]).inserted, true);
     }
@@ -143,11 +126,7 @@ if (parentPort) {
       const result = queryTranscriptReadEntries(postgresDb, params);
       return { selectors: result.entries.map((entry) => entry.selector), hasMore: result.hasMore };
     };
-    const after = (fixture: (typeof fixtures)[number]) => ({
-      sessionId: fixture[1],
-      startedAt: fixture[2],
-    });
-    const proof: ChronologyProof = {
+    port.postMessage({
       threadId,
       list: page({ limit: 20 }).selectors,
       filtered: page({
@@ -155,25 +134,15 @@ if (parentPort) {
         startedBefore: "2024-01-02T00:00:00Z",
       }).selectors,
       invalidFilter: page({ startedAfter: "garbage" }).selectors,
-      pages: [
-        page({ limit: 2 }),
-        page({ limit: 2, after: after(fixtures[2]) }),
-        page({ limit: 2, after: after(fixtures[3]) }),
-        page({ limit: 2, after: after(fixtures[5]) }),
-      ],
+      pages: [undefined, fixtures[2], fixtures[3], fixtures[5]].map((cursor) =>
+        page({ limit: 2, after: cursor && { sessionId: cursor[1], startedAt: cursor[2] } }),
+      ),
       retainedInstant: postgresDb
         .prepare("SELECT started_at_ms FROM meeting_transcript_sessions WHERE selector = ?")
         .get("tie-a-iso")?.started_at_ms,
-    };
-    port.postMessage(proof);
+    } satisfies ChronologyProof);
   } catch (error) {
     port.postMessage({ error: error instanceof Error ? error.stack : String(error) });
-  } finally {
-    try {
-      openClawStateDatabaseCache.closeOpenClawStateDatabaseForTest();
-    } finally {
-      port.close();
-    }
   }
 } else if (process.send) {
   process.once("message", (message: { path: string; connection: string }) => {

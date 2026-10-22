@@ -1,5 +1,4 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { listCodexAppServerExtensionFactories } from "../../plugins/codex-app-server-extension-factory.js";
 import type {
   CodexAppServerExtensionContext,
   CodexAppServerExtensionFactory,
@@ -13,9 +12,10 @@ const log = createSubsystemLogger("agents/harness");
 
 type CodexToolResultHandler = Parameters<CodexAppServerExtensionRuntime["on"]>[1];
 
+/** Retained for published Codex plugins; new transforms use runtime-neutral middleware. */
 export function createCodexAppServerToolResultExtensionRunner(
   ctx: CodexAppServerExtensionContext,
-  factories: CodexAppServerExtensionFactory[] = listCodexAppServerExtensionFactories(),
+  factories: CodexAppServerExtensionFactory[] = [],
 ) {
   const handlers: CodexToolResultHandler[] = [];
   const initPromise = (async () => {

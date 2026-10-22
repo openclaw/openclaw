@@ -15,8 +15,6 @@ import {
   DISCORD_TOKEN_URL,
   DISCORD_USER_URL,
   fetchDiscordJson,
-  fetchWithSsrFGuard,
-  type FetchGuard,
   normalizeInstanceId,
   resolveActivityInstanceChannel,
 } from "./discord-api.js";
@@ -44,11 +42,6 @@ const DISCORD_ACTIVITY_WIDGET_CSP =
 type DiscordActivityHttpDeps = {
   runtime: DiscordActivitiesRuntime;
   vendorAssetPath: string;
-  fetchGuard?: FetchGuard;
-  now?: () => number;
-  readVendorAsset?: (assetPath: string) => Promise<Buffer>;
-  logError?: (message: string) => void;
-  bodyTimeoutMs?: number;
 };
 
 function respond(
@@ -104,7 +97,9 @@ function extractApplicationId(req: IncomingMessage): string | undefined {
       if (match?.[1]) {
         return match[1];
       }
-    } catch {}
+    } catch {
+      // Invalid Origin metadata may still have a valid Referer fallback.
+    }
   }
   return undefined;
 }
@@ -118,13 +113,10 @@ function bearerToken(req: IncomingMessage): string | undefined {
 export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps): {
   handleHttpRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
 } {
-  const fetchGuard = deps.fetchGuard ?? fetchWithSsrFGuard;
-  const limiter = new TokenRateLimiter(deps.now ?? Date.now);
-  const readVendorAsset = deps.readVendorAsset ?? ((assetPath: string) => fs.readFile(assetPath));
-  const reportError = deps.logError ?? logError;
+  const limiter = new TokenRateLimiter();
   // The OAuth code body is unauthenticated and tiny. Reuse the pre-auth webhook budget so a
   // stalled upload cannot retain a Gateway handler indefinitely.
-  const bodyTimeoutMs = deps.bodyTimeoutMs ?? WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
+  const bodyTimeoutMs = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
   let vendorAsset: Promise<Buffer> | undefined;
   let pendingLaunchFailureLogged = false;
 
@@ -133,7 +125,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       return;
     }
     pendingLaunchFailureLogged = true;
-    reportError(`discord activity: failed to consume pending launch: ${String(error)}`);
+    logError(`discord activity: failed to consume pending launch: ${String(error)}`);
   }
 
   async function handleToken(req: IncomingMessage, res: ServerResponse): Promise<true> {
@@ -158,7 +150,6 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     ) =>
       fetchDiscordJson({
         ...params,
-        fetchGuard,
         fetchImpl: account.proxyFetch,
         endpointRuntime,
       }).catch(() => undefined);
@@ -259,7 +250,6 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     const channelId =
       instanceId && account
         ? await resolveActivityInstanceChannel({
-            fetchGuard,
             applicationId: account.applicationId,
             instanceId,
             discordUserId: session.discordUserId,
@@ -381,7 +371,7 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
         return respond(res, 200, DISCORD_ACTIVITY_SHELL_JS, "text/javascript; charset=utf-8");
       }
       if (req.method === "GET" && relative === "/vendor/embedded-app-sdk.mjs") {
-        const pendingAsset = (vendorAsset ??= readVendorAsset(deps.vendorAssetPath));
+        const pendingAsset = (vendorAsset ??= fs.readFile(deps.vendorAssetPath));
         try {
           return respond(res, 200, await pendingAsset, "text/javascript; charset=utf-8");
         } catch {

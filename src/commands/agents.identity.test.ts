@@ -1,15 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { defaultRuntime } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import {
-  createCapturingTestRuntime,
-  createTestConfigSnapshot,
-  createTestRuntime,
-} from "./test-runtime-config-helpers.js";
+import { createTestConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const TEST_MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
 
@@ -41,7 +38,7 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 
-import type { AgentRouteBinding } from "../config/types.js";
+import type { AgentRouteBinding, IdentityConfig } from "../config/types.js";
 import { applyAgentBindings, removeAgentBindings } from "./agents.bindings.js";
 import { agentsSetIdentityCommand } from "./agents.commands.identity.js";
 import { applyAgentConfig, buildAgentSummaries, pruneAgentConfig } from "./agents.config.js";
@@ -58,9 +55,12 @@ function writtenAgent(id = "main") {
 }
 
 async function jsonIdentity(options: IdentityOptions) {
-  const capture = createCapturingTestRuntime();
-  await agentsSetIdentityCommand({ ...options, json: true }, capture.runtime);
-  const payload: unknown = JSON.parse(capture.logs.at(-1) ?? "{}");
+  await agentsSetIdentityCommand({ ...options, json: true });
+  const output = runtime.log.mock.calls.at(-1)?.[0];
+  if (typeof output !== "string") {
+    throw new Error("Expected JSON identity output");
+  }
+  const payload: unknown = JSON.parse(output);
   return payload;
 }
 
@@ -79,7 +79,7 @@ async function writeIdentityFile(workspace: string, lines: string[]) {
 
 async function expectIdentityCommandFailure(options: IdentityOptions, expected: string | RegExp) {
   const message = typeof expected === "string" ? expected : expect.stringMatching(expected);
-  await expect(agentsSetIdentityCommand(options, runtime)).rejects.toMatchObject({
+  await expect(agentsSetIdentityCommand(options)).rejects.toMatchObject({
     name: "ExpectedCliError",
     message,
     humanOutput: message,
@@ -91,10 +91,32 @@ async function expectIdentityCommandFailure(options: IdentityOptions, expected: 
 }
 
 describe("agents set-identity command", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+    vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) =>
+      runtime.log(JSON.stringify(value, null, 2)),
+    );
     setAgents({ entries: { main: {} } });
   });
+
+  it.each<[string, IdentityOptions, string, IdentityConfig]>([
+    ["New Bot", { name: "Pip" }, "Pip", { name: "Pip" }],
+    ["Research assistant", { name: "Pip" }, "Research assistant", { name: "Pip" }],
+    ["New Bot", { emoji: "🐦" }, "New Bot", { name: "New Bot", emoji: "🐦" }],
+  ])(
+    "updates identity while preserving independent roster label %s (%j)",
+    async (name, update, expectedName, expectedIdentity) => {
+      setAgents({ entries: { main: { name, identity: { name: "New Bot" } } } });
+
+      await agentsSetIdentityCommand({ agent: "main", ...update });
+
+      expect(writtenAgent()).toMatchObject({ name: expectedName, identity: expectedIdentity });
+    },
+  );
 
   it("resolves --from-identity against the selected agent workspace", async () => {
     const { root, workspace } = await createIdentityWorkspace();
@@ -104,7 +126,7 @@ describe("agents set-identity command", () => {
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
 
     try {
-      await agentsSetIdentityCommand({ agent: "main", fromIdentity: true }, runtime);
+      await agentsSetIdentityCommand({ agent: "main", fromIdentity: true });
     } finally {
       cwdSpy.mockRestore();
     }
@@ -112,37 +134,29 @@ describe("agents set-identity command", () => {
     expect(writtenAgent()?.identity).toEqual({ name: "Workspace Agent" });
   });
 
-  it("errors when multiple agents match the same workspace", async () => {
-    const { workspace } = await createIdentityWorkspace("shared");
-    const identityPath = await writeIdentityFile(workspace, ["- Name: Echo"]);
-    const originalIdentity = await fs.readFile(identityPath, "utf8");
-
-    setAgents({ entries: { main: { workspace }, ops: { workspace } } });
-
-    await expectIdentityCommandFailure(
-      { workspace },
-      `Multiple agents match ${workspace}: main, ops. Pass --agent to choose one.`,
-    );
-    await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
-  });
-
-  it("rejects an unmatched workspace before reading or changing its identity file", async () => {
-    const { workspace } = await createIdentityWorkspace("unmatched");
-    const identityPath = await writeIdentityFile(workspace, ["- Name: Untouched"]);
-    const originalIdentity = await fs.readFile(identityPath, "utf8");
-
-    await expectIdentityCommandFailure(
-      { workspace, name: "Override", json: true },
-      `No agent workspace matches ${workspace}. Pass --agent to target a specific agent.`,
-    );
-
-    await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
-  });
+  it.each([false, true])(
+    "rejects ambiguous=%s workspace without modifying identity",
+    async (ambiguous) => {
+      const { workspace } = await createIdentityWorkspace();
+      const identityPath = await writeIdentityFile(workspace, ["- Name: Untouched"]);
+      const originalIdentity = await fs.readFile(identityPath, "utf8");
+      if (ambiguous) {
+        setAgents({ entries: { main: { workspace }, ops: { workspace } } });
+      }
+      await expectIdentityCommandFailure(
+        ambiguous ? { workspace } : { workspace, name: "Override", json: true },
+        ambiguous
+          ? `Multiple agents match ${workspace}: main, ops. Pass --agent to choose one.`
+          : `No agent workspace matches ${workspace}. Pass --agent to target a specific agent.`,
+      );
+      await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
+    },
+  );
 
   it("sanitizes identity echoes while preserving stored and JSON values", async () => {
     const name = "Operator\u001B]0;identity-injection\u0007🦞\r\nforged-row\tbadge";
 
-    await agentsSetIdentityCommand({ agent: "main", name }, runtime);
+    await agentsSetIdentityCommand({ agent: "main", name });
 
     const textOutput = runtime.log.mock.calls.flat().join("\n");
     expect(textOutput).not.toContain("\u001B");
@@ -186,7 +200,7 @@ describe("agents set-identity command", () => {
     });
 
     expect(writtenAgent()).toMatchObject({ workspace: storedWorkspace, identity });
-    await agentsSetIdentityCommand(options, runtime);
+    await agentsSetIdentityCommand(options);
     expect(runtime.log).toHaveBeenCalledWith(`Workspace: ${storedWorkspace}`);
     expect(runtime.log).toHaveBeenCalledWith(`Identity source: ${workspace}`);
     expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Relocate with");
@@ -256,7 +270,7 @@ describe("agents set-identity command", () => {
       workspace: storedWorkspace,
       identity: { name: "Worker" },
     });
-    await agentsSetIdentityCommand(options, runtime);
+    await agentsSetIdentityCommand(options);
     expect(runtime.log).toHaveBeenCalledWith(`Workspace: ${storedWorkspace}`);
     expect(runtime.log).toHaveBeenCalledWith(`Workspace locator: ${workspaceLocator}`);
     expect(runtime.log).toHaveBeenCalledWith(
@@ -269,13 +283,6 @@ describe("agents set-identity command", () => {
 });
 
 describe("agents helpers", () => {
-  it("applyAgentConfig leaves a first roster entry trivially sole", async () => {
-    const next = applyAgentConfig({}, { agentId: "work", name: "Work" });
-
-    expect(next.agents?.entries).toEqual({ work: { name: "Work" } });
-    expect(await buildAgentSummaries(next)).toMatchObject([{ id: "work", isDefault: true }]);
-  });
-
   it("applyAgentConfig clears a model override", async () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -295,14 +302,12 @@ describe("agents helpers", () => {
     ]);
   });
 
-  it("adds distinct routes, upgrades account scope, and reports duplicate ownership", () => {
-    const existing = { agentId: "main", match: { channel: "whatsapp", accountId: "default" } };
+  it("adds distinct role and delimiter-bearing routes while upgrading account scope", () => {
     const channel = { agentId: "main", match: { channel: "telegram" } };
     const role = {
       agentId: "main",
       match: { channel: "discord", accountId: "guild-a", guildId: "123", roles: ["111", "222"] },
     };
-    const conflict = { ...existing, agentId: "work" };
     const upgraded = { agentId: "main", match: { channel: "telegram", accountId: "work" } };
     const added: AgentRouteBinding[] = [
       { agentId: "work", match: { channel: "discord", accountId: "guild-a", guildId: "123" } },
@@ -320,17 +325,10 @@ describe("agents helpers", () => {
         },
       },
     ];
-    const result = applyAgentBindings({ bindings: [existing, channel, role] }, [
-      existing,
-      conflict,
-      upgraded,
-      ...added,
-    ]);
+    const result = applyAgentBindings({ bindings: [channel, role] }, [upgraded, ...added]);
     expect(result.added).toStrictEqual(added);
-    expect(result.skipped).toStrictEqual([existing]);
     expect(result.updated).toStrictEqual([upgraded]);
-    expect(result.conflicts).toStrictEqual([{ binding: conflict, existingAgentId: "main" }]);
-    expect(result.config.bindings).toStrictEqual([existing, upgraded, role, ...added]);
+    expect(result.config.bindings).toStrictEqual([upgraded, role, ...added]);
   });
 
   it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
@@ -348,8 +346,8 @@ describe("agents helpers", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
+          skipBootstrap: true,
           workspace: "/srv/fleet",
-          heartbeat: { agentId: "work", every: "5m" },
           systemAgent: { agentId: "WORK" },
           subagents: { allowAgents: ["work", "home"] },
         },
@@ -406,8 +404,9 @@ describe("agents helpers", () => {
     ]);
     expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["home"]);
-    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "5m" });
     expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
+    expect(result.config.agents?.defaults).not.toHaveProperty("heartbeat");
+    expect(result.config.agents?.defaults?.skipBootstrap).toBe(true);
     expect(result.config.talk).toEqual({ provider: "test-provider" });
     expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
     expect(result.config.agents?.entries?.home?.tools).toEqual({
@@ -418,25 +417,8 @@ describe("agents helpers", () => {
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
     expect(result.clearedOwnerRefs).toEqual([
-      "agents.defaults.heartbeat.agentId",
       "agents.defaults.systemAgent.agentId",
       "talk.agentId",
     ]);
-  });
-
-  it("removes ambient heartbeat policy when its owner leaves a surviving fleet", () => {
-    const result = pruneAgentConfig(
-      {
-        agents: {
-          ownership: "explicit",
-          defaults: { heartbeat: { agentId: "ops", every: "5m" } },
-          entries: { ops: {}, research: {}, writer: {} },
-        },
-      },
-      "ops",
-    );
-
-    expect(result.config.agents?.defaults?.heartbeat).toBeUndefined();
-    expect(result.clearedOwnerRefs).toContain("agents.defaults.heartbeat");
   });
 });

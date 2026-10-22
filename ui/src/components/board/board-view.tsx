@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, onCleanup, onSettled, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, Errored, For, onSettled, Show } from "solid-js";
 import {
   BOARD_GRID_COLUMNS,
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
@@ -8,39 +8,41 @@ import {
   layout,
 } from "../../lib/board/grid.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board.css";
-import { BoardTabs, orderedBoardTabs } from "./board-tabs.tsx";
+import { BoardTabs } from "./board-tabs.tsx";
 import {
-  BoardViewState,
+  createBoardViewState,
   orderedWidgets,
   type BoardViewProps,
   type BoardViewMethods,
   type BoardViewElement,
 } from "./board-view-state.ts";
-import { BoardWidgetCell, type BoardWidgetCellProps } from "./board-widget-cell.ts";
+import type { BoardWidgetCellMethods, BoardWidgetCellProps } from "./board-widget-cell-options.ts";
+import { BoardWidgetCell } from "./board-widget-cell.solid.tsx";
 
 export type { BoardViewProps } from "./board-view-state.ts";
 
-const views = new WeakMap<HTMLElement, BoardViewState>();
+const views = new WeakMap<HTMLElement, ReturnType<typeof createBoardViewState>>();
 type CellEntry = {
   key: string;
   present: boolean;
   retiring?: boolean;
-  element?: Pick<
-    HTMLElementTagNameMap["openclaw-board-widget-cell"],
-    "teardown" | "restartAfterTeardown"
-  >;
+  element?: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>;
   options: BoardWidgetCellProps;
 };
 
 function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const state = new BoardViewState(props, host, () => setRevision((value) => value + 1));
-  views.set(host, state);
+  const [layoutRevision, setLayoutRevision] = createSignal(0, { ownedWrite: true });
+  const invalidateLayout = () => setLayoutRevision((value) => value + 1);
   // Grid coordinates change; map insertion order keeps iframe nodes in place.
   const entries = new Map<string, CellEntry>();
+  const owner = createBoardViewState(props, host, () =>
+    [...entries.values()].flatMap(({ element }) => (element ? [element] : [])),
+  );
+  views.set(host, owner);
   let disposed = false;
   const cellKey = (name: string) =>
     JSON.stringify([
@@ -50,26 +52,26 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
       name,
     ]);
   const view = createMemo(() => {
-    revision();
-    state.sync();
+    layoutRevision();
+    const state = owner.presentation;
     const snapshot = props.snapshot;
-    const tabs = orderedBoardTabs(snapshot?.tabs ?? []);
-    const activeTab = state.activeTab(tabs);
+    const tabs = owner.tabs();
+    const activeTab = owner.activeTab();
     const activeTabId = activeTab?.tabId ?? props.activeTabId;
     const activeWidgets = snapshot && activeTab ? orderedWidgets(snapshot, activeTabId) : [];
     if (activeTab) {
-      state.visitedTabs.add(activeTabId);
+      owner.visitedTabs.add(activeTabId);
     }
     // A widget moved to an unvisited tab keeps its already mounted document.
     const widgets = (snapshot?.widgets ?? []).filter(
-      (widget) => state.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
+      (widget) => owner.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
     );
     const rects = tabs.flatMap((tab) =>
       layout(
-        (tab.tabId === activeTabId ? state.previewItems : null) ??
+        (tab.tabId === activeTabId && state.gesture.name ? state.previewItems : null) ??
           boardWidgetGridItems(
             widgets.filter((widget) => widget.tabId === tab.tabId),
-            state.contentHeights,
+            owner.contentHeights,
             props.fitAutoContent,
             props.pageWidgetName,
           ),
@@ -104,17 +106,17 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           widget: widgetsByName.get(rect.name),
           boardRevision: snapshot?.revision ?? 0,
           rect,
-          contentHeightPx: state.contentHeights.get(rect.name),
+          contentHeightPx: owner.contentHeights.get(rect.name),
           fitAutoContent: props.fitAutoContent,
           pageChrome: rect.name === props.pageWidgetName,
           tabs,
           session: props.session,
           sessionKey: snapshot?.sessionKey ?? "",
           widgetFrameUrl: props.widgetFrameUrl,
-          callbacks: state.cellCallbacks,
+          callbacks: owner.cellCallbacks,
           active: props.active && visible,
           bridgeEnabled: props.bridgeEnabled,
-          dragging: rect.name === state.gestureName,
+          dragging: rect.name === state.gesture.name,
           focusTabIndex: rect.name === focusName ? 0 : -1,
           positionInSet: (positions.get(rect.name) ?? 0) + 1,
           setSize: activeRects.length,
@@ -150,7 +152,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           } else {
             entries.delete(key);
           }
-          state.requestUpdate();
+          invalidateLayout();
         };
         void element.teardown().then(finish, finish);
       }
@@ -171,20 +173,19 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     () => view(),
     (current) => {
       host.toggleAttribute("data-initial-loading", current.loading);
-      state.reconcileInitialPresentation();
+      owner.reconcileInitialPresentation();
     },
   );
   onSettled(() => {
     // Hybrid devices move the chrome in/out of flow when pointer capability changes.
     const pointer =
       typeof window.matchMedia === "function" ? window.matchMedia(FINE_POINTER_QUERY) : null;
-    pointer?.addEventListener("change", state.requestUpdate);
-    return () => pointer?.removeEventListener("change", state.requestUpdate);
-  });
-  onCleanup(() => {
-    disposed = true;
-    state.disconnect();
-    views.delete(host);
+    const stop = pointer ? listen(pointer, "change", invalidateLayout) : undefined;
+    return () => {
+      disposed = true;
+      views.delete(host);
+      stop?.();
+    };
   });
 
   return (
@@ -209,16 +210,16 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
         aria-label={t("board.label")}
         aria-busy={view().loading ? "true" : "false"}
         inert={view().loading}
-        onOpenclaw-board-widget-presentation={state.reconcileInitialPresentation}
       >
         <BoardTabs
           tabs={view().tabs}
           activeTabId={view().activeTabId}
           hoverTabId={view().state.hoverTabId}
-          onSelect={state.selectTab}
+          onSelect={owner.selectTab}
         />
         <Show when={Boolean(props.snapshot) || view().cells.length > 0}>
           <div
+            ref={owner.gridRef}
             class="board-grid"
             role="list"
             aria-label={t("board.gridLabel")}
@@ -239,7 +240,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
                 />
               )}
             </For>
-            <Show when={view().state.gesture?.mode === "move"}>
+            <Show when={view().state.gesture.mode === "move"}>
               <div class="board-grid__append-zone" aria-hidden="true" />
             </Show>
           </div>
@@ -253,10 +254,16 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
             </div>
           </Show>
         </Show>
-        <Show when={view().state.actionError}>
-          <div class="board-view__error" role="alert">
-            {view().state.actionError}
-          </div>
+        <Show when={view().state.mutationFailure} keyed>
+          <Errored
+            fallback={() => (
+              <div class="board-view__error" role="alert">
+                {t("board.actionFailed")}
+              </div>
+            )}
+          >
+            {owner.mutationFailure()}
+          </Errored>
         </Show>
         <div class="board-announcer" aria-live="polite" aria-atomic="true">
           <Show when={view().state.announcementRevision || undefined} keyed>

@@ -18,34 +18,107 @@ import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-s
 
 const EMPTY_LOADABLE_PLUGIN_ORIGINS = new Map();
 const BUNDLED_CODEX_PLUGIN_ORIGINS = new Map([["codex", "bundled" as const]]);
-const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+const { prepareSecretsRuntimeSnapshot: prepareSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type SnapshotParams = Parameters<typeof prepareSnapshot>[0];
+type Snapshot = Awaited<ReturnType<typeof prepareSnapshot>>;
+
+function prepareSecretsRuntimeSnapshot(params: SnapshotParams) {
+  return prepareSnapshot({ includeAuthStoreRefs: false, ...params });
+}
+
+function prepare(
+  config: SnapshotParams["config"],
+  env: SnapshotParams["env"] = {},
+  options: Partial<SnapshotParams> = {},
+) {
+  return prepareSecretsRuntimeSnapshot({
+    config,
+    env,
+    loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    ...options,
+  });
+}
+
+function ttsConfig(apiKey: unknown, config: Record<string, unknown> = {}) {
+  return asConfig({
+    ...explicitMainRoster(),
+    ...config,
+    tts: { providers: { elevenlabs: { apiKey } } },
+  });
+}
+
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+const provider = (apiKey: unknown, baseUrl = "https://first.example.invalid/v1") => ({
+  apiKey,
+  baseUrl,
+  models: [],
+});
+function siblingConfig(firstId: string) {
+  return asConfig({
+    ...explicitMainRoster(),
+    models: {
+      providers: {
+        first: provider(envRef(firstId)),
+        second: provider(envRef("SECOND_KEY"), "https://second.example.invalid/v1"),
+      },
+    },
+  });
+}
+function activate(snapshot: Snapshot) {
+  activateSecretsRuntimeSnapshotState({ snapshot, refreshContext: null, refreshHandler: null });
+}
+function pluginConfig(id: string, config: Record<string, unknown>) {
+  return asConfig({
+    ...explicitMainRoster(),
+    plugins: { entries: { [id]: { enabled: true, config } } },
+  });
+}
+function codexConfig(literalAuthorization = false) {
+  return pluginConfig("codex", {
+    appServer: {
+      transport: "websocket",
+      url: "wss://codex-app-server.example.internal/ws",
+      authToken: CODEX_APP_SERVER_TOKEN_REF,
+      headers: {
+        ...(literalAuthorization ? { Authorization: "Bearer literal-token" } : {}),
+        "x-codex-client-session-token": "${CODEX_CLIENT_SESSION_TOKEN}",
+      },
+    },
+  });
+}
 
 function explicitMainRoster() {
   return { agents: { entries: { main: {} } } };
 }
 
-const CODEX_APP_SERVER_TOKEN_REF = {
-  source: "env",
-  provider: "default",
-  id: "CODEX_APP_SERVER_TOKEN",
-} as const;
+function sandboxConfig(
+  identityData: ReturnType<typeof envRef>,
+  entries: Record<string, unknown>,
+  { target, ...options }: { mode: string; backend: string; target?: string } = {
+    mode: "all",
+    backend: "ssh",
+    target: "sandbox@example.com:22",
+  },
+) {
+  return asConfig({
+    agents: {
+      defaults: { sandbox: { ...options, ssh: { ...(target ? { target } : {}), identityData } } },
+      entries,
+    },
+  });
+}
+
+const CODEX_APP_SERVER_TOKEN_REF = envRef("CODEX_APP_SERVER_TOKEN");
 
 afterEach(() => {
   resetSecretRedactionRegistryForTest();
   clearSecretsRuntimeSnapshotState();
 });
 
-const TTS_REF = {
-  source: "env",
-  provider: "default",
-  id: "ELEVENLABS_API_KEY",
-} as const;
+const TTS_REF = envRef("ELEVENLABS_API_KEY");
 
-function expectWarning(
-  snapshot: Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>,
-  expected: { code: string; path: string },
-): void {
+function expectWarning(snapshot: Snapshot, expected: { code: string; path: string }): void {
   const warning = snapshot.warnings.find(
     (entry) => entry.code === expected.code && entry.path === expected.path,
   );
@@ -76,7 +149,6 @@ describe("secrets runtime snapshot", () => {
     const initial = await prepareSecretsRuntimeSnapshot({
       config,
       env,
-      includeAuthStoreRefs: false,
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
     activateSecretsRuntimeSnapshot(initial);
@@ -89,7 +161,6 @@ describe("secrets runtime snapshot", () => {
     const displayed = await prepareSecretsRuntimeSnapshot({
       config: displayConfig,
       env,
-      includeAuthStoreRefs: false,
     });
     expect(displayed.config.models?.providers?.example?.apiKey).toBe("prepared-value");
     expect(displayed.config.ui?.prefs?.chatShowToolCalls).toBe(true);
@@ -113,127 +184,44 @@ describe("secrets runtime snapshot", () => {
     ]) {
       const refreshed = await prepareSecretsRuntimeSnapshot({
         ...params,
-        includeAuthStoreRefs: false,
       });
       expect(refreshed.config.models?.providers?.example?.apiKey).toBe("refreshed-value");
     }
   });
 
-  it("refreshes healthy owners while an unchanged failed owner keeps last-known-good", async () => {
-    const ref = (id: string) => ({ source: "env" as const, provider: "default", id });
-    const config = (firstId: string) =>
-      asConfig({
-        ...explicitMainRoster(),
-        models: {
-          providers: {
-            first: {
-              apiKey: ref(firstId),
-              baseUrl: "https://first.example.invalid/v1",
-              models: [],
-            },
-            second: {
-              apiKey: ref("SECOND_KEY"),
-              baseUrl: "https://second.example.invalid/v1",
-              models: [],
-            },
-          },
-        },
-      });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config: config("FIRST_KEY"),
-      env: { FIRST_KEY: "first-old", SECOND_KEY: "second-old" },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
-    });
-
-    const candidate = await prepareSecretsRuntimeSnapshot({
-      config: config("FIRST_KEY"),
-      env: { SECOND_KEY: "second-new" },
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-
-    expect(candidate.config.models?.providers?.first?.apiKey).toBe("first-old");
-    expect(candidate.config.models?.providers?.second?.apiKey).toBe("second-new");
-    expect(candidate.degradedOwners).toMatchObject([
-      { ownerKind: "provider", ownerId: "first", degradationState: "stale" },
-    ]);
-    activateSecretsRuntimeSnapshotState({
-      snapshot: candidate,
-      refreshContext: null,
-      refreshHandler: null,
-    });
-    expect(() => assertSecretOwnerAvailable("provider", "first")).not.toThrow();
-  });
-
-  it("makes a changed unresolved owner cold while healthy siblings refresh", async () => {
-    const ref = (id: string) => ({ source: "env" as const, provider: "default", id });
-    const config = (firstId: string) =>
-      asConfig({
-        ...explicitMainRoster(),
-        models: {
-          providers: {
-            first: {
-              apiKey: ref(firstId),
-              baseUrl: "https://first.example.invalid/v1",
-              models: [],
-            },
-            second: {
-              apiKey: ref("SECOND_KEY"),
-              baseUrl: "https://second.example.invalid/v1",
-              models: [],
-            },
-          },
-        },
-      });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config: config("FIRST_KEY"),
-      env: { FIRST_KEY: "first-old", SECOND_KEY: "second-old" },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
-    });
-
-    const changedRef = ref("FIRST_KEY_CHANGED");
-    const candidate = await prepareSecretsRuntimeSnapshot({
-      config: config(changedRef.id),
-      env: { SECOND_KEY: "second-new" },
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
-
-    expect(candidate.config.models?.providers?.first?.apiKey).toEqual(changedRef);
-    expect(candidate.config.models?.providers?.second?.apiKey).toBe("second-new");
-    expect(candidate.degradedOwners).toMatchObject([
-      { ownerKind: "provider", ownerId: "first", degradationState: "cold" },
-    ]);
-    activateSecretsRuntimeSnapshotState({
-      snapshot: candidate,
-      refreshContext: null,
-      refreshHandler: null,
-    });
-    expect(() => assertSecretOwnerAvailable("provider", "first")).toThrow(
-      "configured but unavailable",
+  it.each([
+    ["FIRST_KEY", "stale", "first-old"],
+    ["FIRST_KEY_CHANGED", "cold", envRef("FIRST_KEY_CHANGED")],
+  ] as const)("refreshes healthy siblings while %s becomes %s", async (id, state, apiKey) => {
+    activate(
+      await prepare(siblingConfig("FIRST_KEY"), {
+        FIRST_KEY: "first-old",
+        SECOND_KEY: "second-old",
+      }),
     );
+    const candidate = await prepare(
+      siblingConfig(id),
+      { SECOND_KEY: "second-new" },
+      {
+        allowUnavailableSecretOwners: true,
+      },
+    );
+    expect(candidate.config.models?.providers?.first?.apiKey).toEqual(apiKey);
+    expect(candidate.config.models?.providers?.second?.apiKey).toBe("second-new");
+    expect(candidate.degradedOwners).toMatchObject([
+      { ownerKind: "provider", ownerId: "first", degradationState: state },
+    ]);
+    activate(candidate);
+    const available = () => assertSecretOwnerAvailable("provider", "first");
+    if (state === "cold") {
+      expect(available).toThrow("configured but unavailable");
+    } else {
+      expect(available).not.toThrow();
+    }
   });
 
   it("does not send a stale provider credential to a changed endpoint", async () => {
-    const apiKeyRef = {
-      source: "env" as const,
-      provider: "default",
-      id: "PROVIDER_KEY",
-    };
+    const apiKeyRef = envRef("PROVIDER_KEY");
     const config = (baseUrl: string) =>
       asConfig({
         ...explicitMainRoster(),
@@ -243,25 +231,18 @@ describe("secrets runtime snapshot", () => {
           },
         },
       });
-    const active = await prepareSecretsRuntimeSnapshot({
-      config: config("https://old.example.invalid/v1"),
-      env: { PROVIDER_KEY: "last-known-good" },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+    const active = await prepare(config("https://old.example.invalid/v1"), {
+      PROVIDER_KEY: "last-known-good",
     });
-    activateSecretsRuntimeSnapshotState({
-      snapshot: active,
-      refreshContext: null,
-      refreshHandler: null,
-    });
+    activate(active);
 
-    const candidate = await prepareSecretsRuntimeSnapshot({
-      config: config("https://new.example.invalid/v1"),
-      env: {},
-      includeAuthStoreRefs: false,
-      allowUnavailableSecretOwners: true,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
+    const candidate = await prepare(
+      config("https://new.example.invalid/v1"),
+      {},
+      {
+        allowUnavailableSecretOwners: true,
+      },
+    );
 
     expect(candidate.config.models?.providers?.first).toMatchObject({
       apiKey: apiKeyRef,
@@ -273,44 +254,25 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("isolates one plugin route while resolving its sibling snapshot", async () => {
-    const missingRef = {
-      source: "env",
-      provider: "default",
-      id: "MISSING_WEBHOOK_SECRET",
-    } as const;
+    const missingRef = envRef("MISSING_WEBHOOK_SECRET");
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        ...explicitMainRoster(),
-        plugins: {
-          entries: {
-            "route-fixture": {
-              enabled: true,
-              config: {
-                routes: {
-                  healthy: {
-                    sessionKey: "agent:main:main",
-                    secret: {
-                      source: "env",
-                      provider: "default",
-                      id: "HEALTHY_WEBHOOK_SECRET",
-                    },
-                  },
-                  cold: {
-                    sessionKey: "agent:main:main",
-                    secret: missingRef,
-                  },
-                  inlineCold: {
-                    sessionKey: "agent:main:main",
-                    secret: "${MISSING_INLINE_WEBHOOK_SECRET}",
-                  },
-                },
-              },
-            },
+      config: pluginConfig("route-fixture", {
+        routes: {
+          healthy: {
+            sessionKey: "agent:main:main",
+            secret: envRef("HEALTHY_WEBHOOK_SECRET"),
+          },
+          cold: {
+            sessionKey: "agent:main:main",
+            secret: missingRef,
+          },
+          inlineCold: {
+            sessionKey: "agent:main:main",
+            secret: "${MISSING_INLINE_WEBHOOK_SECRET}",
           },
         },
       }),
       env: { HEALTHY_WEBHOOK_SECRET: "healthy-secret" },
-      includeAuthStoreRefs: false,
       allowUnavailableSecretOwners: true,
       loadablePluginOrigins: new Map([["route-fixture", "bundled"]]),
       pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
@@ -333,83 +295,48 @@ describe("secrets runtime snapshot", () => {
     >;
     expect(routes.healthy?.secret).toBe("healthy-secret");
     expect(routes.cold?.secret).toEqual(missingRef);
-    expect(routes.inlineCold?.secret).toEqual({
-      source: "env",
-      provider: "default",
-      id: "MISSING_INLINE_WEBHOOK_SECRET",
-    });
-    expect(snapshot.degradedOwners).toMatchObject([
-      {
-        ownerKind: "route",
-        ownerId: "plugins.entries.route-fixture.config.routes.cold.secret",
-        state: "unavailable",
-        paths: ["plugins.entries.route-fixture.config.routes.cold.secret"],
-        reason: "secret reference was not found",
-      },
-      {
-        ownerKind: "route",
-        ownerId: "plugins.entries.route-fixture.config.routes.inlineCold.secret",
-        state: "unavailable",
-        paths: ["plugins.entries.route-fixture.config.routes.inlineCold.secret"],
-        reason: "secret reference was not found",
-      },
-    ]);
+    expect(routes.inlineCold?.secret).toEqual(envRef("MISSING_INLINE_WEBHOOK_SECRET"));
+    expect(snapshot.degradedOwners).toMatchObject(
+      ["cold", "inlineCold"].map((route) => {
+        const ownerId = `plugins.entries.route-fixture.config.routes.${route}.secret`;
+        return {
+          ownerKind: "route",
+          ownerId,
+          state: "unavailable",
+          paths: [ownerId],
+          reason: "secret reference was not found",
+        };
+      }),
+    );
   });
 
   it("registers resolved TTS values for exact redaction", async () => {
     const secret = "test-secret";
-    await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        ...explicitMainRoster(),
-        tts: { providers: { elevenlabs: { apiKey: TTS_REF } } },
-      }),
-      env: { ELEVENLABS_API_KEY: secret },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-    });
+    await prepare(ttsConfig(TTS_REF), { ELEVENLABS_API_KEY: secret });
 
     expect(redactSensitiveText(`resolved ${secret}`, { mode: "off" })).toBe("resolved ***");
   });
 
   it("keeps default SSH lifecycle secrets materialized when every listed agent overrides them", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        agents: {
-          defaults: {
+      config: sandboxConfig(
+        envRef("DEFAULT_SSH_IDENTITY"),
+        {
+          worker: {
+            enabled: false,
             sandbox: {
-              mode: "off",
-              backend: "ssh",
               ssh: {
-                target: "peter@example.com:22",
-                identityData: {
-                  source: "env",
-                  provider: "default",
-                  id: "DEFAULT_SSH_IDENTITY",
-                },
-              },
-            },
-          },
-          entries: {
-            worker: {
-              enabled: false,
-              sandbox: {
-                ssh: {
-                  identityData: {
-                    source: "env",
-                    provider: "default",
-                    id: "WORKER_SSH_IDENTITY",
-                  },
-                },
+                identityData: envRef("WORKER_SSH_IDENTITY"),
               },
             },
           },
         },
-      }),
+        { mode: "off", backend: "ssh", target: "peter@example.com:22" },
+      ),
       env: {
         DEFAULT_SSH_IDENTITY: "DEFAULT PRIVATE KEY",
         WORKER_SSH_IDENTITY: "WORKER PRIVATE KEY",
       },
-      includeAuthStoreRefs: false,
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
@@ -422,42 +349,19 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("isolates only the agent whose inherited sandbox SSH SecretRef is unavailable", async () => {
-    const missingRef = {
-      source: "env",
-      provider: "default",
-      id: "MISSING_COLD_SSH_IDENTITY",
-    } as const;
+    const missingRef = envRef("MISSING_COLD_SSH_IDENTITY");
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        agents: {
-          defaults: {
-            sandbox: {
-              mode: "all",
-              backend: "ssh",
-              ssh: {
-                target: "sandbox@example.com:22",
-                identityData: missingRef,
-              },
-            },
-          },
-          entries: {
-            cold: {},
-            healthy: {
-              sandbox: {
-                ssh: {
-                  identityData: {
-                    source: "env",
-                    provider: "default",
-                    id: "HEALTHY_SSH_IDENTITY",
-                  },
-                },
-              },
+      config: sandboxConfig(missingRef, {
+        cold: {},
+        healthy: {
+          sandbox: {
+            ssh: {
+              identityData: envRef("HEALTHY_SSH_IDENTITY"),
             },
           },
         },
       }),
       env: { HEALTHY_SSH_IDENTITY: "HEALTHY PRIVATE KEY" },
-      includeAuthStoreRefs: false,
       allowUnavailableSecretOwners: true,
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
@@ -482,31 +386,22 @@ describe("secrets runtime snapshot", () => {
 
   it("treats sandbox ssh secret refs as inactive when ssh backend is not selected", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        agents: {
-          entries: { main: {} },
-          defaults: {
-            sandbox: {
-              mode: "all",
-              backend: "docker",
-              ssh: {
-                identityData: { source: "env", provider: "default", id: "SSH_IDENTITY_DATA" },
-              },
-            },
-          },
+      config: sandboxConfig(
+        envRef("SSH_IDENTITY_DATA"),
+        { main: {} },
+        {
+          mode: "all",
+          backend: "docker",
         },
-      }),
+      ),
       env: {},
-      includeAuthStoreRefs: false,
       allowUnavailableSecretOwners: true,
       loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
     });
 
-    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual({
-      source: "env",
-      provider: "default",
-      id: "SSH_IDENTITY_DATA",
-    });
+    expect(snapshot.config.agents?.defaults?.sandbox?.ssh?.identityData).toEqual(
+      envRef("SSH_IDENTITY_DATA"),
+    );
     expectWarning(snapshot, {
       code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
       path: "agents.defaults.sandbox.ssh.identityData",
@@ -514,35 +409,16 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("resolves active bundled Codex app-server plugin SecretRefs", async () => {
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config: asConfig({
-        ...explicitMainRoster(),
-        plugins: {
-          entries: {
-            codex: {
-              enabled: true,
-              config: {
-                appServer: {
-                  transport: "websocket",
-                  url: "wss://codex-app-server.example.internal/ws",
-                  authToken: CODEX_APP_SERVER_TOKEN_REF,
-                  headers: {
-                    Authorization: "Bearer literal-token",
-                    "x-codex-client-session-token": "${CODEX_CLIENT_SESSION_TOKEN}",
-                  },
-                },
-              },
-            },
-          },
-        },
-      }),
-      env: {
+    const snapshot = await prepare(
+      codexConfig(true),
+      {
         CODEX_APP_SERVER_TOKEN: "resolved-app-server-token",
         CODEX_CLIENT_SESSION_TOKEN: "resolved-session-token",
       },
-      includeAuthStoreRefs: false,
-      loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS,
-    });
+      {
+        loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS,
+      },
+    );
 
     expect(snapshot.config.plugins?.entries?.codex?.config).toMatchObject({
       appServer: {
@@ -557,41 +433,20 @@ describe("secrets runtime snapshot", () => {
 
   it("fails active bundled Codex app-server plugin SecretRefs when env is missing", async () => {
     await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          ...explicitMainRoster(),
-          plugins: {
-            entries: {
-              codex: {
-                enabled: true,
-                config: {
-                  appServer: {
-                    transport: "websocket",
-                    url: "wss://codex-app-server.example.internal/ws",
-                    authToken: CODEX_APP_SERVER_TOKEN_REF,
-                    headers: {
-                      "x-codex-client-session-token": "${CODEX_CLIENT_SESSION_TOKEN}",
-                    },
-                  },
-                },
-              },
-            },
-          },
-        }),
-        env: {
-          CODEX_CLIENT_SESSION_TOKEN: "resolved-session-token",
+      prepare(
+        codexConfig(),
+        { CODEX_CLIENT_SESSION_TOKEN: "resolved-session-token" },
+        {
+          loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS,
         },
-        includeAuthStoreRefs: false,
-        loadablePluginOrigins: BUNDLED_CODEX_PLUGIN_ORIGINS,
-      }),
+      ),
     ).rejects.toThrow('Environment variable "CODEX_APP_SERVER_TOKEN" is missing or empty.');
   });
 
   it("rejects owner isolation after provider policy failures", async () => {
     await expect(
       prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          ...explicitMainRoster(),
+        config: ttsConfig(TTS_REF, {
           secrets: {
             providers: {
               default: {
@@ -600,18 +455,10 @@ describe("secrets runtime snapshot", () => {
               },
             },
           },
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: TTS_REF,
-              },
-            },
-          },
         }),
         env: {
           ELEVENLABS_API_KEY: "test-elevenlabs-api-key",
         },
-        includeAuthStoreRefs: false,
         allowUnavailableSecretOwners: true,
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
       }),
@@ -620,22 +467,13 @@ describe("secrets runtime snapshot", () => {
 
   it("keeps unconfigured SecretRef provider aliases fail-closed", async () => {
     await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          ...explicitMainRoster(),
-          tts: {
-            providers: {
-              elevenlabs: {
-                apiKey: { source: "env", provider: "missing", id: "ELEVENLABS_API_KEY" },
-              },
-            },
-          },
-        }),
-        env: {},
-        includeAuthStoreRefs: false,
-        allowUnavailableSecretOwners: true,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
-      }),
+      prepare(
+        ttsConfig({ ...TTS_REF, provider: "missing" }),
+        {},
+        {
+          allowUnavailableSecretOwners: true,
+        },
+      ),
     ).rejects.toThrow('Secret provider "missing" is not configured');
   });
 
@@ -660,7 +498,6 @@ describe("secrets runtime snapshot", () => {
           },
         }),
         env: {},
-        includeAuthStoreRefs: false,
         agentDirs: ["/tmp/openclaw-agent-main"],
         loadAuthStore: () => ({ version: 1, profiles: {} }),
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,

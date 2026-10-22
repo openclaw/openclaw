@@ -48,6 +48,12 @@ Reset pinned items** restores these defaults. The **Settings** gear beside the
 Gateway selector opens all settings, including while offline. Settings stays in
 the footer rather than the Pages menu or pin editor.
 
+Expanded session catalogs refresh every two minutes while the sidebar is visible
+and the app is in the foreground. Active catalogs refresh immediately when you
+return to the sidebar or reconnect. Polling pauses when all catalogs are collapsed
+after initial discovery; expanding the first catalog resumes it immediately.
+Failed requests and source errors retry every 30 seconds while polling is active.
+
 Use the **pencil beside Pages** to open Agents, Automations, Usage, Skills,
 Skill Workshop, Dreaming, Terminal, or Desktop (when available). Pin the pages
 you use often with **Edit pinned items**. These work pages also remain reachable
@@ -476,7 +482,7 @@ the trailing edge to abort that run.
 
 Open **Home** from the sidebar's **Pages** menu to chat, or select an existing session from the sidebar:
 
-- History: `chat.history` (display-normalized — inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped; silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted; oversized rows can be replaced with placeholders)
+- History: `chat.history` is display-normalized by the Gateway. Inline directive tags, plain-text tool-call XML payloads (`<tool_call>`, `<function_call>`, `<tool_calls>`, `<function_calls>`, and truncated variants), and leaked ASCII/full-width model control tokens are stripped. Stored assistant visibility honors display, phase, and final-source facts first, then omits raw assistant text that trims to uppercase `NO_REPLY`; lowercase and wrapped forms remain visible. User text is never classified as silence. Oversized rows can be replaced with placeholders.
 - Long replies: tap **View all** on a capped assistant reply to load the full formatted text inline. Attachments stay in the conversation, and message actions use the expanded text. Tap **Show less** or press Back to restore the preview; reopening reuses the loaded reply. Loading, retryable failures, unavailable messages, and required reconnects or Gateway updates appear in the message rather than an alert. Synthetic message-tool and commentary previews retain their existing display and actions but do not offer **View all**, because their copied transcript ID cannot retrieve that synthesized text. This also recognizes the older capped-preview format from released Gateways such as v2026.7.1-2. Android requests up to 1,000,000 characters per text field, matching the Gateway's default retrieval limit; oversized or still-capped results show **The full message is too large to display.** instead of an incomplete reply.
 - Large code blocks scroll within a bounded viewport, with **Start of code**, **End of code**, and **Copy code** controls. Start and End also reveal that end of the block in the conversation. Selection stays within the displayed text segment; **Copy code** copies the entire block. The separate message **Select text** action opens a plain-text selection reader; long answers use bounded pages, and selection applies to the displayed page.
 - Reading: scrolling up or using **View all**, **Start of code**, or **End of code** pauses automatic following. Incoming content and window-size changes preserve your reading position, moving text or images into view when space shrinks. Resizing an idle conversation so that all content fits resumes following. **Jump to latest** in the chat header resumes following; it appears only while newer content is below the visible history and never covers messages.

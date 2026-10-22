@@ -137,7 +137,11 @@ flow:
                     [firstParagraph, ...codeBlocks, finalParagraph].join('\n\n')
               - set: auditPath
                 value:
-                  expr: path.join(env.gateway.tempRoot, `${marker}.jsonl`)
+                  expr: path.join(env.gateway.workspaceDir, `${marker}.jsonl`)
+              # Keep the receipt runner-owned in the shared fixture workspace;
+              # the isolated SUT appends without creating a private runtime file.
+              - call: fs.writeFile
+                args: [{ ref: auditPath }, "", { mode: 384 }]
               - call: env.gateway.restartAfterStateMutation
                 args:
                   - lambda:

@@ -99,6 +99,8 @@ export interface StreamOptions {
    * Default: "short".
    */
   cacheRetention?: CacheRetention;
+  /** Request-level cache lifetime for GPT-5.6+ Responses APIs; unset preserves provider defaults. */
+  promptCacheTtl?: "30m" | "12h";
   /**
    * Optional session identifier for providers that support session-based caching.
    * Providers can use this to enable prompt caching, request routing, or other
@@ -125,6 +127,8 @@ export interface StreamOptions {
    * its body stream is consumed.
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
+  /** Local-provider wait observation. Slot waits require request-correlated backend evidence. */
+  onProviderWait?: (reason: "response" | "slot" | null) => void;
   /**
    * Observe a live response that accepts user input before generation finishes.
    * `steer` resolves false only when the input was definitely not admitted;
@@ -357,6 +361,8 @@ export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 /** Stable error codes for provider outcomes that cannot be replayed safely. */
 export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
 export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
+/** The stream owner removed repetitive content before persistence and replay. */
+export const REPETITIVE_OUTPUT_ERROR_CODE = "openclaw_repetitive_output";
 /** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
@@ -821,6 +827,8 @@ export interface Model<TApi extends Api = Api> {
    * smaller practical window.
    */
   contextTokens?: number;
+  /** Provider/catalog-declared total parameter count, including inactive experts. */
+  parameterCount?: number;
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;

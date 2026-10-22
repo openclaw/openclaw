@@ -92,12 +92,14 @@ export async function resizeChatAttachmentImage(
       const worker = new Worker(new URL("./chat-attachment-image.worker.ts", import.meta.url), {
         type: "module",
       });
+      const listeners = new AbortController();
       let settled = false;
       const finish = (result: File | null) => {
         if (settled) {
           return;
         }
         settled = true;
+        listeners.abort();
         worker.terminate();
         signal.removeEventListener("abort", abort);
         if (result && !signal.aborted) {
@@ -114,6 +116,7 @@ export async function resizeChatAttachmentImage(
       signal.addEventListener("abort", abort, { once: true });
       worker.addEventListener("message", ({ data }: MessageEvent<File | null>) => finish(data), {
         once: true,
+        signal: listeners.signal,
       });
       worker.addEventListener(
         "error",
@@ -121,9 +124,12 @@ export async function resizeChatAttachmentImage(
           event.preventDefault();
           finish(null);
         },
-        { once: true },
+        { once: true, signal: listeners.signal },
       );
-      worker.addEventListener("messageerror", () => finish(null), { once: true });
+      worker.addEventListener("messageerror", () => finish(null), {
+        once: true,
+        signal: listeners.signal,
+      });
       try {
         worker.postMessage({ file, maxBytes } satisfies ChatAttachmentImageRequest, []);
       } catch {

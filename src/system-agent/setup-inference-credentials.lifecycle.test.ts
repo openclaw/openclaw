@@ -19,6 +19,7 @@ import {
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import type * as OnboardingPluginInstall from "../commands/onboarding-plugin-install.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import {
@@ -35,17 +36,11 @@ import {
   buildGatewayReloadPlan,
   listConfigReloadRefinementPrefixes,
 } from "../gateway/config-reload-plan.js";
-import type { GatewayClient } from "../gateway/server-methods/client-types.js";
-import { modelsAuthLoginHandlers } from "../gateway/server-methods/models-auth-login.js";
 import { whenAdmittedWizardSessionSettled } from "../gateway/server-methods/setup-admission.js";
 import * as setupExecution from "../gateway/server-methods/system-agent-execution.js";
-import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
-import { createWizardSessionTracker } from "../gateway/server-wizard-sessions.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
-import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import * as providerChoices from "../plugins/provider-auth-choices.js";
-import type { ProviderPlugin } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -56,13 +51,18 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import { fixture, modelRef, tempDirs } from "./setup-inference-activate.test-support.js";
+import {
+  fixture,
+  modelRef,
+  setupLoginSession,
+  setupMuseProvider,
+  tempDirs,
+} from "./setup-inference-activate.test-support.js";
 import {
   activateSavedSetupCredential,
   type SetupCredentialActivationReceipt,
 } from "./setup-inference-credential-access.js";
 import { stageProviderAuthCandidate } from "./setup-inference-credentials.js";
-import { pluginRecord } from "./verified-inference.test-support.js";
 
 const installRuntime = vi.hoisted(() =>
   vi.fn<typeof OnboardingPluginInstall.ensureOnboardingPluginInstalled>(),
@@ -95,6 +95,7 @@ describe("setup inference credential provider lifetime", () => {
       await withOpenClawTestState({ label: "setup-plan-lifetime" }, async (state) => {
         const id = flow === "managed wizard" ? "managed-plan" : "guided-plan";
         const pluginDir = state.path(id);
+        const pluginPath = path.relative(state.stateDir, pluginDir);
         const nativeEvent = `${id}-native`;
         const observationEvent = `${id}-observation`;
         const rawModelRef = `${id}/preview`;
@@ -112,36 +113,29 @@ describe("setup inference credential provider lifetime", () => {
         const observe = (phase: string, value: unknown) => {
           observations.push({ phase, value });
         };
-        await fs.mkdir(pluginDir);
-        await fs.writeFile(
-          path.join(pluginDir, "package.json"),
-          JSON.stringify({
-            name: `@example/${id}`,
-            version: "1.0.0",
-            type: "commonjs",
-            openclaw: { extensions: ["./index.cjs"], setupEntry: "./index.cjs" },
-          }),
-        );
-        await fs.writeFile(
-          path.join(pluginDir, "openclaw.plugin.json"),
-          JSON.stringify({
-            id,
-            providers: [id],
-            configSchema: { type: "object", properties: {} },
-            setup: { requiresRuntime: true, providers: [{ id }] },
-            providerAuthChoices: [
-              {
-                provider: id,
-                method: "synthetic",
-                choiceId: id,
-                choiceLabel: "Synthetic setup",
-                ...(flow === "app-guided auth" ? { appGuidedAuth: "oauth" } : {}),
-              },
-            ],
-          }),
-        );
-        await fs.writeFile(
-          path.join(pluginDir, "index.cjs"),
+        await state.writeJson(`${pluginPath}/package.json`, {
+          name: `@example/${id}`,
+          version: "1.0.0",
+          type: "commonjs",
+          openclaw: { extensions: ["./index.cjs"], setupEntry: "./index.cjs" },
+        });
+        await state.writeJson(`${pluginPath}/openclaw.plugin.json`, {
+          id,
+          providers: [id],
+          configSchema: { type: "object", properties: {} },
+          setup: { requiresRuntime: true, providers: [{ id }] },
+          providerAuthChoices: [
+            {
+              provider: id,
+              method: "synthetic",
+              choiceId: id,
+              choiceLabel: "Synthetic setup",
+              ...(flow === "app-guided auth" ? { appGuidedAuth: "oauth" } : {}),
+            },
+          ],
+        });
+        await state.writeText(
+          `${pluginPath}/index.cjs`,
           `
           const nativeEvent = ${JSON.stringify(nativeEvent)};
           const observationEvent = ${JSON.stringify(observationEvent)};
@@ -205,7 +199,6 @@ describe("setup inference credential provider lifetime", () => {
             agentDir: state.agentDir(),
             effects: { credentialsSaved: false },
             beforePersistentEffect: async () => {},
-            deps: {},
             params: {
               kind: "provider-auth",
               authChoice: id,
@@ -363,133 +356,63 @@ it("activates and restores setup credentials off-thread while preserving later n
   });
 });
 
-it.each([
-  {
-    selectedModel: "meta/muse-spark-1.3",
-    modelName: "Muse Spark 1.3",
-    selectModel: undefined,
-    outcome: "success",
-  },
-  {
-    selectedModel: "meta/muse-spark-1.2",
-    modelName: "Muse Spark 1.2",
-    selectModel: undefined,
-    outcome: "success",
-  },
-  {
-    selectedModel: "meta/muse-spark-1.3",
-    modelName: "Muse Spark 1.3",
-    selectModel: true,
-    outcome: "success",
-  },
-  {
-    selectedModel: "meta/muse-spark-1.3",
-    modelName: "Muse Spark 1.3",
-    selectModel: false,
-    outcome: "success",
-  },
-  ...["cancel", "authority", "verification"].map((outcome) => ({
-    selectedModel: "meta/muse-spark-1.3",
-    modelName: "Muse Spark 1.3",
-    selectModel: undefined,
+function museScenario(version = "1.3", selectModel?: boolean, outcome = "success") {
+  return {
+    selectedModel: `meta/muse-spark-${version}`,
+    modelName: `Muse Spark ${version}`,
+    selectModel,
     outcome,
-  })),
+  };
+}
+
+it.each([
+  museScenario(),
+  museScenario("1.2"),
+  museScenario("1.3", true),
+  museScenario("1.3", false),
+  ...["cancel", "authority", "verification"].map((outcome) =>
+    museScenario("1.3", undefined, outcome),
+  ),
 ])(
   "sets up the Muse route for main (model: $selectedModel, selectModel: $selectModel, $outcome)",
   async ({ selectedModel, modelName, selectModel, outcome }) => {
     const setup = await fixture({ codex: true, primaryModel: modelRef });
     const starter = "meta/muse-spark-1.3";
     const original = { alias: "Existing Meta API model", agentRuntime: { id: "openclaw" } };
-    const config: OpenClawConfig = {
-      ...setup.config,
-      agents: {
-        ...setup.config.agents,
-        ownership: "explicit",
-        defaults: {
-          ...setup.config.agents?.defaults,
-          models: { ...setup.config.agents?.defaults?.models, [starter]: original },
-        },
-        entries: {
-          main: { model: { primary: modelRef, fallbacks: ["stable/agent-fallback"] } },
-          other: {},
-        },
-      },
-      plugins: {
-        ...setup.config.plugins,
-        entries: { ...setup.config.plugins?.entries, meta: { enabled: true } },
-      },
-      models: {
-        ...setup.config.models,
-        providers: {
-          ...setup.config.models?.providers,
-          openai: {
-            ...setup.config.models?.providers?.openai,
-            baseUrl: "https://provider.example/v1",
-            models: setup.config.models?.providers?.openai?.models ?? [],
-            apiKey: "synthetic-working-primary-key",
-          },
-          meta: {
-            baseUrl: "https://api.meta.ai/v1",
-            models: [],
-            apiKey: "synthetic-existing-meta-api-key",
-          },
-        },
-      },
+    const config = structuredClone(setup.config);
+    const agents = expectDefined(config.agents, "fixture agents");
+    agents.ownership = "explicit";
+    const defaults = expectDefined(agents.defaults, "fixture defaults");
+    defaults.models = { ...defaults.models, [starter]: original };
+    agents.entries = {
+      main: { model: { primary: modelRef, fallbacks: ["stable/agent-fallback"] } },
+      other: {},
+    };
+    const plugins = expectDefined(config.plugins, "fixture plugins");
+    plugins.entries = { ...plugins.entries, meta: { enabled: true } };
+    const providers = expectDefined(config.models?.providers, "fixture providers");
+    providers.openai = {
+      ...providers.openai,
+      baseUrl: "https://provider.example/v1",
+      models: providers.openai?.models ?? [],
+      apiKey: "synthetic-working-primary-key",
+    };
+    providers.meta = {
+      baseUrl: "https://api.meta.ai/v1",
+      models: [],
+      apiKey: "synthetic-existing-meta-api-key",
     };
     const previousAgentModel = JSON.stringify(config.agents?.entries?.main?.model);
     const previousDefaultModel = JSON.stringify(config.agents?.defaults?.model);
     await fs.writeFile(setup.configPath, `${JSON.stringify(config, null, 2)}\n`);
     clearConfigCache();
-    const choice: ProviderAuthChoiceMetadata = {
-      pluginId: "meta",
-      providerId: "meta",
-      methodId: "muse-code",
-      choiceId: "muse-code",
-      choiceLabel: "Muse Code",
-      appGuidedAuth: "device-code",
-    };
-    const provider: ProviderPlugin = {
-      id: "meta",
-      pluginId: "meta",
-      label: "Meta",
-      auth: [
-        {
-          id: "muse-code",
-          label: "Muse Code",
-          kind: "device_code",
-          run: async () => ({
-            profiles: [],
-            defaultModel: starter,
-            agentRuntimeId: "muse",
-          }),
-        },
-      ],
-    };
-    setup.deps.resolveManifestProviderAuthChoice = () => choice;
-    setup.deps.resolvePluginProviders = () => [provider];
-    setup.deps.loadPluginRegistrySnapshot = () => ({
-      plugins: [
-        pluginRecord("meta"),
-        pluginRecord("muse"),
-        pluginRecord("codex"),
-        pluginRecord("openai"),
-      ],
+    const phases: string[] = [];
+    const verifySetup = vi.fn(async () => {
+      phases.push("verify");
     });
-    const verifySetup = vi.fn(async () => {});
-    setup.pluginRegistry.agentHarnesses.push({
-      pluginId: "muse",
-      source: "test",
-      harness: {
-        id: "muse",
-        label: "Muse Code",
-        authBootstrap: "harness",
-        executionEnvironment: "host-only",
-        supports: () => ({ supported: true }),
-        verifySetup,
-        runAttempt: async () => {
-          throw new Error("Native setup verification must not start a turn");
-        },
-      },
+    const choice = setupMuseProvider(setup, starter, {
+      verifySetup,
+      executionEnvironment: "host-only",
     });
     const record: PluginInstallRecord = {
       source: "npm",
@@ -499,6 +422,7 @@ it.each([
     installRuntime.mockImplementation(async ({ cfg, entry, beforePersistentEffect }) => {
       expect(entry.pluginId).toBe("muse");
       await beforePersistentEffect?.();
+      phases.push("install");
       return {
         installed: true,
         status: "installed",
@@ -526,7 +450,7 @@ it.each([
           surface: "gateway",
           runtime: createNonExitingRuntime(),
           prompter: setup.prompter,
-          deps: setup.deps,
+          onActivationStarted: () => phases.push("activate"),
           assertCurrent: () => {
             if (!authorized) {
               throw new Error("setup authority revoked");
@@ -566,21 +490,14 @@ it.each([
           activate({
             ...params,
             nativeSessionCatalogsEnabled: false,
-            deps: setup.deps,
           }),
         ),
       );
-      const tracker = createWizardSessionTracker();
-      const client: GatewayClient = {
-        connId: "muse-access",
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          scopes: ["operator.admin"],
-          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-        },
-      };
-      const params = { sessionId: "muse-access", authChoice: "meta/muse-code", agentId: "main" };
+      const login = setupLoginSession(() => config, {
+        sessionId: "muse-access",
+        authChoice: "meta/muse-code",
+        agentId: "main",
+      });
       const unsubscribe = registerConfigWriteListener(
         (event) => {
           const claim = expectDefined(
@@ -609,23 +526,11 @@ it.each([
       );
       try {
         setRuntimeConfigSnapshot(config, config);
-        await expectDefined(
-          modelsAuthLoginHandlers["models.authLogin"],
-          "provider login handler",
-        )({
-          req: { type: "req", id: "muse-access", method: "models.authLogin", params },
-          params,
-          respond: vi.fn(),
-          // SAFETY: Provider login uses only the real session tracker and current fixture config.
-          context: { ...tracker, getRuntimeConfig: () => config } as GatewayRequestContext,
-          client,
-          isWebchatConnect: () => false,
-        });
-        const session = expectDefined(
-          tracker.wizardSessions.get(params.sessionId),
-          "login session",
-        );
-        const consent = await session.next();
+        const session = await login.start();
+        let consent = await session.next();
+        while (consent.step?.type === "progress") {
+          consent = await session.next();
+        }
         expect(consent.step).toMatchObject({
           type: "select",
           message: expect.stringContaining("Use Muse Code’s native permissions?"),
@@ -646,6 +551,12 @@ it.each([
     } else {
       const result = await activateCandidate();
       expect(result).toMatchObject({ ok: true, modelRef: selectedModel, modelName });
+    }
+    if (selectModel !== false) {
+      expect(phases.indexOf("activate")).toBeLessThan(phases.indexOf("install"));
+      const verification = phases.indexOf("verify");
+      expect(verification).toBeGreaterThan(phases.indexOf("install"));
+      expect(phases.indexOf("activate", verification + 1)).toBeGreaterThan(verification);
     }
     const selected = (await readConfigFileSnapshot()).sourceConfig;
     expect(selected.agents?.entries?.main?.nativeRuntimeConsent).toEqual(["muse"]);
@@ -673,6 +584,7 @@ it.each([
     expect(verifySetup).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "meta", modelId: selectedModel.slice("meta/".length) }),
     );
+    expect(loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(1);
     expect(setup.run).not.toHaveBeenCalled();
   },
 );

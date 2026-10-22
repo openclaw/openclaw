@@ -9,6 +9,19 @@ read_when:
 Checks 3-7b cover legacy on-disk state migrations, session integrity, model
 auth health, sandbox images, and plugin installs.
 
+## Legacy data and PostgreSQL
+
+Run `openclaw doctor --fix` before porting SQLite stores to PostgreSQL. Port
+preflight names any pending declared legacy migrations and refuses until they
+are complete. This covers native Codex task assignments, Matrix inbound dedupe,
+and legacy memory index sidecars.
+
+For families already using PostgreSQL, Doctor records an intentional non-outcome
+for these SQLite-only migrations and leaves the engine anchor alone. Legacy
+memory sidecars remain unchanged; normal reindexing uses the authoritative
+memory sources to rebuild the PostgreSQL index and may re-embed them. See
+[Database engines](/reference/database-engines#legacy-data-and-postgresql).
+
 ## Checks 3-7b
 
 <AccordionGroup>
@@ -20,11 +33,11 @@ auth health, sandbox images, and plugin installs.
     - Session rows and transcripts: import legacy `sessions.json` and JSONL history from per-agent `sessions/` directories or explicitly configured stores into `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
     - Agent dir: from `~/.openclaw/agent/` to `~/.openclaw/agents/<agentId>/agent/`
     - WhatsApp auth state (Baileys): from legacy `~/.openclaw/credentials/*.json` (except `oauth.json`) to `~/.openclaw/credentials/whatsapp/<accountId>/...` (default account id: `default`)
-    - Signed device identity: from `~/.openclaw/identity/device.json` into the `primary` `device_identities` row in `state/openclaw.sqlite`; Doctor also owns repair of invalid stored rows; Gateway and node-host startup refuse an unimported identity instead of creating a replacement, and leave the separate device-auth file untouched
+    - Signed device identities: from `~/.openclaw/identity/device.json`, `node-device.json`, and `share-device.json` into the corresponding `primary`, `node`, and `shareExtension` rows in `client/credentials.sqlite`. Doctor preserves the original keys and JSON bytes and records each consumed import. It also owns repair of invalid stored identity rows. Gateway and node-host startup refuse an unimported identity instead of creating a replacement; the separate device-auth files stay untouched.
 
     Imports of the pre-June `tasks/runs.sqlite`, `flows/registry.sqlite`, and `plugin-state/state.sqlite` databases are retired. Doctor leaves these files untouched. Older installations that need their records should [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions) and run its Doctor migrations before installing `latest`; June-and-later releases already use the shared state database.
 
-    The JSON plugin index at `plugins/installs.json` is retired. Doctor leaves it unchanged and directs operators to run `openclaw doctor --fix` on `2026.9.5` with a pre-update backup. Updates also check this original file before stopping the running Gateway. Current SQLite plugin indexes and install records remain supported.
+    The JSON plugin index at `plugins/installs.json` is retired. Doctor archives its original bytes before plugin discovery and reports the archive path. Current SQLite plugin indexes and install records remain authoritative; reinstall a missing plugin using its archived package spec.
 
     Retired Skill Workshop proposals belong to Doctor, including the repair pass during `openclaw update`. Doctor exports each pending or quarantined draft to `<agentDir>/workshop-skills/.archive/.retired-proposals/<proposal-id>/`, drops the retired proposal tables, and removes `<state-dir>/skill-workshop/proposals/`. Normal Gateway and local CLI startup leave those artifacts untouched. A failed export keeps the tables and files and reports a warning; rerun `openclaw doctor --fix` after fixing the cause.
 
@@ -32,11 +45,15 @@ auth health, sandbox images, and plugin installs.
 
     Historical inline assistant directives in SQLite transcripts and archives are normalized by Doctor, including plain `openclaw doctor --non-interactive`. Gateway and ordinary CLI startup leave those historical bytes untouched. When replacing a binary without the updater, stop the Gateway and run Doctor against the same state/config before restarting if old history still contains reply, audio, TTS, or reaction markers. The official [container image entrypoint](/install/docker#upgrading-container-images) runs Doctor automatically before Gateway activation. This normalization keeps its existing completion cursor and stopped-writer checks; it does not enable repair-only maintenance, service changes, or exec-approval migration.
 
+    The same Doctor pass restores assistant transcript rows whose provider was stored as the literal `***`. Transcript storage before 2026.10.12 masked short values that looked like secrets, and some runtime headers registered provider ids as secrets. Doctor restores the provider only from facts the runtime recorded for the same session: the unmasked provider of that session's trajectory runtime events for the row's model. Only the provider value changes, so the transcript search index is not rebuilt. Instead of a full database backup, Doctor records each restored row in migration metadata (`historical-transcript-masked-provider-restored-v1`); every restored provider was `***`, so that list is the complete undo record. Rows whose session recorded no provider, or more than one provider, for that model stay `***`, and Doctor reports their count once. Installs that already completed the directive normalization reopen it once for this repair alone, and later runs skip it. Gateway startup never runs it.
+
     Repair prepares retained archive media normalization from read-only database snapshots before stopping a managed Gateway. Unchanged archives require no archive write transaction. Doctor records verified content and file identities in existing migration metadata, so another run at the same version skips parsing and reading unchanged archive copies. Imports, restores, changed files, and new versions invalidate those facts; stored blob digests are still checked. Actual repairs retain stopped-writer authority and source revalidation.
 
     Automatic discovery no longer imports the pre-agent `~/.openclaw/sessions/` layout. An explicit session-store path remains supported, including a configured path at that location.
 
     Legacy session-file import and repair belong to Doctor. Gateway startup checks readiness without importing those files; runtime session access uses only SQLite. An unreadable legacy session index and its transcripts remain at their original paths, and repeated startups refuse readiness with the Doctor command for the active profile. Stop the Gateway, back up its state, repair the named source, and run `openclaw doctor --fix` before restarting it. The [targeted migration sequence](/cli/doctor#session-sqlite-migration) provides inspection and validation evidence. Current SQLite maintenance does not require legacy files to remain on disk.
+
+    Session routing repair preserves an explicit user-selected model and runtime when the installed, enabled runtime supports that model, even if the default route uses a different runtime. This also applies to archived sessions and the Doctor pass during `openclaw update`. Doctor removes the runtime selection if its plugin is unavailable or the selection is invalid. It still clears legacy CLI runtime residue that live routing ignored after the old backend and model were removed; changing defaults alone does not invalidate a current explicit session choice.
 
     When an unavailable plugin still needs legacy session files, Doctor retains those originals after verifying the core import. Startup accepts the retained files only when their session owners have matching verified imports. An unused configured agent does not need an empty database for another agent's history. Changed, unassigned, or unimported source rows still require repair before startup.
 
@@ -86,7 +103,7 @@ auth health, sandbox images, and plugin installs.
 
     `openclaw doctor --fix` first imports any legacy JSON session store, then keeps the winning primary-session claim and renames each losing claim to `agent:<owner>:legacy-main-conflict-<n>` in its original database. Quarantine changes only the key; the entry and full transcript remain available for inspection or archival.
 
-    Doctor also repairs missing historical session titles from the first user request in a bounded transcript prefix. It preserves explicit names and session activity, skips running and incognito sessions, and does not restore cold history or call a model. After session-key normalization, it normalizes eligible legacy ACP metadata keys while preserving their stored lifecycle bindings. Missing, stale, or conflicting ACP claims remain available for inspection with a warning. Gateway startup and ordinary reads do not perform either repair.
+    Doctor also repairs missing historical session titles from the first user request in a bounded transcript prefix. Internal heartbeat, exec-completion, cron, and session-event wake markers do not become titles. It preserves explicit names and session activity, skips running, incognito, and native sub-agent sessions, and does not restore cold history or call a model. Sub-agent labels remain owned by spawning and explicit renames; visible dashboard child sessions remain eligible for title repair. After session-key normalization, it normalizes eligible legacy ACP metadata keys while preserving their stored lifecycle bindings. Missing, stale, or conflicting ACP claims remain available for inspection with a warning. Gateway startup and ordinary reads do not perform either repair.
 
     Doctor detects missing current-format workspace metadata on managed-worktree sessions and repairs it after session-key repairs have settled. Gateway startup does not scan for these legacy workspace repairs. Current schema opening, readiness validation, transcript projections, and live-run recovery remain with their runtime owners.
 
@@ -167,6 +184,7 @@ auth health, sandbox images, and plugin installs.
     - **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*` mount source, because SD/eMMC-backed random I/O can be slower and wear faster under session and credential writes.
     - **Linux volatile state dir**: warns when state resolves to `tmpfs` or `ramfs`, because sessions, credentials, config, and SQLite state (with WAL/journal sidecars) disappear on reboot. Docker `overlay` mounts are intentionally not flagged because their writable layers persist across host reboots while the container remains.
     - **Session directory permissions**: checks existing session and store directories for writability. Missing archive directories are healthy on fresh profiles and are created when needed.
+    - **Legacy OAuth directory**: a missing directory is a warning, including when channel pairing or `OPENCLAW_OAUTH_DIR` selects it. Doctor can create it with `--fix`; its absence alone does not block update readiness. Existing-directory writability and credential migration checks still apply.
     - **Legacy transcript mismatch**: warns when recent legacy session entries have missing transcript files. SQLite-owned sessions do not require archived JSONL files.
     - **Legacy main session "1-line JSONL"**: flags when an unimported main transcript has only one line (history was not accumulating).
     - **State directory scope**: integrity diagnostics inspect the active state directory selected by the profile or `OPENCLAW_STATE_DIR`. Separate profiles intentionally keep separate histories; Doctor does not probe the default `~/.openclaw` directory merely to warn that it also exists. The macOS launch-agent disablement warning reads only the active state directory's `disable-launchagent` marker. Two released migration exceptions are named in `resolveLegacyProfileMigrationExceptions`: `profileWorkspace` may read and migrate only `~/.openclaw/workspace-<active-profile>` into that profile's workspace, and `standaloneAgent` follows the default-install or explicit-path rule above. Neither migration scans other profiles' entries.
@@ -181,11 +199,19 @@ auth health, sandbox images, and plugin installs.
 
     Doctor also reports auth profiles that are temporarily unusable due to short cooldowns (rate limits/timeouts/auth failures) or longer disables (billing/credit failures).
 
-    Doctor also imports legacy generated provider catalogs (`plugins/*/catalog.json` and retained migration claims) into agent SQLite while preserving provider credentials. Run `openclaw doctor --fix` to import these catalogs or repair persisted generated models whose transport API cannot be derived. Ordinary model loading reads stored SQLite catalogs without importing sidecars or repairing saved rows. Initial disk discovery and explicit registry refresh report legacy catalogs with a Doctor command; hot model lookups and lifecycle-captured catalogs do not inspect legacy files. Newly generated catalogs are still normalized before publication.
+    Doctor also imports legacy generated provider catalogs (`plugins/*/catalog.json` and retained migration claims) into agent SQLite while preserving provider credentials. Run `openclaw doctor --fix` to import these catalogs, remove generated model rows whose transport API cannot be derived, or complete missing numeric cost rates with zero. Supplied rates and pricing metadata are preserved; null or non-numeric costs still need correction at the provider source followed by a catalog refresh. Ordinary model loading reads stored SQLite catalogs without importing sidecars or repairing saved rows. Initial disk discovery and explicit registry refresh report legacy catalogs with a Doctor command; hot model lookups and lifecycle-captured catalogs do not inspect legacy files. Newly generated catalogs are still normalized before publication.
+
+    When a provider already has an API-key or token SecretRef in its effective auth store, Doctor does not import plaintext keys from that provider's generated catalogs. This includes shared profiles inherited by another agent. Explicit literal keys in `models.providers` still migrate; Doctor preserves the existing references and leaves source catalogs unchanged.
+
+    Older versions could copy a plugin's generated provider block into the agent's root `models.json`. For example, `claude-cli` received the `anthropic` catalog through its hook alias. The root file is author-owned, so the copy and its prices never refreshed, and its zero placeholders made unpriced models show as free. With `--fix`, Doctor removes a root provider only when it is an exact copy of a block in that plugin's generated catalog, config does not declare the id, and the block carries no credentials or overrides. It saves the previous file as `models.json.bak-<timestamp>` and lists each removed provider. Edited copies stay.
+
+    This repair accepts line comments and trailing commas, just like model loading. The repaired file uses plain JSON; the backup preserves the original bytes, including comments.
 
     OAuth credential sidecar imports are retired. Doctor leaves their files and encryption keys untouched. When a legacy `auth-profiles.json` still references a sidecar, Doctor refuses the migration: upgrade through `2026.9.7` and run `openclaw doctor --fix` from an interactive terminal on the original host before retrying; that release can recover the historical key and import the credentials. Unreferenced sidecars stay in place without blocking. See [retention policy](/gateway/doctor/config-migrations#retention-policy).
 
     Stale OAuth shadow cleanup preserves profiles with sidecar references in either the legacy file or the canonical store. If a legacy auth file cannot be read or parsed, Doctor skips that agent's shadow cleanup and warns with the file path; inspect or restore it before retrying. A missing legacy file does not prevent cleanup of ordinary SQLite-only profiles.
+
+    Legacy auth-profile JSON, retired `identity/*device-auth.json` files, and `logs/config-health.json` must contain valid UTF-8. Doctor refuses malformed bytes before importing them, preserves the source, and reports the affected path. Keep the original bytes and restore valid UTF-8 JSON from a verified backup before rerunning `openclaw doctor --fix`; do not use a lossy conversion. Valid Unicode, including a literal replacement character, remains supported. Malformed auth archives cannot authorize recovered profile mappings.
 
   </Accordion>
   <Accordion title="6. Hooks model validation">
@@ -206,6 +232,8 @@ auth health, sandbox images, and plugin installs.
     The `core/doctor/legacy-plugin-dependencies` lint selector shipped in v2026.8.1 remains available as a deprecated, non-destructive informational check. It no longer scans cache roots or recommends deleting them. Use `--severity-min info` to display its deprecation notice.
 
     Package-local cleanup remains with the package installer. Doctor still removes orphaned or recovered managed npm copies of bundled `@openclaw/*` plugins that can shadow the current bundled manifest. It also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` keep resolving after updates or npm repairs.
+
+    Host-link checks and post-update relinking use the active install-record paths, so stale managed npm generations do not add work to those passes. If storage access prevents Doctor from reading the records, it warns and falls back to inspecting all managed npm roots. Recovery and cleanup still discover stale generations: `openclaw doctor --fix` retires them for safe pruning after Gateway shutdown.
 
     Doctor can also reinstall missing downloadable plugins when config references them but the local plugin registry cannot find them (material `plugins.entries`, configured channel/provider/search settings, configured agent runtimes). During package updates, doctor avoids reinstalling plugin packages while the core package is being swapped; run `openclaw doctor --fix` again after the update if a configured plugin still needs recovery. Gateway startup and config reload do not run package repair; plugin installs remain explicit doctor/install/update work.
 

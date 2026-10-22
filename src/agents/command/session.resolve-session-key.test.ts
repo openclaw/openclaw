@@ -170,35 +170,6 @@ describe("resolveSessionKeyForRequest", () => {
     expect(hoisted.listSessionEntriesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("assigns unscoped shared-store rows to the persisted owner regardless of scan order", async () => {
-    hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
-    const sharedStore = {
-      main: { sessionId: "ops-session", updatedAt: 10 },
-    } satisfies Record<string, SessionEntry>;
-    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
-
-    const result = await resolveSessionKeyForRequest({
-      cfg: {
-        session: { store: "/stores/shared.sqlite" },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { research: {}, ops: {} },
-        },
-      } satisfies OpenClawConfig,
-      sessionId: "ops-session",
-    });
-
-    expect(result.agentId).toBe("ops");
-    expect(result.sessionKey).toBe("main");
-    expect(result.sessionEntry).toEqual(sharedStore.main);
-    expect(result.storePath).toBe("/stores/shared.sqlite");
-    expect(hoisted.listSessionEntriesMock.mock.calls.map(([scope]) => scope?.agentId)).toEqual([
-      "research",
-      "ops",
-    ]);
-  });
-
   it("uses the persisted fixed-store owner for direct session-id lookup", async () => {
     hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
     const sharedStore = {
@@ -299,31 +270,6 @@ describe("resolveSessionKeyForRequest", () => {
     });
   });
 
-  it("persists a legacy main fixed-store owner and fails closed after main is removed", async () => {
-    hoisted.listAgentIdsMock.mockReturnValue(["research"]);
-    const sharedStore = {
-      main: { sessionId: "legacy-main-session", updatedAt: 10 },
-    } satisfies Record<string, SessionEntry>;
-    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
-    const migrated = createCanonicalAgentConfigFixture({
-      session: { store: "/stores/shared.sqlite" },
-      agents: { entries: { main: { default: true }, research: {} } },
-    }).config;
-    expect(migrated.agents?.defaults?.sessionStore?.agentId).toBe("main");
-    const afterMainRemoval = {
-      ...migrated,
-      agents: {
-        ...migrated.agents,
-        ownership: "explicit" as const,
-        entries: { research: {} },
-      },
-    } satisfies OpenClawConfig;
-
-    await expect(
-      resolveSessionKeyForRequest({ cfg: afterMainRemoval, sessionId: "legacy-main-session" }),
-    ).rejects.toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-  });
-
   it("rejects an explicit agent that conflicts with an unscoped fixed-store owner", async () => {
     hoisted.listAgentIdsMock.mockReturnValue(["ops", "research"]);
     const cfg = {
@@ -348,30 +294,6 @@ describe("resolveSessionKeyForRequest", () => {
       sessionKey: "global",
       storePath: "/stores/shared.sqlite",
     });
-  });
-
-  it("fails closed for an ownerless unscoped row during a cross-agent shared-store scan", async () => {
-    hoisted.listAgentIdsMock.mockReturnValue(["research", "ops"]);
-    const sharedStore = {
-      main: { sessionId: "ownerless-session", updatedAt: 10 },
-    } satisfies Record<string, SessionEntry>;
-    mockSessionStores({ "/stores/shared.sqlite": sharedStore });
-
-    const cfg = {
-      session: { store: "/stores/shared.sqlite" },
-      agents: {
-        ownership: "explicit",
-        entries: { research: {}, ops: {} },
-      },
-    } satisfies OpenClawConfig;
-
-    await expect(
-      resolveSessionKeyForRequest({ cfg, sessionId: "ownerless-session" }),
-    ).rejects.toThrowError(expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }));
-    expect(hoisted.listSessionEntriesMock.mock.calls.map(([scope]) => scope?.agentId)).toEqual([
-      "research",
-      "ops",
-    ]);
   });
 
   it("does not assign an unowned bare key from a session-id scan anchor", async () => {

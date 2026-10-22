@@ -1,10 +1,11 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { BashExecutionMessage, CustomMessage } from "../../agents/sessions/messages.js";
 import type {
-  CommittedCompactionAppend,
+  CommittedCompactionBoundary,
   PreparedCompactionAppend,
 } from "../../agents/sessions/session-compaction-persistence.js";
 import type {
+  ModelChangeEntry,
   SessionEntry,
   SessionLeafControl,
   SessionMessageEntry,
@@ -123,13 +124,12 @@ export type CompactionBoundaryOperations = {
       prepared: Omit<PreparedCompactionAppend, "scope"> & {
         scope: Omit<PreparedCompactionAppend["scope"], "env">;
       };
-      transcriptByteCompactionLatch: NonNullable<
-        InternalSessionEntry["transcriptByteCompactionLatch"]
-      >;
+      transcriptByteCompactionLatch: InternalSessionEntry["transcriptByteCompactionLatch"] | null;
+      tokensAfter?: number;
       initialWriterRunId?: string;
     };
     output: {
-      committed: CommittedCompactionAppend;
+      committed: CommittedCompactionBoundary;
       initialEntry?: InitialSessionEntryCommit;
       projectionNeedsReconcile: boolean;
     };
@@ -168,6 +168,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
       input: {
         scope: MetadataTarget;
         event: Omit<SessionMessageEntry, "message"> | string;
+        initialModel?: ModelChangeEntry;
         cliWriter?: CliHistoryWriterFacts;
         message?: {
           messageJson: string;
@@ -194,6 +195,7 @@ export type SessionMetadataOperations = SessionMaintenanceOperations &
         >;
         projectionNeedsReconcile: boolean;
         pendingInputReceipt?: SessionPendingInputWorkerReceipt;
+        initialModelParentId?: string | null;
         reload?: Result<
           PreparedSessionTranscriptReload,
           OpenClawStateWorkerErrorPayload | undefined

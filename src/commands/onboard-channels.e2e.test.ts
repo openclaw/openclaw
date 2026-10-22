@@ -22,12 +22,30 @@ const manifestRegistryMocks = vi.hoisted(() => ({
 }));
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
-  return createWizardPrompter(
-    {
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-      ...overrides,
-    },
-    { defaultSelect: "__done__" },
+  return createWizardPrompter(overrides, { defaultSelect: "__done__" });
+}
+
+function registerDiscord(
+  setupWizard: ChannelSetupWizardAdapter,
+  config?: Parameters<typeof createChannelTestPluginBase>[0]["config"],
+  chatTypes: ("direct" | "group")[] = ["direct"],
+) {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({
+            id: "discord",
+            label: "Discord",
+            capabilities: { chatTypes },
+            config,
+          }),
+          setupWizard,
+        },
+      },
+    ]),
   );
 }
 
@@ -40,29 +58,6 @@ function createUnexpectedPromptGuards() {
       throw new Error(`unexpected text prompt: ${message}`);
     }) as unknown as WizardPrompter["text"],
   };
-}
-
-type MockWithCalls = {
-  mock: { calls: unknown[][] };
-};
-
-function hasCallWithFields(mock: MockWithCalls, expected: Record<string, unknown>): boolean {
-  return mock.mock.calls.some(([value]) => {
-    if (
-      value === undefined ||
-      value === null ||
-      typeof value !== "object" ||
-      Array.isArray(value)
-    ) {
-      return false;
-    }
-    const arg = value as Record<string, unknown>;
-    return Object.entries(expected).every(([key, expectedValue]) => arg[key] === expectedValue);
-  });
-}
-
-function expectCalledWithFields(mock: MockWithCalls, expected: Record<string, unknown>): void {
-  expect(hasCallWithFields(mock, expected)).toBe(true);
 }
 
 type SetupChannels = typeof import("../flows/channel-setup.js").setupChannels;
@@ -96,130 +91,6 @@ function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
       npmSpec: "@openclaw/external-chat",
     },
   };
-}
-
-function setMinimalOnboardingRegistryForTests(): void {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({
-            id: "telegram",
-            label: "Telegram",
-            capabilities: { chatTypes: ["direct", "group"] },
-          }),
-          setup: {
-            applyAccountConfig: ({
-              cfg,
-              input,
-            }: {
-              cfg: OpenClawConfig;
-              input: { token?: string };
-            }) =>
-              ({
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  telegram: {
-                    ...(cfg.channels?.telegram as Record<string, unknown> | undefined),
-                    ...(input.token ? { botToken: input.token } : {}),
-                  },
-                },
-              }) as OpenClawConfig,
-          },
-          setupWizard: {
-            channel: "telegram",
-            status: {
-              configuredLabel: "configured",
-              unconfiguredLabel: "not configured",
-              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-                Boolean(cfg.channels?.telegram?.botToken),
-            },
-            credentials: [
-              {
-                inputKey: "token",
-                providerHint: "BotFather",
-                credentialLabel: "Telegram bot token",
-                envPrompt: "Use TELEGRAM_BOT_TOKEN from env?",
-                keepPrompt: "Keep current Telegram bot token?",
-                inputPrompt: "Enter Telegram bot token",
-                inspect: ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  accountConfigured: Boolean(cfg.channels?.telegram?.botToken),
-                  hasConfiguredValue: Boolean(cfg.channels?.telegram?.botToken),
-                }),
-              },
-            ],
-          },
-        },
-      },
-      {
-        pluginId: "whatsapp",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({
-            id: "whatsapp",
-            label: "WhatsApp",
-            capabilities: { chatTypes: ["direct", "group"] },
-          }),
-          setup: {
-            applyAccountConfig: ({
-              cfg,
-              input,
-            }: {
-              cfg: OpenClawConfig;
-              input: { account?: string; name?: string };
-            }) =>
-              ({
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  whatsapp: {
-                    ...(cfg.channels?.whatsapp as Record<string, unknown> | undefined),
-                    ...(input.account ? { account: input.account } : {}),
-                    ...(input.name ? { name: input.name } : {}),
-                    linked: false,
-                  },
-                },
-              }) as OpenClawConfig,
-          },
-          setupWizard: {
-            channel: "whatsapp",
-            status: {
-              configuredLabel: "configured",
-              unconfiguredLabel: "not linked",
-              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-                Boolean((cfg.channels?.whatsapp as { account?: string } | undefined)?.account),
-              resolveSelectionHint: async ({ cfg }: { cfg: OpenClawConfig }) =>
-                (cfg.channels?.whatsapp as { account?: string } | undefined)?.account
-                  ? "configured"
-                  : "not linked",
-            },
-            credentials: [],
-            textInputs: [
-              {
-                inputKey: "account",
-                message: "Your personal WhatsApp number",
-                required: true,
-                applySet: ({ cfg, value }: { cfg: OpenClawConfig; value: string }) =>
-                  ({
-                    ...cfg,
-                    channels: {
-                      ...cfg.channels,
-                      whatsapp: {
-                        ...(cfg.channels?.whatsapp as Record<string, unknown> | undefined),
-                        account: value,
-                      },
-                    },
-                  }) as OpenClawConfig,
-              },
-            ],
-          },
-        },
-      },
-    ]),
-  );
 }
 
 function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolean }) {
@@ -299,67 +170,9 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   };
 });
 
+// mock-isolation: Channel setup exercises the synthetic plugin catalog, not bundled plugin loading.
 vi.mock("../channels/plugins/bundled.js", () => ({
-  getBundledChannelSetupPlugin: (channel: string) =>
-    channel === "telegram"
-      ? {
-          id: "telegram",
-          meta: {
-            id: "telegram",
-            label: "Telegram",
-            selectionLabel: "Telegram",
-            docsPath: "/channels/telegram",
-            blurb: "test stub.",
-          },
-          capabilities: { chatTypes: ["direct", "group"] },
-          config: {
-            listAccountIds: () => ["default"],
-            resolveAccount: () => ({}),
-          },
-          setup: {
-            applyAccountConfig: ({
-              cfg,
-              input,
-            }: {
-              cfg: OpenClawConfig;
-              input: { token?: string };
-            }) =>
-              ({
-                ...cfg,
-                channels: {
-                  ...cfg.channels,
-                  telegram: {
-                    ...(cfg.channels?.telegram as Record<string, unknown> | undefined),
-                    ...(input.token ? { botToken: input.token } : {}),
-                  },
-                },
-              }) as OpenClawConfig,
-          },
-          setupWizard: {
-            channel: "telegram",
-            status: {
-              configuredLabel: "configured",
-              unconfiguredLabel: "not configured",
-              resolveConfigured: ({ cfg }: { cfg: OpenClawConfig }) =>
-                Boolean(cfg.channels?.telegram?.botToken),
-            },
-            credentials: [
-              {
-                inputKey: "token",
-                providerHint: "BotFather",
-                credentialLabel: "Telegram bot token",
-                envPrompt: "Use TELEGRAM_BOT_TOKEN from env?",
-                keepPrompt: "Keep current Telegram bot token?",
-                inputPrompt: "Enter Telegram bot token",
-                inspect: ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  accountConfigured: Boolean(cfg.channels?.telegram?.botToken),
-                  hasConfiguredValue: Boolean(cfg.channels?.telegram?.botToken),
-                }),
-              },
-            ],
-          },
-        }
-      : undefined,
+  getBundledChannelSetupPlugin: () => undefined,
 }));
 
 vi.mock("./onboard-helpers.js", () => ({
@@ -384,7 +197,6 @@ vi.mock("../commands/channel-setup/plugin-install.js", async () => {
 describe("setupChannels", () => {
   beforeEach(async () => {
     ({ setupChannels } = await import("../flows/channel-setup.js"));
-    setMinimalOnboardingRegistryForTests();
     catalogMocks.listChannelPluginCatalogEntries.mockReset();
     catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
     manifestRegistryMocks.loadPluginManifestRegistryCore.mockReset();
@@ -401,38 +213,14 @@ describe("setupChannels", () => {
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
   });
 
-  it.each([
-    {
-      name: "explicitly confirmed",
-      configureOwner: true,
-      confirmOwner: true,
-      owners: undefined,
-      expected: ["discord:123456789012345678"],
-    },
-    {
-      name: "skipped",
-      configureOwner: false,
-      confirmOwner: false,
-      owners: undefined,
-      expected: undefined,
-    },
-    {
-      name: "declined at confirmation",
-      configureOwner: true,
-      confirmOwner: false,
-      owners: undefined,
-      expected: undefined,
-    },
-    {
-      name: "already configured",
-      configureOwner: true,
-      confirmOwner: true,
-      owners: ["telegram:existing-owner"],
-      expected: ["telegram:existing-owner"],
-    },
+  it.each<[string, boolean, boolean, string[] | undefined, string[] | undefined]>([
+    ["explicitly confirmed", true, true, undefined, ["discord:123456789012345678"]],
+    ["skipped", false, false, undefined, undefined],
+    ["declined at confirmation", true, false, undefined, undefined],
+    ["already configured", true, true, ["telegram:existing-owner"], ["telegram:existing-owner"]],
   ])(
-    "keeps Discord guild-only owner setup $name",
-    async ({ configureOwner, confirmOwner, owners, expected }) => {
+    "keeps Discord guild-only owner setup %s",
+    async (_name, configureOwner, confirmOwner, owners, expected) => {
       const channels: OpenClawConfig["channels"] = {
         discord: {
           enabled: true,
@@ -441,32 +229,16 @@ describe("setupChannels", () => {
           guilds: { "234567890123456789": { users: ["987654321098765432"] } },
         },
       };
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "discord",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "discord",
-                label: "Discord",
-                capabilities: { chatTypes: ["direct", "group"] },
-              }),
-              setupWizard: {
-                channel: "discord",
-                getStatus: async () => ({ channel: "discord", configured: true, statusLines: [] }),
-                configure: async ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  cfg,
-                  accountId: "default",
-                }),
-                configureInteractive: async ({ cfg }: { cfg: OpenClawConfig }) => ({
-                  cfg,
-                  accountId: "default",
-                }),
-              },
-            },
-          },
-        ]),
+      const configure = async ({ cfg }: { cfg: OpenClawConfig }) => ({ cfg, accountId: "default" });
+      registerDiscord(
+        {
+          channel: "discord",
+          getStatus: async () => ({ channel: "discord", configured: true, statusLines: [] }),
+          configure,
+          configureInteractive: configure,
+        },
+        undefined,
+        ["direct", "group"],
       );
       const prompter = createPrompter({
         select: vi.fn(async ({ message, options }: Parameters<WizardPrompter["select"]>[0]) => {
@@ -561,39 +333,22 @@ describe("setupChannels", () => {
           };
         },
       };
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "discord",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "discord",
-                label: "Discord",
-                config: {
-                  resolveAccount: (cfg, accountId) =>
-                    cfg.channels?.discord?.accounts?.[accountId ?? "default"] ??
-                    cfg.channels?.discord ??
-                    {},
-                  deleteAccount: ({ cfg }) => {
-                    const channels = { ...cfg.channels };
-                    delete channels.discord;
-                    return { ...cfg, channels };
-                  },
-                  setAccountEnabled: ({ cfg, enabled }) => ({
-                    ...cfg,
-                    channels: {
-                      ...cfg.channels,
-                      discord: { ...cfg.channels?.discord, enabled },
-                    },
-                  }),
-                },
-              }),
-              setupWizard,
-            },
+      registerDiscord(setupWizard, {
+        resolveAccount: (cfg, accountId) =>
+          cfg.channels?.discord?.accounts?.[accountId ?? "default"] ?? cfg.channels?.discord ?? {},
+        deleteAccount: ({ cfg }) => {
+          const channels = { ...cfg.channels };
+          delete channels.discord;
+          return { ...cfg, channels };
+        },
+        setAccountEnabled: ({ cfg, enabled }) => ({
+          ...cfg,
+          channels: {
+            ...cfg.channels,
+            discord: { ...cfg.channels?.discord, enabled },
           },
-        ]),
-      );
+        }),
+      });
       const choices = [
         "discord",
         ...(outcome === "removed" || outcome === "disabled" ? ["discord"] : []),
@@ -675,10 +430,12 @@ describe("setupChannels", () => {
       prompter,
     );
 
-    expectCalledWithFields(vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel), {
-      channel: "external-chat",
-      pluginId: "@openclaw/external-chat-plugin",
-    });
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "external-chat",
+        pluginId: "@openclaw/external-chat-plugin",
+      }),
+    );
     expect(multiselect).not.toHaveBeenCalled();
   });
 

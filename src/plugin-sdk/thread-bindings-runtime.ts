@@ -2,6 +2,12 @@
 // expiry and session-binding record types without loading the full
 // conversation-runtime surface.
 
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { resolveThreadBindingConversationIdFromBindingId } from "../channels/thread-binding-id.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { resolveThreadBindingFarewellText } from "../channels/thread-bindings-messages.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { resolveThreadBindingLifecycle } from "../shared/thread-binding-lifecycle.js";
 export {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,

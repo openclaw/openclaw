@@ -15,7 +15,11 @@ import {
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-evidence.js";
-import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
+import {
+  makeQaSuiteTestLaunch,
+  makeQaSuiteTestScenario,
+  recordQaSuiteTestResults,
+} from "./suite-test-helpers.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const tempDirs = createTempDirHarness();
@@ -126,14 +130,7 @@ describe("suite artifacts", () => {
     const invocation = createQaEvidenceInvocation({
       scenarios: [scenario],
       channel: "telegram",
-      launch: {
-        source: { ref: null, integrity: null },
-        runtime: { id: null, version: null },
-        package: null,
-        protocol: null,
-        accountRef: null,
-        proofClass: null,
-      },
+      launch: makeQaSuiteTestLaunch(),
     });
     const recorder = await createQaSuiteEvidenceInvocation(
       {

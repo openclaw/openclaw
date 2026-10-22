@@ -192,7 +192,7 @@ describe("on-demand prepared worker admission", () => {
         profileSnapshot: intent.profileSnapshot,
         preparation: {
           purpose: "reserve",
-          key: intent.preparationKey!,
+          key: intent.profileSnapshot.project!.preparation!.key,
           demandAtMs: 1_000,
           expiresAtMs: 11_000,
         },

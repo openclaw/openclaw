@@ -5,6 +5,10 @@ import {
 } from "@openclaw/ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import "../llm/ai-transport-host.js";
+import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { getModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
@@ -114,16 +118,15 @@ export function configureAiTransportRuntimeHost(): void {
         capability: "llm",
         transport: "stream",
       }).headers,
-    requiresManagedTransport: (model) => {
-      const request = getModelProviderRequestTransport(model);
-      return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
-    },
     inheritManagedTransport: (source, target) =>
       inheritModelProviderRequestRouteFacts(
         source,
         attachModelProviderLocalServiceReconciler(
           attachModelProviderLocalService(
-            attachModelProviderRequestTransport(target, getModelProviderRequestTransport(source)),
+            attachModelProviderRequestTransport(
+              attachProviderAuthAuthority(target, getProviderAuthAuthority(source)),
+              getModelProviderRequestTransport(source),
+            ),
             getModelProviderLocalService(source),
           ),
           getModelProviderLocalServiceReconciler(source),

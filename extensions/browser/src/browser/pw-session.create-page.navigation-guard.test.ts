@@ -11,6 +11,7 @@ import * as navigationGuardModule from "./navigation-guard.js";
 import { pwAi } from "./pw-ai.js";
 import {
   assertPageNavigationCompletedSafely,
+  forceDisconnectPlaywrightForTarget,
   gotoPageWithNavigationGuard,
   wasBrowserNavigationSourcePreservedAfterPolicyDenial,
   withPageNavigationRequestGuard,
@@ -19,7 +20,6 @@ import {
 const {
   closePlaywrightBrowserConnection,
   createPageViaPlaywright,
-  forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   listPagesViaPlaywright,
 } = pwAi;

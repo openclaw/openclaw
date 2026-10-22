@@ -3,7 +3,7 @@ import type {
   SkillWorkshopChange,
   SkillWorkshopSkillSummary,
 } from "@openclaw/gateway-protocol";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -14,6 +14,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/chat/text.css";
@@ -34,6 +35,7 @@ import {
   unusedDays,
   type WorkshopSort,
   type WorkshopView,
+  type WorkshopReads,
 } from "./view-shared.tsx";
 export type {
   WorkshopFilter,
@@ -70,7 +72,7 @@ export function archivedWorkshopSkills(list: SkillsWorkshopListResult) {
     .toSorted((a, b) => (b.versions[0]?.createdAtMs ?? 0) - (a.versions[0]?.createdAtMs ?? 0));
 }
 
-export function SkillWorkshopView(props: { view: WorkshopView }) {
+export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopReads }) {
   return (
     <>
       <PluginsHubHeader
@@ -78,12 +80,7 @@ export function SkillWorkshopView(props: { view: WorkshopView }) {
         onSelect={(tab) => props.view().context.navigate(tab)}
       />
       <SettingsWorkspace>
-        <div
-          id={PLUGINS_HUB_PANEL_ID}
-          role="tabpanel"
-          tabindex="0"
-          aria-labelledby="plugins-tab-skill-workshop"
-        >
+        <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-skill-workshop">
           <SettingsPage wide carapace>
             <Toolbar view={props.view} />
             <For
@@ -101,11 +98,26 @@ export function SkillWorkshopView(props: { view: WorkshopView }) {
                 onRetry={props.view().onRetry}
               />
             )}
-            <Show
-              when={props.view().snapshot}
-              fallback={props.view().loading && <SettingsLoadingSkeleton carapace />}
+            <Loading
+              on={props.reads.listRequest()}
+              fallback={!props.view().snapshot && <SettingsLoadingSkeleton carapace />}
             >
-              <Library view={props.view} />
+              <Errored
+                fallback={(error, reset) => (
+                  <ErrorBanner
+                    message={`${t("skillWorkshop.loadError")} ${formatUiError(error())}`}
+                    onRetry={() => {
+                      props.view().onRetry();
+                      reset();
+                    }}
+                  />
+                )}
+              >
+                {props.reads.list() && null}
+              </Errored>
+            </Loading>
+            <Show when={props.view().snapshot}>
+              <Library view={props.view} reads={props.reads} />
             </Show>
           </SettingsPage>
         </div>
@@ -188,7 +200,7 @@ function Toolbar(props: { view: WorkshopView }) {
 }
 
 type SkillRowEntry = SkillWorkshopSkillSummary | SkillsWorkshopListResult["archived"][number];
-function Library(props: { view: WorkshopView }) {
+function Library(props: { view: WorkshopView; reads: WorkshopReads }) {
   const list = () => props.view().snapshot!.list;
   const archived = createMemo(() => archivedWorkshopSkills(list()));
   const rows = createMemo<SkillRowEntry[]>(() =>
@@ -276,7 +288,7 @@ function Library(props: { view: WorkshopView }) {
             when={props.view().viewer}
             fallback={<SettingsEmpty message={t("skillWorkshop.viewer.pick")} carapace />}
           >
-            <Detail view={props.view} />
+            <Detail view={props.view} reads={props.reads} />
           </Show>
         </section>
       </div>

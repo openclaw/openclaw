@@ -1,10 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import type { Page } from "playwright";
 import { expect } from "vitest";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 
 export async function verifyGatewayServedControlUiBundle(httpUrl: string): Promise<{
   assetPath: string;
@@ -27,59 +24,4 @@ export async function verifyGatewayServedControlUiBundle(httpUrl: string): Promi
   const assetSha256 = hash(builtAsset);
   expect(hash(servedAsset)).toBe(assetSha256);
   return { assetPath, assetSha256 };
-}
-
-export async function captureConfigReadbackFailure(page: Page): Promise<void> {
-  const deadline = new AbortController();
-  try {
-    // Capture fixed name/connection facts, never label text or auth/config state.
-    // The separate deadline must not hide the original click failure.
-    const snapshot = await Promise.race([
-      Promise.all([
-        page.evaluate(() => {
-          return {
-            pathname: location.pathname.slice(0, 160),
-            navigationAgeMs: Math.round(performance.now()),
-            mainInert: document.querySelector("main")?.inert ?? null,
-            outletInert:
-              document.querySelector<HTMLElement>("openclaw-router-outlet")?.inert ?? null,
-            rawButtons: [
-              ...document.querySelectorAll<HTMLButtonElement>(
-                ".settings-segmented--primary button",
-              ),
-            ]
-              .filter((button) => button.textContent?.trim() === "Raw")
-              .slice(0, 3)
-              .map((button) => ({
-                disabled: button.disabled,
-                hasLayout: button.getClientRects().length > 0,
-                inertAncestor: button.closest("[inert]") !== null,
-                label: !button.hasAttribute("aria-label")
-                  ? "absent"
-                  : button.getAttribute("aria-label") === "Raw"
-                    ? "raw"
-                    : "other",
-                labelledBy: button.hasAttribute("aria-labelledby"),
-              })),
-          };
-        }),
-        page.getByRole("button", { name: "Raw", exact: true }).count(),
-        page.getByRole("button", { name: "Raw", exact: true, includeHidden: true }).count(),
-        evaluateControlUiContext(page, (context) => context.gateway.snapshot.phase).catch(
-          () => "unknown",
-        ),
-      ])
-        .then(([state, roleMatches, roleMatchesIncludingHidden, gatewayPhase]) => ({
-          ...state,
-          gatewayPhase,
-          roleMatches,
-          roleMatchesIncludingHidden,
-        }))
-        .catch(() => "unavailable"),
-      delay(1_000, "timed-out", { signal: deadline.signal }),
-    ]);
-    console.error(`[real-config-readback-failure] ${JSON.stringify(snapshot)}`);
-  } finally {
-    deadline.abort();
-  }
 }

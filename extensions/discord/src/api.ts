@@ -49,31 +49,16 @@ function parseDiscordApiErrorPayload(text: string): DiscordApiErrorPayload | nul
   }
 }
 
-function parseRetryAfterSeconds(text: string, response: Response): number | undefined {
-  const payload = parseDiscordApiErrorPayload(text);
-  const retryAfter = parseDiscordRetryAfterBodySeconds(payload?.retry_after);
-  if (retryAfter !== undefined) {
-    return retryAfter;
-  }
-  const header = response.headers.get("Retry-After");
-  return header ? parseRetryAfterHeaderSeconds(header) : undefined;
-}
-
-function formatRetryAfterSeconds(raw: unknown): string | undefined {
-  const value = parseDiscordRetryAfterBodySeconds(raw);
-  if (value === undefined) {
-    return undefined;
-  }
-  const rounded = value < 10 ? value.toFixed(1) : Math.round(value).toString();
-  return `${rounded}s`;
-}
-
-function formatDiscordApiErrorTextUntrusted(text: string, response: Response): string | undefined {
+function formatDiscordApiErrorTextUntrusted(
+  text: string,
+  response: Response,
+  payload: DiscordApiErrorPayload | null,
+  retryAfter: number | undefined,
+): string | undefined {
   const trimmed = text.trim();
   if (!trimmed) {
     return undefined;
   }
-  const payload = parseDiscordApiErrorPayload(trimmed);
   if (!payload) {
     const looksJson = trimmed.startsWith("{") && trimmed.endsWith("}");
     if (looksJson) {
@@ -92,8 +77,11 @@ function formatDiscordApiErrorTextUntrusted(text: string, response: Response): s
     typeof payload.message === "string" && payload.message.trim()
       ? payload.message.trim()
       : "unknown error";
-  const retryAfter = formatRetryAfterSeconds(payload.retry_after);
-  return retryAfter ? `${message} (retry after ${retryAfter})` : message;
+  if (retryAfter === undefined) {
+    return message;
+  }
+  const rounded = retryAfter < 10 ? retryAfter.toFixed(1) : Math.round(retryAfter).toString();
+  return `${message} (retry after ${rounded}s)`;
 }
 
 export class DiscordApiError extends Error {
@@ -196,13 +184,22 @@ export async function requestDiscord<T>(
           const text = await readResponseTextLimited(res, DISCORD_API_ERROR_BODY_LIMIT_BYTES).catch(
             () => "",
           );
-          const untrustedDetail = formatDiscordApiErrorTextUntrusted(text, res);
+          const errorPayload = parseDiscordApiErrorPayload(text);
+          const bodyRetryAfter = parseDiscordRetryAfterBodySeconds(errorPayload?.retry_after);
+          const untrustedDetail = formatDiscordApiErrorTextUntrusted(
+            text,
+            res,
+            errorPayload,
+            bodyRetryAfter,
+          );
           // JSON and text errors can both reflect the request Authorization value.
           const detail = untrustedDetail ? redactToolPayloadText(untrustedDetail) : untrustedDetail;
           const suffix = detail ? `: ${detail}` : "";
           const retryAfter =
             res.status === 429
-              ? (parseRetryAfterSeconds(text, res) ?? DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS)
+              ? (bodyRetryAfter ??
+                parseRetryAfterHeaderSeconds(res.headers.get("Retry-After")) ??
+                DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS)
               : undefined;
           throw new DiscordApiError(
             `Discord API ${path} failed (${res.status})${suffix}`,

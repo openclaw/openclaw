@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { createQaPollingErrorState } from "../../qa-transport.js";
 import { readQaScenarioExecutionConfig } from "../../scenario-catalog.js";
 import {
   createMatrixQaScenarioEnvironment,
@@ -69,10 +69,8 @@ export async function waitForMatrixQaObserverEvent(params: {
   observer: MatrixQaRoomObserver;
   predicate: (event: MatrixQaObservedEvent) => boolean;
   roomId: string;
-  sleepImpl?: (ms: number) => Promise<unknown>;
   timeoutMs: number;
 }): Promise<MatrixQaRoomEventWaitResult> {
-  const sleepImpl = params.sleepImpl ?? sleep;
   for (;;) {
     const expectedInterruptionAtStart = params.isExpectedInterruption();
     try {
@@ -86,7 +84,7 @@ export async function waitForMatrixQaObserverEvent(params: {
       if (!expectedInterruptionAtStart && !params.isExpectedInterruption()) {
         throw error;
       }
-      await sleepImpl(MATRIX_EXPECTED_INTERRUPTION_RETRY_MS);
+      await sleep(MATRIX_EXPECTED_INTERRUPTION_RETRY_MS);
     }
   }
 }
@@ -191,7 +189,7 @@ export async function createMatrixQaTransportAdapter(
   });
   let stopped = false;
   let gatewayClient: Parameters<AdapterDefinition["waitReady"]>[0]["gateway"] | undefined;
-  let pollingError: Error | undefined;
+  const pollingError = createQaPollingErrorState(() => stopped);
   const logicalConversationByRoomId = new Map<
     string,
     { id: string; kind: "channel" | "direct" | "group" }
@@ -274,11 +272,7 @@ export async function createMatrixQaTransportAdapter(
         busMessageIds.set(event.eventId, outbound.id);
       }
     }),
-  ).catch((error: unknown) => {
-    if (!stopped) {
-      pollingError = toStringifiedError(error);
-    }
-  });
+  ).catch(pollingError.capture);
 
   return {
     id: "matrix",
@@ -287,9 +281,7 @@ export async function createMatrixQaTransportAdapter(
     requiredPluginIds: ["matrix"],
     supportedActions: ["delete", "edit", "react"],
     assertTransportHealthy() {
-      if (pollingError) {
-        throw pollingError;
-      }
+      pollingError.assertHealthy();
     },
     async sendInbound(input) {
       const room = resolveMatrixQaAdapterRoom(provisioning.topology, input.conversation);

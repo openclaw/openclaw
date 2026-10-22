@@ -30,6 +30,11 @@ export type LegacyMeetingTranscriptSnapshot = {
   sourceSizeBytes: number;
 };
 
+export type LegacyMeetingTranscriptSource = Pick<
+  LegacyMeetingTranscriptSnapshot,
+  "sourceDir" | "sourceHash"
+>;
+
 export function isRecordedCanonicalTranscriptExport(params: {
   sessionDir: string;
   manifest: Readonly<Record<string, string>>;
@@ -206,8 +211,10 @@ export function disposeLegacyMeetingTranscriptStage(params: {
     params.database?.close();
   } catch (error) {
     warnings.push(
-      `Could not close the meeting transcript migration stage database: ${String(error)}`,
+      `Could not close the meeting transcript migration stage database: ${String(error)}. Left stage files in place${params.databasePath ? ` at ${params.databasePath}` : ""}; remove them only after this process exits.`,
     );
+    // A failed native close can leave the WAL-index mapped.
+    return warnings;
   }
   if (!params.databasePath) {
     return warnings;
@@ -528,7 +535,7 @@ export async function archivePartialMeetingTranscriptArtifacts(params: {
 }
 
 export async function rehashLegacyMeetingTranscriptSnapshots(
-  snapshots: LegacyMeetingTranscriptSnapshot[],
+  snapshots: LegacyMeetingTranscriptSource[],
 ): Promise<boolean> {
   for (const snapshot of snapshots) {
     const files = ["metadata.json", "transcript.jsonl", "summary.json", "summary.md"].map(
@@ -545,7 +552,7 @@ export async function rehashLegacyMeetingTranscriptSnapshots(
 
 export async function archiveLegacyMeetingTranscriptSnapshots(params: {
   sourceRoot: string;
-  snapshots: LegacyMeetingTranscriptSnapshot[];
+  snapshots: LegacyMeetingTranscriptSource[];
   expectedRelativeDirs: string[];
   canonicalRelativeDirs: string[];
   archiveRoot: string;

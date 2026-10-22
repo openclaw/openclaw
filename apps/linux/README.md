@@ -57,10 +57,16 @@ requirement.
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
 
-New Session uses `Cmd+Shift+O` on macOS and `Ctrl+Shift+O` on Linux and Windows
-only while its dashboard is focused. Quick Chat keeps the separate global
+New Session uses `Cmd+N` on macOS and `Ctrl+N` on Linux and Windows
+only while its dashboard is focused. Web browsers keep `Cmd+Shift+O` or
+`Ctrl+Shift+O`. Quick Chat keeps the separate global
 `Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
 in front.
+
+New Quick Chat shortcut assignments cannot use either New Session chord. An
+existing saved `Cmd+N` or `Ctrl+N` Quick Chat binding keeps its behavior after
+upgrading; change it in Quick Chat's shortcut settings to use that chord for
+New Session instead.
 
 ## Chrome setup bridge
 
@@ -492,6 +498,9 @@ CLI launchers without a managed marker for the rollback selection.
 
 The companion checks the latest GitHub release shortly after launch and from **Check for Updates** in the tray menu. AppImage installs download and verify the signed update in place, then wait for **Restart to update**. Package-managed installs such as `.deb` stay owned by the system package manager and link to the release download page instead of replacing installed files. Windows uses the regular `windows-stable` channel, downloads the update first, and runs its installer only after **Restart to update**. The macOS test build uses the separate opt-in desktop-test channel and self-updates like the AppImage build.
 
+All desktop platforms offer numbered correction releases such as `2026.9.3-1`
+as updates to `2026.9.3`.
+
 If the Windows installer cannot launch, the companion stays open, reports the error, and keeps the downloaded update available for another **Restart to update** attempt.
 
 While a newer Gateway release waits for its Linux app, the latest release keeps
@@ -667,12 +676,15 @@ The `Linux App` workflow checks affected pull requests with Rust formatting,
 ABI scanner's unit tests. It also runs the native Linux inline browser smoke
 under Xvfb, including pointer input, snapshots, dashboard replacement, and native
 save/cancel, and uploads the synthetic screenshots and JSON results as the
-`linux-inline-browser` proof artifact. Bundles, the full graphical first-run
-scenarios, and AppImage runtime checks remain manual dispatch checks.
+`linux-inline-browser` proof artifact. Automatic local onboarding and failed
+Gateway startup use the debug candidate compiled with the synthetic CLI. The
+failure scenario must run before packaging replaces those runtime resources with
+the real core package. Bundles, packaged first-run choices, and AppImage runtime
+checks remain manual dispatch checks.
 
 Manually dispatch `Linux App` on the branch to validate packaging before a
 release. It retains all pull-request checks, builds the `.deb` and AppImage,
-runs both native first-run cases and the packaged AppImage runtime smoke, and
+runs packaged first-run choices and the packaged AppImage runtime smoke, and
 uploads the bundles as the `openclaw-linux-companion` workflow artifact. This
 validation does not publish a release.
 

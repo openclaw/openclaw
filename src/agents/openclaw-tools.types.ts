@@ -9,6 +9,7 @@ import type { SkillSnapshot } from "../skills/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
+import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "./exec-defaults.js";
 import type { InstalledSkill } from "./installed-skill-catalog.js";
@@ -29,6 +30,8 @@ export type OpenClawSharedToolsOptions = {
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
+  /** Restrict mixed tool owners to reads before the recovery surface is filtered. */
+  forceRestartSafeTools?: boolean;
   /**
    * Overrides the originating-channel sender for blocking questions. An actual
    * harness prompt reservation retains delivery ownership.
@@ -88,7 +91,7 @@ export type OpenClawSharedToolsOptions = {
   /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   runtimeToolAllowlist?: string[];
-  /** Host-prepared proof that this exact session can request Gateway publication. */
+  /** Host-enabled Gateway publication request surface; the broker checks target and credentials. */
   githubPublicationAvailable?: boolean;
   cronCreatorAuthorityUnavailableReason?: CronToolOptions["creatorAuthorityUnavailableReason"];
   /** Mutable model-context generation used to expire screenshot coordinate frames. */
@@ -97,12 +100,9 @@ export type OpenClawSharedToolsOptions = {
   /** Registers run-owned cleanup for tools that hold node resources. */
   registerRunCleanup?: (cleanup: (reason: string) => Promise<void>) => void;
   inboundEventKind?: InboundEventKind;
-  /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
-  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: SessionsYieldCallback;
@@ -112,6 +112,12 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
+  sandbox?: import("./sandbox/types.js").SandboxContext | null;
+  abortSignal?: AbortSignal;
+  pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
+  /** Captured installation identities, independent of prompt-facing sandbox paths. */
+  pluginExecutionSkillsSnapshot?: SkillSnapshot;
   /** Host-projected default sandbox surface; cannot execute other session actions. */
   sandboxSessionRenameOnly?: boolean;
   /** Host-issued source for session-control schema projection; execution rechecks the caller. */
@@ -122,6 +128,8 @@ export type OpenClawToolsOptions = {
   allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
   agentChannel?: string;
+  /** Prepared active-conversation support for structured human questions. */
+  questionInputMode?: ReturnType<typeof resolveConversationQuestionInputMode>;
   /** Host-bound standalone request/grant authority, never supplied by tool arguments. */
   assertInvocationCurrent?: () => void;
   assertInputCommitAllowed?: () => void;
@@ -156,6 +164,7 @@ export type OpenClawToolsOptions = {
   sandboxWorkspaceMediaReadAllowed?: boolean;
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
+  cronSandboxContext?: CronToolOptions["sandboxContext"];
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   /** Prepared profile authority for the gateway tool's configuration-read actions. */

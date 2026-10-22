@@ -1,13 +1,23 @@
-import type { AuthProfileAuthorization } from "../agents/auth-profiles/authorization-contract.js";
+import {
+  AuthProfileAuthorizationError,
+  type AuthProfileAuthorization,
+} from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
+import {
+  cliBackendAcceptsAuthProfileForwarding,
+  resolveCliExecutionAuthProfileId,
+} from "../agents/cli-execution-auth.js";
+import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { isConfiguredKeyAuthSource } from "../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../agents/runtime-plan/prepare-auth.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
 import type { CronInferenceBinding } from "./inference-binding.js";
 
 /** Capture only a selected, current credential owner; never infer a legacy job's history. */
@@ -24,13 +34,20 @@ export async function captureCronInferenceBinding(params: {
   if (!model) {
     throw new Error("Automation model could not be resolved.");
   }
-  // CLI backends own their login; a host profile cannot bind that account.
+  const cliExecutionProvider = resolveCliRuntimeExecutionProvider({
+    cfg,
+    agentId,
+    provider: model.provider,
+    modelId: model.modelId,
+    authProfileId: model.profileId,
+  });
+  // Backends that never forward a stored profile own their login; nothing here can bind it.
   if (
-    resolveCliRuntimeExecutionProvider({
-      cfg,
+    cliExecutionProvider &&
+    !cliBackendAcceptsAuthProfileForwarding({
+      provider: cliExecutionProvider,
+      config: cfg,
       agentId,
-      provider: model.provider,
-      modelId: model.modelId,
     })
   ) {
     return undefined;
@@ -41,16 +58,63 @@ export async function captureCronInferenceBinding(params: {
   const creatorSession =
     creatorProvider && creatorProvider !== model.provider ? undefined : params.sessionEntry;
   const { agentDir } = model;
-  let selection = await resolveSessionAuthSelection({
-    cfg,
-    agentId,
-    agentDir,
-    provider: model.provider,
-    modelId: model.modelId,
-    configuredProfileId: model.profileId ?? creatorSession?.authProfileOverride,
-    sessionEntry: model.profileId ? undefined : creatorSession,
-    isNewSession: false,
-  });
+  let selection: Awaited<ReturnType<typeof resolveSessionAuthSelection>>;
+  if (cliExecutionProvider) {
+    // Record the stored account this backend would forward, chosen by the same selector
+    // interactive CLI turns use; a native CLI login leaves no host account to record.
+    const selectedProfileId = model.profileId ?? creatorSession?.authProfileOverride;
+    const profileId = await resolveCliExecutionAuthProfileId({
+      cliExecutionProvider,
+      authProfileProvider: model.provider,
+      config: cfg,
+      agentDir,
+      selected: selectedProfileId
+        ? {
+            authProfileId: selectedProfileId,
+            authProfileIdSource:
+              model.profileId ||
+              creatorSession?.authProfileOverrideSource === "user" ||
+              creatorSession?.authProfileOverrideSource === "user-link"
+                ? "user"
+                : "auto",
+          }
+        : undefined,
+    });
+    if (!profileId) {
+      return undefined;
+    }
+    selection = {
+      profileId,
+      source: model.profileId ? "user" : "auto",
+      routeRequirement: undefined,
+    };
+  } else {
+    selection = await resolveSessionAuthSelection({
+      cfg,
+      agentId,
+      agentDir,
+      provider: model.provider,
+      modelId: model.modelId,
+      configuredProfileId: model.profileId ?? creatorSession?.authProfileOverride,
+      sessionEntry: model.profileId ? undefined : creatorSession,
+      isNewSession: false,
+    });
+  }
+  const requiredProfileId = cfg.cloudWorkers?.requiredProfile;
+  const requiredProfile = requiredProfileId
+    ? cfg.cloudWorkers?.profiles?.[requiredProfileId]
+    : undefined;
+  if (
+    !selection &&
+    requiredProfile &&
+    workerInferencePlacement({
+      providerId: requiredProfile.provider,
+      profileSnapshot: requiredProfile,
+    }) === "worker"
+  ) {
+    // Required worker inference owns its credentials; do not capture an ambient host account.
+    return undefined;
+  }
   const store = await ensureAuthProfileStoreAsync(agentDir, {
     profileId: selection?.profileId,
     allowKeychainPrompt: false,
@@ -58,6 +122,12 @@ export async function captureCronInferenceBinding(params: {
   });
   if (!selection) {
     // With no compatible creator account, use the same route-aware planner as a fresh run.
+    const harness = resolveAgentHarnessSelectionDecision({
+      provider: model.provider,
+      modelId: model.modelId,
+      config: cfg,
+      agentId,
+    });
     const [attempt] = prepareAgentRuntimeAuth({
       provider: model.provider,
       modelId: model.modelId,
@@ -65,12 +135,16 @@ export async function captureCronInferenceBinding(params: {
       agentId,
       agentDir,
       authProfileStore: store,
+      harnessId: harness.selectedHarnessId,
+      harnessRuntime: harness.selectedHarnessId,
+      harnessAuthBootstrap: harness.harness?.authBootstrap,
     }).attempts;
     if (attempt?.kind !== "profile") {
+      // A configured key keeps the job unbound, the same rule its runs follow.
       const source = attempt?.plan.credentialSource;
-      if (source?.kind === "direct" && source.evidence !== "synthetic") {
+      if (source?.kind === "direct" && !isConfiguredKeyAuthSource(source)) {
         throw new Error(
-          "Automation requires a stored inference account. Select one with model@profile; environment and provider-config keys have no durable account ownership.",
+          "Automation requires a stored inference account or a key in the environment or provider config. Select an account with model@profile.",
         );
       }
       return undefined;
@@ -137,23 +211,34 @@ export async function acquireCronInferenceAuthorization(params: {
   cfg: OpenClawConfig;
   agentDir: string;
 }) {
-  const authority = await captureAuthProfileAuthorization({
-    profileId: params.binding.profileId,
-    agentDir: params.agentDir,
-    cfg: params.cfg,
-    assertCurrent() {},
-  });
-  if (authority.authorizationId !== params.binding.authorizationId) {
-    authority.dispose();
-    throw new Error(
-      "Automation inference account was replaced. Explicitly select an authorized account again.",
-    );
-  }
+  let authority: AuthProfileAuthorization | undefined;
   try {
+    authority = await captureAuthProfileAuthorization({
+      profileId: params.binding.profileId,
+      agentDir: params.agentDir,
+      cfg: params.cfg,
+      assertCurrent() {},
+    });
+    if (authority.authorizationId !== params.binding.authorizationId) {
+      throw new Error(
+        "Automation inference account was replaced. Explicitly select an authorized account again.",
+      );
+    }
     authority.assertCurrent();
     return authority;
   } catch (error) {
-    authority.dispose();
+    authority?.dispose();
+    // The shared authorization owner names its retired error for MCP callers; say what an
+    // automation lost instead.
+    if (
+      error instanceof AuthProfileAuthorizationError &&
+      error.code === "MCP_AUTHORIZATION_RETIRED"
+    ) {
+      throw new Error(
+        `Automation inference account ${params.binding.profileId} was removed or signed out. Explicitly select an authorized account again.`,
+        { cause: error },
+      );
+    }
     throw error;
   }
 }

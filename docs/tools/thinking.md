@@ -23,7 +23,7 @@ title: "Thinking levels"
   - Thinking menus and pickers are provider-profile driven. Provider plugins declare the exact level set for the selected model, including labels such as binary `on`.
   - `adaptive`, `xhigh`, and `max` are advertised only when the provider/model supports them. Ultra is a separate harness mode, not an additional provider API effort. Typed directives for unsupported native levels are rejected with that model's valid options.
   - Agent turns use the published capability facts retained for their selected model and runtime, without fetching a model list during the turn. Explicit configured thinking-level maps and effort lists still take precedence. A `reasoning: true` declaration alone does not freeze the provider's supported levels. Sign in to xAI again to remove effort lists copied by an older sign-in; future levels then come from the live catalog.
-  - Model and runtime switches preserve your saved thinking preference. Each run clamps an unsupported inherited level by provider profile rank and reports the effective level without replacing the saved request. Switching back to a supporting model restores the requested level. `/status` shows both levels when they differ. When `adaptive` is not selectable, execution uses the provider's declared non-off default; otherwise its ranked fallback preserves enabled thinking, usually `medium`. `xhigh` and `max` fall back to the largest supported non-off level for the selected model.
+  - Model and runtime switches preserve your saved thinking preference. Each run clamps an unsupported inherited level by provider profile rank without replacing the saved request. Automatic clamp notices appear in channel replies only with verbose mode or authorized tracing enabled; the agent CLI still prints them. Switching back to a supporting model restores the requested level. `/status` shows both levels when they differ. When `adaptive` is not selectable, execution uses the provider's declared non-off default; otherwise its ranked fallback preserves enabled thinking, usually `medium`. `xhigh` and `max` fall back to the largest supported non-off level for the selected model.
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Anthropic Claude Opus 4.8 and Opus 4.7 keep thinking off unless you explicitly set a thinking level. Opus 4.8's provider-owned effort default is `high` after adaptive thinking is enabled.
   - Anthropic Claude Opus 4.7+ maps `/think xhigh` to adaptive thinking plus `output_config.effort: "xhigh"`, because `/think` is a thinking directive and `xhigh` is the Opus effort setting.
@@ -137,7 +137,7 @@ check the per-agent setting if the model default still does not take effect.
 
 ## Fast mode (/fast)
 
-- Levels: `auto|on|off|ultrafast|default`.
+- Levels: `auto|on|off|ultrafast|default`. `ultra` is accepted as shorthand for `ultrafast` and stores the same `ultrafast` value.
 - Directive-only message toggles a session fast-mode override and replies `Fast mode set to auto.`, `Fast mode enabled.`, or `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
@@ -165,8 +165,9 @@ check the per-agent setting if the model default still does not take effect.
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - `/verbose off` stores an explicit session override; clear it via the Sessions UI by choosing `inherit`.
 - Authorized external channel senders may persist the session verbose override. Internal gateway/webchat clients need `operator.admin` to persist it.
-- Inline directive affects only that message; session/global defaults apply otherwise.
+- Inline directive affects only that message; session, per-agent, and global defaults apply otherwise.
 - Send `/verbose` (or `/verbose:`) with no argument to see the current verbose level.
+- Resolution order: inline directive, then session override, then per-agent default (`agents.entries.*.verboseDefault`), then global default (`agents.defaults.verboseDefault`), then fallback (`off`).
 - When verbose is on, agents that emit structured tool results send each tool call back as its own safe metadata-only message. Shell tools show their label without command text. These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.

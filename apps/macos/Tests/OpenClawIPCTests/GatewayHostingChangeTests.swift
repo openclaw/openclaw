@@ -267,6 +267,17 @@ struct GatewayHostingChangeTests {
         let state = profile.stateDirectoryURL()
         defer { try? FileManager.default.removeItem(at: state) }
         try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: directory) {
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { arguments in
+                #expect(arguments == ["status", "--runtime-intent-only", "--json"])
+            }
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload(
+                #"{"service":{"runtimeIntent":{"status":"known","stored":false,"revision":"absent"}}}"#)
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
             let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: directory, profile: profile)
             let artifacts = GatewayLaunchAgentManager.generatedEnvironmentArtifacts(
                 directory: state.appendingPathComponent("service-env"), profile: profile)

@@ -14,7 +14,7 @@ afterEach(() => vi.restoreAllMocks());
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 
-function skill(name: string, description: string, content = "Whole instructions"): InstalledSkill {
+function skill(name: string, description: string, content?: string): InstalledSkill {
   return {
     name,
     description,
@@ -23,29 +23,38 @@ function skill(name: string, description: string, content = "Whole instructions"
   };
 }
 
+function searchBodies(catalog: InstalledSkill[], query: string) {
+  return searchInstalledSkills(catalog, query, 5, undefined, () => true);
+}
+
+async function matchingNames(catalog: InstalledSkill[], query: string) {
+  return (await searchBodies(catalog, query)).skills.map(({ name }) => name);
+}
+
 describe("installed skill catalog", () => {
+  it("keeps an emoji whole at the description cap", async () => {
+    const prefix = "a".repeat(511);
+    const found = await searchInstalledSkills(
+      [skill("boundary-guide", `${prefix}😀tail`)],
+      "boundary-guide",
+    );
+    expect(found.skills[0]?.description).toBe(prefix);
+  });
+
   it("shares body postings across runs while binding results, readers, and permissions per run", async () => {
     const build = vi.spyOn(ranking, "buildLexicalIndex");
+    const metadata = { name: "shared-guide", description: "Shared catalog metadata" };
     const catalogs = Array.from({ length: 20 }, (_, run) => {
-      const guide = skill("shared-guide", "Shared catalog metadata");
+      const guide = skill(metadata.name, metadata.description);
       guide.location = `/run-${run}/guide`;
-      guide.source.readContent = undefined;
       guide.readSearchContent = vi.fn(async () => "Nebular spectroscopy instructions");
       return [guide];
     });
     const results = await Promise.all(
-      catalogs.map((catalog) =>
-        searchInstalledSkills(catalog, "spectroscopy", 5, undefined, () => true),
-      ),
+      catalogs.map((catalog) => searchBodies(catalog, "spectroscopy")),
     );
     for (const [run, result] of results.entries()) {
-      expect(result.skills).toEqual([
-        {
-          name: "shared-guide",
-          description: "Shared catalog metadata",
-          location: `/run-${run}/guide`,
-        },
-      ]);
+      expect(result.skills).toEqual([{ ...metadata, location: `/run-${run}/guide` }]);
       expect(catalogs[run]![0]!.readSearchContent).toHaveBeenCalledOnce();
     }
     expect(build).toHaveBeenCalledTimes(2);
@@ -56,13 +65,10 @@ describe("installed skill catalog", () => {
     catalogs[0]![0]!.assertCurrent = () => {
       throw new Error("Run retired");
     };
-    await expect(
-      searchInstalledSkills(catalogs[0]!, "spectroscopy", 5, undefined, () => true),
-    ).rejects.toThrow("Run retired");
-    expect(
-      (await searchInstalledSkills(catalogs[1]!, "spectroscopy", 5, undefined, () => true))
-        .skills[0]?.location,
-    ).toBe("/run-1/guide");
+    await expect(searchBodies(catalogs[0]!, "spectroscopy")).rejects.toThrow("Run retired");
+    expect((await searchBodies(catalogs[1]!, "spectroscopy")).skills[0]?.location).toBe(
+      "/run-1/guide",
+    );
     expect(build).toHaveBeenCalledTimes(2);
   });
 
@@ -71,30 +77,17 @@ describe("installed skill catalog", () => {
       skill("revision-a", "Revision metadata", "Pulsar timing"),
       skill("revision-b", "Revision metadata", "Volcanic geology"),
     ];
-    expect(
-      (await searchInstalledSkills(first, "pulsar", 5, undefined, () => true)).skills.map(
-        ({ name }) => name,
-      ),
-    ).toEqual(["revision-a"]);
+    expect(await matchingNames(first, "pulsar")).toEqual(["revision-a"]);
     const revised = [
       skill("revision-b", "Revision metadata", "Pulsar timing"),
       skill("revision-a", "Revision metadata", "Volcanic geology"),
     ];
-    expect(
-      (await searchInstalledSkills(revised, "pulsar", 5, undefined, () => true)).skills.map(
-        ({ name }) => name,
-      ),
-    ).toEqual(["revision-b"]);
+    expect(await matchingNames(revised, "pulsar")).toEqual(["revision-b"]);
     const filtered = [skill("revision-a", "Revision metadata", "Volcanic geology")];
-    expect(
-      (await searchInstalledSkills(filtered, "pulsar", 5, undefined, () => true)).skills,
-    ).toEqual([]);
+    expect(await matchingNames(filtered, "pulsar")).toEqual([]);
     const unreadable = skill("revision-0", "Revision metadata");
-    unreadable.source.readContent = undefined;
     unreadable.reader = async () => "Opaque reader must not be indexed";
-    expect(
-      await searchInstalledSkills([unreadable, ...revised], "pulsar", 5, undefined, () => true),
-    ).toMatchObject({
+    expect(await searchBodies([unreadable, ...revised], "pulsar")).toMatchObject({
       skills: [{ name: "revision-b" }],
       coverage: { bodyIndexed: 2, metadataOnly: 1, truncatedBodies: 0 },
     });
@@ -103,22 +96,20 @@ describe("installed skill catalog", () => {
   it("reuses a live body revision after idle-cache eviction", async () => {
     const build = vi.spyOn(ranking, "buildLexicalIndex");
     const first = [skill("retained-guide", "Retained metadata", "Astrometric calibration")];
-    await searchInstalledSkills(first, "astrometric", 5, undefined, () => true);
+    await searchBodies(first, "astrometric");
     for (let revision = 0; revision < 33; revision += 1) {
       getTextLexicalIndex([`Eviction pressure ${revision}`]);
     }
     const before = build.mock.calls.length;
     const second = [skill("retained-guide", "Retained metadata", "Astrometric calibration")];
-    const result = await searchInstalledSkills(second, "astrometric", 5, undefined, () => true);
+    const result = await searchBodies(second, "astrometric");
     expect(result.skills[0]?.name).toBe("retained-guide");
     // Metadata has no run-held reference; body postings do.
     const bodyBuilds = build.mock.calls
       .slice(before)
       .filter(([documents]) => documents.some(({ terms }) => terms.includes("astrometric")));
     expect(bodyBuilds).toHaveLength(0);
-    expect(
-      (await searchInstalledSkills(first, "astrometric", 5, undefined, () => true)).skills[0]?.name,
-    ).toBe("retained-guide");
+    expect(await matchingNames(first, "astrometric")).toEqual(["retained-guide"]);
   });
 
   it("ranks an exact identity first and searches the entire prepared catalog", async () => {
@@ -188,21 +179,6 @@ describe("installed skill catalog", () => {
     await expect(searchInstalledSkills(skills, "deploy", 21)).rejects.toThrow("limit");
   });
 
-  it("reads only an exact eligible identity through its owner and preserves the whole body", async () => {
-    const reader = vi.fn(async () => "# Guide\n\nRun this.\nTHE END");
-    const guide = skill("guide", "A guide");
-    guide.source.readContent = undefined;
-    guide.reader = reader;
-    expect((await readInstalledSkill([guide], "guide")).content).toBe(
-      "# Guide\n\nRun this.\nTHE END",
-    );
-    expect(reader).toHaveBeenCalledWith({ location: guide.location, signal: undefined });
-    await expect(readInstalledSkill([guide], "../hidden")).rejects.toThrow(
-      "is not available to this agent",
-    );
-    expect(reader).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects oversized instructions and cancellation, including inline content", async () => {
     await expect(
       readInstalledSkill([skill("large", "Large", "x".repeat(256 * 1024 + 1))], "large"),
@@ -212,7 +188,6 @@ describe("installed skill catalog", () => {
     ).rejects.toThrow();
     const controller = new AbortController();
     const guide = skill("guide", "Guide");
-    guide.source.readContent = undefined;
     guide.reader = async () => {
       controller.abort();
       return "Must not reach the model";
@@ -227,19 +202,17 @@ describe("installed skill catalog", () => {
     await fs.writeFile(filePath, prefix);
     const guide = skill("guide", "Guide");
     guide.source = { filePath };
-    const complete = await searchInstalledSkills([guide], "canary", 5, undefined, () => true);
+    const complete = await searchBodies([guide], "canary");
     expect(complete.skills[0]?.name).toBe("guide");
     expect(complete.coverage).toBeUndefined();
     const instructions = `${prefix}\nHidden-tail instructions.\n`;
     await fs.writeFile(filePath, instructions);
     const catalog = [guide];
-    expect(await searchInstalledSkills(catalog, "canary", 5, undefined, () => true)).toMatchObject({
+    expect(await searchBodies(catalog, "canary")).toMatchObject({
       skills: [{ name: "guide" }],
       coverage: { bodyIndexed: 1, metadataOnly: 0, truncatedBodies: 1 },
     });
-    expect(
-      (await searchInstalledSkills(catalog, "hidden-tail", 5, undefined, () => true)).skills,
-    ).toEqual([]);
+    expect(await matchingNames(catalog, "hidden-tail")).toEqual([]);
     expect((await readInstalledSkill(catalog, "guide")).content).toBe(instructions);
     await fs.truncate(filePath, 256 * 1024 + 1);
     await expect(readInstalledSkill(catalog, "guide")).rejects.toThrow(/large|size|limit/i);

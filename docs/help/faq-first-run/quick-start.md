@@ -53,8 +53,8 @@ where to run the Gateway see
 
   <Accordion title="I am stuck, fastest way to get unstuck">
     Use a local AI agent that can **see your machine**. Most "I'm stuck" cases are
-    **local config or environment issues** a remote helper cannot inspect, so this beats
-    asking in Discord.
+    **local config or environment issues** a remote helper cannot inspect.
+    For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/).
 
     - **Claude Code**: [https://www.anthropic.com/claude-code/](https://www.anthropic.com/claude-code/)
     - **OpenAI Codex**: [https://openai.com/codex/](https://openai.com/codex/)
@@ -69,7 +69,7 @@ where to run the Gateway see
     Ask the agent to plan and supervise the fix step-by-step, then execute only the
     necessary commands - smaller diffs are easier to audit.
 
-    Share these outputs when asking for help (in Discord or a GitHub issue):
+    Share these outputs when asking for support, or in a GitHub issue for a reproducible bug. Review diagnostics for secrets and personal information before posting:
 
     | Command | Shows |
     | --- | --- |

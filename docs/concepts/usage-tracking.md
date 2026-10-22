@@ -12,6 +12,8 @@ title: "Usage tracking"
 - Human-readable quota-window output is normalized to `X% left`, even when a provider reports consumed quota, remaining quota, or only raw counts. Providers without resettable quota windows show provider summary text instead (for example a balance).
 - Session-level `/status` and the `session_status` tool fall back to the session's transcript log when the live session snapshot is missing token/model data. That fallback fills missing token/cache counters, can recover the active runtime model label, and prefers the larger prompt-oriented total when session metadata is missing or smaller (`totalTokensFresh !== true`, zero, or below the transcript-derived value). Nonzero live values always win over the fallback.
 
+Provider usage is cached for 60 seconds; set `models.usage.cacheTtlMs` to change this (`0` disables reuse).
+
 ## Where it shows up
 
 - `/status` in chats: status card with session tokens and estimated cost (API key models only). Provider usage shows for the **current model provider** when available, as a normalized `X% left` window or provider summary text.
@@ -73,7 +75,9 @@ change chart totals. Selecting sessions narrows the charts while retaining the
 comparison table. JSON export loads the full matching report.
 
 The overview uses a rebuildable usage projection maintained after committed
-transcript changes. Background refresh waits for 30 seconds without new usage
+transcript changes. A refresh that overlaps agent database creation joins that
+database's preparation before writing its projection. An empty store stays absent
+until a transcript needs a rollup. Background refresh waits for 30 seconds without new usage
 or an active agent turn. After five minutes of pending work, it can start in the
 next idle gap without another quiet period. Explicit cost and overview reads
 flush and await pending updates, so a completed turn does not need to wait for
@@ -109,6 +113,12 @@ Subscription quota and API billing are different provider surfaces:
 - OpenAI ChatGPT/Codex OAuth continues to show plan, quota windows, and credit balance. Set `OPENAI_ADMIN_KEY` to show organization cost and completions-usage history instead; optionally set `OPENAI_PROJECT_ID` to scope it to one project. OpenClaw never sends inference credentials from `OPENAI_API_KEY`, provider config, or auth profiles to organization APIs because those keys may belong to custom endpoints.
 
 Admin credentials take precedence because they provide actual organization billing. OpenClaw does not combine these provider-reported totals with its local session estimates; the two sections intentionally answer different questions.
+
+OpenAI Admin token totals include text, audio, and images. The input breakdown
+separates uncached input, cache reads, and cache writes; both 30-minute and
+12-hour cache writes appear in the cache-write category. Audio and other
+modality breakdowns are already included in the totals and are not added again.
+See the [OpenAI Completions Usage API](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/usage/methods/completions).
 
 ## Default usage footer mode
 
@@ -422,13 +432,17 @@ provider-neutral for CLI, app, and Control UI consumers.
   profile). Combines the account credits endpoint with the key quota endpoint,
   so account balance/spend, key budget, and daily/weekly/monthly usage appear
   when the credential can access them. Either endpoint can enrich the snapshot
-  independently.
+  independently. Transport failures include their underlying cause in the usage
+  error shown by `openclaw status --usage --json`.
 - **Venice**: API key via env/config/auth store (`VENICE_API_KEY`). Shows USD and
   DIEM balances plus DIEM epoch allocation usage when reported.
 - **Xiaomi MiMo**: two separate usage surfaces. Pay-as-you-go uses an API key
   (`XIAOMI_API_KEY`); the Token Plan uses a separate key (`XIAOMI_TOKEN_PLAN_API_KEY`).
   Neither currently reports quota windows.
 - **z.ai**: API key via env/config/auth store (`ZAI_API_KEY` or `Z_AI_API_KEY`).
+  Shows provider-reported token periods, including weekly windows, and monthly
+  tool quotas. Reset countdowns accept epoch milliseconds or date strings;
+  missing or invalid resets leave the quota visible without a countdown.
 
 ## Related
 

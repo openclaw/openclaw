@@ -1,8 +1,17 @@
-import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
+import {
+  ChatStatusEventSchema,
+  type ChatEvent,
+  type ChatStatusEvent,
+} from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { TOOL_CALL_RAW_TOOL_NAME } from "../agents/tool-search-types.js";
 import type { AgentEventPayload, AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { resolveAssistantTextInput } from "./agent-event-assistant-text.js";
 import {
+  appendChatCanvasBlocks,
   appendChatCanvasBlocksToMessage,
   type ChatCanvasBlock,
 } from "./chat-display-projection.canvas.js";
@@ -13,6 +22,45 @@ type ChatRunRecord = ReturnType<ChatRunState["getOrCreate"]>;
 type LiveTextStream = "chat" | "agent";
 
 type LiveTextDelivery = NonNullable<GatewayBroadcastOpts["liveText"]>;
+
+const CHAT_RETRY_REASONS = new Set<string>(
+  ChatStatusEventSchema.properties.retry.properties.reason.anyOf.map((reason) => reason.const),
+);
+
+export function projectChatStatusEvent(
+  event: Pick<AgentEventPayload, "seq" | "data">,
+  identity: { runId: string; sessionKey: string; agentId?: string; spawnedBy?: string | null },
+): ChatStatusEvent | undefined {
+  const payload = {
+    runId: identity.runId,
+    sessionKey: identity.sessionKey,
+    ...(identity.agentId ? { agentId: identity.agentId } : {}),
+    ...(identity.spawnedBy ? { spawnedBy: identity.spawnedBy } : {}),
+    seq: event.seq,
+    state: "status" as const,
+    ...(event.data.phase === "retrying"
+      ? {
+          phase: "starting_model",
+          ...(CHAT_RETRY_REASONS.has(String(event.data.reason))
+            ? {
+                retry: {
+                  attempt: event.data.attempt,
+                  maxAttempts: event.data.maxAttempts,
+                  reason: event.data.reason,
+                  ...(typeof event.data.retryAt === "number" && Number.isFinite(event.data.retryAt)
+                    ? { retryAt: event.data.retryAt }
+                    : {}),
+                },
+              }
+            : {}),
+        }
+      : {
+          phase: event.data.phase,
+          ...(event.data.phase === "waiting_for_model" ? { waitReason: event.data.reason } : {}),
+        }),
+  };
+  return Value.Check(ChatStatusEventSchema, payload) ? payload : undefined;
+}
 
 function projectChatWireDelta(value: unknown): ChatEvent {
   // SAFETY: the private delivery key binds this callback to the typed chat producer.
@@ -76,6 +124,34 @@ export function chatWireProjection(params: {
   };
 }
 
+export function projectChatTerminalMessage(params: {
+  runId: string;
+  text: string;
+  displayText?: string;
+  timestamp: number;
+  canvasBlocks: ChatCanvasBlock[];
+  idempotencyKey?: string;
+}) {
+  const { text, displayText, timestamp, canvasBlocks, runId, idempotencyKey } = params;
+  return appendChatCanvasBlocksToMessage(
+    {
+      role: "assistant",
+      content: text ? [{ type: "text", text }] : [],
+      timestamp,
+      ...(displayText === undefined
+        ? {}
+        : {
+            [ASSISTANT_DISPLAY_CONTENT_FIELD]: appendChatCanvasBlocks(
+              displayText ? [{ type: "text", text: displayText }] : [],
+              canvasBlocks,
+            ),
+          }),
+      ...(idempotencyKey ? { __openclaw: { runId, idempotencyKey } } : {}),
+    },
+    canvasBlocks,
+  );
+}
+
 export function assistantWireProjection(
   payload: AgentEventPayload,
   sessionKey: string | undefined,
@@ -112,6 +188,22 @@ export function prepareAgentWirePayload(
   isCurrent: () => boolean,
 ): AgentEventPayload {
   let payload = event.runId === clientRunId ? event : { ...event, runId: clientRunId };
+  if (
+    event.stream === "tool" &&
+    event.data.phase === "result" &&
+    event.data.name === TOOL_CALL_RAW_TOOL_NAME
+  ) {
+    const result = readRecord(event.data.result);
+    const details = readRecord(result?.details);
+    if (details) {
+      // The dispatcher keeps raw target results for internal consumers, not display clients.
+      const { tool: _tool, result: _result, ...liveDetails } = details;
+      payload = {
+        ...payload,
+        data: { ...event.data, result: { ...result, details: liveDetails } },
+      };
+    }
+  }
   if (event.stream === "item" && event.data.kind === "preamble") {
     payload = {
       ...payload,

@@ -16,6 +16,14 @@ schema edges or rehearse migrations on copied databases. See the
 
 ## Schema updates and recovery
 
+Ordinary deployments wait up to 180 seconds when the canonical deployment lock
+is busy, allowing routine health checks and disk maintenance to finish without
+discarding the update request. The controller retains the same exclusive lock
+and post-lock maintenance-idle admission. A wait timeout exits `75` (deferred),
+not a successful `SKIP`; other lock errors retain their failure status. Bound
+maintenance and recovery actions retain their immediate contention refusal.
+This change requires complete-pair adoption; landing it does not deploy it.
+
 The incumbent keeps serving while the controller builds and seals the candidate.
 For a schema crossing, the controller takes its ordinary maintenance suspension,
 drains and stops the Gateway, then invokes the candidate:
@@ -86,20 +94,48 @@ sidecar startup and the model agent's own pending admission still wait. Missing
 transport responses and pending startup/admission
 facts wait inside the original budget. Malformed evidence, corruption, changed
 identity, protocol failures, and authentication failures remain failures.
+If native readiness becomes unavailable again after convergence, a well-formed
+HTTP 503 readiness snapshot waits within that same deadline. It never authorizes
+marker dispatch. `elapsed_seconds` in `VERIFICATION_FAILED` measures the named
+step, not the elapsed startup or marker budget.
 
 If marker dispatch has a typed transport timeout, the owner checks readiness
 again and replays the byte-identical request with its original idempotency key.
 The Gateway owns reservation and replay; a minimal `in_flight` acknowledgement
 still names that same run. Acceptance requires the subsequent `agent.wait`
 terminal receipt to bind the exact session, visible marker, and configured
-provider/model. Neither a healthy probe nor a timeout becomes successful
+requested provider/model. The effective model must be that primary or one of its
+configured fallbacks captured with the protected policy; fallback changes are
+policy changes. The release's native model-reference parser separates auth-profile
+suffixes for receipt comparisons; the full configured references remain protected.
+A successful configured fallback remains valid when the primary
+is rate-limited. Neither a healthy probe nor a timeout becomes successful
 acceptance. A deadline expiry retains recovery evidence.
+
+Suspension drain defaults to 30 seconds even when the controller is invoked
+outside its systemd unit. Larger `OPENCLAW_TEAM_DRAIN_BUDGET` values are capped
+at 30 with a diagnostic. The controller acquires one drain lease and never
+renews it; the Gateway owns its absolute 45-second cutoff. After the drain
+budget, transient write custody receives at most five more seconds before the
+controller defers and resumes its exact lease. Final custody reads retain the
+five-second RPC bound. The remaining grace permits handoff or cleanup; pending
+writes never become permission to stop. Adopt this controller closure alongside
+the Gateway's bounded-drain change; landing either does not deploy it.
+
+Activation audits the current and previous sealed release trees before closing
+Gateway admission. The deployment lock excludes other pointer writers; a direct
+current-target comparison still precedes journal publication. Fresh suspension,
+process-generation, protected-identity, and policy checks remain at the stop
+boundary, including after handoff arming. Adopt the reviewed controller closure
+to move these audits out of the client-visible offline window.
 
 During graceful suspension drain, status reads use a five-second transport and
 subprocess bound (shortened by the original drain deadline). A typed timeout,
 connection loss, or service-restart close retries after one, two, then at most
 four seconds, with each wait capped by the remaining drain budget. These reads
-do not renew the deadline or the suspension lease. Missing or malformed failure
+do not renew the deadline or the suspension lease. If request preparation consumes
+the remaining budget before CLI dispatch, the same deadline policy applies; no
+RPC is started. Missing or malformed failure
 evidence, authentication or protocol failures, and definitive Gateway refusals
 remain fatal. Deadline expiry still requires the existing fresh lease,
 process-generation, and write-custody proof before authorized interruption;
@@ -253,12 +289,15 @@ shell even when its bundles and precompressed assets are reused.
 Sealing makes every regular file read-only (preserving executable bits as `0555`),
 every directory `0555`, and leaves relative in-tree symlinks intact. The staging
 copy has independent inodes, is root-owned, and is not exposed to the runtime
-user. After the complete permission walk, GNU `sync -f` performs one `syncfs`
-barrier for the staging filesystem: file bytes, inode metadata, and directory
-entries must be durable before publication. A failed barrier aborts publication;
-the rename still has its separate parent-directory fsync. The barrier flushes
-the filesystem's other pending writes too, so its latency can reflect concurrent
-I/O. It does not evict page-cache contents.
+user. After the permission walk, sealing fsyncs regular files followed by
+directories, with at most eight open handles at once. This persists file bytes,
+inode modes, symlinks, and directory entries before publication without requesting
+a filesystem-wide flush of unrelated dirty data. Storage contention can still
+slow those operations. The durability deadline is two minutes plus ten
+milliseconds per file/directory and one second per eight MiB of file data.
+A failed fsync or expired deadline aborts publication; no sync subprocess is
+left behind. The rename retains its separate parent-directory fsync. Adopt the
+script and library together to remove the former fixed 120-second sealing bound.
 
 The manifest binds the exact source SHA, build ID, schema declarations, official
 origin, and Control UI entrypoint SHA-256; validation also checks build stamps,

@@ -1,6 +1,6 @@
-// Ollama node inference tests cover local discovery, chat, and agent tool routing.
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { Socket } from "node:net";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { text } from "node:stream/consumers";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
@@ -12,76 +12,81 @@ if (!OLLAMA_MODELS_COMMAND || !OLLAMA_CHAT_COMMAND) {
   throw new Error("Ollama node inference policy must register models and chat commands");
 }
 
-async function readBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+type NodeRuntime = OpenClawPluginApi["runtime"]["nodes"];
+type NodeRow = Awaited<ReturnType<NodeRuntime["list"]>>["nodes"][number];
+function nodeApi(nodes: NodeRow[], invoke: NodeRuntime["invoke"]) {
+  return createTestPluginApi({
+    runtime: { nodes: { list: async () => ({ nodes }), invoke } } as never,
+  });
 }
 
-async function withOllamaServer<T>(
+function inferenceNode(
+  nodeId: string,
+  invocableCommands?: string[],
+  displayName?: string,
+): NodeRow {
+  return {
+    nodeId,
+    connected: true,
+    commands: ["ollama.models", "ollama.chat"],
+    ...(invocableCommands ? { invocableCommands } : {}),
+    ...(displayName ? { displayName } : {}),
+  };
+}
+
+function sendJson(response: ServerResponse, body: unknown): void {
+  response.end(JSON.stringify(body));
+}
+
+async function readBody(request: IncomingMessage): Promise<unknown> {
+  return JSON.parse(await text(request));
+}
+
+async function withOllamaServer(
   run: (
     baseUrl: string,
     chatRequests: Record<string, unknown>[],
     showRequests: string[],
-  ) => Promise<T>,
+  ) => Promise<void>,
   options?: {
     models: Array<Record<string, unknown>>;
     loadedModels?: Array<Record<string, unknown>>;
   },
-): Promise<T> {
+): Promise<void> {
   const chatRequests: Record<string, unknown>[] = [];
   const showRequests: string[] = [];
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     response.setHeader("Content-Type", "application/json");
     if (request.url === "/api/tags") {
-      response.end(
-        JSON.stringify({
-          models: options?.models ?? [
-            {
-              name: "remote:cloud",
-              size: 1,
-              remote_host: "https://ollama.com",
-              details: {},
+      return sendJson(response, {
+        models: options?.models ?? [
+          { name: "remote:cloud", size: 1, remote_host: "https://ollama.com", details: {} },
+          {
+            name: "remote-model-only:latest",
+            size: 1,
+            remote_model: "upstream-chat",
+            details: {},
+          },
+          { name: "tagged-only:cloud", size: 1, details: {} },
+          { name: "tagged-only:120b-cloud", size: 1, details: {} },
+          {
+            name: "chat:small",
+            size: 500,
+            modified_at: "2026-07-01T00:00:00Z",
+            details: {
+              family: "small",
+              parameter_size: "0.5B",
+              quantization_level: "Q4_K_M",
             },
-            {
-              name: "remote-model-only:latest",
-              size: 1,
-              remote_model: "upstream-chat",
-              details: {},
-            },
-            {
-              name: "tagged-only:cloud",
-              size: 1,
-              details: {},
-            },
-            {
-              name: "tagged-only:120b-cloud",
-              size: 1,
-              details: {},
-            },
-            {
-              name: "chat:small",
-              size: 500,
-              modified_at: "2026-07-01T00:00:00Z",
-              details: {
-                family: "small",
-                parameter_size: "0.5B",
-                quantization_level: "Q4_K_M",
-              },
-            },
-            { name: "chat:large", size: 5000, details: { family: "large" } },
-            { name: "embedding:latest", size: 100, details: { family: "embed" } },
-            { name: "unknown:latest", size: 50, details: { family: "unknown" } },
-          ],
-        }),
-      );
-      return;
+          },
+          { name: "chat:large", size: 5000, details: { family: "large" } },
+          { name: "embedding:latest", size: 100, details: { family: "embed" } },
+          { name: "unknown:latest", size: 50, details: { family: "unknown" } },
+        ],
+      });
     }
     if (request.url === "/api/ps") {
-      response.end(JSON.stringify({ models: options?.loadedModels ?? [{ name: "chat:large" }] }));
-      return;
+      return sendJson(response, { models: options?.loadedModels ?? [{ name: "chat:large" }] });
     }
     if (request.url === "/api/show") {
       const body = (await readBody(request)) as { model?: string };
@@ -90,63 +95,39 @@ async function withOllamaServer<T>(
       }
       if (body.model === "unknown:latest") {
         response.statusCode = 500;
-        response.end(JSON.stringify({ error: "show failed" }));
-        return;
+        return sendJson(response, { error: "show failed" });
       }
       const embedding = body.model?.startsWith("embedding") === true;
-      response.end(
-        JSON.stringify({
-          capabilities: embedding ? ["embedding"] : ["completion", "tools"],
-          model_info: embedding ? {} : { "test.context_length": 32768 },
-        }),
-      );
-      return;
+      return sendJson(response, {
+        capabilities: embedding ? ["embedding"] : ["completion", "tools"],
+        model_info: embedding ? {} : { "test.context_length": 32768 },
+      });
     }
     if (request.url === "/api/chat") {
       const body = (await readBody(request)) as Record<string, unknown>;
       chatRequests.push(body);
-      response.end(
-        JSON.stringify({
-          model: body.model,
-          message: { content: "local answer" },
-          done_reason:
-            (body.options as { num_predict?: unknown } | undefined)?.num_predict === 1
-              ? "length"
-              : "stop",
-          prompt_eval_count: 8,
-          eval_count: 3,
-          load_duration: 2_500_000,
-          total_duration: 12_750_000,
-        }),
-      );
-      return;
+      return sendJson(response, {
+        model: body.model,
+        message: { content: "local answer" },
+        done_reason:
+          (body.options as { num_predict?: unknown } | undefined)?.num_predict === 1
+            ? "length"
+            : "stop",
+        prompt_eval_count: 8,
+        eval_count: 3,
+        load_duration: 2_500_000,
+        total_duration: 12_750_000,
+      });
     }
     response.statusCode = 404;
     response.end(JSON.stringify({ error: "not found" }));
   };
-  const server = createServer((request: IncomingMessage, response: ServerResponse) => {
-    void handleRequest(request, response);
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server did not expose a TCP address");
-  }
-  try {
-    return await run(`http://127.0.0.1:${address.port}`, chatRequests, showRequests);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
-  }
+  await withServer(
+    (request, response) => {
+      void handleRequest(request, response);
+    },
+    (baseUrl) => run(baseUrl, chatRequests, showRequests),
+  );
 }
 
 function commandByName(baseUrl: string, command: string) {
@@ -295,30 +276,13 @@ describe("node_inference agent tool", () => {
     const invoke = vi.fn(async () => ({
       payload: { provider: "ollama", models: [{ name: "chat:small", loaded: true }] },
     }));
-    const api = createTestPluginApi({
-      runtime: {
-        nodes: {
-          list: async () => ({
-            nodes: [
-              {
-                nodeId: "denied-node",
-                connected: true,
-                commands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
-                invocableCommands: [],
-              },
-              {
-                nodeId: "allowed-node",
-                displayName: "Desk",
-                connected: true,
-                commands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
-                invocableCommands: [OLLAMA_MODELS_COMMAND],
-              },
-            ],
-          }),
-          invoke,
-        },
-      } as never,
-    });
+    const api = nodeApi(
+      [
+        inferenceNode("denied-node", []),
+        inferenceNode("allowed-node", [OLLAMA_MODELS_COMMAND], "Desk"),
+      ],
+      invoke,
+    );
 
     const result = await createOllamaNodeInferenceTool(api).execute("call-discover", {
       action: "discover",
@@ -349,29 +313,13 @@ describe("node_inference agent tool", () => {
     const invoke = vi.fn(async () => ({
       payload: { provider: "ollama", model: "chat:small", response: "done" },
     }));
-    const api = createTestPluginApi({
-      runtime: {
-        nodes: {
-          list: async () => ({
-            nodes: [
-              {
-                nodeId: "denied-node",
-                connected: true,
-                commands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
-                invocableCommands: [OLLAMA_MODELS_COMMAND],
-              },
-              {
-                nodeId: "allowed-node",
-                connected: true,
-                commands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
-                invocableCommands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
-              },
-            ],
-          }),
-          invoke,
-        },
-      } as never,
-    });
+    const api = nodeApi(
+      [
+        inferenceNode("denied-node", [OLLAMA_MODELS_COMMAND]),
+        inferenceNode("allowed-node", [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND]),
+      ],
+      invoke,
+    );
 
     const result = await createOllamaNodeInferenceTool(api).execute("call-authorized", {
       action: "run",
@@ -408,6 +356,17 @@ type AbortTestServer = {
   canceled: string[];
 };
 
+function nodeReplies(model: Record<string, unknown>, contextWindow: number, content: string) {
+  return {
+    "/api/tags": { models: [model] },
+    "/api/show": {
+      capabilities: ["completion", "tools"],
+      model_info: { "test.context_length": contextWindow },
+    },
+    "/api/chat": { model: model.name, message: { content }, done_reason: "stop" },
+  };
+}
+
 async function withAbortTestServer(
   stallPath: string,
   run: (server: AbortTestServer) => Promise<void>,
@@ -415,6 +374,11 @@ async function withAbortTestServer(
 ): Promise<void> {
   const requests: string[] = [];
   const canceled: string[] = [];
+  const replies = nodeReplies(
+    { name: "node-local:small", digest: "sha256:node-local-small", size: 512 },
+    8192,
+    "node-only inference",
+  );
   let stalls = 0;
   await withServer(
     (request: IncomingMessage, response: ServerResponse) => {
@@ -429,45 +393,18 @@ async function withAbortTestServer(
         });
         return;
       }
-
       response.setHeader("Content-Type", "application/json");
-      if (requestPath === "/api/tags") {
-        response.end(
-          JSON.stringify({
-            models: [{ name: "node-local:small", digest: "sha256:node-local-small", size: 512 }],
-          }),
-        );
-        return;
-      }
-      if (requestPath === "/api/show") {
-        response.end(
-          JSON.stringify({
-            capabilities: ["completion", "tools"],
-            model_info: { "test.context_length": 8192 },
-          }),
-        );
-        return;
-      }
-      if (requestPath === "/api/chat") {
-        response.end(
-          JSON.stringify({
-            model: "node-local:small",
-            message: { content: "node-only inference" },
-            done_reason: "stop",
-          }),
-        );
-        return;
+      if (
+        requestPath === "/api/tags" ||
+        requestPath === "/api/show" ||
+        requestPath === "/api/chat"
+      ) {
+        return sendJson(response, replies[requestPath]);
       }
       response.statusCode = 404;
-      response.end(JSON.stringify({ error: "not found" }));
+      sendJson(response, { error: "not found" });
     },
-    async (baseUrl) => {
-      await run({
-        baseUrl,
-        requests,
-        canceled,
-      });
-    },
+    (baseUrl) => run({ baseUrl, requests, canceled }),
   );
 }
 
@@ -504,22 +441,7 @@ describe("node-local Ollama inference cancellation", () => {
           ),
         }),
       );
-      const api = createTestPluginApi({
-        runtime: {
-          nodes: {
-            list: async () => ({
-              nodes: [
-                {
-                  nodeId: "paired-node",
-                  connected: true,
-                  commands: ["ollama.models", "ollama.chat"],
-                },
-              ],
-            }),
-            invoke,
-          },
-        } as never,
-      });
+      const api = nodeApi([inferenceNode("paired-node")], invoke);
 
       const inference = createOllamaNodeInferenceTool(api).execute(
         "paired-node-inference",
@@ -563,6 +485,9 @@ describe("node-local Ollama inference cancellation", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  // Go through ollama.models without a timeout, because a timeout bypasses the
+  // cache on its own. Keep the cache key stable and prove both cancellation
+  // isolation and later successful reuse.
   it("does not poison shared model metadata after a canceled show request", async () => {
     await withAbortTestServer(
       "/api/show",
@@ -601,12 +526,12 @@ describe("node-local Ollama inference cancellation", () => {
 
 const CHAT_MODEL = "deadline-model:latest";
 
-async function withDelayedOllamaServer<T>(
+async function withDelayedOllamaServer(
   delays: Partial<Record<"/api/tags" | "/api/show" | "/api/chat", number>>,
-  run: (baseUrl: string, requestedPaths: string[]) => Promise<T>,
-): Promise<T> {
+  run: (baseUrl: string, requestedPaths: string[]) => Promise<void>,
+): Promise<void> {
   const requestedPaths: string[] = [];
-  const sockets = new Set<Socket>();
+  const replies = nodeReplies({ name: CHAT_MODEL }, 32_768, "within the requested deadline");
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     const requestPath = request.url;
     if (requestPath !== "/api/tags" && requestPath !== "/api/show" && requestPath !== "/api/chat") {
@@ -614,11 +539,8 @@ async function withDelayedOllamaServer<T>(
       return;
     }
     requestedPaths.push(requestPath);
-    const bodyChunks: Buffer[] = [];
-    for await (const chunk of request) {
-      bodyChunks.push(Buffer.from(chunk));
-    }
-    if (requestPath !== "/api/tags" && Buffer.concat(bodyChunks).length === 0) {
+    const body = await text(request);
+    if (requestPath !== "/api/tags" && body.length === 0) {
       throw new Error("Ollama deadline test received an empty POST body");
     }
     const delayMs = delays[requestPath];
@@ -631,52 +553,14 @@ async function withDelayedOllamaServer<T>(
       return;
     }
     response.setHeader("Content-Type", "application/json");
-    if (requestPath === "/api/tags") {
-      response.end(JSON.stringify({ models: [{ name: CHAT_MODEL }] }));
-      return;
-    }
-    if (requestPath === "/api/show") {
-      response.end(
-        JSON.stringify({
-          capabilities: ["completion", "tools"],
-          model_info: { "test.context_length": 32_768 },
-        }),
-      );
-      return;
-    }
-    response.end(
-      JSON.stringify({
-        model: CHAT_MODEL,
-        message: { content: "within the requested deadline" },
-        done_reason: "stop",
-      }),
-    );
+    sendJson(response, replies[requestPath]);
   };
-  const server = createServer((request, response) => {
-    void handleRequest(request, response);
-  });
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Ollama deadline test server did not expose a TCP address");
-  }
-  try {
-    return await run(`http://127.0.0.1:${address.port}`, requestedPaths);
-  } finally {
-    const closed = new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    await closed;
-  }
+  await withServer(
+    (request, response) => {
+      void handleRequest(request, response);
+    },
+    (baseUrl) => run(baseUrl, requestedPaths),
+  );
 }
 
 function runNodeChat(baseUrl: string, timeoutMs: number): Promise<string> {

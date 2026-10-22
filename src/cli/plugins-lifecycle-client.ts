@@ -19,7 +19,7 @@ import { registerSignalExitGate } from "./signal-exit-barrier.js";
 export async function resolvePluginBatchReload(): Promise<PluginInstallBatchReload | undefined> {
   const gateway = await resolvePluginLifecycleGateway();
   return gateway
-    ? async (plugins) => {
+    ? async (plugins, options) => {
         const result = await gateway<PluginsReloadResult>("plugins.reload", {
           plugins,
         });
@@ -28,6 +28,7 @@ export async function resolvePluginBatchReload(): Promise<PluginInstallBatchRelo
             "Gateway did not confirm the plugin batch runtime generation. Inspect plugin status before retrying.",
           );
         }
+        options?.commitGuard?.();
         return {
           ...result.runtime,
           ...(result.restartRequired ? { restartRequired: true } : {}),

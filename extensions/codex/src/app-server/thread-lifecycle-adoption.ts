@@ -4,10 +4,10 @@ import { readCodexSessionMeta } from "../session-catalog-provenance.js";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
+  usesManagedCodexThreadUnloading,
 } from "./auth-start-options.js";
 import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
-import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
 import { isJsonObject, type CodexThread } from "./protocol.js";
 import {
@@ -157,7 +157,7 @@ export async function resumePendingCodexThread(
   const prebuiltPluginThreadConfig = params.pluginThreadConfig?.enabled
     ? await lifecycleTiming.measure("plugin-config-build", () => params.pluginThreadConfig?.build())
     : undefined;
-  const clientId = resolveCodexAppServerClientInstanceId(params.client);
+  const clientId = params.client.getInstanceId();
   const resumed = await resumeExistingCodexThread(params, {
     ...context,
     prebuiltPluginThreadConfig,
@@ -311,49 +311,67 @@ function observeCodexThreadConfiguration(
     throw new CodexAdoptedThreadActiveError();
   }
   const settledSystemError = thread.status.type === "systemError";
+  const managedThreadUnloading = usesManagedCodexThreadUnloading(params.appServer.start);
   let unloaded = thread.status.type === "notLoaded";
+  let closed = false;
+  let expired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   let onUnload: (() => void) | undefined;
   const dispose = params.client.addNotificationHandler((notification) => {
+    const isClosed = notification.method === "thread/closed";
     if (
-      notification.method === "thread/status/changed" &&
       isJsonObject(notification.params) &&
       notification.params.threadId === thread.id &&
-      isJsonObject(notification.params.status) &&
-      notification.params.status.type === "notLoaded"
+      (isClosed ||
+        // Native idle-override reload inside resume emits notLoaded, without closed.
+        (!managedThreadUnloading &&
+          notification.method === "thread/status/changed" &&
+          isJsonObject(notification.params.status) &&
+          notification.params.status.type === "notLoaded"))
     ) {
+      closed ||= isClosed;
       unloaded = true;
       onUnload?.();
     }
   });
   return {
     modelProvider: thread.modelProvider,
-    dispose,
+    dispose: () => {
+      clearTimeout(timer);
+      dispose();
+    },
     settledSystemError,
     // Unsubscribe only acknowledges removal of our subscription. Native teardown
     // is asynchronous, including with a zero post-unsubscribe retention delay.
-    waitForUnload: async () => {
+    waitForUnload: async (requireClosed = false) => {
       assertCurrent();
-      if (!unloaded) {
+      // One budget covers teardown and a closing rejection; a replay cannot renew it.
+      timer ??= setTimeout(() => {
+        expired = true;
+        onUnload?.();
+      }, 2_000);
+      if (!(requireClosed ? closed : unloaded) && !expired) {
         await new Promise<void>((resolve) => {
           const finish = () => {
-            clearTimeout(timer);
             params.signal?.removeEventListener("abort", finish);
             onUnload = undefined;
             resolve();
           };
-          const timer = setTimeout(finish, 2_000);
           onUnload = finish;
           params.signal?.addEventListener("abort", finish, { once: true });
+          if (params.signal?.aborted) {
+            finish();
+          }
         });
       }
       assertCurrent();
-      return unloaded;
+      return (requireClosed ? closed : unloaded) && !expired;
     },
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber
-      // or failed shutdown retains the session. notLoaded proves teardown, not a
-      // reservation against native-internal reloads outside OpenClaw's thread queue.
+      // or failed shutdown retains the session. An initially cold thread or its
+      // close receipt permits admission, without reserving against native reloads.
       if (!unloaded) {
         throw new Error(
           "Codex did not confirm unloading its previous configuration. The thread is preserved; stop competing native work and reconnect before retrying.",

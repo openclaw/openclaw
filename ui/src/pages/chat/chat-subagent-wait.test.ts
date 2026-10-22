@@ -1,4 +1,3 @@
-import { render } from "lit";
 import { createComponent, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -6,7 +5,10 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { projectSubagentStatus } from "./chat-subagent-wait.ts";
 import { UnplacedSubagentWait } from "./components/chat-message-stream-view.tsx";
-import { renderSubagentActivity } from "./components/chat-subagent-activity.ts";
+import {
+  SubagentActivity,
+  type SubagentActivityProps,
+} from "./components/chat-subagent-activity.tsx";
 import { ChatWorkingIndicator } from "./components/chat-working-indicator.tsx";
 
 type ChatWorkingIndicatorOptions = Parameters<typeof ChatWorkingIndicator>[0]["options"];
@@ -150,10 +152,29 @@ describe("chat waiting on subagents", () => {
     expect(project([{ ...active, status: "done", hasActiveRun: false }]).activity).toEqual([]);
     expect(project([active], true).activity).toEqual([]);
 
-    const container = document.createElement("div");
     const onOpenSubagent = vi.fn();
     const onOpenSession = vi.fn();
-    render(renderSubagentActivity(initial.activity, onOpenSubagent, onOpenSession), container);
+    let update!: (props: SubagentActivityProps) => void;
+    const view = mountSolid(() => {
+      const [props, setProps] = createSignal<SubagentActivityProps>({
+        rows: initial.activity,
+        onOpenSubagent,
+        onOpenSession,
+      });
+      update = (value) => setProps(value);
+      return createComponent(SubagentActivity, {
+        get rows() {
+          return props().rows;
+        },
+        get onOpenSubagent() {
+          return props().onOpenSubagent;
+        },
+        get onOpenSession() {
+          return props().onOpenSession;
+        },
+      });
+    });
+    const container = view.container;
     expect(container.textContent).toContain("Backend implementation");
     expect(container.textContent).toContain("Checking the API response");
     expect(container.textContent).toContain("UI regression tests");
@@ -163,10 +184,12 @@ describe("chat waiting on subagents", () => {
     container.querySelector("button")?.click();
     expect(onOpenSubagent).toHaveBeenCalledWith(child.key);
     const acp = project([{ ...active, key: "agent:main:acp:coder" }]);
-    render(renderSubagentActivity(acp.activity, onOpenSubagent, onOpenSession), container);
+    update({ rows: acp.activity, onOpenSubagent, onOpenSession });
+    flush();
     container.querySelector("button")?.click();
     expect(onOpenSession).toHaveBeenCalledWith("agent:main:acp:coder");
-    render(renderSubagentActivity(updated.activity), container);
+    update({ rows: updated.activity });
+    flush();
     expect(container.textContent).toContain("Running the backend tests");
     expect(container.textContent).not.toContain("Checking the API response");
     expect(container.querySelector("button")).toBeNull();
@@ -379,7 +402,7 @@ describe("chat waiting on subagents", () => {
   it.each([
     { name: "no loaded handoff", history: [] },
     { name: "only an earlier turn's handoff", history: messages },
-  ])("renders the recorded wait clock with $name", async ({ history }) => {
+  ])("renders the recorded wait clock with $name", ({ history }) => {
     const now = Date.UTC(2026, 9, 12, 20, 48);
     const wait = resolveChatSubagentWait({
       selectedSession: { ...parent, startedAt: now - 100_000, endedAt: now - 65_000 },
@@ -405,8 +428,6 @@ describe("chat waiting on subagents", () => {
       );
       flush();
       const elapsed = container.querySelector("openclaw-elapsed-time");
-      await elapsed?.updateComplete;
-      flush();
       expect(elapsed?.textContent?.trim()).toBe("1m 5s");
     } finally {
       view?.unmount();
@@ -482,7 +503,11 @@ describe("chat waiting on subagents", () => {
     expect(listed([child], false)).toBe(true);
     const worker = { ...child, key: "agent:main:subagent:worker", swarmGroupId: "audit" };
     expect(listed([child, worker])).toBe(true);
-    expect(listed([{ ...child, key: "agent:main:acp:coder" }], false)).toBe(false);
+    for (const key of ["agent:main:acp:coder", "agent:main:worker:unknown"]) {
+      const unlisted = { ...child, key };
+      expect(listed([unlisted], false)).toBe(false);
+      expect(listed([child, unlisted], false)).toBe(false);
+    }
     // A child session is not one of the line's subagents.
     expect(listed([child, { ...child, key: "agent:main:dashboard:opened" }])).toBe(true);
     expect(listed([{ ...child, hasActiveRun: false }])).toBe(false);
@@ -508,8 +533,8 @@ describe("chat waiting on subagents", () => {
 
   it.each([false, true])(
     "keeps a working fallback until child activity replaces it (bubble mode: %s)",
-    (bubbleMode) => {
-      const container = document.createElement("div");
+    async (bubbleMode) => {
+      const container = document.body.appendChild(document.createElement("div"));
       const onOpenSubagent = vi.fn();
       const projection = projectSubagentStatus(
         {
@@ -530,19 +555,18 @@ describe("chat waiting on subagents", () => {
       const draw = mountWorkingIndicator(container, part, options);
       expect(container.textContent).toContain("Working…");
       expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
-      const subagentActivity = renderSubagentActivity(projection.activity, onOpenSubagent);
-      if (typeof subagentActivity === "symbol") {
-        throw new Error("Expected running child activity");
-      }
       draw({
         ...options,
-        subagentActivity,
+        subagentActivity: { rows: projection.activity, onOpenSubagent },
       });
+      await vi.dynamicImportSettled();
+      flush();
       expect(container.textContent).toContain("Backend implementation");
       expect(container.textContent).not.toContain("Waiting on");
       expect(container.querySelector(".chat-working-indicator")).toBeNull();
       container.querySelector("button")?.click();
       expect(onOpenSubagent).toHaveBeenCalledWith(child.key);
+      container.remove();
     },
   );
 

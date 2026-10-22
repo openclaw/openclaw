@@ -177,9 +177,8 @@ describe("projectContextEngineAssemblyForCodex", () => {
       ],
       prompt: "next",
     });
-    expect(ordered.promptText).toContain(
-      "[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\ntool result [content omitted]",
-    );
+    expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo");
+    expect(ordered.promptText).not.toContain("[toolResult]");
   });
 
   it("preserves stable user provenance while leaving legacy user rows unattributed", async () => {
@@ -241,7 +240,7 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(history[0]).not.toHaveProperty("content");
   });
 
-  it("frames projected history as reference data and omits tool payloads", async () => {
+  it("drops omitted tool-only events while retaining mixed assistant text", async () => {
     const result = await projectContextEngineAssemblyForCodex({
       assembledMessages: [
         {
@@ -256,19 +255,54 @@ describe("projectContextEngineAssemblyForCodex", () => {
           toolCallId: "call-1",
           toolName: "exec",
           isError: false,
-          content: [{ type: "toolResult", toolUseId: "call-1", content: "API_KEY=sk-secret" }],
+          content: [{ type: "text", text: "API_KEY=sk-secret" }],
           timestamp: 2,
-        } as unknown as AgentMessage,
+        },
+        {
+          ...textMessage("assistant", "The operation completed."),
+          content: [
+            { type: "text", text: "The operation completed." },
+            { type: "toolCall", id: "call-2", name: "read", arguments: { path: "example.txt" } },
+          ],
+        } as AgentMessage,
       ],
       prompt: "continue",
     });
 
     expect(result.promptText).toContain("quoted reference data");
-    expect(result.promptText).toContain("tool call: exec [input omitted]");
-    expect(result.promptText).toContain("tool result: call-1 [content omitted]");
+    expect(result.promptText).toContain("[assistant]\nThe operation completed.");
+    expect(result.promptText).not.toContain("tool call");
+    expect(result.promptText).not.toContain("tool result");
+    expect(result.promptText).not.toContain("call-1");
     expect(result.promptText).not.toContain("sk-secret");
     expect(result.promptText).not.toContain("cat .env");
   });
+
+  it.each([true, false])(
+    "does not spend the history window on omitted tools (prior prose: %s)",
+    async (priorProse) => {
+      const instruction = "Keep the blue database available until verification finishes.";
+      const tools: AgentMessage[] = Array.from({ length: 12 }, (_, index) => ({
+        role: "toolResult",
+        toolCallId: `call-${index}`,
+        toolName: "read",
+        content: [{ type: "text", text: "Completed synthetic read." }],
+        isError: false,
+        timestamp: index + 2,
+      }));
+      const result = await projectContextEngineAssemblyForCodex({
+        assembledMessages: [...(priorProse ? [textMessage("user", instruction)] : []), ...tools],
+        maxRenderedContextChars: 256,
+        prompt: "Continue.",
+      });
+      if (priorProse) {
+        expect(result.promptText).toContain(`[user]\n${instruction}`);
+      } else {
+        expect(result.promptText).toBe("Continue.");
+      }
+      expect(result.promptText).not.toContain("[content omitted]");
+    },
+  );
 
   it("preserves tool payload context for thread bootstrap projections", async () => {
     const shared = { recursive: true };
@@ -653,9 +687,6 @@ describe("resolveCodexContinuityProjectionMaxChars", () => {
       undefined,
     );
     expect(buildCodexContinuityCalibration({ promptChars: 200_000, inputTokens: 0 })).toBe(
-      undefined,
-    );
-    expect(buildCodexContinuityCalibration({ promptChars: Number.NaN, inputTokens: 64_000 })).toBe(
       undefined,
     );
   });

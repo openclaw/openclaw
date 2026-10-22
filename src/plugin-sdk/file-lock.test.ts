@@ -1,6 +1,3 @@
-/**
- * Tests plugin SDK file lock retry, stale lock, and cleanup behavior.
- */
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -16,12 +13,29 @@ import {
   resetFileLockStateForTest,
 } from "./file-lock.js";
 
+const retries = { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 } as const;
+const staleOptions = { retries, stale: 10 } as const;
+const ownerOptions = { retries, stale: 60_000 } as const;
+const deadPid = 2 ** 30;
+const missing = (filePath: string) =>
+  expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+const timesOut = (lock: ReturnType<typeof acquireFileLock>) =>
+  expect(lock).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
+
+async function writeLock(lockPath: string, pid = deadPid, createdAt = "2000-01-01T00:00:00Z") {
+  await fs.writeFile(lockPath, JSON.stringify({ pid, createdAt }), "utf8");
+}
+
 describe("acquireFileLock", () => {
   let tempDir = "";
+  let filePath: string;
+  let lockPath: string;
 
   beforeEach(async () => {
     resetFileLockStateForTest();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-file-lock-"));
+    filePath = path.join(tempDir, "oauth-refresh");
+    lockPath = `${filePath}.lock`;
   });
 
   afterEach(async () => {
@@ -33,57 +47,21 @@ describe("acquireFileLock", () => {
   });
 
   it("respects the configured retry budget even when stale windows are much larger", async () => {
-    const filePath = path.join(tempDir, "oauth-refresh");
-    const lockPath = `${filePath}.lock`;
     const options = {
-      retries: {
-        retries: 1,
-        factor: 1,
-        minTimeout: 20,
-        maxTimeout: 20,
-      },
+      retries: { ...retries, retries: 1, minTimeout: 20, maxTimeout: 20 },
       stale: 100,
-    } as const;
+    };
+    await writeLock(lockPath, process.pid, new Date().toISOString());
 
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2),
-      "utf8",
-    );
-
-    let caught: { code?: string; lockPath?: string } | undefined;
-    try {
-      await acquireFileLock(filePath, options);
-    } catch (error) {
-      caught = error as { code?: string; lockPath?: string };
-    }
-    expect(caught?.code).toBe(FILE_LOCK_TIMEOUT_ERROR_CODE);
-    expect(caught?.lockPath ? path.relative(await fs.realpath(tempDir), caught.lockPath) : "").toBe(
-      "oauth-refresh.lock",
-    );
+    await expect(acquireFileLock(filePath, options)).rejects.toMatchObject({
+      code: FILE_LOCK_TIMEOUT_ERROR_CODE,
+      lockPath: path.join(await fs.realpath(tempDir), "oauth-refresh.lock"),
+    });
   }, 5_000);
 
   it("reclaims a stale lock when its owner pid is dead", async () => {
-    const filePath = path.join(tempDir, "auth-profiles.json");
-    const lockPath = `${filePath}.lock`;
-    const options = {
-      retries: {
-        retries: 0,
-        factor: 1,
-        minTimeout: 1,
-        maxTimeout: 1,
-      },
-      stale: 10,
-    } as const;
-
-    const deadPid = 2 ** 30;
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify({ pid: deadPid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
-      "utf8",
-    );
-
-    const lock = await acquireFileLock(filePath, options);
+    await writeLock(lockPath);
+    const lock = await acquireFileLock(filePath, staleOptions);
     await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid": ${process.pid}`);
     await lock.release();
   });
@@ -97,11 +75,7 @@ describe("acquireFileLock", () => {
       await fs.symlink(realDir, linkDir, "dir");
       const realPath = path.join(realDir, "state.json");
       const linkPath = path.join(linkDir, "state.json");
-      const options = {
-        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-        stale: 60_000,
-        reentrantOwner: "test-operation:alias",
-      } as const;
+      const options = { ...ownerOptions, reentrantOwner: "test-operation:alias" };
 
       const first = await acquireFileLock(realPath, options);
       const second = await acquireFileLock(linkPath, options);
@@ -110,7 +84,7 @@ describe("acquireFileLock", () => {
         await first.release();
         await fs.access(first.lockPath);
         await second.release();
-        await expect(fs.access(first.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await missing(first.lockPath);
       } finally {
         await first.release();
         await second.release();
@@ -122,39 +96,23 @@ describe("acquireFileLock", () => {
     ["different", "test-operation:second"],
     ["absent", undefined],
   ] as const)("makes a %s logical owner contend normally", async (_label, reentrantOwner) => {
-    const filePath = path.join(tempDir, "owner-isolation.json");
     const first = await acquireFileLock(filePath, {
-      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-      stale: 60_000,
+      ...ownerOptions,
       reentrantOwner: "test-operation:first",
     });
     try {
-      await expect(
-        acquireFileLock(filePath, {
-          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-          stale: 60_000,
-          reentrantOwner,
-        }),
-      ).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
+      await timesOut(acquireFileLock(filePath, { ...ownerOptions, reentrantOwner }));
     } finally {
       await first.release();
     }
   });
 
   it("fails closed for a security-sensitive stale lock", async () => {
-    const filePath = path.join(tempDir, "exec-approvals.json");
-    const lockPath = `${filePath}.lock`;
-    const deadPid = 2 ** 30;
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify({ pid: deadPid, createdAt: new Date(Date.now() - 60_000).toISOString() }),
-      "utf8",
-    );
+    await writeLock(lockPath);
 
     await expect(
       acquireFileLock(filePath, {
-        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-        stale: 10,
+        ...staleOptions,
         staleRecovery: "fail-closed",
       }),
     ).rejects.toMatchObject({
@@ -165,25 +123,14 @@ describe("acquireFileLock", () => {
   });
 
   it.each([
-    {
-      name: "definitely dead",
-      payload: { pid: 2 ** 30, createdAt: "2000-01-01T00:00:00Z" },
-      reclaim: true,
-    },
-    {
-      name: "live",
-      payload: { pid: process.pid, createdAt: "2000-01-01T00:00:00Z" },
-      reclaim: false,
-    },
-    { name: "unknown owner", payload: { createdAt: "2000-01-01T00:00:00Z" }, reclaim: false },
-  ])("requires definite owner retirement for $name sidecars", async ({ payload, reclaim }) => {
-    const filePath = path.join(tempDir, "owner-retirement");
-    const lockPath = `${filePath}.lock`;
-    const bytes = JSON.stringify(payload);
+    ["definitely dead", deadPid, true],
+    ["live", process.pid, false],
+    ["unknown owner", undefined, false],
+  ] as const)("requires definite owner retirement for %s sidecars", async (_name, pid, reclaim) => {
+    const bytes = JSON.stringify({ pid, createdAt: "2000-01-01T00:00:00Z" });
     await fs.writeFile(lockPath, bytes);
     const options = {
-      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-      stale: 10,
+      ...staleOptions,
       staleRecovery: "remove-if-definitely-stale",
     } as const;
     if (reclaim) {
@@ -191,44 +138,33 @@ describe("acquireFileLock", () => {
       expect(JSON.parse(await fs.readFile(lockPath, "utf8")).pid).toBe(process.pid);
       await held.release();
     } else {
-      await expect(acquireFileLock(filePath, options)).rejects.toMatchObject({
-        code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-      });
+      await timesOut(acquireFileLock(filePath, options));
       expect(await fs.readFile(lockPath, "utf8")).toBe(bytes);
     }
   });
 
   it("does not grant stale removal for an unsupported JavaScript policy", async () => {
-    const filePath = path.join(tempDir, "unsupported-policy");
-    const bytes = JSON.stringify({ pid: 2 ** 30, createdAt: "2000-01-01T00:00:00Z" });
-    await fs.writeFile(`${filePath}.lock`, bytes);
+    const bytes = JSON.stringify({ pid: deadPid, createdAt: "2000-01-01T00:00:00Z" });
+    await fs.writeFile(lockPath, bytes);
     // JavaScript consumers are not constrained by the TypeScript option union.
     const runtimeOptions = JSON.parse('{"staleRecovery":"unsupported-runtime-policy"}');
     await expect(
       acquireFileLock(filePath, {
-        retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-        stale: 10,
+        ...staleOptions,
         ...runtimeOptions,
       }),
     ).rejects.toMatchObject({ code: FILE_LOCK_STALE_ERROR_CODE });
-    expect(await fs.readFile(`${filePath}.lock`, "utf8")).toBe(bytes);
+    expect(await fs.readFile(lockPath, "utf8")).toBe(bytes);
   });
 
   it("does not unlink an ownerless sidecar while its creator still holds it", async () => {
-    const filePath = path.join(tempDir, "payload-pending-open");
-    const lockPath = `${filePath}.lock`;
     const owner = await fs.open(lockPath, "wx");
     try {
       const staleAt = new Date(Date.now() - 60_000);
       await owner.utimes(staleAt, staleAt);
       const before = await owner.stat();
 
-      await expect(
-        acquireFileLock(filePath, {
-          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-          stale: 10,
-        }),
-      ).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
+      await timesOut(acquireFileLock(filePath, staleOptions));
 
       const after = await fs.stat(lockPath);
       expect({ dev: after.dev, ino: after.ino }).toEqual({ dev: before.dev, ino: before.ino });
@@ -241,17 +177,11 @@ describe("acquireFileLock", () => {
   });
 
   it("releases an acquired lock when the handoff guard rejects it", async () => {
-    const filePath = path.join(tempDir, "rejected-handoff");
-    const lockPath = `${filePath}.lock`;
-    const options = {
-      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-      stale: 60_000,
-    };
     const guardError = new Error("resource became borrowed");
 
     await expect(
       acquireFileLock(filePath, {
-        ...options,
+        ...ownerOptions,
         assertResourceUnborrowed: () => {
           // Reject only after the real lock sidecar contains its owner payload.
           if (existsSync(lockPath) && readFileSync(lockPath, "utf8").length > 0) {
@@ -261,13 +191,13 @@ describe("acquireFileLock", () => {
       }),
     ).rejects.toBe(guardError);
 
-    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    const next = await acquireFileLock(filePath, options);
+    await missing(lockPath);
+    const next = await acquireFileLock(filePath, ownerOptions);
     await next.release();
   });
 
   it("closes an opened lock handle when writing the owner payload fails", async () => {
-    const filePath = path.join(tempDir, "write-fails");
+    const failurePath = path.join(tempDir, "write-fails");
     const writeError = new Error("owner write failed");
     const open = fs.open;
     const opened: Awaited<ReturnType<typeof fs.open>>[] = [];
@@ -284,17 +214,9 @@ describe("acquireFileLock", () => {
 
     // Inject the failure at the real JavaScript FileHandle write boundary.
     await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
-      await expect(
-        acquireFileLock(filePath, {
-          retries: {
-            retries: 0,
-            factor: 1,
-            minTimeout: 1,
-            maxTimeout: 1,
-          },
-          stale: 100,
-        }),
-      ).rejects.toThrow(writeError);
+      await expect(acquireFileLock(failurePath, { retries, stale: 100 })).rejects.toThrow(
+        writeError,
+      );
     });
 
     expect(opened).toHaveLength(1);
@@ -302,20 +224,16 @@ describe("acquireFileLock", () => {
     for (const handle of opened) {
       await expect(handle.stat()).rejects.toMatchObject({ code: "EBADF" });
     }
-    await expect(fs.stat(`${filePath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${failurePath}.lock`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("reclaims a definitely stale retired lock sidecar", async () => {
-    const lockPath = path.join(tempDir, "embed.lock.lock");
-    await fs.writeFile(
-      lockPath,
-      `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`,
-      "utf8",
-    );
+    const retiredPath = path.join(tempDir, "embed.lock.lock");
+    await writeLock(retiredPath, deadPid, new Date().toISOString());
 
-    await expect(reclaimDefinitelyStaleFileLock(lockPath)).resolves.toBe("removed");
-    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(reclaimDefinitelyStaleFileLock(lockPath)).resolves.toBe("missing");
+    await expect(reclaimDefinitelyStaleFileLock(retiredPath)).resolves.toBe("removed");
+    await missing(retiredPath);
+    await expect(reclaimDefinitelyStaleFileLock(retiredPath)).resolves.toBe("missing");
   });
 
   it("retains live, malformed, and symlink lock sidecars", async () => {
@@ -323,17 +241,9 @@ describe("acquireFileLock", () => {
     const malformedPath = path.join(tempDir, "malformed.lock.lock");
     const staleTargetPath = path.join(tempDir, "stale-target.lock");
     const symlinkPath = path.join(tempDir, "symlink.lock.lock");
-    await fs.writeFile(
-      livePath,
-      `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
-      "utf8",
-    );
+    await writeLock(livePath, process.pid);
     await fs.writeFile(malformedPath, "{", "utf8");
-    await fs.writeFile(
-      staleTargetPath,
-      `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`,
-      "utf8",
-    );
+    await writeLock(staleTargetPath);
     await fs.symlink(staleTargetPath, symlinkPath);
 
     await expect(reclaimDefinitelyStaleFileLock(livePath)).resolves.toBe("retained");
@@ -341,34 +251,25 @@ describe("acquireFileLock", () => {
     await expect(reclaimDefinitelyStaleFileLock(symlinkPath)).resolves.toBe("retained");
     await expect(fs.readFile(livePath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
     await expect(fs.readFile(malformedPath, "utf8")).resolves.toBe("{");
-    await expect(fs.lstat(symlinkPath)).resolves.toMatchObject({ mode: expect.any(Number) });
     expect((await fs.lstat(symlinkPath)).isSymbolicLink()).toBe(true);
     await expect(fs.readFile(staleTargetPath, "utf8")).resolves.toContain(`"pid":${2 ** 30}`);
   });
 
   it("retains a stale snapshot replaced before reclaim approval", async () => {
-    const lockPath = path.join(tempDir, "replaced.lock.lock");
-    await fs.writeFile(
-      lockPath,
-      `${JSON.stringify({ pid: 2 ** 30, createdAt: new Date().toISOString() })}\n`,
-      "utf8",
-    );
+    const replacedPath = path.join(tempDir, "replaced.lock.lock");
+    await writeLock(replacedPath);
     const originalLstat = fs.lstat.bind(fs);
     let lockLstatCalls = 0;
     vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
       const [candidate] = args;
-      if (candidate === lockPath && ++lockLstatCalls === 3) {
-        await fs.rm(lockPath);
-        await fs.writeFile(
-          lockPath,
-          `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() })}\n`,
-          "utf8",
-        );
+      if (candidate === replacedPath && ++lockLstatCalls === 3) {
+        await fs.rm(replacedPath);
+        await writeLock(replacedPath, process.pid);
       }
       return await originalLstat(...args);
     });
 
-    await expect(reclaimDefinitelyStaleFileLock(lockPath)).resolves.toBe("retained");
-    await expect(fs.readFile(lockPath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
+    await expect(reclaimDefinitelyStaleFileLock(replacedPath)).resolves.toBe("retained");
+    await expect(fs.readFile(replacedPath, "utf8")).resolves.toContain(`"pid":${process.pid}`);
   });
 });

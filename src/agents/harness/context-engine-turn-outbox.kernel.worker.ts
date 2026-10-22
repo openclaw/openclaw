@@ -4,19 +4,16 @@ import {
   type ClosedTranscriptTurnReadResult,
 } from "../../config/sessions/session-accessor.transcript-range.worker.js";
 import type { TranscriptTurnBoundary } from "../../config/sessions/transcript-entry-anchor.js";
-import { requireNativeDatabaseFile } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { ensureContextEngineTurnOutboxSchema } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentDatabaseSchema } from "../../state/openclaw-agent-db.generated.js";
-import { deriveContextEngineTurnOutboxState } from "./context-engine-turn-outbox-state.js";
 import {
   isRetryableContextEngineTurnReadFailure,
   type AcceptedContextEngineTurnOutboxPayload,
@@ -111,7 +108,7 @@ function writeContextEngineTurnOutboxPayload(
             last_attempt_at: null,
             last_error: null,
             payload_json: payloadJson,
-            payload_state: deriveContextEngineTurnOutboxState(params.payload),
+            payload_state: params.payload.state,
           })
           .where("advancement_key", "=", advancementKey),
       );
@@ -132,7 +129,7 @@ function writeContextEngineTurnOutboxPayload(
         owner_plugin_id: params.ownerPluginId ?? null,
         session_id: admission.sessionId,
         payload_json: payloadJson,
-        payload_state: deriveContextEngineTurnOutboxState(params.payload),
+        payload_state: params.payload.state,
         created_at: Date.now(),
         last_attempt_at: null,
         last_error: null,
@@ -146,7 +143,6 @@ export function enqueueContextEngineTurnIntent(params: OutboxKernelParams<"enque
     ...params,
     payload: {
       admission: params.admission,
-      isHeartbeat: params.isHeartbeat,
       state: "admitted",
     },
   });
@@ -157,7 +153,6 @@ export function acceptContextEngineTurnIntent(params: OutboxKernelParams<"accept
     ...params,
     payload: {
       boundary: params.boundary,
-      isHeartbeat: params.isHeartbeat,
       state: "accepted",
       runtimeContext: params.runtimeContext,
     },
@@ -181,7 +176,6 @@ function blockContextEngineTurnIntent(
     boundary: TranscriptTurnBoundary;
     database: ContextEngineTurnOutboxConnection;
     failure: BlockedContextEngineTurnOutboxPayload["failure"];
-    isHeartbeat: boolean;
   },
 ): void {
   writeContextEngineTurnOutboxPayload({
@@ -189,7 +183,6 @@ function blockContextEngineTurnIntent(
     payload: {
       boundary: params.boundary,
       failure: params.failure,
-      isHeartbeat: params.isHeartbeat,
       state: "blocked",
     },
   });
@@ -241,7 +234,6 @@ function advanceAcceptedContextEngineTurn(
         database: owner.database,
         engineId: owner.engineId,
         failure: closedTurn.kind,
-        isHeartbeat: payload.isHeartbeat,
         ownerPluginId: owner.ownerPluginId,
       });
     }
@@ -253,7 +245,6 @@ function advanceAcceptedContextEngineTurn(
     ownerPluginId: owner.ownerPluginId,
     payload: {
       boundary: payload.boundary,
-      isHeartbeat: payload.isHeartbeat,
       messages: closedTurn.messages,
       runtimeContext: payload.runtimeContext,
     },
@@ -434,9 +425,6 @@ export function executeContextEngineTurnOutboxCommand(
   db: EngineConnection,
   command: OutboxCommand,
 ): OutboxOutput {
-  if (isPostgresSqlConnection(db)) {
-    requireNativeDatabaseFile("postgres", "repair");
-  }
   const database = { db };
   switch (command.type) {
     case "prepareRun":

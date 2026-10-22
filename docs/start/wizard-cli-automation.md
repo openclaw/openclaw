@@ -186,6 +186,8 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
     `--custom-api-key` is optional; some endpoints do not require auth. If omitted, onboarding checks `CUSTOM_API_KEY` in env. `--custom-provider-id` is optional and auto-derived from the base URL when omitted. `--custom-compatibility` defaults to `openai` (other values: `openai-responses`, `anthropic`).
 
+    For `openai` or `openai-responses`, omit `--custom-model-id` to save the models discovered from `/v1/models` and use the first as the default. Supplying the flag skips discovery. If discovery fails or finds no usable models, rerun with an explicit ID. The `anthropic` example above requires an explicit model ID.
+
     OpenClaw infers image-input support from known vision model-id patterns (`gpt-4o`, `claude-3/4`, `gemini`, `-vl`/`vision` suffixes, and similar). Add `--custom-image-input` to force it on for an unrecognized vision model, or `--custom-text-input` to force text-only.
 
     Ref-mode variant, storing `apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`:

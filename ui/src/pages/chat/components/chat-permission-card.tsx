@@ -1,19 +1,22 @@
-import { createMemo, createSignal, Show } from "solid-js";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
+import { action, createMemo, createOptimistic, createSignal, Errored, Show } from "solid-js";
 import type { NodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { projectNativeDeviceSettings } from "../../../lib/reactive/application-native.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
-function ChatPermissionCard(props: {
+registerEnglishCatalog(registerChatComposerEnglish);
+
+export function ChatPermissionCard(props: {
   request: NodePermissionRequest;
   onRetry?: (message: string) => void;
 }) {
   const native = useOptionalApplication()?.nativeDeviceSettings;
   const projection = native ? projectNativeDeviceSettings(native) : null;
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal("");
+  const [busy, setBusy] = createOptimistic(false);
+  const [operation, setOperation] = createSignal<{ promise: Promise<undefined> }>();
   const names = (capabilities = props.request.capabilities) =>
     capabilities
       .map((id) => {
@@ -57,7 +60,7 @@ function ChatPermissionCard(props: {
     ),
   );
   const complete = () => Boolean(local()) && remaining().length === 0;
-  const action = createMemo(() => {
+  const permissionAction = createMemo(() => {
     const snapshot = projection?.read();
     if (local()) {
       if (disabled().length > 0) {
@@ -85,90 +88,88 @@ function ChatPermissionCard(props: {
     return { state: props.request.state, capabilities: remaining() };
   });
   const following = () =>
-    action().state === "disabled-in-openclaw"
+    permissionAction().state === "disabled-in-openclaw"
       ? remaining().filter((id) => !disabled().includes(id))
       : [];
-  const grant = async () => {
-    if (!local() || busy()) {
+  const grant = action(function* (): Generator<Promise<void>, undefined, unknown> {
+    const resolvePermission = local();
+    if (!resolvePermission || busy()) {
       return;
     }
     setBusy(true);
-    setError("");
-    try {
-      await native?.resolvePermission?.({
-        ...props.request,
-        ...action(),
-      });
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  };
+    yield resolvePermission({
+      ...props.request,
+      ...permissionAction(),
+    });
+  });
   return (
-    <section
-      class="chat-permission-card"
-      aria-label={t("chat.permissions.title", { permissions: names() })}
-    >
-      <div class="chat-permission-card__heading">
-        <Icon name="shieldCheck" />
-        <strong>{t("chat.permissions.title", { permissions: names() })}</strong>
-      </div>
-      <p>
-        {t("chat.permissions.neededOn", { node: props.request.nodeName ?? props.request.nodeId })}
-      </p>
-      <Show when={local()} fallback={<p>{t("chat.permissions.openApp")}</p>}>
+    <openclaw-chat-permission-card>
+      <section
+        class="chat-permission-card"
+        aria-label={t("chat.permissions.title", { permissions: names() })}
+      >
+        <div class="chat-permission-card__heading">
+          <Icon name="shieldCheck" />
+          <strong>{t("chat.permissions.title", { permissions: names() })}</strong>
+        </div>
         <p>
-          {t(complete() ? "chat.permissions.ready" : `chat.permissions.states.${action().state}`)}
+          {t("chat.permissions.neededOn", { node: props.request.nodeName ?? props.request.nodeId })}
         </p>
-        <Show when={following().length > 0}>
-          <p>{t("chat.permissions.following", { permissions: names(following()) })}</p>
-        </Show>
-        <Show
-          when={complete()}
-          fallback={
+        <Show when={local()} fallback={<p>{t("chat.permissions.openApp")}</p>}>
+          <p>
+            {t(
+              complete()
+                ? "chat.permissions.ready"
+                : `chat.permissions.states.${permissionAction().state}`,
+            )}
+          </p>
+          <Show when={following().length > 0}>
+            <p>{t("chat.permissions.following", { permissions: names(following()) })}</p>
+          </Show>
+          <Show
+            when={complete()}
+            fallback={
+              <button
+                class="btn primary"
+                type="button"
+                disabled={busy()}
+                onClick={() => {
+                  const pending = grant();
+                  // The card can unmount before its outcome boundary observes the rejection.
+                  void pending.catch(() => {});
+                  setOperation({ promise: pending });
+                }}
+              >
+                {t(`chat.permissions.actions.${permissionAction().state}`, {
+                  permissions: names(permissionAction().capabilities),
+                })}
+              </button>
+            }
+          >
             <button
               class="btn primary"
               type="button"
-              disabled={busy()}
-              onClick={() => void grant()}
+              disabled={!props.onRetry}
+              onClick={() =>
+                props.onRetry?.(t("chat.permissions.retryMessage", { permissions: names() }))
+              }
             >
-              {t(`chat.permissions.actions.${action().state}`, {
-                permissions: names(action().capabilities),
-              })}
+              {t("chat.permissions.tryAgain")}
             </button>
-          }
-        >
-          <button
-            class="btn primary"
-            type="button"
-            disabled={!props.onRetry}
-            onClick={() =>
-              props.onRetry?.(t("chat.permissions.retryMessage", { permissions: names() }))
-            }
-          >
-            {t("chat.permissions.tryAgain")}
-          </button>
+          </Show>
         </Show>
-      </Show>
-      <Show when={error()}>
-        <p role="alert">{error()}</p>
-      </Show>
-    </section>
+        <Show when={!busy() && operation()} keyed>
+          {({ promise }) => {
+            // Only failure renders; successful native actions have no content.
+            const outcome = createMemo(() => promise, { loadingValue: undefined });
+            return (
+              <Errored fallback={(error) => <p role="alert">{coerceErrorMessage(error())}</p>}>
+                {outcome()}
+              </Errored>
+            );
+          }}
+        </Show>
+      </section>
+    </openclaw-chat-permission-card>
   );
 }
-
-defineSolidBridge<{ request: NodePermissionRequest | null; onRetry?: (message: string) => void }>(
-  "openclaw-chat-permission-card",
-  (props) => (
-    <Show when={props.request}>
-      {(request) => <ChatPermissionCard request={request()} onRetry={props.onRetry} />}
-    </Show>
-  ),
-  {
-    properties: {
-      request: { default: null, attribute: false },
-      onRetry: { default: undefined, attribute: false },
-    },
-  },
-);

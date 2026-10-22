@@ -10,7 +10,7 @@ import {
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
 } from "./talk/audio.ts";
-import { describeRealtimeTalkInputError, RealtimeTalkInputController } from "./talk/input.ts";
+import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
@@ -28,7 +28,7 @@ type DictationSessionResult = {
 
 type ComposerDictationSessionCallbacks = {
   onError: (message: string, preservesText: boolean) => void;
-  onLevel: (level: number) => void;
+  onLevel?: (level: number) => void;
   onTranscriptChange: () => void;
   onReady: () => void;
   onSilence?: () => void;
@@ -55,7 +55,7 @@ function isAbortError(error: unknown): boolean {
 }
 
 export class ComposerDictationSession {
-  private readonly input = new RealtimeTalkInputController((detail) => this.reportFailure(detail));
+  private readonly input = new RealtimeTalkInputOwner((detail) => this.reportFailure(detail));
   private context: AudioContext | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
@@ -112,8 +112,10 @@ export class ComposerDictationSession {
     if (this.context.sampleRate !== DICTATION_SAMPLE_RATE_HZ) {
       throw new Error(t("chat.composer.dictationBrowserAudioUnsupported"));
     }
-    this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
-    this.inputMeter.start(media, this.context);
+    if (this.callbacks.onLevel) {
+      this.inputMeter = new RealtimeTalkMediaStreamMeter(this.callbacks.onLevel);
+      this.inputMeter.start(media, this.context);
+    }
     this.inputPump.start(media, this.context, (samples) => this.appendAudio(samples));
     this.callbacks.onReady();
 

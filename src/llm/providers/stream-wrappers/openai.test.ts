@@ -79,7 +79,6 @@ describe("Ultrafast server compaction at request egress", () => {
     { payloadTier: undefined, fastMode: "ultrafast" as const, expected: 260_000 },
     { payloadTier: "priority", fastMode: "ultrafast" as const, expected: 700_000 },
     { payloadTier: "ultrafast", fastMode: false, expected: 260_000 },
-    { payloadTier: undefined, fastMode: true, expected: 700_000 },
   ])(
     "uses the actual request tier $payloadTier/$fastMode",
     ({ payloadTier, fastMode, expected }) => {

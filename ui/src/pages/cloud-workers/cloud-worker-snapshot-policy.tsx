@@ -1,40 +1,28 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, createSignal, For } from "solid-js";
+import { createMemo, createStore, For } from "solid-js";
 import { parseDurationMs } from "../../../../src/cli/parse-duration.js";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
-import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { useApplication } from "../../lib/reactive/context.ts";
-import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
-import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
+import { SettingsSelectRow } from "../config/settings-select-row.tsx";
+import { useCloudWorkerConfig } from "./use-cloud-worker-config.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 type PolicyDraft = { refreshAfter: string; retainUnused: string; keepPrevious: "0" | "1" };
 
 export function CloudWorkerSnapshotPolicy() {
-  const context = useApplication();
-  const [draft, setDraft] = createSignal<PolicyDraft | null>(null, { ownedWrite: true });
-  const [saveRevision, setSaveRevision] = createSignal(0, { ownedWrite: true });
-  const configSave = new CloudWorkerConfigSave(() => setSaveRevision((revision) => revision + 1));
-  const runtime = projectRuntimeConfig(context.runtimeConfig);
-  const gateway = useGatewayPage({
-    getGateway: () => context.gateway,
-    invalidateRequests: () => {
-      setDraft(null);
-      configSave.update({ busy: false, error: null, notice: null });
-    },
-  });
-  void context.runtimeConfig.ensureLoaded();
-  const saveState = () => {
-    saveRevision();
-    return configSave.state;
+  const [draft, setDraft] = createStore<{ value: PolicyDraft | null }>({ value: null });
+  const resetDraft = () => {
+    setDraft((state) => {
+      state.value = null;
+    });
   };
+  const editor = useCloudWorkerConfig(resetDraft);
+  void editor.ensureLoaded();
+  const saveState = editor.state;
   const policy = createMemo<PolicyDraft>(() => {
-    let value: unknown = resolveEditableSnapshotConfig(runtime.read().state.configSnapshot);
+    let value: unknown = editor.config();
     for (const key of ["plugins", "entries", "crabbox", "config", "warmImages"]) {
       value = isRecord(value) ? value[key] : undefined;
     }
@@ -45,28 +33,20 @@ export function CloudWorkerSnapshotPolicy() {
       keepPrevious: configured.keepPrevious === 1 ? "1" : "0",
     };
   });
-  const values = () => draft() ?? policy();
-  const canSave = () => {
-    const config = runtime.read().state;
-    return Boolean(
-      canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin") &&
-      config.configSnapshot?.hash &&
-      !config.configLoading &&
-      !config.configSaving &&
-      !saveState().busy,
-    );
-  };
+  const values = () => draft.value ?? policy();
+  const canSave = () => editor.editable() && !editor.loading();
   function edit(patch: Partial<PolicyDraft>) {
-    setDraft((current) => ({ ...(current ?? policy()), ...patch }));
-    configSave.update({ error: null, notice: null });
+    setDraft((state) => {
+      state.value ??= { ...policy() };
+      Object.assign(state.value, patch);
+    });
+    editor.update({ error: null, notice: null });
   }
   async function save() {
-    const scope = gateway.capture();
-    const runtimeConfig = context.runtimeConfig;
-    if (!scope || !canSave()) {
+    if (!canSave()) {
       return;
     }
-    const current = values();
+    const current = { ...values() };
     for (const [key, minimum] of [
       ["refreshAfter", 3_600_000],
       ["retainUnused", 86_400_000],
@@ -75,12 +55,11 @@ export function CloudWorkerSnapshotPolicy() {
         !/^[1-9][0-9]{0,7}(m|h|d)(?![\s\S])/.test(current[key]) ||
         parseDurationMs(current[key]) < minimum
       ) {
-        configSave.update({ error: t(`cloudWorkersPage.snapshots.${key}Invalid`) });
+        editor.update({ error: t(`cloudWorkersPage.snapshots.${key}Invalid`) });
         return;
       }
     }
-    const isCurrent = () => gateway.isCurrent(scope) && context.runtimeConfig === runtimeConfig;
-    await configSave.save(runtimeConfig, isCurrent, {
+    await editor.save({
       build: () => ({
         patch: {
           plugins: {
@@ -99,11 +78,9 @@ export function CloudWorkerSnapshotPolicy() {
         },
       }),
       note: "cloud workers: update snapshot retention policy",
-      canDispatch: () =>
-        isCurrent() && canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin"),
       failed: () => t("cloudWorkersPage.snapshots.policySaveFailed"),
       success: () => {
-        setDraft(null);
+        resetDraft();
         return t("cloudWorkersPage.snapshots.policySaved");
       },
     });
@@ -131,26 +108,15 @@ export function CloudWorkerSnapshotPolicy() {
             />
           )}
         </For>
-        <SettingsRow
+        <SettingsSelectRow
           title={t("cloudWorkersPage.snapshots.keepPrevious")}
-          control={
-            <select
-              class="settings-select"
-              aria-label={t("cloudWorkersPage.snapshots.keepPrevious")}
-              value={values().keepPrevious}
-              disabled={!canSave()}
-              onChange={(event) =>
-                edit({ keepPrevious: event.currentTarget.value === "1" ? "1" : "0" })
-              }
-            >
-              <option value="0" selected={values().keepPrevious === "0"}>
-                {t("cloudWorkersPage.snapshots.keepNone")}
-              </option>
-              <option value="1" selected={values().keepPrevious === "1"}>
-                {t("cloudWorkersPage.snapshots.keepOne")}
-              </option>
-            </select>
-          }
+          value={values().keepPrevious}
+          disabled={!canSave()}
+          onChange={(value) => edit({ keepPrevious: value === "1" ? "1" : "0" })}
+          options={[
+            { value: "0", label: t("cloudWorkersPage.snapshots.keepNone") },
+            { value: "1", label: t("cloudWorkersPage.snapshots.keepOne") },
+          ]}
         />
         <SettingsRow
           title=""

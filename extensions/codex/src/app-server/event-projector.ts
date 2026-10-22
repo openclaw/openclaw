@@ -12,7 +12,7 @@ import {
   matchesCodexSnapshotTurn,
   shouldClearTerminalPresentationForNativeItem,
 } from "./event-projector-items.js";
-import { CodexTurnProjection } from "./event-projector-result.js";
+import { CodexTurnProjection, type CodexAppServerToolTelemetry } from "./event-projector-result.js";
 import { buildCodexSteeringMessagesSnapshot } from "./event-projector-snapshot.js";
 import type { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import {
@@ -21,16 +21,11 @@ import {
   readItem,
 } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
-import {
-  isCodexNotificationForTurn,
-  readCodexNotificationThreadId,
-} from "./notification-correlation.js";
 import { CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS } from "./notification-policy.js";
 import type { CodexApprovalKind } from "./plugin-approval-roundtrip.js";
-import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexServerNotification,
+  type CodexPreparedServerNotification,
   type CodexThreadItem,
   type CodexTurn,
   type JsonObject,
@@ -67,18 +62,25 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
   }
 
   /** Native completion owns the answer independently of unfinished host projection. */
-  recoverCompletedAnswer(): boolean {
+  recoverCompletedAnswer(
+    toolTelemetry: CodexAppServerToolTelemetry,
+    options?: { readRetainedNativeCommands?: () => ReadonlyMap<string, string> },
+  ): boolean {
     const completed = this.settlement.completedAnswer;
     if (!completed || this.aborted || this.promptError) {
       return false;
     }
+    this.completedTurn = completed.turn;
+    this.assistantProjection.recordItemCompleted(completed.answer);
+    this.assistantProjection.finalizeAnswerCandidate(completed.turn);
+    // Settlement expiry abandons blocked checkpoint writes. Materialize any
+    // missing native result first so the final transcript mirror retains the
+    // unknown outcome instead of presenting the recovered answer as clean.
+    this.prepareTerminalToolResultCheckpoint(toolTelemetry, options);
     // Retire accepted writes before the enriched final enters the same mirror owner.
     this.closeCompactionProgress();
     this.projectionController.abort();
     this.transcriptCheckpoint.abandon();
-    this.completedTurn = completed.turn;
-    this.assistantProjection.recordItemCompleted(completed.answer);
-    this.assistantProjection.finalizeAnswerCandidate(completed.turn);
     return true;
   }
 
@@ -89,7 +91,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     return this.nativeToolLifecycleProjector.getActiveMcpToolCall(serverName);
   }
 
-  recordMcpToolCallReceipt(notification: CodexServerNotification): void {
+  recordMcpToolCallReceipt(notification: CodexPreparedServerNotification): void {
     if (!this.projectionClosed) {
       this.nativeToolLifecycleProjector.recordMcpToolCallReceipt(notification);
     }
@@ -142,7 +144,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     this.nativeToolLifecycleProjector.recordPreToolUseFailure(failure);
   }
 
-  async handleNotification(notification: CodexServerNotification): Promise<void> {
+  async handleNotification(notification: CodexPreparedServerNotification): Promise<void> {
     if (this.projectionClosed) {
       return;
     }
@@ -160,14 +162,14 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       notification.method === "configWarning"
     ) {
       // Codex warnings are process- or thread-scoped and never carry a turn id.
-      const warningThreadId = readCodexNotificationThreadId(params);
+      const warningThreadId = notification.threadId;
       if (
         (notification.method === "guardianWarning" && warningThreadId !== this.threadId) ||
         (warningThreadId && warningThreadId !== this.threadId)
       ) {
         return;
       }
-    } else if (!isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
+    } else if (notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
       return;
     }
     if (
@@ -239,11 +241,18 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         break;
       }
       case "turn/completed":
-        await this.handleTurnCompleted(params);
+        await this.handleTurnCompleted(notification.completedTurn);
         break;
-      case "rawResponse/completed":
-        this.usageProjection.record(params, this.params.hostCapabilities.reportOutputTokens);
+      case "rawResponse/completed": {
+        const response = this.usageProjection.record(
+          params,
+          this.params.hostCapabilities.reportOutputTokens,
+        );
+        if (response) {
+          this.options.onResponseObserved?.(response);
+        }
         break;
+      }
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
         break;
@@ -560,8 +569,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     });
   }
 
-  private async handleTurnCompleted(params: JsonObject): Promise<void> {
-    const turn = readCodexTurnCompletedNotification(params)?.turn;
+  private async handleTurnCompleted(turn: CodexTurn | undefined): Promise<void> {
     if (!turn || turn.id !== this.turnId) {
       return;
     }
@@ -661,11 +669,19 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       item?.type === "agentMessage"
         ? this.assistantProjection.assistantTextByItem.get(item.id)
         : undefined;
-    if (streamed && typeof item?.text === "string" && item.text.startsWith(streamed)) {
-      await this.assistantProjection.handleAssistantDelta({
-        itemId: item.id,
-        delta: item.text.slice(streamed.length),
-      });
+    if (
+      streamed &&
+      typeof item?.text === "string" &&
+      item.text.startsWith(streamed) &&
+      (notification || item.text !== streamed)
+    ) {
+      await this.assistantProjection.handleAssistantDelta(
+        {
+          itemId: item.id,
+          delta: item.text.slice(streamed.length),
+        },
+        true,
+      );
     }
     const asyncMessage = this.assistantProjection.recordItemCompleted(
       item,

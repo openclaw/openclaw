@@ -52,7 +52,6 @@ import {
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { withPluginSourceCleanup } from "./source-cleanup.js";
 import { buildPluginSnapshotReport } from "./status.js";
-import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
 import {
   prepareConfigForDisabledPluginSet,
   recordPluginPackageUninstallPlan,
@@ -432,13 +431,6 @@ export async function uninstallPluginWithPolicy(
         const nextConfig = mutation.nextConfig;
         params.deferRuntime?.record({ operation: "uninstall", pluginId, write: committed });
         const warnings = [
-          ...(!cli
-            ? await collectClawPluginUninstallWarnings({
-                pluginId,
-                installRecord: installRecords[pluginId],
-                env,
-              })
-            : []),
           ...(!cli && (requestedPluginId !== pluginId || pluginIds.length > 1)
             ? [
                 `Uninstalled package "${pluginId}" and all owned plugin entries: ${pluginIds.join(", ")}.`,

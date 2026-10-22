@@ -6,13 +6,10 @@ import {
 import type { RespondFn } from "./types.js";
 export { parseGatewayPayload } from "../server-json.js";
 
-/** Narrows successful node invoke results or responds with the node error details. */
-export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; error?: unknown }>(
+export const respondUnavailableOnNodeInvokeError: <T extends { ok: boolean; error?: unknown }>(
   respond: RespondFn,
   res: T,
-): res is T & { ok: true } {
-  return respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res);
-}
+) => res is T & { ok: true } = respondUnavailableOnNodeInvokeErrorWithProvenance;
 
 export function respondUnavailableOnNodeInvokeErrorWithProvenance<
   T extends { ok: boolean; error?: unknown },

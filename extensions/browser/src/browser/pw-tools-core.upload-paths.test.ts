@@ -28,8 +28,8 @@ vi.mock("./paths.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./pw-tools-core.interactions.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./pw-tools-core.interactions.js")>()),
+vi.mock("./pw-tools-core.interactions.actions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./pw-tools-core.interactions.actions.js")>()),
   ...interactionMocks,
 }));
 

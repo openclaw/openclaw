@@ -87,7 +87,7 @@ export async function detectWorktreeFilesystemBackend(
       },
     };
   }
-  if (backend !== "apfs" && backend !== "btrfs") {
+  if (backend !== "apfs" && backend !== "btrfs" && backend !== "xfs") {
     return null;
   }
   const apfs =
@@ -120,9 +120,9 @@ export async function detectWorktreeFilesystemBackend(
   };
   return {
     id: backend,
-    // Btrfs shares directory metadata; APFS allocates file and directory metadata.
+    // Btrfs shares directory metadata; APFS and XFS allocate per-entry metadata.
     estimateCloneBytes: (entries, indexBytes) =>
-      16 * 1024 ** 2 + 2 * indexBytes + (backend === "apfs" ? entries * 8192 : 0),
+      16 * 1024 ** 2 + 2 * indexBytes + (backend === "btrfs" ? 0 : entries * 8192),
     async createTemplate(destination, templateOptions) {
       assertActive(templateOptions);
       if (backend === "apfs") {

@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const PortalSummaryIdentityFields = {
   id: NonEmptyString,
@@ -13,7 +14,7 @@ const PortalSummaryMetadataFields = {
   publicUrl: NonEmptyString,
   exposure: Type.Optional(
     closedObject({
-      kind: Type.Union([Type.Literal("loopback-only"), Type.Literal("non-loopback")]),
+      kind: stringLiteralUnion(["loopback-only", "non-loopback"]),
       browserReachability: Type.Literal("unverified"),
     }),
   ),

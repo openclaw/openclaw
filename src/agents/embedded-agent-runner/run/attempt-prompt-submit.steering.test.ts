@@ -22,7 +22,7 @@ import { pruneAllSessionTranscriptArchivesToHighWater } from "../../../config/se
 import { findSessionTranscriptArchiveEventReadOnly } from "../../../config/sessions/session-history.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -35,6 +35,10 @@ import {
 import { SessionManager } from "../../sessions/session-manager.js";
 import { markPendingFinalDelivery } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
+import {
+  ensureDeliveryState,
+  loadPendingFinalDeliveryPayload,
+} from "../../subagents/registry/subagent-delivery-state.js";
 import { subagentRuns } from "../../subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import {
@@ -88,7 +92,7 @@ async function prepareSteering() {
     spawnMode: "session",
     expectsCompletionMessage: true,
   });
-  const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: answer });
+  const terminalReply = prepareAgentRunTerminalReply({ rawText: answer }).terminalReply;
   if (terminalReply.disposition !== "visible") {
     throw new Error("Expected visible terminal reply");
   }
@@ -112,7 +116,10 @@ async function prepareSteering() {
       },
     };
     next.completion = { required: true, resultText: terminalReply.text, terminalReply };
-    markPendingFinalDelivery({ entry: next });
+    Object.assign(ensureDeliveryState(next), {
+      status: "pending",
+      payload: loadPendingFinalDeliveryPayload(next),
+    });
     return { value: next, postimages: new Map([[childRunId, next]]) };
   });
   announceTesting.setDepsForTest({
@@ -424,7 +431,7 @@ async function publishChild(runId: string, resultText: string) {
     spawnMode: "session",
     expectsCompletionMessage: true,
   });
-  const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: resultText });
+  const terminalReply = prepareAgentRunTerminalReply({ rawText: resultText }).terminalReply;
   if (terminalReply.disposition !== "visible") {
     throw new Error("Expected visible terminal reply");
   }

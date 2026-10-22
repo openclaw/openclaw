@@ -2,6 +2,7 @@ import type {
   EnvironmentSummary,
   EnvironmentsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type { WorkerRecipePreparation } from "../../../../src/plugins/capability-provider.types.js";
 import type { CloudWorkerRepository } from "./cloud-worker-repositories-config.ts";
 
 export type SnapshotImage = {
@@ -36,13 +37,7 @@ export type SnapshotImage = {
     phase: "scrubbing" | "creating" | "uncertain";
     stale: boolean;
   };
-  recipePreparation?: {
-    source: "devcontainer" | "script" | "detected" | "none";
-    ignoredPropertiesNote?: string;
-    note?: string;
-    phaseDurationsMs?: { onCreate?: number; updateContent?: number; detectedInstall?: number };
-    failure?: { reason: string; outputTail?: string };
-  };
+  recipePreparation?: WorkerRecipePreparation;
   recipePreparationAtMs?: number;
   captureUnsupported?: { atMs: number; provider: string; message: string };
 };

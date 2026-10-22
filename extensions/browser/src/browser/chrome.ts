@@ -19,7 +19,6 @@ import {
   CHROME_BOOTSTRAP_PREFS_POLL_MS,
   CHROME_BOOTSTRAP_PREFS_TIMEOUT_MS,
   CHROME_LAUNCH_READY_POLL_MS,
-  CHROME_LAUNCH_READY_WINDOW_MS,
   CHROME_REACHABILITY_TIMEOUT_MS,
   CHROME_STDERR_HINT_MAX_CHARS,
   CHROME_STOP_PROBE_TIMEOUT_MS,
@@ -63,13 +62,7 @@ import {
   sameManagedChromeIdentity,
   type ManagedChromeProcessIdentity,
 } from "./chrome.process-ownership.js";
-import {
-  decorateOpenClawProfile,
-  ensureProfileCleanExit,
-  ensureProfileNetworkPredictionDisabled,
-  isProfileDecorated,
-  usesOpenClawMockKeychain,
-} from "./chrome.profile-decoration.js";
+import { prepareOpenClawProfile, usesOpenClawMockKeychain } from "./chrome.profile-decoration.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
 import type { BrowserGraphicsDiagnostics } from "./client.types.js";
 import {
@@ -189,16 +182,10 @@ function resolveOwnedManagedChromeIdentity(params: {
   if (shell) {
     return shell;
   }
-  // One-shot launches can differ from persisted mode. Discovery is not authority:
-  // either candidate must pass the same live PID, port, command, and profile proof.
-  for (const headless of [false, true]) {
-    const exe = resolveBrowserExecutable(params.resolved, params.profile, headless);
-    const identity = exe && readOwnedManagedChromeIdentity({ ...params, exe });
-    if (exe && identity) {
-      return { exe, identity };
-    }
-  }
-  return null;
+  // Discovery is mode-independent; live PID, port, command, and profile checks own identity.
+  const exe = resolveBrowserExecutable(params.resolved, params.profile);
+  const identity = exe && readOwnedManagedChromeIdentity({ ...params, exe });
+  return exe && identity ? { exe, identity } : null;
 }
 
 function resolveOwnedManagedChromeListener(params: {
@@ -486,41 +473,6 @@ async function ensureManagedChromePortAvailable(
   await probeManagedChromePorts(profile, signal);
 }
 
-function chromeLaunchHints(params: {
-  stderrOutput: string;
-  stderrSignals?: ChromeLaunchStderrSignals;
-  resolved: ResolvedBrowserConfig;
-  profile: ResolvedBrowserProfile;
-  launchOptions?: ManagedBrowserHeadlessOptions;
-}): string {
-  const hints: string[] = [];
-  if (process.platform === "linux" && !params.resolved.noSandbox) {
-    hints.push("If running in a container or as root, try setting browser.noSandbox: true.");
-  }
-  const headlessMode = resolveManagedBrowserHeadlessMode(
-    params.resolved,
-    params.profile,
-    params.launchOptions,
-  );
-  const missingDisplay =
-    params.stderrSignals?.missingDisplay ??
-    CHROME_MISSING_DISPLAY_PATTERN.test(params.stderrOutput);
-  if (missingDisplay && !headlessMode.headless) {
-    hints.push(
-      "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
-    );
-  }
-  const singletonInUse =
-    params.stderrSignals?.singletonInUse ??
-    CHROME_SINGLETON_IN_USE_PATTERN.test(params.stderrOutput);
-  if (singletonInUse) {
-    hints.push(
-      `The Chromium profile "${params.profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${params.profile.name}/user-data.`,
-    );
-  }
-  return hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
-}
-
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
@@ -549,68 +501,15 @@ export class ManagedChromeCleanupError extends Error {
 function resolveBrowserExecutable(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
-  headless = resolveManagedBrowserHeadlessMode(resolved, profile).headless,
 ): BrowserExecutable | null {
   return resolveBrowserExecutableForPlatform(
-    { ...resolved, headless, executablePath: profile.executablePath ?? resolved.executablePath },
+    { ...resolved, executablePath: profile.executablePath ?? resolved.executablePath },
     process.platform,
   );
 }
 
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
-}
-
-function buildOpenClawChromeLaunchArgs(params: {
-  resolved: ResolvedBrowserConfig;
-  profile: ResolvedBrowserProfile;
-  userDataDir: string;
-  headlessOverride?: boolean;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  useMockKeychain?: boolean;
-}): string[] {
-  const { resolved, profile, userDataDir } = params;
-  const platform = params.platform ?? process.platform;
-  const headlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, params);
-  const args: string[] = [
-    `--remote-debugging-port=${profile.cdpPort}`,
-    `--user-data-dir=${userDataDir}`,
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-sync",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-features=Translate,MediaRouter",
-    "--disable-session-crashed-bubble",
-    "--hide-crash-restore-bubble",
-    "--password-store=basic",
-  ];
-
-  if (platform === "darwin" && params.useMockKeychain) {
-    // This is an isolated OpenClaw-owned profile, not the user's Chrome profile.
-    // Keep its basic password store non-interactive so headless Chrome can
-    // encrypt and persist cookies without login-keychain prompts.
-    args.push("--use-mock-keychain");
-  }
-  if (headlessMode.headless) {
-    args.push("--headless=new");
-    args.push("--disable-gpu");
-  }
-  if (resolved.noSandbox) {
-    args.push("--no-sandbox");
-  }
-  if (platform === "linux") {
-    args.push("--disable-dev-shm-usage");
-  }
-  if (!hasChromeProxyControlArg(resolved.extraArgs)) {
-    args.push("--no-proxy-server");
-  }
-  if (resolved.extraArgs.length > 0) {
-    args.push(...resolved.extraArgs);
-  }
-
-  return args;
 }
 
 export type ChromeWebSocketEndpoint = {
@@ -624,17 +523,12 @@ async function canOpenWebSocket(
   lookup?: CdpEndpointPin["lookup"],
   signal?: AbortSignal,
 ): Promise<boolean> {
-  try {
-    return await withCdpSocket(url, async () => true, {
-      handshakeTimeoutMs: timeoutMs,
-      handshakeRetries: 0,
-      lookup,
-      signal,
-    });
-  } catch {
-    signal?.throwIfAborted();
-    return false;
-  }
+  return await withCdpSocket(url, async () => true, {
+    handshakeTimeoutMs: timeoutMs,
+    handshakeRetries: 0,
+    lookup,
+    signal,
+  });
 }
 
 export async function isChromeReachable(
@@ -824,7 +718,7 @@ async function launchOpenClawChromeLocked(
     );
   }
 
-  const exe = resolveBrowserExecutable(resolved, profile, headlessMode.headless);
+  const exe = resolveBrowserExecutable(resolved, profile);
   if (!exe) {
     throw new Error(
       "No supported browser found (Chrome/Brave/Edge/Chromium on macOS, Linux, or Windows).",
@@ -846,23 +740,46 @@ async function launchOpenClawChromeLocked(
     process.platform === "darwin" &&
     (usesOpenClawMockKeychain(userDataDir) || (profileIsNew && headlessMode.headless));
 
-  const needsDecorate = !isProfileDecorated(
-    userDataDir,
-    profile.name,
-    profile.color.toUpperCase(),
-    DEFAULT_DOWNLOAD_DIR,
-  );
-
   // Headless profiles are seeded directly; headed profiles retain Chrome's first-run bootstrap.
   const spawnOnce = async (onStderr?: (chunk: Buffer | string) => void) => {
     signal?.throwIfAborted();
-    const args = buildOpenClawChromeLaunchArgs({
-      resolved,
-      profile,
-      userDataDir,
-      ...headlessOptions,
-      useMockKeychain,
-    });
+    const platform = headlessOptions.platform ?? process.platform;
+    const spawnHeadlessMode = resolveManagedBrowserHeadlessMode(resolved, profile, headlessOptions);
+    const args: string[] = [
+      `--remote-debugging-port=${profile.cdpPort}`,
+      `--user-data-dir=${userDataDir}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-sync",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-features=Translate,MediaRouter",
+      "--disable-session-crashed-bubble",
+      "--hide-crash-restore-bubble",
+      "--password-store=basic",
+    ];
+    if (platform === "darwin" && useMockKeychain) {
+      // This is an isolated OpenClaw-owned profile, not the user's Chrome profile.
+      // Keep its basic password store non-interactive so headless Chrome can
+      // encrypt and persist cookies without login-keychain prompts.
+      args.push("--use-mock-keychain");
+    }
+    if (spawnHeadlessMode.headless) {
+      args.push("--headless=new");
+      args.push("--disable-gpu");
+    }
+    if (resolved.noSandbox) {
+      args.push("--no-sandbox");
+    }
+    if (platform === "linux") {
+      args.push("--disable-dev-shm-usage");
+    }
+    if (!hasChromeProxyControlArg(resolved.extraArgs)) {
+      args.push("--no-proxy-server");
+    }
+    if (resolved.extraArgs.length > 0) {
+      args.push(...resolved.extraArgs);
+    }
     const env: NodeJS.ProcessEnv = {
       ...omitChromeProxyEnv(process.env),
       // Reduce accidental sharing with the user's env.
@@ -964,30 +881,15 @@ async function launchOpenClawChromeLocked(
 
   signal?.throwIfAborted();
 
-  if (needsDecorate) {
-    try {
-      decorateOpenClawProfile(userDataDir, {
-        name: profile.name,
-        color: profile.color,
-        downloadDir: DEFAULT_DOWNLOAD_DIR,
-        mockKeychain: useMockKeychain,
-      });
-      log.info(`🦞 openclaw browser profile decorated (${profile.color})`);
-    } catch (err) {
-      log.warn(`openclaw browser profile decoration failed: ${String(err)}`);
-    }
-  }
-
   try {
-    ensureProfileNetworkPredictionDisabled(userDataDir);
+    prepareOpenClawProfile(userDataDir, {
+      name: profile.name,
+      color: profile.color,
+      downloadDir: DEFAULT_DOWNLOAD_DIR,
+      mockKeychain: useMockKeychain,
+    });
   } catch (err) {
-    log.warn(`openclaw browser network-prediction prefs failed: ${String(err)}`);
-  }
-
-  try {
-    ensureProfileCleanExit(userDataDir);
-  } catch (err) {
-    log.warn(`openclaw browser clean-exit prefs failed: ${String(err)}`);
+    log.warn(`openclaw browser profile preparation failed: ${String(err)}`);
   }
   signal?.throwIfAborted();
 
@@ -1005,8 +907,7 @@ async function launchOpenClawChromeLocked(
       const spawned = await spawnOnce(onStderr);
       proc = spawned.proc;
       releaseSpawnAbort = spawned.releaseAbort;
-      const readyDeadline =
-        Date.now() + (resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS);
+      const readyDeadline = Date.now() + resolved.localLaunchTimeoutMs;
       let launchHttpReachable = false;
       // Full CDP WebSocket readiness is handled by the caller's
       // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.
@@ -1078,13 +979,28 @@ async function launchOpenClawChromeLocked(
           const stderrHint = redactedStderrOutput
             ? `\nChrome stderr:\n${sliceUtf16Safe(redactedStderrOutput, -CHROME_STDERR_HINT_MAX_CHARS)}`
             : "";
-          const launchHints = chromeLaunchHints({
-            stderrOutput,
-            stderrSignals,
+          const hints: string[] = [];
+          if (process.platform === "linux" && !resolved.noSandbox) {
+            hints.push(
+              "If running in a container or as root, try setting browser.noSandbox: true.",
+            );
+          }
+          const hintHeadlessMode = resolveManagedBrowserHeadlessMode(
             resolved,
             profile,
-            launchOptions: headlessOptions,
-          });
+            headlessOptions,
+          );
+          if (stderrSignals.missingDisplay && !hintHeadlessMode.headless) {
+            hints.push(
+              "No DISPLAY/X server was detected. Set OPENCLAW_BROWSER_HEADLESS=1, remove the headed override, start Xvfb, or run the Gateway in a desktop session.",
+            );
+          }
+          if (stderrSignals.singletonInUse) {
+            hints.push(
+              `The Chromium profile "${profile.name}" is locked. Stop the existing browser or remove stale Singleton* lock files under ~/.openclaw/browser/${profile.name}/user-data.`,
+            );
+          }
+          const launchHints = hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
           try {
             proc.kill("SIGKILL");
           } catch {
@@ -1351,14 +1267,11 @@ async function stopOwnedOpenClawChromeLocked(
   }
   let owner: ReturnType<typeof resolveOwnedManagedChromeIdentity>;
   try {
-    if (
-      process.platform !== "linux" &&
-      process.platform !== "darwin" &&
-      [false, true].some((headless) => {
-        const exe = resolveBrowserExecutable(resolved, profile, headless);
-        return exe && isHeadlessShellExecutable(exe.path);
-      })
-    ) {
+    const unsupportedPlatformExe =
+      process.platform !== "linux" && process.platform !== "darwin"
+        ? resolveBrowserExecutable(resolved, profile)
+        : null;
+    if (unsupportedPlatformExe && isHeadlessShellExecutable(unsupportedPlatformExe.path)) {
       return {
         status: "unverified",
         reason:

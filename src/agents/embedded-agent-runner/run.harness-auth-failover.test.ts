@@ -295,6 +295,38 @@ describe("native harness auth failover", () => {
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
+  it.each(["thrown", "returned"])(
+    "does not rotate or mark profiles for a %s local context timeout",
+    async (surface) => {
+      const runEmbeddedAgent = prepareAuthFailoverRun();
+      const { WorkerTaskError } = await import("@openclaw/worker-runtime");
+      const { ContextPreparationTimeoutError } =
+        await import("../failover/local-preparation-error.js");
+      const failure = new ContextPreparationTimeoutError(
+        new WorkerTaskError("worker task timed out", "timeout"),
+      );
+      if (surface === "thrown") {
+        mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
+      } else {
+        mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+          makeAttemptResult({ promptError: failure, promptErrorSource: "precheck" }),
+        );
+      }
+      await expect(
+        runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          provider: "openai",
+          model: "gpt-5.6-sol",
+          agentHarnessId: "codex",
+          authProfileId: failedProfile,
+          authProfileIdSource: "auto",
+        }),
+      ).rejects.toBe(failure);
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     [
       "CODEX_NODE_EXEC_APPROVAL_EXPIRED",

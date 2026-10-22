@@ -73,9 +73,7 @@ export function setFixtureRuntimeChoices(
   }
 }
 
-export function createResolvedAgentRoute(
-  overrides: Partial<ResolvedAgentRoute> = {},
-): ResolvedAgentRoute {
+export function createResolvedAgentRoute(): ResolvedAgentRoute {
   return {
     agentId: "main",
     channel: "discord",
@@ -84,6 +82,5 @@ export function createResolvedAgentRoute(
     mainSessionKey: "agent:main:main",
     lastRoutePolicy: "session",
     matchedBy: "default",
-    ...overrides,
   };
 }

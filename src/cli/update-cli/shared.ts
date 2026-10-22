@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../../cli-invocation.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveBrewOpenClawPath } from "../../infra/brew.js";
 import { hasErrnoCode } from "../../infra/errors.js";
@@ -63,6 +67,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     /** Immutable original bytes for this invocation; never restoration authority. */
     originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
+    /** Retain the admitted SQLite writer allowance through finalization. */
+    busyTimeoutMs?: number;
     activationTimeoutMs?: number;
     /** Explicit operator budget, minted once by this invocation’s admission. */
     deadline?: import("../daemon-cli/restart-health-deadline.js").GatewayRestartDeadline;
@@ -82,6 +88,7 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   json?: boolean;
   restart?: boolean;
@@ -106,7 +113,7 @@ export function usesCandidateUpdateAdmission(
 
 export type UpdateFinalizeOptions = Pick<
   UpdateCommandOptions,
-  "acceptCapabilities" | "json" | "channel" | "timeout" | "yes"
+  "acceptCapabilities" | "fullIntegrityCheck" | "json" | "channel" | "timeout" | "yes"
 > & {
   /** Internal external-supervisor handshake; public repair always leaves this false. */
   deferCompletionCache?: boolean;
@@ -114,7 +121,7 @@ export type UpdateFinalizeOptions = Pick<
 
 export type UpdateWizardOptions = Pick<
   UpdateCommandOptions,
-  "runtimeRecoveryEnv" | "acceptCapabilities" | "timeout"
+  "runtimeRecoveryEnv" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"
 >;
 
 /** Parse the shared timeout contract without exiting an owning operation. */
@@ -270,7 +277,7 @@ async function cloneGitCheckoutTransactionally(
   const stagingIdentity = await fs.lstat(stagingDir, { bigint: true });
   let cleanupStaging = true;
   let published = false;
-  let result: UpdateStepResult | undefined;
+  let result: UpdateStepResult | null = null;
 
   async function ownsDirectory(
     directory: string,
@@ -295,7 +302,7 @@ async function cloneGitCheckoutTransactionally(
     }
   }
 
-  const runOperation = async (): Promise<GitCheckoutResult> => {
+  const runOperation = async (): Promise<void> => {
     result = await runUpdateStep({
       name: "git-clone",
       argv: ["git", "clone", GIT_CLONE_BLOB_FILTER, UPSTREAM_REPOSITORY_URL, stagingDir],
@@ -304,7 +311,7 @@ async function cloneGitCheckoutTransactionally(
       progress: params.progress,
     });
     if (result.exitCode !== 0) {
-      return { checkoutDir: targetDir, step: result };
+      return;
     }
 
     const publish = async (): Promise<string> => {
@@ -379,18 +386,17 @@ async function cloneGitCheckoutTransactionally(
     } else {
       await publish();
     }
-    return { checkoutDir: targetDir, step: result };
   };
-  let outcome: { result: GitCheckoutResult } | { error: unknown };
+  let operationFailure: { error: unknown } | undefined;
   try {
-    outcome = { result: await runOperation() };
+    await runOperation();
   } catch (error) {
-    outcome = { error };
+    operationFailure = { error };
     if (hasCommandProcessCleanupError(error)) {
       cleanupStaging = false;
     }
   }
-  let cleanupOutcome: { ok: true } | { ok: false; error: unknown } = { ok: true };
+  let cleanupFailure: { error: unknown } | undefined;
   // The container does not confer ownership of a replaced repository child.
   // Only completed publication permits that child to be absent at cleanup.
   if (cleanupStaging) {
@@ -418,27 +424,27 @@ async function cloneGitCheckoutTransactionally(
         },
       });
     } catch (error) {
-      cleanupOutcome = { ok: false, error };
+      cleanupFailure = { error };
     }
   }
-  if (!cleanupOutcome.ok) {
+  if (cleanupFailure) {
     if (
-      "error" in outcome &&
-      outcome.error !== cleanupOutcome.error &&
-      hasCommandProcessCleanupError(cleanupOutcome.error)
+      operationFailure &&
+      operationFailure.error !== cleanupFailure.error &&
+      hasCommandProcessCleanupError(cleanupFailure.error)
     ) {
       throw new AggregateError(
-        [outcome.error, cleanupOutcome.error],
+        [operationFailure.error, cleanupFailure.error],
         "Git clone and cleanup progress both failed",
-        { cause: outcome.error },
+        { cause: operationFailure.error },
       );
     }
-    throw cleanupOutcome.error;
+    throw cleanupFailure.error;
   }
-  if ("error" in outcome) {
-    throw outcome.error;
+  if (operationFailure) {
+    throw operationFailure.error;
   }
-  return outcome.result;
+  return { checkoutDir: targetDir, step: result };
 }
 
 export async function ensureGitCheckout(params: {
@@ -528,22 +534,26 @@ export async function tryWriteCompletionCache(
   nodeRunner = resolveNodeRunner(),
 ): Promise<"completed" | "failed" | "skipped"> {
   const binPath = path.join(root, "openclaw.mjs");
-  if (!(await pathExists(binPath))) {
+  const standalone = isStandaloneRuntimeExecutable(nodeRunner);
+  if (!standalone && !(await pathExists(binPath))) {
     return "skipped";
   }
 
   let failure: string;
   try {
-    const result = await runCommandWithTimeout(
-      [nodeRunner, binPath, "completion", "--write-state"],
-      {
-        cwd: root,
-        env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
-        input: "",
-        timeoutMs,
-        killProcessTree: true,
-      },
-    );
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: nodeRunner,
+      entryPath: standalone ? undefined : binPath,
+      execArgv: [],
+      args: ["completion", "--write-state"],
+    });
+    const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
+      cwd: root,
+      env: { ...process.env, [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1" },
+      input: "",
+      timeoutMs,
+      killProcessTree: true,
+    });
     if (result.code === 0) {
       return "completed";
     }
@@ -609,7 +619,7 @@ export async function confirmUpdateDowngrade(params: {
       status: "skipped",
       reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
     },
-    { env: run.env },
+    run,
   );
   if (decision === "confirmation-required") {
     defaultRuntime.error(

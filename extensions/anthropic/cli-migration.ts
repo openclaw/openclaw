@@ -55,10 +55,10 @@ function rewriteModelSelection(config: OpenClawConfig): {
     const rewritten = rewrite(model);
     return { ...rewritten, runtimeRefs, changed: Boolean(rewritten.changed) };
   }
-  if (!model || typeof model !== "object" || Array.isArray(model)) {
+  if (!model) {
     return { value: model, runtimeRefs, changed: false };
   }
-  const primary = typeof model.primary === "string" ? rewrite(model.primary) : undefined;
+  const primary = model.primary !== undefined ? rewrite(model.primary) : undefined;
   const fallbacks = model.fallbacks?.map((entry) => rewrite(entry).value);
   const changed =
     Boolean(primary?.changed) ||
@@ -77,8 +77,8 @@ function rewriteModelSelection(config: OpenClawConfig): {
   };
 }
 
-function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
-  value: Record<string, unknown> | undefined;
+function rewriteModelEntryMap(models: AgentDefaultsModels): {
+  value: AgentDefaultsModels;
   migrated: string[];
   runtimeRefs: string[];
 } {
@@ -141,13 +141,11 @@ function seedClaudeCliAllowlist(
   return next;
 }
 
-export function buildAnthropicCliMigrationResult(config: OpenClawConfig): ProviderAuthResult {
+export function buildAnthropicCliMigrationResult(config: OpenClawConfig) {
   const defaults = config.agents?.defaults;
   const rewrittenModel = rewriteModelSelection(config);
   const rewrittenModels = rewriteModelEntryMap(defaults?.models);
-  const existingModels = (rewrittenModels.value ??
-    defaults?.models ??
-    {}) as NonNullable<AgentDefaultsModels>;
+  const existingModels = rewrittenModels.value ?? {};
   const defaultModel = rewrittenModel.primary ?? CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF;
   const nextModels = seedClaudeCliAllowlist(existingModels, [
     ...rewrittenModel.runtimeRefs,
@@ -176,5 +174,5 @@ export function buildAnthropicCliMigrationResult(config: OpenClawConfig): Provid
         ? [`Migrated allowlist entries: ${rewrittenModels.migrated.join(", ")}.`]
         : []),
     ],
-  };
+  } satisfies ProviderAuthResult;
 }

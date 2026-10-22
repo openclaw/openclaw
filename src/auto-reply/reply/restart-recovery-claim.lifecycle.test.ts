@@ -1,10 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import {
   loadSessionEntry,
   markSessionAbortTarget,
@@ -28,6 +32,7 @@ import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-databa
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { clearOpenClawAgentDatabaseValidationCache } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -35,14 +40,95 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { handleReplyAgentRunError } from "./agent-runner-core.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import { createRecoveryControllerFixture } from "./recovery-controller.fixture.test-support.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
-import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => memorySessionActorOwners.reset());
+
+async function claimFixture(
+  initial: Partial<InternalSessionEntry> = {},
+  overrides: Partial<Parameters<typeof createReplyRestartRecoveryClaimController>[0]> = {},
+) {
+  const scope = {
+    agentId: overrides.agentId ?? "main",
+    storePath:
+      overrides.storePath ?? path.join(tempDirs.make("openclaw-reply-claim-"), "sessions.json"),
+    sessionKey: overrides.sessionKey ?? "agent:main:main",
+  };
+  const fixture = await createRecoveryControllerFixture(
+    scope,
+    {
+      sessionId: "session",
+      updatedAt: 1,
+      status: undefined,
+      restartRecoveryDeliveryRunId: "recovery-run",
+      ...initial,
+    },
+    { admissionRunId: "recovery-run", ...overrides },
+  );
+  return { ...fixture, controller: fixture.controller() };
+}
+
+it("adopts an exact channel recovery claim before execution starts", async () => {
+  setRuntimeConfigSnapshot({});
+  onTestFinished(clearRuntimeConfigSnapshot);
+  const deliveryContext = {
+    channel: "telegram",
+    to: "chat",
+    accountId: "default",
+    threadId: "thread",
+  };
+  const claim = {
+    restartRecoveryDeliveryContext: deliveryContext,
+    restartRecoveryDeliveryReceiptState: "terminal-pending" as const,
+    restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+    restartRecoveryDeliveryRunId: "recovery-run",
+    restartRecoveryDeliverySourceRunId: "source-turn",
+    restartRecoveryDeliveryToolCallId: "message-call",
+  };
+  await using fixture = await claimFixture(
+    {
+      ...claim,
+      abortedLastRun: false,
+      lifecycleRunId: "recovery-run",
+      sessionId: "channel-session",
+      startedAt: 1,
+    },
+    {
+      sessionKey: "agent:main:telegram:group:chat:topic:thread",
+      resolveDeliveryContext: () => deliveryContext,
+      sourceTurnId: "source-turn",
+    },
+  );
+  await expect(fixture.controller.admitUserTurn()).resolves.toBe("admitted");
+  const persisted = loadSessionEntry(fixture.scope);
+  expect(persisted).toMatchObject(claim);
+  expect(persisted?.status).toBeUndefined();
+});
+
+async function restartReply(
+  controller: ReturnType<typeof createReplyRestartRecoveryClaimController>,
+  operation: ReplyOperation,
+) {
+  let drains = 0;
+  const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
+    resolveVisibleReplyDelivery: async () => false,
+
+    replyExpectation: "required",
+    isRestartRecoveryArmed: controller.isArmed,
+    replyOperation: operation,
+    resolvedVerboseLevel: "off",
+    sessionCtx: {},
+    returnWithQueuedFollowupDrain: (value) => {
+      drains += 1;
+      return value;
+    },
+  });
+  expect(drains).toBe(1);
+  return reply;
+}
 
 async function withTrackedReply(
   test: (fixture: {
@@ -68,62 +154,52 @@ async function withTrackedReply(
           ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })
           : state.statePath("sessions.json"),
     };
-    let entry: InternalSessionEntry = {
+    await using actor = await createRecoveryControllerFixture(scope, {
       sessionId: "old-session",
       updatedAt: 1,
       status: undefined,
       restartRecoveryDeliveryRunId: "old-recovery",
       ...(storage === "memory" ? { incognito: true } : {}),
-    };
-    await replaceSessionEntry(scope, entry);
+    });
     const memory =
       storage === "memory"
         ? memorySessionActorOwners.read({ agentId: scope.agentId, path: scope.storePath })
         : undefined;
     const operation = createReplyOperation({
       ...scope,
-      sessionId: entry.sessionId,
+      sessionId: actor.entry.sessionId,
       resetTriggered: false,
     });
     operation.setPhase("running");
-    await using actor = createReplyRecoveryActorFixture({
-      ...scope,
-      getSessionId: () => operation.sessionId,
-      operation,
-    });
-    const controller = createReplyRestartRecoveryClaimController({
-      ...scope,
-      acquireSessionActor: () => actor.acquireSessionActor(),
-      admissionRunId: "old-recovery",
-      lifecycleGeneration: operation.lifecycleGeneration,
-      getEntry: () => entry,
-      getSessionId: () => operation.sessionId,
-      isRestartAbort: () =>
-        operation.result?.kind === "aborted" && operation.result.code === "aborted_for_restart",
-      resolveDeliveryContext: () => undefined,
-      setEntry: (value) => {
-        entry = value;
+    const controller = actor.controller(
+      {
+        admissionRunId: "old-recovery",
+        lifecycleGeneration: operation.lifecycleGeneration,
+        getSessionId: () => operation.sessionId,
+        isRestartAbort: () =>
+          operation.result?.kind === "aborted" && operation.result.code === "aborted_for_restart",
       },
-    });
+      operation,
+    );
     try {
       await controller.admitUserTurn();
       await test({
         controller,
         operation,
         async confirmArmed() {
-          entry = { ...entry, abortedLastRun: true };
-          await replaceSessionEntry(scope, entry);
+          actor.setEntry({ ...actor.entry, abortedLastRun: true });
+          await replaceSessionEntry(scope, actor.entry);
           expect(await controller.isArmed()).toBe(true);
         },
         async replaceWithSuccessor() {
-          entry = {
+          actor.setEntry({
             sessionId: "successor-session",
             updatedAt: 2,
             status: undefined,
             abortedLastRun: true,
             restartRecoveryDeliveryRunId: "successor-recovery",
-          };
-          await replaceSessionEntry(scope, entry);
+          });
+          await replaceSessionEntry(scope, actor.entry);
         },
         readEntry: () => loadSessionEntry(scope),
         releaseDatabase: () => actor.release(),
@@ -153,22 +229,8 @@ it("settles incognito recovery through hook checkpoints and restart readiness", 
     expect(readEntry()?.restartRecoveryBeforeAgentReplyState).toBe("handled-silent");
     await confirmArmed();
     operation.abortForRestart();
-    let drains = 0;
-    const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
-      resolveVisibleReplyDelivery: async () => false,
-      isHeartbeat: false,
-      replyExpectation: "required",
-      isRestartRecoveryArmed: controller.isArmed,
-      replyOperation: operation,
-      resolvedVerboseLevel: "off",
-      returnWithQueuedFollowupDrain: (value) => {
-        drains += 1;
-        return value;
-      },
-      sessionCtx: {},
-    });
-    expect(reply?.text).toBe(SILENT_REPLY_TOKEN);
-    expect(drains).toBe(1);
+    const reply = await restartReply(controller, operation);
+    expect(reply).toEqual({});
     expect(readEntry()).toMatchObject({
       sessionId: "old-session",
       restartRecoveryDeliveryRunId: "old-recovery",
@@ -188,98 +250,75 @@ it.each([
 ] as const)(
   "settles restart readiness without adopting successor facts ($stage, confirmed=$confirmed)",
   async ({ stage, confirmed }) => {
-    await withTrackedReply(
-      async ({
-        controller,
-        operation,
-        confirmArmed,
-        replaceWithSuccessor,
-        readEntry,
-        releaseDatabase,
-        databasePath,
-      }) => {
-        if (confirmed) {
-          await confirmArmed();
-        }
-        let restore: (() => void) | undefined;
-        let assertBoundary: () => void;
-        let drains = 0;
-        try {
-          if (stage === "cold-registration") {
-            await releaseDatabase();
-            await closeOpenClawAgentDatabasesAsync();
-            clearOpenClawAgentDatabaseValidationCache();
-            revokeSqliteDatabaseAdmissionsForPath(databasePath);
-            let witnessed = 0;
-            const admission = probe.admission(workerAdmission, (request, grant, admit) => {
-              if (
-                request.stage === "prepare" &&
-                isRecord(request.facts) &&
-                request.facts.kind === "agent-registration-committed"
-              ) {
-                witnessed += 1;
+    await withTrackedReply(async (fixture) => {
+      const { controller, operation, readEntry } = fixture;
+      if (confirmed) {
+        await fixture.confirmArmed();
+      }
+      let restore: (() => void) | undefined;
+      let assertBoundary: () => void;
+      try {
+        if (stage === "cold-registration") {
+          operation.abortForRestart();
+          await fixture.releaseDatabase();
+          await closeOpenClawAgentDatabasesAsync();
+          clearOpenClawAgentDatabaseValidationCache();
+          revokeSqliteDatabaseAdmissionsForPath(fixture.databasePath);
+          let witnessed = 0;
+          const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+            if (
+              request.stage === "prepare" &&
+              isRecord(request.facts) &&
+              request.facts.kind === "agent-registration-committed"
+            ) {
+              witnessed += 1;
+              rotateAgentEventLifecycleGeneration();
+            }
+            admit(request, grant);
+          });
+          restore = () => admission.mockRestore();
+          assertBoundary = () => {
+            expect(witnessed).toBe(1);
+            expect(readEntry()).toMatchObject({ sessionId: "old-session" });
+          };
+        } else {
+          const read = entryReads.readSessionEntryInWorker;
+          const reads = vi.spyOn(entryReads, "readSessionEntryInWorker");
+          restore = () => reads.mockRestore();
+          assertBoundary = () => {
+            expect(reads).toHaveBeenCalledTimes(stage === "before-read" ? 0 : 1);
+            expect(readEntry()).toMatchObject({
+              sessionId: "successor-session",
+              restartRecoveryDeliveryRunId: "successor-recovery",
+              abortedLastRun: true,
+            });
+          };
+          operation.abortForRestart();
+          if (stage === "before-read") {
+            rotateAgentEventLifecycleGeneration();
+            await fixture.replaceWithSuccessor();
+          } else {
+            reads.mockImplementationOnce(async (...args) => {
+              const result = await read(...args);
+              if (stage === "during-read") {
                 rotateAgentEventLifecycleGeneration();
               }
-              admit(request, grant);
+              await fixture.replaceWithSuccessor();
+              return result;
             });
-            restore = () => admission.mockRestore();
-            assertBoundary = () => {
-              expect(witnessed).toBe(1);
-              expect(readEntry()).toMatchObject({ sessionId: "old-session" });
-            };
-            operation.abortForRestart();
-          } else {
-            const read = entryReads.readSessionEntryInWorker;
-            const reads = vi.spyOn(entryReads, "readSessionEntryInWorker");
-            restore = () => reads.mockRestore();
-            assertBoundary = () => {
-              expect(reads).toHaveBeenCalledTimes(stage === "before-read" ? 0 : 1);
-              expect(readEntry()).toMatchObject({
-                sessionId: "successor-session",
-                restartRecoveryDeliveryRunId: "successor-recovery",
-                abortedLastRun: true,
-              });
-            };
-            operation.abortForRestart();
-            if (stage === "before-read") {
-              rotateAgentEventLifecycleGeneration();
-              await replaceWithSuccessor();
-            } else {
-              reads.mockImplementationOnce(async (...args) => {
-                const result = await read(...args);
-                if (stage === "during-read") {
-                  rotateAgentEventLifecycleGeneration();
-                }
-                await replaceWithSuccessor();
-                return result;
-              });
-            }
           }
-          const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
-            resolveVisibleReplyDelivery: async () => false,
-            isHeartbeat: false,
-            replyExpectation: "required",
-            isRestartRecoveryArmed: controller.isArmed,
-            replyOperation: operation,
-            resolvedVerboseLevel: "off",
-            returnWithQueuedFollowupDrain: (value) => {
-              drains += 1;
-              return value;
-            },
-            sessionCtx: {},
-          });
-          expect(reply?.text).toBe(
-            confirmed
-              ? SILENT_REPLY_TOKEN
-              : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-          );
-          expect(drains).toBe(1);
-          assertBoundary();
-        } finally {
-          restore?.();
         }
-      },
-    );
+        const reply = await restartReply(controller, operation);
+        expect(reply?.text).toBe(
+          confirmed
+            ? undefined
+            : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        );
+        assertBoundary();
+      } finally {
+        restore?.();
+      }
+    });
   },
 );
 
@@ -297,7 +336,7 @@ it.each(["active-storage", "retired-storage", "retired-cleanup"] as const)(
               staleError,
             )
           : storageError;
-      const reads = vi
+      using _ = vi
         .spyOn(entryReads, "readSessionEntryInWorker")
         .mockImplementationOnce(async () => {
           if (failure !== "active-storage") {
@@ -305,125 +344,44 @@ it.each(["active-storage", "retired-storage", "retired-cleanup"] as const)(
           }
           throw expected;
         });
-      try {
-        operation.abortForRestart();
-        await expect(controller.isArmed()).rejects.toBe(expected);
-      } finally {
-        reads.mockRestore();
-      }
+      operation.abortForRestart();
+      await expect(controller.isArmed()).rejects.toBe(expected);
     });
   },
 );
 
 describe("restart recovery claim settlement", () => {
-  it.each([
-    { receiptState: undefined, expectedStatus: "done" },
-    { receiptState: "terminal-pending" as const, expectedStatus: "failed" },
-  ])(
-    "clears lifecycle ownership when claim cleanup settles $expectedStatus",
-    async ({ receiptState, expectedStatus }) => {
-      const root = tempDirs.make(`openclaw-reply-claim-${expectedStatus}-`);
-      const storePath = path.join(root, "sessions.json");
-      const sessionKey = "agent:main:main";
-      const sessionId = "session";
-      let entry: InternalSessionEntry = {
-        abortedLastRun: false,
-        lifecycleRunId: "recovery-run",
-        restartRecoveryDeliveryRunId: "recovery-run",
-        sessionId,
-        startedAt: 1,
-        status: undefined,
-        updatedAt: 1,
-      };
-      await replaceSessionEntry({ storePath, sessionKey }, entry);
-      await using actor = createReplyRecoveryActorFixture({
-        agentId: "main",
-        storePath,
-        sessionKey,
-        getSessionId: () => sessionId,
-      });
-      const controller = createReplyRestartRecoveryClaimController({
-        agentId: "main",
-        acquireSessionActor: () => actor.acquireSessionActor(),
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        admissionRunId: "recovery-run",
-        getEntry: () => entry,
-        getSessionId: () => sessionId,
-        isRestartAbort: () => false,
-        resolveDeliveryContext: () => undefined,
-        sessionKey,
-        setEntry: (next) => {
-          entry = next;
-        },
-        storePath,
-      });
-
+  it.each(["done", "failed", "restart"] as const)(
+    "settles lifecycle ownership for %s cleanup",
+    async (outcome) => {
+      let restartAborted = false;
+      await using fixture = await claimFixture(
+        { abortedLastRun: false, lifecycleRunId: "recovery-run", startedAt: 1 },
+        { isRestartAbort: () => restartAborted },
+      );
+      const { controller, scope } = fixture;
       await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-      if (receiptState) {
-        entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
-          restartRecoveryDeliveryReceiptState: receiptState,
-        }))) as InternalSessionEntry;
-      } else {
+      if (outcome === "failed") {
+        fixture.setEntry(
+          (await updateSessionEntry(scope, () => ({
+            restartRecoveryDeliveryReceiptState: "terminal-pending",
+          }))) as InternalSessionEntry,
+        );
+      } else if (outcome === "done") {
         await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
         await controller.checkpointBeforeAgentReply({ state: "handled-silent" });
+      } else {
+        restartAborted = true;
       }
       await controller.clear();
-
-      const persisted = loadSessionEntry({ storePath, sessionKey }) as InternalSessionEntry;
-      expect(persisted.status).toBe(expectedStatus);
-      expect(persisted.lifecycleRunId).toBeUndefined();
+      const persisted = loadSessionEntry(scope);
+      expect(persisted?.status).toBe(outcome === "restart" ? undefined : outcome);
+      expect(persisted?.lifecycleRunId).toBe(outcome === "restart" ? "recovery-run" : undefined);
+      if (outcome === "restart") {
+        expect(persisted?.restartRecoveryDeliveryRunId).toBe("recovery-run");
+      }
     },
   );
-
-  it("preserves lifecycle ownership when cleanup observes a restart abort", async () => {
-    const root = tempDirs.make("openclaw-reply-claim-restart-abort-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const sessionId = "session";
-    let restartAborted = false;
-    let entry: InternalSessionEntry = {
-      abortedLastRun: false,
-      lifecycleRunId: "recovery-run",
-      restartRecoveryDeliveryRunId: "recovery-run",
-      sessionId,
-      startedAt: 1,
-      status: undefined,
-      updatedAt: 1,
-    };
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
-    await using actor = createReplyRecoveryActorFixture({
-      agentId: "main",
-      storePath,
-      sessionKey,
-      getSessionId: () => sessionId,
-    });
-    const controller = createReplyRestartRecoveryClaimController({
-      agentId: "main",
-      acquireSessionActor: () => actor.acquireSessionActor(),
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      admissionRunId: "recovery-run",
-      getEntry: () => entry,
-      getSessionId: () => sessionId,
-      isRestartAbort: () => restartAborted,
-      resolveDeliveryContext: () => undefined,
-      sessionKey,
-      setEntry: (next) => {
-        entry = next;
-      },
-      storePath,
-    });
-
-    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-    restartAborted = true;
-    await controller.clear();
-
-    const persisted = loadSessionEntry({ storePath, sessionKey });
-    expect(persisted).toMatchObject({
-      lifecycleRunId: "recovery-run",
-      restartRecoveryDeliveryRunId: "recovery-run",
-    });
-    expect(persisted?.status).toBeUndefined();
-  });
 
   it.each([
     "restart-handoff",
@@ -436,43 +394,26 @@ describe("restart recovery claim settlement", () => {
   ] as const)(
     "preserves the delivery claim when queued cleanup loses ownership through %s",
     async (interruption) => {
-      const root = tempDirs.make("openclaw-reply-claim-queued-cleanup-");
-      const scope = { storePath: path.join(root, "sessions.json"), sessionKey: "agent:main:main" };
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const deliveryContext = { channel: "telegram", to: "chat", accountId: "default" };
       let restartAborted = false;
       let sessionId = "session";
-      let entry: InternalSessionEntry = {
-        sessionId: "session",
-        updatedAt: 1,
-        status: undefined,
-        abortedLastRun: false,
-        restartRecoveryDeliveryRunId: "recovery-run",
-        restartRecoveryDeliverySourceRunId: "source-turn",
-        restartRecoveryDeliveryContext: deliveryContext,
-        restartRecoverySourceIngress: "channel",
-      };
-      await replaceSessionEntry(scope, entry);
-      await using actor = createReplyRecoveryActorFixture({
-        agentId: "main",
-        ...scope,
-        getSessionId: () => sessionId,
-      });
-      const controller = createReplyRestartRecoveryClaimController({
-        agentId: "main",
-        acquireSessionActor: () => actor.acquireSessionActor(),
-        lifecycleGeneration:
-          interruption === "missing-generation" ? undefined : lifecycleGeneration,
-        admissionRunId: "recovery-run",
-        getEntry: () => entry,
-        getSessionId: () => sessionId,
-        isRestartAbort: () => restartAborted,
-        resolveDeliveryContext: () => deliveryContext,
-        setEntry: (next) => {
-          entry = next;
+      await using fixture = await claimFixture(
+        {
+          abortedLastRun: false,
+          restartRecoveryDeliverySourceRunId: "source-turn",
+          restartRecoveryDeliveryContext: deliveryContext,
+          restartRecoverySourceIngress: "channel",
         },
-        ...scope,
-      });
+        {
+          lifecycleGeneration:
+            interruption === "missing-generation" ? undefined : lifecycleGeneration,
+          getSessionId: () => sessionId,
+          isRestartAbort: () => restartAborted,
+          resolveDeliveryContext: () => deliveryContext,
+        },
+      );
+      const { controller, scope } = fixture;
       await expect(controller.admitUserTurn()).resolves.toBe("admitted");
 
       const writerEntered = createDeferred();
@@ -516,29 +457,24 @@ describe("restart recovery claim settlement", () => {
       });
       await writerEntered.promise;
       let interruptedAtCommit = false;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const admission = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, options) =>
-          createAdmission((request, grant) => {
-            if (
-              !interruptedAtCommit &&
-              (interruption === "commit-rotation" || interruption === "commit-abort") &&
-              request.stage === "transaction" &&
-              isRecord(request.facts) &&
-              isRecord(request.facts.publication) &&
-              request.facts.publication.kind === "session-entry-patch-validated"
-            ) {
-              interruptedAtCommit = true;
-              if (interruption === "commit-rotation") {
-                rotateAgentEventLifecycleGeneration();
-              } else {
-                restartAborted = true;
-              }
-            }
-            admit(request, grant);
-          }, options),
-        );
+      using admission = probe.admission(workerAdmission, (request, grant, admit) => {
+        if (
+          !interruptedAtCommit &&
+          (interruption === "commit-rotation" || interruption === "commit-abort") &&
+          request.stage === "transaction" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.publication) &&
+          request.facts.publication.kind === "session-entry-patch-validated"
+        ) {
+          interruptedAtCommit = true;
+          if (interruption === "commit-rotation") {
+            rotateAgentEventLifecycleGeneration();
+          } else {
+            restartAborted = true;
+          }
+        }
+        admit(request, grant);
+      });
       // The old cleanup enters before shutdown; its actual write waits behind the handoff.
       const clearing = controller.clear().catch((error: unknown) => {
         expect(
@@ -558,11 +494,8 @@ describe("restart recovery claim settlement", () => {
       } finally {
         releaseWriter.resolve();
       }
-      try {
-        await Promise.all([handoff, clearing]);
-      } finally {
-        admission.mockRestore();
-      }
+      await Promise.all([handoff, clearing]);
+      admission.mockRestore();
       expect(interruptedAtCommit).toBe(
         interruption === "commit-rotation" || interruption === "commit-abort",
       );
@@ -589,37 +522,12 @@ describe("restart recovery claim settlement", () => {
   );
 
   it("retires the source claim after an ordinary user abort", async () => {
-    const root = tempDirs.make("openclaw-reply-claim-user-abort-");
-    const scope = { storePath: path.join(root, "sessions.json"), sessionKey: "agent:main:main" };
-    let entry: InternalSessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      status: undefined,
-      restartRecoveryDeliveryRunId: "recovery-run",
+    await using fixture = await claimFixture({
       restartRecoveryDeliverySourceRunId: "source-turn",
       restartRecoveryDeliveryContext: { channel: "telegram", to: "chat" },
       restartRecoverySourceIngress: "channel",
-    };
-    await replaceSessionEntry(scope, entry);
-    await using actor = createReplyRecoveryActorFixture({
-      agentId: "main",
-      ...scope,
-      getSessionId: () => "session",
     });
-    const controller = createReplyRestartRecoveryClaimController({
-      agentId: "main",
-      acquireSessionActor: () => actor.acquireSessionActor(),
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      admissionRunId: "recovery-run",
-      getEntry: () => entry,
-      getSessionId: () => "session",
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => undefined,
-      setEntry: (next) => {
-        entry = next;
-      },
-      ...scope,
-    });
+    const { controller, scope } = fixture;
     await expect(controller.admitUserTurn()).resolves.toBe("admitted");
     await markSessionAbortTarget({ scope });
     await controller.clear();

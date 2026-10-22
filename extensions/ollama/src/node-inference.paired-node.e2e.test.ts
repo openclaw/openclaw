@@ -40,6 +40,13 @@ type NodeInvokeFrame = {
   paramsJSON?: string | null;
 };
 
+type PairedNode = {
+  nodeId: string;
+  displayName?: string;
+  connected?: boolean;
+  commands?: string[];
+};
+
 describe("Ollama paired-node Gateway inference", () => {
   it(
     "routes authenticated discovery and chat over the actual paired node socket",
@@ -61,6 +68,7 @@ describe("Ollama paired-node Gateway inference", () => {
 
       try {
         await state.writeConfig({
+          cron: { enabled: false },
           gateway: {
             mode: "local",
             port: gatewayPort,
@@ -73,7 +81,7 @@ describe("Ollama paired-node Gateway inference", () => {
             allow: ["ollama"],
           },
           agents: {
-            defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
+            defaults: { skipBootstrap: true },
             entries: { main: { tools: { allow: ["node_inference"] } } },
           },
           models: {
@@ -139,9 +147,6 @@ describe("Ollama paired-node Gateway inference", () => {
                 gatewayToken,
                 readinessDeadline,
                 role: "operator",
-                clientName: "test",
-                mode: "test",
-                scopes: ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
               }),
             {
               timeout: remainingPhaseTimeoutMs(readinessDeadline, "Gateway readiness"),
@@ -164,11 +169,6 @@ describe("Ollama paired-node Gateway inference", () => {
           gatewayToken,
           readinessDeadline,
           role: "node",
-          clientName: "node-host",
-          mode: "node",
-          platform: "macos",
-          displayName: NODE_DISPLAY_NAME,
-          caps: ["local-inference"],
           commands: [...commandsByName.keys()],
           onEvent: (event) => {
             if (event.event !== "node.invoke.request") {
@@ -346,20 +346,15 @@ function remainingPhaseTimeoutMs(deadline: number, phase: string): number {
   return remainingMs;
 }
 
-async function connectClient(params: {
-  gatewayPort: number;
-  gatewayToken: string;
-  readinessDeadline: number;
-  role: "operator" | "node";
-  clientName: "test" | "node-host";
-  mode: "test" | "node";
-  scopes?: string[];
-  platform?: string;
-  displayName?: string;
-  caps?: string[];
-  commands?: string[];
-  onEvent?: (event: { event: string; payload?: unknown }) => void;
-}): Promise<GatewayClient> {
+async function connectClient(
+  params: Pick<ConstructorParameters<typeof GatewayClient>[0], "commands" | "onEvent"> & {
+    gatewayPort: number;
+    gatewayToken: string;
+    readinessDeadline: number;
+    role: "operator" | "node";
+  },
+): Promise<GatewayClient> {
+  const isNode = params.role === "node";
   // Leave the shared readiness deadline available for another handshake attempt.
   const timeoutMs = Math.min(
     CONNECT_ATTEMPT_TIMEOUT_MS,
@@ -384,13 +379,15 @@ async function connectClient(params: {
       url: `ws://127.0.0.1:${params.gatewayPort}`,
       token: params.gatewayToken,
       role: params.role,
-      clientName: params.clientName,
-      clientDisplayName: params.displayName ?? "ollama-paired-node-e2e",
+      clientName: isNode ? "node-host" : "test",
+      clientDisplayName: isNode ? NODE_DISPLAY_NAME : "ollama-paired-node-e2e",
       clientVersion: "1.0.0",
-      platform: params.platform ?? process.platform,
-      mode: params.mode,
-      scopes: params.scopes ?? [],
-      caps: params.caps,
+      platform: isNode ? "macos" : process.platform,
+      mode: isNode ? "node" : "test",
+      scopes: isNode
+        ? []
+        : ["operator.admin", "operator.pairing", "operator.read", "operator.write"],
+      caps: isNode ? ["local-inference"] : undefined,
       commands: params.commands,
       requestTimeoutMs: INFERENCE_TIMEOUT_MS,
       onEvent: params.onEvent,
@@ -414,29 +411,20 @@ async function approvePendingNodePairings(
   const pairingOptions = () => ({
     timeoutMs: remainingPhaseTimeoutMs(readinessDeadline, "Gateway node pairing"),
   });
-  const devices = await operator.request<{
-    pending?: Array<{ requestId?: string; role?: string }>;
-  }>("device.pair.list", {}, pairingOptions());
-  for (const request of devices.pending ?? []) {
-    if (request.requestId) {
-      await operator.request(
-        "device.pair.approve",
-        { requestId: request.requestId },
-        pairingOptions(),
-      );
-    }
-  }
-
-  const nodes = await operator.request<{
-    pending?: Array<{ requestId?: string; displayName?: string }>;
-  }>("node.pair.list", {}, pairingOptions());
-  for (const request of nodes.pending ?? []) {
-    if (request.requestId) {
-      await operator.request(
-        "node.pair.approve",
-        { requestId: request.requestId },
-        pairingOptions(),
-      );
+  for (const owner of ["device", "node"]) {
+    const result = await operator.request<{ pending?: Array<{ requestId?: string }> }>(
+      `${owner}.pair.list`,
+      {},
+      pairingOptions(),
+    );
+    for (const request of result.pending ?? []) {
+      if (request.requestId) {
+        await operator.request(
+          `${owner}.pair.approve`,
+          { requestId: request.requestId },
+          pairingOptions(),
+        );
+      }
     }
   }
 }
@@ -464,20 +452,11 @@ async function waitForPairedInferenceNode(
   logs: string[],
   readinessDeadline: number,
 ) {
-  let paired:
-    | { nodeId: string; displayName?: string; connected?: boolean; commands?: string[] }
-    | undefined;
+  let paired: PairedNode | undefined;
   await vi.waitFor(
     async () => {
       await approvePendingNodePairings(operator, readinessDeadline);
-      const result = await operator.request<{
-        nodes?: Array<{
-          nodeId: string;
-          displayName?: string;
-          connected?: boolean;
-          commands?: string[];
-        }>;
-      }>(
+      const result = await operator.request<{ nodes?: PairedNode[] }>(
         "node.list",
         {},
         {
@@ -559,6 +538,10 @@ async function readRequestJson(request: IncomingMessage): Promise<Record<string,
   return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
 }
 
+function sendJson(response: ServerResponse, body: unknown): void {
+  response.end(JSON.stringify(body));
+}
+
 async function startFakeOllama(owner: "node" | "gateway"): Promise<FakeOllama> {
   const paths: string[] = [];
   const chatRequests: Array<Record<string, unknown>> = [];
@@ -566,7 +549,7 @@ async function startFakeOllama(owner: "node" | "gateway"): Promise<FakeOllama> {
     void handleFakeOllamaRequest(request, response, owner, paths, chatRequests).catch(
       (error: unknown) => {
         response.statusCode = 500;
-        response.end(JSON.stringify({ error: String(error) }));
+        sendJson(response, { error: String(error) });
       },
     );
   });
@@ -608,44 +591,35 @@ async function handleFakeOllamaRequest(
             { name: LOADED_NODE_MODEL, size: 1200 },
           ]
         : [{ name: "gateway-remote:latest" }];
-    response.end(JSON.stringify({ models }));
-    return;
+    return sendJson(response, { models });
   }
   if (requestPath === "/api/ps") {
-    response.end(JSON.stringify({ models: [{ name: LOADED_NODE_MODEL }] }));
-    return;
+    return sendJson(response, { models: [{ name: LOADED_NODE_MODEL }] });
   }
   if (requestPath === "/api/show") {
     const body = await readRequestJson(request);
     const modelName = typeof body.model === "string" ? body.model : undefined;
     if (!modelName) {
       response.statusCode = 400;
-      response.end(JSON.stringify({ error: "model is required" }));
-      return;
+      return sendJson(response, { error: "model is required" });
     }
     const isEmbedding = modelName.startsWith("embedding-");
-    response.end(
-      JSON.stringify({
-        capabilities: isEmbedding ? ["embedding"] : ["completion", "tools"],
-        model_info: isEmbedding ? {} : { "test.context_length": 32_768 },
-      }),
-    );
-    return;
+    return sendJson(response, {
+      capabilities: isEmbedding ? ["embedding"] : ["completion", "tools"],
+      model_info: isEmbedding ? {} : { "test.context_length": 32_768 },
+    });
   }
   if (requestPath === "/api/chat") {
     const body = await readRequestJson(request);
     chatRequests.push(body);
-    response.end(
-      JSON.stringify({
-        model: body.model,
-        message: { content: owner === "node" ? "PAIRED_NODE_OK" : "WRONG_GATEWAY_ENDPOINT" },
-        done_reason: "stop",
-        prompt_eval_count: 8,
-        eval_count: 3,
-      }),
-    );
-    return;
+    return sendJson(response, {
+      model: body.model,
+      message: { content: owner === "node" ? "PAIRED_NODE_OK" : "WRONG_GATEWAY_ENDPOINT" },
+      done_reason: "stop",
+      prompt_eval_count: 8,
+      eval_count: 3,
+    });
   }
   response.statusCode = 404;
-  response.end(JSON.stringify({ error: "not found" }));
+  sendJson(response, { error: "not found" });
 }

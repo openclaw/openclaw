@@ -155,9 +155,6 @@ export function createFeishuVcMeetingInvitedHandler(params: {
       const prompt = callId
         ? `${basePrompt} If the join tool supports a call_id parameter, pass call_id=${JSON.stringify(callId)}; otherwise join by meeting number only.`
         : basePrompt;
-      runtime?.log?.(
-        `feishu[${accountId}]: vc meeting invited, dispatching synthetic p2p message sender=${senderId} meeting_no=${meetingNo}`,
-      );
       const event = setFeishuSyntheticDirectPreDispatchTarget(
         {
           sender: {

@@ -1,8 +1,15 @@
-import type { ChatMember, ReactionTypeEmoji } from "grammy/types";
+import type {
+  ChatMember,
+  ReactionType,
+  ReactionTypeCustomEmoji,
+  ReactionTypeEmoji,
+} from "grammy/types";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
 import { reportChannelRoomJoin } from "openclaw/plugin-sdk/channel-join-intro-runtime";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
@@ -23,6 +30,7 @@ import { evaluateTelegramGroupPolicyAccess } from "./group-access.js";
 import { migrateTelegramGroupConfig } from "./group-migration.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
 import { findTelegramPollRegistryEntry, retireTelegramPollRegistryEntry } from "./poll-registry.js";
+import { wasSentByBot } from "./sent-message-cache.js";
 
 /** Stable operator-facing reason for a scoped reaction dropped without a known topic. */
 const TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON = "thread-context-unavailable";
@@ -31,6 +39,16 @@ type TelegramEventMessageDependencies = Pick<
   TelegramMessagePipeline,
   "resolveCachedMessageThreadSpec" | "processMessageWithReplyChain"
 >;
+
+type TelegramNotificationReaction = ReactionTypeEmoji | ReactionTypeCustomEmoji;
+
+function isNotificationReaction(reaction: ReactionType): reaction is TelegramNotificationReaction {
+  return reaction.type === "emoji" || reaction.type === "custom_emoji";
+}
+
+function reactionKey(reaction: TelegramNotificationReaction): string {
+  return reaction.type === "emoji" ? reaction.emoji : `custom_emoji:${reaction.custom_emoji_id}`;
+}
 
 type CreateTelegramEventBindingsOptions = {
   params: RegisterTelegramHandlerParams;
@@ -55,8 +73,7 @@ export function createTelegramEventBindings({
   message,
   authorization,
 }: CreateTelegramEventBindingsOptions) {
-  const { accountId, ownerAgentId, bot, cfg, opts, runtime, shouldSkipUpdate, telegramDeps } =
-    params;
+  const { accountId, ownerAgentId, bot, cfg, opts, runtime, shouldSkipUpdate } = params;
   const { authorizeTelegramEventSender, resolveTelegramEventAuthorizationContext } = authorization;
   const { processMessageWithReplyChain, resolveCachedMessageThreadSpec } = message;
   const resolveAuthorizedEventContext = async (
@@ -90,7 +107,7 @@ export function createTelegramEventBindings({
       }
 
       const chatId = membership.chat.id;
-      const currentCfg = telegramDeps.getRuntimeConfig();
+      const currentCfg = getRuntimeConfig();
       const telegramCfg = resolveTelegramAccount({ cfg: currentCfg, accountId }).config;
       const { groupConfig } = params.resolveTelegramGroupConfig(chatId, undefined, currentCfg);
       const groupPolicyAccess = evaluateTelegramGroupPolicyAccess({
@@ -168,7 +185,7 @@ export function createTelegramEventBindings({
         const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
         const isDirectMessagesChat = reaction.chat.is_direct_messages === true;
         const isForum = !isDirectMessagesChat && reaction.chat.is_forum === true;
-        const authorizationCfg = telegramDeps.getRuntimeConfig();
+        const authorizationCfg = getRuntimeConfig();
         const authorizationTelegramCfg = resolveTelegramAccount({
           cfg: authorizationCfg,
           accountId,
@@ -180,7 +197,7 @@ export function createTelegramEventBindings({
         }
         if (
           reactionMode === "own" &&
-          !(await telegramDeps.wasSentByBot(chatId, messageId, authorizationCfg, {
+          !(await wasSentByBot(chatId, messageId, authorizationCfg, {
             accountId,
             agentId: ownerAgentId,
           }))
@@ -192,14 +209,12 @@ export function createTelegramEventBindings({
         }
 
         // Detect additions before topic recovery so no-op reactions avoid cache work and warnings.
-        const oldEmojis = new Set(
-          reaction.old_reaction
-            .filter((item): item is ReactionTypeEmoji => item.type === "emoji")
-            .map((item) => item.emoji),
+        const oldReactions = new Set(
+          reaction.old_reaction.filter(isNotificationReaction).map(reactionKey),
         );
         const addedReactions = reaction.new_reaction
-          .filter((item): item is ReactionTypeEmoji => item.type === "emoji")
-          .filter((item) => !oldEmojis.has(item.emoji));
+          .filter(isNotificationReaction)
+          .filter((item) => !oldReactions.has(reactionKey(item)));
         if (addedReactions.length === 0) {
           return;
         }
@@ -277,12 +292,14 @@ export function createTelegramEventBindings({
             : senderName || senderUsernameLabel) || (user?.id ? `id:${user.id}` : "unknown");
 
         for (const addedReaction of addedReactions) {
-          const emoji = addedReaction.emoji;
+          const emoji =
+            addedReaction.type === "emoji"
+              ? addedReaction.emoji
+              : `custom emoji ${addedReaction.custom_emoji_id}`;
           const text = `Telegram reaction added: ${emoji} by ${senderLabel} on msg ${messageId}`;
-          telegramDeps.enqueueRoutedSystemEvent(text, route, {
-            contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
+          enqueueRoutedSystemEvent(text, route, {
+            contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${reactionKey(addedReaction)}`,
           });
-          logVerbose(`telegram: reaction event enqueued: ${text}`);
         }
       } catch (err) {
         runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));
@@ -355,7 +372,7 @@ export function createTelegramEventBindings({
           );
           return;
         }
-        const authorizationCfg = telegramDeps.getRuntimeConfig();
+        const authorizationCfg = getRuntimeConfig();
         const eventAuthContext = await resolveAuthorizedEventContext({
           cfg: authorizationCfg,
           chatId,
@@ -412,7 +429,6 @@ export function createTelegramEventBindings({
           },
         });
         recordTelegramMessageProcessingResult(result);
-        logVerbose(`telegram: poll_answer dispatched for poll ${pollId} by ${senderId}`);
       } catch (err) {
         handlePollError(err, ctx, "poll_answer");
       }
@@ -441,7 +457,7 @@ export function createTelegramEventBindings({
           return;
         }
 
-        const currentConfig = telegramDeps.getRuntimeConfig();
+        const currentConfig = getRuntimeConfig();
         const migration = migrateTelegramGroupConfig({
           cfg: currentConfig,
           accountId,

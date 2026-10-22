@@ -3,10 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
-import {
-  resolvePackageActivationHelper,
-  resolvePackageActivationJournalPath,
-} from "../../infra/package-update-activation-journal.js";
+import { resolvePackageActivationHelper } from "../../infra/package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
 import {
   readPackageActivationReceipt,
@@ -61,6 +58,11 @@ function snapshot(root: string) {
       return { name, inode: stat.ino, bytes: stat.isFile() ? fs.readFileSync(file) : undefined };
     });
 }
+async function expectUnchanged(work: () => Promise<unknown>) {
+  const before = snapshot(fixtureRoot);
+  await work();
+  expect(snapshot(fixtureRoot)).toEqual(before);
+}
 
 function preparePreview(
   f: Pick<Awaited<ReturnType<typeof fixtures.prepare>>, "params" | "packageRoot">,
@@ -71,29 +73,56 @@ function preparePreview(
   vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue(f.params.installTarget);
   vi.spyOn(packageTarget, "fetchNpmPackageTargetStatus").mockResolvedValue({
     version: "3.0.0",
-    nodeEngine: ">=24.16.0",
+    nodeEngine: ">=24.22.1",
   });
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(createMockGatewayService());
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
+}
+const preview = () => updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
+function expectPreview(note: RegExp, targetVersion?: string) {
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+    expect.objectContaining({
+      dryRun: true,
+      ...(targetVersion ? { targetVersion } : {}),
+      notes: expect.arrayContaining([expect.stringMatching(note)]),
+    }),
+  );
+}
+function writeRunnablePackage(root: string, entry = 'import "./dist/index.js";\n') {
+  fs.writeFileSync(path.join(root, "openclaw.mjs"), entry);
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version: "1.0.0",
+      type: "module",
+      bin: { openclaw: "openclaw.mjs" },
+    }),
+  );
+}
+async function publication(phase: Parameters<typeof createInterruptedPackagePublication>[1]) {
+  const f = await createInterruptedPackagePublication(fixtureRoot, phase);
+  preparePreview(f);
+  return {
+    ...f,
+    liveFile: path.join(f.packageRoot, "dist/index.js"),
+    previousFile: path.join(f.anchor, "previous/dist/index.js"),
+    retiredFile: path.join(
+      `${f.anchor}.superseded-${f.record.descriptor.operationId}`,
+      "previous/dist/index.js",
+    ),
+  };
 }
 
 describe.skipIf(process.platform === "win32")("package activation admission", () => {
   it.each(["prepared", "publishing", "publication-complete", "damaged candidate"] as const)(
     "admits only a verified completed publication with the original lease (%s)",
     async (phase) => {
-      const f = await createInterruptedPackagePublication(
-        fixtureRoot,
-        phase === "damaged candidate" ? "publication-complete" : phase,
-      );
-      preparePreview(f);
+      const f = await publication(phase === "damaged candidate" ? "publication-complete" : phase);
       if (phase === "damaged candidate") {
-        fs.appendFileSync(path.join(f.packageRoot, "dist/index.js"), "// changed live content\n");
+        fs.appendFileSync(f.liveFile, "// changed live content\n");
       }
-      const retained = () => [
-        snapshot(f.packageRoot),
-        snapshot(f.anchor),
-        fs.readFileSync(resolvePackageActivationJournalPath(f.anchor)),
-      ];
+      const retained = () => [snapshot(f.packageRoot), snapshot(f.anchor)];
       const before = retained();
       if (phase !== "publication-complete") {
         await expect(prepareUpdateCommand({ json: true })).rejects.toThrow(
@@ -104,19 +133,10 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         expect(retained()).toEqual(before);
         return;
       }
-      const previous = fs.readFileSync(path.join(f.anchor, "previous/dist/index.js"));
-      const candidate = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
-      const previewBefore = snapshot(fixtureRoot);
-      await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
-      expect(snapshot(fixtureRoot)).toEqual(previewBefore);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dryRun: true,
-          notes: expect.arrayContaining([
-            expect.stringMatching(/Would settle.*update can proceed/),
-          ]),
-        }),
-      );
+      const previous = fs.readFileSync(f.previousFile);
+      const candidate = fs.readFileSync(f.liveFile);
+      await expectUnchanged(preview);
+      expectPreview(/Would settle.*update can proceed/);
 
       await expect(prepareUpdateCommand({ json: true })).resolves.toMatchObject({
         discoveredRoot: f.packageRoot,
@@ -124,12 +144,8 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
 
       assertManagedUpdateLeaseDatabaseIdentity(f.record.descriptor.authority);
       expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
-      expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(candidate);
-      expect(
-        fs.readFileSync(
-          `${f.anchor}.superseded-${f.record.descriptor.operationId}/previous/dist/index.js`,
-        ),
-      ).toEqual(previous);
+      expect(fs.readFileSync(f.liveFile)).toEqual(candidate);
+      expect(fs.readFileSync(f.retiredFile)).toEqual(previous);
     },
   );
   it.each(
@@ -139,26 +155,15 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
   )(
     "dry-run preserves a publication-complete receipt with a $lease lease and $live live",
     async ({ lease, live }) => {
-      const f = await createInterruptedPackagePublication(fixtureRoot, "publication-complete");
-      mocks.root.mockResolvedValue(f.packageRoot);
-      const retainedPrevious = path.join(f.anchor, "previous/dist/index.js");
-      const previousBytes = fs.readFileSync(retainedPrevious);
+      const f = await publication("publication-complete");
+      const previousBytes = fs.readFileSync(f.previousFile);
       if (live === "previous") {
         const previousRoot = path.join(f.anchor, "previous");
-        fs.writeFileSync(path.join(previousRoot, "openclaw.mjs"), 'import "./dist/index.js";\n');
-        fs.writeFileSync(
-          path.join(previousRoot, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            version: "1.0.0",
-            type: "module",
-            bin: { openclaw: "openclaw.mjs" },
-          }),
-        );
+        writeRunnablePackage(previousRoot);
         fs.renameSync(f.packageRoot, path.join(f.anchor, "candidate"));
         fs.renameSync(path.join(f.anchor, "previous"), f.packageRoot);
       } else if (live === "damaged candidate") {
-        fs.appendFileSync(path.join(f.packageRoot, "dist/index.js"), "// changed live content\n");
+        fs.appendFileSync(f.liveFile, "// changed live content\n");
       }
       const { databasePath } = f.record.descriptor.authority;
       fs.renameSync(databasePath, `${databasePath}.lost`);
@@ -166,60 +171,35 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
         fs.copyFileSync(`${databasePath}.lost`, databasePath);
         fs.chmodSync(databasePath, 0o600);
       }
-      preparePreview(f);
-      const packageBytes = fs.readFileSync(path.join(f.packageRoot, "dist/index.js"));
-      const journalBytes = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
-      const before = snapshot(fixtureRoot);
-
+      const packageBytes = fs.readFileSync(f.liveFile);
       if (live === "damaged candidate") {
-        await expect(
-          updateCommand({ dryRun: true, json: true, tag: "3.0.0" }),
-        ).rejects.toMatchObject({ code: 1 });
+        await expectUnchanged(() => expect(preview()).rejects.toMatchObject({ code: 1 }));
         expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({ reason: "update-recovery-pending" }),
         );
         expect(defaultRuntime.error).toHaveBeenCalledWith(
           expect.stringContaining("inventoried dist files changed"),
         );
-        expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(
-          journalBytes,
-        );
-        expect(fs.readFileSync(retainedPrevious)).toEqual(previousBytes);
-        expect(snapshot(fixtureRoot)).toEqual(before);
         return;
       }
-
-      await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
-
-      expect(snapshot(fixtureRoot)).toEqual(before);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dryRun: true,
-          targetVersion: "3.0.0",
-          notes: expect.arrayContaining([
-            expect.stringMatching(/Would settle.*update can proceed/),
-          ]),
-        }),
-      );
+      await expectUnchanged(preview);
+      expectPreview(/Would settle.*update can proceed/, "3.0.0");
       const previousPostCore = process.env[POST_CORE_UPDATE_ENV];
       vi.stubEnv(POST_CORE_UPDATE_ENV, "1");
       try {
-        await expect(prepareUpdateCommand({ dryRun: true, json: true })).rejects.toMatchObject({
-          name: "UpdateCommandPendingRecoveryFailure",
-        });
+        await expectUnchanged(() =>
+          expect(prepareUpdateCommand({ dryRun: true, json: true })).rejects.toMatchObject({
+            name: "UpdateCommandPendingRecoveryFailure",
+          }),
+        );
       } finally {
         vi.stubEnv(POST_CORE_UPDATE_ENV, previousPostCore);
       }
-      expect(snapshot(fixtureRoot)).toEqual(before);
       await prepareUpdateCommand({ json: true });
       expect(readPackageActivationReceipt(f.packageRoot)).toBeUndefined();
-      expect(fs.readFileSync(path.join(f.packageRoot, "dist/index.js"))).toEqual(packageBytes);
+      expect(fs.readFileSync(f.liveFile)).toEqual(packageBytes);
       if (live === "candidate") {
-        expect(
-          fs.readFileSync(
-            `${f.anchor}.superseded-${f.record.descriptor.operationId}/previous/dist/index.js`,
-          ),
-        ).toEqual(previousBytes);
+        expect(fs.readFileSync(f.retiredFile)).toEqual(previousBytes);
       }
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("Settled previous package update"),
@@ -231,29 +211,11 @@ describe.skipIf(process.platform === "win32")("package activation admission", ()
     await runPackageActivationRecovery(f.anchor, "repair", f.operationId);
     await runPackageActivationRecovery(f.anchor, "retire", f.operationId);
     fs.writeFileSync(resolvePackageActivationHelper(f.anchor), "retained helper");
-    fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "export {};\n");
-    fs.writeFileSync(
-      path.join(f.packageRoot, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "1.0.0",
-        type: "module",
-        bin: { openclaw: "openclaw.mjs" },
-      }),
-    );
+    writeRunnablePackage(f.packageRoot, "export {};\n");
     fs.unlinkSync(f.launcher);
     fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", f.launcher);
     preparePreview(f);
-    const before = snapshot(fixtureRoot);
-
-    await updateCommand({ dryRun: true, json: true, tag: "3.0.0" });
-
-    expect(snapshot(fixtureRoot)).toEqual(before);
-    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dryRun: true,
-        notes: expect.arrayContaining([expect.stringContaining("publication-retired")]),
-      }),
-    );
+    await expectUnchanged(preview);
+    expectPreview(/publication-retired/);
   });
 });

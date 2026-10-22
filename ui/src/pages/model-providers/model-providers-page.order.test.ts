@@ -8,19 +8,24 @@ import type {
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusProfile, WizardNextResult } from "../../api/types.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import "../../lib/toast-host.ts";
+import "../../lib/toast-host.tsx";
 import {
   getRenderedModalDialog,
   installDialogPolyfill,
   nextFrame,
 } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
 import {
   appendPage,
+  openApiKeyProvider,
+  drainPageUpdates,
+  publishRouteData,
   mountPage,
   unmountPage,
   createAuthStatus,
   createHarness,
+  expandProvider,
   waitForProviders,
   requestCount,
   type ModelProvidersPageTestElement,
@@ -77,20 +82,23 @@ describe("ModelProvidersPage profile actions", () => {
       return originalRequest(method);
     });
     const page = appendPage(context);
+    await expandProvider(page, "openai");
     await waitForSolid(() =>
       expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
     );
 
-    page.profileActions.setOrder("openai", "openai", profileIds);
+    page.view.props.onProfileOrderChange("openai", "openai", profileIds);
 
-    await waitForSolid(() =>
-      expect(page.state.data?.authStatus?.unavailable?.code).toBe(
-        "PREPARED_MODEL_AUTH_UNAVAILABLE",
-      ),
-    );
+    await waitForSolid(() => {
+      expect(page.view.props.authStatus?.unavailable?.code).toBe("PREPARED_MODEL_AUTH_UNAVAILABLE");
+      expect(toast.toast?.message).toBe(warning);
+    });
+    await toast.updateComplete;
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(toast.textContent).toContain(warning));
-    expect(page.state.profileOrders.openai).toBeUndefined();
-    expect(page.state.data?.authStatus?.providers).toEqual([]);
+    expect(page.view.props.profileOrders.openai).toBeUndefined();
+    expect(page.view.props.authStatus?.providers).toEqual([]);
+    expect(page.querySelector('li.provider-row[data-provider-id="openai"]')).toBeNull();
     expect(page.querySelector(".model-providers__profile")).toBeNull();
   });
 
@@ -108,10 +116,10 @@ describe("ModelProvidersPage profile actions", () => {
       return originalRequest(method);
     });
 
-    page.profileActions.setOrder("openai", "openai", ["openai:two", "openai:one"]);
+    page.view.props.onProfileOrderChange("openai", "openai", ["openai:two", "openai:one"]);
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(1));
-    page.profileActions.setOrder("openai", "openai", ["openai:one", "openai:two"]);
-    expect(page.state.profileOrders.openai).toEqual(["openai:one", "openai:two"]);
+    page.view.props.onProfileOrderChange("openai", "openai", ["openai:one", "openai:two"]);
+    expect(page.view.props.profileOrders.openai).toEqual(["openai:one", "openai:two"]);
     expect(requestCount(request, "models.authOrderSet")).toBe(1);
     runtimeConfig.state.configSaving = true;
     notifyRuntimeConfig();
@@ -121,17 +129,17 @@ describe("ModelProvidersPage profile actions", () => {
     });
 
     expect(requestCount(request, "models.authOrderSet")).toBe(1);
-    expect(page.state.profileOrders.openai).toEqual(["openai:one", "openai:two"]);
+    expect(page.view.props.profileOrders.openai).toEqual(["openai:one", "openai:two"]);
 
     runtimeConfig.state.configSaving = false;
     notifyRuntimeConfig();
     await vi.waitFor(() => expect(requestCount(request, "models.authOrderSet")).toBe(2));
-    await vi.waitFor(() => expect(page.state.profileOrders.openai).toBeUndefined());
+    await vi.waitFor(() => expect(page.view.props.profileOrders.openai).toBeUndefined());
     expect(request.mock.calls.findLast(([method]) => method === "models.authOrderSet")).toEqual([
       "models.authOrderSet",
       { provider: "openai", profileIds: ["openai:one", "openai:two"], agentId: "main" },
     ]);
-    expect(page.state.messages.openai).toBeUndefined();
+    expect(page.view.props.messages.openai).toBeUndefined();
   });
 
   it("discards a detached page's queued order before a replacement page saves", async () => {
@@ -184,6 +192,7 @@ describe("ModelProvidersPage profile actions", () => {
     };
     const oldPage = appendPage(context);
     await waitForProviders(oldPage);
+    await expandProvider(oldPage, "openai");
     await waitForSolid(() => expect(rows(oldPage)).toHaveLength(3));
     moveFirstAccount(oldPage, "down");
     await oldPage.updateComplete;
@@ -195,11 +204,14 @@ describe("ModelProvidersPage profile actions", () => {
     unmountPage(oldPage);
     const replacementPage = appendPage(context);
     await waitForProviders(replacementPage);
+    await expandProvider(replacementPage, "openai");
     await waitForSolid(() =>
       expect(rows(replacementPage)).toEqual(["openai:two", "openai:one", "openai:three"]),
     );
     moveFirstAccount(replacementPage, "up");
-    await waitForSolid(() => expect(replacementPage.state.profileOrders.openai).toBeUndefined());
+    await waitForSolid(() =>
+      expect(replacementPage.view.props.profileOrders.openai).toBeUndefined(),
+    );
     expect(savedOrder).toEqual(["openai:one", "openai:two", "openai:three"]);
 
     // The first write already reached the server; only its response is delayed.
@@ -275,6 +287,7 @@ describe("ModelProvidersPage profile actions", () => {
         // Separate user clicks so the previous confirmation can settle.
         await nextFrame();
         await waitForProviders(page);
+        await expandProvider(page, "anthropic");
         await waitForSolid(() =>
           expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2),
         );
@@ -292,6 +305,11 @@ describe("ModelProvidersPage profile actions", () => {
       await page.updateComplete;
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(requestCount(request, "models.authLogout")).toBe(0);
+      expect(
+        [...page.querySelectorAll<HTMLButtonElement>(".model-providers__profile-logout")].every(
+          (button) => !button.disabled,
+        ),
+      ).toBe(true);
 
       for (const invalidate of [
         () => {
@@ -326,8 +344,14 @@ describe("ModelProvidersPage profile actions", () => {
       expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(2);
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
       expect(page.querySelector(".model-providers__row > .callout")).toBeNull();
-      expect(page.state.messages.anthropic).toBeUndefined();
+      expect(page.view.props.messages.anthropic).toBeUndefined();
       expect(requestCount(request, "models.authLogout")).toBe(1);
+      await waitForSolid(() =>
+        expect(
+          page.querySelector<HTMLButtonElement>('[aria-label="Log out work@example.com"]')
+            ?.disabled,
+        ).toBe(false),
+      );
 
       ({ modal } = await openConfirmation());
       expect(modal.querySelector('[role="alert"]')).toBeNull();
@@ -350,6 +374,12 @@ describe("ModelProvidersPage profile actions", () => {
         expect(page.querySelectorAll(".model-providers__profile")).toHaveLength(1),
       );
       expect(requestCount(request, "models.authLogout")).toBe(2);
+      await waitForSolid(() =>
+        expect(
+          page.querySelector<HTMLButtonElement>('[aria-label="Log out personal@example.com"]')
+            ?.disabled,
+        ).toBe(false),
+      );
       expect(
         [...page.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
           (row) => row.dataset.profileId,
@@ -361,11 +391,87 @@ describe("ModelProvidersPage profile actions", () => {
       expect(toast.querySelector(".app-toast--bottom .app-toast__icon")).not.toBeNull();
       expect(toast.querySelector('[role="status"]')?.textContent).toContain("Logged out.");
       expect(page.querySelector(".model-providers__row > .callout")).toBeNull();
-      expect(page.state.messages.anthropic).toBeUndefined();
+      expect(page.view.props.messages.anthropic).toBeUndefined();
     } finally {
       logout.resolve();
       unmountPage(page);
       restoreDialogPolyfill();
+    }
+  });
+  it("ignores logout completion when route data changes the selected agent", async () => {
+    const { settingsAgentSelection, context, request, runtimeConfig } = createHarness("main");
+    const restoreDialogs = installDialogPolyfill();
+    const toast = document.body.appendChild(document.createElement("openclaw-toast-host"));
+    const page = appendPage(context);
+    await waitForProviders(page);
+    const firstLogout = deferred<unknown>();
+    const defaultsSave = deferred();
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method, params?: { provider?: string }) => {
+      if (method === "models.authLogout") {
+        return firstLogout.promise;
+      }
+      if (method === "models.probe") {
+        if (params?.provider === "anthropic") {
+          throw new Error("Previous agent failure");
+        }
+        return { provider: "openai", status: "ok", results: [] };
+      }
+      return originalRequest(method);
+    });
+    try {
+      page.view.props.onProbe("openai", ["openai"]);
+      await waitForSolid(() => expect(page.view.props.probeResults.openai).toBeDefined());
+      page.view.props.onProbe("anthropic", ["anthropic"]);
+      await waitForSolid(() =>
+        expect(page.view.props.messages.anthropic?.text).toBe("Previous agent failure"),
+      );
+      page.view.props.onOpenKeyEditor("openai");
+      page.view.props.onKeyDraftChange("synthetic-route-agent-key");
+      await openApiKeyProvider(page, "anthropic");
+      page.view.props.onAddProviderKeyChange("synthetic-route-provider-key");
+      runtimeConfig.ensureLoaded.mockImplementationOnce(() => defaultsSave.promise);
+      page.view.props.onPrimaryChange("openai/gpt-5");
+      page.view.props.onRequestLogout({
+        cardId: "openai",
+        label: "OpenAI",
+        target: { provider: "openai", profileIds: ["openai:first"] },
+      });
+      await waitForSolid(() =>
+        expect(document.body.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+      );
+      // The unrelated defaults write stays held while this confirmation opens.
+      await drainPageUpdates(page);
+      expect(page.view.props.busy.defaults).toBe(true);
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
+      document.body
+        .querySelector<HTMLButtonElement>(".exec-approval-actions button.danger")!
+        .click();
+      await waitForSolid(() => expect(requestCount(request, "models.authLogout")).toBe(1));
+      settingsAgentSelection.state.selectedId = "writer";
+      settingsAgentSelection.state.scopeId = "writer";
+      publishRouteData(page, { ...EMPTY_MODEL_PROVIDERS_DATA, updatedAt: 1 });
+      await page.updateComplete;
+      expect(page.view.props.credentialAgentLabel).toBe("Writer");
+      expect(page.view.props.busy).toEqual({});
+      expect(page.view.props.messages).toEqual({});
+      expect(page.view.props.probeResults).toEqual({});
+      expect(page.view.props.keyEditorProvider).toBeNull();
+      expect(page.view.props.keyDraft).toBe("");
+      expect(page.view.props.addProviderOpen).toBe(false);
+      expect(page.view.props.addProviderId).toBe("");
+      expect(page.view.props.addProviderKey).toBe("");
+      expect(page.view.props.defaultModels.primary).toBe("openai/gpt-5");
+      firstLogout.resolve({});
+      await drainPageUpdates(page);
+      expect(requestCount(request, "models.authLogout")).toBe(1);
+      await toast.updateComplete;
+      expect(toast.querySelector('[role="status"]')).toBeNull();
+    } finally {
+      firstLogout.resolve({});
+      defaultsSave.resolve();
+      unmountPage(page);
+      restoreDialogs();
     }
   });
 });
@@ -520,6 +626,7 @@ describe("Models account recovery", () => {
     try {
       await waitForProviders(page);
       expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
+      await expandProvider(page, "example");
       page
         .querySelector<HTMLButtonElement>('[aria-label="Log out original@example.invalid"]')!
         .click();
@@ -540,7 +647,7 @@ describe("Models account recovery", () => {
 
       await openAccountRecovery(page);
       expect(page.querySelector("[data-models-use-account]")).toBeNull();
-      await startSelectedLogin(page, "example-browser");
+      await startSelectedLogin(page, "Example browser sign-in");
       await submitCredential(page);
       login.resolve({ done: true, status: "done" });
       await waitForSolid(() =>
@@ -590,6 +697,43 @@ describe("Models account recovery", () => {
     }
   });
 
+  it("cancels account recovery while config admission is queued without dispatching activation", async () => {
+    const restoreDialog = installDialogPolyfill();
+    const { context, request, runtimeConfig, modelRef } = accountRecoveryHarness("replacement");
+    const waiting = deferred();
+    const release = deferred();
+    const page = appendPage(context);
+    try {
+      await openAccountRecovery(page);
+      runtimeConfig.beforeExternalDispatch.mockImplementation(async () => {
+        waiting.resolve();
+        await release.promise;
+      });
+      page.querySelector<HTMLButtonElement>("[data-models-use-account]")!.click();
+      await waiting.promise;
+      await waitForSolid(() =>
+        expect(page.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+          "Checking your model setup",
+        ),
+      );
+      page.querySelector<HTMLButtonElement>(".model-setup-wizard__footer button")!.click();
+      await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+      release.resolve();
+      await drainPageUpdates(page);
+      expect(
+        request.mock.calls.some(([method]) => method === "openclaw.setup.activate.start"),
+      ).toBe(false);
+      expect(currentConfigObject(runtimeConfig.state)).toMatchObject({
+        agents: { entries: { writer: { model: `${modelRef}@example:original` } } },
+      });
+      expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      unmountPage(page);
+      restoreDialog();
+    }
+  });
+
   it.each(["cancel", "missing receipt"] as const)(
     "keeps the unavailable selection visible after account activation %s",
     async (outcome) => {
@@ -598,6 +742,10 @@ describe("Models account recovery", () => {
       const page = appendPage(context);
       await useReplacementAccount(page);
       if (outcome === "cancel") {
+        await waitForSolid(() => {
+          expect(requestCount(request, "wizard.next")).toBe(1);
+          expect(page.querySelector(".model-setup-wizard__footer button")).not.toBeNull();
+        });
         page.querySelector<HTMLButtonElement>(".model-setup-wizard__footer button")!.click();
         await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
         expect(request.mock.calls.some(([method]) => method === "wizard.cancel")).toBe(true);
@@ -619,7 +767,7 @@ describe("Models account recovery", () => {
     const { context } = accountRecoveryHarness("unavailable");
     const page = appendPage(context);
     await waitForProviders(page);
-    expect(page.state.data?.authStatus?.unavailable).toBeDefined();
+    expect(page.view.props.authStatus?.unavailable).toBeDefined();
     expect(page.querySelector("[data-models-account-recovery]")).toBeNull();
   });
 

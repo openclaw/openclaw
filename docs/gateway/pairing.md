@@ -430,6 +430,10 @@ Boundaries:
 
 ## Metadata-upgrade auto-approval
 
+On an already-paired Mac, the CLI and probe can use `macos` or `darwin`
+alongside the native app's versioned macOS label without re-pairing. The pinned
+device family must still match.
+
 When an already-paired device reconnects with only non-sensitive metadata
 changes (for example display name or client platform hints), OpenClaw treats
 that as a `metadata-upgrade`. Silent auto-approval is narrow: it applies only
@@ -439,6 +443,12 @@ OS version metadata changes. Browser/Control UI clients and remote clients
 still use the explicit re-approval flow. Scope upgrades (read to
 write/admin) and public key changes are **not** eligible for
 metadata-upgrade auto-approval; they stay explicit re-approval requests.
+
+The Gateway loads paired devices once during startup. Reconnects use those
+committed, process-owned records for pairing lookups. Pairing writes publish updated records before the next authorization
+check. Access metadata is recorded after the hello response and coalesced across
+tabs of the same device; last-seen-only refreshes within one minute may be skipped.
+This bookkeeping never grants access and cannot update a replacement approval.
 
 ## QR pairing helpers
 

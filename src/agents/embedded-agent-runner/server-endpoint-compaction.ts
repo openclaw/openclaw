@@ -7,7 +7,6 @@ import {
   resolveOpenAIResponsesCompactEndpointPlan,
 } from "@openclaw/ai/transports";
 import type { Message } from "@openclaw/llm-core";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { CompactionRequestBudget } from "../sessions/compaction/request-budget.js";
@@ -40,7 +39,6 @@ export async function attemptServerEndpointCompaction(params: {
   requestOptions: Parameters<typeof requestPreparedOpenAIResponsesCompaction>[3];
   requestBudget?: CompactionRequestBudget;
   customInstructions?: string;
-  config?: OpenClawConfig;
   onUsage?: (usage: ServerEndpointCompactionResult["usage"]) => void;
   onCompactionCommitted?: (tokensBefore: number) => void;
   assertActive?: () => void;
@@ -182,7 +180,6 @@ export async function attemptServerEndpointCompaction(params: {
 function findEndpointWindowNormalizationSource(params: {
   model: Parameters<typeof supportsNativeOpenAIResponsesEndpoint>[0];
   context: { systemPrompt: string; messages: readonly AgentMessage[] };
-  config?: OpenClawConfig;
 }): "system prompt" | "user message" | undefined {
   // Public OpenAI receives the prompt as `instructions`; other compact routes put it in input.
   if (params.context.systemPrompt && !supportsNativeOpenAIResponsesEndpoint(params.model)) {

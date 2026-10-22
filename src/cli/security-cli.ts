@@ -1,4 +1,3 @@
-// Security CLI for local/deep audits and safe remediation.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -6,7 +5,6 @@ import {
 import type { Command } from "commander";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
-import type { GatewayAuthMode } from "../config/types.gateway.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAuditCore } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
@@ -24,50 +22,6 @@ type SecurityAuditOptions = {
   token?: string;
   password?: string;
 };
-
-function parseGatewayAuthMode(value: string | undefined): GatewayAuthMode | undefined {
-  const mode = normalizeOptionalLowercaseString(value);
-  if (!mode) {
-    return undefined;
-  }
-  if (mode === "none" || mode === "token" || mode === "password" || mode === "trusted-proxy") {
-    return mode;
-  }
-  throw new Error(
-    'Invalid --auth value. Expected "none", "token", "password", or "trusted-proxy".',
-  );
-}
-
-function buildAuditGatewayAuthOverride(params: {
-  mode?: GatewayAuthMode;
-  token?: string;
-  password?: string;
-}) {
-  // Explicit runtime auth overrides must include the matching credential.
-  if (!params.mode) {
-    return undefined;
-  }
-  if (params.mode === "token" && !params.token) {
-    throw new Error("Invalid --auth token: pass --token <token> for audit auth override.");
-  }
-  if (params.mode === "password" && !params.password) {
-    throw new Error("Invalid --auth password: pass --password <password> for audit auth override.");
-  }
-  return {
-    mode: params.mode,
-    ...(params.token ? { token: params.token } : {}),
-    ...(params.password ? { password: params.password } : {}),
-  };
-}
-
-function formatSummary(summary: { critical: number; warn: number; info: number }): string {
-  const rich = isRich();
-  return [
-    colorize(rich, theme.error, `${summary.critical} critical`),
-    colorize(rich, theme.warn, `${summary.warn} warn`),
-    colorize(rich, theme.muted, `${summary.info} info`),
-  ].join(" · ");
-}
 
 export function registerSecurityCli(program: Command) {
   const security = program
@@ -109,14 +63,33 @@ export function registerSecurityCli(program: Command) {
     .option("--fix", "Apply safe fixes (tighten defaults + chmod state/config)", false)
     .option("--json", "Print JSON", false)
     .action(async (opts: SecurityAuditOptions) => {
-      const authMode = parseGatewayAuthMode(opts.auth);
+      const rawAuthMode = normalizeOptionalLowercaseString(opts.auth);
+      const authMode =
+        rawAuthMode === "none" ||
+        rawAuthMode === "token" ||
+        rawAuthMode === "password" ||
+        rawAuthMode === "trusted-proxy"
+          ? rawAuthMode
+          : undefined;
+      if (rawAuthMode && !authMode) {
+        throw new Error(
+          'Invalid --auth value. Expected "none", "token", "password", or "trusted-proxy".',
+        );
+      }
       const token = normalizeOptionalString(opts.token);
       const password = normalizeOptionalString(opts.password);
-      const auditGatewayAuthOverride = buildAuditGatewayAuthOverride({
-        mode: authMode,
-        token,
-        password,
-      });
+      // Explicit runtime auth overrides must include the matching credential.
+      if (authMode === "token" && !token) {
+        throw new Error("Invalid --auth token: pass --token <token> for audit auth override.");
+      }
+      if (authMode === "password" && !password) {
+        throw new Error(
+          "Invalid --auth password: pass --password <password> for audit auth override.",
+        );
+      }
+      const auditGatewayAuthOverride = authMode
+        ? { mode: authMode, ...(token ? { token } : {}), ...(password ? { password } : {}) }
+        : undefined;
       const fixResult = opts.fix ? await fixSecurityFootguns() : null;
 
       const sourceConfig = await captureRuntimeConfigAsyncReader()();
@@ -132,7 +105,6 @@ export function registerSecurityCli(program: Command) {
         sourceConfig,
         deep: Boolean(opts.deep),
         includeFilesystem: true,
-        includeChannelSecurity: true,
         deepProbeAuth:
           token || password
             ? {
@@ -158,7 +130,12 @@ export function registerSecurityCli(program: Command) {
 
       const lines: string[] = [];
       lines.push(heading("OpenClaw security audit"));
-      lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
+      const summary = [
+        colorize(rich, theme.error, `${report.summary.critical} critical`),
+        colorize(rich, theme.warn, `${report.summary.warn} warn`),
+        colorize(rich, theme.muted, `${report.summary.info} info`),
+      ].join(" · ");
+      lines.push(muted(`Summary: ${summary}`));
       if ((report.suppressedFindings?.length ?? 0) > 0) {
         lines.push(muted(`Suppressed: ${report.suppressedFindings?.length ?? 0} configured`));
       }

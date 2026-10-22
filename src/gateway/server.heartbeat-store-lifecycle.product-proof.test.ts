@@ -13,7 +13,6 @@ import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
-import { requestHeartbeatAndWait, setHeartbeatsEnabled } from "../infra/heartbeat-wake.js";
 import { isSystemEventTurnOwned, peekSystemEventEntries } from "../infra/system-events.js";
 import * as stateEventSweep from "../sessions/session-state-events.sweep.js";
 import { decodeSessionStateNoticeContextKey } from "../sessions/session-state-notices.js";
@@ -171,7 +170,6 @@ describe("session notification store ownership through the Gateway", () => {
                 workspace: home.workspaceDir,
                 skipBootstrap: true,
                 model: "proof/primary",
-                heartbeat: { every: "30m" },
                 subagents: { allowAgents: ["*"], maxConcurrent: 2 },
                 models: Object.fromEntries(
                   ["primary", "backup"].map((model) => [
@@ -277,10 +275,6 @@ describe("session notification store ownership through the Gateway", () => {
                 agents: { defaults: { model: "proof/backup" } },
               }),
             });
-            expect(await gateway.client.request("last-heartbeat", {})).toMatchObject({
-              status: "skipped",
-              reason: "store-replaced",
-            });
             const after = await gateway.client.request<SessionsListResult>("sessions.list", {
               agentId: "main",
               limit: 100,
@@ -336,18 +330,6 @@ describe("session notification store ownership through the Gateway", () => {
           }
           expect(provider.errors).toEqual([]);
         },
-        async () => {
-          if (!gateway) {
-            return;
-          }
-          setHeartbeatsEnabled(false);
-          await requestHeartbeatAndWait({
-            source: "manual",
-            intent: "immediate",
-            reason: "wake",
-            coalesceMs: 0,
-          });
-        },
         () => gateway && disconnectGatewayClient(gateway.client),
         () => gateway?.server.close({ reason: "heartbeat store proof complete" }),
         () => sweepSpy.mockRestore(),
@@ -355,7 +337,6 @@ describe("session notification store ownership through the Gateway", () => {
         () => resetSubagentRegistryForTests({ persist: false }),
         () => removeGatewayTempHome(home.tempHome),
         () => home.envSnapshot.restore(),
-        () => setHeartbeatsEnabled(true),
         resetHeartbeatEventsForTest,
         resetGatewayTestState,
       );

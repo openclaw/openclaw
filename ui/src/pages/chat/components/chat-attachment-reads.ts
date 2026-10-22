@@ -1,4 +1,5 @@
 import type { ApplicationConfigCapability } from "../../../app/config.ts";
+import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../../lib/uploads.ts";
@@ -9,6 +10,7 @@ import {
 import {
   admitAttachmentFiles,
   attachmentReservationBytes,
+  chatAttachmentBatchBytes,
   type ChatAttachmentLimits,
 } from "./chat-attachment-admission.ts";
 import { resizeChatAttachmentImage } from "./chat-attachment-image.ts";
@@ -24,7 +26,11 @@ type ChatAttachmentReadDestination = {
 export type ChatAttachmentRead = {
   attachment: ChatAttachment;
   state: "reading" | "ready" | "error";
+  errorMessage?: string;
   progress?: number;
+  preparation?: "offer" | "compressing";
+  compress?: () => void;
+  reservedBytes?: number;
   cancel?: () => void;
   destination?: ChatAttachmentReadDestination;
 };
@@ -36,6 +42,7 @@ type PendingChatAttachmentRead = ChatAttachmentRead & {
 export class ChatAttachmentReadLifecycle {
   pendingReads = 0;
   revision = 0;
+  failureCount = 0;
   private controller = new AbortController();
   private entries: ChatAttachmentRead[] = [];
 
@@ -64,11 +71,12 @@ export class ChatAttachmentReadLifecycle {
       (total, entry) =>
         total +
         (entry.state === "reading"
-          ? attachmentReservationBytes(
+          ? (entry.reservedBytes ??
+            attachmentReservationBytes(
               entry.attachment.sizeBytes ?? 0,
               entry.attachment.mimeType,
               limits,
-            )
+            ))
           : 0),
       0,
     );
@@ -86,19 +94,32 @@ export class ChatAttachmentReadLifecycle {
     files: readonly File[],
     attachments: ChatAttachment[],
     destination: ChatAttachmentReadDestination,
+    limits?: ChatAttachmentLimits,
+    stagedBytes = 0,
   ): PendingChatAttachmentRead[] {
     this.project(attachments);
-    const entries = files.map((file): PendingChatAttachmentRead => ({
-      attachment: {
-        id: generateAttachmentId(),
-        origin: "file",
-        mimeType: file.type || "application/octet-stream",
-        fileName: file.name || undefined,
-        sizeBytes: file.size,
-      },
-      state: "reading",
-      destination,
-    }));
+    let total = stagedBytes;
+    const entries = files.map((file): PendingChatAttachmentRead => {
+      const reservedBytes = attachmentReservationBytes(
+        file.size,
+        file.type,
+        limits,
+        file.type.startsWith("video/") ? (limits?.maxBatchBytes ?? Infinity) - total : Infinity,
+      );
+      total += reservedBytes;
+      return {
+        reservedBytes,
+        attachment: {
+          id: generateAttachmentId(),
+          origin: "file",
+          mimeType: file.type || "application/octet-stream",
+          fileName: file.name || undefined,
+          sizeBytes: file.size,
+        },
+        state: "reading",
+        destination,
+      };
+    });
     this.entries.push(...entries);
     this.notify();
     return entries;
@@ -122,13 +143,60 @@ export class ChatAttachmentReadLifecycle {
     return this.entries;
   }
 
-  settle(entry: ChatAttachmentRead, state: "ready" | "error"): void {
+  complete(entry: ChatAttachmentRead): void {
     if (!this.entries.includes(entry)) {
       return;
     }
-    entry.state = state;
+    entry.state = "ready";
+    entry.preparation = undefined;
+    entry.compress = undefined;
     entry.cancel = undefined;
     this.notify();
+  }
+
+  fail(entry: ChatAttachmentRead): boolean {
+    if (!this.entries.includes(entry)) {
+      return false;
+    }
+    this.failureCount += 1;
+    this.remove(entry);
+    return true;
+  }
+
+  failCompression(entry: ChatAttachmentRead, message: string, retry: () => void): void {
+    if (!this.entries.includes(entry)) {
+      return;
+    }
+    this.failureCount += 1;
+    entry.state = "error";
+    entry.errorMessage = message;
+    entry.preparation = undefined;
+    entry.compress = retry;
+    entry.cancel = undefined;
+    this.notify();
+  }
+
+  retry(entry: PendingChatAttachmentRead, file: File, limits?: ChatAttachmentLimits): boolean {
+    if (!this.entries.includes(entry) || entry.state !== "error") {
+      return false;
+    }
+    const stagedBytes =
+      chatAttachmentBatchBytes(entry.destination.getAttachments()) + this.pendingBytes(limits);
+    if (admitAttachmentFiles([file], limits, stagedBytes, { compressVideos: true }).length === 0) {
+      return false;
+    }
+    entry.reservedBytes = attachmentReservationBytes(
+      file.size,
+      file.type,
+      limits,
+      (limits?.maxBatchBytes ?? Infinity) - stagedBytes,
+    );
+    entry.state = "reading";
+    entry.errorMessage = undefined;
+    entry.compress = undefined;
+    entry.progress = undefined;
+    this.notify();
+    return true;
   }
 
   updateProgress(entry: ChatAttachmentRead, fraction: number): void {
@@ -185,7 +253,11 @@ export function readChatAttachmentFile(
       // Ignore reader abort errors on stalled handles.
     }
   };
-  const finish = (outcome: "ready" | "error" | "aborted") => {
+  const finish = (
+    outcome: "ready" | "error" | "aborted",
+    failureMessage = "chat.attachments.readFailed",
+    retryCompression?: () => void,
+  ) => {
     if (settled) {
       return;
     }
@@ -195,13 +267,18 @@ export function readChatAttachmentFile(
     timer = undefined;
     signal.removeEventListener("abort", abort);
     entry.cancel = undefined;
+    entry.compress = undefined;
     if (outcome === "ready" && !uploadsEnabled(props.uploadConfig)) {
-      showToast({ message: uploadsDisabledMessage() });
-      // Keep a failed slot visible rather than silently dropping the rejected file.
-      reads.settle(entry, "error");
+      if (reads.fail(entry)) {
+        showToast({
+          message: uploadsDisabledMessage(),
+          placement: "top-center",
+          severity: "error",
+        });
+      }
     } else if (outcome === "ready" && typeof reader.result === "string" && !signal.aborted) {
       const completedAttachment = registerChatAttachmentPayload({
-        attachment: entry.attachment,
+        attachment: { ...entry.attachment, fileName: preparedFile.name },
         dataUrl: reader.result,
         file: preparedFile,
       });
@@ -214,11 +291,13 @@ export function readChatAttachmentFile(
           .filter(({ attachment }) => readyIds.has(attachment.id))
           .map(({ attachment }) => attachment),
       );
-      reads.settle(entry, "ready");
+      reads.complete(entry);
     } else if (outcome === "aborted" || signal.aborted) {
       reads.remove(entry);
-    } else {
-      reads.settle(entry, "error");
+    } else if (retryCompression) {
+      reads.failCompression(entry, failureMessage, retryCompression);
+    } else if (reads.fail(entry)) {
+      showToast({ message: t(failureMessage), placement: "top-center", severity: "error" });
     }
     entry.destination.onPendingReadsChange?.(-1);
   };
@@ -229,19 +308,25 @@ export function readChatAttachmentFile(
     timer =
       processing && !settled ? setTimeout(onTimeout, CHAT_ATTACHMENT_READ_TIMEOUT_MS) : undefined;
   };
+  // This read owns the FileReader and abort subscription through settlement, independent of rendering.
   entry.cancel = abort;
   signal.addEventListener("abort", abort, { once: true });
-  reader.addEventListener("error", () => finish("error"), { once: true });
-  reader.addEventListener("abort", () => finish("aborted"), { once: true });
-  reader.addEventListener("load", () => finish("ready"), { once: true });
-  reader.addEventListener("progress", (event) => {
-    if (!settled && event.lengthComputable && event.total > 0) {
-      reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
-      if (timer !== undefined) {
-        setProcessing(true);
+  const listenerOptions = { signal: preparation.signal };
+  reader.addEventListener("error", () => finish("error"), listenerOptions);
+  reader.addEventListener("abort", () => finish("aborted"), listenerOptions);
+  reader.addEventListener("load", () => finish("ready"), listenerOptions);
+  reader.addEventListener(
+    "progress",
+    (event) => {
+      if (!settled && event.lengthComputable && event.total > 0) {
+        reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
+        if (timer !== undefined) {
+          setProcessing(true);
+        }
       }
-    }
-  });
+    },
+    listenerOptions,
+  );
   entry.destination.onPendingReadsChange?.(1);
   setProcessing(true);
   const readPreparedFile = (prepared: File) => {
@@ -249,8 +334,18 @@ export function readChatAttachmentFile(
       return;
     }
     // Intake reserved this file's batch share at its per-file ceiling; preparation can only shrink it.
-    if (admitAttachmentFiles([prepared], props.attachmentLimits, 0).length === 0) {
-      finish("error");
+    if (
+      prepared.size > (entry.reservedBytes ?? Infinity) ||
+      admitAttachmentFiles([prepared], props.attachmentLimits, 0, { notify: false }).length === 0
+    ) {
+      finish(
+        "error",
+        prepared.size === 0
+          ? "chat.attachments.readFailed"
+          : file.type.startsWith("video/")
+            ? "chat.attachments.compressionTooLarge"
+            : "chat.attachments.tooLargeToast",
+      );
       return;
     }
     preparedFile = prepared;
@@ -266,8 +361,48 @@ export function readChatAttachmentFile(
       finish("error");
     }
   };
+  const videoLimit = entry.reservedBytes ?? props.attachmentLimits?.maxBytes;
   const imageLimit = props.attachmentLimits?.maxImageBytes;
-  if (imageLimit !== undefined && file.type.startsWith("image/") && file.size > imageLimit) {
+  if (videoLimit !== undefined && file.type.startsWith("video/") && file.size > videoLimit) {
+    // Waiting for consent (and time queued for an encoder) is not a stalled file read.
+    setProcessing(false);
+    entry.preparation = "offer";
+    entry.compress = () => {
+      if (settled || preparation.signal.aborted || !entry.compress) {
+        return;
+      }
+      entry.compress = undefined;
+      entry.preparation = "compressing";
+      reads.updateProgress(entry, 0);
+      void import("./chat-attachment-video.ts")
+        .then(({ compressChatAttachmentVideo }) =>
+          compressChatAttachmentVideo(file, videoLimit, preparation.signal, (progress) =>
+            reads.updateProgress(entry, Math.max(entry.progress ?? 0, progress * 0.95)),
+          ),
+        )
+        .then(readPreparedFile, (error: unknown) => {
+          const reason = error instanceof Error ? error.message : "failed";
+          const message =
+            reason === "unsupported"
+              ? "chat.attachments.compressionUnsupported"
+              : reason === "too-large"
+                ? "chat.attachments.compressionTooLarge"
+                : "chat.attachments.compressionFailed";
+          finish("error", message, () => {
+            if (
+              signal.aborted ||
+              !uploadsEnabled(props.uploadConfig) ||
+              !reads.retry(entry, file, props.attachmentLimits)
+            ) {
+              return;
+            }
+            readChatAttachmentFile(file, entry, reads, props);
+            entry.compress?.();
+          });
+        });
+    };
+    reads.updateProgress(entry, 0);
+  } else if (imageLimit !== undefined && file.type.startsWith("image/") && file.size > imageLimit) {
     void resizeChatAttachmentImage(file, imageLimit, preparation.signal, setProcessing).then(
       readPreparedFile,
       () => finish("error"),

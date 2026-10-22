@@ -95,13 +95,10 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     role: "assistant",
     content: resolvedContent.map((block) => Object.assign({}, block)),
   };
-  const preparedDisplayMessage = applyAssistantDeliveryDirectives(displayMessage);
-  const displayContent = preparedDisplayMessage.content;
-  const canonicalContent = retainAssistantModelContent(displayContent);
-  const rawDeliveryFacts = preparedDisplayMessage.openclawDelivery;
-  const messageBody: AppendMessageArg & Record<string, unknown> = applyAssistantDeliveryDirectives({
+  const displayContent = applyAssistantDeliveryDirectives(displayMessage).content;
+  const messageBody: AppendMessageArg & Record<string, unknown> = {
     role: "assistant",
-    content: canonicalContent,
+    content: retainAssistantModelContent(displayContent),
     [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
     timestamp: now,
     // Runtime projections retain their terminal state; host-authored partials
@@ -134,9 +131,9 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
           },
         }
       : {}),
-  });
-  if (rawDeliveryFacts && messageBody.openclawDelivery === undefined) {
-    messageBody.openclawDelivery = rawDeliveryFacts;
+  };
+  if (displayMessage.openclawDelivery) {
+    messageBody.openclawDelivery = displayMessage.openclawDelivery;
   }
 
   const scope = {

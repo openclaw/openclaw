@@ -5,7 +5,6 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
   status: "deprecated",
   owner: "sdk",
   // Verified compatibility floor; these public methods shipped in 2026.10.1.
-  introduced: "2026-10-01",
   deprecated: "2026-10-11",
   warningStarts: "2026-10-11",
   removeAfter: "2026-12-31",
@@ -68,19 +67,4 @@ export const AUTH_ASYNC_COMPAT_RECORD = {
     "TypeScript @deprecated annotations and migration documentation",
     "Synchronous auth storage entrypoints warn once per plugin and capability family on use",
   ],
-  tests: [
-    "src/agents/auth-profiles.sqlite-store.test.ts",
-    "src/plugin-sdk/provider-auth-runtime.test.ts",
-    "src/agents/sessions/auth-storage.test.ts",
-    "src/agents/auth-profiles/paths-direct-import.test.ts",
-    "src/agents/embedded-agent-runner/cli-backend-dispatch.test.ts",
-    "src/media-generation/runtime-shared.test.ts",
-    "src/plugin-sdk/provider-selection-runtime.test.ts",
-    "src/talk/provider-resolver.test.ts",
-    "src/tts/provider-registry.test.ts",
-    "src/tts/tts-runtime-personas.test.ts",
-    "src/plugins/compat/registry.test.ts",
-  ],
-  releaseNote:
-    "Auth-profile reads and writes, provider availability, and model selection use the existing database workers. Bundled callers await the new APIs; released synchronous contracts remain supported through 2026-12-31. Stored data, schemas, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { runWithSessionControllerCleanup } from "../sessions/session-controller.cleanup-context.js";
 import { AsyncWorkScope, runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -71,13 +72,8 @@ const hostClock: GatewaySchedulerClock = {
   },
 };
 
-/** Next maintenance slot on one clock after a run, skipping missed slots without replay. */
+/** Next maintenance slot after a run, skipping missed slots without replay. */
 function nextMaintenanceSlot(slotMs: number, clockMs: number, everyMs: number): number {
-  // A slot more than half a period ahead was not served by this run (a forward wall-clock
-  // jump fired the job early); keep it so the elapsed cadence still runs on time.
-  if (slotMs - clockMs > everyMs / 2) {
-    return slotMs;
-  }
   return slotMs + (Math.floor(Math.max(0, clockMs - slotMs) / everyMs) + 1) * everyMs;
 }
 
@@ -88,7 +84,6 @@ export class GatewayScheduler {
   private readonly pending = new Set<Promise<void>>();
   private cancelTimer?: () => void;
   private dispatching = false;
-  private timerGeneration = 0;
   private readonly controller = new AbortController();
 
   constructor(
@@ -187,16 +182,19 @@ export class GatewayScheduler {
       phase: params.phase,
       atMs,
       elapsedAtMs:
-        relative || params.everyMs !== undefined
+        params.phase !== "maintenance" && (relative || params.everyMs !== undefined)
           ? this.clock.monotonicNow() + Math.max(0, atMs - nowMs)
           : undefined,
-      context: runOutsideAsyncWorkScope(() => AsyncLocalStorage.snapshot()),
+      // Jobs outlive their registrant: keep its request context, not its work or turn custody.
+      context: runOutsideAsyncWorkScope(() =>
+        runWithSessionControllerCleanup(() => AsyncLocalStorage.snapshot()),
+      ),
       cancelled,
       owner,
     };
     if (params.mode === "earliest" && previous && !previous.running) {
       job.atMs = Math.min(job.atMs, previous.atMs);
-      if (previous.elapsedAtMs !== undefined) {
+      if (params.phase !== "maintenance" && previous.elapsedAtMs !== undefined) {
         job.elapsedAtMs =
           job.elapsedAtMs === undefined
             ? previous.elapsedAtMs
@@ -238,7 +236,6 @@ export class GatewayScheduler {
   beginClose(): void {
     this.controller.abort();
     materializeErrorStack(this.controller.signal.reason);
-    this.timerGeneration += 1;
     this.cancelTimer?.();
     this.cancelTimer = undefined;
     for (const job of this.jobs.values()) {
@@ -267,17 +264,13 @@ export class GatewayScheduler {
     }
     this.cancelTimer?.();
     this.cancelTimer = undefined;
-    const generation = ++this.timerGeneration;
     const next = this.nextWakeAtMs;
     if (next !== null) {
       const nowMs = this.now();
       // Node truncates fractional delays and clamps overflow to 1ms; never arm before due.
       const delayMs = Math.min(2_147_483_647, Math.max(0, Math.ceil(next - nowMs)));
       this.cancelTimer = runInDetachedAsyncContext(() =>
-        this.clock.arm(
-          () => (generation === this.timerGeneration ? this.wake(nowMs + delayMs) : undefined),
-          delayMs,
-        ),
+        this.clock.arm(() => this.wake(nowMs + delayMs), delayMs),
       );
     }
   }
@@ -340,23 +333,9 @@ export class GatewayScheduler {
         if (job.phase === "maintenance") {
           // Advance nominal slots, including across sleep and slow async work, without replay.
           // An immediate startup pass joins the shared phase on its next iteration.
-          const alignmentMs = job.atMs - Math.floor(job.atMs / 10_000) * 10_000;
-          job.atMs -= alignmentMs;
-          if (job.elapsedAtMs !== undefined) {
-            job.elapsedAtMs -= alignmentMs;
-          }
-          // Each clock advances only the slot this run served. A wall-clock jump must not
-          // advance the elapsed cadence with it, but ordinary drift between the clocks
-          // leaves the other clock's slot just ahead; it was served too, or the job would
-          // run again milliseconds later for the same slot.
+          // Clock corrections may delay best-effort maintenance until its next wall slot.
+          job.atMs = Math.floor(job.atMs / 10_000) * 10_000;
           job.atMs = nextMaintenanceSlot(job.atMs, this.now(), job.everyMs);
-          if (job.elapsedAtMs !== undefined) {
-            job.elapsedAtMs = nextMaintenanceSlot(
-              job.elapsedAtMs,
-              this.clock.monotonicNow(),
-              job.everyMs,
-            );
-          }
         } else {
           job.atMs = this.now() + job.everyMs;
           job.elapsedAtMs = this.clock.monotonicNow() + job.everyMs;

@@ -1,17 +1,25 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { PostgresSqlConnection } from "../sql-connection.js";
+import {
+  getSqliteDatabaseAdmission,
+  publishSqliteDatabaseAdmission,
+  type SqliteDatabaseFactKey,
+} from "../sqlite-database-admission.js";
 import type { StoreSchema } from "./contract.js";
 import {
   postgresCatalogQuery,
   readPostgresCatalog,
   type PostgresCatalogFact,
 } from "./postgres-catalog.js";
+import { postgresSearchSql } from "./postgres-search-schema.js";
 
 export const postgresSchemaMetadataSql = `CREATE TABLE openclaw_schema_meta (
   store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL,
   fingerprint TEXT, ddl_hash TEXT, server_major BIGINT)`;
 const recovery =
   "Use a compatible OpenClaw binary or restore the matching PostgreSQL schema and anchor; do not edit schema metadata.";
+// Keep the DDL seal portable when a backup is restored into a fresh namespace.
+const canonicalNamespace = "openclaw_schema";
 const quote = (name: string) => `"${name.replaceAll('"', '""')}"`;
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 export type PostgresCapabilities = {
@@ -20,6 +28,18 @@ export type PostgresCapabilities = {
   clientEncoding: "UTF8";
 };
 const capabilities = new WeakMap<PostgresSqlConnection, PostgresCapabilities>();
+// Definitions follow physical admission across handles and worker isolates.
+const admittedSchemaKey: SqliteDatabaseFactKey<StoreSchema> = {
+  name: "database.postgres.schema",
+  schemaDependent: true,
+};
+export const getAdmittedPostgresSchema = (db: PostgresSqlConnection) =>
+  getSqliteDatabaseAdmission(db, admittedSchemaKey);
+export const retainPostgresSchema = (db: PostgresSqlConnection, schema: StoreSchema) => {
+  // Upgrade recipes can contain backup callbacks; workers only need the current definition.
+  const { postgresMigrations: _migrations, ...definition } = schema;
+  publishSqliteDatabaseAdmission(db, admittedSchemaKey, definition);
+};
 
 export function admitPostgresCapabilities(db: PostgresSqlConnection): PostgresCapabilities {
   const retained = capabilities.get(db);
@@ -67,8 +87,16 @@ export function readPostgresSchema(db: PostgresSqlConnection, namespace: string,
     fingerprint?: string;
     ddl_hash?: string;
     server_major?: number;
+    search_extensions?: string;
   } = JSON.parse(row.metadata);
   return { catalog: readPostgresCatalog(JSON.parse(row.catalog)), metadata };
+}
+
+export function withPostgresSearchExtensions(
+  schema: StoreSchema,
+  snapshot: ReturnType<typeof readPostgresSchema>,
+): StoreSchema {
+  return { ...schema, searchExtensions: JSON.parse(snapshot.metadata.search_extensions ?? "{}") };
 }
 
 function postgresSchemaFingerprint(
@@ -86,6 +114,7 @@ function postgresSchemaFingerprint(
 
 export function postgresSchemaSql(
   schema: StoreSchema,
+  namespace: string,
   catalog?: readonly PostgresCatalogFact[],
 ): string {
   const tables = new Set(
@@ -112,7 +141,18 @@ export function postgresSchemaSql(
     ordered.set(fragment.id, fragment.sql);
   };
   active.forEach(add);
-  return [schema.postgres ?? "", ...ordered.values()].join("\n");
+  const search = [schema.search, ...Object.values(schema.searchExtensions ?? {})].filter(
+    (item) => item !== undefined,
+  );
+  const shared = { text: false, vector: false };
+  const searchSql = search.map((definition) => {
+    const ddl = postgresSearchSql(definition, namespace, shared);
+    shared.text ||= Object.keys(definition.text ?? {}).length > 0;
+    shared.vector ||=
+      definition.mode !== "keyword-only" && Object.keys(definition.vector ?? {}).length > 0;
+    return `;\n${ddl}`;
+  });
+  return [schema.postgres ?? "", ...ordered.values(), ...searchSql].join("\n");
 }
 
 export function recordPostgresSchema(
@@ -129,7 +169,7 @@ export function recordPostgresSchema(
     "UPDATE openclaw_schema_meta SET fingerprint = ?, ddl_hash = ?, server_major = ? WHERE store = ?",
   ).run(
     postgresSchemaFingerprint(captured.catalog),
-    hash(postgresSchemaSql(schema, captured.catalog)),
+    hash(postgresSchemaSql(schema, canonicalNamespace, captured.catalog)),
     admitPostgresCapabilities(db).serverMajor,
     schema.id,
   );
@@ -141,9 +181,10 @@ export function verifyPostgresSchema(
   namespace: string,
   schema: StoreSchema,
   snapshot: ReturnType<typeof readPostgresSchema>,
+  preserveSeal = false,
 ): void {
   const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
-  const ddl = postgresSchemaSql(schema, snapshot.catalog);
+  const ddl = postgresSchemaSql(schema, canonicalNamespace, snapshot.catalog);
   const { metadata } = snapshot;
   const major = admitPostgresCapabilities(db).serverMajor;
   if (
@@ -153,13 +194,41 @@ export function verifyPostgresSchema(
   ) {
     throw new Error(`PostgreSQL schema drift detected. ${recovery}`);
   }
-  if (metadata.ddl_hash && metadata.ddl_hash !== hash(ddl)) {
-    throw new Error(`PostgreSQL generated DDL hash mismatch. ${recovery}`);
-  }
-  if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash) {
+  if (metadata.server_major === major && metadata.fingerprint && metadata.ddl_hash === hash(ddl)) {
     return;
   }
-  verifyAndRecordPostgresSchema(db, namespace, schema, snapshot);
+  // Inspection may compare reconstructed source DDL without rewriting the installed seal.
+  if (preserveSeal) {
+    db.runTransaction(() => verifyPostgresSchemaDefinition(db, namespace, schema, snapshot));
+  } else {
+    // Fragment regrouping can change DDL bytes without changing the canonical catalog.
+    verifyAndRecordPostgresSchema(db, namespace, schema, snapshot);
+  }
+}
+
+function verifyPostgresSchemaDefinition(
+  db: PostgresSqlConnection,
+  namespace: string,
+  schema: StoreSchema,
+  snapshot: ReturnType<typeof readPostgresSchema>,
+): void {
+  const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
+  const scratch = `openclaw_check_${randomUUID().replaceAll("-", "")}`;
+  db.exec(`CREATE SCHEMA ${quote(scratch)}`);
+  try {
+    db.exec(`SET LOCAL search_path TO ${quote(scratch)}`);
+    db.exec(postgresSchemaSql(schema, scratch, snapshot.catalog));
+    const row = db.query(
+      `SELECT catalog::text FROM (${postgresCatalogQuery(scratch, true)}) captured`,
+    ).rows[0];
+    const expected = readPostgresCatalog(JSON.parse(String(row?.catalog)));
+    if (postgresSchemaFingerprint(expected, { from: scratch, to: namespace }) !== fingerprint) {
+      throw new Error(`PostgreSQL schema drift detected against generated DDL. ${recovery}`);
+    }
+  } finally {
+    db.exec(`SET LOCAL search_path TO ${quote(namespace)}`);
+    db.exec(`DROP SCHEMA ${quote(scratch)} CASCADE`);
+  }
 }
 
 /** Migrations and major upgrades validate the destination before publishing its seal. */
@@ -168,26 +237,9 @@ export function verifyAndRecordPostgresSchema(
   namespace: string,
   schema: StoreSchema,
   snapshot = readPostgresSchema(db, namespace, schema.id),
-): void {
-  const fingerprint = postgresSchemaFingerprint(snapshot.catalog);
-  const ddl = postgresSchemaSql(schema, snapshot.catalog);
-  const scratch = `openclaw_check_${randomUUID().replaceAll("-", "")}`;
+): ReturnType<typeof readPostgresSchema> {
   db.runTransaction(() => {
-    db.exec(`CREATE SCHEMA ${quote(scratch)}`);
-    try {
-      db.exec(`SET LOCAL search_path TO ${quote(scratch)}`);
-      db.exec(ddl);
-      const row = db.query(
-        `SELECT catalog::text FROM (${postgresCatalogQuery(scratch, true)}) captured`,
-      ).rows[0];
-      const expected = readPostgresCatalog(JSON.parse(String(row?.catalog)));
-      if (postgresSchemaFingerprint(expected, { from: scratch, to: namespace }) !== fingerprint) {
-        throw new Error(`PostgreSQL schema drift detected against generated DDL. ${recovery}`);
-      }
-    } finally {
-      db.exec(`SET LOCAL search_path TO ${quote(namespace)}`);
-      db.exec(`DROP SCHEMA ${quote(scratch)} CASCADE`);
-    }
+    verifyPostgresSchemaDefinition(db, namespace, schema, snapshot);
     if (!snapshot.metadata.ddl_hash) {
       db.exec(
         "ALTER TABLE openclaw_schema_meta ADD COLUMN IF NOT EXISTS fingerprint TEXT, ADD COLUMN IF NOT EXISTS ddl_hash TEXT, ADD COLUMN IF NOT EXISTS server_major BIGINT",
@@ -195,4 +247,5 @@ export function verifyAndRecordPostgresSchema(
     }
     recordPostgresSchema(db, namespace, schema, snapshot);
   });
+  return snapshot;
 }

@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -26,6 +26,58 @@ const inventoryCheck =
   'pnpm test test/scripts/eager-import-closure.test.ts -t "PR wrapper inventory"';
 const wrapperFailure = (output: string) =>
   `${output}\nCheck the inventory first: ${inventoryCheck}`;
+
+function run(
+  command: string,
+  args: string[],
+  options: Pick<SpawnSyncOptions, "cwd" | "env" | "timeout"> = {},
+) {
+  return spawnSync(command, args, { ...options, encoding: "utf8" });
+}
+
+function expectResult(
+  result: ReturnType<typeof run>,
+  expected: { status: number; stdout?: unknown; stderr?: unknown },
+) {
+  expect(result, wrapperFailure(result.stderr)).toMatchObject(expected);
+}
+
+function wrapperFixture() {
+  const root = tempDirs.make("openclaw-pr-anchor-");
+  const canonical = join(root, "canonical");
+  const env = {
+    PATH: process.env.PATH,
+    HOME: root,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+  const git = (cwd: string, ...args: string[]) => {
+    const result = run(
+      "git",
+      ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args],
+      { cwd, env },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  return { root, canonical, env, git };
+}
+
+function writeFixture(root: string, files: Record<string, unknown>) {
+  for (const [file, value] of Object.entries(files)) {
+    const target = join(root, file);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, typeof value === "string" ? value : JSON.stringify(value));
+  }
+}
+
+function replaceFsSafe(root: string, canonical: string, manifest: Record<string, unknown>) {
+  const dependency = join(root, "fixture-fs-safe");
+  writeFixture(dependency, { "package.json": manifest, "config.js": "export {};\n" });
+  const installed = join(canonical, "node_modules/@openclaw/fs-safe");
+  rmSync(installed);
+  symlinkSync(dependency, installed, process.platform === "win32" ? "junction" : "dir");
+}
 
 it("keeps packaged scripts closed over runtime imports", () => {
   const files: string[] = JSON.parse(readFileSync("package.json", "utf8")).files;
@@ -57,22 +109,11 @@ it("keeps the PR wrapper inventory closed over runtime imports", () => {
   const missing = closure.filter(
     (file) => !file.startsWith("scripts/pr-lib/") && !extracted.has(file),
   );
+  // Existing assets can be path-loaded; only absent inventory paths are stale.
   const diagnostic = [
     "The trusted-anchor PR wrapper extracts only scripts/pr, scripts/pr-lib, and its inventory.",
-    ...(missing.length
-      ? [
-          `Missing runtime imports:\n${missing.join("\n")}`,
-          `Add these lines to ${wrapperInventory}.`,
-        ]
-      : []),
-    // Existing non-imported assets may be loaded by path; only deleted paths
-    // are provably stale without changing the extraction contract.
-    ...(stale.length
-      ? [
-          `Stale paths (absent from the repository):\n${stale.join("\n")}`,
-          `Remove these lines from ${wrapperInventory}.`,
-        ]
-      : []),
+    `Missing runtime imports (add to ${wrapperInventory}):\n${missing.join("\n")}`,
+    `Stale paths (remove from ${wrapperInventory}):\n${stale.join("\n")}`,
     `Run locally: ${inventoryCheck}`,
   ].join("\n");
   expect({ missing, stale }, diagnostic).toEqual({ missing: [], stale: [] });
@@ -88,14 +129,16 @@ it("acquires wrapper leases and manages templates without the application comman
     "src/state/openclaw-state-lease.ts",
     "src/state/openclaw-state-db.ts",
     "src/state/openclaw-state.worker.ts",
+    "src/state/openclaw-state-read.worker.ts",
     "src/state/openclaw-state-lease-worker.ts",
     "src/state/openclaw-state-lease-heartbeat.worker.ts",
     "src/infra/gateway-state-owner-heartbeat.worker.ts",
     "src/infra/sqlite-store.worker.ts",
     "src/infra/sqlite-readonly-location.worker.ts",
+    "src/infra/worker-native-lifecycle.worker.ts",
   ]);
   expect(existsSync(join(root, "src/state/openclaw-state-worker-runtime.ts"))).toBe(false);
-  const result = spawnSync(
+  const result = run(
     process.execPath,
     [
       "--input-type=module",
@@ -151,7 +194,6 @@ it("acquires wrapper leases and manages templates without the application comman
     ],
     {
       cwd: root,
-      encoding: "utf8",
       timeout: 30_000,
       env: {
         PATH: process.env.PATH,
@@ -163,8 +205,7 @@ it("acquires wrapper leases and manages templates without the application comman
       },
     },
   );
-  expect(result.status, wrapperFailure(result.stderr)).toBe(0);
-  expect(result.stdout, wrapperFailure(result.stderr)).toContain("LEASE_BOOTSTRAP_OK");
+  expectResult(result, { status: 0, stdout: expect.stringContaining("LEASE_BOOTSTRAP_OK") });
 });
 
 it("resolves wrapper package exports and workspace aliases from the extracted dependency context", () => {
@@ -183,15 +224,11 @@ it("resolves wrapper package exports and workspace aliases from the extracted de
   ]) {
     expect(files).toContain(join(entrypoint));
   }
-  const pinned = spawnSync(
-    process.execPath,
-    [
-      join(root, "scripts/pr-lib/materialize-dependencies.mjs"),
-      join(process.cwd(), "node_modules"),
-      join(root, "node_modules"),
-    ],
-    { encoding: "utf8" },
-  );
+  const pinned = run(process.execPath, [
+    join(root, "scripts/pr-lib/materialize-dependencies.mjs"),
+    join(process.cwd(), "node_modules"),
+    join(root, "node_modules"),
+  ]);
   expect(pinned.status, wrapperFailure(pinned.stderr)).toBe(0);
   const closure = collectRuntimeImportClosure(root, files, { validatePackages: true });
   expect(closure.filter((file) => file.startsWith("..") || !existsSync(join(root, file)))).toEqual(
@@ -208,9 +245,8 @@ it.each([
   const root = tempDirs.make("openclaw-eager-import-closure-");
   const entry = join(root, "entry.mts");
   writeFileSync(entry, `${source}\nconsole.log("entry executed");\n`);
-  const result = spawnSync(resolveTestNodeExecPath(), [entry], {
+  const result = run(resolveTestNodeExecPath(), [entry], {
     cwd: root,
-    encoding: "utf8",
     env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
   });
   expect(result.status, result.stderr).toBe(loadsModule ? 1 : 0);
@@ -229,20 +265,15 @@ it.each([
 itPosix.each(["empty", "legacy", "outdated"])(
   "boots an anchor handed off by an older wrapper (dependencies=%s)",
   (dependencies) => {
-    const root = tempDirs.make("openclaw-pr-anchor-dependencies-");
-    const canonical = join(root, "canonical");
+    const { root, canonical, env: baseEnv, git } = wrapperFixture();
     const anchor = join(root, "anchor");
     mkdirSync(canonical);
     const env = {
-      PATH: process.env.PATH,
-      HOME: root,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
+      ...baseEnv,
       OPENCLAW_PR_ANCHOR_REPO_ROOT: canonical,
       TSX_TSCONFIG_PATH: join(anchor, "tsconfig.json"),
     };
-    const initialized = spawnSync("git", ["init", canonical], { env, encoding: "utf8" });
-    expect(initialized.status, initialized.stderr).toBe(0);
+    git(root, "init", canonical);
     copyPrWrapperSources(anchor);
     linkPrWrapperDependencies(canonical);
     if (dependencies === "legacy") {
@@ -257,17 +288,9 @@ itPosix.each(["empty", "legacy", "outdated"])(
       }
     }
     if (dependencies === "outdated") {
-      const obsoletePackage = join(root, "obsolete-fs-safe");
-      mkdirSync(obsoletePackage);
-      writeFileSync(join(obsoletePackage, "package.json"), JSON.stringify({ version: "0.5.6" }));
-      const donor = join(canonical, "node_modules/@openclaw/fs-safe");
-      rmSync(donor);
-      symlinkSync(obsoletePackage, donor, process.platform === "win32" ? "junction" : "dir");
+      replaceFsSafe(root, canonical, { version: "0.5.6" });
     }
-    const bootstrap = spawnSync(join(anchor, "scripts/pr"), ["review-init"], {
-      env,
-      encoding: "utf8",
-    });
+    const bootstrap = run(join(anchor, "scripts/pr"), ["review-init"], { env });
     if (dependencies === "outdated") {
       expect(bootstrap.status, bootstrap.stderr).toBe(1);
       expect(bootstrap.stderr).toContain("has version 0.5.6; the trust anchor requires");
@@ -275,92 +298,50 @@ itPosix.each(["empty", "legacy", "outdated"])(
         "Restore frozen dependencies in a clean trusted-main checkout",
       );
       expect(existsSync(join(anchor, "node_modules"))).toBe(false);
-      const locks = spawnSync("git", ["-C", canonical, "for-each-ref", "refs/openclaw"], {
-        env,
-        encoding: "utf8",
+      expectResult(run("git", ["-C", canonical, "for-each-ref", "refs/openclaw"], { env }), {
+        status: 0,
+        stdout: "",
       });
-      expect(locks.status, locks.stderr).toBe(0);
-      expect(locks.stdout).toBe("");
       return;
     }
-    expect(bootstrap.status, wrapperFailure(bootstrap.stderr)).toBe(2);
-    expect(bootstrap.stdout, wrapperFailure(bootstrap.stderr)).toContain(
-      "scripts/pr review-init <PR>",
-    );
-    const provision = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        join(anchor, "scripts/tsx.mjs"),
-        join(anchor, "scripts/pr-lib/worktree-provision.mts"),
-      ],
-      { env, encoding: "utf8" },
-    );
-    expect(provision.status, wrapperFailure(provision.stderr)).toBe(1);
-    expect(provision.stderr, wrapperFailure(provision.stderr)).toContain(
-      "Usage: worktree-provision.mts",
-    );
-
-    if (dependencies !== "legacy") {
-      return;
-    }
-    rmSync(join(canonical, "node_modules/yaml"));
-    const supervised = spawnSync(join(anchor, "scripts/pr"), ["review-init"], {
-      env,
-      encoding: "utf8",
+    expectResult(bootstrap, {
+      status: 2,
+      stdout: expect.stringContaining("scripts/pr review-init <PR>"),
     });
-    expect(supervised.status, wrapperFailure(supervised.stderr)).toBe(2);
-    expect(supervised.stdout, wrapperFailure(supervised.stderr)).toContain(
-      "scripts/pr review-init <PR>",
-    );
+    if (dependencies === "legacy") {
+      rmSync(join(canonical, "node_modules/yaml"));
+      expectResult(run(join(anchor, "scripts/pr"), ["review-init"], { env }), {
+        status: 2,
+        stdout: expect.stringContaining("scripts/pr review-init <PR>"),
+      });
+    }
   },
 );
 
 itPosix.each([false, true])("launches a pre-helper anchor (manifest=%s)", (manifest) => {
-  const root = tempDirs.make("openclaw-pr-legacy-anchor-");
-  const canonical = join(root, "canonical");
+  const { root, canonical, env, git } = wrapperFixture();
   const linked = join(root, "linked");
-  const env = {
-    PATH: process.env.PATH,
-    HOME: root,
+  Object.assign(env, {
     TMPDIR: root,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
     GIT_AUTHOR_NAME: "OpenClaw Test",
     GIT_AUTHOR_EMAIL: "test@example.invalid",
     GIT_COMMITTER_NAME: "OpenClaw Test",
     GIT_COMMITTER_EMAIL: "test@example.invalid",
-  };
-  const git = (cwd: string, ...args: string[]) => {
-    const result = spawnSync(
-      "git",
-      ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args],
-      { cwd, env, encoding: "utf8" },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    return result.stdout.trim();
-  };
+  });
   git(root, "init", "-b", "main", canonical);
-  mkdirSync(join(canonical, "scripts/pr-lib"), { recursive: true });
   const wrapper = join(canonical, "scripts/pr");
   // The old entrypoint understands the verified handoff but has no dependency helper.
-  writeFileSync(
-    wrapper,
-    '#!/bin/bash\n# OPENCLAW_PR_ANCHOR_REPO_ROOT\nexec node "$(dirname "$0")/pr-lib/legacy-entry.mjs"\n',
-  );
+  writeFixture(canonical, {
+    "scripts/pr":
+      '#!/bin/bash\n# OPENCLAW_PR_ANCHOR_REPO_ROOT\nexec node "$(dirname "$0")/pr-lib/legacy-entry.mjs"\n',
+    "scripts/pr-lib/legacy-entry.mjs": `import "${manifest ? "@openclaw/fs-safe/config" : "yaml"}";\nconsole.log("legacy anchor loaded");\n`,
+    "scripts/pr-lib/wrapper-components.txt": `${manifest ? "package.json\n" : ""}scripts/pr-lib/legacy-entry.mjs\n`,
+  });
   chmodSync(wrapper, 0o755);
-  writeFileSync(
-    join(canonical, "scripts/pr-lib/legacy-entry.mjs"),
-    `import "${manifest ? "@openclaw/fs-safe/config" : "yaml"}";\nconsole.log("legacy anchor loaded");\n`,
-  );
-  writeFileSync(
-    join(canonical, "scripts/pr-lib/wrapper-components.txt"),
-    `${manifest ? "package.json\n" : ""}scripts/pr-lib/legacy-entry.mjs\n`,
-  );
   if (manifest) {
     const packageJson = JSON.parse(readFileSync("package.json", "utf8"));
     packageJson.dependencies["@openclaw/fs-safe"] = "0.0.0-fixture";
-    writeFileSync(join(canonical, "package.json"), JSON.stringify(packageJson));
+    writeFixture(canonical, { "package.json": packageJson });
   }
   git(canonical, "add", ".");
   git(canonical, "commit", "-m", "test: pre-helper anchor");
@@ -379,47 +360,33 @@ itPosix.each([false, true])("launches a pre-helper anchor (manifest=%s)", (manif
   linkPrWrapperDependencies(canonical);
   if (manifest) {
     // The anchor's required version can differ from the newer parent's manifest.
-    const dependency = join(root, "older-fs-safe");
-    mkdirSync(dependency);
-    writeFileSync(
-      join(dependency, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/fs-safe",
-        version: "0.0.0-fixture",
-        type: "module",
-        exports: { "./config": "./config.js" },
-      }),
-    );
-    writeFileSync(join(dependency, "config.js"), "export {};\n");
-    const installed = join(canonical, "node_modules/@openclaw/fs-safe");
-    rmSync(installed);
-    symlinkSync(dependency, installed, "dir");
+    replaceFsSafe(root, canonical, {
+      name: "@openclaw/fs-safe",
+      version: "0.0.0-fixture",
+      type: "module",
+      exports: { "./config": "./config.js" },
+    });
   }
 
-  const result = spawnSync(join(linked, "scripts/pr"), ["review-init"], {
+  const result = run(join(linked, "scripts/pr"), ["review-init"], {
     cwd: linked,
     env,
-    encoding: "utf8",
   });
-  expect(result.status, wrapperFailure(result.stderr)).toBe(0);
-  expect(result.stderr, wrapperFailure(result.stderr)).toContain(
-    "running wrapper code materialized from",
-  );
-  expect(result.stdout, wrapperFailure(result.stderr)).toBe("legacy anchor loaded\n");
+  expectResult(result, {
+    status: 0,
+    stderr: expect.stringContaining("running wrapper code materialized from"),
+    stdout: "legacy anchor loaded\n",
+  });
   expect(git(canonical, "for-each-ref", "refs/openclaw")).toBe("");
 });
 
 it("captures lazy platform modules and their runtime dependencies without loading them", () => {
   const directory = tempDirs.make("openclaw-runtime-import-closure-");
-  writeFileSync(
-    join(directory, "entry.mts"),
-    'export const load = () => import("./platform.mts");',
-  );
-  writeFileSync(
-    join(directory, "platform.mts"),
-    'import "./native.js"; throw new Error("must not load");',
-  );
-  writeFileSync(join(directory, "native.ts"), 'import type { Missing } from "./erased.ts";');
+  writeFixture(directory, {
+    "entry.mts": 'export const load = () => import("./platform.mts");',
+    "platform.mts": 'import "./native.js"; throw new Error("must not load");',
+    "native.ts": 'import type { Missing } from "./erased.ts";',
+  });
   const entry = relative(process.cwd(), join(directory, "entry.mts")).replaceAll("\\", "/");
   expect(collectRuntimeImportClosure(process.cwd(), [entry])).toEqual([entry]);
   expect(
@@ -433,26 +400,19 @@ it("captures lazy platform modules and their runtime dependencies without loadin
 
 it("resolves runtime aliases and import/require conditions without following declarations", () => {
   const root = tempDirs.make("openclaw-runtime-resolution-");
-  mkdirSync(join(root, "src"));
-  writeFileSync(
-    join(root, "tsconfig.json"),
-    JSON.stringify({
+  writeFixture(root, {
+    "tsconfig.json": {
       compilerOptions: {
         module: "NodeNext",
         moduleResolution: "NodeNext",
         verbatimModuleSyntax: true,
         paths: { "@fixture/*": ["./src/*.ts"] },
       },
-    }),
-  );
-  writeFileSync(
-    join(root, "package.json"),
-    JSON.stringify({
+    },
+    "package.json": {
       type: "module",
       imports: { "#branch": { import: "./import.ts", require: "./require.ts" } },
-    }),
-  );
-  for (const [file, source] of Object.entries({
+    },
     "entry.ts":
       'import "@fixture/alias"; import "./native.js"; import "./common.cts"; require("#branch");',
     "common.cts": 'export const load = () => import("#branch");',
@@ -463,9 +423,7 @@ it("resolves runtime aliases and import/require conditions without following dec
     "native-dependency.ts": "export const native = true;",
     "import.ts": "export const imported = true;",
     "require.ts": "export const required = true;",
-  })) {
-    writeFileSync(join(root, file), source);
-  }
+  });
 
   expect(
     collectRuntimeImportClosure(root, ["entry.ts", "launch"], { includeDynamicImports: true }),
@@ -489,6 +447,7 @@ it("resolves runtime aliases and import/require conditions without following dec
 it.each([
   {
     name: "native update authority",
+    dynamic: false,
     entrypoints: [
       "src/cli/update-cli/update-command-executor.ts",
       "src/cli/update-cli/update-command-retained-service.ts",
@@ -503,22 +462,32 @@ it.each([
   },
   {
     name: "migrated finalization",
+    dynamic: false,
     entrypoints: ["src/infra/update-migrated-finalize.worker.ts"],
     deferredOwners: ["src/cli/daemon-cli.ts", "src/cli/daemon-cli/register.ts"],
   },
-])("keeps $name free of eager validation imports", ({ entrypoints, deferredOwners }) => {
-  const closure = collectRuntimeImportClosure(process.cwd(), entrypoints);
+  {
+    name: "Git operation workers",
+    entrypoints: ["src/infra/git-operation.worker.ts"],
+    dynamic: true,
+    deferredOwners: [
+      "src/agents/worktrees/service-preparation.ts",
+      "src/agents/worktrees/allocation.ts",
+    ],
+  },
+  {
+    name: "Ollama config metadata",
+    entrypoints: ["extensions/ollama/src/defaults.ts", "extensions/ollama/provider-policy-api.ts"],
+    dynamic: false,
+    deferredOwners: [
+      "src/plugin-sdk/provider-model-shared.ts",
+      "src/plugin-sdk/plugin-entry.ts",
+      "src/plugins/provider-replay-helpers.ts",
+    ],
+  },
+])("keeps $name independent of deferred owners", ({ entrypoints, deferredOwners, dynamic }) => {
+  const closure = collectRuntimeImportClosure(process.cwd(), entrypoints, {
+    includeDynamicImports: dynamic,
+  });
   expect(closure.filter((file) => deferredOwners.includes(file))).toEqual([]);
-});
-
-it("keeps Git operation workers independent of worktree allocation and registry owners", () => {
-  const closure = collectRuntimeImportClosure(
-    process.cwd(),
-    ["src/infra/git-operation.worker.ts"],
-    {
-      includeDynamicImports: true,
-    },
-  );
-  expect(closure).not.toContain("src/agents/worktrees/service-preparation.ts");
-  expect(closure).not.toContain("src/agents/worktrees/allocation.ts");
 });

@@ -29,6 +29,7 @@ import {
 import {
   assertPackageIntegritySettlementUnchanged,
   createPackageIntegrityReader,
+  packageIntegrityMatches,
   packageStatUnchanged,
 } from "./package-update-integrity.js";
 
@@ -140,7 +141,10 @@ export async function verifyPackagePublicationSettlement(
     );
     assertCurrent();
     remount.assertUnchanged();
-    if (!isDeepStrictEqual(tree, { ...expectedTree, identity: installedIdentity })) {
+    if (
+      !("digest" in expectedTree) ||
+      !packageIntegrityMatches({ ...expectedTree, identity: installedIdentity }, tree)
+    ) {
       throw new Error(`Package settlement full ${selected} fingerprint changed.`);
     }
     assertTreeUnchanged = () => assertPackageIntegritySettlementUnchanged(tree);

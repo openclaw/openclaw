@@ -20,25 +20,31 @@ import {
   type ServiceDefinitionDrift,
 } from "../../daemon/service-audit.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   formatDeferredPluginMigration,
   readDeferredPluginMigrationsAsync,
 } from "../../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readGatewayLastInstallationReplacement } from "../../infra/gateway-boot-lifecycle.js";
+import { readGatewayLastInstallationReplacementAsync } from "../../infra/gateway-boot-lifecycle.js";
 import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
+import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import {
   normalizeUpdateChannel,
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
-import { checkUpdateStatus, formatGitInstallLabel } from "../../infra/update-check.js";
+import {
+  checkUpdateStatus,
+  formatGitInstallLabel,
+  type UpdateCheckResult,
+} from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { UPDATE_NETWORK_TIMEOUT_MS } from "../../infra/update-network-budget.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
 import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
@@ -76,64 +82,141 @@ async function readUpdateRecoverySetStatus() {
 async function readChannelStatusIssues(
   config: OpenClawConfig,
   timeoutMs = 5_000,
+  signal?: AbortSignal,
 ): Promise<ChannelStatusIssue[]> {
   try {
-    const [{ callGateway }, { collectChannelStatusIssues }, { loadDeviceIdentityIfPresent }] =
+    const [{ callGateway }, { collectChannelStatusIssues }, { loadDeviceIdentityIfPresentAsync }] =
       await Promise.all([
         import("../../gateway/call.js"),
         import("../../infra/channels-status-issues.js"),
-        import("../../infra/device-identity.js"),
+        import("../../infra/device-identity-async.js"),
       ]);
     const payload = await callGateway({
       method: "channels.status",
       params: { probe: false, timeoutMs },
       timeoutMs,
+      signal,
       config,
       sharedStateMode: "read-only",
       // The RPC's default async identity lookup uses a writable actor, even for existing-only reads.
-      deviceIdentity: loadDeviceIdentityIfPresent(),
+      deviceIdentity: await loadDeviceIdentityIfPresentAsync(),
     });
     return collectChannelStatusIssues(payload, []);
-  } catch {
-    return [];
+  } catch (error) {
+    throw new Error(`Channel inspection unavailable: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
   }
 }
 
 export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<void> {
-  return await withArtifactPreservingStateReads(() => inspectUpdateStatus(opts));
+  const checkTimeoutMs = parseUpdateTimeoutMs(opts.timeout);
+  // --timeout bounds update checks; a short network budget must not discard local history.
+  const timeoutMs = Math.max(30_000, checkTimeoutMs ?? 0);
+  const scope = new AsyncWorkScope();
+  const timer = setTimeout(
+    () => scope.beginClose(new Error(`Update status timed out after ${timeoutMs / 1000} seconds`)),
+    timeoutMs,
+  );
+  try {
+    await withSqliteDatabaseAdmissionWait(
+      { deadlineAtMs: Date.now() + timeoutMs, assertActive: () => scope.signal.throwIfAborted() },
+      () =>
+        scope.run(() =>
+          withArtifactPreservingStateReads(() =>
+            inspectUpdateStatus(opts, scope.signal, timeoutMs, checkTimeoutMs),
+          ),
+        ),
+    );
+  } finally {
+    clearTimeout(timer);
+    scope.beginClose();
+  }
 }
 
-async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
-  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
+async function inspectUpdateStatus(
+  opts: UpdateStatusOptions,
+  signal: AbortSignal,
+  timeoutMs: number,
+  checkTimeoutMs: number | undefined,
+): Promise<void> {
+  const inspectionErrors: { section: string; message: string }[] = [];
+  const deadline = performance.now() + timeoutMs;
+  const remainingMs = () => Math.max(1, deadline - performance.now());
+  const inspect = async <T>(
+    section: string,
+    operation: () => T | Promise<T>,
+    fallback: T,
+    onError?: (message: string) => void,
+  ): Promise<T> => {
+    try {
+      signal.throwIfAborted();
+      return await racePromiseWithAbortSignal(
+        Promise.resolve().then(operation),
+        signal,
+        (aborted) => aborted.reason,
+      );
+    } catch (error) {
+      const message = sanitizeTerminalText(
+        redactSensitiveText(formatErrorMessage(error), { mode: "tools" }),
+      );
+      inspectionErrors.push({ section, message });
+      onError?.(message);
+      return fallback;
+    }
+  };
 
+  const runStatusPromise = inspect<Awaited<ReturnType<typeof readUpdateRunStatus>>>(
+    "update history",
+    readUpdateRunStatus,
+    { runStatusError: "Update history inspection unavailable" },
+  );
+  const recoveryStatusPromise = inspect<Awaited<ReturnType<typeof readUpdateRecoverySetStatus>>>(
+    "recovery sets",
+    readUpdateRecoverySetStatus,
+    { recoverySetsError: "Recovery set inspection unavailable" },
+  );
   const [root, config, runtimeFindings] = await Promise.all([
-    resolveUpdateRoot(),
-    readSourceConfigBestEffort(),
-    collectNodeRuntimeFindings(),
+    inspect<string | null>("installation root", resolveUpdateRoot, null),
+    inspect<OpenClawConfig>("configuration", readSourceConfigBestEffort, {}),
+    inspect("Node runtime", collectNodeRuntimeFindings, []),
   ]);
   const configChannel = normalizeUpdateChannel(config.update?.channel);
   const gitTargetChannel =
     opts.json && (configChannel === "stable" || configChannel === "beta")
-      ? await readUpdateChannelConfig(false)
-          .then(({ storedChannel }) => storedChannel)
-          .catch(() => null)
+      ? await inspect(
+          "channel configuration",
+          () => readUpdateChannelConfig(false).then(({ storedChannel }) => storedChannel),
+          null,
+        )
       : null;
 
   const [update, channelIssues] = await Promise.all([
-    checkUpdateStatus({
-      root,
-      timeoutMs,
-      fetchGit: true,
-      useDetachedDevUpstream: configChannel === "dev",
-      includeRegistry: true,
-      resolveRegistryChannel: ({ installKind, git }) =>
-        resolveStatusRegistryUpdateChannel({
-          configChannel,
-          installKind,
-          git,
+    inspect<UpdateCheckResult>(
+      "installation",
+      () =>
+        checkUpdateStatus({
+          root,
+          timeoutMs: Math.min(checkTimeoutMs ?? Infinity, remainingMs()),
+          signal,
+          fetchGit: true,
+          useDetachedDevUpstream: configChannel === "dev",
+          includeRegistry: true,
+          resolveRegistryChannel: ({ installKind, git }) =>
+            resolveStatusRegistryUpdateChannel({
+              configChannel,
+              installKind,
+              git,
+            }),
         }),
-    }),
-    readChannelStatusIssues(config, timeoutMs),
+      { root, installKind: "unknown", packageManager: "unknown" },
+    ),
+    inspect(
+      "channels",
+      () =>
+        readChannelStatusIssues(config, Math.min(checkTimeoutMs ?? 5_000, remainingMs()), signal),
+      [],
+    ),
   ]);
   const git = update.git;
   const currentSha = git?.sha;
@@ -143,16 +226,20 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
     currentSha &&
     git.dirty === false &&
     (gitTargetChannel === "stable" || gitTargetChannel === "beta")
-      ? await import("../../infra/update-runner-git-target.js")
-          .then(({ readPreferredGitChannelTarget }) =>
-            readPreferredGitChannelTarget({
-              root: git.root,
-              sha: currentSha,
-              channel: gitTargetChannel,
-              timeoutMs: timeoutMs ?? UPDATE_NETWORK_TIMEOUT_MS,
-            }),
-          )
-          .catch(() => undefined)
+      ? await inspect(
+          "Git target",
+          () =>
+            import("../../infra/update-runner-git-target.js").then(
+              ({ readPreferredGitChannelTarget }) =>
+                readPreferredGitChannelTarget({
+                  root: git.root,
+                  sha: currentSha,
+                  channel: gitTargetChannel,
+                  timeoutMs: Math.min(checkTimeoutMs ?? Infinity, remainingMs()),
+                }),
+            ),
+          undefined,
+        )
       : undefined;
 
   const channelInfo = resolveUpdateChannelDisplay({
@@ -169,17 +256,27 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
   let immutableCoverageLines: string[] = [];
   if (update.immutable) {
     try {
-      const { inspectImmutableUpdateCoverage, formatImmutableUpdateCoverage } =
-        await import("../../infra/update-immutable-inspection.js");
-      immutableCoverage = await inspectImmutableUpdateCoverage({ root: update.immutable.root });
-      immutableCoverageLines = formatImmutableUpdateCoverage(immutableCoverage);
+      const coverage = await inspect(
+        "immutable coverage",
+        async () => {
+          const { inspectImmutableUpdateCoverage, formatImmutableUpdateCoverage } =
+            await import("../../infra/update-immutable-inspection.js");
+          const value = await inspectImmutableUpdateCoverage({ root: update.immutable!.root });
+          return { value, lines: formatImmutableUpdateCoverage(value) };
+        },
+        undefined,
+      );
+      if (!coverage) {
+        throw new Error("Immutable coverage inspection unavailable");
+      }
+      immutableCoverage = coverage.value;
+      immutableCoverageLines = coverage.lines;
     } catch (error) {
       immutableCoverageLines = [`Immutable coverage unavailable: ${formatErrorMessage(error)}`];
     }
   }
 
-  const runStatus = await readUpdateRunStatus();
-  const recoveryStatus = await readUpdateRecoverySetStatus();
+  const [runStatus, recoveryStatus] = await Promise.all([runStatusPromise, recoveryStatusPromise]);
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
     !("runStatusError" in runStatus) && activeRun && !runStatus.staleRun && !runStatus.abandonedRun;
@@ -195,7 +292,13 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
         "Run openclaw doctor --fix to repair the configuration.",
       ].map(safeMessage);
   const replacement =
-    config.gateway?.mode === "remote" ? undefined : readGatewayLastInstallationReplacement();
+    config.gateway?.mode === "remote"
+      ? undefined
+      : await inspect(
+          "previous Gateway shutdown",
+          readGatewayLastInstallationReplacementAsync,
+          undefined,
+        );
   const lastGatewayInstallationReplacement = replacement
     ? { ...replacement, reason: safeMessage(replacement.reason) }
     : undefined;
@@ -206,12 +309,30 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
     !resolveIsNixMode(process.env)
   ) {
     try {
-      const command = await resolveGatewayService().readCommand(process.env, {
-        requireEffective: true,
-        timeoutMs,
-      });
+      const command = await inspect(
+        "service command",
+        () =>
+          resolveGatewayService().readCommand(process.env, {
+            requireEffective: true,
+            timeoutMs: remainingMs(),
+          }),
+        null,
+        (message) => {
+          serviceDefinition = {
+            drift: [],
+            warnings: [safeMessage(`Service definition inspection failed: ${message}`)],
+          };
+        },
+      );
       if (command) {
-        const audit = await auditGatewayServiceConfig({ env: process.env, command, timeoutMs });
+        const audit = await inspect(
+          "service definition",
+          () => auditGatewayServiceConfig({ env: process.env, command, timeoutMs: remainingMs() }),
+          undefined,
+        );
+        if (!audit) {
+          throw new Error("Service definition inspection unavailable");
+        }
         serviceDefinition = {
           drift: audit.definitionDrift ?? [],
           warnings: [
@@ -249,11 +370,13 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
       ),
     () => readSessionSqliteMigrationWarnings(),
   ]) {
-    try {
-      migrationWarnings.push(...(await readWarnings()).map(safeMessage));
-    } catch (error) {
-      migrationWarningErrors.push(safeMessage(formatErrorMessage(error)));
-    }
+    migrationWarnings.push(
+      ...(
+        await inspect("migration warnings", readWarnings, [], (message) =>
+          migrationWarningErrors.push(message),
+        )
+      ).map(safeMessage),
+    );
   }
   const migrationWarningsError = migrationWarningErrors.join("\n");
   let packageActivation;
@@ -291,10 +414,20 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
       ...(packageActivationError ? { packageActivationError } : {}),
       ...recoveryStatus,
       ...(configWarnings.length > 0 ? { configWarnings } : {}),
+      ...(inspectionErrors.length > 0 ? { inspectionErrors } : {}),
     });
     return;
   }
 
+  const displayedRun = activeRun ?? ("lastRun" in runStatus ? runStatus.lastRun : undefined);
+  const currentRunHealth =
+    displayedRun?.status === "failed"
+      ? await inspect(
+          "Gateway health",
+          () => readUpdateRunReportHealth(displayedRun.verification, { timeoutMs: remainingMs() }),
+          undefined,
+        )
+      : undefined;
   const gitLabel = formatGitInstallLabel(update);
   const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
   const tableWidth = getTerminalTableWidth();
@@ -435,6 +568,9 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
   if (migrationWarnings.length > 0 || migrationWarningsError) {
     defaultRuntime.log("");
   }
+  for (const error of inspectionErrors) {
+    printWarning(`${error.section} unavailable: ${error.message}`);
+  }
 
   if ("runReconciliationError" in runStatus) {
     printWarning(`Update run reconciliation failed: ${runStatus.runReconciliationError}`);
@@ -465,9 +601,7 @@ async function inspectUpdateStatus(opts: UpdateStatusOptions): Promise<void> {
       }
       const report = renderUpdateRunReport(
         run,
-        run.status === "failed"
-          ? { currentHealth: await readUpdateRunReportHealth(run.verification, { timeoutMs }) }
-          : {},
+        run.status === "failed" ? { currentHealth: currentRunHealth } : {},
       );
       if (!abandonedRun && !staleRun) {
         defaultRuntime.log(report.headline);

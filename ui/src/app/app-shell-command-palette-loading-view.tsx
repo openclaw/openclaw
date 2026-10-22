@@ -6,22 +6,15 @@ import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loa
 
 export function CommandPaletteLoading(props: {
   state: CommandPaletteLoadingState;
-  revision: number;
   onClose: () => void;
 }) {
-  const current = createMemo(() => {
-    void props.revision;
-    return {
-      defined: Boolean(customElements.get("openclaw-modal-dialog")),
-      value: props.state.value,
-      readOnly: props.state.submitRequested,
-    };
-  });
+  let initialInput!: HTMLTextAreaElement;
   // An unrelated shell refresh must not rewrite the live field's selection.
-  const value = createMemo(() => current().value);
+  const value = createMemo(() => props.state.value());
   return (
-    <Show when={current().defined}>
+    <Show when={props.state.defined()}>
       <openclaw-modal-dialog
+        prop:initialFocus={() => initialInput}
         class="cmd-palette-overlay palette"
         label={t("palette.placeholder")}
         style={COMMAND_PALETTE_DIALOG_STYLE}
@@ -33,14 +26,21 @@ export function CommandPaletteLoading(props: {
           onCompositionStart={() => props.state.handleCompositionStart()}
           onCompositionEnd={() => props.state.handleCompositionEnd()}
           onKeyDown={(event) => props.state.handleKeydown(event)}
+          onDragOver={(event) => props.state.handleDragOver(event)}
+          onDrop={(event) => props.state.handleDrop(event)}
         >
           <CommandPaletteInput
+            onAutofocusRef={(element) => {
+              initialInput = element;
+            }}
             value={value()}
-            placeholder={t("palette.placeholder")}
+            placeholder={t(
+              props.state.hasAttachments() ? "palette.attachmentPrompt" : "palette.placeholder",
+            )}
             onInputRef={(element, previous) => props.state.inputRef(element, previous)}
             onValueChange={(nextValue, event) => props.state.captureInput(nextValue, event)}
             onPaste={(event) => props.state.handlePaste(event)}
-            readOnly={current().readOnly}
+            readOnly={props.state.submitRequested()}
           />
           <div class="cmd-palette__empty" role="status">
             {t("common.loading")}

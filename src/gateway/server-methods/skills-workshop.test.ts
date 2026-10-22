@@ -42,17 +42,13 @@ const call = (method: string, params: Record<string, unknown>) =>
   callGatewayHandler({ ...skillsWorkshopHandlers, ...skillsRetiredHandlers }, method, params, {
     context,
   });
+const expectInvalid = (result: Awaited<ReturnType<typeof call>>, message?: string) =>
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", ...(message === undefined ? {} : { message }) },
+  });
 
-const change = {
-  id: "change-1",
-  agentId: "ops",
-  skillName: "deploy-notes",
-  action: "archive",
-  actor: "user",
-  summary: "archived",
-  versionId: "20260929T000000000Z-archive",
-  createdAtMs: 1,
-};
+const change = { id: "change-1" };
 
 describe("skills.workshop gateway methods", () => {
   beforeEach(() => {
@@ -134,33 +130,17 @@ describe("skills.workshop gateway methods", () => {
   });
 
   it("returns library refusals and unknown agents as invalid requests", async () => {
-    library.archiveWorkshopSkill.mockRejectedValue(
-      new library.WorkshopWriteError('Skill "ghost" does not exist.'),
-    );
+    const missingSkill = 'Skill "ghost" does not exist.';
+    const missingReview = "No skill changes recorded for review skill-workshop-review:9.";
+    library.archiveWorkshopSkill.mockRejectedValue(new library.WorkshopWriteError(missingSkill));
 
-    const refused = await call("skills.workshop.archive", { name: "ghost" });
-    const unknownAgent = await call("skills.workshop.restore", { agentId: "nope", name: "x" });
-    undoWorkshopReview.mockRejectedValue(
-      new WorkshopReviewNotFoundError(
-        "No skill changes recorded for review skill-workshop-review:9.",
-      ),
+    expectInvalid(await call("skills.workshop.archive", { name: "ghost" }), missingSkill);
+    expectInvalid(await call("skills.workshop.restore", { agentId: "nope", name: "x" }));
+    undoWorkshopReview.mockRejectedValue(new WorkshopReviewNotFoundError(missingReview));
+    expectInvalid(
+      await call("skills.workshop.undo", { runId: "skill-workshop-review:9" }),
+      missingReview,
     );
-    const unknownReview = await call("skills.workshop.undo", {
-      runId: "skill-workshop-review:9",
-    });
-
-    expect(refused).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: 'Skill "ghost" does not exist.' },
-    });
-    expect(unknownAgent).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    expect(unknownReview).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "No skill changes recorded for review skill-workshop-review:9.",
-      },
-    });
   });
 
   it("answers retired proposal and curator methods with Workshop guidance", async () => {

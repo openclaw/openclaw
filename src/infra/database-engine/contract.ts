@@ -1,16 +1,36 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Kysely } from "kysely";
-import type { SqlConnection } from "../sql-connection.js";
+import type { EngineConnection, SqlConnection } from "../sql-connection.js";
+import type { PortDescriptor } from "./port-types.js";
+import type { FullTextCapability, TextIndex, TextIndexDefinition } from "./text-contract.js";
 import type { DatabaseEngineId, DatabaseEngineInput } from "./types.js";
+import type { VectorCapability, VectorIndex } from "./vector-contract.js";
 
 export type { EngineConnection } from "../sql-connection.js";
 
-export type DatabaseErrorKind =
-  | "constraint"
-  | "busy"
-  | "connection-lost"
-  | "outcome-unknown"
-  | "other";
+/** @experimental Existing admitted native handle or admitted worker-store descriptor. */
+export type SearchStore = EngineConnection | { databasePath: string; input?: DatabaseEngineInput };
+/** @experimental Feature-owned declarations of the existing derived indexes. */
+export type SearchSchema = {
+  text?: Record<string, TextIndexDefinition>;
+  vector?: Record<string, Omit<VectorIndex, "store">>;
+  /** Selected by the memory owner only for the explicit provider: "none" setting. */
+  mode?: "keyword-only";
+  /** Schema where the operator installed the required PostgreSQL extensions. */
+  extensionSchema?: string;
+};
+/** @experimental Null means unavailable; diagnostics name the required next step. */
+export type StoreSearchCapabilities = {
+  fullText: FullTextCapability | null;
+  vector: VectorCapability | null;
+  text: Record<string, TextIndex>;
+  vectors: Record<string, VectorIndex>;
+  diagnostics: readonly string[];
+  /** Rebuild derived PostgreSQL search state inside the owning writer transaction. */
+  rebuild?: () => void;
+};
+
+type DatabaseErrorKind = "constraint" | "busy" | "connection-lost" | "outcome-unknown" | "other";
 export type PostgresSchemaFragment = {
   id: string;
   tables: readonly string[];
@@ -33,16 +53,24 @@ export type StoreSchema = {
     sql: string;
     fromSchema: PostgresSchemaDefinition;
     schema: PostgresSchemaDefinition;
+    /** Exact predecessor export needed before Doctor may advance this family. */
+    backup?: PortDescriptor;
   }[];
   postgresFragments?: readonly PostgresSchemaFragment[];
+  search?: SearchSchema;
+  /** Persisted, owner-registered derived search definitions. */
+  searchExtensions?: Record<string, SearchSchema>;
 };
 export type AdmittedStore = {
+  reusePostgresConnection?: boolean;
   anchor: DatabaseSync;
   schema: StoreSchema;
   input: DatabaseEngineInput;
   openSqlite: () => void;
   storeId?: string;
   namespace?: string;
+  /** Owner-specific data extraction inside the validated source migration transaction. */
+  beforeMigrate?: (database: EngineConnection, fromVersion: number) => void;
 };
 type TransactionRecipes<Connection extends SqlConnection> = {
   write<T>(connection: Connection, operation: () => T): T;
@@ -54,6 +82,8 @@ export interface DatabaseEngineAdapter<Connection extends SqlConnection = SqlCon
   kysely(connection: Connection): Kysely<unknown>;
   transactions: TransactionRecipes<Connection>;
   capabilities: { fullText: "fts5" | "tsvector" | null; vector: "sqlite-vec" | "pgvector" | null };
+  /** @experimental Bind engine search operations to an already admitted store. */
+  search?: (store: SearchStore, schema: SearchSchema) => StoreSearchCapabilities;
   schema: {
     bootstrap(store: AdmittedStore, connection: Connection): void;
     migrate(store: AdmittedStore, from: number, connection: Connection): void;

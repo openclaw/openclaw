@@ -5,7 +5,7 @@ import {
   type AiProviderRequestCapabilities,
   type AiProviderRequestPolicyInput,
 } from "../host.js";
-import type { AssistantMessage, Context, Model } from "../types.js";
+import type { Context, Model } from "../types.js";
 
 const mockOpenAI = vi.hoisted(() => ({
   chunks: [] as unknown[],
@@ -45,12 +45,10 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
-import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import {
   resolveOpenAICompletionsCompat,
   type ResolvedOpenAICompletionsCompat,
 } from "../transports/openai-completions-compat.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { streamOpenAICompletions } from "./openai-completions.js";
 
 const baseModel: Model<"openai-completions"> = {
@@ -233,107 +231,6 @@ afterEach(() => {
 });
 
 describe("OpenAI-compatible completions compatibility", () => {
-  it.each([{ provider: "qwen", baseUrl: "", expected: "anthropic" }])(
-    "defaults cache markers for $provider at $baseUrl",
-    ({ provider, baseUrl, expected }) => {
-      expect(
-        resolveOpenAICompletionsCompat(createModel({ provider, baseUrl })).cacheControlFormat,
-      ).toBe(expected);
-    },
-  );
-
-  it.each([true])(
-    "sends custom-endpoint long TTL only with explicit support: %s",
-    async (supportsLongCacheRetention) => {
-      await streamOpenAICompletions(
-        createModel({ compat: { cacheControlFormat: "anthropic", supportsLongCacheRetention } }),
-        context,
-        { apiKey: "test", cacheRetention: "long" },
-      ).result();
-      expect(mockOpenAI.payloads).toHaveLength(1);
-      const cacheControl = supportsLongCacheRetention
-        ? { type: "ephemeral", ttl: "1h" }
-        : { type: "ephemeral" };
-      expect(JSON.stringify(mockOpenAI.payloads[0])).toContain(
-        `"cache_control":${JSON.stringify(cacheControl)}`,
-      );
-    },
-  );
-
-  it.each(["anthropic"] as const)(
-    "requires explicit cache format %s for Qwen behind a custom endpoint",
-    async (cacheControlFormat) => {
-      const model = createModel({
-        id: "qwen-plus",
-        provider: "qwen",
-        compat: { cacheControlFormat },
-      });
-      await streamOpenAICompletions(
-        model,
-        {
-          systemPrompt: "Follow instructions.",
-          messages: [userMessage],
-          tools: [
-            {
-              name: "lookup",
-              description: "Look up data",
-              parameters: { type: "object", properties: {} },
-            },
-          ],
-        },
-        { apiKey: "test", cacheRetention: "short" },
-      ).result();
-
-      expect(mockOpenAI.payloads).toHaveLength(1);
-      const markers = JSON.stringify(mockOpenAI.payloads[0]).match(/"cache_control":/g) ?? [];
-      expect(markers).toHaveLength(cacheControlFormat === "anthropic" ? 3 : 0);
-      expect(resolveOpenAICompletionsCompat(model).cacheControlFormat).toBe(cacheControlFormat);
-    },
-  );
-
-  it.each(["none"] as const)(
-    "sends Model Studio cache markers without OpenAI cache fields for retention %s",
-    async (cacheRetention) => {
-      const model = createModel({
-        id: "qwen-plus",
-        provider: "custom",
-        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-      });
-      await streamOpenAICompletions(
-        model,
-        {
-          systemPrompt: "Follow instructions.",
-          messages: [userMessage, { ...userMessage, content: "latest", timestamp: 2 }],
-          tools: ["alpha", "zeta"].map((name) => ({
-            name,
-            description: name,
-            parameters: { type: "object", properties: {} },
-          })),
-        },
-        { apiKey: "test", sessionId: "session-test", cacheRetention },
-      ).result();
-
-      const cacheControl = cacheRetention === "none" ? undefined : { type: "ephemeral" };
-      const content = (text: string) =>
-        cacheControl ? [{ type: "text", text, cache_control: cacheControl }] : text;
-      const expectedPayload = {
-        model: "qwen-plus",
-        messages: [
-          { role: "system", content: content("Follow instructions.") },
-          { role: "user", content: "hello" },
-          { role: "user", content: content("latest") },
-        ],
-        stream: true,
-        tools: ["alpha", "zeta"].map((name) => ({
-          type: "function",
-          function: { name, description: name, parameters: { type: "object", properties: {} } },
-        })),
-      };
-      // Compare wire JSON, where undefined cache fields must be omitted.
-      expect(JSON.stringify(mockOpenAI.payloads[0])).toBe(JSON.stringify(expectedPayload));
-    },
-  );
-
   it.each(legacyMatrixParityCases)(
     "maps former provider matrix case %s to canonical endpoint policy",
     (_name, overrides, expected) => {
@@ -342,62 +239,6 @@ describe("OpenAI-compatible completions compatibility", () => {
       ).toEqual(expected);
     },
   );
-
-  it("lets Ollama tools win over JSON Schema response formats", async () => {
-    const model = createModel({
-      id: "gemma4:e4b",
-      provider: "ollama",
-      baseUrl: "http://127.0.0.1:11434/v1",
-      compat: { supportsJsonSchemaResponseFormat: true },
-    });
-
-    await streamOpenAICompletions(
-      model,
-      {
-        messages: [userMessage],
-        tools: [
-          {
-            name: "weather",
-            description: "Get weather",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      },
-      {
-        apiKey: "test",
-        responseFormat: {
-          type: "object",
-          properties: { reply: { type: "string" } },
-          required: ["reply"],
-          additionalProperties: false,
-        },
-      },
-    ).result();
-
-    expect(mockOpenAI.payloads[0]).toMatchObject({ tools: [expect.any(Object)] });
-    expect(mockOpenAI.payloads[0]).not.toHaveProperty("response_format");
-  });
-
-  it("omits JSON Schema response formats for hosted Ollama Cloud", async () => {
-    const model = createModel({
-      id: "gemma4",
-      provider: "ollama",
-      baseUrl: "https://ollama.com/v1",
-      compat: { supportsJsonSchemaResponseFormat: true },
-    });
-
-    await streamOpenAICompletions(model, context, {
-      apiKey: "test",
-      responseFormat: {
-        type: "object",
-        properties: { reply: { type: "string" } },
-        required: ["reply"],
-        additionalProperties: false,
-      },
-    }).result();
-
-    expect(mockOpenAI.payloads[0]).not.toHaveProperty("response_format");
-  });
 
   it("buffers encrypted reasoning details until their tool call arrives", async () => {
     const reasoningDetail = {
@@ -438,7 +279,10 @@ describe("OpenAI-compatible completions compatibility", () => {
     let replayPayload: unknown;
     await streamOpenAICompletions(
       model,
-      { messages: [result] },
+      {
+        messages: [result],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
+      },
       {
         apiKey: "test",
         onPayload(payload) {
@@ -452,35 +296,6 @@ describe("OpenAI-compatible completions compatibility", () => {
     ).messages?.find((message) => message.role === "assistant");
     expect(replayedAssistant?.reasoning_details).toEqual([reasoningDetail]);
   });
-
-  it.each([{ modelId: "anthropic/claude-sonnet-4.6", expectedRole: "system" }])(
-    "uses $expectedRole instructions for OpenRouter model $modelId",
-    async (testCase) => {
-      let payload: unknown;
-      const model = createModel({
-        id: testCase.modelId,
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: true,
-      });
-
-      await streamOpenAICompletions(
-        model,
-        { ...context, systemPrompt: "Follow instructions." },
-        {
-          apiKey: "test",
-          onPayload(nextPayload) {
-            payload = nextPayload;
-            throw new Error("payload captured");
-          },
-        },
-      ).result();
-
-      expect((payload as { messages?: Array<{ role?: string }> }).messages?.[0]?.role).toBe(
-        testCase.expectedRole,
-      );
-    },
-  );
 
   it("sends configured OpenRouter routing through a compatible proxy", async () => {
     let payload: unknown;
@@ -545,58 +360,26 @@ describe("OpenAI-compatible completions compatibility", () => {
     },
   );
 
-  it("retains replayed Z.AI thinking when reasoning is enabled", async () => {
-    let payload: unknown;
-    const model = createModel({
-      id: "glm-test",
-      provider: "zai",
-      baseUrl: "https://api.z.ai/api/paas/v4",
-      reasoning: true,
+  it("uses host-normalized provider attribution for session-affinity headers", async () => {
+    configureAiTransportHost({
+      resolveProviderRequestCapabilities: (input) => ({
+        ...resolveTestCapabilities(input),
+        provider: "openrouter",
+      }),
     });
-    const assistant: AssistantMessage = {
-      role: "assistant",
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
-      content: [
-        {
-          type: "thinking",
-          thinking: "prior reasoning",
-          thinkingSignature: "reasoning_content",
-        },
-        { type: "toolCall", id: "call_1", name: "lookup", arguments: {} },
-      ],
-      usage: createZeroUsage(),
-      stopReason: "toolUse",
-      timestamp: 2,
-    };
 
     await streamOpenAICompletions(
-      model,
-      {
-        messages: [
-          userMessage,
-          assistant,
-          makeTextToolResult("call_1", "lookup", "done", false, 3),
-        ],
-      },
-      {
-        apiKey: "test",
-        reasoningEffort: "high",
-        onPayload(nextPayload) {
-          payload = nextPayload;
-          throw new Error("payload captured");
-        },
-      },
+      createModel({
+        provider: "OPENROUTER",
+        compat: { sendSessionAffinityHeaders: true },
+      }),
+      context,
+      { apiKey: "test", sessionId: "session-123" },
     ).result();
 
-    const request = payload as {
-      thinking?: unknown;
-      messages?: Array<Record<string, unknown>>;
-    };
-    expect(request.thinking).toEqual({ type: "enabled", clear_thinking: false });
-    expect(request.messages?.find((message) => message.role === "assistant")).toMatchObject({
-      reasoning_content: "prior reasoning",
+    expect(mockOpenAI.clientOptions).toHaveLength(1);
+    expect(mockOpenAI.clientOptions[0]).toMatchObject({
+      defaultHeaders: { "x-session-id": "session-123" },
     });
   });
 

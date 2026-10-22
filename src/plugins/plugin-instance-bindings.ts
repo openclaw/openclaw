@@ -17,6 +17,7 @@ import {
 } from "./plugin-instance-scope.js";
 import type { PluginInstanceCallLease } from "./plugin-instance.types.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { createPluginToolExecutionBinding } from "./plugin-tool-execution.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
@@ -102,10 +103,10 @@ type PluginInstanceBindingOwner = {
 
 /** Registration facts and captured stream scopes share the instance's lifetime. */
 export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwner) {
-  const factories = new WeakMap<object, true | readonly PropertyKey[]>();
+  const factories = new WeakMap<object, true | "tool" | readonly PropertyKey[]>();
   const admitFactory = (
     factory: (...args: never[]) => unknown,
-    resultCallbacks?: readonly PropertyKey[],
+    resultCallbacks?: "tool" | readonly PropertyKey[],
   ): void => {
     factories.set(factory, resultCallbacks ?? true);
   };
@@ -123,11 +124,10 @@ export function createPluginInstanceBindings(bindings: PluginInstanceBindingOwne
 /** Builds callable views while the exact instance continues to own admission and leases. */
 function createPluginBindings(
   bindings: PluginInstanceBindingOwner,
-  factories: WeakMap<object, true | readonly PropertyKey[]>,
+  factories: WeakMap<object, true | "tool" | readonly PropertyKey[]>,
   admit: <T>(run: () => T) => T,
   admitCallback: <T>(run: () => T) => T,
 ) {
-  const { instance } = bindings;
   const prepareInvocation = (token: object, parent?: PluginInstanceInvocation) => {
     const context = pluginInvocationContext.getStore();
     const consumer = bindings.isConsumerToken(token);
@@ -143,15 +143,15 @@ function createPluginBindings(
       origin,
       reenter: <T>(run: () => T): T => {
         if (consumer && !bindings.hasToken(token)) {
-          throw new Error(`Plugin ${instance.pluginId} consumer is closed`);
+          throw new Error(`Plugin ${bindings.instance.pluginId} consumer is closed`);
         }
         return resource.runInAsyncScope(() => pluginInstanceInvocation.run(origin, run));
       },
       assertCurrent: () => {
-        context?.lookup(instance);
+        context?.lookup(bindings.instance);
         const current = pluginInvocationContext.getStore();
         if (current !== context) {
-          current?.lookup(instance);
+          current?.lookup(bindings.instance);
         }
       },
       run: <T>(run: () => T): T => resource.runInAsyncScope(run),
@@ -165,7 +165,7 @@ function createPluginBindings(
     for (
       let source: object | undefined = value;
       source;
-      source = getPluginOriginalValue(source, instance)
+      source = getPluginOriginalValue(source, bindings.instance)
     ) {
       const binding = factories.get(source);
       if (binding) {
@@ -195,7 +195,10 @@ function createPluginBindings(
       ? wrap(value)
       : value;
   // Factory arrays contain executable registrations, not ordinary result payloads.
-  const bindFactoryResult = <T>(value: T, binding: true | readonly PropertyKey[]): T => {
+  const bindFactoryResult = <T>(value: T, binding: true | "tool" | readonly PropertyKey[]): T => {
+    if (binding === "tool") {
+      return bindTool(value);
+    }
     const callbacks = binding === true ? undefined : binding;
     if (
       callbacks &&
@@ -214,7 +217,7 @@ function createPluginBindings(
   const wrapResult = <T>(
     result: T,
     callerData?: unknown[],
-    executable?: true | readonly PropertyKey[],
+    executable?: true | "tool" | readonly PropertyKey[],
   ): T => {
     const completion = resolvePluginReturnPromise(result);
     if (completion) {
@@ -235,6 +238,21 @@ function createPluginBindings(
         ? bindFactoryResult(result, executable)
         : passResult(result);
   };
+
+  const bindTool = createPluginToolExecutionBinding({
+    admit,
+    wrapProxy: (tool) => wrap(tool),
+    call: (method, receiver, args) =>
+      admit(() => {
+        const call = wrapArguments(args);
+        return wrapResult(Reflect.apply(method, receiver, call.args), call.callerData);
+      }),
+    register: (view, source) => {
+      void new PluginFactoryBinding(view, factory);
+      setPluginOriginalValue(view, source, bindings.instance);
+      valueInstances.setHost(view, bindings.instance);
+    },
+  });
 
   /** Callables retain their instance; schemas remain data for host validators. */
   const wrap = <T>(

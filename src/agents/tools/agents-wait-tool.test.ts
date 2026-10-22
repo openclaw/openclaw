@@ -18,6 +18,8 @@ import {
 } from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../subagents/registry/subagent-registry.types.js";
 
+const MAIN = "agent:main:main";
+type RegistryState = typeof import("../subagents/registry/subagent-registry-state.js");
 const records = new Map<string, SubagentRunRecord>();
 type ReadRuns = (runIds: readonly string[]) => Promise<PreparedSubagentRunsRead>;
 const registryEvents = vi.hoisted(() => ({
@@ -56,15 +58,116 @@ import {
 
 // These read cases retain the actual publisher while the tool's subscription stays mocked.
 function persistCollectorReadFixture(
-  state: Pick<
-    typeof import("../subagents/registry/subagent-registry-state.js"),
-    "publishSubagentRunsAfterAtomicStore"
-  >,
-  rows: Map<string, SubagentRunRecord>,
-  runIds: readonly string[],
+  state: Pick<RegistryState, "publishSubagentRunsAfterAtomicStore">,
+  entry: SubagentRunRecord,
 ) {
+  const rows = new Map([[entry.runId, entry]]);
+  const runIds = [entry.runId];
   saveSubagentRegistryChangesToSqlite(rows, runIds);
   state.publishSubagentRunsAfterAtomicStore(rows, runIds)();
+}
+
+function storedRun(entry: SubagentRunRecord) {
+  return createSubagentRunRecord({ ...entry, delivery: { status: "not_required" } });
+}
+
+function addRun(
+  runId: string,
+  completion?: SubagentRunRecord["collectorCompletion"],
+  overrides: Partial<SubagentRunRecord> = {},
+  owner = MAIN,
+) {
+  const entry = { ...collectorRun(runId, owner, completion), ...overrides };
+  records.set(runId, entry);
+  return entry;
+}
+
+function startWait(runId: string, timeoutSeconds = 1, boundary: "tool" | "bridge" = "tool") {
+  const controller = new AbortController();
+  const state: { result?: unknown } = {};
+  const waiting = (
+    boundary === "tool"
+      ? createMainSessionWaitTool()
+          .execute("wait", { ids: [runId], timeoutSeconds }, controller.signal)
+          .then((value) => value.details)
+      : waitAtBoundary(boundary, runId, controller.signal)
+  ).then((value) => {
+    state.result = value;
+    return value;
+  });
+  const observed = observe(waiting);
+  onTestFinished(async () => {
+    controller.abort();
+    await observed;
+    vi.useRealTimers();
+  });
+  return { observed, state };
+}
+
+async function withPersistedState(exercise: (state: RegistryState) => Promise<void>) {
+  const state = await vi.importActual<RegistryState>(
+    "../subagents/registry/subagent-registry-state.js",
+  );
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      state.clearSubagentRunsReadCacheForTest();
+      try {
+        await exercise(state);
+      } finally {
+        state.clearSubagentRunsReadCacheForTest();
+      }
+    },
+  );
+}
+
+async function subscribePersisted() {
+  const publication = await vi.importActual<
+    typeof import("../subagents/registry/subagent-registry-publication.js")
+  >("../subagents/registry/subagent-registry-publication.js");
+  const unsubscribed = vi.fn();
+  registryEvents.subscribe.mockImplementation((listener) => {
+    const unsubscribe = publication.subscribeSubagentRunChanges("persistence", listener);
+    return () => {
+      unsubscribe();
+      unsubscribed();
+    };
+  });
+  return unsubscribed;
+}
+
+function executeWait(
+  ids: string[],
+  timeoutSeconds = 0,
+  signal?: AbortSignal,
+  tool = createMainSessionWaitTool(),
+) {
+  return tool.execute("wait", { ids, timeoutSeconds }, signal);
+}
+
+function publishChanges(count = 1) {
+  for (let publication = 0; publication < count; publication++) {
+    for (const listener of registryEvents.listeners) {
+      listener();
+    }
+  }
+}
+
+function observe<T>(promise: Promise<T>) {
+  return promise.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+}
+
+function notOwner(runId: string) {
+  return { completed: [], pending: [], errors: [{ runId, error: "not_owner" }], success: false };
+}
+
+function deniedAtBoundary(boundary: "tool" | "bridge", runId: string) {
+  return boundary === "tool"
+    ? { value: notOwner(runId) }
+    : { error: expect.objectContaining({ message: `agents.run not_owner: ${runId}` }) };
 }
 
 describe("agents_wait", () => {
@@ -82,11 +185,10 @@ describe("agents_wait", () => {
 
   it("composes real collector outputs through discovery, describe, and generated declarations", async () => {
     onTestFinished(resetCodeModeTestState);
-    const entry = collectorRun("ready", "agent:main:main", {
+    addRun("ready", {
       status: "done",
       structured: { answer: 42 },
     });
-    records.set(entry.runId, entry);
     const h = createCodeModeHarness();
     const tool = createMainSessionWaitTool();
     applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
@@ -151,7 +253,7 @@ describe("agents_wait", () => {
   ] as const)("rejects the %s when abort wins %s collector waiting", async (boundary, timing) => {
     const entry = collectorRun(
       "abort-race",
-      "agent:main:main",
+      MAIN,
       boundary === "bridge" && timing === "before" ? { status: "done" } : undefined,
     );
     records.set(entry.runId, entry);
@@ -167,14 +269,7 @@ describe("agents_wait", () => {
       });
     }
 
-    const waiting =
-      boundary === "bridge"
-        ? waitForCollectorCompletion({
-            runId: entry.runId,
-            currentSessionKeys: new Set(["agent:main:main"]),
-            signal: controller.signal,
-          })
-        : waitAtBoundary(boundary, entry.runId, controller.signal);
+    const waiting = waitAtBoundary(boundary, entry.runId, controller.signal);
     if (timing === "during") {
       controller.abort();
     }
@@ -189,60 +284,58 @@ describe("agents_wait", () => {
     expect(registryEvents.listeners.size).toBe(0);
   });
 
-  it("parks without reading and resolves a replacement by its stable collector id", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    const runId = "collector-run";
-    const entry = collectorRun("local-wake", "agent:main:main");
-    entry.swarmRunId = runId;
-    records.set(entry.runId, entry);
-    const controller = new AbortController();
-    const tool = createMainSessionWaitTool();
-    const reads = vi.spyOn(records, "get");
-    const initialRead = createDeferred();
-    registryEvents.read.mockImplementationOnce(async (runIds) =>
-      preparedRuns(() => {
-        const selected = selectRuns(records, runIds);
-        initialRead.resolve();
-        return selected;
-      }),
-    );
-    let result: unknown;
-    const waiting = tool
-      .execute("call", { ids: [runId], timeoutSeconds: 1 }, controller.signal)
-      .then((value) => {
-        result = value.details;
-      });
-    try {
+  it.each([
+    ["tool", false],
+    ["tool", true],
+    ["bridge", true],
+  ] as const)(
+    "parks without polling and handles a %s replacement (foreign=%s)",
+    async (boundary, foreign) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      const runId = "collector-run";
+      const entry = addRun("previous", undefined, { swarmRunId: runId });
+      const reads = vi.spyOn(records, "get");
+      const initialRead = createDeferred();
+      registryEvents.read.mockImplementationOnce(async (runIds) =>
+        preparedRuns(() => {
+          const selected = selectRuns(records, runIds);
+          initialRead.resolve();
+          return selected;
+        }),
+      );
+      const wait = startWait(runId, 1, boundary);
+      onTestFinished(() => reads.mockRestore());
+      expect(registryEvents.listeners.size).toBe(1);
       await initialRead.promise;
       const initialReads = reads.mock.calls.length;
       await vi.advanceTimersByTimeAsync(750);
       expect(reads).toHaveBeenCalledTimes(initialReads);
-      const replacement = collectorRun("replacement", "agent:main:main", { status: "done" });
-      replacement.swarmRunId = runId;
       records.delete(entry.runId);
-      records.set(replacement.runId, replacement);
-      for (const listener of registryEvents.listeners) {
-        listener();
-      }
+      const replacement = addRun(
+        "replacement",
+        { status: "done" },
+        { swarmRunId: runId },
+        foreign ? "agent:other:main" : MAIN,
+      );
+      publishChanges();
       await vi.advanceTimersByTimeAsync(0);
-      expect(result).toMatchObject({
-        completed: [
-          { runId, result: "result-replacement", sessionKey: replacement.childSessionKey },
-        ],
-        pending: [],
-      });
+      if (foreign) {
+        expect(await wait.observed).toEqual(deniedAtBoundary(boundary, runId));
+      } else {
+        expect(wait.state.result).toMatchObject({
+          completed: [
+            { runId, result: "result-replacement", sessionKey: replacement.childSessionKey },
+          ],
+          pending: [],
+        });
+      }
       expect(registryEvents.listeners.size).toBe(0);
       expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      reads.mockRestore();
-      controller.abort();
-      await waiting.catch(() => {});
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
   it("projects an authorized collector failure without failing a mixed batch", async () => {
-    const failed = collectorRun("failed", "agent:main:main", {
+    const failed = addRun("failed", {
       status: "failed",
       structured: { partial: true },
     });
@@ -251,14 +344,8 @@ describe("agents_wait", () => {
       outcome: { status: "error", error: "provider failed after tool output" },
     };
     failed.completion = { required: false, resultText: null, capturedAt: 10 };
-    records.set(failed.runId, failed);
-    records.set("pending", collectorRun("pending", "agent:main:main"));
-    const tool = createMainSessionWaitTool();
-
-    const result = await tool.execute("call", {
-      ids: [failed.runId, "pending"],
-      timeoutSeconds: 0,
-    });
+    addRun("pending");
+    const result = await executeWait([failed.runId, "pending"]);
 
     expect(result.details).toEqual({
       completed: [
@@ -281,56 +368,33 @@ describe("agents_wait", () => {
     async (step) => {
       vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
       vi.setSystemTime(100_000);
-      const controller = new AbortController();
-      records.set("clock-step", collectorRun("clock-step", "agent:main:main"));
-      const tool = createMainSessionWaitTool();
-      let result: unknown;
-      const waiting = tool
-        .execute("clock", { ids: ["clock-step"], timeoutSeconds: 0.1 }, controller.signal)
-        .then((value) => {
-          result = value.details;
-        });
-      try {
-        await vi.advanceTimersByTimeAsync(25);
-        vi.setSystemTime(Date.now() + step);
-        await vi.advanceTimersByTimeAsync(74);
-        expect(result).toBeUndefined();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(result).toEqual({ completed: [], pending: ["clock-step"] });
-      } finally {
-        controller.abort();
-        await waiting.catch(() => {});
-        vi.useRealTimers();
-      }
+      addRun("clock-step");
+      const wait = startWait("clock-step", 0.1);
+      await vi.advanceTimersByTimeAsync(25);
+      vi.setSystemTime(Date.now() + step);
+      await vi.advanceTimersByTimeAsync(74);
+      expect(wait.state.result).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(wait.state.result).toEqual({ completed: [], pending: ["clock-step"] });
     },
   );
 
   it("orders completions by durable capture time with input-order ties", async () => {
-    const later = collectorRun("later", "agent:main:main", { status: "done" });
-    later.completion = { required: false, resultText: "later", capturedAt: 10 };
-    const earlier = collectorRun("earlier", "agent:main:main", { status: "done" });
-    earlier.completion = { required: false, resultText: "earlier", capturedAt: 5 };
-    records.set(later.runId, later);
-    records.set(earlier.runId, earlier);
+    for (const [id, capturedAt] of [
+      ["later", 10],
+      ["earlier", 5],
+      ["tied", 5],
+    ] as const) {
+      addRun(
+        id,
+        { status: "done" },
+        { completion: { required: false, resultText: id, capturedAt } },
+      );
+    }
+    addRun("foreign", { status: "done" }, {}, "agent:other:main");
+    addRun("pending-one");
+    addRun("pending-two");
     const tool = createMainSessionWaitTool();
-
-    const result = await tool.execute("call", {
-      ids: ["later", "earlier"],
-      timeoutSeconds: 0,
-    });
-
-    expect(result.details).toMatchObject({
-      completed: [{ runId: "earlier" }, { runId: "later" }],
-      pending: [],
-    });
-
-    const tied = collectorRun("tied", "agent:main:main", { status: "done" });
-    tied.completion = { required: false, resultText: "tied", capturedAt: 5 };
-    records.set(tied.runId, tied);
-    records.set("foreign", collectorRun("foreign", "agent:other:main", { status: "done" }));
-    records.set("pending-one", collectorRun("pending-one", "agent:main:main"));
-    records.set("pending-two", collectorRun("pending-two", "agent:main:main"));
-
     const mixed = await tool.execute("mixed", {
       ids: ["later", "missing", "tied", "pending-two", "foreign", "earlier", "pending-one"],
       timeoutSeconds: 0,
@@ -349,12 +413,11 @@ describe("agents_wait", () => {
 
   it("is idempotent and returns per-id ownership and unknown errors", async () => {
     const done = collectorRun("done", "agent:worker:subagent:owner", { status: "done" });
-    done.swarmWaitOwnerSessionKeys = ["agent:worker:subagent:owner", "agent:main:main"];
+    done.swarmWaitOwnerSessionKeys = ["agent:worker:subagent:owner", MAIN];
     records.set("done", done);
-    records.set("owner", collectorRun("owner", "agent:main:main"));
     records.set("foreign", collectorRun("foreign", "agent:other:main", { status: "failed" }));
     const tool = createAgentsWaitTool({
-      agentSessionKey: "agent:main:main",
+      agentSessionKey: MAIN,
       agentId: "main",
       config: { tools: { swarm: { enabled: true, waitTimeoutSecondsMax: 1 } } },
     });
@@ -382,88 +445,51 @@ describe("agents_wait", () => {
   it.each(["tool", "bridge"] as const)(
     "rechecks a persisted %s completion after ownership changes at read settlement",
     async (boundary) => {
-      const state = await vi.importActual<
-        typeof import("../subagents/registry/subagent-registry-state.js")
-      >("../subagents/registry/subagent-registry-state.js");
-      await withOpenClawTestState(
-        { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-        async () => {
-          state.clearSubagentRunsReadCacheForTest();
-          const entry = createSubagentRunRecord({
-            ...collectorRun("persisted-owner-change", "agent:main:main", { status: "done" }),
-            generation: 1,
-            delivery: { status: "not_required" },
+      await withPersistedState(async (state) => {
+        const entry = storedRun({
+          ...collectorRun("persisted-owner-change", MAIN, { status: "done" }),
+          generation: 1,
+        });
+        saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
+        const replacement = storedRun({
+          ...collectorRun(entry.runId, "agent:other:main", { status: "done" }),
+          generation: 2,
+        });
+        await subscribePersisted();
+        let publication: Promise<void> | undefined;
+        registryEvents.read.mockImplementation(async (runIds) => {
+          const prepared = await state.prepareSubagentRunsSnapshotForRunIds(new Map(), runIds);
+          publication ??= Promise.resolve().then(() => {
+            persistCollectorReadFixture(state, replacement);
           });
-          saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
-          const replacement = createSubagentRunRecord({
-            ...collectorRun(entry.runId, "agent:other:main", { status: "done" }),
-            generation: 2,
-            delivery: { status: "not_required" },
-          });
-          const registryPublication = await vi.importActual<
-            typeof import("../subagents/registry/subagent-registry-publication.js")
-          >("../subagents/registry/subagent-registry-publication.js");
-          registryEvents.subscribe.mockImplementation((listener) =>
-            registryPublication.subscribeSubagentRunChanges("persistence", listener),
+          void publication.catch(() => {});
+          return prepared;
+        });
+        const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+        const abort = new AbortController();
+        const waiting =
+          boundary === "tool"
+            ? executeWait([entry.runId], 0, abort.signal).then((result) => result.details)
+            : waitForCollectorCompletion({
+                runId: entry.runId,
+                currentSessionKeys: new Set([MAIN]),
+                currentAgentId: "main",
+                signal: abort.signal,
+              });
+        const observed = observe(waiting);
+        try {
+          const result = await observed;
+          await publication;
+          expect(reads.mock.calls.some(([, command]) => command.type === "subagents.runs")).toBe(
+            true,
           );
-          let publication: Promise<void> | undefined;
-          registryEvents.read.mockImplementation(async (runIds) => {
-            const prepared = await state.prepareSubagentRunsSnapshotForRunIds(new Map(), runIds);
-            publication ??= Promise.resolve().then(() => {
-              persistCollectorReadFixture(state, new Map([[replacement.runId, replacement]]), [
-                replacement.runId,
-              ]);
-            });
-            void publication.catch(() => {});
-            return prepared;
-          });
-          const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-          const abort = new AbortController();
-          const waiting =
-            boundary === "tool"
-              ? createMainSessionWaitTool()
-                  .execute("wait", { ids: [entry.runId], timeoutSeconds: 0 }, abort.signal)
-                  .then((result) => result.details)
-              : waitForCollectorCompletion({
-                  runId: entry.runId,
-                  currentSessionKeys: new Set(["agent:main:main"]),
-                  currentAgentId: "main",
-                  signal: abort.signal,
-                });
-          const observed = waiting.then(
-            (value) => ({ value }),
-            (error: unknown) => ({ error }),
-          );
-          try {
-            const result = await observed;
-            await publication;
-            expect(reads.mock.calls.some(([, command]) => command.type === "subagents.runs")).toBe(
-              true,
-            );
-            expect(result).toEqual(
-              boundary === "tool"
-                ? {
-                    value: {
-                      completed: [],
-                      pending: [],
-                      errors: [{ runId: entry.runId, error: "not_owner" }],
-                      success: false,
-                    },
-                  }
-                : {
-                    error: expect.objectContaining({
-                      message: `agents.run not_owner: ${entry.runId}`,
-                    }),
-                  },
-            );
-          } finally {
-            abort.abort();
-            await Promise.allSettled([waiting, publication]);
-            reads.mockRestore();
-            state.clearSubagentRunsReadCacheForTest();
-          }
-        },
-      );
+          expect(result).toEqual(deniedAtBoundary(boundary, entry.runId));
+        } finally {
+          abort.abort();
+          await Promise.allSettled([waiting, publication]);
+          reads.mockRestore();
+        }
+      });
     },
   );
 
@@ -476,9 +502,7 @@ describe("agents_wait", () => {
     "coalesces publications during pending %s reads before returning a %s replacement",
     async (boundary, replacement) => {
       const runId = "collector-run";
-      const previous = collectorRun("previous", "agent:main:main");
-      previous.swarmRunId = runId;
-      records.set(previous.runId, previous);
+      const previous = addRun("previous", undefined, { swarmRunId: runId });
       const firstRead = createDeferred();
       const secondRead = createDeferred();
       const secondStarted = createDeferred();
@@ -493,17 +517,10 @@ describe("agents_wait", () => {
           return preparedRuns(() => selectRuns(records, runIds));
         });
       const controller = new AbortController();
-      const observed = waitAtBoundary(boundary, runId, controller.signal).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const observed = observe(waitAtBoundary(boundary, runId, controller.signal));
       try {
         expect(registryEvents.listeners.size).toBe(1);
-        for (let publication = 0; publication < 3; publication += 1) {
-          for (const listener of registryEvents.listeners) {
-            listener();
-          }
-        }
+        publishChanges(3);
         expect(registryEvents.read).toHaveBeenCalledTimes(1);
         firstRead.resolve();
         await Promise.race([
@@ -514,33 +531,18 @@ describe("agents_wait", () => {
         ]);
         const current = collectorRun(
           "replacement",
-          replacement === "foreign" ? "agent:other:main" : "agent:main:main",
+          replacement === "foreign" ? "agent:other:main" : MAIN,
           { status: "done" },
         );
         current.swarmRunId = runId;
         records.delete(previous.runId);
         records.set(current.runId, current);
-        for (let publication = 0; publication < 3; publication += 1) {
-          for (const listener of registryEvents.listeners) {
-            listener();
-          }
-        }
+        publishChanges(3);
         expect(registryEvents.read).toHaveBeenCalledTimes(2);
         secondRead.resolve();
         const result = await observed;
         if (replacement === "foreign") {
-          expect(result).toEqual(
-            boundary === "tool"
-              ? {
-                  value: {
-                    completed: [],
-                    pending: [],
-                    errors: [{ runId, error: "not_owner" }],
-                    success: false,
-                  },
-                }
-              : { error: expect.objectContaining({ message: `agents.run not_owner: ${runId}` }) },
-          );
+          expect(result).toEqual(deniedAtBoundary(boundary, runId));
         } else {
           const completed = {
             runId,
@@ -564,28 +566,24 @@ describe("agents_wait", () => {
 
   it("yields between immediate publication retries and returns current state at the deadline", async () => {
     vi.useFakeTimers({ toFake: ["performance", "setImmediate", "clearImmediate"] });
-    const entry = collectorRun("publication-deadline", "agent:main:main");
+    const entry = collectorRun("publication-deadline", MAIN);
     const checked = createDeferred();
     const entries = new Map([[entry.runId, entry]]);
     registryEvents.read
       .mockImplementationOnce(async () => ({
         consume(consume) {
           const value = consume(entries);
-          for (const listener of registryEvents.listeners) {
-            listener();
-          }
+          publishChanges();
           checked.resolve();
           return { ready: true, value };
         },
       }))
       .mockImplementationOnce(async () => preparedRuns(() => entries));
     const controller = new AbortController();
-    const observed = createMainSessionWaitTool()
-      .execute("deadline", { ids: [entry.runId], timeoutSeconds: 0.01 }, controller.signal)
-      .then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+    const observed = executeWait([entry.runId], 0.01, controller.signal).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
     try {
       await checked.promise;
       expect(registryEvents.read).toHaveBeenCalledOnce();
@@ -605,96 +603,62 @@ describe("agents_wait", () => {
   });
 
   it("times out while unrelated persisted publications continue at read settlement", async () => {
-    const state = await vi.importActual<
-      typeof import("../subagents/registry/subagent-registry-state.js")
-    >("../subagents/registry/subagent-registry-state.js");
-    await withOpenClawTestState(
-      { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-      async () => {
-        state.clearSubagentRunsReadCacheForTest();
-        const entry = createSubagentRunRecord({
-          ...collectorRun("persisted-deadline", "agent:main:main"),
-          delivery: { status: "not_required" },
-        });
-        const unrelated = createSubagentRunRecord({
-          ...collectorRun("unrelated-publication", "agent:main:main"),
-          delivery: { status: "not_required" },
-        });
-        saveSubagentRegistryToSqlite(new Map([entry, unrelated].map((run) => [run.runId, run])));
-        const unsubscribed = vi.fn();
-        const registryPublication = await vi.importActual<
-          typeof import("../subagents/registry/subagent-registry-publication.js")
-        >("../subagents/registry/subagent-registry-publication.js");
-        registryEvents.subscribe.mockImplementation((listener) => {
-          const unsubscribe = registryPublication.subscribeSubagentRunChanges(
-            "persistence",
-            listener,
-          );
-          return () => {
-            unsubscribe();
-            unsubscribed();
-          };
-        });
-        const overranDeadline = createDeferred();
-        const releaseExtraRead = createDeferred();
-        const abort = new AbortController();
-        const publications: Promise<void>[] = [];
-        let readCount = 0;
-        let elapsed = 0;
-        const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-        registryEvents.read.mockImplementation(async (runIds) => {
-          readCount += 1;
-          if (readCount === 3) {
-            // Observe starvation without waiting for the runner's timeout or stopping publications.
-            overranDeadline.resolve();
-            await releaseExtraRead.promise;
-          }
-          const prepared = await state.prepareSubagentRunsSnapshotForRunIds(new Map(), runIds);
-          if (abort.signal.aborted) {
-            return prepared;
-          }
-          const publication = Promise.resolve().then(() => {
-            elapsed += 5;
-            persistCollectorReadFixture(
-              state,
-              new Map([[unrelated.runId, { ...unrelated, model: `publication-${elapsed}` }]]),
-              [unrelated.runId],
-            );
-          });
-          publications.push(publication);
-          void publication.catch(() => abort.abort());
-          return prepared;
-        });
-        const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-        const waiting = createMainSessionWaitTool()
-          .execute("deadline", { ids: [entry.runId], timeoutSeconds: 0.01 }, abort.signal)
-          .then((result) => result.details);
-        const observed = waiting.then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        try {
-          const result = await Promise.race([
-            observed,
-            overranDeadline.promise.then(() => ({ overranDeadline: true })),
-          ]);
-          expect(result).toEqual({ value: { completed: [], pending: [entry.runId] } });
-          await Promise.all(publications);
-          expect(publications).toHaveLength(2);
-          expect(reads.mock.calls.some(([, command]) => command.type === "subagents.runs")).toBe(
-            true,
-          );
-          expect(unsubscribed).toHaveBeenCalledOnce();
-        } finally {
-          abort.abort();
-          releaseExtraRead.resolve();
-          await Promise.allSettled([waiting, ...publications]);
-          reads.mockRestore();
-          clock.mockRestore();
-          state.clearSubagentRunsReadCacheForTest();
+    await withPersistedState(async (state) => {
+      const entry = storedRun(collectorRun("persisted-deadline", MAIN));
+      const unrelated = storedRun(collectorRun("unrelated-publication", MAIN));
+      saveSubagentRegistryToSqlite(new Map([entry, unrelated].map((run) => [run.runId, run])));
+      const unsubscribed = await subscribePersisted();
+      const overranDeadline = createDeferred();
+      const releaseExtraRead = createDeferred();
+      const abort = new AbortController();
+      const publications: Promise<void>[] = [];
+      let readCount = 0;
+      let elapsed = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+      registryEvents.read.mockImplementation(async (runIds) => {
+        readCount += 1;
+        if (readCount === 3) {
+          // Observe starvation without waiting for the runner's timeout or stopping publications.
+          overranDeadline.resolve();
+          await releaseExtraRead.promise;
         }
-      },
-    );
+        const prepared = await state.prepareSubagentRunsSnapshotForRunIds(new Map(), runIds);
+        if (abort.signal.aborted) {
+          return prepared;
+        }
+        const publication = Promise.resolve().then(() => {
+          elapsed += 5;
+          persistCollectorReadFixture(state, { ...unrelated, model: `publication-${elapsed}` });
+        });
+        publications.push(publication);
+        void publication.catch(() => abort.abort());
+        return prepared;
+      });
+      const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      const waiting = executeWait([entry.runId], 0.01, abort.signal).then(
+        (result) => result.details,
+      );
+      const observed = observe(waiting);
+      try {
+        const result = await Promise.race([
+          observed,
+          overranDeadline.promise.then(() => ({ overranDeadline: true })),
+        ]);
+        expect(result).toEqual({ value: { completed: [], pending: [entry.runId] } });
+        await Promise.all(publications);
+        expect(publications).toHaveLength(2);
+        expect(reads.mock.calls.some(([, command]) => command.type === "subagents.runs")).toBe(
+          true,
+        );
+        expect(unsubscribed).toHaveBeenCalledOnce();
+      } finally {
+        abort.abort();
+        releaseExtraRead.resolve();
+        await Promise.allSettled([waiting, ...publications]);
+        reads.mockRestore();
+        clock.mockRestore();
+      }
+    });
   });
 
   it.each([
@@ -703,7 +667,7 @@ describe("agents_wait", () => {
     ["tool", "failure"],
     ["bridge", "failure"],
   ] as const)("joins the %s read after abort wins its pending %s", async (boundary, outcome) => {
-    const entry = collectorRun("pending-read", "agent:main:main", { status: "done" });
+    const entry = collectorRun("pending-read", MAIN, { status: "done" });
     const read = createDeferred<ReadonlyMap<string, SubagentRunRecord>>();
     const readFailure = new Error("worker read failed", {
       cause: new Error("reader cleanup failed"),
@@ -745,59 +709,15 @@ describe("agents_wait", () => {
     }
   });
 
-  it.each(["tool", "bridge"] as const)(
-    "rejects a foreign replacement while the %s is parked",
-    async (boundary) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-      const pending = collectorRun("old-gateway-run", "agent:main:main");
-      pending.swarmRunId = "collector-run";
-      records.set(pending.runId, pending);
-      const controller = new AbortController();
-      const waiting = waitAtBoundary(boundary, "collector-run", controller.signal);
-      const observed = waiting.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      try {
-        expect(registryEvents.listeners.size).toBe(1);
-        records.delete(pending.runId);
-        const foreign = collectorRun("new-gateway-run", "agent:other:main", { status: "done" });
-        foreign.swarmRunId = "collector-run";
-        foreign.completion = { required: false, resultText: "foreign result" };
-        records.set(foreign.runId, foreign);
-        for (const listener of registryEvents.listeners) {
-          listener();
-        }
-
-        expect(await observed).toEqual(
-          boundary === "tool"
-            ? {
-                value: {
-                  completed: [],
-                  pending: [],
-                  errors: [{ runId: "collector-run", error: "not_owner" }],
-                  success: false,
-                },
-              }
-            : {
-                error: expect.objectContaining({ message: "agents.run not_owner: collector-run" }),
-              },
-        );
-        expect(registryEvents.listeners.size).toBe(0);
-        expect(vi.getTimerCount()).toBe(0);
-      } finally {
-        controller.abort();
-        await observed;
-        vi.useRealTimers();
-      }
-    },
-  );
-
   it("does not treat a routed completion owner as the spawning session", async () => {
-    const routed = collectorRun("routed", "agent:main:main", { status: "done" });
-    routed.controllerSessionKey = "agent:worker:route-a";
-    routed.swarmRequesterSessionKey = "agent:worker:route-a";
-    records.set(routed.runId, routed);
+    addRun(
+      "routed",
+      { status: "done" },
+      {
+        controllerSessionKey: "agent:worker:route-a",
+        swarmRequesterSessionKey: "agent:worker:route-a",
+      },
+    );
     const routedOwner = createAgentsWaitTool({
       agentSessionKey: "agent:worker:route-a",
       agentId: "worker",
@@ -806,18 +726,10 @@ describe("agents_wait", () => {
     const completionOwner = createMainSessionWaitTool();
 
     const allowed = await routedOwner.execute("owner", { ids: ["routed"], timeoutSeconds: 0 });
-    const denied = await completionOwner.execute("proxy", {
-      ids: ["routed"],
-      timeoutSeconds: 0,
-    });
+    const denied = await executeWait(["routed"], 0, undefined, completionOwner);
 
     expect(allowed.details).toMatchObject({ completed: [{ runId: "routed" }] });
-    expect(denied.details).toEqual({
-      completed: [],
-      pending: [],
-      errors: [{ runId: "routed", error: "not_owner" }],
-      success: false,
-    });
+    expect(denied.details).toEqual(notOwner("routed"));
     expect(isToolResultError(denied)).toBe(true);
   });
 
@@ -834,10 +746,7 @@ describe("agents_wait", () => {
       },
     });
 
-    const result = await tool.execute("wait", {
-      ids: [foreign.runId],
-      timeoutSeconds: 0,
-    });
+    const result = await executeWait([foreign.runId], 0, undefined, tool);
 
     expect(result.details).toMatchObject({
       errors: [{ runId: foreign.runId, error: "not_owner" }],
@@ -861,11 +770,98 @@ describe("agents_wait", () => {
 
   it.each([
     { ids: [" ", "\t"], timeoutSeconds: 0, error: "at least one non-empty run id" },
+    { timeoutSeconds: 0, error: "array of run id strings" },
+    { ids: [7], timeoutSeconds: 0, error: "array of run id strings" },
+    { ids: "missing", timeoutSeconds: 0, error: "array of run id strings" },
+    { ids: 7, timeoutSeconds: 0, error: "array of run id strings" },
     {
       ids: Array.from({ length: 1_001 }, (_, index) => `run-${index}`),
       error: "at most 1000 ids",
     },
   ])("rejects invalid batches: $error", async ({ error, ...params }) => {
     await expect(createMainSessionWaitTool().execute("call", params)).rejects.toThrow(error);
+  });
+
+  function observeRead() {
+    const read = createDeferred();
+    registryEvents.read.mockImplementation(async (ids) => {
+      read.resolve();
+      return preparedRuns(() => selectRuns(records, ids));
+    });
+    return read.promise;
+  }
+
+  it.each(["cell", "nested"])(
+    "keeps sibling results owned with %s awaitResults until every completion arrives",
+    async (mode) => {
+      onTestFinished(resetCodeModeTestState);
+      const first = addRun("first-required", { status: "done" });
+      const second = addRun("second-required");
+      const read = observeRead();
+      const h = createCodeModeHarness();
+      applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createMainSessionWaitTool()] });
+      const result = expectDefined(h.tools[0], "exec").execute("required-child-results", {
+        title: "Collect required child results",
+        awaitResults: mode === "cell",
+        code: `return await agents_wait({ids:["first-required", "second-required"]${mode === "nested" ? ", awaitResults: true" : ""}});`,
+      });
+      const complete = () => {
+        second.collectorCompletion = { status: "failed" };
+        publishChanges();
+      };
+      try {
+        await read;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await vi.advanceTimersByTimeAsync(60_000);
+        const pending = Symbol("pending");
+        expect(await Promise.race([result, Promise.resolve(pending)])).toBe(pending);
+        expect(registryEvents.read).toHaveBeenCalledOnce();
+        second.completion = { required: false, resultText: "child failure evidence" };
+        complete();
+        vi.useRealTimers();
+        expect((await result).details).toMatchObject({
+          status: "completed",
+          value: {
+            pending: [],
+            completed: [
+              { runId: first.runId, status: "done" },
+              { runId: second.runId, status: "failed", result: "child failure evidence" },
+            ],
+          },
+        });
+        expect(registryEvents.read).toHaveBeenCalledTimes(2);
+        expect(registryEvents.listeners.size).toBe(0);
+      } finally {
+        vi.useRealTimers();
+        complete();
+        await result;
+      }
+    },
+  );
+
+  it("cancels required collection without borrowing another requester's child", async () => {
+    const entry = addRun("foreign-required", undefined, {}, "agent:other:main");
+    const tool = createMainSessionWaitTool();
+    await expect(
+      tool.execute("foreign", { ids: [entry.runId], awaitResults: true }),
+    ).resolves.toMatchObject({
+      details: { success: false, errors: [{ runId: entry.runId, error: "not_owner" }] },
+    });
+    entry.swarmRequesterSessionKey = MAIN;
+    const read = observeRead();
+    const abort = new AbortController();
+    const result = tool.execute(
+      "required-abort",
+      { ids: [entry.runId], awaitResults: true },
+      abort.signal,
+    );
+    const rejected = expect(result).rejects.toThrow("agents_wait aborted");
+    await read;
+    abort.abort();
+    await rejected;
+    expect(registryEvents.listeners.size).toBe(0);
+    await expect(
+      tool.execute("ambiguous-wait", { ids: [entry.runId], awaitResults: true, timeoutSeconds: 1 }),
+    ).rejects.toThrow("cannot also specify");
   });
 });

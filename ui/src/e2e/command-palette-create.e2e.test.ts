@@ -315,6 +315,7 @@ suite.define(() => {
 
   it.each([
     { mode: "dark", width: 1280 },
+    { mode: "dark", width: 390 },
     { mode: "light", width: 390 },
   ] as const)(
     "aligns settings and preserves keyboard focus in $mode at $width",

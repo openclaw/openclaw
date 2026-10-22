@@ -18,8 +18,8 @@ import type { TemplateContext } from "../templating.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 import {
   createFollowupRun,
+  createCliFollowupRun as createCliRun,
   createMinimalRunAgentTurnParams,
-  createTestUserTurnRecorder,
   expectMockCallArgFields,
   getExecuteAgentTurnForTest,
   initialFallbackAttemptOptions,
@@ -28,22 +28,10 @@ import {
   requireRecord,
   setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
+import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
-function createCliRun(provider: string, model: string) {
-  state.isCliProviderMock.mockReturnValue(true);
-  state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-    result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-    provider,
-    model,
-    attempts: [],
-  }));
-  const followupRun = createFollowupRun();
-  followupRun.run.provider = provider;
-  followupRun.run.model = model;
-  return followupRun;
-}
 afterEach(resetGeneratedMediaTaskActivityForTests);
 
 function rejectUnexpectedCompactionSuccessor(): never {

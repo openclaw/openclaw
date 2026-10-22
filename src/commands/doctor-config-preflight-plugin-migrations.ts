@@ -25,7 +25,6 @@ import {
 import type {
   LegacyStateMigrationStepReceipt,
   MigrationMessages,
-  MigrationLogger,
 } from "../infra/state-migrations.types.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -52,7 +51,7 @@ export function createDoctorPluginMigrationPreparation(params: {
   measure: ConfigSnapshotReadMeasure;
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
   doctorOnlyStateMigrations: boolean;
-  log?: MigrationLogger;
+  integrityCheck?: "quick" | "full";
 }) {
   const shouldDeferInstallation = () =>
     Boolean(resolveUpdateRehearsalRoot(params.env())) ||
@@ -230,7 +229,7 @@ export function createDoctorPluginMigrationPreparation(params: {
             autoMigrateLegacyPluginDoctorState({
               config,
               env: params.env(),
-              log: params.log,
+              integrityCheck: params.integrityCheck,
               ...(params.doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
             }),
           ),

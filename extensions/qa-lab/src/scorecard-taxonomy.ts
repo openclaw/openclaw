@@ -526,13 +526,13 @@ export function readValidatedQaMaturityScoreSources(params?: {
     YAML.parse(fs.readFileSync(scoresPath, "utf8")),
     scoresPath,
   );
-  const warnings = validateQaMaturityScoresAgainstTaxonomy({
+  validateQaMaturityScoresAgainstTaxonomy({
     coverageScores: params?.coverageScores,
     scores,
     taxonomy,
     scoresPath,
   });
-  return { scores, taxonomy, warnings };
+  return { scores, taxonomy };
 }
 
 function readQaMaturityTaxonomy(repoRoot: string | undefined) {
@@ -741,7 +741,6 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
   scoresPath?: string;
 }) {
   const scoresPath = params.scoresPath ?? QA_MATURITY_SCORES_PATH;
-  const warnings: string[] = [];
   const scoreSurfaces = params.scores.surfaces;
   const taxonomyIndex = buildQaMaturityTaxonomyCategoryIndex(params.taxonomy);
   if (params.scores.counts.active_surfaces !== scoreSurfaces.length) {
@@ -855,7 +854,6 @@ function validateQaMaturityScoresAgainstTaxonomy(params: {
       }
     }
   }
-  return warnings;
 }
 
 function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
@@ -891,14 +889,13 @@ function buildMaturityRefs(taxonomy: QaMaturityTaxonomy | null) {
 export function readQaScorecardProfileOptions(profileId: string | undefined, repoRoot?: string) {
   const profile = profileId?.trim();
   if (!profile) {
-    return { evidenceMode: "full" as const, channelDriver: "qa-channel" as const };
+    return { evidenceMode: "full" as const };
   }
   const profileOptions = readQaMaturityTaxonomy(repoRoot)?.profiles.find(
     (entry) => entry.id === profile,
   );
   return {
     evidenceMode: profileOptions?.evidenceMode ?? "full",
-    channelDriver: profileOptions?.channelDriver ?? "qa-channel",
   };
 }
 
@@ -964,7 +961,7 @@ function buildQaScorecardTaxonomyReport(params: {
   });
   const allScenarioCoverageIds = uniqueSorted(params.scenarios.flatMap(scenarioCoverageIds));
 
-  if (!pathExists(params.repoRoot, QA_MATURITY_TAXONOMY_PATH) || !params.taxonomy) {
+  if (!params.taxonomy) {
     issues.push({
       code: "taxonomy-ref-not-found",
       severity: "warning",

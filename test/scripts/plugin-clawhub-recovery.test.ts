@@ -754,44 +754,35 @@ describe("sealed ClawHub recovery manifest", () => {
   });
 
   it("keeps automated recovery behind approval and preserves the manifest before cancellation", () => {
-    const recovery = parse(readFileSync(".github/workflows/plugin-clawhub-recovery.yml", "utf8"));
-    expect(recovery.jobs.recover.environment).toBe("clawhub-plugin-release");
-    const recoveryNames = recovery.jobs.recover.steps.map((step: { name?: string }) => step.name);
-    expect(
-      recoveryNames.indexOf("Validate original sealed authority and exact recovery roster"),
-    ).toBeLessThan(recoveryNames.indexOf("Recover every non-public exact attempt"));
-    expect(
-      recovery.jobs.recover.steps.find(
-        (step: { name?: string }) => step.name === "Recover every non-public exact attempt",
-      ).run,
-    ).toContain("plugin-clawhub-recovery.mjs execute");
+    const workflow = (name: string) =>
+      parse(readFileSync(`.github/workflows/${name}.yml`, "utf8")).jobs;
+    type Step = { name?: string; run?: string; "continue-on-error"?: boolean };
+    const named = (steps: Step[], name: string) => steps.find((step) => step.name === name)!;
+    const before = (steps: Step[], first: string, last: string) => {
+      const names = steps.map((step) => step.name);
+      expect(names.indexOf(first)).toBeLessThan(names.indexOf(last));
+    };
+    const recovery = workflow("plugin-clawhub-recovery").recover;
+    expect(recovery.environment).toBe("clawhub-plugin-release");
+    before(
+      recovery.steps,
+      "Validate original sealed authority and exact recovery roster",
+      "Recover every non-public exact attempt",
+    );
+    expect(named(recovery.steps, "Recover every non-public exact attempt").run).toContain(
+      "plugin-clawhub-recovery.mjs execute",
+    );
 
-    const release = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"));
-    const cleanupNames = release.jobs.cleanup_clawhub.steps.map(
-      (step: { name?: string }) => step.name,
-    );
-    expect(
-      cleanupNames.indexOf("Download sealed recovery manifest before cancellation"),
-    ).toBeLessThan(cleanupNames.indexOf("Cancel unfinished ClawHub children"));
-    expect(cleanupNames.indexOf("Upload sealed cleanup evidence")).toBeLessThan(
-      cleanupNames.indexOf("Cancel unfinished ClawHub children"),
-    );
-    expect(
-      release.jobs.cleanup_clawhub.steps.find(
-        (step: { name?: string }) =>
-          step.name === "Download sealed recovery manifest before cancellation",
-      )["continue-on-error"],
-    ).toBe(true);
-    expect(release.jobs).not.toHaveProperty("verify_clawhub_publication");
+    const release = workflow("openclaw-release-publish");
+    const cleanup = release.cleanup_clawhub.steps;
+    const download = "Download sealed recovery manifest before cancellation";
+    before(cleanup, download, "Cancel unfinished ClawHub children");
+    before(cleanup, "Upload sealed cleanup evidence", "Cancel unfinished ClawHub children");
+    expect(named(cleanup, download)["continue-on-error"]).toBe(true);
+    expect(release).not.toHaveProperty("verify_clawhub_publication");
 
-    const child = parse(readFileSync(".github/workflows/plugin-clawhub-release.yml", "utf8"));
-    expect(child.jobs.seal_clawhub_recovery_manifest.steps.at(-1).with.name).toContain(
-      "openclaw-clawhub-recovery-manifest-",
-    );
-    expect(
-      child.jobs.seal_clawhub_recovery_manifest.steps.find(
-        (step: { name?: string }) => step.name === "Download package publication receipts",
-      )["continue-on-error"],
-    ).toBe(true);
+    const child = workflow("plugin-clawhub-release").seal_clawhub_recovery_manifest.steps;
+    expect(child.at(-1).with.name).toContain("openclaw-clawhub-recovery-manifest-");
+    expect(named(child, "Download package publication receipts")["continue-on-error"]).toBe(true);
   });
 });

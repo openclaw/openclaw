@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
@@ -70,7 +70,7 @@ export class OpenClawAgentDatabaseReadOnlyScope {
 
   invalidateProjection(
     databaseIdentity: string,
-    invalidate: (database: DatabaseSync) => void,
+    invalidate: (database: EngineConnection) => void,
   ): void {
     if (
       this.database &&
@@ -296,7 +296,7 @@ function cachedScope(options: ReadTarget): OpenClawAgentDatabaseReadOnlyScope {
 /** Committed worker receipts invalidate projections on retained readers without running SQL. */
 export function invalidateOpenClawAgentReadOnlyProjections(
   databaseIdentity: string,
-  invalidate: (database: DatabaseSync) => void,
+  invalidate: (database: EngineConnection) => void,
 ): void {
   for (const scope of retainedScopes.active) {
     scope.invalidateProjection(databaseIdentity, invalidate);

@@ -95,7 +95,7 @@ export function resolveSubagentChildAuthority(
   };
 }
 
-// New runs record ownership; report the restored legacy population once per process.
+// New runs record ownership; report unsettled legacy work once per process.
 let warnedLegacyAuthority = false;
 export function warnLegacySubagentAuthority(
   entries: Iterable<SubagentRunRecord>,
@@ -107,6 +107,13 @@ export function warnLegacySubagentAuthority(
   const runIds = new Set<string>();
   const sampleRunIds: string[] = [];
   for (const entry of entries) {
+    if (
+      !entry.requesterSettleWake &&
+      (entry.cleanupCompletedAt !== undefined ||
+        (entry.execution.status === "terminal" && entry.suppressCompletionDelivery))
+    ) {
+      continue;
+    }
     if (
       !runIds.has(entry.runId) &&
       resolveSubagentChildAuthority(entry).status === "legacy-unverified"

@@ -26,13 +26,7 @@ export function buildIrcConnectOptions(
     username: account.username,
     realname: account.realname,
     password: account.password,
-    nickserv: {
-      enabled: account.config.nickserv?.enabled,
-      service: account.config.nickserv?.service,
-      password: account.config.nickserv?.password,
-      register: account.config.nickserv?.register,
-      registerEmail: account.config.nickserv?.registerEmail,
-    },
+    nickserv: account.config.nickserv,
     ...overrides,
   };
 }

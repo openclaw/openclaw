@@ -138,6 +138,47 @@ export function createCodexTestModel(provider = "openai", input = ["text"]): Mod
   } as Model;
 }
 
+export function createCodexRuntimePlanFixture(): NonNullable<
+  EmbeddedRunAttemptParams["runtimePlan"]
+> {
+  return {
+    auth: {},
+    observability: {
+      resolvedRef: "codex/gpt-5.4-codex",
+      provider: "codex",
+      modelId: "gpt-5.4-codex",
+      harnessId: "codex",
+    },
+    prompt: {
+      resolveSystemPromptContribution: () => undefined,
+    },
+    tools: {
+      normalize: (tools: unknown[]) => tools,
+      logDiagnostics: () => undefined,
+    },
+  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+}
+
+export function assistantMessage(text: string, timestamp: number) {
+  return {
+    role: "assistant" as const,
+    content: [{ type: "text" as const, text }],
+    api: "openai-chatgpt-responses",
+    provider: "openai",
+    model: "gpt-5.4-codex",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop" as const,
+    timestamp,
+  };
+}
+
 export async function waitForHarnessRequest(
   harness: ReturnType<typeof createClientHarness>,
   method: string,
@@ -290,7 +331,7 @@ export function createClientHarness(
       return stdinDestroyed;
     },
     emitExit,
-    send(message: unknown) {
+    send(this: void, message: unknown) {
       stdout.write(`${JSON.stringify(message)}\n`);
     },
   };

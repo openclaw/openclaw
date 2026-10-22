@@ -203,6 +203,7 @@ it.each(["local", "legacy-shared"] as const)(
             const writing = record({
               kind: "failure",
               expectedProfile: store.profiles[profileId],
+              observedAt: Date.now(),
               reason: "auth",
               whamResult: null,
               probeEligible: false,

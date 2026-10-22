@@ -579,14 +579,13 @@ process.stdout.write("head");
   );
 
   it.runIf(process.platform !== "win32")(
-    "does not include failed child output in resolver errors",
+    "keeps the exit-code diagnostic when failed op read has no stderr",
     async () => {
       const tempDir = fixtureWorkspace.dir;
       const opPath = path.join(tempDir, "op");
       writeOpScript(
         opPath,
         `process.stdout.write("secret-output-must-not-escape");
-process.stderr.write("secret-error-must-not-escape");
 process.exitCode = 1;
 `,
       );
@@ -595,10 +594,46 @@ process.exitCode = 1;
         env: { CLAW_1PASSWORD_OP: opPath },
       });
       expect(result.stdout).not.toContain("secret-output-must-not-escape");
-      expect(result.stdout).not.toContain("secret-error-must-not-escape");
       expect(JSON.parse(result.stdout).errors).toEqual({
         "op://Engineering/OpenRouter/apiKey": { message: "op read failed with exit code 1." },
       });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reports a bounded redacted stderr tail without exposing op read secrets",
+    async () => {
+      const opPath = path.join(fixtureWorkspace.dir, "op");
+      writeOpScript(
+        opPath,
+        `process.stdout.write("fixture-secret-output");
+process.stderr.write("discarded-prefix " + "x".repeat(2_000) + "\\n");
+process.stderr.write(process.env.OP_SERVICE_ACCOUNT_TOKEN + "\\nfixture-secret-output\\n");
+process.stderr.write("password=" + "fixture-private-password".repeat(40) + "\\nnot signed in; item not found\\n");
+process.exitCode = 1;
+`,
+      );
+
+      const result = await runResolver({ env: { CLAW_1PASSWORD_OP: opPath } });
+      expect(result).toMatchObject({ code: 0, stderr: "" });
+      const response = JSON.parse(result.stdout) as {
+        values: Record<string, string>;
+        errors: Record<string, { message: string }>;
+      };
+      expect(response.values).toEqual({});
+      const message = response.errors["op://Engineering/OpenRouter/apiKey"]?.message;
+      expect(message).toBeDefined();
+      expect(message).toMatch(/^op read failed with exit code 1\./);
+      expect(message).toMatch(/not signed in; item not found$/);
+      expect(message?.length).toBeLessThanOrEqual("op read failed with exit code 1. ".length + 512);
+      for (const hidden of [
+        "discarded-prefix",
+        "not-a-real-service-account-token",
+        "fixture-secret-output",
+        "fixture-private-password",
+      ]) {
+        expect(result.stdout).not.toContain(hidden);
+      }
     },
   );
 
@@ -628,7 +663,7 @@ setInterval(() => {}, 1000);
         });
         expect(JSON.parse(result.stdout).errors).toEqual({
           "op://Engineering/OpenRouter/apiKey": {
-            message: "op read output exceeded the secret value limit.",
+            message: "op read output exceeded the limit.",
           },
         });
         const pid = Number.parseInt(fs.readFileSync(descendantPidPath, "utf8"), 10);

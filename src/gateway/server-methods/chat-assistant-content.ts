@@ -14,7 +14,6 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
-import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   buildManagedMediaFailureBlock,
   createManagedOutgoingMediaBlocks,
@@ -208,7 +207,7 @@ export async function buildAssistantReplyContentFromInputs(
     const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
       preserveBoundaries: preserveTextBoundaries,
     });
-    if (text && (isPrepared || !isSuppressedControlReplyText(text))) {
+    if (text) {
       if (statusNotice) {
         content.push({ type: "text", text, openclawStatusNotice: true });
       } else {
@@ -225,7 +224,7 @@ export async function buildAssistantReplyContentFromInputs(
     // Display text may merge across payloads. Transcript captions and directives
     // stay attached to their source payload instead of matching display slots.
     const transcriptText = params.transcriptMediaMessage?.payloadTexts[entry.sourceIndex] ?? text;
-    if (transcriptText && (isPrepared || !isSuppressedControlReplyText(transcriptText))) {
+    if (transcriptText) {
       persistedContent.push({
         type: "text",
         text: transcriptText,

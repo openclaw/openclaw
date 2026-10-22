@@ -11,6 +11,7 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { McpToolCatalog } from "../agent-bundle-mcp-types.js";
+import type { PreparedAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "./runtime-artifact.types.js";
 
@@ -108,7 +109,16 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "trajectoryRecorder"
   | "inputAttachmentMedia"
   | "supportsTurnScopedToolRestrictions"
->;
+  | "onSettledTurn"
+> & {
+  /** Awaited in the original attempt scope; core alone decides whether to capture. */
+  onSettledTurn?: (
+    attempt: AgentHarnessCanonicalAttemptResult,
+    captureContext: () => Promise<
+      AgentHarnessCanonicalAttemptResult["settledTurnFinalizationContext"]
+    >,
+  ) => Promise<void>;
+};
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
  * existing harness source compatible through 2026-10-12.
@@ -139,7 +149,9 @@ export type AgentHarnessAttemptResult =
   | AgentHarnessLegacyAttemptResult;
 export type AgentHarnessSettledTurnFinalizationAttemptParams<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
-> = Omit<TAttemptParams, "hostCapabilities"> & { hostCapabilities?: never };
+> = Omit<TAttemptParams, "hostCapabilities" | "onSettledTurn"> & {
+  hostCapabilities?: never;
+};
 type AgentHarnessSettledTurnFinalizationParams<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
 > = {
@@ -151,6 +163,7 @@ type AgentHarnessSettledTurnFinalizationParams<
 export type AgentHarnessSettledTurnFinalizationResult = {
   /** The single completed assistant answer produced by the isolated operation. */
   assistant: import("../../llm/types.js").AssistantMessage;
+  preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Normalized usage for the finalization model call only. */
   usage?: import("../usage.js").NormalizedUsage;
   /** True when the harness already persisted the assistant into the application transcript. */
@@ -295,6 +308,10 @@ export type AgentHarnessSideQuestionParams = {
 /** Current side-question contract for hosts that always provide closure-bound authority. */
 export type AgentHarnessSideQuestionParamsV2 = AgentHarnessSideQuestionParams & {
   hostCapabilities: AgentHarnessHostCapabilities;
+  /** Non-authorizing native ownership captured before model and auth preparation. */
+  expectedSessionRuntimeOwnership?: InternalEmbeddedRunAttemptParams["expectedSessionRuntimeOwnership"];
+  /** Core-prepared search policy, bound to the side question's model and requester facts. */
+  preparedWebSearchPolicy?: InternalEmbeddedRunAttemptParams["preparedWebSearchPolicy"];
 };
 export type AgentHarnessSideQuestionResult = {
   text: string;
@@ -542,7 +559,7 @@ type AgentHarnessContract<
   verifySetup?(ctx: AgentHarnessSetupVerificationContext): Promise<void>;
   /**
    * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
-   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;

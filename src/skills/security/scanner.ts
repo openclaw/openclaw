@@ -7,6 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { statIfExists } from "../../infra/path-existence.js";
 import { isPathInside } from "../../security/scan-paths.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
@@ -510,17 +511,6 @@ function scanSourceRules(
   return findings;
 }
 
-async function statIfPresent(filePath: string): Promise<Stats | null> {
-  try {
-    return await fs.stat(filePath);
-  } catch (err) {
-    if (hasErrnoCode(err, "ENOENT")) {
-      return null;
-    }
-    throw err;
-  }
-}
-
 async function resolveForcedFiles(params: {
   rootDir: string;
   includeFiles: string[];
@@ -537,7 +527,7 @@ async function resolveForcedFiles(params: {
       continue;
     }
 
-    const st = await statIfPresent(includePath);
+    const st = await statIfExists(includePath);
     if (!st?.isFile()) {
       continue;
     }
@@ -598,7 +588,7 @@ async function scanFileWithCache(
   filePath: string,
   maxFileBytes: number,
 ): Promise<{ scanned: boolean; findings: SkillScanFinding[] }> {
-  const st = await statIfPresent(filePath);
+  const st = await statIfExists(filePath);
   if (!st?.isFile()) {
     return { scanned: false, findings: [] };
   }

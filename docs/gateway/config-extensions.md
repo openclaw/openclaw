@@ -105,7 +105,7 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   lifetime and retires its runtimes at run end; retained transcripts alone do
   not keep them alive.
 - `mcp.sessionIdleTtlMs`: optional idle eviction in milliseconds. Unset or `0`
-  keeps the session lifetime above. Positive finite values opt into eviction;
+  keeps the session lifetime above unless capacity eviction is needed. Positive finite values opt into TTL eviction;
   fractions round down. For example, `mcp: { sessionIdleTtlMs: 3600000 }` evicts
   after one hour without use. While enabled, a sweep runs once per minute and
   preserves active leases and pending acquisitions. This override does not
@@ -114,8 +114,21 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   intended value from your config backup; the deleted value cannot be inferred.
 - Each Gateway admits at most 256 OpenClaw-managed MCP runtimes with server connections across sessions
   and requester partitions, including creation and cleanup in progress. At the
-  limit, existing runtimes stay alive and new admissions fail with a log message
-  directing you to stop or reset unused sessions. A runtime can own multiple
+  limit, the least-recently-used idle runtime is retired and its servers stop;
+  that session reconnects on its next turn. Active runs, leases, app views, and
+  pending acquisitions are preserved. An active turn protects its session runtime;
+  idle requester partitions in that session remain eligible for eviction. If every runtime is in use, the turn
+  continues with a bounded warning once per capacity episode.
+  Waiting for idle cleanup is bounded; unfinished cleanup retains its slot and continues
+  under the lifecycle owner. Usable static or requester connections remain available. Previously advertised
+  tool schemas stay stable; unavailable bindings return an error without contacting MCP.
+  Sign-in tools from a refused connection keep their schemas but cannot start authorization;
+  retry on the next turn.
+  Tool catalogs for up to 256 evicted runtime partitions and advertised requester catalogs
+  for up to 256 evicted sessions are retained in least-recently-used order, in addition
+  to catalogs with live ownership. Session retirement or config reload
+  clears retained catalogs; older evicted sessions rediscover their tools on reconnect.
+  A runtime can own multiple
   configured server connections. Sessions without available MCP servers and
   sign-in-only catalogs do not consume this limit. Native client runtimes manage their own bounds.
 - MCP config changes retire only changed or removed server connections. Unchanged
@@ -288,6 +301,11 @@ conversation bindings, or any non-Codex harness.
   marketplace-qualified. `/codex plugins available` lists discoverable
   identities, and an owner or `operator.admin` can install one with
   `/codex plugins install <plugin>@<marketplace>`.
+- `plugins.entries.codex.config.codexPlugins.plugins.<key>.read_only`: defaults to
+  `false`. When `true`, only connected-app tools explicitly marked read-only
+  and enabled in the current app inventory are available. Unknown tools and
+  stale native tool grants are denied. This restriction applies with every
+  `allow_destructive_actions` value; it does not change that flag when disabled.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the

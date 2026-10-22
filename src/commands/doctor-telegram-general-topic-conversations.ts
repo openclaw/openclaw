@@ -14,6 +14,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { projectExistingAgentDatabaseTargets } from "../infra/session-sqlite-migration-readers.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { buildConversationRef } from "../routing/conversation-ref.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { Conversations } from "../state/openclaw-agent-db.generated.js";
@@ -52,7 +53,7 @@ function canonicalIdentity(row: Conversations) {
   };
 }
 
-function listLegacyRows(database: import("node:sqlite").DatabaseSync): Conversations[] {
+function listLegacyRows(database: EngineConnection): Conversations[] {
   const db = getSessionKysely(database);
   return executeSqliteQuerySync(
     database,

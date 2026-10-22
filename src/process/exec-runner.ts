@@ -122,6 +122,14 @@ export async function runCommandBuffersWithTimeout(
   return await runCommandWithOutputEncoding(argv, optionsOrTimeout, false, true);
 }
 
+/** Retain raw bytes with UTF-8 capture boundaries, independent of the Windows console page. */
+export async function runUtf8CommandBuffersWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<BufferSpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, true, true);
+}
+
 async function runCommandWithOutputEncoding(
   argv: string[],
   optionsOrTimeout: number | CommandOptions,

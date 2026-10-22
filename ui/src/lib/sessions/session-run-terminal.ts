@@ -2,7 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { formatUiExternalText } from "../format-error.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
+import { isSessionRunStateActive } from "../session-run-state.ts";
 import { mapSessionResultRows } from "./reconcile.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -19,6 +19,7 @@ export type SessionRunTerminal = {
   /** Latest session status after this owned model run leaves the active registry. */
   status: SessionRunStatus;
   errorMessage?: string;
+  suppressErrorNotice?: boolean;
   endedAt: number;
 };
 
@@ -54,7 +55,7 @@ function createSessionRunTerminalReconciler(
       return existing;
     }
     const row = observation?.project(existing) ?? existing;
-    const wasActive = row.hasActiveRun === true || isSessionRunActive(row);
+    const wasActive = row.hasActiveRun === true || isSessionRunStateActive(row);
     const previousTerminalRunId = row.lastRunId?.trim();
     const isTerminal = terminal.status !== "queued" && terminal.status !== "running";
     // An idle tuple may predate this run or belong to a newer completion.
@@ -94,6 +95,7 @@ function createSessionRunTerminalReconciler(
     const lastRunError = failed
       ? errorMessage || (replacementRunId ? undefined : row.lastRunError)
       : undefined;
+    const suppressErrorNotice = terminal.suppressErrorNotice ?? false;
     const endedAt = replacementRunId ? terminal.endedAt : (row.endedAt ?? terminal.endedAt);
     const runtimeMs = replacementRunId
       ? undefined
@@ -112,6 +114,7 @@ function createSessionRunTerminalReconciler(
       row.hasActiveRun === false &&
       row.status === terminal.status &&
       row.lastRunError === lastRunError &&
+      (row.suppressErrorNotice ?? false) === suppressErrorNotice &&
       row.endedAt === endedAt &&
       row.runtimeMs === runtimeMs &&
       row.activeRunIds === activeRunIds &&
@@ -124,6 +127,7 @@ function createSessionRunTerminalReconciler(
             hasActiveRun: false,
             status: terminal.status,
             lastRunError,
+            suppressErrorNotice,
             endedAt,
             runtimeMs,
             abortedLastRun,

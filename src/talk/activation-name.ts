@@ -1,6 +1,4 @@
 /**
- * Realtime voice activation-name matching for direct spoken address.
- *
  * The matcher accepts short names at the leading or trailing edge of a
  * transcript, strips the name before agent routing, and keeps fuzzy matching
  * conservative so ordinary dictation does not trigger Talk turns.

@@ -84,8 +84,9 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   const references = new Map<string, RecoveryArtifactReference[]>();
-  const manifestPaths: string[] = [];
+  let manifestPaths: string[] = [];
   const artifacts: RecoveryCleanupArtifact[] = [];
+  const missingOriginals = new Set<string>();
   const protectUnmanifested = (filePath: string, bytes: number, reason: string) => {
     artifacts.push({ path: filePath, runs: [], bytes, outcome: "protected", reason });
   };
@@ -100,7 +101,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
       reason: "manifest-directory-alias",
     });
   } else {
-    manifestPaths.push(...listSessionSqliteMigrationManifestPaths(params.env));
+    manifestPaths = listSessionSqliteMigrationManifestPaths(params.env);
     for (const manifestPath of manifestPaths) {
       const stat = statMigrationPath(manifestPath);
       const manifest =
@@ -158,10 +159,17 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
         ? fs.lstatSync(evidence.disposal.claimPath, { bigint: true, throwIfNoEntry: false })
         : undefined;
     const current = stat ?? claim;
+    if (
+      refs.every((ref) => ref.trusted) &&
+      !current &&
+      evidence?.disposal.state !== "pending-disposal"
+    ) {
+      missingOriginals.add(archivePath);
+    }
     const item: RecoveryCleanupArtifact = {
       path: archivePath,
       runs: [...new Set(refs.map((ref) => ref.run.manifest.runId))],
-      bytes: current?.isFile() ? Number(current.size) : (evidence?.identity.size ?? 0),
+      bytes: current?.isFile() ? Number(current.size) : 0,
       outcome: "candidate",
       reason: "producer-verified-original",
       consequence:
@@ -288,26 +296,25 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   // Unknown files in known archive directories are visible, with no authority inferred from names.
+  const knownArchivePaths = new Set(artifacts.map((item) => item.path));
+  const pendingClaims = new Set<string>();
+  for (const refs of references.values()) {
+    for (const { move } of refs) {
+      if (move.artifact?.disposal.state === "pending-disposal") {
+        pendingClaims.add(move.artifact.disposal.claimPath);
+      }
+    }
+  }
   for (const directory of archiveDirs) {
     if (!statMigrationPath(directory)?.isDirectory() || hasSymbolicLinkInDirectoryPath(directory)) {
       continue;
     }
     for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
       const filePath = path.join(directory, item.name);
-      if (references.has(filePath) || artifacts.some((artifact) => artifact.path === filePath)) {
+      if (knownArchivePaths.has(filePath) || pendingClaims.has(filePath)) {
         continue;
       }
-      if (
-        [...references.values()].some((refs) =>
-          refs.some(
-            ({ move }) =>
-              move.artifact?.disposal.state === "pending-disposal" &&
-              move.artifact.disposal.claimPath === filePath,
-          ),
-        )
-      ) {
-        continue;
-      }
+      knownArchivePaths.add(filePath);
       protectUnmanifested(
         filePath,
         item.isFile() ? fs.lstatSync(filePath).size : 0,
@@ -329,9 +336,16 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
   }
   protectRecoveryDependencies(artifacts, references);
   return {
+    // Doctor still needs absent receipts to reconcile interrupted duplicate retirement.
+    artifacts,
     references,
     manifestPaths,
-    report: summarizeRecoveryCleanup(root, artifacts, "preview"),
+    report: summarizeRecoveryCleanup(
+      root,
+      artifacts.filter((item) => !missingOriginals.has(item.path)),
+      "preview",
+      missingOriginals.size,
+    ),
   };
 }
 
@@ -414,6 +428,7 @@ export function summarizeRecoveryCleanup(
   stateDir: string,
   artifacts: RecoveryCleanupArtifact[],
   status: "preview" | "refused" | "complete" | "blocked",
+  missingOriginals = 0,
 ) {
   const totals = {
     candidateBytes: 0,
@@ -440,7 +455,7 @@ export function summarizeRecoveryCleanup(
       totals.removedFiles += 1;
     }
   }
-  return { stateDir, artifacts, totals, status };
+  return { stateDir, artifacts, totals, status, missingOriginals };
 }
 
 /** Update cleanup also reviews original-state captures; Doctor's session repair does not. */
@@ -462,6 +477,7 @@ export function collectUpdateCleanupInventory(params: {
           inventory.report.stateDir,
           [...inventory.report.artifacts, ...captures.artifacts],
           "preview",
+          inventory.report.missingOriginals,
         ),
       };
     },

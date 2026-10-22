@@ -1,6 +1,4 @@
 /**
- * Runtime dependency barrel for the embedded Gateway stub.
- *
  * Tests mock this module to exercise local sessions.list/sessions.resolve/sessions.search/chat.history
  * behavior without importing the full Gateway server graph.
  */

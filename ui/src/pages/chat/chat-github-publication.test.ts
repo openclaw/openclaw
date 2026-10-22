@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
+import { createComponent, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationOptions } from "../../lib/sessions/github-publication-owner.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   account,
   confirmation,
@@ -15,9 +16,25 @@ import {
   settled,
   shared,
 } from "./chat-github-publication.test-support.ts";
-import { renderGitHubPublicationAction } from "./components/chat-github-publication.ts";
+import { GitHubPublicationAction } from "./components/chat-github-publication.tsx";
 
 describe("explicit GitHub publication", () => {
+  it("notifies sibling presentations only after freezing the admitted account", async () => {
+    const { controller, request, changed } = setup();
+    const ready = await settled(controller);
+    const response = createDeferred<unknown>();
+    request.mockReturnValueOnce(response.promise);
+    const snapshots: unknown[] = [];
+    changed.mockImplementation(() => {
+      const view = controller.view()!;
+      snapshots.push({ activity: view.activity, locked: view.locked, onSelect: view.onSelect });
+    });
+    const completion = ready.onPublish?.();
+    expect(snapshots).toEqual([{ activity: "publish", locked: true, onSelect: undefined }]);
+    response.resolve({ requestId, status: "requested", publisher: shared });
+    await completion;
+  });
+
   it("does not present an accepted publication status read as a new write", async () => {
     const { controller, request } = setup();
     (await settled(controller)).onSelect?.("personal");
@@ -28,14 +45,19 @@ describe("explicit GitHub publication", () => {
       message: "Accepted.",
     };
     request.mockResolvedValueOnce(accepted);
-    controller.view()?.onPublish?.();
+    void controller.view()?.onPublish?.();
     const pending = await settled(controller);
     const status = createDeferred<unknown>();
     request.mockImplementationOnce(() => status.promise);
-    pending.onRefresh();
+    void pending.onRefresh();
     const container = document.createElement("div");
+    let unmount: (() => void) | undefined;
     try {
-      render(renderGitHubPublicationAction(controller.view()!), container);
+      unmount = mountSolid(
+        () => createComponent(GitHubPublicationAction, { publication: controller.view()! }),
+        { container },
+      ).unmount;
+      flush();
       expect(container.textContent).not.toContain("Publishing");
       expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(true);
       expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
@@ -49,7 +71,7 @@ describe("explicit GitHub publication", () => {
     } finally {
       status.resolve({ result: accepted, confirmation: null });
       await settled(controller);
-      render(null, container);
+      unmount?.();
     }
   });
 
@@ -68,7 +90,7 @@ describe("explicit GitHub publication", () => {
         },
       });
     });
-    controller.view()?.onPublish?.();
+    void controller.view()?.onPublish?.();
     const rejected = await settled(controller);
     const first = request.mock.calls.at(-1)![1];
     expect(rejected).toMatchObject({
@@ -82,14 +104,14 @@ describe("explicit GitHub publication", () => {
       shared: { ...shared, accountId: 3, login: "new-shared" },
     };
     request.mockResolvedValueOnce(next);
-    rejected.onRefresh();
+    void rejected.onRefresh();
     const refreshed = await settled(controller);
     expect(
       request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
     ).toHaveLength(1);
     refreshed.onSelect?.("shared");
     request.mockResolvedValueOnce({ requestId, status: "requested", message: "Accepted." });
-    controller.view()?.onPublish?.();
+    void controller.view()?.onPublish?.();
     await settled(controller);
     const second = request.mock.calls.at(-1)![1];
     expect(second.idempotencyKey).not.toBe(first.idempotencyKey);
@@ -120,12 +142,12 @@ describe("explicit GitHub publication", () => {
             }
           : reject,
       );
-      controller.view()?.onPublish?.();
+      void controller.view()?.onPublish?.();
       await settled(controller);
       const first = request.mock.calls.at(-1)![1];
       expect(first).toMatchObject({ selection: { source: "personal", generation, account } });
       request.mockImplementationOnce(reject);
-      controller.view()?.onPublish?.();
+      void controller.view()?.onPublish?.();
       const retained = await settled(controller);
       expect(retained.locked).toBe(true);
       expect(retained.onSelect).toBeUndefined();
@@ -138,7 +160,7 @@ describe("explicit GitHub publication", () => {
     const { controller, request } = setup({ ...options, pendingPersonal: interrupted });
     const view = await settled(controller);
     request.mockRejectedValueOnce(new Error("Confirmation response lost"));
-    view.onConfirm?.();
+    void view.onConfirm?.();
     const unknown = await settled(controller);
     expect(unknown.locked).toBe(true);
     expect(unknown.onNewAction).toBeUndefined();
@@ -153,7 +175,7 @@ describe("explicit GitHub publication", () => {
       },
       confirmation: null,
     });
-    unknown.onRefresh();
+    void unknown.onRefresh();
     const failed = await settled(controller);
     expect(request).toHaveBeenLastCalledWith("sessions.github.status", {
       sessionKey: "agent:main:one",
@@ -174,7 +196,7 @@ describe("explicit GitHub publication", () => {
           resolveOld = resolve;
         }),
     );
-    controller.view()?.onRefresh();
+    void controller.view()?.onRefresh();
     const nextOptions = {
       shared: { ...shared, login: "other-system" },
       personal: null,
@@ -200,7 +222,7 @@ describe("explicit GitHub publication", () => {
       const ready = await settled(controller);
       const response = createDeferred<unknown>();
       request.mockImplementationOnce(() => response.promise);
-      ready.onPublish?.();
+      void ready.onPublish?.();
       const first = request.mock.calls.at(-1)![1];
       presented = false;
       controller.sync(retainedScope);
@@ -226,9 +248,9 @@ describe("explicit GitHub publication", () => {
       await vi.waitFor(() => expect(changed).toHaveBeenCalled());
       controller.sync(retainedScope);
       expect(controller.view()).toBeUndefined();
-      ready.onPublish?.();
+      void ready.onPublish?.();
       ready.onSelect?.("personal");
-      ready.onRefresh();
+      void ready.onRefresh();
       expect(request).toHaveBeenCalledTimes(2);
       presented = true;
       controller.sync(retainedScope);
@@ -237,7 +259,7 @@ describe("explicit GitHub publication", () => {
       if (outcome === "published") {
         expect(visible.result).toMatchObject({ requestId, publisher: shared, status: "published" });
         presented = false;
-        visible.onNewAction?.();
+        void visible.onNewAction?.();
         presented = true;
         expect(controller.view()?.result).toEqual(visible.result);
       } else {
@@ -262,7 +284,7 @@ describe("explicit GitHub publication", () => {
             rejectOld = reject;
           }),
       );
-      controller.view()?.onPublish?.();
+      void controller.view()?.onPublish?.();
       const first = request.mock.calls.at(-1)![1];
       controller.reset();
       request.mockResolvedValueOnce({ ...options, pendingPersonal: interrupted });
@@ -303,13 +325,21 @@ describe("explicit GitHub publication", () => {
     const personalOnly = setup({ ...options, shared: null });
     expect((await settled(personalOnly.controller)).selection).toBeNull();
     const container = document.createElement("div");
+    let unmount: (() => void) | undefined;
     personalOnly.request.mockResolvedValueOnce({
       requestId,
       status: "requested",
       message: "Accepted.",
     });
     try {
-      render(renderGitHubPublicationAction(personalOnly.controller.view()!), container);
+      unmount = mountSolid(
+        () =>
+          createComponent(GitHubPublicationAction, {
+            publication: personalOnly.controller.view()!,
+          }),
+        { container },
+      ).unmount;
+      flush();
       expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
       const button = container.querySelector<HTMLButtonElement>(".chat-pr__create");
       expect(button?.textContent?.trim()).toBe("Publish as @alice-tools");
@@ -323,7 +353,7 @@ describe("explicit GitHub publication", () => {
         selection: { source: "personal", account, generation },
       });
     } finally {
-      render(null, container);
+      unmount?.();
     }
   });
 
@@ -333,7 +363,7 @@ describe("explicit GitHub publication", () => {
     expect(staff.onConfirm).toBeTypeOf("function");
     controller.sync({ ...scope, canPublishPersonal: false });
     expect(controller.view()?.onConfirm).toBeUndefined();
-    staff.onConfirm?.();
+    void staff.onConfirm?.();
     expect(request.mock.calls.some(([method]) => method === "sessions.github.confirm")).toBe(false);
   });
 
@@ -343,12 +373,12 @@ describe("explicit GitHub publication", () => {
     controller.sync({ ...scope, canPublishPersonal: false });
     const response = createDeferred<GitHubPublicationOptions>();
     request.mockReturnValueOnce(response.promise);
-    controller.view()?.onRefresh();
+    void controller.view()?.onRefresh();
     const refreshing = controller.view()!;
     expect(refreshing.onPublish).toBeTypeOf("function");
     response.resolve({ ...options, shared: null, personal: null });
     expect((await settled(controller)).onPublish).toBeUndefined();
-    refreshing.onPublish?.();
+    void refreshing.onPublish?.();
     expect(request.mock.calls.some(([method]) => method === "sessions.github.publish")).toBe(false);
   });
 
@@ -366,7 +396,7 @@ describe("explicit GitHub publication", () => {
     expect(reader.onPublish).toBeUndefined();
     controller.sync({ ...scope, key: "remote", personalReady: false });
     (await settled(controller)).onSelect?.("personal");
-    controller.view()?.onPublish?.();
+    void controller.view()?.onPublish?.();
     expect(request.mock.calls.some(([method]) => method === "sessions.github.publish")).toBe(false);
     controller.view()?.onSelect?.("shared");
     request.mockResolvedValueOnce({
@@ -375,7 +405,7 @@ describe("explicit GitHub publication", () => {
       publisher: shared,
       message: "Waiting for reconciliation.",
     });
-    controller.view()?.onPublish?.();
+    void controller.view()?.onPublish?.();
     await settled(controller);
     expect(request).toHaveBeenLastCalledWith(
       "sessions.github.publish",
@@ -388,22 +418,22 @@ describe("publication action observation", () => {
   it("does not let an old terminal acknowledgement release a newer uncertain attempt", async () => {
     const { controller, request } = setup();
     request.mockResolvedValueOnce({ requestId, status: "published", publisher: shared });
-    (await settled(controller)).onPublish?.();
+    void (await settled(controller)).onPublish?.();
     const terminal = await settled(controller);
-    terminal.onNewAction?.();
+    void terminal.onNewAction?.();
     const next = await settled(controller);
     request.mockRejectedValueOnce(new Error("Response lost"));
-    next.onPublish?.();
+    void next.onPublish?.();
     const unknown = await settled(controller);
     const calls = request.mock.calls.length;
-    terminal.onNewAction?.();
+    void terminal.onNewAction?.();
     expect(controller.view()).toMatchObject({
       locked: true,
       error: unknown.error,
       selection: unknown.selection,
     });
     expect(request).toHaveBeenCalledTimes(calls);
-    controller.view()?.onPublish?.();
+    void controller.view()?.onPublish?.();
     await settled(controller);
     const publications = request.mock.calls.filter(
       ([method]) => method === "sessions.github.publish",
@@ -421,10 +451,10 @@ describe("publication action observation", () => {
       status: "published",
       publisher: { source: "personal", ...account },
     });
-    original.onConfirm?.();
+    void original.onConfirm?.();
     const terminal = await settled(controller);
     request.mockResolvedValueOnce(options);
-    terminal.onNewAction?.();
+    void terminal.onNewAction?.();
     (await settled(controller)).onSelect?.("personal");
     const next = {
       ...interrupted,
@@ -432,14 +462,14 @@ describe("publication action observation", () => {
       confirmation: { ...confirmation, requestDigest: "b".repeat(64) },
     };
     request.mockResolvedValueOnce(next.result).mockResolvedValueOnce(next);
-    controller.view()?.onPublish?.();
+    void controller.view()?.onPublish?.();
     const reviewed = await settled(controller);
     expect(reviewed.confirmation).toEqual(next.confirmation);
     const calls = request.mock.calls.length;
-    original.onConfirm?.();
+    void original.onConfirm?.();
     expect(request).toHaveBeenCalledTimes(calls);
     request.mockResolvedValueOnce({ ...next.result, status: "requested" });
-    reviewed.onConfirm?.();
+    void reviewed.onConfirm?.();
     await settled(controller);
     expect(request).toHaveBeenLastCalledWith(
       "sessions.github.confirm",

@@ -12,6 +12,42 @@ import {
 } from "./attempt-types.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
+
+/** Deletion follows disconnect even when disconnect fails; the first cleanup failure wins. */
+export async function disconnectCopilotSession(params: {
+  session: SessionLike;
+  client: PooledClient["client"];
+  deleteSessionId?: string;
+}): Promise<void> {
+  let failure: Error | undefined;
+  try {
+    await params.session.disconnect();
+  } catch (error) {
+    failure = toCopilotError(error);
+  }
+  if (params.deleteSessionId) {
+    try {
+      await params.client.deleteSession(params.deleteSessionId);
+    } catch (error) {
+      failure ??= toCopilotError(error);
+    }
+  }
+  if (failure) {
+    throw failure;
+  }
+}
+
+export function preserveCopilotAttemptCleanupError(
+  primary: Error | undefined,
+  error: unknown,
+): Error {
+  if (primary) {
+    console.warn("[copilot-attempt] detached session cleanup failed after primary error", error);
+    return primary;
+  }
+  return toCopilotError(error);
+}
+
 export async function finalizeCopilotAttempt(
   params: AttemptParamsLike,
   result: AgentHarnessAttemptResult,
@@ -56,11 +92,13 @@ export async function deferBackgroundCompactionCleanup(params: {
   cleanupByokProxy?: () => Promise<void>;
   cleanupToolBridge?: () => void;
   deleteSessionOnIncompleteCleanup: boolean;
+  deleteSessionOnCleanup?: boolean;
   sdkSessionId?: string;
   session: SessionLike;
   timeoutMs: number;
 }): Promise<"aborted" | "completed" | "deadline"> {
   let outcome: "aborted" | "completed" | "deadline" = "deadline";
+  let cleanupError: Error | undefined;
   try {
     outcome = await awaitDeferredCleanupBeforeDeadline({
       abortSignal: params.abortSignal,
@@ -69,6 +107,7 @@ export async function deferBackgroundCompactionCleanup(params: {
       timeoutMs: params.timeoutMs,
     });
   } catch {
+    // A failed wait follows the same bounded cancellation path as its deadline.
   } finally {
     if (outcome !== "completed") {
       await cancelBackgroundCompactionBeforeTeardown(params.session);
@@ -76,19 +115,39 @@ export async function deferBackgroundCompactionCleanup(params: {
     }
     params.bridge.detach();
     await params.bridge.awaitAgentEventChain();
-    try {
-      await params.session.disconnect();
-    } catch {}
     params.cleanupToolBridge?.();
-    await params.cleanupByokProxy?.();
-    if (outcome !== "completed" && params.deleteSessionOnIncompleteCleanup && params.sdkSessionId) {
-      try {
-        await params.handle.client.deleteSession(params.sdkSessionId);
-      } catch {}
+    try {
+      await params.cleanupByokProxy?.();
+    } catch (error) {
+      cleanupError ??= toCopilotError(error);
+    }
+    try {
+      await disconnectCopilotSession({
+        session: params.session,
+        client: params.handle.client,
+        deleteSessionId:
+          params.deleteSessionOnCleanup ||
+          (outcome !== "completed" && params.deleteSessionOnIncompleteCleanup)
+            ? params.sdkSessionId
+            : undefined,
+      });
+    } catch (error) {
+      // Disposable owners await this cleanup; ordinary checkpoints retain best effort.
+      if (params.deleteSessionOnCleanup) {
+        cleanupError ??= toCopilotError(error);
+      }
     }
     try {
       await params.pool.release(params.handle);
-    } catch {}
+    } catch (error) {
+      // Ordinary deferred teardown cannot replace an already-returned turn outcome.
+      if (params.deleteSessionOnCleanup) {
+        cleanupError ??= toCopilotError(error);
+      }
+    }
+  }
+  if (cleanupError) {
+    throw cleanupError;
   }
   return outcome;
 }

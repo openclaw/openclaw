@@ -1,17 +1,15 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as invite from "./community-invite-state.ts";
 
-let invite: typeof import("./community-invite-state.ts");
-
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   localStorage.clear();
-  invite = await import("./community-invite-state.ts");
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  invite.dismissCommunityInvite();
   localStorage.clear();
 });
 

@@ -24,16 +24,11 @@ export async function readConfigSnapshotForMutation(params: {
     return await params.io.readConfigFileSnapshotForWrite(options);
   }
   if (params.ownedConfigPathForWrite) {
+    const { skipPluginValidation, ...readOptions } = options;
     const ioOptions = {
+      ...readOptions,
       configPath: params.ownedConfigPathForWrite,
-      ...(params.writeOptions?.deferredPluginMigrations !== undefined
-        ? { deferredPluginMigrations: params.writeOptions.deferredPluginMigrations }
-        : {}),
-      ...(params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
-      ...(params.writeOptions?.observe === false ? { observe: false } : {}),
-      ...(params.writeOptions?.preservedLegacyRootKeys
-        ? { preservedLegacyRootKeys: params.writeOptions.preservedLegacyRootKeys }
-        : {}),
+      ...(skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
     };
     const io = hasManagedRuntimeConfigWriteOwner(params.ownedConfigPathForWrite)
       ? createConfigIO({

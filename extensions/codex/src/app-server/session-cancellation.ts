@@ -23,24 +23,29 @@ export async function withCodexSessionDescendantCancellation<T>(
   if (!binding?.clientId) {
     return run(async () => ({ killed: 0, cancelledRequesters: [] }));
   }
+  const prepared = await bindingStore.prepareRead(identity);
+  if (!prepared) {
+    throw new Error("Codex descendant cancellation binding reader is unavailable");
+  }
+  using reader = { read: prepared.read, [Symbol.dispose]: prepared.release };
   const lease = await retainSharedCodexAppServerClientByInstanceId(binding.clientId, {
     waitForExit: false,
   });
-  const assertCurrent = () => {
-    params.assertCurrent();
-    const current = bindingStore.read(identity);
+  const assertBindingCurrent = () => {
+    const current = reader.read();
     if (!current || !isSameCodexAppServerThreadOwner(current, binding)) {
       throw new Error("Codex descendant cancellation binding changed");
     }
   };
   try {
-    assertCurrent();
+    params.assertCurrent();
+    assertBindingCurrent();
     if (!lease) {
       return run(async () => ({ killed: 0, cancelledRequesters: [] }));
     }
     return await codexNativeSubagentMonitorRuntime.withDescendantCancellation(
       lease.client,
-      { ...params, parentThreadId: binding.threadId, assertCurrent },
+      { ...params, parentThreadId: binding.threadId, assertBindingCurrent },
       run,
     );
   } finally {

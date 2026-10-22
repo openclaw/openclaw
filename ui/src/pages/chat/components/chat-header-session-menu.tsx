@@ -1,34 +1,38 @@
-import { createSignal, For, merge, onSettled, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createProjection, createSignal, Errored, flush, lazy, Loading, onSettled } from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
-import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
-import { BoardWidgetMenuItems } from "../../../components/board/board-widget-cell-render.solid.tsx";
-import { activateMenuShortcut } from "../../../components/menu-shortcuts.ts";
-import {
-  EMPTY_SESSION_MENU_DATA,
-  SessionMenuActions,
-  type SessionManagementAction,
-  type SessionMenuData,
+import type {
+  SessionManagementAction,
+  SessionMenuData,
 } from "../../../components/session-menu-actions.ts";
+import type { CompactSessionMenuView } from "../../../components/session-menu-compact.ts";
+import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-data.ts";
+import { Icon } from "../../../components/solid/icon.tsx";
+import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import {
-  compactSessionMenuViewForValue,
-  type CompactSessionMenuView,
-} from "../../../components/session-menu-compact.ts";
-import { useSessionMenuControllers } from "../../../components/session-menu-controllers.ts";
-import { useSessionMenuView } from "../../../components/session-menu-view.tsx";
-import { Icon, type IconName } from "../../../components/solid/icon.tsx";
-import { useOptionalApplication } from "../../../lib/reactive/context.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+  createMenuControls,
+  Menu,
+  type MenuControls,
+  type MenuEntry,
+  type MenuItem,
+  type MenuHandle,
+} from "../../../components/solid/menu.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
-import { ChatQuickActionItem, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
-import {
-  canManageChatSessionSharing,
-  ChatSessionSharing,
-  selectChatSessionSharingItem,
-  type ChatSessionSharingProps,
-} from "./chat-session-sharing.solid.tsx";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import type { HeaderSessionMenuMobileHost } from "./chat-header-session-menu-mobile.tsx";
+import type { HeaderMenuSessionAction, HeaderMenuQuickAction } from "./chat-quick-action.tsx";
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
+
+const Content = lazy(() => import("./chat-header-session-menu-content.tsx"), {
+  export: "ChatHeaderSessionMenuContent",
+});
 
 export type HeaderMenuAction =
   | SessionManagementAction
@@ -38,13 +42,18 @@ export type HeaderMenuAction =
 export type HeaderMenuActionKind = HeaderMenuAction["kind"];
 export type { HeaderMenuQuickAction, HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 
-type CompactMenuView = CompactSessionMenuView | "sharing" | "view";
-type HeaderMenuProps = {
+export type CompactMenuView = CompactSessionMenuView | "sharing" | "view";
+export type HeaderMenuProps = {
   session: SessionMenuData;
+  /** Pane-local actions before a catalog thread has session management metadata. */
+  paneTitle?: string;
   worktreePath: string | null;
   onboarding: boolean;
   preferencesBrowserOnly: boolean;
   compact: boolean;
+  mobile?: boolean;
+  mobileHost?: HeaderSessionMenuMobileHost;
+  mobilePageOpen?: boolean;
   bubbleModeEnabled: boolean;
   mainKey: string;
   copyMarkdownAllowed: boolean;
@@ -58,6 +67,8 @@ type HeaderMenuProps = {
     | "chatBubbleDisabledSessionKeys"
   >;
   sessionActions: HeaderMenuSessionAction[];
+  viewActions?: HeaderMenuQuickAction[];
+  viewContent?: JSX.Element;
   boardWidgetMenu?: BoardWidgetPageMenu;
   sharing: ChatSessionSharingProps | null;
   groups: readonly string[];
@@ -70,356 +81,206 @@ type HeaderMenuProps = {
   deleteAllowed: boolean;
   onOpen: () => void;
   onOpenCommandPalette: () => void;
+  onOpenDetails?: (source: HTMLElement) => void;
   onSettingsChange: (patch: Partial<UiSettings>) => void;
   onAction: (action: HeaderMenuAction) => void;
 };
 
-const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
-  "compact:open-sharing": "sharing",
-  "compact:open-view": "view",
+type HeaderMenuMethods = {
+  openMenu(): boolean;
+  readTrigger(): HTMLElement | undefined;
 };
+type HeaderMenuHandlers = {
+  select(item: MenuItem, event: CustomEvent<MenuItem>): void;
+  escape(event: KeyboardEvent): boolean;
+  openChange(open: boolean): void;
+  items(): readonly MenuEntry[];
+};
+export type HeaderMenuContentProps = {
+  menuProps: HeaderMenuProps;
+  host: SolidBridgeElement<HeaderMenuProps, HeaderMenuMethods>;
+  controls: MenuControls;
+  presented: boolean;
+  compactView: CompactMenuView;
+  onCompactViewChange: (view: CompactMenuView) => void;
+  readMenu: () => MenuHandle | undefined;
+  onReady: (handlers: HeaderMenuHandlers | undefined) => void;
+  renderItems: (items: () => readonly MenuEntry[]) => JSX.Element;
+};
+const menus = new WeakMap<HTMLElement, () => MenuHandle | undefined>();
+let nextMenuId = 0;
 
-const VIEW_SETTINGS = [
-  ["reasoning", "chatShowThinking", "chat.view.reasoning", false],
-  ["tool-calls", "chatShowToolCalls", "chat.view.toolCalls", true],
-  ["commentary", "chatPersistCommentary", "chat.view.commentary", undefined],
-] as const;
-
-function ChatHeaderSessionMenuContent(
-  props: HeaderMenuProps,
-  host: SolidBridgeElement<HeaderMenuProps>,
+function ChatHeaderSessionMenuShell(
+  liveProps: HeaderMenuProps,
+  host: SolidBridgeElement<HeaderMenuProps, HeaderMenuMethods>,
 ) {
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
+  const menuId = `chat-header-session-${++nextMenuId}`;
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
-  const [opened, setOpened] = createSignal(false);
-  let dropdown: HTMLElement & { open: boolean };
-  const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
-  const readState = () => state;
-  const controllerHost = useSessionMenuControllers(
-    host,
-    useOptionalApplication(),
-    () => setRevision((value) => value + 1),
-    () => {
-      revision();
-      return Object.values(props);
-    },
-  );
-  const close = () => {
-    dropdown.open = false;
-  };
-  const actions = new SessionMenuActions(
-    controllerHost,
-    readState,
-    (action) => props.onAction(action),
-    close,
-  );
-  const view = useSessionMenuView(host, actions, readState, revision, {
-    renderOpenInExtra: (inline) => (
-      <wa-dropdown-item
-        slot={inline ? undefined : "submenu"}
-        class="session-menu__item"
-        value="continue-in-terminal"
-        prop:disabled={Boolean(props.actionDisabledReasons["continue-in-terminal"])}
-        title={props.actionDisabledReasons["continue-in-terminal"]}
-      >
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">
-          <Icon name="terminal" />
-        </span>
-        <span class="session-menu__text">{t("chat.sessionHeader.continueInTerminal.action")}</span>
-      </wa-dropdown-item>
-    ),
-  });
-  const handleSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
-    const value = event.detail.item.value;
-    if (!value) {
-      return;
-    }
-    if (value.startsWith("board-widget:")) {
-      props.boardWidgetMenu?.onSelect(value.slice("board-widget:".length));
-      return;
-    }
-    const managementView = compactSessionMenuViewForValue(value);
-    const nextView = managementView ?? COMPACT_MENU_VIEW_BY_VALUE[value];
-    if (nextView) {
-      event.preventDefault();
-      setCompactView(nextView);
-      if (managementView === "icon") {
-        view.appearance.prepare();
-      } else if (nextView === "sharing" && !props.sharing?.openDisabledReason) {
-        props.sharing?.onOpen();
-      }
-      onSettled(() => actions.focusCurrentView());
-      return;
-    }
-    if (value === "open-command-palette") {
-      props.onOpenCommandPalette();
-      return;
-    }
-    if (value.startsWith("quick:")) {
-      const id = value.slice("quick:".length);
-      const action = props.sessionActions.find((candidate) => candidate.id === id);
-      if (action && !action.disabled) {
-        action.onActivate();
-      }
-      return;
-    }
-    if (value.startsWith("view:")) {
-      event.preventDefault();
-      if (props.onboarding) {
-        return;
-      }
-      const setting = value.slice("view:".length);
-      const option = VIEW_SETTINGS.find(([id]) => id === setting);
-      if (option) {
-        props.onSettingsChange({ [option[1]]: props.settings[option[1]] === false });
-      } else if (
-        setting === "speech-bubbles" &&
-        props.bubbleModeEnabled &&
-        props.session.target?.key
-      ) {
-        const sessionKey = props.session.target.key;
-        props.onSettingsChange(
-          setChatBubbleMode(
-            props.settings,
-            sessionKey,
-            !isChatBubbleMode(props.settings, sessionKey, props.bubbleModeEnabled, props.mainKey),
-          ),
-        );
-      }
-      return;
-    }
+  const [open, setOpen] = createSignal(false);
+  const presented = () => open() || (liveProps.mobilePageOpen ?? false);
+  const presentation = createParkedProjection(() => ({ ...liveProps }), presented);
+  const props = createProjection(presentation, null, { key: "id" });
+  const controls = createMenuControls();
+  let menu: MenuHandle | undefined;
+  let handlers: HeaderMenuHandlers | undefined;
+  let openingFocus: Element | null | undefined;
+  let focusLast = false;
+  const mobile = () => props.mobile === true && Boolean(props.mobileHost) && !props.boardWidgetMenu;
+  const focusReady = () => {
+    const active = host.ownerDocument.activeElement;
     if (
-      value.startsWith("visibility:") ||
-      value.startsWith("member:") ||
-      value.startsWith("public:")
+      menu?.overlay.open &&
+      (active === openingFocus ||
+        active === menu.overlay.surface ||
+        (active === host.ownerDocument.body && openingFocus && !openingFocus.isConnected))
     ) {
-      if (props.sharing) {
-        selectChatSessionSharingItem(props.sharing, value);
+      const last = focusLast ? menu.itemElements().at(-1) : undefined;
+      if (last) {
+        last.focus({ preventScroll: true });
+      } else {
+        menu.focusFirst();
       }
-      return;
-    }
-    if (actions.handleSelect(value)) {
-      event.preventDefault();
-      return;
-    }
-    if (value === "continue-in-terminal" && !props.actionDisabledReasons[value]) {
-      close();
-      props.onAction({ kind: value });
     }
   };
-  const SessionActions = () => (
-    <For each={props.sessionActions}>
-      {(action) => <ChatQuickActionItem action={action} value={`quick:${action.id}`} />}
-    </For>
-  );
-  const ViewOption = (input: {
-    inline?: boolean;
-    value: string;
-    label: string;
-    checked: boolean;
-  }) => (
-    <wa-dropdown-item
-      slot={input.inline ? undefined : "submenu"}
-      class="session-menu__item"
-      type="checkbox"
-      value={`view:${input.value}`}
-      prop:checked={input.checked}
-      prop:disabled={props.onboarding}
-      title={props.onboarding ? t("chat.onboardingDisabled") : undefined}
-    >
-      <span class="session-menu__text">{input.label}</span>
-    </wa-dropdown-item>
-  );
-  const ViewOptions = (input: { inline?: boolean }) => (
-    <>
-      <For each={VIEW_SETTINGS}>
-        {([value, key, label, onboarding]) => (
-          <ViewOption
-            inline={input.inline}
-            value={value}
-            label={t(label)}
-            checked={
-              props.onboarding && onboarding !== undefined
-                ? onboarding
-                : props.settings[key] !== false
-            }
-          />
-        )}
-      </For>
-      {props.bubbleModeEnabled ? (
-        <ViewOption
-          inline={input.inline}
-          value="speech-bubbles"
-          label={t("chat.view.speechBubbles")}
-          checked={isChatBubbleMode(
-            props.settings,
-            props.session.target?.key ?? "",
-            true,
-            props.mainKey,
-          )}
-        />
-      ) : undefined}
-      {props.preferencesBrowserOnly ? (
-        <div slot={input.inline ? undefined : "submenu"} class="session-menu__info" role="note">
-          {t("quickSettings.personal.browserOnly")}
-        </div>
-      ) : undefined}
-    </>
-  );
-  const Submenu = (input: {
-    group: "view" | "sharing";
-    label: string;
-    icon: IconName;
-    disabled?: boolean;
-  }) => (
-    <wa-dropdown-item
-      class="session-menu__item"
-      value={props.compact ? `compact:open-${input.group}` : undefined}
-      prop:disabled={input.disabled}
-    >
-      <span slot="icon" class="session-menu__icon" aria-hidden="true">
-        <Icon name={input.icon} />
-      </span>
-      <span class="session-menu__text">{input.label}</span>
-      {props.compact ? (
-        <span slot="details" class="session-menu__icon session-menu__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
-        </span>
-      ) : input.group === "view" ? (
-        <ViewOptions />
-      ) : undefined}
-    </wa-dropdown-item>
-  );
-  const Compact = () => (
-    <Show when={compactView()} keyed>
-      {(current) => {
-        if (current !== "sharing" && current !== "view") {
-          return <view.Compact view={current} />;
+  const ready = (next: HeaderMenuHandlers | undefined) => {
+    handlers = next;
+    if (next && menu?.overlay.open) {
+      next.openChange(true);
+      focusReady();
+    }
+  };
+  onSettled(() => {
+    menus.set(host, () => menu);
+    const stopKeyboard = listen(
+      host,
+      "keydown",
+      (event) => {
+        if (event.target === menu?.overlay.trigger && !menu.overlay.open) {
+          focusLast = event.key === "ArrowUp";
         }
-        return (
-          <>
-            <wa-dropdown-item class="session-menu__item session-menu__back" value="compact:back">
-              <span slot="icon" class="session-menu__icon" aria-hidden="true">
-                <Icon name="arrowLeft" />
-              </span>
-              <span class="session-menu__text">{t("common.back")}</span>
-            </wa-dropdown-item>
-            <div class="session-menu__separator" role="separator" />
-            {current === "sharing" && props.sharing ? (
-              <ChatSessionSharing {...props.sharing} inline />
-            ) : (
-              <ViewOptions inline />
-            )}
-          </>
-        );
-      }}
-    </Show>
-  );
-  const Root = () => (
-    <>
-      <wa-dropdown-item class="session-menu__item" value="open-command-palette">
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">
-          <Icon name="search" />
-        </span>
-        <span class="session-menu__text">{t("chat.openCommandPalette")}</span>
-      </wa-dropdown-item>
-      <div class="session-menu__separator" role="separator" />
-      <Show when={props.boardWidgetMenu}>
-        {(menu) => (
-          <>
-            <div class="board-widget__page-menu-heading">
-              <strong>{menu().widget.title || menu().widget.name}</strong>
-            </div>
-            <BoardGrantedCapabilities widget={menu().widget} presentation="details" />
-            {menu().canMutate ? (
-              <BoardWidgetMenuItems
-                widget={menu().widget}
-                tabs={menu().tabs}
-                disabled={false}
-                prefix="board-widget:"
+      },
+      true,
+    );
+    return () => {
+      menus.delete(host);
+      stopKeyboard();
+    };
+  });
+  const items: MenuEntry[] = [
+    {
+      kind: "group",
+      id: "header-session-content",
+      get items() {
+        return handlers?.items() ?? [];
+      },
+      render: (renderItems) => (
+        <Errored
+          fallback={(error, reset) => {
+            onSettled(focusReady);
+            return (
+              <LazyViewError
+                error={error()}
+                onRetry={() => {
+                  openingFocus = host.ownerDocument.activeElement;
+                  focusLast = false;
+                  reset();
+                }}
+                retryRef={controls.ref()}
+                inline
               />
-            ) : undefined}
-            <div class="session-menu__separator" role="separator" />
-          </>
-        )}
-      </Show>
-      {props.compact &&
-      props.sharing?.session &&
-      canManageChatSessionSharing(props.sharing.session) ? (
-        <Submenu
-          group="sharing"
-          label={t("chat.sessionSharing.menu")}
-          icon="users"
-          disabled={Boolean(props.sharing.openDisabledReason)}
-        />
-      ) : undefined}
-      <Submenu group="view" label={t("chat.view.menu")} icon="eye" />
-      <div class="session-menu__separator" role="separator" />
-      <view.Primary />
-      <div class="session-menu__separator" role="separator" />
-      <view.Organization />
-      <SessionActions />
-      <div class="session-menu__separator" role="separator" />
-      <view.Advanced />
-    </>
-  );
-  const menuLabel = () => t("chat.sidebar.sessionMenu", { session: props.session.label });
+            );
+          }}
+        >
+          <Loading
+            fallback={renderItems(() => [
+              {
+                id: "header-session-loading",
+                label: t("common.loading"),
+                disabled: true,
+              },
+            ])}
+          >
+            <Content
+              menuProps={props}
+              host={host}
+              controls={controls}
+              presented={presented()}
+              compactView={compactView()}
+              onCompactViewChange={setCompactView}
+              readMenu={() => menu}
+              onReady={ready}
+              renderItems={renderItems}
+            />
+          </Loading>
+        </Errored>
+      ),
+    },
+  ];
+  const label = () =>
+    t("chat.sidebar.sessionMenu", { session: liveProps.paneTitle ?? liveProps.session.label });
   return (
-    <wa-dropdown
-      ref={(element) => {
-        dropdown = element;
-      }}
+    <Menu
+      controls={controls}
+      id={menuId}
+      lazy
       class={[
         "session-menu chat-header-session-menu",
         {
-          "session-menu--compact chat-header-session-menu--compact": props.compact,
+          "session-menu--compact chat-header-session-menu--compact": props.compact || mobile(),
+          "chat-header-session-menu--mobile": mobile(),
           "chat-header-session-menu--compact-sharing": props.compact && compactView() === "sharing",
         },
       ]}
+      panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
-      aria-label={menuLabel()}
-      onKeyDown={(event) => {
-        if (!actions.handleKeydown(event, view.appearance)) {
-          activateMenuShortcut(host, event);
+      label={label()}
+      triggerClass="btn btn--ghost btn--icon chat-icon-btn chat-header-session-menu__trigger"
+      trigger={<Icon name="moreHorizontal" />}
+      items={items}
+      onSelect={(item, event) => handlers?.select(item, event)}
+      ref={(handle) => {
+        menu = handle;
+      }}
+      onEscape={(event) => handlers?.escape(event) ?? false}
+      onBeforeShow={() => {
+        openingFocus = host.ownerDocument.activeElement;
+        setOpen(true);
+        // The native menu validates and focuses current entries synchronously.
+        flush();
+      }}
+      onOpenChange={(isOpen) => {
+        setOpen(isOpen);
+        handlers?.openChange(isOpen);
+        if (isOpen) {
+          props.onOpen();
+        } else {
+          openingFocus = undefined;
+          focusLast = false;
+          setCompactView("root");
         }
       }}
-      onWa-show={() => {
-        setOpened(true);
-        setCompactView("root");
-        actions.loadOwners();
-        props.onOpen();
-      }}
-      onWa-after-hide={actions.advanced.close}
-      onWa-select={handleSelect}
-    >
-      <button
-        slot="trigger"
-        class="btn btn--ghost btn--icon chat-icon-btn chat-header-session-menu__trigger"
-        type="button"
-        aria-label={menuLabel()}
-        aria-haspopup="menu"
-      >
-        <Icon name="moreHorizontal" />
-      </button>
-      <Show when={opened()}>
-        <Show when={props.compact && compactView() !== "root"} fallback={<Root />}>
-          <Compact />
-        </Show>
-      </Show>
-    </wa-dropdown>
+    />
   );
 }
 
-defineSolidBridge<HeaderMenuProps>(
+export const ChatHeaderSessionMenu = defineSolidBridge<HeaderMenuProps, HeaderMenuMethods>(
   "openclaw-chat-header-session-menu",
-  ChatHeaderSessionMenuContent,
+  ChatHeaderSessionMenuShell,
   {
+    methods: {
+      openMenu: (host) => menus.get(host)?.()?.open() ?? false,
+      readTrigger: (host) => menus.get(host)?.()?.overlay.trigger ?? undefined,
+    },
     properties: {
       session: { default: EMPTY_SESSION_MENU_DATA, attribute: false },
+      paneTitle: { default: undefined, attribute: false },
       worktreePath: { default: null, attribute: false },
       onboarding: { default: false, attribute: false },
       preferencesBrowserOnly: { default: false, attribute: false },
       compact: { default: false, attribute: false },
+      mobile: { default: undefined, attribute: false },
+      mobileHost: { default: undefined, attribute: false },
+      mobilePageOpen: { default: false, attribute: false },
       bubbleModeEnabled: { default: false, attribute: false },
       mainKey: { default: "main", attribute: false },
       copyMarkdownAllowed: { default: false, attribute: false },
@@ -428,6 +289,8 @@ defineSolidBridge<HeaderMenuProps>(
         default: { chatShowThinking: false, chatShowToolCalls: false },
         attribute: false,
       },
+      viewContent: { default: undefined, attribute: false },
+      viewActions: { default: undefined, attribute: false },
       sessionActions: { default: [], attribute: false },
       boardWidgetMenu: { default: undefined, attribute: false },
       sharing: { default: null, attribute: false },
@@ -441,6 +304,7 @@ defineSolidBridge<HeaderMenuProps>(
       deleteAllowed: { default: false, attribute: false },
       onOpen: { default: () => {}, attribute: false },
       onOpenCommandPalette: { default: () => {}, attribute: false },
+      onOpenDetails: { default: undefined, attribute: false },
       onSettingsChange: { default: () => {}, attribute: false },
       onAction: { default: () => {}, attribute: false },
     },
@@ -449,6 +313,6 @@ defineSolidBridge<HeaderMenuProps>(
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-chat-header-session-menu": SolidBridgeElement<HeaderMenuProps>;
+    "openclaw-chat-header-session-menu": SolidBridgeElement<HeaderMenuProps, HeaderMenuMethods>;
   }
 }

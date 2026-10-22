@@ -29,7 +29,7 @@ const xaiPresetAppliers = createModelCatalogPresetAppliers({
 
 function pruneRetiredXaiBuiltinModels(cfg: OpenClawConfig): OpenClawConfig {
   const provider = cfg.models?.providers?.xai;
-  if (!provider || !Array.isArray(provider.models)) {
+  if (!provider?.models) {
     return cfg;
   }
   const models = provider.models.filter((model) => !isLegacyXaiBuiltinModel(model));

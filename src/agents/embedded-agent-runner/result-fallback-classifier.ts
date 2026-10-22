@@ -1,10 +1,10 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason, isProviderRequestSizeCeilingError } from "../failover/classify.js";
 import type { FailoverReason } from "../failover/signal.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
+import { resolveReplyExpectation } from "../reply-completion.js";
 import {
   hasCommittedOutboundDeliveryEvidence,
   hasVisibleAgentPayload,
@@ -42,6 +42,10 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
     meta: {
       ...params.latestResult.meta,
       error: params.preferredResult.meta.error,
+      suppressErrorNotice: params.preferredResult.meta.suppressErrorNotice,
+      terminalReply: params.preferredResult.meta.terminalReply,
+      finalAssistantRawText: params.preferredResult.meta.finalAssistantRawText,
+      finalAssistantVisibleText: params.preferredResult.meta.finalAssistantVisibleText,
       ...(traceNeedsNormalization
         ? {
             executionTrace: {
@@ -56,21 +60,15 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
   };
 }
 
-function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
-  return [result.meta.finalAssistantRawText, result.meta.finalAssistantVisibleText].some(
-    (text) => typeof text === "string" && isSilentReplyPayloadText(text),
-  );
-}
-
 function hasDeliverableAssistantPayload(result: {
   payloads?: unknown;
-  meta?: { finalAssistantVisibleText?: unknown };
+  meta?: EmbeddedAgentRunResult["meta"];
 }): boolean {
   const finalVisibleText = result.meta?.finalAssistantVisibleText;
   return (
-    (typeof finalVisibleText === "string" &&
-      finalVisibleText.trim().length > 0 &&
-      !isSilentReplyPayloadText(finalVisibleText)) ||
+    (result.meta?.terminalReply?.disposition !== "silent" &&
+      typeof finalVisibleText === "string" &&
+      finalVisibleText.trim().length > 0) ||
     hasVisibleAgentPayload(result, {
       includeErrorPayloads: false,
       includeReasoningPayloads: false,
@@ -222,14 +220,6 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       preserveResultPriority: params.result.meta.error?.terminalPresentation === true ? 1 : 0,
     };
   }
-  const harnessClassification = classifyHarnessResult(
-    params,
-    params.result.meta.agentHarnessResultClassification,
-  );
-  if (harnessClassification) {
-    return harnessClassification;
-  }
-
   const errorPayloads = payloads.filter((payload) => payload?.isError === true);
   const errorText = errorPayloads
     .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
@@ -262,11 +252,23 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     };
   }
 
-  // Once the shared visibility owner finds no deliverable assistant payload,
-  // empty and reasoning-only output must advance fallback for every model.
-  if (hasDeliberateSilentTerminalReply(params.result)) {
+  // Only an explicitly optional turn may complete with an empty result.
+  if (
+    params.result.meta.terminalReply?.disposition === "silent" ||
+    (params.result.meta.terminalReply?.disposition === "empty" &&
+      resolveReplyExpectation(params.result.meta) === "optional" &&
+      !terminalError)
+  ) {
     return null;
   }
+  const harnessClassification = classifyHarnessResult(
+    params,
+    params.result.meta.agentHarnessResultClassification,
+  );
+  if (harnessClassification) {
+    return harnessClassification;
+  }
+
   if (errorText.trim()) {
     return null;
   }

@@ -14,6 +14,7 @@ import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js"
 import {
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
+  transcriptPredicateSql,
 } from "./transcript-payload.js";
 
 function parseNavigation(eventJson: string): Record<string, unknown> | undefined {
@@ -133,8 +134,12 @@ export function* iterateUnindexedTranscriptNavigation(
     .$if(options.controlsOnly === true, (filtered) =>
       filtered.where((eb) =>
         eb.or([
-          eb("event.navigation_valid", "=", 0),
-          eb("event.navigation_last_type", "in", ["reset", "compaction", "custom_message"]),
+          eb(transcriptPredicateSql(projection.database.db, "navigation_valid", "event"), "=", 0),
+          eb(
+            transcriptPredicateSql(projection.database.db, "navigation_last_type", "event"),
+            "in",
+            ["reset", "compaction", "custom_message"],
+          ),
         ]),
       ),
     )

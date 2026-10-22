@@ -11,9 +11,9 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
   requireOpenClawStateDatabaseIdentity,
 } from "./openclaw-state-db-cache.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { readUserProfileCatalogSnapshot } from "./user-profile-catalog-read.js";
 import {
   captureUserProfileAuthorityRead,
   emitUserProfilesChanged,
@@ -25,6 +25,7 @@ import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
 import {
   profileCatalogPath,
   projectHasMultipleSessionSharingIdentities,
+  readCatalogUserProfileAuthority,
   resolveUserProfileReferenceInCatalog,
 } from "./user-profile-identity.read.js";
 import type { UserProfileEmailBindingChange } from "./user-profile-mutation.js";
@@ -32,6 +33,8 @@ import {
   applyUserProfileEmailBinding,
   bindPreparedUserProfileIdentity,
   projectUserProfileDisplay,
+  projectUserProfileGitHubFacts,
+  projectUserProfileSnapshot,
   projectCatalogUserProfileIdentity,
   resolveCatalogProfile,
   toUserProfile,
@@ -137,7 +140,7 @@ export function captureResidentUserProfileAccess(
       return {
         profileId: profile.id,
         emails: [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted(),
-        ...(profile.githubAccountIds ? { githubAccountIds: [...profile.githubAccountIds] } : {}),
+        ...projectUserProfileGitHubFacts(profile),
         assignedRole: profile.role ?? null,
         githubLogin: profile.githubLogin ?? null,
       };
@@ -159,6 +162,22 @@ export function readResidentGatewayOwnerProfile(pathname: string) {
     return undefined;
   }
   return toUserProfile({ ...owner, created_at: owner.gatewayOwnerCreatedAt });
+}
+
+/** Existing authenticated email bindings use the same write-through catalog as role checks. */
+export function readResidentUserProfileForEmail(email: string, pathname: string) {
+  const catalog = profileCatalogs.get(pathname);
+  const binding = catalog?.valid && profileBindings.get(catalog.rows)?.byEmail.get(email);
+  if (!binding) {
+    return undefined;
+  }
+  catalog.assertCurrent?.(binding.profileId);
+  const profile = resolveCatalogProfile(catalog.rows, binding.profileId);
+  if (profile) {
+    catalog.assertCurrent?.(profile.id);
+    return toUserProfile(profile);
+  }
+  return undefined;
 }
 
 /** Sharing pickers consume the session projection's committed display catalog. */
@@ -522,10 +541,9 @@ async function acquireUserProfileCatalog(options: OpenClawStateDatabaseOptions =
   ) {
     const profileRevision = readUserProfileVersion();
     const bindingRevision = readUserProfileEmailBindingRevision();
-    const reply = await executeExistingOpenClawStateRead(
+    const reply = await readUserProfileCatalogSnapshot(
       { ...options, path: pathname },
-      { type: "userProfiles.catalog" },
-      { current: true },
+      { identityKey: context.admission.identity.key, profileRevision, bindingRevision },
     );
     context.admission.assertCurrent();
     if (
@@ -634,8 +652,27 @@ export async function prepareUserProfileCatalog(options: OpenClawStateDatabaseOp
       }
       return profile;
     },
+    readCurrentAuthority(this: void, profileId: string, includeProfile = false) {
+      return readCatalogUserProfileAuthority(catalog, profileId, includeProfile);
+    },
     release: catalog.release,
   };
+}
+
+/** Lists share committed profile facts rather than reserving the shared-state writer. */
+export async function readUserProfileSnapshot(
+  githubAccountIds?: readonly number[],
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const catalog = await acquireUserProfileCatalog(options);
+  try {
+    for (const row of catalog.rows.values()) {
+      catalog.assertCurrent(row.id);
+    }
+    return projectUserProfileSnapshot(catalog.rows, catalog.bindings, githubAccountIds);
+  } finally {
+    catalog.release();
+  }
 }
 
 /** Prepare once off-thread; execution reads only committed facts retained by this owner. */
@@ -658,8 +695,6 @@ export function stageUserProfileCatalogChange(db: EngineConnection, profileIds: 
   if (catalog) {
     const rows = selectProfileAccessEntries(db, profileIds);
     stageSqliteTransactionState(db, {
-      stage: () => {},
-      rollback: () => {},
       commit: () => {
         for (const id of profileIds) {
           catalog.delete(id);

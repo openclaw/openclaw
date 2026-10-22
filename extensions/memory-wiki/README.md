@@ -145,6 +145,10 @@ The plugin initializes a vault like this:
 
 Generated content stays inside managed blocks. Human note blocks are preserved.
 
+If lint cannot read an existing report, it reports the filesystem error without
+replacing the report. Resolve the access or I/O error and run lint again. Missing
+reports still receive their normal template.
+
 Key beliefs can live in structured `claims` frontmatter with per-claim evidence, confidence, and status. Compile also persists a machine-readable snapshot in OpenClaw plugin state so agent/runtime consumers do not have to scrape markdown pages.
 
 When `render.createBacklinks` is enabled, compile adds repeatable `## Related` blocks to pages. Those blocks list source pages, pages that reference the current page, and nearby pages that share the same source ids.
@@ -241,3 +245,4 @@ unknown ids fail in multi-agent setups.
 - Rollback quarantine clears immediately for an in-process compile. After a separate compiler process publishes, refresh the plugin lifecycle so the daemon can validate that durable publication.
 - Pre-publication-epoch cache rows are rebuildable misses, not migrated state; the next compile replaces them.
 - Obsidian CLI support requires the official `obsidian` CLI to be installed and available on `PATH`.
+- Whole-vault scans for `wiki_search`, `wiki_get` id lookups and misses, and `wiki_apply` metadata updates run in a plugin-owned pool of two worker threads, handing their shared compute slot or worker to a waiting task at the next 64-page checkpoint (deadlines stay with the caller: `wiki_search` keeps its 30-second deadline, other scans run to completion as before); single-page reads (`wiki_get` by exact path, by basename or by claim id) stay on the calling thread, and the gateway main thread only merges returned results and reads a lookup's one matched page, so the gateway event loop stays responsive and short reads never wait behind a scan.

@@ -1,4 +1,3 @@
-// Stores and broadcasts agent lifecycle and streaming events.
 import { isDefinitiveRunLifecycle } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -14,6 +13,12 @@ import type {
   AgentAssistantSourceReceipt,
   AgentEventPayload,
   AgentEventRuntimePayload,
+  AgentEventListener,
+  AgentEventRegistration,
+  AgentEventState,
+  CaptureAgentEventDelivery,
+  AgentTerminalEventData,
+  AgentTerminalEventReservation,
 } from "./agent-events.types.js";
 import { createAgentRunStaleLifecycleError } from "./agent-lifecycle-error.js";
 import {
@@ -25,7 +30,8 @@ import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "./agent-run-registry.js";
-import type { AgentRunContext, AgentRunEventState } from "./agent-run-registry.types.js";
+import type { AgentRunContext } from "./agent-run-registry.types.js";
+import { captureAgentRunTerminalPersistence } from "./agent-run-terminal-writes.js";
 import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 export type {
@@ -37,34 +43,11 @@ export type {
   AgentEventStream,
 } from "./agent-events.types.js";
 
-type AgentEventListener = (
-  evt: AgentEventRuntimePayload,
-  isDeliveryCurrent?: () => boolean,
-) => void;
-type CaptureAgentEventDelivery = (evt: AgentEventRuntimePayload) => () => boolean;
-type AgentEventRegistration = {
-  readonly listener: AgentEventListener;
-  readonly id: number;
-  readonly captureDelivery?: CaptureAgentEventDelivery;
-};
-type AgentEventListeners = Map<AgentEventListener, AgentEventRegistration>;
-
-type AgentEventState = {
-  runs: Map<string, AgentRunEventState>;
-  assistantSources?: WeakMap<object, AgentAssistantSourceReceipt>;
-  listeners: AgentEventListeners;
-  runListeners: Map<string, AgentEventListeners>;
-  nextListenerId: number;
-  auditListeners: Set<(evt: AgentEventPayload) => void>;
-  lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
-};
-
 const AGENT_EVENT_ROUTING_FIELDS = [
   ["controlUiVisible", "isControlUiVisible"],
   ["projectSessionLifecycle", "projectSessionLifecycle"],
   ["projectSessionMessages", "projectSessionMessages"],
   ["mainSessionRestartRecovery", "mainSessionRestartRecovery"],
-  ["isHeartbeat", "isHeartbeat"],
   ["verboseLevel", "verboseLevel"],
   ["registeredAt", "registeredAt"],
 ] as const;
@@ -73,7 +56,7 @@ function getAgentEventState(): AgentEventState {
   // Lifecycle owners can register before an importing runtime chunk finishes initialization.
   return resolveGlobalSingleton<AgentEventState>(Symbol.for("openclaw.agentEvents.state"), () => ({
     runs: new Map(),
-    listeners: new Map(),
+    listeners: { registrations: [] },
     runListeners: new Map(),
     nextListenerId: 0,
     auditListeners: new Set<(evt: AgentEventPayload) => void>(),
@@ -112,21 +95,20 @@ export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, 
   return storage.run({ lifecycleGeneration, onceByRun, routingByRun }, run);
 }
 
-type AgentTerminalEventData = Record<string, unknown> & { phase: "end" | "error" };
-
 /** Reserves client terminal publication without advancing execution settlement. */
 export function reserveAgentTerminalEvent(
   identity: Omit<AgentEventPayload, "seq" | "ts" | "stream" | "data">,
-): (data: AgentTerminalEventData) => void {
+): AgentTerminalEventReservation {
   const { runId } = identity;
   const context = getAgentRunContext(runId);
+  const terminalPersistence = captureAgentRunTerminalPersistence(runId);
   return withAgentRunLifecycleGeneration(captureAgentRunLifecycleGeneration(runId), () => {
     if (context) {
       recordAgentEventRouting(runId, context);
     }
     const resolved = resolveAgentEventRouting(identity);
     if (!resolved) {
-      return () => {};
+      return { publish: () => {}, release: () => {} };
     }
     const state = getAgentEventState();
     const runState = resolved.routing?.eventState ?? state.runs.get(runId) ?? { seq: 0 };
@@ -138,18 +120,32 @@ export function reserveAgentTerminalEvent(
     const storage = getAgentEventExecutionContext();
     const scope = storage.getStore()!;
     let pending = true;
-    return (data: AgentTerminalEventData) => {
-      if (pending) {
+    return {
+      publish: (data: AgentTerminalEventData) => {
+        if (pending) {
+          pending = false;
+          storage.run(scope, () =>
+            dispatchAgentEvent(
+              { ...identity, stream: "lifecycle", data },
+              undefined,
+              undefined,
+              publication,
+              undefined,
+              undefined,
+              terminalPersistence,
+            ),
+          );
+        }
+      },
+      release: () => {
+        if (!pending) {
+          return;
+        }
         pending = false;
-        storage.run(scope, () =>
-          dispatchAgentEvent(
-            { ...identity, stream: "lifecycle", data },
-            undefined,
-            undefined,
-            publication,
-          ),
-        );
-      }
+        if (runState.terminalPublication === publication) {
+          delete runState.terminalPublication;
+        }
+      },
     };
   });
 }
@@ -404,6 +400,7 @@ function enrichAgentEvent(
   reservedPublication?: symbol,
   assistantSource?: AgentAssistantSourceReceipt,
   assistantProjection?: AgentAssistantProjection,
+  terminalPersistence?: AgentEventRuntimePayload["terminalPersistence"],
 ): AgentEventRuntimePayload | undefined {
   const resolved = resolveAgentEventRouting(event, claimId, expectedContext);
   if (!resolved || hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
@@ -516,6 +513,14 @@ function enrichAgentEvent(
     });
   }
   Object.defineProperties(enriched, {
+    terminalPersistence: {
+      value:
+        terminalPersistence ??
+        (event.stream === "lifecycle" && isDefinitiveRunLifecycle({ phase: data.phase, data })
+          ? captureAgentRunTerminalPersistence(event.runId, context ?? capturedOwner)
+          : undefined),
+      enumerable: false,
+    },
     assistantSource: { value: assistantSource, enumerable: false },
     assistantProjection: { value: assistantProjection, enumerable: false },
   });
@@ -555,6 +560,7 @@ function dispatchAgentEvent(
   reservedPublication?: symbol,
   assistantSource?: AgentAssistantSourceReceipt,
   assistantProjection?: AgentAssistantProjection,
+  terminalPersistence?: AgentEventRuntimePayload["terminalPersistence"],
 ): boolean {
   const state = getAgentEventState();
   const enriched = enrichAgentEvent(
@@ -565,43 +571,60 @@ function dispatchAgentEvent(
     reservedPublication,
     assistantSource,
     assistantProjection,
+    terminalPersistence,
   );
   if (!enriched) {
     return false;
   }
   // New subscriptions start with the next event, even when a listener emits recursively.
-  const runListeners = state.runListeners.get(enriched.runId);
-  const registrations = [...state.listeners.values(), ...(runListeners?.values() ?? [])].toSorted(
-    (left, right) => left.id - right.id,
-  );
-  const deliveries = new Map<AgentEventRegistration, () => boolean>();
+  const global = state.listeners.registrations;
+  const run = state.runListeners.get(enriched.runId)?.registrations;
+  let deliveries: Map<AgentEventRegistration, () => boolean> | undefined;
   // Capture registrations before callbacks can replace them. New subscriptions
   // during this emission have no captured delivery authority until the next event.
-  notifyListeners(
-    registrations.map((registration) => () => {
+  // Only global runtime registrations capture delivery authority.
+  for (const registration of global) {
+    try {
       if (registration.captureDelivery) {
-        deliveries.set(registration, registration.captureDelivery(enriched));
+        const isDeliveryCurrent = registration.captureDelivery(enriched);
+        (deliveries ??= new Map()).set(registration, isDeliveryCurrent);
       }
-    }),
-    enriched,
-  );
-  notifyListeners(
-    registrations.map((registration) => (deliveredEvent: AgentEventRuntimePayload) => {
-      if (
-        state.listeners.get(registration.listener) !== registration &&
-        runListeners?.get(registration.listener) !== registration
-      ) {
-        return;
+    } catch {
+      // A failed capture must not prevent delivery to other registrations.
+    }
+  }
+  // Both snapshots are already in registration order; merge without materializing a cohort.
+  let globalIndex = 0;
+  let runIndex = 0;
+  while (true) {
+    const globalRegistration = global[globalIndex];
+    const runRegistration = run?.[runIndex];
+    const registration =
+      globalRegistration && (!runRegistration || globalRegistration.id < runRegistration.id)
+        ? globalRegistration
+        : runRegistration;
+    if (!registration) {
+      break;
+    }
+    if (registration === globalRegistration) {
+      globalIndex++;
+    } else {
+      runIndex++;
+    }
+    try {
+      if (!registration.active) {
+        continue;
       }
-      const isDeliveryCurrent = deliveries.get(registration);
+      const isDeliveryCurrent = deliveries?.get(registration);
       if (!registration.captureDelivery) {
-        registration.listener(deliveredEvent);
+        registration.listener(enriched);
       } else if (isDeliveryCurrent?.()) {
-        registration.listener(deliveredEvent, isDeliveryCurrent);
+        registration.listener(enriched, isDeliveryCurrent);
       }
-    }),
-    enriched,
-  );
+    } catch {
+      // Match ordinary listener delivery: isolate each subscriber's failure.
+    }
+  }
   return true;
 }
 
@@ -710,19 +733,34 @@ function registerAgentEventListener(
   captureDelivery?: CaptureAgentEventDelivery,
 ) {
   const state = getAgentEventState();
-  const bucket: AgentEventListeners =
-    runId === undefined ? state.listeners : (state.runListeners.get(runId) ?? new Map());
-  if (!bucket.has(listener)) {
-    bucket.set(listener, { listener, id: state.nextListenerId++, captureDelivery });
+  const bucket =
+    runId === undefined
+      ? state.listeners
+      : (state.runListeners.get(runId) ?? { registrations: [] });
+  if (!bucket.registrations.some((registration) => registration.listener === listener)) {
+    bucket.registrations = [
+      ...bucket.registrations,
+      { listener, id: state.nextListenerId++, captureDelivery, active: true },
+    ];
     if (runId !== undefined) {
       state.runListeners.set(runId, bucket);
     }
   }
   return () => {
-    bucket.delete(listener);
+    bucket.registrations = bucket.registrations.filter((registration) => {
+      if (registration.listener !== listener) {
+        return true;
+      }
+      registration.active = false;
+      return false;
+    });
     // Only reclaim the bucket this handle registered into; a later subscriber
     // for the same run may already have installed a replacement.
-    if (runId !== undefined && bucket.size === 0 && state.runListeners.get(runId) === bucket) {
+    if (
+      runId !== undefined &&
+      bucket.registrations.length === 0 &&
+      state.runListeners.get(runId) === bucket
+    ) {
       state.runListeners.delete(runId);
     }
   };
@@ -739,9 +777,11 @@ export function resetAgentEventsForTest(options?: { preserveListeners?: boolean 
   state.runs.clear();
   resetAgentRunRegistryForTest();
   if (!options?.preserveListeners) {
-    state.listeners.clear();
-    for (const bucket of state.runListeners.values()) {
-      bucket.clear();
+    for (const bucket of [state.listeners, ...state.runListeners.values()]) {
+      for (const registration of bucket.registrations) {
+        registration.active = false;
+      }
+      bucket.registrations = [];
     }
     state.runListeners.clear();
     state.auditListeners.clear();

@@ -1,35 +1,18 @@
-// Real native image results must retain a bounded, truthful visual context.
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { expect, it } from "vitest";
 import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
-import type { AgentMessage } from "../runtime/index.js";
+import type { Agent, AgentMessage } from "../runtime/index.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { createImageTool } from "../tools/image-tool.js";
 import {
-  createMessageCharEstimateCache,
-  estimateMessageCharsCached,
+  estimateMessageCharsCached as estimateChars,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
 } from "./tool-result-char-estimator.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
 
 type ContentBlock = { type: string; text?: string; data?: string; mimeType?: string };
-
-function createRequiredImageTool() {
-  const config: OpenClawConfig = {
-    agents: { defaults: { imageMaxDimensionPx: 32 } },
-  };
-  return expectDefined(
-    createImageTool({
-      config,
-      agentDir: join(tmpdir(), "openclaw-native-image-context-test"),
-      modelHasVision: true,
-    }),
-    "native-vision image tool is available",
-  );
-}
 
 function makeDistinctImageRef(index: number): string {
   const width = 64;
@@ -43,11 +26,18 @@ function makeDistinctImageRef(index: number): string {
 }
 
 async function executeNativeImageTool(imageCount: number): Promise<AgentMessage> {
-  const result = await createRequiredImageTool().execute("native-image-context", {
+  const tool = expectDefined(
+    createImageTool({
+      config: { agents: { defaults: { imageMaxDimensionPx: 32 } } },
+      agentDir: join(tmpdir(), "openclaw-native-image-context-test"),
+      modelHasVision: true,
+    }),
+    "native-vision image tool is available",
+  );
+  const result = await tool.execute("native-image-context", {
     paths: Array.from({ length: imageCount }, (_, index) => makeDistinctImageRef(index)),
   });
-  const content = result.content;
-  expect(content.filter((block) => block.type === "image")).toHaveLength(imageCount);
+  expect(result.content.filter((block) => block.type === "image")).toHaveLength(imageCount);
   return castAgentMessage({
     role: "toolResult",
     toolCallId: "native-image-context",
@@ -58,109 +48,73 @@ async function executeNativeImageTool(imageCount: number): Promise<AgentMessage>
   });
 }
 
-async function projectForContext(
-  source: AgentMessage,
-  contextWindowTokens: number,
-): Promise<AgentMessage> {
-  const agent: {
-    transformContext?: (messages: AgentMessage[], signal: AbortSignal) => Promise<AgentMessage[]>;
-  } = {};
+async function projectForContext(source: AgentMessage, contextWindowTokens = 32_000) {
+  const agent: Pick<Agent, "transformContext"> = {};
   installToolResultContextGuard({ agent, contextWindowTokens });
-  const transformed = await expectDefined(agent.transformContext, "installed context guard")(
-    [source],
-    new AbortController().signal,
+  const transform = expectDefined(agent.transformContext, "installed context guard");
+  const [result] = await transform([source], new AbortController().signal);
+  const projected = expectDefined(result, "guarded native image result");
+  const existingCap = Math.max(
+    1_024,
+    Math.floor(contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * 0.5),
   );
-  return expectDefined(transformed[0], "guarded native image result");
+  expect(estimateChars(projected, new WeakMap<AgentMessage, number>())).toBeLessThanOrEqual(
+    existingCap,
+  );
+  expect(projected).not.toHaveProperty("details");
+  const content = blocksOf(projected);
+  return { projected, content, images: content.filter((block) => block.type === "image") };
 }
 
 function blocksOf(message: AgentMessage): ContentBlock[] {
   return (message as { content: ContentBlock[] }).content;
 }
 
-function expectWithinExistingCap(message: AgentMessage, contextWindowTokens: number): void {
-  const existingCap = Math.max(
-    1_024,
-    Math.floor(contextWindowTokens * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE * 0.5),
+it("explains when no sanitized image fits the context window", async () => {
+  const source = await executeNativeImageTool(1);
+  const originalSnapshot = structuredClone(source);
+  const { content, images } = await projectForContext(source, 8_000);
+  const projectedText = content
+    .filter((block) => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+
+  expect(images).toEqual([]);
+  expect(projectedText).toMatch(/1 image .*omitted|omitted.*1 image/i);
+  expect(projectedText).toMatch(/context/i);
+  expect(projectedText).toMatch(
+    /no images? (?:fit|included|available)|images? (?:could not|cannot) (?:fit|be included)/i,
   );
-  expect(estimateMessageCharsCached(message, createMessageCharEstimateCache())).toBeLessThanOrEqual(
-    existingCap,
-  );
-}
+  expect(source).toEqual(originalSnapshot);
+  expect(source).toMatchObject({ details: { media: { outbound: false } } });
+});
 
-describe("native image tool result context projection", () => {
-  it("explains when no sanitized image fits the context window", async () => {
-    const contextWindowTokens = 8_000;
-    const source = await executeNativeImageTool(1);
-    const originalSnapshot = structuredClone(source);
-    const projected = await projectForContext(source, contextWindowTokens);
-    const projectedImages = blocksOf(projected).filter((block) => block.type === "image");
-    const projectedText = blocksOf(projected)
-      .filter((block) => block.type === "text")
-      .map((block) => block.text)
-      .join("\n");
-
-    expect(projectedImages).toEqual([]);
-    expect(projectedText).toMatch(/1 image .*omitted|omitted.*1 image/i);
-    expect(projectedText).toMatch(/context/i);
-    expect(projectedText).toMatch(
-      /no images? (?:fit|included|available)|images? (?:could not|cannot) (?:fit|be included)/i,
-    );
-    expectWithinExistingCap(projected, contextWindowTokens);
-    expect(source).toEqual(originalSnapshot);
-    expect((source as { details?: unknown }).details).toMatchObject({
-      media: { outbound: false },
-    });
-    expect(projected).not.toHaveProperty("details");
+it("preserves mixed text, unknown blocks, CJK content, image order, and original privacy", async () => {
+  const native = await executeNativeImageTool(3);
+  const nativeBlocks = blocksOf(native);
+  const unknown = { type: "custom", value: { label: "bounded metadata" } };
+  const cjk = { type: "text", text: "画像の順序を維持する 🖼️" };
+  const source = castAgentMessage({
+    ...native,
+    toolName: "read",
+    content: [nativeBlocks[0], nativeBlocks[1], unknown, cjk, nativeBlocks[2], nativeBlocks[3]],
+    details: { media: { outbound: false }, privateReference: "private-fixture-reference" },
   });
+  const { content, images } = await projectForContext(source);
 
-  it("preserves mixed text, unknown blocks, CJK content, image order, and original privacy", async () => {
-    const native = await executeNativeImageTool(3);
-    const nativeBlocks = blocksOf(native);
-    const unknown = { type: "custom", value: { label: "bounded metadata" } };
-    const cjk = { type: "text", text: "画像の順序を維持する 🖼️" };
-    const source = castAgentMessage({
-      ...native,
-      toolName: "read",
-      content: [nativeBlocks[0], nativeBlocks[1], unknown, cjk, nativeBlocks[2], nativeBlocks[3]],
-      details: { media: { outbound: false }, privateReference: "private-fixture-reference" },
-    });
-    const projected = await projectForContext(source, 32_000);
-    const content = blocksOf(projected);
+  expect(images).toEqual([nativeBlocks[1]]);
+  expect(content.map((block) => block.type)).toEqual(["text", "image", "custom", "text", "text"]);
+  expect(content).toContain(unknown);
+  expect(content).toContain(cjk);
+  expect(content.at(-1)?.text).toMatch(/2 images? .*omitted|omitted.*2 images?/i);
+  expect(JSON.stringify(content)).not.toContain("private-fixture-reference");
+  expect(source).toMatchObject({ details: { media: { outbound: false } } });
+});
 
-    expect(content.filter((block) => block.type === "image")).toEqual([nativeBlocks[1]]);
-    expect(content.map((block) => block.type)).toEqual(["text", "image", "custom", "text", "text"]);
-    expect(content).toContain(unknown);
-    expect(content).toContain(cjk);
-    expect(content.at(-1)?.text).toMatch(/2 images? .*omitted|omitted.*2 images?/i);
-    expectWithinExistingCap(projected, 32_000);
-    expect(projected).not.toHaveProperty("details");
-    expect(JSON.stringify(blocksOf(projected))).not.toContain("private-fixture-reference");
-    expect(
-      (source as { details?: { media?: { outbound?: boolean } } }).details?.media?.outbound,
-    ).toBe(false);
-  });
-
-  it("retains a fitting image beside oversized CJK text without an omission notice", async () => {
-    const native = await executeNativeImageTool(1);
-    const nativeBlocks = blocksOf(native);
-    const source = castAgentMessage({
-      ...native,
-      content: [{ type: "text", text: "画像🖼️".repeat(8_000) }, ...nativeBlocks.slice(1)],
-    });
-    const projected = await projectForContext(source, 32_000);
-    const content = blocksOf(projected);
-
-    expect(content.filter((block) => block.type === "image")).toEqual([nativeBlocks[1]]);
-    expect(content[0]?.text).toContain("画像");
-    const boundedText = expectDefined(content[0]?.text, "bounded image context text");
-    expect(Buffer.from(boundedText, "utf8").toString("utf8")).toBe(boundedText);
-    expectWithinExistingCap(projected, 32_000);
-    expect(content.some((block) => block.text?.includes("0 images"))).toBe(false);
-    expect(blocksOf(source).filter((block) => block.type === "image")).toHaveLength(1);
-  });
-
-  it("keeps a fitting image without starving a later 2,000-character text block", async () => {
-    const native = await executeNativeImageTool(2);
+it.each([false, true])(
+  "retains an image beside CJK text (trailing block: %s)",
+  async (trailing) => {
+    const native = await executeNativeImageTool(trailing ? 2 : 1);
     const nativeBlocks = blocksOf(native);
     const trailingText = { type: "text", text: "d".repeat(2_000) };
     const source = castAgentMessage({
@@ -168,18 +122,21 @@ describe("native image tool result context projection", () => {
       content: [
         { type: "text", text: "画像🖼️".repeat(8_000) },
         nativeBlocks[1],
-        trailingText,
-        nativeBlocks[2],
+        ...(trailing ? [trailingText, nativeBlocks[2]] : nativeBlocks.slice(2)),
       ],
     });
-    const projected = await projectForContext(source, 32_000);
-    const content = blocksOf(projected);
+    const { content, images } = await projectForContext(source);
 
-    expect(content.filter((block) => block.type === "image")).toEqual([nativeBlocks[1]]);
-    const boundedText = expectDefined(content[0]?.text, "bounded multi-block image context text");
+    expect(images).toEqual([nativeBlocks[1]]);
+    const boundedText = expectDefined(content[0]?.text, "bounded image context text");
     expect(Buffer.from(boundedText, "utf8").toString("utf8")).toBe(boundedText);
-    expect(content).toContainEqual(trailingText);
-    expect(content.at(-1)?.text).toContain("1 image omitted");
-    expectWithinExistingCap(projected, 32_000);
-  });
-});
+    if (trailing) {
+      expect(content).toContainEqual(trailingText);
+      expect(content.at(-1)?.text).toContain("1 image omitted");
+    } else {
+      expect(boundedText).toContain("画像");
+      expect(content.some((block) => block.text?.includes("0 images"))).toBe(false);
+      expect(blocksOf(source).filter((block) => block.type === "image")).toHaveLength(1);
+    }
+  },
+);

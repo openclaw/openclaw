@@ -183,6 +183,7 @@ export async function prepareWorkerTurnPrompt(params: {
       availableTools: capabilityToolNames,
       citationsMode: turn.config?.memory?.citations,
       sandboxed: false,
+      memoryProjectKey: preparedModelRuntime.projectKey ?? undefined,
       isOpenAIResponsesApi: [
         "openai-responses",
         "azure-openai-responses",
@@ -210,6 +211,7 @@ export async function prepareWorkerTurnPrompt(params: {
     runtimeModel: `${model.provider}/${model.id}`,
     systemPromptText,
     runAbortSignal: turn.abortSignal,
+    hasBaselineTools: () => projection.tools.length > 0,
     applyPromptBuildToolsAllow: (toolsAllow) => {
       const names = params.toolRuntime.applyPromptToolsAllow(toolsAllow);
       capabilityToolNames.clear();
@@ -256,6 +258,7 @@ export async function prepareWorkerTurnPrompt(params: {
   return {
     contextEngineTurn,
     systemPromptText,
+    systemPromptReport: prompt.systemPromptReport,
     history,
     prompt: context.llmBoundaryPromptForPrecheck,
     runtimeContext: isRawModelRun ? undefined : context.runtimeContextFragments,

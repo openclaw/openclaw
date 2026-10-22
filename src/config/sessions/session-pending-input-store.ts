@@ -5,6 +5,7 @@ import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import type { SessionInputLifecycleAdmission } from "./restart-resume.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -23,6 +24,7 @@ import {
   readPendingInputMutationReceipt,
   type PendingInputCustodyGrant,
   type PendingInputMutation,
+  type PendingInputMutationReceipt,
   type PendingInputRead,
 } from "./session-pending-input-operations.types.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
@@ -42,8 +44,16 @@ export type PendingInputScope = SessionAccessScope & {
 export async function preparePendingInputStore(
   scope: PendingInputScope,
   assertCurrent: () => void,
+  lifecycleAdmission?: SessionInputLifecycleAdmission,
 ) {
-  if (captureSessionActorStorageOwner(scope, { assertCurrent, authorize: assertCurrent })) {
+  const memoryOwner = captureSessionActorStorageOwner(scope, {
+    assertCurrent,
+    authorize: assertCurrent,
+  });
+  if (lifecycleAdmission && memoryOwner) {
+    throw new Error("Restart resume requires a durable session.");
+  }
+  if (memoryOwner) {
     const acquired = await acquireSessionActorStorage(scope, {
       lifetime: { assertCurrent, assertReadable: assertCurrent },
       authority: { assertCurrent, authorize: assertCurrent },
@@ -58,6 +68,9 @@ export async function preparePendingInputStore(
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const inputActor = await getSessionInputActor(scope);
+  if (lifecycleAdmission && !inputActor) {
+    throw new Error("Restart resume requires the current input actor.");
+  }
   const logical = resolveSqliteScope({ ...captured, storePath: undefined });
   const target = captureSessionStoreReadTarget(
     captured,
@@ -258,7 +271,7 @@ export async function preparePendingInputStore(
               },
             };
             let expectedState: ReturnType<typeof buildRestartRecoveryExpectedState> | undefined;
-            let receipt: ReturnType<typeof readPendingInputMutationReceipt>;
+            let receipt: PendingInputMutationReceipt | undefined;
             const outcome = await runSessionActorCommand(
               inputActor.actor,
               authority,
@@ -268,23 +281,22 @@ export async function preparePendingInputStore(
                   throw new Error("Input actor lost its staged session");
                 }
                 // Select lifecycle facts inside the FIFO, then retain them across version rebasing.
-                expectedState ??= buildRestartRecoveryExpectedState(hot.entry);
+                const resume = input.expected.existing ? undefined : lifecycleAdmission;
+                expectedState ??=
+                  resume?.expectedState ?? buildRestartRecoveryExpectedState(hot.entry);
                 return inputActor.actor.acceptInput(
                   {
                     commandId: randomUUID(),
                     phaseId: `accept:${input.runId}`,
                     expected: hot.version,
                     pending: input,
-                    lifecycle: {},
+                    lifecycle: resume?.lifecycle ?? {},
                     expectedState,
                   },
                   authority,
                   {
                     committed(commit) {
-                      receipt = readPendingInputMutationReceipt(
-                        commit.value.pendingInputReceipt,
-                        input,
-                      );
+                      receipt = commit.value.pendingInputReceipt;
                       if (!receipt) {
                         throw new Error("Input actor omitted its committed custody receipt");
                       }
@@ -308,7 +320,6 @@ export async function preparePendingInputStore(
             return receipt;
           }
           let admitted: SessionWorkerReceiptAdmission | undefined;
-          const readReceipt = (facts: unknown) => readPendingInputMutationReceipt(facts, input);
           let committedFacts: PendingInputCustodyGrant | undefined;
           const checkGrant = (stage: "transaction" | "commit", facts: unknown) => {
             if (
@@ -331,7 +342,7 @@ export async function preparePendingInputStore(
                 const receipt = await settleSessionWorkerReceipt(
                   () => worker.execute({ type: "session.pendingInputs.mutate", input }),
                   () => admitted,
-                  readReceipt,
+                  readPendingInputMutationReceipt,
                   "Pending input has no confirmed native completion and commit receipt",
                   "Pending input native commitment is unknown; do not replay",
                 );
@@ -351,7 +362,7 @@ export async function preparePendingInputStore(
               if (
                 !isRecord(facts) ||
                 !isRecord(facts.publication) ||
-                !readReceipt(facts.publication.receipt)
+                !readPendingInputMutationReceipt(facts.publication.receipt)
               ) {
                 throw new Error("Pending input commit omitted its exact receipt");
               }

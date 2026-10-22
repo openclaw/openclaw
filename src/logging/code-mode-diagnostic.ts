@@ -1,6 +1,10 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createHash } from "node:crypto";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import {
+  diagnosticErrorCategory,
+  diagnosticErrorFailureKind,
+} from "../infra/diagnostic-error-metadata.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "./subsystem.js";
 import type { SubsystemLogger } from "./subsystem.js";
 
@@ -16,24 +20,32 @@ export type CodeModeFailureContext = {
   codeModeRunId?: string;
   workerId?: string;
   failurePhase: string;
+  failureCode?: string;
   bridgeDispatchStarted?: boolean;
   bridgeRequestId?: string;
   bridgeMethod?: string;
 };
 
-/** Record the producer's cause before guest projection or output budgeting. */
+/** Record failure categories and correlation without message or tool content. */
 export function logCodeModeFailure(error: unknown, context: CodeModeFailureContext): void {
   const cause = error instanceof Error && error.cause instanceof Error ? error.cause : error;
-  const record = isRecord(cause) ? cause : undefined;
-  const name = cause instanceof Error ? cause.name : record?.name;
-  const message = cause instanceof Error ? cause.message : record?.message;
-  const stack = cause instanceof Error ? cause.stack : record?.stack;
-  failureLog.error("Code Mode execution failed", {
+  const level =
+    context.failurePhase === "guest" ||
+    context.failurePhase === "input" ||
+    context.failureCode === "invalid_input" ||
+    context.failureCode === "input_contract" ||
+    context.failureCode === "store_range" ||
+    context.failureCode === "store_type"
+      ? "warn"
+      : "error";
+  failureLog[level]("Code Mode execution failed", {
     ...context,
-    errorName: typeof name === "string" ? name : "Error",
-    errorCode: typeof record?.code === "string" ? record.code : undefined,
-    error: typeof message === "string" ? message : formatErrorMessage(error),
-    stack: typeof stack === "string" ? stack.split("\n").slice(0, 12).join("\n") : undefined,
+    errorCode:
+      extractErrorCode(cause) === "ERR_WORKER_OUT_OF_MEMORY"
+        ? "ERR_WORKER_OUT_OF_MEMORY"
+        : undefined,
+    errorCategory: diagnosticErrorCategory(cause),
+    failureKind: diagnosticErrorFailureKind(cause),
   });
 }
 
@@ -65,4 +77,14 @@ export function logCodeModeDiagnostic(
     }),
   );
   log.info(`code-mode diagnostic ${JSON.stringify({ boundary, ...bounded })}`);
+}
+
+/** Prepare only correlation metadata; never send the session key into a guest worker. */
+export function codeModeGcAttribution(runId: string, sessionKey?: string) {
+  return {
+    runId,
+    sessionKeyHash: sessionKey
+      ? createHash("sha256").update(sessionKey).digest("hex").slice(0, 16)
+      : undefined,
+  };
 }

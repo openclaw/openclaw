@@ -1,6 +1,5 @@
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { mergeRestartRecoveryTerminalRunIds } from "../../config/sessions/restart-recovery-state.js";
-import { retryAsync } from "../../infra/retry.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { isAgentLifecycleYieldedWaiting } from "../agent-lifecycle-parent-state.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
@@ -10,54 +9,23 @@ import {
   type MainRecoveryStateFields,
 } from "./main-session-recovery-clear.js";
 
-const MAIN_SESSION_RECOVERY_RETRY_DELAY_MS = 1_000;
-const MAIN_SESSION_RECOVERY_RETRY_MAX_DELAY_MS = 30_000;
-
 type MainRecoveryLifecycleEvent = {
   runId?: string;
   lifecycleGeneration?: string;
   data?: Parameters<typeof isAgentLifecycleYieldedWaiting>[0];
 };
 
-export async function retryMainSessionRecoveryMutation<T>(mutation: () => Promise<T>): Promise<T> {
-  return await retryAsync(mutation, 3, 25);
-}
-
-/** Retries now, then leaves an exact idempotent repair queued after transient failure. */
+/** One idempotent repair; persisted recovery facts remain available after failure. */
 export async function repairMainSessionRecoveryMutation<T>(params: {
   mutation: () => Promise<T>;
-  onDeferredSuccess: (result: T) => void | Promise<void>;
   onError: (error: unknown) => void;
 }): Promise<T | undefined> {
   try {
-    return await retryMainSessionRecoveryMutation(params.mutation);
+    return await params.mutation();
   } catch (error) {
     params.onError(error);
-    scheduleMainSessionRecoveryMutation({
-      mutation: () => retryMainSessionRecoveryMutation(params.mutation),
-      onSuccess: params.onDeferredSuccess,
-    });
     return undefined;
   }
-}
-
-/** Keeps an idempotent durable-state repair alive until it succeeds or restart retires it. */
-export function scheduleMainSessionRecoveryMutation<T>(params: {
-  mutation: () => Promise<T>;
-  onError?: (error: unknown) => void;
-  onSuccess: (result: T) => void | Promise<void>;
-  delayMs?: number;
-}): void {
-  const delayMs = params.delayMs ?? MAIN_SESSION_RECOVERY_RETRY_DELAY_MS;
-  setTimeout(() => {
-    void params.mutation().then(params.onSuccess, (error: unknown) => {
-      params.onError?.(error);
-      scheduleMainSessionRecoveryMutation({
-        ...params,
-        delayMs: Math.min(delayMs * 2, MAIN_SESSION_RECOVERY_RETRY_MAX_DELAY_MS),
-      });
-    });
-  }, delayMs).unref?.();
 }
 
 export function inspectMainSessionRecoveryLifecycleEvent(params: {

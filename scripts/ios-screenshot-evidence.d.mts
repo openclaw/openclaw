@@ -12,18 +12,12 @@ export type IosScreenshotProvenance = {
   tooling: IosScreenshotTooling;
 };
 
-export type XcresultSummary = {
-  testResult: string;
-  failedTests: number;
-};
-
 export function collectIosScreenshotEvidence(options: {
-  family: string;
   screenshotDirectory: string;
   xcresultDirectory: string;
   outputDirectory: string;
   provenance: IosScreenshotProvenance;
-  readXcresultSummary?: (resultPath: string) => XcresultSummary;
+  readXcresult?: (resultPath: string, section: "summary" | "tests") => unknown;
 }): Record<string, unknown>;
 
 export function reduceIosScreenshotEvidence(options: {

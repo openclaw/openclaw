@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import type { IconName } from "../../components/solid/icon.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -26,7 +26,7 @@ export function describeJobSchedule(job: CronJob): string {
 }
 
 export function JobStateIndicator(props: { job: CronJob }) {
-  const presentation = createMemo((): [string, IconName | null, string] => {
+  const presentation = (): [string, IconName | null, string] => {
     const autoDisabled = props.job.state?.autoDisabled;
     return isCronJobRunning(props.job)
       ? ["running", "loader", t("cron.runs.runStatusRunning")]
@@ -37,10 +37,10 @@ export function JobStateIndicator(props: { job: CronJob }) {
           : !props.job.enabled
             ? ["paused", "pause", t("cron.list.paused")]
             : ["active", null, t("cron.detail.active")];
-  });
+  };
   return (
     <span
-      class={`cron-table__state cron-table__state--${presentation()[0]}`}
+      class={["cron-table__state", `cron-table__state--${presentation()[0]}`]}
       role="img"
       aria-label={presentation()[2]}
       title={presentation()[2]}
@@ -71,11 +71,10 @@ export function DisabledNote(props: { job: CronJob }) {
   };
   return (
     <span
-      class={
-        props.job.state?.autoDisabled
-          ? "cron-table__paused-note cron-table__auto-disabled"
-          : "muted cron-table__paused-note"
-      }
+      class={[
+        "cron-table__paused-note",
+        props.job.state?.autoDisabled ? "cron-table__auto-disabled" : "muted",
+      ]}
       data-test-id={
         props.job.state?.autoDisabled ? `cron-row-auto-disabled-${props.job.id}` : undefined
       }
@@ -101,7 +100,7 @@ export function LastRunCell(props: { job: CronJob }) {
   const status = () => resolveCronJobLastRunStatus(props.job);
   const relative = () => {
     const time = props.job.state?.lastRunAtMs;
-    return typeof time === "number" && Number.isFinite(time) ? formatRelativeTimestamp(time) : null;
+    return time === undefined ? null : formatRelativeTimestamp(time);
   };
   return (
     <>

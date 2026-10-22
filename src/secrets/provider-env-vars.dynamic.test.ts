@@ -1,7 +1,8 @@
 /** Tests dynamic provider env-var discovery from plugin metadata. */
 import fs from "node:fs";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginConfigState from "../plugins/config-state.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { buildPluginMetadataProviderFacts } from "../plugins/plugin-metadata-provider-facts.js";
@@ -14,32 +15,16 @@ import {
   resolveProviderAuthLookupMaps,
 } from "./provider-env-vars.js";
 
-type MockManifestPlugin = {
-  id: string;
-  origin: PluginManifestRecord["origin"];
-  enabled?: boolean;
-  enabledByDefault?: boolean;
-  kind?: "memory" | "context-engine" | Array<"memory" | "context-engine">;
-  providers?: string[];
-  providerUsageAuthEnvVars?: Record<string, string[]>;
-  providerAuthAliases?: Record<string, string>;
-  setup?: {
-    requiresRuntime?: boolean;
-    providers?: Array<{
-      id: string;
-      envVars?: string[];
-      authEvidence?: Array<{
-        type: "local-file-with-env";
-        fileEnvVar?: string;
-        fallbackPaths?: string[];
-        requiresAnyEnv?: string[];
-        requiresAllEnv?: string[];
-        credentialMarker: string;
-        source?: string;
-      }>;
-    }>;
+type MockManifestPlugin = Pick<PluginManifestRecord, "id" | "origin"> &
+  Partial<
+    Pick<
+      PluginManifestRecord,
+      "kind" | "providers" | "providerUsageAuthEnvVars" | "providerAuthAliases" | "setup"
+    >
+  > & {
+    enabled?: boolean;
+    enabledByDefault?: boolean;
   };
-};
 
 type MockManifestRegistry = {
   plugins: MockManifestPlugin[];
@@ -47,6 +32,7 @@ type MockManifestRegistry = {
 };
 
 type MockSetupProvider = NonNullable<NonNullable<MockManifestPlugin["setup"]>["providers"]>[number];
+type MockAuthEvidence = NonNullable<MockSetupProvider["authEvidence"]>[number];
 
 const pluginRegistryMocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn<(...args: unknown[]) => MockManifestRegistry>(() => ({
@@ -64,10 +50,6 @@ const pluginRegistryMocks = vi.hoisted(() => {
     }),
   };
 });
-
-function manifestRegistry(...plugins: MockManifestPlugin[]): MockManifestRegistry {
-  return { plugins, diagnostics: [] };
-}
 
 function setupPlugin(
   id: string,
@@ -110,9 +92,10 @@ const LOAD_PATH_PROVIDER_PLUGIN = setupPlugin("load-path-provider", "global", {
 });
 
 function useInstalledPlugins(...plugins: MockManifestPlugin[]): void {
-  pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
-    manifestRegistry(...plugins),
-  );
+  pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+    plugins,
+    diagnostics: [],
+  });
 }
 
 function useInstalledSetupPlugin(
@@ -124,18 +107,39 @@ function useInstalledSetupPlugin(
   useInstalledPlugins(setupPlugin(id, origin, provider, extra));
 }
 
-function useRegistryPlugins(...plugins: MockManifestPlugin[]): void {
-  pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue(
-    manifestRegistry(...plugins),
-  );
+const cloudCredential = {
+  credentialMarker: "external-cloud-local-credentials",
+  source: "local auth evidence",
+};
+function cloudEvidence(
+  fallbackPaths = [
+    "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
+    "${HOME}/credentials.json",
+    "${APPDATA}/credentials.json",
+  ],
+  extra: Partial<MockAuthEvidence> = {},
+): MockAuthEvidence[] {
+  return [
+    {
+      type: "local-file-with-env",
+      credentialMarker: cloudCredential.credentialMarker,
+      fallbackPaths,
+      ...extra,
+    },
+  ];
 }
+const workspaceEvidence: MockAuthEvidence[] = [
+  {
+    type: "local-file-with-env",
+    fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+    credentialMarker: "workspace-cloud-local-credentials",
+  },
+];
 
-function useRegistrySetupPlugin(
-  id: string,
-  origin: PluginManifestRecord["origin"],
-  provider: MockSetupProvider,
-): void {
-  useRegistryPlugins(setupPlugin(id, origin, provider));
+function mockExistingPaths(...paths: string[]) {
+  return vi
+    .spyOn(fs, "existsSync")
+    .mockImplementation((candidate) => paths.some((path) => path === candidate));
 }
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -159,13 +163,13 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 describe("provider env vars dynamic manifest metadata", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     useInstalledPlugins();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
-    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReset();
-    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset().mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReset().mockReturnValue(undefined);
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
   });
 
@@ -194,24 +198,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   it("scrubs usage credentials using host metadata rather than the candidate sandbox env", () => {
     const configuredSnapshot = {
       workspaceDir: "/workspace",
-      owners: buildPluginMetadataProviderFacts([]),
-      index: {
-        plugins: [
-          {
-            pluginId: "configured-billing",
-            origin: "workspace",
-            enabled: true,
-            enabledByDefault: true,
-          },
-          {
-            pluginId: "disabled-workspace",
-            origin: "workspace",
-            enabled: false,
-            enabledByDefault: false,
-          },
-        ],
-      },
-      plugins: [
+      ...metadataSnapshot(
         {
           id: "configured-billing",
           origin: "workspace",
@@ -226,8 +213,12 @@ describe("provider env vars dynamic manifest metadata", () => {
             "disabled-workspace": ["PATH"],
           },
         },
-      ],
+      ),
+      owners: buildPluginMetadataProviderFacts([]),
     };
+    for (const plugin of configuredSnapshot.index.plugins.slice(1)) {
+      Object.assign(plugin, { enabled: false, enabledByDefault: false });
+    }
     pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
       (params: { env?: NodeJS.ProcessEnv }) =>
         !params.env || params.env === process.env ? configuredSnapshot : undefined,
@@ -247,198 +238,83 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("expands provider-owned directory variables in manifest credential evidence", () => {
-    useRegistrySetupPlugin("external-cloud", "global", {
+    useInstalledSetupPlugin("external-cloud", "global", {
       id: "external-cloud",
-      authEvidence: [
+      authEvidence: cloudEvidence(
+        ["${EXTERNAL_CLOUD_CONFIG}/application_default_credentials.json"],
         {
-          type: "local-file-with-env",
-          fallbackPaths: ["${EXTERNAL_CLOUD_CONFIG}/application_default_credentials.json"],
           requiresAllEnv: ["EXTERNAL_CLOUD_PROJECT"],
-          credentialMarker: "external-cloud-local-credentials",
           source: "external cloud credentials",
         },
-      ],
+      ),
     });
     const evidence = resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"];
     const expectedPath = "/fixture/cloud-sdk/application_default_credentials.json";
-    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
-      return candidate === expectedPath;
-    });
+    const existsSync = mockExistingPaths(expectedPath);
 
-    try {
-      expect(
-        resolveLocalProviderAuthEvidence(evidence, {
-          EXTERNAL_CLOUD_CONFIG: "/fixture/cloud-sdk",
-          EXTERNAL_CLOUD_PROJECT: "fixture-project",
-        }),
-      ).toEqual({
-        credentialMarker: "external-cloud-local-credentials",
-        source: "external cloud credentials",
-      });
-      expect(existsSync).toHaveBeenCalledWith(expectedPath);
-    } finally {
-      existsSync.mockRestore();
-    }
+    expect(
+      resolveLocalProviderAuthEvidence(evidence, {
+        EXTERNAL_CLOUD_CONFIG: "/fixture/cloud-sdk",
+        EXTERNAL_CLOUD_PROJECT: "fixture-project",
+      }),
+    ).toEqual({
+      credentialMarker: "external-cloud-local-credentials",
+      source: "external cloud credentials",
+    });
+    expect(existsSync).toHaveBeenCalledWith(expectedPath);
   });
 
   it("rejects stale home evidence when an explicit provider directory has no credentials", () => {
-    useRegistrySetupPlugin("external-cloud", "global", {
+    useInstalledSetupPlugin("external-cloud", "global", {
       id: "external-cloud",
-      authEvidence: [
-        {
-          type: "local-file-with-env",
-          fallbackPaths: [
-            "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
-            "${HOME}/credentials.json",
-            "${APPDATA}/credentials.json",
-          ],
-          credentialMarker: "external-cloud-local-credentials",
-        },
-      ],
+      authEvidence: cloudEvidence(),
     });
     const evidence = resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"];
-    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
-      return candidate === "/fixture/home/credentials.json";
-    });
-
-    try {
-      expect(
-        resolveLocalProviderAuthEvidence(evidence, {
-          EXTERNAL_CLOUD_CONFIG: "/fixture/missing-cloud-sdk",
-          HOME: "/fixture/home",
-          APPDATA: "/fixture/appdata",
-        }),
-      ).toBeNull();
-      expect(existsSync).toHaveBeenCalledOnce();
-      expect(existsSync).toHaveBeenCalledWith("/fixture/missing-cloud-sdk/credentials.json");
-    } finally {
-      existsSync.mockRestore();
-    }
-  });
-
-  it("preserves home and appdata fallback when no provider directory is selected", () => {
-    const fallbackPaths = [
-      "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
-      "${HOME}/credentials.json",
-      "${APPDATA}/credentials.json",
-    ];
-    const evidence = [
-      {
-        type: "local-file-with-env" as const,
-        fallbackPaths,
-        credentialMarker: "external-cloud-local-credentials",
-      },
-    ];
-    const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
-      return (
-        candidate === "/fixture/home/credentials.json" ||
-        candidate === "/fixture/appdata/credentials.json"
-      );
-    });
-
-    try {
-      expect(resolveLocalProviderAuthEvidence(evidence, { HOME: "/fixture/home" })).toEqual({
-        credentialMarker: "external-cloud-local-credentials",
-        source: "local auth evidence",
-      });
-      expect(
-        resolveLocalProviderAuthEvidence(evidence, {
-          EXTERNAL_CLOUD_CONFIG: "   ",
-          HOME: "/fixture/missing-home",
-          APPDATA: "/fixture/appdata",
-        }),
-      ).toEqual({
-        credentialMarker: "external-cloud-local-credentials",
-        source: "local auth evidence",
-      });
-    } finally {
-      existsSync.mockRestore();
-    }
-  });
-
-  it("accepts placeholder text introduced by an environment value", () => {
-    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
-
-    try {
-      expect(
-        resolveLocalProviderAuthEvidence(
-          [
-            {
-              type: "local-file-with-env",
-              fallbackPaths: ["${EXTERNAL_CLOUD_CONFIG}/credentials.json"],
-              credentialMarker: "external-cloud-local-credentials",
-            },
-          ],
-          { EXTERNAL_CLOUD_CONFIG: "/fixture/${literal}" },
-        ),
-      ).toEqual({
-        credentialMarker: "external-cloud-local-credentials",
-        source: "local auth evidence",
-      });
-      expect(existsSync).toHaveBeenCalledWith("/fixture/${literal}/credentials.json");
-    } finally {
-      existsSync.mockRestore();
-    }
-  });
-
-  it.each([
-    {
-      scenario: "missing variable",
-      fallbackPath: "${EXTERNAL_CLOUD_CONFIG}/credentials.json",
-      env: {},
-    },
-  ])("rejects manifest credential evidence with a $scenario", ({ fallbackPath, env }) => {
-    const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
-
-    try {
-      expect(
-        resolveLocalProviderAuthEvidence(
-          [
-            {
-              type: "local-file-with-env",
-              fallbackPaths: [fallbackPath],
-              credentialMarker: "external-cloud-local-credentials",
-            },
-          ],
-          env,
-        ),
-      ).toBeNull();
-      expect(existsSync).not.toHaveBeenCalled();
-    } finally {
-      existsSync.mockRestore();
-    }
-  });
-
-  it("reuses the current compatible metadata snapshot for workspace auth evidence", () => {
-    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(
-      metadataSnapshot(
-        setupPlugin("external-cloud", "global", {
-          id: "external-cloud",
-          authEvidence: [
-            {
-              type: "local-file-with-env",
-              fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
-              credentialMarker: "external-cloud-local-credentials",
-            },
-          ],
-        }),
-      ),
-    );
+    const existsSync = mockExistingPaths("/fixture/home/credentials.json");
 
     expect(
-      resolveProviderAuthLookupMaps({
-        config: {},
-        workspaceDir: "/workspace",
-      }).authEvidenceMap["external-cloud"],
-    ).toEqual([
-      {
-        type: "local-file-with-env",
-        fileEnvVar: "EXTERNAL_CLOUD_CREDENTIALS",
-        credentialMarker: "external-cloud-local-credentials",
-      },
-    ]);
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+      resolveLocalProviderAuthEvidence(evidence, {
+        EXTERNAL_CLOUD_CONFIG: "/fixture/missing-cloud-sdk",
+        HOME: "/fixture/home",
+        APPDATA: "/fixture/appdata",
+      }),
+    ).toBeNull();
+    expect(existsSync).toHaveBeenCalledOnce();
+    expect(existsSync).toHaveBeenCalledWith("/fixture/missing-cloud-sdk/credentials.json");
   });
+
+  it.each<{ name: string; env: NodeJS.ProcessEnv }>([
+    { name: "home", env: { HOME: "/fixture/home" } },
+    {
+      name: "appdata after a blank override",
+      env: {
+        EXTERNAL_CLOUD_CONFIG: "   ",
+        HOME: "/fixture/missing-home",
+        APPDATA: "/fixture/appdata",
+      },
+    },
+  ])("preserves $name fallback without an explicit provider directory", ({ env }) => {
+    mockExistingPaths("/fixture/home/credentials.json", "/fixture/appdata/credentials.json");
+    expect(resolveLocalProviderAuthEvidence(cloudEvidence(), env)).toEqual(cloudCredential);
+  });
+
+  it.each([undefined, "/fixture/${literal}"])(
+    "expands only manifest placeholders (directory: %s)",
+    (directory) => {
+      const existsSync = vi.spyOn(fs, "existsSync").mockReturnValue(true);
+      expect(
+        resolveLocalProviderAuthEvidence(
+          cloudEvidence(["${EXTERNAL_CLOUD_CONFIG}/credentials.json"]),
+          directory === undefined ? {} : { EXTERNAL_CLOUD_CONFIG: directory },
+        ),
+      ).toEqual(directory === undefined ? null : cloudCredential);
+      if (directory === undefined) {
+        expect(existsSync).not.toHaveBeenCalled();
+      } else {
+        expect(existsSync).toHaveBeenCalledWith("/fixture/${literal}/credentials.json");
+      }
+    },
+  );
 
   it("does not reuse a load-path current snapshot for default provider env lookups", () => {
     const staleSnapshot = metadataSnapshot(LOAD_PATH_PROVIDER_PLUGIN);
@@ -462,175 +338,97 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
   });
 
-  it("excludes untrusted workspace plugin auth evidence by default", () => {
-    useRegistrySetupPlugin("workspace-cloud", "workspace", {
-      id: "workspace-cloud",
-      authEvidence: [
-        {
-          type: "local-file-with-env",
-          fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
-          credentialMarker: "workspace-cloud-local-credentials",
-        },
-      ],
-    });
+  it("reuses lookup maps only for immutable configs", () => {
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(
+      metadataSnapshot(LOAD_PATH_PROVIDER_PLUGIN),
+    );
+    const frozen: OpenClawConfig = Object.freeze({ plugins: Object.freeze({}) });
+    expect(resolveProviderAuthLookupMaps({ config: frozen })).toBe(
+      resolveProviderAuthLookupMaps({ config: frozen }),
+    );
 
-    expect(
-      resolveProviderAuthLookupMaps({ config: { plugins: {} } }).authEvidenceMap["workspace-cloud"],
-    ).toBeUndefined();
+    // A mutable config can change in place, so every read recomputes its maps.
+    const mutable: OpenClawConfig = { plugins: {} };
+    expect(resolveProviderAuthLookupMaps({ config: mutable })).not.toBe(
+      resolveProviderAuthLookupMaps({ config: mutable }),
+    );
   });
 
-  it("keeps explicitly trusted workspace plugin auth evidence", () => {
-    useRegistrySetupPlugin("workspace-cloud", "workspace", {
+  it.each([false, true])("requires workspace trust for auth evidence (trusted: %s)", (trusted) => {
+    useInstalledSetupPlugin("workspace-cloud", "workspace", {
       id: "workspace-cloud",
-      authEvidence: [
-        {
-          type: "local-file-with-env",
-          fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
-          credentialMarker: "workspace-cloud-local-credentials",
-        },
-      ],
+      authEvidence: workspaceEvidence,
     });
 
     expect(
       resolveProviderAuthLookupMaps({
-        config: {
-          plugins: {
-            allow: ["workspace-cloud"],
-          },
-        },
+        config: { plugins: trusted ? { allow: ["workspace-cloud"] } : {} },
       }).authEvidenceMap["workspace-cloud"],
-    ).toEqual([
-      {
-        type: "local-file-with-env",
-        fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
-        credentialMarker: "workspace-cloud-local-credentials",
-      },
-    ]);
+    ).toEqual(trusted ? workspaceEvidence : undefined);
   });
 
-  it("excludes untrusted workspace plugin env vars when requested", async () => {
+  it("excludes untrusted workspace plugin env vars when requested", () => {
     useInstalledPlugins({
       id: "workspace-audio",
       origin: "workspace",
       setup: {
         providers: [
-          {
-            id: "whisperx",
-            envVars: ["AWS_SECRET_ACCESS_KEY"],
-          },
-          {
-            id: "workspace-setup",
-            envVars: ["WORKSPACE_SETUP_SECRET"],
-          },
+          { id: "whisperx", envVars: ["AWS_SECRET_ACCESS_KEY"] },
+          { id: "workspace-setup", envVars: ["WORKSPACE_SETUP_SECRET"] },
         ],
       },
     });
 
-    const mod = await import("./provider-env-vars.js");
-
-    expect(
-      mod.getProviderEnvVarsCore("whisperx", {
-        config: { plugins: {} },
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    ).toStrictEqual([]);
-    expect(
-      mod.getProviderEnvVarsCore("workspace-setup", {
-        config: { plugins: {} },
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    ).toStrictEqual([]);
-    expect(
-      mod.listKnownProviderAuthEnvVarNamesCore({
-        config: { plugins: {} },
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    ).not.toContain("AWS_SECRET_ACCESS_KEY");
-    expect(
-      mod.listKnownProviderAuthEnvVarNamesCore({
-        config: { plugins: {} },
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    ).not.toContain("WORKSPACE_SETUP_SECRET");
+    const options = { config: { plugins: {} }, includeUntrustedWorkspacePlugins: false };
+    expect(getProviderEnvVarsCore("whisperx", options)).toStrictEqual([]);
+    expect(getProviderEnvVarsCore("workspace-setup", options)).toStrictEqual([]);
+    expect(listKnownProviderAuthEnvVarNamesCore(options)).not.toContain("AWS_SECRET_ACCESS_KEY");
+    expect(listKnownProviderAuthEnvVarNamesCore(options)).not.toContain("WORKSPACE_SETUP_SECRET");
   });
 
-  it("does not trust arbitrary workspace plugin ids from the context engine slot", async () => {
-    useInstalledSetupPlugin("workspace-audio", "workspace", {
-      id: "whisperx",
-      envVars: ["AWS_SECRET_ACCESS_KEY"],
-    });
+  it.each([false, true])(
+    "trusts the context-engine slot only for an engine (engine: %s)",
+    (engine) => {
+      useInstalledSetupPlugin(
+        "workspace-engine",
+        "workspace",
+        { id: "whisperx", envVars: [engine ? "WHISPERX_API_KEY" : "AWS_SECRET_ACCESS_KEY"] },
+        engine ? { kind: "context-engine" } : {},
+      );
 
-    const mod = await import("./provider-env-vars.js");
-
-    expect(
-      mod.getProviderEnvVarsCore("whisperx", {
-        config: {
-          plugins: {
-            slots: {
-              contextEngine: "workspace-audio",
-            },
-          },
-        },
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("keeps selected workspace context engine env vars when requested", async () => {
-    useInstalledSetupPlugin(
-      "workspace-engine",
-      "workspace",
-      { id: "whisperx", envVars: ["WHISPERX_API_KEY"] },
-      { kind: "context-engine" },
-    );
-
-    const mod = await import("./provider-env-vars.js");
-
-    expect(
-      mod.getProviderEnvVarsCore("whisperx", {
-        config: {
-          plugins: {
-            slots: {
-              contextEngine: "workspace-engine",
-            },
-          },
-        },
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    ).toEqual(["WHISPERX_API_KEY"]);
-  });
+      expect(
+        getProviderEnvVarsCore("whisperx", {
+          config: { plugins: { slots: { contextEngine: "workspace-engine" } } },
+          includeUntrustedWorkspacePlugins: false,
+        }),
+      ).toStrictEqual(engine ? ["WHISPERX_API_KEY"] : []);
+    },
+  );
 
   it("resolves auth maps with policy work bounded to contributing plugins", () => {
-    useInstalledPlugins(
+    const fireworksEvidence: MockAuthEvidence[] = [
       {
-        id: "external-fireworks",
-        origin: "global",
-        providerAuthAliases: {
-          "fireworks-plan": "fireworks",
-        },
-        setup: {
-          providers: [
-            {
-              id: "fireworks",
-              envVars: ["FIREWORKS_ALT_API_KEY"],
-              authEvidence: [
-                {
-                  type: "local-file-with-env",
-                  fileEnvVar: "FIREWORKS_CREDENTIALS",
-                  credentialMarker: "fireworks-local-credentials",
-                },
-              ],
-            },
-          ],
-        },
+        type: "local-file-with-env",
+        fileEnvVar: "FIREWORKS_CREDENTIALS",
+        credentialMarker: "fireworks-local-credentials",
       },
+    ];
+    useInstalledPlugins(
+      setupPlugin(
+        "external-fireworks",
+        "global",
+        {
+          id: "fireworks",
+          envVars: ["FIREWORKS_ALT_API_KEY"],
+          authEvidence: fireworksEvidence,
+        },
+        { providerAuthAliases: { "fireworks-plan": "fireworks" } },
+      ),
       {
         id: "legacy-setup-owner",
         origin: "global",
         providers: ["legacy-cloud"],
-        providerAuthAliases: {
-          "legacy-cloud-plan": "legacy-cloud",
-        },
+        providerAuthAliases: { "legacy-cloud-plan": "legacy-cloud" },
       },
       { id: "channel-only", origin: "bundled", providers: [] },
       {
@@ -644,26 +442,15 @@ describe("provider env vars dynamic manifest metadata", () => {
     );
 
     const policy = vi.spyOn(pluginConfigState, "resolveEffectivePluginActivationState");
-    let lookupMaps: ReturnType<typeof resolveProviderAuthLookupMaps>;
-    try {
-      lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
-      expect(policy.mock.calls.length).toBeLessThanOrEqual(2);
-      expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("channel-only");
-      expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("metadata-only");
-    } finally {
-      policy.mockRestore();
-    }
+    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+    expect(policy.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("channel-only");
+    expect(policy.mock.calls.map(([{ id }]) => id)).not.toContain("metadata-only");
 
     expect(lookupMaps.aliasMap["fireworks-plan"]).toBe("fireworks");
     expect(lookupMaps.envCandidateMap["metadata-only"]).toEqual(["METADATA_ONLY_API_KEY"]);
     expect(lookupMaps.envCandidateMap["fireworks-plan"]).toEqual(["FIREWORKS_ALT_API_KEY"]);
-    expect(lookupMaps.authEvidenceMap["fireworks-plan"]).toEqual([
-      {
-        type: "local-file-with-env",
-        fileEnvVar: "FIREWORKS_CREDENTIALS",
-        credentialMarker: "fireworks-local-credentials",
-      },
-    ]);
+    expect(lookupMaps.authEvidenceMap["fireworks-plan"]).toEqual(fireworksEvidence);
     expect(lookupMaps.setupProviderFallbackRefs).toEqual([
       "fireworks",
       "fireworks-plan",
@@ -685,9 +472,7 @@ describe("provider env vars dynamic manifest metadata", () => {
       {
         enabled: false,
         providers: ["disabled-cloud"],
-        providerAuthAliases: {
-          "disabled-cloud-plan": "disabled-cloud",
-        },
+        providerAuthAliases: { "disabled-cloud-plan": "disabled-cloud" },
       },
     );
 
@@ -695,7 +480,7 @@ describe("provider env vars dynamic manifest metadata", () => {
     const config = { plugins: { entries: { "disabled-setup-owner": { enabled: false } } } };
     for (const enabled of [false, true, false]) {
       config.plugins.entries["disabled-setup-owner"].enabled = enabled;
-      const lookupMaps = resolveProviderAuthLookupMaps({ config });
+      const lookupMaps = resolveProviderAuthLookupMaps({ config, workspaceDir: "/workspace" });
       expect(lookupMaps.setupProviderFallbackRefs).toEqual(
         enabled ? ["disabled-cloud", "disabled-cloud-plan"] : [],
       );

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveStandaloneNpmCliPath } from "../../cli-invocation.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -20,7 +21,9 @@ class BundledNpmCliNotFoundError extends Error {
 export function resolveBundledNpmCommand(args: readonly string[]): [string, string, ...string[]] {
   let cliPath = "npm/bin/npm-cli.js";
   try {
-    cliPath = path.join(path.dirname(require.resolve("npm/package.json")), "bin", "npm-cli.js");
+    cliPath =
+      resolveStandaloneNpmCliPath() ??
+      path.join(path.dirname(require.resolve("npm/package.json")), "bin", "npm-cli.js");
     if (!fs.statSync(cliPath).isFile()) {
       throw new Error("Not a regular file");
     }

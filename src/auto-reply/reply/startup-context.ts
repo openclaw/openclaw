@@ -18,7 +18,7 @@ export function shouldApplyStartupContext(params: {
     return false;
   }
   const applyOn = startupContext?.applyOn;
-  return !Array.isArray(applyOn) || applyOn.length === 0 || applyOn.includes(params.action);
+  return !applyOn?.length || applyOn.includes(params.action);
 }
 
 function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string {

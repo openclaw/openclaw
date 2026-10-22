@@ -14,8 +14,8 @@ export type CommandPaletteOpenInput = CommandPaletteInputSnapshot & {
   submitRequested?: true;
   /** Position of an explicitly typed @ retained only during the cold-input handoff. */
   mentionTrigger?: number;
-  /** Clipboard Files remain in memory until the canonical draft admits and reads them. */
-  imageFiles?: readonly File[];
+  /** Dropped/clipboard Files remain in memory until the canonical draft admits and reads them. */
+  attachmentFiles?: readonly File[];
 };
 
 /** Read the live cold input when replacement focus is accepted; undefined means retired. */
@@ -59,7 +59,7 @@ function isCommandPaletteTargetDetail(value: unknown): value is CommandPaletteTa
 export function applyCommandPaletteTargetEvent(
   host: {
     commandPaletteTarget: CommandPaletteTargetDetail | undefined;
-    requestUpdate(): void;
+    invalidate(): void;
   },
   event: Event,
 ): void {
@@ -72,7 +72,7 @@ export function applyCommandPaletteTargetEvent(
     : host.commandPaletteTarget?.owner === detail.owner
       ? undefined
       : host.commandPaletteTarget;
-  host.requestUpdate();
+  host.invalidate();
 }
 
 export type CommandPaletteElement = HTMLElement & {

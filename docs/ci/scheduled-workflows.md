@@ -208,6 +208,50 @@ The slot does not cover manual/PR iOS jobs or runs admitted by an older workflow
 This removes workflow admission blocking, not runner-capacity waits. No measured
 cost savings or strict completion interval is claimed.
 
+## Weekly mobile store releases
+
+**iOS Store Release** and **Android Store Release** run every Monday at
+**11:00 AM Pacific** (`0 11 * * 1`, `America/Los_Angeles`). GitHub adjusts for
+daylight saving time. Each run pins the scheduled `main` commit and follows the
+same qualification, screenshots, signing, and upload path as the manual
+`release` operation. Existing platform concurrency queues serialize daily,
+weekly, and manual releases without cancelling active runs. Apple App Review
+submission and Google Play production promotion remain manual.
+
+The separate daily 7:00 AM Pacific TestFlight/internal schedules retain their
+`IOS_TESTFLIGHT_ENABLED` and `ANDROID_INTERNAL_ENABLED` activation variables.
+Those variables do not disable weekly store releases. Store runs use the
+existing `ios-store-release` and `android-store-release` environments and their
+credentials; environment approval rules still apply.
+
+**Mobile Store Release Notifications** observes completed weekly attempts and
+posts one short status message per platform with the run link. Successful runs
+say **iOS release uploaded successfully** or **Android release uploaded successfully**;
+other outcomes say **iOS release needs attention** or **Android release needs attention**. Manual store
+releases, daily distributions, and screenshot-only runs stay silent. A rerun
+posts its own result with the attempt number. Reporting success requires a successful run
+and a successful upload job and step; it does not mean the app is publicly
+available. Cancellation, timeout, skipped releases, and unconfirmed outcomes
+report that the release needs attention. Details come from job/step metadata, never raw logs. If the combined
+preparation/upload command fails, store acceptance is unconfirmed; the notifier
+does not infer whether an inner upload completed.
+
+Before enabling notifications, create a Discord webhook in the destination text
+channel and save its URL as `DISCORD_MOBILE_RELEASE_WEBHOOK_URL` in each of the
+`ios-store-release` and `android-store-release` **GitHub environments**. Each
+notification job enters its matching environment and receives only the webhook
+secret; it does not access signing assets or run release code. It checks out
+trusted default-branch notification code, reads only
+the completed attempt's job metadata, disables mentions and link embeds, and waits for Discord
+to confirm message creation. Transient delivery errors receive bounded retries;
+an ambiguous network failure can produce a duplicate message. Exhausted retries
+or a missing webhook fail only the notification workflow, never rerun an upload.
+
+The schedule is best-effort: GitHub can delay or drop a scheduled run. There is
+no missed-run watchdog, and no completion notification if a run never starts.
+Deploying these workflow changes enables the next Monday occurrence; no manual
+release is needed to activate it.
+
 ## Nightly Full Release Validation
 
 `Full Release Validation Nightly` (`full-release-validation-nightly.yml`) runs

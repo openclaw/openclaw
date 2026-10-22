@@ -276,11 +276,13 @@ it.runIf(process.platform !== "win32")(
       const releasePath = path.join(fixtureRoot, "release");
       for (const filename of [
         "openclaw.mjs",
+        "cli-invocation.mjs",
         "node-host-launcher.mjs",
         "node-compile-cache.mjs",
         "node-version.mjs",
         "node-runtime-update.mjs",
         "node-runtime-recovery.mjs",
+        "cli-parent-lifetime.mjs",
         "node-runtime-env.mjs",
         "cli-root-options.mjs",
         "gateway-run-argv.mjs",
@@ -453,6 +455,7 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
     const sourceRoot = process.cwd();
     const hook = fileURLToPath(new URL("./fixtures/native-runner-signals.mjs", import.meta.url));
     mkdirSync(path.join(checkout, "src"), { recursive: true });
+    mkdirSync(path.join(checkout, ".git"));
     mkdirSync(path.join(root, "home"));
     writeFileSync(
       path.join(root, "receipts.mjs"),
@@ -548,6 +551,7 @@ it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP"] as const)(
   async (stopSignal, { signal }) => {
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
+      mkdirSync(path.join(checkoutRoot, ".git"));
       const childPidPath = path.join(fixtureRoot, "child.pid");
       const wrapperPidPath = path.join(fixtureRoot, "wrapper.pid");
       const childPath = path.join(fixtureRoot, "resistant-child.mjs");

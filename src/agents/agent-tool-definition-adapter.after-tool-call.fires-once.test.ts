@@ -1,11 +1,4 @@
-/**
- * Integration test: after_tool_call fires exactly once when both the adapter
- * (toToolDefinitions) and the subscription handler (handleToolExecutionEnd)
- * are active — the production scenario for embedded runs.
- *
- * Regression guard for the double-fire bug fixed by removing the adapter-side
- * after_tool_call invocation (see PR #27283 → dedup in this fix).
- */
+// Regression: both adapter and subscription are active in embedded runs (PR #27283).
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,42 +25,26 @@ const beforeToolCallMocks = vi.hoisted(() => ({
   })),
 }));
 
-function createTestTool(name: string) {
+function createTestTool(name: string, fail = false) {
   return {
     name,
     label: name,
     description: `test tool: ${name}`,
     parameters: Type.Object({}),
-    execute: vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: { ok: true },
-    })),
-  } satisfies AgentTool;
-}
-
-function createFailingTool(name: string) {
-  return {
-    name,
-    label: name,
-    description: `failing tool: ${name}`,
-    parameters: Type.Object({}),
     execute: vi.fn(async () => {
-      throw new Error("tool failed");
+      if (fail) {
+        throw new Error("tool failed");
+      }
+      return { content: [{ type: "text" as const, text: "ok" }], details: { ok: true } };
     }),
   } satisfies AgentTool;
 }
 
 function createToolHandlerCtx() {
   return {
-    params: {
-      runId: "integration-test",
-      session: { messages: [] },
-    },
+    params: { runId: "integration-test", session: { messages: [] } },
     hookRunner: hookMocks.runner,
-    state: {
-      ...createBaseToolHandlerState(),
-      successfulCronAdds: 0,
-    },
+    state: createBaseToolHandlerState(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,
@@ -124,119 +101,68 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
   beforeAll(loadFreshAfterToolCallModulesForTest);
 
   beforeEach(() => {
-    hookMocks.runner.hasHooks.mockClear();
+    vi.clearAllMocks();
     hookMocks.runner.hasHooks.mockReturnValue(true);
-    hookMocks.runner.runAfterToolCall.mockClear();
     hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
-    hookMocks.runner.runBeforeToolCall.mockClear();
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
-    beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockClear();
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
-    beforeToolCallMocks.recordAdjustedParamsForToolCall.mockClear();
-    beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockClear();
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(false);
-    beforeToolCallMocks.runBeforeToolCallHook.mockClear();
     beforeToolCallMocks.runBeforeToolCallHook.mockImplementation(async ({ params }) => ({
       blocked: false,
       params,
     }));
   });
 
-  function resolveAdapterDefinition(tool: Parameters<typeof toToolDefinitions>[0][number]) {
+  function createToolCall(toolName: string, fail = false) {
+    const tool = createTestTool(toolName, fail);
     const def = toToolDefinitions([tool])[0];
     if (!def) {
       throw new Error("missing tool definition");
     }
     const extensionContext = {} as Parameters<typeof def.execute>[4];
-    return { def, extensionContext };
-  }
-
-  async function emitToolExecutionStartEvent(params: {
-    ctx: ReturnType<typeof createToolHandlerCtx>;
-    toolName: string;
-    toolCallId: string;
-    args: Record<string, unknown>;
-  }) {
-    await handleToolExecutionStart(
-      params.ctx as never,
-      {
-        type: "tool_execution_start",
-        toolName: params.toolName,
-        toolCallId: params.toolCallId,
-        args: params.args,
-      } as never,
-    );
-  }
-
-  async function emitToolExecutionEndEvent(params: {
-    ctx: ReturnType<typeof createToolHandlerCtx>;
-    toolName: string;
-    toolCallId: string;
-    isError: boolean;
-    result: unknown;
-  }) {
-    await handleToolExecutionEnd(
-      params.ctx as never,
-      {
-        type: "tool_execution_end",
-        toolName: params.toolName,
-        toolCallId: params.toolCallId,
-        isError: params.isError,
-        result: params.result,
-      } as never,
-      prepareToolResult(params.result),
-    );
+    return (toolCallId: string, args: Record<string, unknown>, ctx = createToolHandlerCtx()) => ({
+      async start() {
+        await handleToolExecutionStart(
+          ctx as never,
+          { type: "tool_execution_start", toolName, toolCallId, args } as never,
+        );
+        await def.execute(toolCallId, args, undefined, undefined, extensionContext);
+      },
+      async end(result: unknown) {
+        return await handleToolExecutionEnd(
+          ctx as never,
+          { type: "tool_execution_end", toolName, toolCallId, isError: fail, result } as never,
+          prepareToolResult(result),
+        );
+      },
+    });
   }
 
   it("fires after_tool_call exactly once on error when both adapter and handler are active", async () => {
-    const { def, extensionContext } = resolveAdapterDefinition(createFailingTool("exec"));
-
-    const toolCallId = "integration-call-err";
-    const args = { command: "fail" };
-    const ctx = createToolHandlerCtx();
-
-    await emitToolExecutionStartEvent({ ctx, toolName: "exec", toolCallId, args });
-
-    await def.execute(toolCallId, args, undefined, undefined, extensionContext);
-
-    await emitToolExecutionEndEvent({
-      ctx,
-      toolName: "exec",
-      toolCallId,
-      isError: true,
-      result: { status: "error", error: "tool failed" },
-    });
+    const call = createToolCall("exec", true)("integration-call-err", { command: "fail" });
+    await call.start();
+    await call.end({ status: "error", error: "tool failed" });
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
-
-    const call = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls.at(0);
-    const event = call?.[0] as { error?: unknown } | undefined;
+    const event = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as { error?: unknown } | undefined;
     expect(event?.error).toBe("tool failed");
   });
 
   it("uses before_tool_call adjusted params for after_tool_call payload", async () => {
-    const { def, extensionContext } = resolveAdapterDefinition(createTestTool("read"));
-
     const toolCallId = "integration-call-adjusted";
     const args = { path: "/tmp/original.txt" };
     const adjusted = { path: "/tmp/adjusted.txt", mode: "safe" };
-    const ctx = createToolHandlerCtx();
+    const call = createToolCall("read")(toolCallId, args);
 
     beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(true);
     beforeToolCallMocks.consumeAdjustedParamsForToolCall.mockImplementation((id: string) =>
       id === toolCallId ? adjusted : undefined,
     );
 
-    await emitToolExecutionStartEvent({ ctx, toolName: "read", toolCallId, args });
-    await def.execute(toolCallId, args, undefined, undefined, extensionContext);
+    await call.start();
     expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).not.toHaveBeenCalled();
-    await emitToolExecutionEndEvent({
-      ctx,
-      toolName: "read",
-      toolCallId,
-      isError: false,
-      result: { content: [{ type: "text", text: "ok" }] },
-    });
+    const terminal = await call.end({ content: [{ type: "text", text: "ok" }] });
 
     expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledExactlyOnceWith(
       toolCallId,
@@ -245,27 +171,23 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
     const event = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as { params?: unknown } | undefined;
     expect(event?.params).toEqual(adjusted);
+    // Plugin-owned hook inputs remain mutable without changing retained execution facts.
+    (event!.params as typeof adjusted).path = "/tmp/plugin.txt";
+    expect(terminal.executedArguments).toEqual({ path: "/tmp/adjusted.txt", mode: "safe" });
   });
 
   it("fires after_tool_call exactly once per tool across multiple sequential tool calls", async () => {
-    const { def, extensionContext } = resolveAdapterDefinition(createTestTool("write"));
     const ctx = createToolHandlerCtx();
+    const toolCall = createToolCall("write");
 
     for (let i = 0; i < 3; i++) {
-      const toolCallId = `sequential-call-${i}`;
-      const args = { path: `/tmp/file-${i}.txt`, content: "data" };
-
-      await emitToolExecutionStartEvent({ ctx, toolName: "write", toolCallId, args });
-
-      await def.execute(toolCallId, args, undefined, undefined, extensionContext);
-
-      await emitToolExecutionEndEvent({
+      const call = toolCall(
+        `sequential-call-${i}`,
+        { path: `/tmp/file-${i}.txt`, content: "data" },
         ctx,
-        toolName: "write",
-        toolCallId,
-        isError: false,
-        result: { content: [{ type: "text", text: "written" }] },
-      });
+      );
+      await call.start();
+      await call.end({ content: [{ type: "text", text: "written" }] });
     }
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(3);

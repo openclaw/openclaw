@@ -13,7 +13,6 @@ import { readSessionActorMemoryHistoryFacts } from "./session-actor-memory-histo
 import {
   readSessionActorMemoryProjection,
   readSessionActorMemoryRawDelta,
-  readSessionActorMemoryVisibleDelta,
   type SessionActorMemoryHistoryScope,
 } from "./session-actor-memory-history-projection.js";
 import { readSessionActorMemoryHistory } from "./session-actor-memory-history.js";
@@ -21,6 +20,7 @@ import {
   resolveSessionActorMemoryWindow,
   type SessionActorMemoryState,
 } from "./session-actor-memory-state.js";
+import { readSessionActorMemoryVisibleDelta } from "./session-actor-memory-visible-delta.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 
 /** Runs synchronously in the actor's owner-wide FIFO. The facade detaches its result. */

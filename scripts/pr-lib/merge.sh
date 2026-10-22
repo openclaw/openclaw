@@ -77,7 +77,7 @@ record_crabbox_landing_parent_audit() {
     echo "Admin landing parent audit matched: landed=$landed_sha parent=$actual_parent_sha"
   else
     echo "Admin landing parent audit drift: landed=$landed_sha expected_parent=$expected_parent_sha actual_parent=$actual_parent_sha"
-    echo "The merge already completed after intervening main movement; this audit reports the residual non-atomic race."
+    echo "Main advanced since the original admission snapshot; the completed merge receipt was verified against the actual landed parent."
   fi
 }
 
@@ -142,8 +142,8 @@ mainline_drift_requires_sync() (
   # Compare only mainline commits since the prepared lineage base. The remote
   # GraphQL commit has a different parent but its verified tree shares this
   # lineage, so its PR files must not look like incoming mainline drift.
-  pr_git diff --name-only "${mainline_base}..${comparison_head_sha}" | sed '/^$/d' | sort -u > "$delta_file" || return 2
-  pr_git diff --name-only "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file" || return 2
+  pr_git diff --name-only --no-renames "${mainline_base}..${comparison_head_sha}" | sed '/^$/d' | sort -u > "$delta_file" || return 2
+  pr_git diff --name-only --no-renames "${mainline_base}..${prepared_head_sha}" | sed '/^$/d' | sort -u > "$prepared_files_file" || return 2
   comm -12 "$delta_file" "$prepared_files_file" > "$overlap_file" || return 2
   : > "$critical_file" || return 2
 
@@ -412,6 +412,10 @@ merge_verify() {
   ') || return 1
   local pending_required
   pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length') || return 1
+  MERGE_REQUIRED_CHECKS_PASSED=false
+  if [ "$failed_required" -eq 0 ] && [ "$pending_required" -eq 0 ]; then
+    MERGE_REQUIRED_CHECKS_PASSED=true
+  fi
 
   if [ "$pending_required" -gt 0 ] && [ "${MERGE_USE_PRIOR_CI_ADMIN:-false}" != true ] &&
     { [ "$github_pending" != true ] || [ "$qualified_refusal" = true ] || [ "$qualified_immediate_recovery" = true ]; }; then
@@ -617,6 +621,7 @@ merge_run() {
   local refusal_directory="${8:-}" refusal="" qualified_refusal=false
   local provider_rejection="" stale_head_retirement="" async_failure="" qualified_pending_recovery=false
   local retired_auto_admin=false stale_admin_head=false qualified_immediate_recovery=false
+  local MERGE_REQUIRED_CHECKS_PASSED=false
   local MERGE_REFUSAL_DIRECTORY=""
   local MERGE_ADMIN_EVIDENCE="${9:-}" confirmed_admin="${10:-false}" MERGE_PRIOR_CI_PROOF=""
   local MERGE_USE_PRIOR_CI_ADMIN=false
@@ -650,6 +655,22 @@ merge_run() {
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
   local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_ENTRY_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
+  if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
+    [ "$recovery_oid" = "${PR_WORKFLOW_RECOVERY_OUTCOME:-}" ] &&
+      [ "$replacement_head" = "${PR_WORKFLOW_RECOVERY_HEAD:-}" ] &&
+      [ "$auto_merge_requested" = false ] && [ "$cancel_auto" = false ] &&
+      [ -z "$merged_head$observed_head$legacy_directory$refusal_directory" ] &&
+      [ "$recovery_oid" = "$MERGE_OUTCOME_OID" ] &&
+      printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -e --arg replacement "$replacement_head" \
+        --argjson admin "$MERGE_USE_PRIOR_CI_ADMIN" '
+        .phase == "intent" and .method == "squash" and
+        (if $replacement != "" then .route == "auto" and .cancellation.state == "confirmed"
+         else $admin and .route == "admin" and .accepted == false and
+           .priorCiAdmin.dispatchTransport == "rest" end)' >/dev/null || {
+        merge_outcome_stop "current workflow recovery requires the selected cancelled auto outcome or confirmed same-head REST admin recovery"
+        return 1
+      }
+  fi
   if [ "$cancel_auto" = true ]; then
     [ -n "$recovery_oid" ] && [ -z "$replacement_head$body_path$legacy_directory$refusal_directory" ] && [ "$auto_merge_requested" = false ] || return 2
     merge_outcome_cancel_auto "$pr" "$recovery_oid" "$observed_head"
@@ -755,7 +776,7 @@ merge_run() {
       # still passes both live admin checks before the successor intent is written.
       retired_auto_admin=true
     else
-      provider_rejection=$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection .local) || return 1
+      provider_rejection=$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_oid" .local) || return 1
       recovery_artifact_head=$(printf '%s\n' "$recovery_record" | jq -er .head) || return 1
     fi
     qualified_pending_recovery=true
@@ -891,7 +912,8 @@ merge_run() {
 
   local crabbox_final_main_sha="" crabbox_verified_main="" route=immediate
   local MERGE_ADMISSION_ACTIVE=true MERGE_OBSERVED_MAIN=""
-  local admission_attempt=0 previous_observation="" admission_start="" admission_deadline="" admission_delay=2
+  local admission_attempt=0 previous_observation="" admission_start="" admission_deadline="" admission_delay=2 admission_observed_at
+  local admission_proof_started admission_proof_seconds
   # Only fresh admission waits for calculation; retained intent reconciles immediately.
   # Pin PR/policy facts and each projection as soon as it becomes known.
   while true; do
@@ -901,9 +923,10 @@ merge_run() {
     fi
     admission_attempt=$((admission_attempt + 1))
     merge_outcome_observe "$pr" || return 1
+    admission_observed_at="$MERGE_REMOTE_PROJECTION_AT"
     if [ -z "$admission_start" ] && printf '%s\n' "$MERGE_OBSERVATION" | jq -e \
       '.pr.mergeable == "UNKNOWN" or .pr.mergeStateStatus == "UNKNOWN"' >/dev/null; then
-      admission_start=$(pr_merge_now); admission_deadline=$((admission_start + 60))
+      admission_start=$admission_observed_at; admission_deadline=$((admission_start + 60))
     fi
     if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
       { [ "$merge_method" != squash ] || [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; }; then
@@ -943,16 +966,21 @@ merge_run() {
       merge_outcome_stop "PR or main changed while waiting for mergeability; stopped before intent/dispatch"
       return 1
     fi
+    admission_proof_started=$(pr_merge_now)
     verify_merge_main_advance \
       "$(printf '%s\n' "${previous_observation:-$MERGE_OBSERVATION}" | jq -r .main)" \
       "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)" || return 1
-    if [ -n "$previous_observation" ] && [ "$(pr_merge_now)" -ge "$admission_deadline" ]; then
+    admission_proof_seconds=$((MERGE_REMOTE_LOCAL_PROOF_SECONDS + $(pr_merge_now) - admission_proof_started))
+    # A timely projection does not become late while its local main proof runs.
+    if [ -n "$previous_observation" ] && [ "$admission_observed_at" -ge "$admission_deadline" ]; then
       merge_outcome_stop "mergeability exceeded the 60s settle limit; stopped before intent/dispatch"
       return 1
     fi
     if printf '%s\n' "$MERGE_OBSERVATION" | jq -e '.pr.mergeable != "UNKNOWN" and .pr.mergeStateStatus != "UNKNOWN"' >/dev/null; then
       break
     fi
+    admission_start=$((admission_start + admission_proof_seconds))
+    admission_deadline=$((admission_deadline + admission_proof_seconds))
     if [ "$(pr_merge_now)" -ge "$admission_deadline" ]; then
       local known_projections
       known_projections=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c \
@@ -970,11 +998,8 @@ merge_run() {
       echo "Waiting for GitHub mergeability to settle (60s limit; 2s, 4s, then 8s backoff)."
     fi
     previous_observation="$MERGE_OBSERVATION"
-    pr_merge_pause "$admission_deadline" "$admission_delay" || {
-      merge_outcome_stop "mergeability remained UNKNOWN through the 60s settle limit; stopped before intent/dispatch"
-      return 1
-    }
-    [ "$admission_delay" -ge 8 ] || admission_delay=$((admission_delay * 2))
+    merge_wait_for_projection "$pr" "$admission_deadline" "$admission_delay" || return 1
+    admission_delay="$MERGE_PROJECTION_DELAY"
   done
   if [ "$MERGE_TRANSPORT" = rest ] && [ "$MERGE_PRIOR_CI_REST_OBSERVATION" = false ] &&
     [ "$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .pr.mergeStateStatus)" != CLEAN ]; then
@@ -1025,15 +1050,20 @@ merge_run() {
     return 1
   fi
   if [ "$stale_admin_head" = true ] && [ "$route" != auto ]; then
-    merge_outcome_stop "stale admin head retirement requires MERGEABLE/BLOCKED or MERGEABLE/BEHIND auto admission"
-    return 1
+    # A completed replacement needs ordinary admission, never the old head's
+    # admin exception or pending-check permission intended for an auto request.
+    if [ "$route" != immediate ] || [ "$MERGE_REQUIRED_CHECKS_PASSED" != true ]; then
+      merge_outcome_stop "stale admin head retirement requires auto admission or passing required checks for immediate admission"
+      return 1
+    fi
   fi
   if [ "$route" = immediate ] && [ "$merge_method" = squash ] && [ -z "$merge_body_snapshot" ]; then
     merge_outcome_stop "ordinary squash requires the captured merge body; queue policy changed during admission"
     return 1
   fi
   local strict_immediate_recovery=false
-  if [ "$qualified_refusal" = true ] || [ "$qualified_immediate_recovery" = true ]; then strict_immediate_recovery=true; fi
+  if [ "$qualified_refusal" = true ] || [ "$qualified_immediate_recovery" = true ] ||
+    { [ "$stale_admin_head" = true ] && [ "$route" = immediate ]; }; then strict_immediate_recovery=true; fi
   verify_merge_route_projection "$pr" "$MERGE_OBSERVATION" "$route" "$strict_immediate_recovery" || return 1
   local observed_main
   observed_main=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -r .main)
@@ -1102,7 +1132,7 @@ merge_run() {
     local authority_round=0 authority_result expected_prior_ci_proof="$MERGE_PRIOR_CI_PROOF" crabbox_main_sha
     local authority_start authority_deadline round_start authority_ready=false qualified_observation snapshot_main
     local MERGE_PRIOR_CI_UNKNOWN_START="" MERGE_PRIOR_CI_UNKNOWN_DELAY=2 MERGE_PRIOR_CI_SETTLING=false
-    local now drift_result
+    local now drift_result rematerialization_started
     authority_start=$(pr_merge_now); authority_deadline=$((authority_start + 900))
     while [ "$authority_round" -lt 32 ] && [ "$(pr_merge_now)" -lt "$authority_deadline" ]; do
       authority_round=$((authority_round + 1))
@@ -1162,17 +1192,18 @@ merge_run() {
             MERGE_PRIOR_CI_PROOF=""
             [ -n "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" ] || return 1
             # Discard authority before fetching the exact missing main object.
+            rematerialization_started=$(pr_merge_now)
             verify_merge_main_advance "$MERGE_OBSERVED_MAIN" "$MERGE_PRIOR_CI_REMATERIALIZE_MAIN" || return 1
+            if [ -n "$MERGE_PRIOR_CI_UNKNOWN_START" ]; then
+              MERGE_PRIOR_CI_UNKNOWN_START=$((MERGE_PRIOR_CI_UNKNOWN_START + $(pr_merge_now) - rematerialization_started))
+            fi
             MERGE_OBSERVED_MAIN="$MERGE_PRIOR_CI_REMATERIALIZE_MAIN"
             ;;
           76)
             MERGE_PRIOR_CI_PROOF=""
             if [ -n "$MERGE_PRIOR_CI_UNKNOWN_START" ]; then
-              pr_merge_pause "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" "$MERGE_PRIOR_CI_UNKNOWN_DELAY" || {
-                merge_outcome_stop "mergeability recalculation remained UNKNOWN through the 60s settle limit; stopped before intent/dispatch"
-                return 1
-              }
-              [ "$MERGE_PRIOR_CI_UNKNOWN_DELAY" -ge 8 ] || MERGE_PRIOR_CI_UNKNOWN_DELAY=$((MERGE_PRIOR_CI_UNKNOWN_DELAY * 2))
+              merge_wait_for_projection "$pr" "$((MERGE_PRIOR_CI_UNKNOWN_START + 60))" "$MERGE_PRIOR_CI_UNKNOWN_DELAY" "mergeability recalculation" || return 1
+              MERGE_PRIOR_CI_UNKNOWN_DELAY="$MERGE_PROJECTION_DELAY"
             fi
             ;;
           *) return 1 ;;
@@ -1213,7 +1244,7 @@ merge_run() {
     crabbox_final_main_sha="$observed_main"
   fi
   if [ -n "$provider_rejection" ] &&
-    [ "$provider_rejection" != "$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection .local)" ]; then
+    [ "$provider_rejection" != "$(printf '%s\n' "$recovery_record" | node "$script_parent_dir/pr-lib/merge-prior-ci.mjs" provider-rejection "$recovery_oid" .local)" ]; then
     merge_outcome_stop "provider rejection evidence changed during admission"; return 1
   fi
   if [ -n "$stale_head_retirement" ] &&
@@ -1263,6 +1294,10 @@ merge_run() {
   fi
   if [ -n "$refusal" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson refusal "$refusal" '.recovery.preDispatchRefusal=$refusal') || return 1
+  fi
+  if [ -n "${PR_WORKFLOW_RECOVERY_PROVENANCE:-}" ]; then
+    intent=$(printf '%s\n' "$intent" | jq -c --argjson provenance "$PR_WORKFLOW_RECOVERY_PROVENANCE" \
+      '.workflowRecovery=$provenance') || return 1
   fi
   if [ -n "$provider_rejection" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson rejection "$provider_rejection" '.recovery.providerRejection=$rejection') || return 1
@@ -1362,6 +1397,7 @@ merge_run() {
   cleanup_pr_worktree ".worktrees/pr-$pr" || cleanup_complete=false
   if [ "$cleanup_complete" = true ]; then
     merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.phase="complete"')" || return 1
+    retire_pr_workflow_binding "$pr" || return 1
     echo "merge-run complete for PR #$pr"
   else
     echo "Merge confirmed; completion pending: inspect cleanup warnings. Recovery will not delete branches or worktrees."

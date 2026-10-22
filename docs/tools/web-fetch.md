@@ -27,7 +27,9 @@ URL to fetch. `http(s)` only.
 </ParamField>
 
 <ParamField path="extractMode" type="'markdown' | 'text'" default="markdown">
-Output format after main-content extraction.
+Output format after main-content extraction. For Markdown responses, text mode
+normalizes prose whitespace but preserves indentation, repeated spaces, tabs,
+and blank lines inside fenced code blocks.
 </ParamField>
 
 <ParamField path="maxChars" type="number">

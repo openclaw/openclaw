@@ -100,6 +100,26 @@ their caller-owned lifetime.
 
 For the bundled non-ACP Codex harness, OpenClaw applies the same lifecycle by projecting assembled context into Codex developer instructions and the current turn prompt. Codex still owns its native thread history and native compactor.
 
+### Provider compaction ownership
+
+On direct OpenAI API-key routes using `openai-responses`, when the active context
+engine declares `info.ownsCompaction: true`, OpenClaw disables native compaction
+and stored Responses checkpoint replay by default. Set
+`params.responsesServerCompaction` explicitly to `true` to opt in. Engines that
+do not own compaction, including `legacy`, retain the existing default-on behavior
+on eligible routes. Native ChatGPT sign-in (`openai-chatgpt-responses`), the Codex
+app-server harness, and other providers are unchanged.
+
+Preexisting Responses checkpoints are bypassed while this ownership guard is
+active; their stored data is not deleted. Explicit opt-in allows a matching
+Responses checkpoint to take precedence over the selected engine's assembled
+context. Choose it only when you want provider-managed context to override engine
+assembly for those requests.
+
+On these direct API-key routes, memory-extraction (memory flush) turns always
+disable native compaction and checkpoint replay, even with explicit opt-in, so
+extraction can use the unsummarized history.
+
 ### Subagent lifecycle (optional)
 
 OpenClaw calls two optional subagent lifecycle hooks:
@@ -161,7 +181,7 @@ export default function register(api) {
       },
     },
 
-    async ingest({ sessionId, message, isHeartbeat }) {
+    async ingest({ sessionId, message }) {
       // Store the message in your data store
       return { ingested: true };
     },
@@ -240,13 +260,19 @@ Required members:
 
 Set `info.acceptedHostParams` to restrict the host-added lifecycle fields the
 engine receives. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
-`sessionTarget`, `runtimeContext`, and `abortSignal`. OpenClaw intersects the
-declaration with the fields available for each lifecycle method, so undeclared
-or unknown keys are never injected. `abortSignal` governs optional cooperative
-cancellation for `maintain()`; the existing compact-operation abort signal is
-always preserved. Engines without this declaration receive every current host
-field; declare an explicit list, including `[]`, when the engine validates a
-narrower input shape.
+`sessionTarget`, `runtimeContext`, `abortSignal`, and `onProgress`. OpenClaw
+intersects the declaration with the fields available for each lifecycle method,
+so undeclared or unknown keys are never injected. `abortSignal` governs optional
+cooperative cancellation for `maintain()`; the existing compact-operation abort
+signal is always preserved. Engines without this declaration receive every
+current host field except `onProgress`; declare an explicit list, including `[]`,
+when the engine validates a narrower input shape.
+
+Compaction progress is opt-in: explicitly include `"onProgress"` to receive the
+optional `compact()` callback. Report useful progress to refresh the existing
+no-progress window, under the same finite overall ceiling. Engines that omit the
+declaration or exclude `"onProgress"` keep the one-window contract for their own
+compaction work. See [Compaction progress](/plugins/architecture-internals/context-engines#compaction-progress).
 
 For durable admitted turns, declare both transcript semantics:
 
@@ -259,7 +285,11 @@ and implement `commitTurn(...)` as one atomic write keyed by
 The `messages` payload contains only the inclusive range from the admitted user
 entry through the accepted terminal entry. Engines that need the earlier
 transcript during bootstrap or rebuild should read it through the transcript
-cursor API, `readSessionTranscriptVisibleMessageDelta(...)`.
+cursor API, `readSessionTranscriptVisibleMessageDelta(...)` from
+`openclaw/plugin-sdk/context-engine-transcript-runtime`. Pass
+`start: "reset-window"` so a fresh drain begins at the latest same-session reset
+instead of importing pre-reset history; see
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor).
 Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
 then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted

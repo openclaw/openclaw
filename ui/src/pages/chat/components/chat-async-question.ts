@@ -2,6 +2,7 @@ import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveAssistantMessagePhase } from "../../../../../src/shared/chat-message-content.js";
 import { t } from "../../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../../lib/chat/composer-draft-store.runtime.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
@@ -31,7 +32,7 @@ import type {
 import { questionDraftValues } from "./chat-question-answer-controls.ts";
 import type { QuestionPanelOptions, QuestionPanelProps } from "./chat-question-card.ts";
 
-export { renderAsyncQuestionSummary } from "./chat-async-question-summary.ts";
+registerChatSessionEnglish();
 
 function terminalOutcome(message: unknown): "successful" | "settled" | null {
   const record = asNullableRecord(message);
@@ -232,16 +233,30 @@ function questionHistory(messages: readonly unknown[]) {
   return history;
 }
 
+type AsyncQuestionState = {
+  asyncQuestionScope?: string;
+  asyncQuestionGeneration?: number;
+  asyncQuestionPresentation?: AsyncQuestionPresentation;
+  asyncQuestionSessions?: Map<string, AsyncQuestionDraftSession>;
+  asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
+  asyncQuestionRevision: number;
+  transcriptRenderContext: { onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"] };
+};
+
+const questionListeners = new WeakMap<AsyncQuestionState, Set<() => void>>();
+
+export function subscribeAsyncQuestionState(state: AsyncQuestionState, notify: () => void) {
+  let listeners = questionListeners.get(state);
+  if (!listeners) {
+    listeners = new Set();
+    questionListeners.set(state, listeners);
+  }
+  listeners.add(notify);
+  return () => listeners.delete(notify);
+}
+
 export function createAsyncQuestionPresentation(
-  state: {
-    asyncQuestionScope?: string;
-    asyncQuestionGeneration?: number;
-    asyncQuestionPresentation?: AsyncQuestionPresentation;
-    asyncQuestionSessions?: Map<string, AsyncQuestionDraftSession>;
-    asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
-    asyncQuestionRevision: number;
-    transcriptRenderContext: { onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"] };
-  },
+  state: AsyncQuestionState,
   props: {
     messages?: readonly unknown[];
     queue?: readonly ChatQueueItem[];
@@ -253,7 +268,6 @@ export function createAsyncQuestionPresentation(
     asyncQuestionStorage?: DurableComposerDraftScope | null;
     onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"];
     onReopen?: (itemId: string, scope: string) => void;
-    onRequestUpdate?: () => void;
   },
 ): AsyncQuestionPresentation {
   const storageScope = props.asyncQuestionStorage
@@ -327,7 +341,9 @@ export function createAsyncQuestionPresentation(
   const notify = () => {
     if (isCurrent()) {
       state.asyncQuestionRevision += 1;
-      props.onRequestUpdate?.();
+      for (const listener of questionListeners.get(state) ?? []) {
+        listener();
+      }
     }
   };
   if (session) {

@@ -104,6 +104,26 @@ function setup(
   return { state, openclaw, runtime: state.profiles.get("openclaw")!, fetchMock };
 }
 
+function setupManagedTabEviction(closed: string[], cleanup: { resolve: () => void }) {
+  return setup(async (url) => {
+    if (url.includes("/json/list")) {
+      return Response.json(makeManagedTabsWithNew({ newFirst: true }));
+    }
+    if (url.includes("/json/version")) {
+      return Response.json({
+        webSocketDebuggerUrl:
+          "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
+      });
+    }
+    if (url.includes("/json/close/")) {
+      closed.push(url);
+      cleanup.resolve();
+      return new Response();
+    }
+    throw new Error("unexpected fetch: " + url);
+  });
+}
+
 function listOnly(tabs: () => ReturnType<typeof page>[]) {
   return setup(async (url) => {
     if (url.includes("/json/list")) {
@@ -244,23 +264,7 @@ describe("browser tab selection and ownership", () => {
     mockCreatedTarget("NEW", "http://127.0.0.1:3009");
     const closed: string[] = [];
     const cleanup = Promise.withResolvers<void>();
-    const { openclaw, runtime } = setup(async (url) => {
-      if (url.includes("/json/list")) {
-        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
-      }
-      if (url.includes("/json/version")) {
-        return Response.json({
-          webSocketDebuggerUrl:
-            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
-        });
-      }
-      if (url.includes("/json/close/")) {
-        closed.push(url);
-        cleanup.resolve();
-        return new Response();
-      }
-      throw new Error("unexpected fetch: " + url);
-    });
+    const { openclaw, runtime } = setupManagedTabEviction(closed, cleanup);
     runtime.running = mockLaunchedChrome(vi.fn(), 1234);
     const opened = await openclaw.openTab("http://127.0.0.1:3009");
     expect(opened).toMatchObject({
@@ -293,23 +297,7 @@ describe("browser tab selection and ownership", () => {
         lastUsedAt: 2_000 + index,
       })),
     );
-    const { openclaw, runtime } = setup(async (url) => {
-      if (url.includes("/json/list")) {
-        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
-      }
-      if (url.includes("/json/version")) {
-        return Response.json({
-          webSocketDebuggerUrl:
-            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
-        });
-      }
-      if (url.includes("/json/close/")) {
-        closed.push(url);
-        cleanup.resolve();
-        return new Response();
-      }
-      throw new Error("unexpected fetch: " + url);
-    });
+    const { openclaw, runtime } = setupManagedTabEviction(closed, cleanup);
     runtime.running = mockLaunchedChrome(vi.fn(), 1234);
     await openclaw.openTab("http://127.0.0.1:3009");
     await cleanup.promise;
@@ -332,23 +320,7 @@ describe("browser tab selection and ownership", () => {
         lastUsedAt: 5_000 + index,
       })),
     );
-    const { openclaw, runtime } = setup(async (url) => {
-      if (url.includes("/json/list")) {
-        return Response.json(makeManagedTabsWithNew({ newFirst: true }));
-      }
-      if (url.includes("/json/version")) {
-        return Response.json({
-          webSocketDebuggerUrl:
-            "ws://127.0.0.1:18800/devtools/browser/MANAGED-BROWSER?auth=fixture-value",
-        });
-      }
-      if (url.includes("/json/close/")) {
-        closed.push(url);
-        cleanup.resolve();
-        return new Response();
-      }
-      throw new Error("unexpected fetch: " + url);
-    });
+    const { openclaw, runtime } = setupManagedTabEviction(closed, cleanup);
     runtime.running = mockLaunchedChrome(vi.fn(), 1234);
     await openclaw.openTab("http://127.0.0.1:3009");
     await cleanup.promise;

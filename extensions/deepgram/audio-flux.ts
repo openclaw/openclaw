@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, tempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { setDeepgramQueryParam } from "./audio-query.js";
 
 const DEEPGRAM_FLUX_SAMPLE_RATE = 16_000;
 // Deepgram recommends 80 ms chunks. 16 kHz mono linear16 contains 32 bytes per millisecond.
@@ -42,45 +43,6 @@ type DeepgramFluxRequestConfig = {
 
 export function isDeepgramFluxModel(model?: string): boolean {
   return model?.trim().toLowerCase().startsWith("flux-") ?? false;
-}
-
-function buildDeepgramFluxUrl(params: {
-  baseUrl: string;
-  language?: string;
-  model: string;
-  query?: Record<string, string | number | boolean | undefined>;
-}): string {
-  const url = URL.parse(params.baseUrl);
-  if (!url) {
-    throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
-  }
-  if (url.protocol === "http:") {
-    url.protocol = "ws:";
-  } else if (url.protocol === "https:") {
-    url.protocol = "wss:";
-  } else if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    throw new Error(
-      `Invalid Deepgram baseUrl: unsupported scheme "${url.protocol}" (expected http, https, ws, or wss)`,
-    );
-  }
-  const basePath = url.pathname.replace(/\/+$/u, "");
-  url.pathname = `${basePath ? basePath.replace(/\/v1$/u, "/v2") : "/v2"}/listen`;
-  url.search = "";
-  url.searchParams.set("model", params.model);
-  url.searchParams.set("encoding", "linear16");
-  url.searchParams.set("sample_rate", String(DEEPGRAM_FLUX_SAMPLE_RATE));
-  const query = { ...params.query };
-  // Deepgram's v2 contract permits language hints only on its multilingual model.
-  query.language_hint =
-    params.model === "flux-general-multi"
-      ? (query.language_hint ?? (params.language?.trim() || undefined))
-      : undefined;
-  for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined && DEEPGRAM_FLUX_QUERY_KEYS.has(key)) {
-      url.searchParams.set(key, String(value));
-    }
-  }
-  return url.toString();
 }
 
 function readFluxEvent(data: Buffer | ArrayBuffer | Buffer[]): Record<string, unknown> {
@@ -120,51 +82,6 @@ function sendSocketFrame(socket: DeepgramFluxSocket, data: Buffer | string): Pro
   });
 }
 
-async function decodeDeepgramFluxAudio(params: {
-  buffer: Buffer;
-  outputPath: string;
-  signal?: AbortSignal;
-  timeoutMs: number;
-}): Promise<void> {
-  const result = await runCommandBuffered(
-    [
-      resolveFfmpegBin(),
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-i",
-      "pipe:0",
-      "-vn",
-      "-sn",
-      "-dn",
-      "-c:a",
-      "pcm_s16le",
-      "-ar",
-      String(DEEPGRAM_FLUX_SAMPLE_RATE),
-      "-ac",
-      "1",
-      "-f",
-      "s16le",
-      params.outputPath,
-    ],
-    {
-      input: params.buffer,
-      maxOutputBytes: 64 * 1024,
-      signal: params.signal,
-      terminateOnOutputError: true,
-      timeoutMs: params.timeoutMs,
-    },
-  );
-  if (result.termination === "exit" && result.code === 0) {
-    return;
-  }
-  const detail = result.stderr.toString("utf8").trim();
-  throw new Error(
-    `Audio transcription failed: ffmpeg ${result.termination}${detail ? `: ${detail}` : ""}`,
-    { cause: result.error },
-  );
-}
-
 export async function transcribeDeepgramFluxAudio(params: {
   request: AudioTranscriptionRequest;
   requestConfig: DeepgramFluxRequestConfig;
@@ -184,23 +101,87 @@ export async function transcribeDeepgramFluxAudio(params: {
     prefix: "audio-transcription-",
   });
   const pcmPath = workspace.path("audio.pcm");
-  await decodeDeepgramFluxAudio({
-    buffer: params.request.buffer,
-    outputPath: pcmPath,
-    signal: params.request.signal,
-    timeoutMs: resolveTimeoutMs(),
-  });
+  const sourceBuffer = params.request.buffer;
+  const decodeSignal = params.request.signal;
+  const decodeTimeoutMs = resolveTimeoutMs();
+  const decodeResult = await runCommandBuffered(
+    [
+      resolveFfmpegBin(),
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-i",
+      "pipe:0",
+      "-vn",
+      "-sn",
+      "-dn",
+      "-c:a",
+      "pcm_s16le",
+      "-ar",
+      String(DEEPGRAM_FLUX_SAMPLE_RATE),
+      "-ac",
+      "1",
+      "-f",
+      "s16le",
+      pcmPath,
+    ],
+    {
+      input: sourceBuffer,
+      maxOutputBytes: 64 * 1024,
+      signal: decodeSignal,
+      terminateOnOutputError: true,
+      timeoutMs: decodeTimeoutMs,
+    },
+  );
+  if (decodeResult.termination !== "exit" || decodeResult.code !== 0) {
+    const detail = decodeResult.stderr.toString("utf8").trim();
+    throw new Error(
+      `Audio transcription failed: ffmpeg ${decodeResult.termination}${detail ? `: ${detail}` : ""}`,
+      { cause: decodeResult.error },
+    );
+  }
   await using pcm = await open(pcmPath, "r");
   if ((await pcm.stat()).size === 0) {
     throw new Error("Audio transcription failed: decoded audio is empty");
   }
 
-  const url = buildDeepgramFluxUrl({
-    baseUrl: params.requestConfig.baseUrl,
-    language: params.request.language,
-    model: params.model,
-    query: params.request.query,
-  });
+  const baseUrl = params.requestConfig.baseUrl;
+  const language = params.request.language;
+  const model = params.model;
+  const queryOptions = params.request.query;
+  const url = URL.parse(baseUrl);
+  if (!url) {
+    throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
+  }
+  if (url.protocol === "http:") {
+    url.protocol = "ws:";
+  } else if (url.protocol === "https:") {
+    url.protocol = "wss:";
+  } else if (url.protocol !== "ws:" && url.protocol !== "wss:") {
+    throw new Error(
+      `Invalid Deepgram baseUrl: unsupported scheme "${url.protocol}" (expected http, https, ws, or wss)`,
+    );
+  }
+  const basePath = url.pathname.replace(/\/+$/u, "");
+  url.pathname = `${basePath ? basePath.replace(/\/v1$/u, "/v2") : "/v2"}/listen`;
+  url.search = "";
+  url.searchParams.set("model", model);
+  url.searchParams.set("encoding", "linear16");
+  url.searchParams.set("sample_rate", String(DEEPGRAM_FLUX_SAMPLE_RATE));
+  // Deepgram's v2 contract permits language hints only on its multilingual model.
+  const query = {
+    ...queryOptions,
+    language_hint:
+      model === "flux-general-multi"
+        ? (queryOptions?.language_hint ?? (language?.trim() || undefined))
+        : undefined,
+  };
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && DEEPGRAM_FLUX_QUERY_KEYS.has(key)) {
+      setDeepgramQueryParam(url.searchParams, key, value);
+    }
+  }
+  const socketUrl = url.toString();
   const timeoutMs = resolveTimeoutMs();
   const socket = await openProviderWebSocket({
     allowPrivateNetwork: params.requestConfig.allowPrivateNetwork,
@@ -211,7 +192,7 @@ export async function transcribeDeepgramFluxAudio(params: {
     signal: params.request.signal,
     timeoutMs,
     trustConfiguredBaseUrlOrigin: params.requestConfig.trustConfiguredBaseUrlOrigin,
-    url,
+    url: socketUrl,
   });
 
   const transcript = await new Promise<string>((resolve, reject) => {

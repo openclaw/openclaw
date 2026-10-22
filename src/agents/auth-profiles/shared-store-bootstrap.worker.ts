@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "../../infra/node-sqlite.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
@@ -9,6 +10,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { writeConfigMachineStateInDatabase } from "../../state/config-machine-state-write.js";
 import { readConfigMachineStateRowInDatabase } from "../../state/config-machine-state.js";
+import { agentEngineInput, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -101,21 +103,49 @@ export function bootstrapSharedAuthStoreInWorker(
     return commit(true);
   }
   let inspected = false;
-  let source: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+  let source: EngineConnection | undefined;
+  let anchor: ReturnType<typeof openNodeSqliteDatabase> | undefined;
   try {
-    source = openNodeSqliteDatabase(resolveExistingSqliteFileUri(input.sourcePath));
+    anchor = openNodeSqliteDatabase(resolveExistingSqliteFileUri(input.sourcePath));
+    source = anchor;
+    if (agentEngineInput()) {
+      source = openAgentEngineStore(
+        anchor,
+        undefined,
+        input.sourcePath,
+        true,
+        (connection, error) => {
+          source = connection;
+          throw error;
+        },
+      );
+    }
     // SQLite ignores the writer reservation on a read-only connection. mode=rw
     // keeps this lock-only handle from creating a missing source or changing its schema.
-    return runSqliteImmediateTransactionSync(
-      source,
-      () => {
-        assertDatabasePathIdentity(input.sourcePath, input.sourceIdentity!);
-        const rows = readSharedAuthLegacyRowsFromDatabase(source!);
-        inspected = true;
-        return commit(!rows.store && !rows.state);
-      },
-      { operationLabel: "auth-profiles.bootstrap-source" },
-    );
+    const inspect = () => {
+      assertDatabasePathIdentity(input.sourcePath, input.sourceIdentity!);
+      const rows = readSharedAuthLegacyRowsFromDatabase(source!);
+      inspected = true;
+      return commit(!rows.store && !rows.state);
+    };
+    if (isPostgresSqlConnection(source)) {
+      const postgres = source;
+      // Read after the source writer's lock settles, without a second mutation receipt.
+      return postgres.runTransaction(
+        () => {
+          // sqlite-allow-raw -- The source snapshot must include a writer that commits while this lock waits.
+          postgres.exec("SET TRANSACTION ISOLATION LEVEL READ COMMITTED");
+          // sqlite-allow-raw -- Hold the source writer's existing advisory lock during inspection.
+          postgres.prepare("SELECT pg_advisory_xact_lock(?)").get(postgres.advisoryLockKey);
+          return inspect();
+        },
+        undefined,
+        true,
+      );
+    }
+    return runSqliteImmediateTransactionSync(source, inspect, {
+      operationLabel: "auth-profiles.bootstrap-source",
+    });
   } catch (error) {
     if (inspected) {
       throw error;
@@ -123,6 +153,12 @@ export function bootstrapSharedAuthStoreInWorker(
     // Unreadable or partially migrated legacy state remains Doctor-owned.
     return commit(false);
   } finally {
-    source?.close();
+    try {
+      source?.close();
+    } finally {
+      if (source !== anchor && anchor?.isOpen) {
+        anchor.close();
+      }
+    }
   }
 }

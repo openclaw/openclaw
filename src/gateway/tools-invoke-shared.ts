@@ -12,6 +12,7 @@ import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
+import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { resolveStoredSessionPermissionPolicy } from "../agents/tool-fs-policy.js";
@@ -220,6 +221,7 @@ type InvokeGatewayToolParams = {
   /** Host-minted authority from the calling connection; never derived from wire params. */
   operatorRoleActor?: NonNullable<GatewayClient["internal"]>["operatorRoleActor"];
   operatorScopes?: readonly string[];
+  approvalReviewerDeviceId?: string;
   senderIsOwner?: boolean;
   clientCaps?: string[];
   conversationReadOrigin?: ConversationReadInvocationOrigin;
@@ -506,6 +508,7 @@ async function invokeGatewayToolWithSignal(
       accountId: params.accountId,
       agentTo: params.agentTo,
       agentThreadId: params.agentThreadId,
+      approvalReviewerDeviceId: params.approvalReviewerDeviceId,
       senderIsOwner: params.senderIsOwner,
       clientCaps: params.clientCaps,
       conversationReadOrigin,
@@ -554,6 +557,7 @@ async function invokeGatewayToolWithSignal(
         agentId,
         config: params.cfg,
         sessionKey,
+        approvalReviewerDeviceId: params.approvalReviewerDeviceId,
         workspaceDir,
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
@@ -578,6 +582,7 @@ async function invokeGatewayToolWithSignal(
       async () => {
         assertInvocationCurrent();
         assertCapturedInputCommitAllowed();
+        createGatewayToolPolicyAssertion(tool, params.cfg)(hookResult.params);
         return await tool.execute?.(toolCallId, hookResult.params, params.signal);
       },
     );

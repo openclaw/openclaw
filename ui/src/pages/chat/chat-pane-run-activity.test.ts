@@ -95,7 +95,7 @@ describe.each([false, true])("chat run activity (recovery ready: %s)", (recovery
     pane.render();
 
     const container = createApplicationContextProvider(context);
-    renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"));
+    renderChatPropsInto(container, expectDefined(pane.chatProps, "chat props"), context);
 
     expect(pane.chatProps?.canAbort).toBe(true);
     expect(
@@ -119,7 +119,7 @@ describe("composer run status", () => {
   it.each(["editable", "view-only subagent", "read-only shared"] as const)(
     "keeps %s child activity in the transcript through roster hydration and settlement",
     async (access) => {
-      vi.spyOn(Date, "now").mockReturnValue(66_000);
+      vi.spyOn(Date, "now").mockReturnValue(66_500);
       const parent: GatewaySessionRow = {
         key: access === "view-only subagent" ? "agent:main:subagent:parent" : "agent:main:parent",
         kind: "direct",
@@ -146,33 +146,37 @@ describe("composer run status", () => {
       const container = createApplicationContextProvider(context);
       const onOpenSubagent = vi.fn();
       const draw = async (children: GatewaySessionRow[], hydrated = true) => {
-        renderChatPropsInto(container, {
-          ...expectDefined(pane.chatProps, "chat props"),
-          selectedSession: parent,
-          messages: [
-            { role: "user", content: "Implement the backend.", timestamp: 1_500 },
-            {
-              role: "assistant",
-              runId: "parent-run",
-              timestamp: 2_000,
-              content: [
-                { type: "text", text: "The backend work is delegated." },
-                { type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} },
-              ],
-            },
-            {
-              role: "toolResult",
-              runId: "parent-run",
-              toolCallId: "yield",
-              toolName: "sessions_yield",
-              timestamp: 2_001,
-              content: [{ type: "text", text: '{"status":"yielded"}' }],
-            },
-          ],
-          subagentSessions: children,
-          subagentSessionsHydrated: hydrated,
-          onOpenSubagent,
-        });
+        renderChatPropsInto(
+          container,
+          {
+            ...expectDefined(pane.chatProps, "chat props"),
+            selectedSession: parent,
+            messages: [
+              { role: "user", content: "Implement the backend.", timestamp: 1_500 },
+              {
+                role: "assistant",
+                runId: "parent-run",
+                timestamp: 2_000,
+                content: [
+                  { type: "text", text: "The backend work is delegated." },
+                  { type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} },
+                ],
+              },
+              {
+                role: "toolResult",
+                runId: "parent-run",
+                toolCallId: "yield",
+                toolName: "sessions_yield",
+                timestamp: 2_001,
+                content: [{ type: "text", text: '{"status":"yielded"}' }],
+              },
+            ],
+            subagentSessions: children,
+            subagentSessionsHydrated: hydrated,
+            onOpenSubagent,
+          },
+          context,
+        );
         flush();
         expect(container.querySelector(".agent-chat__composer-run-status")).toBeNull();
       };
@@ -181,6 +185,8 @@ describe("composer run status", () => {
         container.querySelector(".chat-working-indicator .chat-reading-indicator"),
       ).not.toBeNull();
       await draw([child]);
+      await vi.dynamicImportSettled();
+      flush();
       if (access === "view-only subagent") {
         expect(container.querySelector(".agent-chat__disabled-banner")?.textContent).toContain(
           "View-only subagent",
@@ -197,7 +203,7 @@ describe("composer run status", () => {
       const timer = container.querySelector(
         ".chat-subagent-activity__elapsed openclaw-elapsed-time",
       );
-      expect(timer).toHaveProperty("startMs", 1_500);
+      expect(timer?.textContent).toBe("1m 5s");
 
       await draw([
         child,

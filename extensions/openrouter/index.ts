@@ -1,14 +1,20 @@
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
+  ProviderNormalizeToolSchemasContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import {
+  readProviderJsonResponse,
+  resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildPassthroughGeminiSanitizingReplayPolicy,
   DEFAULT_CONTEXT_TOKENS,
@@ -17,8 +23,21 @@ import {
   getLoadedOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import {
+  buildProviderToolCompatFamilyHooks,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_NESTED_KEYS,
+} from "openclaw/plugin-sdk/provider-tools";
+import {
+  buildUsageHttpErrorSnapshot,
+  parseProviderUsageNonNegativeNumber,
+  resolveProviderUsageApiKeyAuth,
+  type ProviderUsageSnapshot,
+} from "openclaw/plugin-sdk/provider-usage";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { buildOpenRouterDecisionProvider, isOpenRouterDecisionModel } from "./decision-provider.js";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { isOpenRouterMistralModelId, normalizeOpenRouterApiModelId } from "./models.js";
@@ -33,17 +52,119 @@ import {
   normalizeOpenRouterBaseUrl,
   OPENROUTER_BASE_URL,
   resolveOpenRouterApiBaseUrl,
+  resolveOpenRouterSsrfPolicy,
 } from "./provider-catalog.js";
-import { resolveOpenRouterExtraParamsForTransport } from "./provider-routing.js";
+import {
+  resolveOpenRouterConfiguredExtraParams,
+  resolveOpenRouterExtraParamsForTransport,
+} from "./provider-routing.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 import { resolveOpenRouterThinkingProfile } from "./thinking-policy.js";
-import { inspectOpenRouterToolSchemas, normalizeOpenRouterToolSchemas } from "./tool-schemas.js";
-import { fetchOpenRouterUsage } from "./usage.js";
 import {
   buildOpenRouterVideoGenerationProvider,
   listOpenRouterVideoModelCatalog,
 } from "./video-generation-provider.js";
+
+const openAiTools = buildProviderToolCompatFamilyHooks("openai");
+const schemaTypes = new Set(["null", "boolean", "object", "array", "number", "integer", "string"]);
+
+function readSchemaTypes(type: unknown): string[] | undefined {
+  const types = Array.isArray(type) ? type : [type];
+  return types.length > 0 &&
+    types.every((entry) => typeof entry === "string" && schemaTypes.has(entry))
+    ? types
+    : undefined;
+}
+
+function canMoveParentType(branches: unknown[], parentTypes: string[]): boolean {
+  return (
+    branches.length > 0 &&
+    branches.every((branch) => {
+      const record = readRecord(branch);
+      // Unknown references, boolean schemas and nested unions cannot safely inherit a type.
+      if (!record || "$ref" in record || "anyOf" in record || "oneOf" in record) {
+        return false;
+      }
+      if (!("type" in record)) {
+        return true;
+      }
+      return (
+        readSchemaTypes(record.type)?.every(
+          (type) =>
+            parentTypes.includes(type) || (type === "integer" && parentTypes.includes("number")),
+        ) === true
+      );
+    })
+  );
+}
+
+function normalizeMoonshotSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map(normalizeMoonshotSchema);
+  }
+  const record = readRecord(schema);
+  if (!record) {
+    return schema;
+  }
+  return normalizeMoonshotSchemaObject(record);
+}
+
+function normalizeMoonshotSchemaObject(record: Record<string, unknown>): Record<string, unknown> {
+  // Traverse schema locations only: default/examples/enum can contain arbitrary user data.
+  // fromEntries preserves own __proto__ keys without invoking Object.prototype setters.
+  const next = Object.fromEntries(
+    Object.entries(record).map(([key, value]) => {
+      const entries = SCHEMA_MAP_KEYS.has(key) ? readRecord(value) : undefined;
+      if (entries) {
+        return [
+          key,
+          Object.fromEntries(
+            Object.entries(entries).map(([name, child]) => [name, normalizeMoonshotSchema(child)]),
+          ),
+        ];
+      }
+      return [key, SCHEMA_NESTED_KEYS.has(key) ? normalizeMoonshotSchema(value) : value];
+    }),
+  );
+  const parentTypes = readSchemaTypes(next.type);
+  const branches = next.anyOf;
+  if (!parentTypes || !Array.isArray(branches) || !canMoveParentType(branches, parentTypes)) {
+    return next;
+  }
+  // Moonshot requires anyOf branch types. Distribute the parent's conjunctive type only
+  // when every typed branch is already a subset; retain all other parent constraints.
+  // oneOf has no evidenced rewrite here. Never apply DeepSeek's first-branch reduction.
+  const { type, ...result } = next;
+  const typedBranches: unknown[] = [];
+  for (const branch of branches) {
+    const branchRecord = readRecord(branch);
+    typedBranches.push(
+      branchRecord && !("type" in branchRecord) ? { type, ...branchRecord } : branch,
+    );
+  }
+  result.anyOf = typedBranches;
+  return result;
+}
+
+const moonshotTools = {
+  normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) =>
+    ctx.tools.map((tool) => {
+      const parameters = readRecord(tool.parameters);
+      return parameters ? { ...tool, parameters: normalizeMoonshotSchemaObject(parameters) } : tool;
+    }),
+  // Retained unions are valid schema contracts, not DeepSeek-incompatible diagnostics.
+  inspectToolSchemas: (_ctx: ProviderNormalizeToolSchemasContext) => [],
+};
+
+function resolveOpenRouterToolFamily(modelId: string) {
+  const normalized =
+    normalizeOpenRouterModelFamilyId(normalizeOpenRouterApiModelId(modelId)) ?? modelId;
+  if (normalized.startsWith("moonshot/") || normalized.startsWith("moonshotai/")) {
+    return moonshotTools;
+  }
+  return openAiTools;
+}
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
@@ -53,6 +174,46 @@ const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
 const OPENROUTER_CACHE_TTL_MODEL_FAMILY =
   /^(?:(?:anthropic|deepseek|moonshot(?:ai)?|x-ai|z-?ai)\/|google\/gemini-(?:2\.5|3))/;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
+const OPENROUTER_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
+
+type EndpointResult =
+  | { ok: true; data: Record<string, unknown> }
+  | { ok: false; status: number }
+  | { ok: false; reason: "malformed" }
+  | { ok: false; reason: "transport"; error: string };
+
+type OpenRouterLimitReset = "daily" | "weekly" | "monthly";
+
+function resolveLimitReset(value: unknown): OpenRouterLimitReset | undefined {
+  return value === "daily" || value === "weekly" || value === "monthly" ? value : undefined;
+}
+
+function resolveKeyBudget(
+  data: Record<string, unknown> | undefined,
+): { used: number; limit: number; period?: OpenRouterLimitReset } | undefined {
+  const limit = parseProviderUsageNonNegativeNumber(data?.limit);
+  if (limit === undefined) {
+    return undefined;
+  }
+  const period = resolveLimitReset(data?.limit_reset);
+  const periodUsage = parseProviderUsageNonNegativeNumber(
+    period ? data?.[`usage_${period}`] : data?.usage,
+  );
+  const byokUsage =
+    data?.include_byok_in_limit !== true
+      ? undefined
+      : parseProviderUsageNonNegativeNumber(
+          period ? data[`byok_usage_${period}`] : data.byok_usage,
+        );
+  const remaining = parseProviderUsageNonNegativeNumber(data?.limit_remaining);
+  // `limit_remaining` already incorporates BYOK usage when the key is configured to count it.
+  const usage =
+    periodUsage === undefined && byokUsage === undefined
+      ? undefined
+      : (periodUsage ?? 0) + (byokUsage ?? 0);
+  const used = remaining === undefined ? usage : Math.max(0, limit - remaining);
+  return used === undefined ? undefined : { used, limit, ...(period ? { period } : {}) };
+}
 
 // Configured rows keep their sizing and opt-outs, but the OpenRouter model
 // catalog owns effort capabilities on its canonical transport.
@@ -104,6 +265,11 @@ type OpenRouterFusionPromptContribution = {
   dynamicSuffix?: string;
 };
 
+function normalizeRouterBaseUrl<T extends { baseUrl?: string }>(value: T) {
+  const baseUrl = normalizeOpenRouterBaseUrl(value.baseUrl);
+  return baseUrl && baseUrl !== value.baseUrl ? { ...value, baseUrl } : undefined;
+}
+
 function normalizeOpenRouterResolvedModel<T extends ProviderRuntimeModel>(model: T): T | undefined {
   const normalizedBaseUrl = normalizeOpenRouterBaseUrl(model.baseUrl);
   const normalizedId = normalizeOpenRouterApiModelId(model.id);
@@ -134,66 +300,13 @@ function sanitizePromptModelId(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function openRouterModelConfigKey(modelId: string): string {
-  const providerPrefix = `${PROVIDER_ID}/`;
-  return modelId.trim().toLowerCase().startsWith(providerPrefix)
-    ? modelId
-    : `${PROVIDER_ID}/${modelId}`;
-}
-
-function findConfiguredOpenRouterModelParams(
-  ctx: OpenRouterFusionPromptContext,
-): Record<string, unknown> | undefined {
-  const configuredModels = ctx.config?.agents?.defaults?.models;
-  if (!configuredModels) {
-    return undefined;
-  }
-
-  const normalizedModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
-  const directKeys = [
-    openRouterModelConfigKey(ctx.modelId),
-    openRouterModelConfigKey(normalizedModelId),
-    `${PROVIDER_ID}/${ctx.modelId}`,
-    `${PROVIDER_ID}/${normalizedModelId}`,
-  ];
-  for (const key of directKeys) {
-    const params = readRecord(configuredModels[key]?.params);
-    if (params) {
-      return params;
-    }
-  }
-
-  for (const [rawKey, entry] of Object.entries(configuredModels)) {
-    const slashIndex = rawKey.indexOf("/");
-    if (slashIndex <= 0) {
-      continue;
-    }
-    const provider = rawKey.slice(0, slashIndex).trim().toLowerCase();
-    const modelId = rawKey.slice(slashIndex + 1);
-    const candidateModelId = normalizeOpenRouterApiModelId(modelId) ?? modelId;
-    if (
-      provider === PROVIDER_ID &&
-      candidateModelId.trim().toLowerCase() === normalizedModelId.trim().toLowerCase()
-    ) {
-      return readRecord(entry.params);
-    }
-  }
-
-  return undefined;
-}
-
 function resolveFusionExtraBody(
   ctx: OpenRouterFusionPromptContext,
 ): Record<string, unknown> | undefined {
-  const params = {
-    ...readRecord(ctx.config?.agents?.defaults?.params),
-    ...findConfiguredOpenRouterModelParams(ctx),
-    ...(ctx.agentId ? readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params) : {}),
-  };
-  if (Object.keys(params).length === 0) {
-    return undefined;
-  }
-  return readRecord(Object.hasOwn(params, "extra_body") ? params.extra_body : params.extraBody);
+  const params = resolveOpenRouterConfiguredExtraParams(ctx);
+  return params
+    ? readRecord(Object.hasOwn(params, "extra_body") ? params.extra_body : params.extraBody)
+    : undefined;
 }
 
 function resolveOpenRouterFusionPromptContribution(
@@ -311,7 +424,10 @@ export default defineSingleProviderPluginEntry({
           return { provider: buildOpenrouterProvider() };
         },
       },
-      resolveDynamicModel: buildDynamicOpenRouterModel,
+      resolveDynamicModel: (ctx) =>
+        isOpenRouterDecisionModel(normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId)
+          ? undefined
+          : buildDynamicOpenRouterModel(ctx),
       // Resolve the catalog model even when a configured row already exists.
       preferRuntimeResolvedModel: (ctx) => {
         const configuredProvider = findNormalizedProviderValue(
@@ -331,26 +447,16 @@ export default defineSingleProviderPluginEntry({
         );
       },
       prepareDynamicModel: async (ctx) => {
+        if (isOpenRouterDecisionModel(normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId)) {
+          return;
+        }
         await loadOpenRouterModelCapabilities(
           normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId,
         );
       },
-      normalizeConfig: ({ providerConfig }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(providerConfig.baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
-          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
-          : undefined;
-      },
+      normalizeConfig: ({ providerConfig }) => normalizeRouterBaseUrl(providerConfig),
       normalizeResolvedModel: ({ model }) => normalizeOpenRouterResolvedModel(model),
-      normalizeTransport: ({ api: apiLocal, baseUrl }) => {
-        const normalizedBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
-        return normalizedBaseUrl && normalizedBaseUrl !== baseUrl
-          ? {
-              api: apiLocal,
-              baseUrl: normalizedBaseUrl,
-            }
-          : undefined;
-      },
+      normalizeTransport: ({ api, baseUrl }) => normalizeRouterBaseUrl({ api, baseUrl }),
       classifyFailoverReason: ({ provider, errorMessage }) => {
         if (provider?.trim().toLowerCase() !== PROVIDER_ID) {
           return undefined;
@@ -369,8 +475,10 @@ export default defineSingleProviderPluginEntry({
           ? { sanitizeToolCallIds: true, toolCallIdMode: "strict9" as const }
           : {}),
       }),
-      normalizeToolSchemas: normalizeOpenRouterToolSchemas,
-      inspectToolSchemas: inspectOpenRouterToolSchemas,
+      normalizeToolSchemas: (ctx) =>
+        resolveOpenRouterToolFamily(ctx.modelId ?? "").normalizeToolSchemas(ctx),
+      inspectToolSchemas: (ctx) =>
+        resolveOpenRouterToolFamily(ctx.modelId ?? "").inspectToolSchemas(ctx),
       resolveReasoningOutputMode: () => "native",
       resolveThinkingProfile: (ctx) =>
         resolveOpenRouterThinkingProfile(ctx.modelId, withOpenRouterCatalogThinking(ctx)),
@@ -381,26 +489,151 @@ export default defineSingleProviderPluginEntry({
       wrapSimpleCompletionStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: ({ modelId }) =>
         OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
-      resolveUsageAuth: async (ctx) => {
-        const apiKey = (
-          await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
-            envDirect: [ctx.env.OPENROUTER_API_KEY],
-          })
-        )?.[0];
-        return apiKey ? { token: apiKey } : null;
+      resolveUsageAuth: (ctx) => resolveProviderUsageApiKeyAuth(ctx, [ctx.env.OPENROUTER_API_KEY]),
+      fetchUsageSnapshot: async (ctx) => {
+        const providerConfig = ctx.config.models?.providers?.openrouter;
+        const requestConfig = resolveProviderHttpRequestConfig({
+          provider: "openrouter",
+          capability: "other",
+          baseUrl: resolveOpenRouterApiBaseUrl(providerConfig?.baseUrl),
+          defaultBaseUrl: OPENROUTER_BASE_URL,
+          defaultHeaders: {
+            Accept: "application/json",
+            Authorization: `Bearer ${ctx.token}`,
+          },
+          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
+        });
+        const ssrfPolicy = resolveOpenRouterSsrfPolicy(requestConfig, providerConfig?.request);
+        async function fetchEndpoint(path: "credits" | "key"): Promise<EndpointResult> {
+          let guardedResponse: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+          try {
+            guardedResponse = await fetchWithSsrFGuard({
+              url: `${requestConfig.baseUrl}/${path}`,
+              // Ambient proxy fetch wrappers replace dispatchers, so configured provider transport wins.
+              ...(requestConfig.dispatcherPolicy
+                ? { dispatcherPolicy: requestConfig.dispatcherPolicy }
+                : { fetchImpl: ctx.fetchFn }),
+              init: { headers: requestConfig.headers, redirect: "error" },
+              timeoutMs: ctx.timeoutMs,
+              signal: ctx.signal,
+              // The shared guard controls redirects manually; zero hops preserves fail-closed usage auth.
+              maxRedirects: 0,
+              policy: ssrfPolicy,
+              auditContext: "openrouter-usage",
+            });
+          } catch (error) {
+            return { ok: false, reason: "transport", error: formatErrorMessage(error) };
+          }
+          try {
+            const { response } = guardedResponse;
+            if (!response.ok) {
+              // release() aborts transport before cancelling unread capture-tee bodies.
+              // Awaiting one branch here can hold the error result until the other ends.
+              return { ok: false, status: response.status };
+            }
+            const root = readRecord(
+              await readProviderJsonResponse(response, "OpenRouter usage", {
+                maxBytes: OPENROUTER_USAGE_RESPONSE_MAX_BYTES,
+                chunkTimeoutMs: 0,
+              }),
+            );
+            const data = readRecord(root?.data);
+            return data ? { ok: true, data } : { ok: false, reason: "malformed" };
+          } catch {
+            return { ok: false, reason: "malformed" };
+          } finally {
+            await guardedResponse.release();
+          }
+        }
+        const [creditsResult, keyResult] = await Promise.all([
+          fetchEndpoint("credits"),
+          fetchEndpoint("key"),
+        ]);
+        if (!creditsResult.ok && !keyResult.ok) {
+          const status =
+            "status" in creditsResult
+              ? creditsResult.status
+              : "status" in keyResult
+                ? keyResult.status
+                : undefined;
+          if (status !== undefined) {
+            return buildUsageHttpErrorSnapshot({ provider: "openrouter", status });
+          }
+          const transportFailure = [creditsResult, keyResult].find(
+            (result) => "reason" in result && result.reason === "transport",
+          );
+          return {
+            provider: "openrouter",
+            displayName: "OpenRouter",
+            windows: [],
+            error: transportFailure
+              ? `Usage unavailable: ${transportFailure.error}`
+              : "Malformed usage response",
+          };
+        }
+        const credits = creditsResult.ok ? creditsResult.data : undefined;
+        const key = keyResult.ok ? keyResult.data : undefined;
+        const totalCredits = parseProviderUsageNonNegativeNumber(credits?.total_credits);
+        const totalUsage = parseProviderUsageNonNegativeNumber(credits?.total_usage);
+        const keyUsage = parseProviderUsageNonNegativeNumber(key?.usage);
+        const keyBudget = resolveKeyBudget(key);
+        const windows = [];
+        if (keyBudget) {
+          const periodLabel = keyBudget.period
+            ? `${keyBudget.period[0]?.toUpperCase()}${keyBudget.period.slice(1)} key budget`
+            : "API key budget";
+          windows.push({
+            label: periodLabel,
+            usedPercent:
+              keyBudget.limit === 0 ? 100 : Math.min(100, (keyBudget.used / keyBudget.limit) * 100),
+          });
+        }
+        const billing: NonNullable<ProviderUsageSnapshot["billing"]> = [];
+        if (totalCredits !== undefined && totalUsage !== undefined) {
+          billing.push({
+            type: "balance",
+            label: "Account balance",
+            amount: totalCredits - totalUsage,
+            unit: "USD",
+          });
+          billing.push({ type: "spend", label: "Account usage", amount: totalUsage, unit: "USD" });
+        }
+        if (keyBudget) {
+          billing.push({
+            type: "budget",
+            label: "API key budget",
+            used: keyBudget.used,
+            limit: keyBudget.limit,
+            unit: "USD",
+            ...(keyBudget.period ? { period: keyBudget.period } : {}),
+          });
+        } else if (keyUsage !== undefined) {
+          billing.push({ type: "spend", label: "API key usage", amount: keyUsage, unit: "USD" });
+        }
+        const keyLabel = typeof key?.label === "string" ? key.label.trim() : "";
+        const periodUsage: [string, number | undefined][] = [
+          ["today", parseProviderUsageNonNegativeNumber(key?.usage_daily)],
+          ["this week", parseProviderUsageNonNegativeNumber(key?.usage_weekly)],
+          ["this month", parseProviderUsageNonNegativeNumber(key?.usage_monthly)],
+        ];
+        const summary = periodUsage
+          .flatMap(([period, amount]) =>
+            amount === undefined ? [] : [`$${amount.toFixed(2)} ${period}`],
+          )
+          .join(" · ");
+        return {
+          provider: "openrouter",
+          displayName: "OpenRouter",
+          windows,
+          ...(billing.length > 0 ? { billing } : {}),
+          ...(summary ? { summary } : {}),
+          ...(keyLabel ? { plan: keyLabel } : {}),
+        };
       },
-      fetchUsageSnapshot: async (ctx) =>
-        await fetchOpenRouterUsage({
-          token: ctx.token,
-          baseUrl: ctx.config.models?.providers?.openrouter?.baseUrl,
-          request: ctx.config.models?.providers?.openrouter?.request,
-          timeoutMs: ctx.timeoutMs,
-          signal: ctx.signal,
-          fetchFn: ctx.fetchFn,
-        }),
     };
   },
   register(api) {
+    api.registerDecisionProvider(buildOpenRouterDecisionProvider());
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
     api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());

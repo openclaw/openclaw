@@ -8,7 +8,6 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
 import type { DraftCloudProfile, DraftEnvironment } from "./discovery.ts";
-import { readDraftCloudProfiles, readDraftEnvironments } from "./discovery.ts";
 
 registerNewSessionSetupEnglish();
 registerSessionPlacementEnglish();
@@ -26,9 +25,11 @@ export async function requestPlaceCatalog(
     runtimeId ? { runtimeId } : {},
   );
   return {
-    profiles: readDraftCloudProfiles(result?.profiles),
-    suggestedProfile: result?.suggestedProfile,
-    environments: readDraftEnvironments(result?.environments),
+    profiles: (result.profiles ?? []).toSorted((left, right) => left.id.localeCompare(right.id)),
+    suggestedProfile: result.suggestedProfile,
+    environments: result.environments
+      .filter((environment) => ["local", "node", "worker"].includes(environment.type))
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
   };
 }
 
@@ -39,7 +40,6 @@ export type SessionMenuItemOptions = {
   description?: string;
   icon?: unknown;
   sub?: string;
-  facts?: readonly string[];
   checked: boolean;
   disabled?: boolean;
   title?: string;
@@ -56,7 +56,7 @@ export type SessionMenuItemOptions = {
   hideDetails?: boolean;
   remediation?: "enable-session-hosting" | "update-device";
   provider?: string;
-  trust?: "persistent" | "disposable";
+  trust?: DraftCloudProfile["trust"];
   onSelect: () => void;
 };
 
@@ -71,7 +71,6 @@ export type CloudProfileMenuItemsOptions = {
   disabled?: boolean;
   disabledReason?: string;
   profileDisabledReason?: (profile: DraftCloudProfile) => string | undefined;
-  compact?: boolean;
   onSelect: (profileId: string, useDefaults?: boolean) => void;
 };
 

@@ -18,12 +18,7 @@ function active(state: number): boolean {
 export function readSqliteWorkerRequestCustody(
   descriptor: SqliteWorkerRequestCustodyDescriptor,
 ): boolean {
-  return (
-    Atomics.load(descriptor.slot, 0) === 1 &&
-    active(Atomics.load(descriptor.request, 0)) &&
-    Atomics.load(descriptor.slot, 0) === 1 &&
-    active(Atomics.load(descriptor.request, 0))
-  );
+  return Atomics.load(descriptor.slot, 0) === 1 && active(Atomics.load(descriptor.request, 0));
 }
 
 export class SqliteWorkerSlotCustody {

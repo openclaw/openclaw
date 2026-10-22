@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { openRootFile } from "openclaw/plugin-sdk/file-access-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fileIdentity, matchesFileIdentity, readPathBinding } from "../shared/path-binding.js";
 import {
-  classifyFsSafeReadError,
+  createReadErrorClassifier,
   readAbsolutePath,
   rejectCanonicalPathChange,
   resolveCanonicalReadPath,
@@ -18,17 +17,12 @@ type FileStatParams = {
   expectedBinding?: unknown;
 };
 
-function classifyError(error: unknown): string {
-  const safeCode = classifyFsSafeReadError(error);
-  if (safeCode) {
-    return safeCode;
-  }
-  const code = asOptionalRecord(error)?.code;
-  if (code === "ENOENT" || code === "ENOTDIR") {
-    return "NOT_FOUND";
-  }
-  return code === "EACCES" || code === "EPERM" ? "PERMISSION_DENIED" : "READ_ERROR";
-}
+const classifyError = createReadErrorClassifier({
+  ENOENT: "NOT_FOUND",
+  ENOTDIR: "NOT_FOUND",
+  EACCES: "PERMISSION_DENIED",
+  EPERM: "PERMISSION_DENIED",
+} as const);
 
 export async function handleFileStat(params: FileStatParams) {
   const requestedPath = readAbsolutePath(params.path);

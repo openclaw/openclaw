@@ -17,6 +17,12 @@ openclaw path --help
 Use `set --dry-run` to review an edit before applying it. Commands run locally
 on the CLI host and do not require a running Gateway.
 
+Markdown bullet fields can wrap onto continuation lines. Resolving a field
+returns its complete value; setting it replaces that value while preserving
+child bullets, sibling fields, and the file's line endings.
+
+Markdown paths returned by `find` can be reused with `resolve` and `set`, including quoted field names and empty section or item slugs. Quoted selector-like names are literals; unquoted selectors such as `$last` keep their usual meaning.
+
 This is a file-editing interface; it does not replace higher-level configuration
 or memory management.
 

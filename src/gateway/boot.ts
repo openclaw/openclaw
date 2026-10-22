@@ -1,4 +1,3 @@
-// Gateway BOOT.md runner.
 // Runs per-workspace boot checks in a run-owned temporary session.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -53,8 +52,9 @@ function buildBootPrompt(content: string) {
       text: [
         "If BOOT.md asks you to send a message, use the message tool (action=send with channel + target).",
         "Use the `target` field (not `to`) for message tool destinations.",
-        `After sending with the message tool, reply with ONLY: ${SILENT_REPLY_TOKEN}.`,
-        `If nothing needs attention, reply with ONLY: ${SILENT_REPLY_TOKEN}.`,
+        `After sending with the message tool, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
+        `If nothing needs attention, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
+        `${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
       ].join("\n"),
     },
   ];

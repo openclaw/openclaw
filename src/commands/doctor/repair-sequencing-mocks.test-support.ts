@@ -57,6 +57,7 @@ vi.mock("../../state/user-profiles-owner-migration.js", () => ({
   repairMergedGatewayOwnerProfile: hoistedMocks.repairMergedGatewayOwnerProfile,
 }));
 
+// mock-isolation: Scenario fixtures own credential state and migration outcomes; isolate filesystem writes and provider login effects proved by their owner suites.
 vi.mock("../doctor-auth-flat-profiles.js", () => ({
   maybeRepairLegacyAuthProfileStores: ({
     profileIdMap,
@@ -65,6 +66,7 @@ vi.mock("../doctor-auth-flat-profiles.js", () => ({
   }) => ({
     changes: [],
     warnings: [],
+    findings: [],
     profileIdMap,
   }),
   collectOpenAICodexAuthProfileStoreIdMap: hoistedMocks.collectOpenAICodexAuthProfileStoreIdMap,

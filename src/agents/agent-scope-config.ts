@@ -3,7 +3,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
-  readStringValue,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -16,6 +15,7 @@ import type {
 } from "../config/types.agent-defaults.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { getMainThreadTaskName, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { resolveUserPath } from "../utils.js";
@@ -53,7 +53,6 @@ export type AgentSelectionContext = {
 export class AgentSelectionRequiredError extends Error {
   readonly code = "AGENT_SELECTION_REQUIRED";
   readonly agentIds: string[];
-  readonly surface: string;
   readonly hint: string;
 
   constructor(agentIds: string[], context?: AgentSelectionContext) {
@@ -64,7 +63,6 @@ export class AgentSelectionRequiredError extends Error {
     super(`Multiple agents are configured, but ${surface} has no explicit owner. ${hint}`);
     this.name = "AgentSelectionRequiredError";
     this.agentIds = agentIds;
-    this.surface = surface;
     this.hint = hint;
   }
 }
@@ -114,7 +112,7 @@ export function resolveAgentModelConfigForRuntime(
   if (runtime === "acp" || agent?.runtime?.type !== "acp") {
     return model;
   }
-  return model && typeof model === "object" && Array.isArray(model.fallbacks)
+  return model && typeof model === "object" && model.fallbacks
     ? { fallbacks: model.fallbacks }
     : undefined;
 }
@@ -164,14 +162,20 @@ const agentRosterFacts = new WeakMap<
 
 /** Share roster reads synchronously; unbound mutable configs expire when the callback returns. */
 export function withAgentRosterFactsBatch<T>(config: OpenClawConfig, callback: () => T): T {
-  const parent = activeAgentRosterFactsBatch;
-  activeAgentRosterFactsBatch =
-    parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
-  try {
-    return callback();
-  } finally {
-    activeAgentRosterFactsBatch = parent;
-  }
+  return runWithMainThreadTask(
+    getMainThreadTaskName() ?? "gateway",
+    () => {
+      const parent = activeAgentRosterFactsBatch;
+      activeAgentRosterFactsBatch =
+        parent?.config === config ? parent : { config, facts: readAgentRosterFacts(config) ?? {} };
+      try {
+        return callback();
+      } finally {
+        activeAgentRosterFactsBatch = parent;
+      }
+    },
+    "agent-roster",
+  );
 }
 
 function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined {
@@ -400,19 +404,16 @@ export function resolveAgentConfig(
   }
   const agentDefaults = cfg.agents?.defaults;
   return {
-    name: readStringValue(entry.name),
-    workspace: readStringValue(entry.workspace),
-    agentDir: readStringValue(entry.agentDir),
-    model:
-      typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
-        ? entry.model
-        : undefined,
+    name: entry.name,
+    workspace: entry.workspace,
+    agentDir: entry.agentDir,
+    model: entry.model,
     ...(entry.models ? { models: entry.models } : {}),
     ...(entry.params ? { params: entry.params } : {}),
     ...(entry.runtime ? { runtime: entry.runtime } : {}),
     ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
-    utilityModel: readStringValue(entry.utilityModel),
-    decisionModel: readStringValue(entry.decisionModel),
+    utilityModel: entry.utilityModel,
+    decisionModel: entry.decisionModel,
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     toolProgressDetail: entry.toolProgressDetail ?? agentDefaults?.toolProgressDetail,
@@ -421,27 +422,22 @@ export function resolveAgentConfig(
     contextInjection: entry.contextInjection,
     bootstrapMaxChars: entry.bootstrapMaxChars,
     bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
-    experimental:
-      typeof entry.experimental === "object" && entry.experimental
-        ? { ...agentDefaults?.experimental, ...entry.experimental }
-        : agentDefaults?.experimental,
-    skills: Array.isArray(entry.skills) ? entry.skills : undefined,
+    experimental: entry.experimental
+      ? { ...agentDefaults?.experimental, ...entry.experimental }
+      : agentDefaults?.experimental,
+    skills: entry.skills,
     memory: entry.memory,
     humanDelay: entry.humanDelay,
     typingMode: entry.typingMode ?? agentDefaults?.typingMode,
     tts: entry.tts,
-    contextLimits:
-      typeof entry.contextLimits === "object" && entry.contextLimits
-        ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
-        : agentDefaults?.contextLimits,
+    contextLimits: entry.contextLimits
+      ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
+      : agentDefaults?.contextLimits,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
-    subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
-    embeddedAgent:
-      typeof entry.embeddedAgent === "object" && entry.embeddedAgent
-        ? entry.embeddedAgent
-        : undefined,
+    subagents: entry.subagents,
+    embeddedAgent: entry.embeddedAgent,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };

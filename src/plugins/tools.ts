@@ -78,114 +78,6 @@ function denylistBlocksPlugin(params: {
   );
 }
 
-function inspectPluginTool(
-  tool: unknown,
-  name: string,
-  clientCaps: ReadonlySet<string>,
-  entry: PluginToolRegistration,
-  registry: PluginRegistry,
-  assertInvocationCurrent?: () => void,
-  memoryAudience?: OpenClawPluginToolContext["memoryAudience"],
-): { tool: AnyAgentTool } | { error: string } | null {
-  try {
-    if (!isRecord(tool)) {
-      return { error: "tool must be an object" };
-    }
-    const requiredClientCaps = tool.requiredClientCaps;
-    const validCaps =
-      Array.isArray(requiredClientCaps) &&
-      requiredClientCaps.every((requiredCap) => typeof requiredCap === "string");
-    if (validCaps && requiredClientCaps.some((requiredCap) => !clientCaps.has(requiredCap))) {
-      return null;
-    }
-    const error = !name
-      ? "missing non-empty name"
-      : typeof tool.execute !== "function"
-        ? `${name} missing execute function`
-        : !isRecord(tool.parameters)
-          ? `${name} missing parameters object`
-          : requiredClientCaps !== undefined && !validCaps
-            ? `${name} requiredClientCaps must be an array of strings`
-            : undefined;
-    return error
-      ? { error }
-      : {
-          tool: bindPluginToolCallbacks(
-            entry,
-            registry,
-            tool as AnyAgentTool,
-            assertInvocationCurrent,
-            memoryAudience,
-          ),
-        };
-  } catch (error) {
-    return { error: formatErrorMessage(error) };
-  }
-}
-
-function filterManifestToolNamesForAvailability(
-  params: Parameters<typeof hasManifestToolAvailability>[0],
-): string[] {
-  return params.toolNames.filter((toolName) =>
-    hasManifestToolAvailability({ ...params, toolNames: [toolName] }),
-  );
-}
-
-function resolvePluginToolPluginIds(params: {
-  config: PluginLoadOptions["config"];
-  availabilityConfig?: PluginLoadOptions["config"];
-  env: NodeJS.ProcessEnv;
-  allowlist: PluginToolAllowlist;
-  toolDenylist?: string[];
-  hasAuthForProvider?: (providerId: string) => boolean;
-  snapshot: PluginMetadataManifestView;
-}): string[] {
-  const selected: string[] = [];
-  const denylist = normalizeDenylist(params.toolDenylist);
-  const normalizedPlugins = normalizePluginsConfig(params.config?.plugins);
-  const snapshot = params.snapshot;
-  const isInstalledPluginEnabled = createInstalledPluginEnabledPredicate(
-    snapshot.index.plugins,
-    params.config,
-  );
-  for (const plugin of snapshot.plugins) {
-    if (
-      !isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config: params.config,
-        normalizedConfig: normalizedPlugins,
-        isInstalledPluginEnabled,
-      })
-    ) {
-      continue;
-    }
-    if (denylistBlocksPlugin({ pluginId: plugin.id, denylist })) {
-      continue;
-    }
-    const allowsPlugin = params.allowlist.allowsPlugin(plugin.id);
-    const toolNames = (plugin.contracts?.tools ?? []).filter(
-      (name) =>
-        (allowsPlugin ||
-          (params.allowlist.includesDefaults && plugin.toolMetadata?.[name]?.optional !== true) ||
-          params.allowlist.allowsTool(plugin.id, name)) &&
-        !denylistBlocksName(name, denylist),
-    );
-    if (
-      hasManifestToolAvailability({
-        plugin,
-        toolNames,
-        config: params.availabilityConfig ?? params.config,
-        env: params.env,
-        hasAuthForProvider: params.hasAuthForProvider,
-      })
-    ) {
-      selected.push(plugin.id);
-    }
-  }
-  return [...new Set(selected)].toSorted((a, b) => a.localeCompare(b));
-}
-
 type PreparedPluginToolRuntime = {
   loadContext?: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   metadataSnapshot: PluginMetadataManifestView;
@@ -239,15 +131,50 @@ function resolvePluginToolLoadState(params: {
           env,
         });
   const allowlist = createPluginToolAllowlist(params.toolAllowlist);
-  const onlyPluginIds = resolvePluginToolPluginIds({
-    config: context.config,
-    availabilityConfig: params.context.runtimeConfig ?? context.config,
-    env,
-    allowlist,
-    toolDenylist: params.toolDenylist,
-    hasAuthForProvider: params.hasAuthForProvider,
-    snapshot,
-  });
+  const availabilityConfig = params.context.runtimeConfig ?? context.config;
+  const selected: string[] = [];
+  const denylist = normalizeDenylist(params.toolDenylist);
+  const normalizedPlugins = normalizePluginsConfig(context.config.plugins);
+  const isInstalledPluginEnabled = createInstalledPluginEnabledPredicate(
+    snapshot.index.plugins,
+    context.config,
+  );
+  for (const plugin of snapshot.plugins) {
+    if (
+      !isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: context.config,
+        normalizedConfig: normalizedPlugins,
+        isInstalledPluginEnabled,
+      })
+    ) {
+      continue;
+    }
+    if (denylistBlocksPlugin({ pluginId: plugin.id, denylist })) {
+      continue;
+    }
+    const allowsPlugin = allowlist.allowsPlugin(plugin.id);
+    const toolNames = (plugin.contracts?.tools ?? []).filter(
+      (name) =>
+        (allowsPlugin ||
+          (allowlist.includesDefaults && plugin.toolMetadata?.[name]?.optional !== true) ||
+          allowlist.allowsTool(plugin.id, name)) &&
+        !denylistBlocksName(name, denylist),
+    );
+    if (
+      hasManifestToolAvailability({
+        plugin,
+        toolNames,
+        config: availabilityConfig,
+        env,
+        hasAuthForProvider: params.hasAuthForProvider,
+      })
+    ) {
+      selected.push(plugin.id);
+    }
+  }
+  const onlyPluginIds = [...new Set(selected)].toSorted((a, b) => a.localeCompare(b));
   const loadOptions = buildPluginRuntimeLoadOptions(context, {
     activate: false,
     toolDiscovery: true,
@@ -284,6 +211,9 @@ type PluginToolResolutionParams = {
   /** Host-owned turn fence for factories and retained tool callbacks. */
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
+  bindExecutionCapabilities?: Parameters<
+    typeof createPluginToolFactoryContext
+  >[0]["bindExecutionCapabilities"];
   existingToolNames?: Set<string>;
   clientCaps?: string[];
   toolAllowlist?: string[];
@@ -572,13 +502,17 @@ function* resolvePluginToolsFromRegistry(
       const availabilityNames =
         declaredNames.length > 0 ? declaredNames : Array.from(entry.declaredNames ?? []);
       const allowlistNames = manifestPlugin
-        ? filterManifestToolNamesForAvailability({
-            plugin: manifestPlugin,
-            toolNames: availabilityNames,
-            config: params.context.runtimeConfig ?? context.config,
-            env,
-            hasAuthForProvider: params.hasAuthForProvider,
-          }).filter((toolName) => !denylistBlocksName(toolName, denylist))
+        ? availabilityNames
+            .filter((toolName) =>
+              hasManifestToolAvailability({
+                plugin: manifestPlugin,
+                toolNames: [toolName],
+                config: params.context.runtimeConfig ?? context.config,
+                env,
+                hasAuthForProvider: params.hasAuthForProvider,
+              }),
+            )
+            .filter((toolName) => !denylistBlocksName(toolName, denylist))
         : declaredNames;
       if (manifestPlugin && availabilityNames.length > 0 && allowlistNames.length === 0) {
         continue;
@@ -607,6 +541,7 @@ function* resolvePluginToolsFromRegistry(
         context: params.context,
         assertInvocationCurrent: params.assertInvocationCurrent,
         ownerContinuation: params.ownerContinuation,
+        bindExecutionCapabilities: params.bindExecutionCapabilities,
       });
       // Catalog discovery may construct tools without an admitted run; their V2 execution stays fenced.
       params.assertInvocationCurrent?.();
@@ -682,17 +617,44 @@ function* resolvePluginToolsFromRegistry(
         ) {
           continue;
         }
-        const inspected = inspectPluginTool(
-          toolRaw,
-          toolName,
-          clientCaps,
-          entry,
-          owner.registry,
-          factoryContext.assertInvocationCurrent,
-          factoryContext.memoryAudience,
-        );
-        if (!inspected) {
-          continue;
+        let inspected: { tool: AnyAgentTool } | { error: string };
+        try {
+          if (!isRecord(toolRaw)) {
+            inspected = { error: "tool must be an object" };
+          } else {
+            const requiredClientCaps = toolRaw.requiredClientCaps;
+            const validCaps =
+              Array.isArray(requiredClientCaps) &&
+              requiredClientCaps.every((requiredCap) => typeof requiredCap === "string");
+            if (
+              validCaps &&
+              requiredClientCaps.some((requiredCap) => !clientCaps.has(requiredCap))
+            ) {
+              continue;
+            }
+            const error = !toolName
+              ? "missing non-empty name"
+              : typeof toolRaw.execute !== "function"
+                ? `${toolName} missing execute function`
+                : !isRecord(toolRaw.parameters)
+                  ? `${toolName} missing parameters object`
+                  : requiredClientCaps !== undefined && !validCaps
+                    ? `${toolName} requiredClientCaps must be an array of strings`
+                    : undefined;
+            inspected = error
+              ? { error }
+              : {
+                  tool: bindPluginToolCallbacks(
+                    entry,
+                    owner.registry,
+                    toolRaw as AnyAgentTool,
+                    factoryContext.assertInvocationCurrent,
+                    factoryContext.memoryAudience,
+                  ),
+                };
+          }
+        } catch (error) {
+          inspected = { error: formatErrorMessage(error) };
         }
         if ("error" in inspected) {
           reportError(entry, `plugin tool is malformed (${entry.pluginId}): ${inspected.error}`);

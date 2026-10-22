@@ -6,7 +6,11 @@ import {
 } from "../../infra/sqlite-lifecycle-errors.js";
 import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { getCliHistoryWriter } from "./cli-history-boundary.js";
+import {
+  answerCliHistoryOwnerProbe,
+  cliHistoryWriterFacts,
+  getCliHistoryWriter,
+} from "./cli-history-boundary.js";
 import {
   assertSessionGoalOperationTime,
   prepareSessionTurnGoalMessage,
@@ -60,15 +64,16 @@ type TurnResult = SqliteExpectedSessionTranscriptTurnResult | { kind: "restore-c
 
 export async function appendSessionTurnInWorker(
   requested: ResolvedTranscriptScope,
-  options: SqliteSessionTurnOptions,
+  requestedOptions: SqliteSessionTurnOptions,
   context: SessionTranscriptTurnWriteContext,
   native: (
     messages: SessionTranscriptTurnMessageAppend[],
   ) => Promise<SqliteExpectedSessionTranscriptTurnResult>,
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
+  let options = requestedOptions;
   const scope = captureLifecycleDatabaseScope(requested);
   const database = { ...toDatabaseOptions(scope), path: scope.path };
-  const inputActor = await getSessionInputActor(scope);
+  const inputActor = await getSessionInputActor(scope, options.resolveRuntimeTarget);
   if (inputActor && inputActor.target.readSource?.path !== database.path) {
     throw new Error("Input actor changed the transcript's physical target");
   }
@@ -81,10 +86,11 @@ export async function appendSessionTurnInWorker(
   const freshCommitGuards = new Set<() => void>();
   const sources: (PreparedSessionSourceAuthority | undefined)[] = [];
   const committedCompletions: Promise<void>[] = [];
+  const assertOwnerCurrent = () =>
+    (ownerSource?.assertPreparedCurrent ?? ownerSource?.assertCurrent)?.();
   const assertCurrent = () => {
     execution?.assertCurrent();
     inputActor?.storageAuthority?.assertCurrent();
-    (ownerSource?.assertPreparedCurrent ?? ownerSource?.assertCurrent)?.();
     options.assertCurrent?.();
     options.sessionTurnMutation?.assertCurrent?.();
     if (options.sessionTurnMutation) {
@@ -123,18 +129,14 @@ export async function appendSessionTurnInWorker(
           }
         : undefined,
     },
-    cliWriter: cliWriter
-      ? {
-          runId: cliWriter.runId,
-          authFingerprint: cliWriter.authFingerprint,
-          lifecycleRevision: cliWriter.lifecycleRevision,
-        }
-      : undefined,
+    // The worker asks the host to confirm the owner inside its commit transaction.
+    cliWriter: cliWriter && cliHistoryWriterFacts(cliWriter),
     ownerSources: ownerSource?.checks.map(({ predicate }) => predicate),
     custody: custody?.facts,
     relocation: custody?.relocation,
   };
   const actor = inputActor?.actor;
+  let runtimeTarget: SqliteExpectedSessionTranscriptTurnResult["runtimeTarget"];
   let inputExpectedState = options.expectedSessionState;
   const fixedVoiceTranscript =
     !actor &&
@@ -160,7 +162,8 @@ export async function appendSessionTurnInWorker(
     !memory &&
     !fixedVoiceTranscript &&
     !messages.some((append) => append.shouldAppend) &&
-    (Boolean(sessionTurnMutation) ||
+    (options.resolveRuntimeTarget ||
+      Boolean(sessionTurnMutation) ||
       messages.some(
         (append) =>
           append.workerPreparation ||
@@ -179,7 +182,10 @@ export async function appendSessionTurnInWorker(
       return restoreSessionTurnColdTranscript(
         scope,
         options,
-        assertCurrent,
+        () => {
+          assertCurrent();
+          assertOwnerCurrent();
+        },
         plan.options.initialSessionEntry,
       );
     };
@@ -196,6 +202,9 @@ export async function appendSessionTurnInWorker(
       assertCurrent,
       candidateKind: "session-turn",
       onTransactionFacts(facts) {
+        if (answerCliHistoryOwnerProbe(facts, cliWriter)) {
+          return true;
+        }
         if (isRecord(facts) && facts.kind === "session-turn-owner") {
           if (!ownerSource) {
             throw new Error("Session turn omitted its owner source authority");
@@ -237,6 +246,8 @@ export async function appendSessionTurnInWorker(
         return true;
       },
       assertCandidate(candidate) {
+        // The transaction has supplied source facts; admit the real write once here.
+        assertOwnerCurrent();
         if (custodyRequired) {
           custody?.assertCurrent(candidate.authority, assertCurrent);
         }
@@ -255,6 +266,23 @@ export async function appendSessionTurnInWorker(
         }
         const prepareOwnedTurn = async () => {
           const prepared = await prepareTurn();
+          if (prepared.runtimeTarget) {
+            runtimeTarget = prepared.runtimeTarget;
+            if (inputActor && runtimeTarget.sessionKey !== inputActor.actor.target.sessionKey) {
+              throw new Error("Input actor differs from the recorder's admitted target");
+            }
+            scope.sessionKey = runtimeTarget.sessionKey;
+            context.sessionKey = runtimeTarget.sessionKey;
+            const selected = {
+              resolveRuntimeTarget: undefined,
+              selectedSessionId: runtimeTarget.selectedSessionId,
+              selectedLifecycleRevision: runtimeTarget.selectedLifecycleRevision,
+              sessionFile: runtimeTarget.sessionKey,
+            };
+            options = { ...options, ...selected };
+            plan.sessionKey = runtimeTarget.sessionKey;
+            plan.options = { ...plan.options, ...selected };
+          }
           if (prepared.refusedOwnerSource) {
             ownerSource?.checks[prepared.refusedOwnerSource.index]?.refuse(
               prepared.refusedOwnerSource.facts,
@@ -279,6 +307,9 @@ export async function appendSessionTurnInWorker(
         }
         const accepted: SessionTranscriptTurnMessageAppend[] = [];
         for (const append of messages) {
+          if (append.shouldAppend) {
+            assertOwnerCurrent();
+          }
           if (!append.shouldAppend || (await append.shouldAppend(context))) {
             accepted.push(append);
           }
@@ -353,6 +384,7 @@ export async function appendSessionTurnInWorker(
             if (hooks?.prepareMessageAfterIdempotencyCheckAsync) {
               append.preparationVersion = preparation?.version;
             }
+            assertOwnerCurrent();
             message = await prepare(message);
             assertCurrent();
           }
@@ -603,5 +635,5 @@ export async function appendSessionTurnInWorker(
   if (!outcome.ok) {
     throw outcome.error;
   }
-  return outcome.value;
+  return runtimeTarget ? { ...outcome.value, runtimeTarget } : outcome.value;
 }

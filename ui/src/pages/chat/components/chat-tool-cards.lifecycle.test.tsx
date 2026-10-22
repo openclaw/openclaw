@@ -6,6 +6,39 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
+it("remeasures each disclosure's own content on pointer and focus interactions", async () => {
+  const { container } = mountSolid(() => (
+    <>
+      <ChatToolCard
+        card={{ id: "first", name: "exec", args: { command: "first command" } }}
+        options={{ messageKey: "first", expanded: false, onToggleExpanded: vi.fn() }}
+      />
+      <ChatToolCard
+        card={{ id: "second", name: "exec", args: { command: "second command" } }}
+        options={{ messageKey: "second", expanded: false, onToggleExpanded: vi.fn() }}
+      />
+    </>
+  ));
+  await waitForSolid(() => expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(2));
+  const [first, second] = [...container.querySelectorAll<HTMLElement>(".chat-tool-row")];
+  let firstWidth = 80;
+  for (const [row, width] of [
+    [first!, () => firstWidth],
+    [second!, () => 20],
+  ] as const) {
+    Object.defineProperties(row.querySelector(".chat-tool-disclosure__content")!, {
+      scrollWidth: { get: width },
+      clientWidth: { value: 50 },
+    });
+    row.dispatchEvent(new Event("pointerenter"));
+  }
+  expect(first!.classList.contains("chat-tool-disclosure--overflowing")).toBe(true);
+  expect(second!.classList.contains("chat-tool-disclosure--overflowing")).toBe(false);
+  firstWidth = 20;
+  first!.dispatchEvent(new FocusEvent("focus"));
+  expect(first!.classList.contains("chat-tool-disclosure--overflowing")).toBe(false);
+});
+
 it.each([
   { hasChildren: undefined, mode: "inferred" },
   { hasChildren: true, mode: "explicit" },

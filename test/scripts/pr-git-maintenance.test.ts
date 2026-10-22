@@ -80,40 +80,37 @@ function createMaintenanceFixture(command: string, exitCode: number) {
   const hook = join(root, "recent-objects.mjs");
   writeFileSync(
     hook,
-    [
-      fixtureReceiptClientSource(receipts.endpoint),
-      'import { execFileSync } from "node:child_process";',
-      'import { existsSync, fstatSync, renameSync, writeFileSync } from "node:fs";',
-      `const ready = ${JSON.stringify(ready)};`,
-      "if (!existsSync(ready)) {",
-      '  const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());',
-      "  const notifierOpen = fstatSync(3).isSocket() || fstatSync(3).isFIFO();",
-      '  writeFileSync(ready + ".pending", JSON.stringify({ pgid, notifierOpen }));',
-      '  renameSync(ready + ".pending", ready);',
-      '  sendReceipt(ready, "ready");',
-      '  await awaitRelease(ready, "release");',
-      `  writeFileSync(${JSON.stringify(completed)}, "complete\\n");`,
-      "}",
-    ].join("\n"),
+    fixtureReceiptClientSource(receipts.endpoint) +
+      `
+import { execFileSync } from "node:child_process";
+import { existsSync, fstatSync, renameSync, writeFileSync } from "node:fs";
+const ready = ${JSON.stringify(ready)};
+if (!existsSync(ready)) {
+  const pgid = Number(execFileSync("ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim());
+  const notifierOpen = fstatSync(3).isSocket() || fstatSync(3).isFIFO();
+  writeFileSync(ready + ".pending", JSON.stringify({ pgid, notifierOpen }));
+  renameSync(ready + ".pending", ready);
+  sendReceipt(ready, "ready");
+  await awaitRelease(ready, "release");
+  writeFileSync(${JSON.stringify(completed)}, "complete\\n");
+}`,
   );
   git(["config", "gc.recentObjectsHook", `${shellQuote(process.execPath)} ${shellQuote(hook)}`]);
 
   const script = join(root, "operation.sh");
   writeFileSync(
     script,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      `source ${shellQuote(lockScript)}`,
-      `repo_root() { printf '%s\\n' ${shellQuote(repo)}; }`,
-      "acquire_pr_operation_lock 42",
-      "begin_pr_operation_validation_phase",
-      "mark_pr_operation_side_effects_started",
-      'test "$(git config --get test.fromCount)" = "preserved count value"',
-      'test "$(git config --get test.fromParameters)" = "value with spaces=kept"',
-      command,
-      `exit ${exitCode}`,
-    ].join("\n"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+source ${shellQuote(lockScript)}
+repo_root() { printf '%s\\n' ${shellQuote(repo)}; }
+acquire_pr_operation_lock 42
+begin_pr_operation_validation_phase
+mark_pr_operation_side_effects_started
+test "$(git config --get test.fromCount)" = "preserved count value"
+test "$(git config --get test.fromParameters)" = "value with spaces=kept"
+${command}
+exit ${exitCode}`,
   );
   chmodSync(script, 0o755);
   return { repo, env, git, script, ready, completed };
@@ -126,60 +123,26 @@ describePosix("scripts/pr Git maintenance ownership", () => {
   afterAll(async () => {
     await receipts.close();
   });
-  it.for(["git fetch origin main", "git gc --auto"])(
-    "suppresses automatic maintenance during %s",
-    async (command, { signal }) => {
-      const fixture = createMaintenanceFixture(command, 0);
-      const config = readFileSync(join(fixture.repo, ".git/config"), "utf8");
-      receipts.release(fixture.ready, "release");
-      const child = spawn(process.execPath, [runner, fixture.repo, fixture.script], {
-        cwd: fixture.repo,
-        env: fixture.env,
-        stdio: ["ignore", "ignore", "pipe"],
-      });
-      let stderr = "";
-      child.stderr.setEncoding("utf8");
-      child.stderr.on("data", (chunk: string) => (stderr += chunk));
-      const closed = new Promise<number | null>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", resolve);
-      });
-      try {
-        expect(await withinTest(closed, signal), stderr).toBe(0);
-      } finally {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill("SIGKILL");
-        }
-        await closed;
+  it.for(["git fetch origin main", "git gc --auto", 0, 7])(
+    "owns Git maintenance through %s",
+    async (variant, { signal }) => {
+      const automatic = typeof variant === "string";
+      const exitCode = automatic ? 0 : variant;
+      const f = createMaintenanceFixture(automatic ? variant : "git gc", exitCode);
+      const config = readFileSync(join(f.repo, ".git/config"), "utf8");
+      if (automatic) {
+        receipts.release(f.ready, "release");
       }
-      expect(existsSync(fixture.ready)).toBe(false);
-      expect(existsSync(fixture.completed)).toBe(false);
-      expect(
-        spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
-          cwd: fixture.repo,
-          env: fixture.env,
-        }).status,
-      ).toBe(1);
-      expect(readFileSync(join(fixture.repo, ".git/config"), "utf8")).toBe(config);
-      expect(fixture.git(["config", "--bool", "maintenance.auto"])).toBe("true");
-      expect(fixture.git(["config", "--int", "gc.auto"])).toBe("1");
-    },
-  );
-
-  it.for([
-    { command: "git gc", exitCode: 0 },
-    { command: "git gc", exitCode: 7 },
-  ])(
-    "joins $command before operation completion (exit $exitCode)",
-    async ({ command, exitCode }, { signal }) => {
-      const fixture = createMaintenanceFixture(command, exitCode);
-      const child = spawn(process.execPath, [runner, fixture.repo, fixture.script], {
-        cwd: fixture.repo,
-        env: fixture.env,
-        stdio: ["ignore", "pipe", "pipe"],
+      const child = spawn(process.execPath, [runner, f.repo, f.script], {
+        cwd: f.repo,
+        env: f.env,
+        stdio: ["ignore", automatic ? "ignore" : "pipe", "pipe"],
       });
       let stderr = "";
-      child.stdout.resume();
+      child.stdout?.resume();
+      if (!child.stderr) {
+        throw new Error("expected piped maintenance stderr");
+      }
       child.stderr.setEncoding("utf8");
       child.stderr.on("data", (chunk: string) => {
         stderr += chunk;
@@ -189,72 +152,89 @@ describePosix("scripts/pr Git maintenance ownership", () => {
         child.once("close", resolve);
       });
       try {
-        await withinTest(
-          Promise.race([
-            receipts.waitFor(fixture.ready, "ready"),
-            closed.then(() => {
-              // The hook publishes this record before its receipt; separate pipes may reorder.
-              expect(existsSync(fixture.ready), stderr).toBe(true);
-            }),
-          ]),
-          signal,
-        );
-        const ownerOid = fixture.git(["rev-parse", lockRef]);
-        const owner = fixture.git(["cat-file", "blob", ownerOid]);
-        const pgid = Number(/^pgid=(\d+)$/m.exec(owner)?.[1]);
-        const hookState = JSON.parse(readFileSync(fixture.ready, "utf8")) as {
-          pgid: number;
-          notifierOpen: boolean;
-        };
-        expect(hookState.notifierOpen).toBe(true);
-        expect(hookState.pgid).toBe(pgid);
-        expect(child.exitCode).toBeNull();
-        expect(existsSync(fixture.completed)).toBe(false);
-        // A second operation cannot acquire the exact PR while maintenance is held.
-        const probe = spawn(
-          "bash",
-          [
-            "-c",
-            `source ${shellQuote(lockScript)}; repo_root() { printf '%s\\n' ${shellQuote(fixture.repo)}; }; try_acquire_pr_operation_lock 42`,
-          ],
-          { cwd: fixture.repo, env: fixture.env, detached: true, stdio: "ignore" },
-        );
-        const probeClosed = new Promise<number | null>((resolve, reject) => {
-          probe.once("error", reject);
-          probe.once("close", resolve);
-        });
-        try {
-          expect(await withinTest(probeClosed, signal)).toBe(1);
-        } finally {
-          if (probe.exitCode === null && probe.signalCode === null) {
-            probe.kill("SIGKILL");
+        if (automatic) {
+          expect(await withinTest(closed, signal), stderr).toBe(0);
+        } else {
+          await withinTest(
+            Promise.race([
+              receipts.waitFor(f.ready, "ready"),
+              closed.then(() => {
+                // The hook writes before its receipt; separate pipes may reorder.
+                expect(existsSync(f.ready), stderr).toBe(true);
+              }),
+            ]),
+            signal,
+          );
+          const ownerOid = f.git(["rev-parse", lockRef]);
+          const owner = f.git(["cat-file", "blob", ownerOid]);
+          const pgid = Number(/^pgid=(\d+)$/m.exec(owner)?.[1]);
+          expect(JSON.parse(readFileSync(f.ready, "utf8"))).toMatchObject({
+            notifierOpen: true,
+            pgid,
+          });
+          expect(child.exitCode).toBeNull();
+          expect(existsSync(f.completed)).toBe(false);
+          const probe = spawn(
+            "bash",
+            [
+              "-c",
+              `source ${shellQuote(lockScript)}; repo_root() { printf '%s\\n' ${shellQuote(f.repo)}; }; try_acquire_pr_operation_lock 42`,
+            ],
+            { cwd: f.repo, env: f.env, detached: true, stdio: "ignore" },
+          );
+          const probeClosed = new Promise<number | null>((resolve, reject) => {
+            probe.once("error", reject);
+            probe.once("close", resolve);
+          });
+          try {
+            expect(await withinTest(probeClosed, signal)).toBe(1);
+          } finally {
+            if (probe.exitCode === null && probe.signalCode === null) {
+              probe.kill("SIGKILL");
+            }
+            await probeClosed;
           }
-          await probeClosed;
+          expect(f.git(["rev-parse", lockRef])).toBe(ownerOid);
         }
-        expect(fixture.git(["rev-parse", lockRef])).toBe(ownerOid);
       } finally {
-        // The gate belongs to this fixture. Let Git finish and join it; no PID-based cleanup.
-        receipts.release(fixture.ready, "release");
+        if (automatic && child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+        // Only this fixture releases the hook; always join Git before cleanup.
+        if (!automatic) {
+          receipts.release(f.ready, "release");
+        }
         await closed;
       }
       expect(child.exitCode, stderr).toBe(exitCode);
-      expect(existsSync(fixture.completed)).toBe(true);
-      expect(stderr).not.toContain("drain deadline");
-      expect(stderr).not.toContain("process group remained active");
-      // A joined maintenance failure drains like a clean exit, so both release the lock.
+      expect(existsSync(f.completed)).toBe(!automatic);
       expect(
         spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
-          cwd: fixture.repo,
-          env: fixture.env,
+          cwd: f.repo,
+          env: f.env,
         }).status,
       ).toBe(1);
-      if (exitCode !== 0) {
-        expect(stderr).toContain(
-          `Released the operation lock for PR #42 after exit code ${exitCode}`,
-        );
+      if (automatic) {
+        expect(existsSync(f.ready)).toBe(false);
+        expect(readFileSync(join(f.repo, ".git/config"), "utf8")).toBe(config);
+        expect([
+          f.git(["config", "--bool", "maintenance.auto"]),
+          f.git(["config", "--int", "gc.auto"]),
+        ]).toEqual(["true", "1"]);
+      } else {
+        expect(stderr).not.toContain("drain deadline");
+        expect(stderr).not.toContain("process group remained active");
+        if (exitCode !== 0) {
+          expect(stderr).toContain(
+            `Released the operation lock for PR #42 after exit code ${exitCode}`,
+          );
+        }
+        expect(
+          ["maintenance.autoDetach", "gc.autoDetach"].map((key) =>
+            f.git(["config", "--bool", key]),
+          ),
+        ).toEqual(["true", "true"]);
       }
-      expect(fixture.git(["config", "--bool", "maintenance.autoDetach"])).toBe("true");
-      expect(fixture.git(["config", "--bool", "gc.autoDetach"])).toBe("true");
     },
   );
 });

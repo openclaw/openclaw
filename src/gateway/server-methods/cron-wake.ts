@@ -3,6 +3,7 @@ import {
   errorShape,
   validateWakeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
 import { isSubagentSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
@@ -38,6 +39,26 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
   const sessionKey = p.sessionKey?.trim() || undefined;
   const agentId = p.agentId?.trim() || undefined;
   const callerScope = readCronCallerScope(client);
+  const sessionKeyAgentId = sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined;
+  if (callerScope && agentId && normalizeAgentId(agentId) !== callerScope.agentId) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "wake agentId outside caller scope"),
+    );
+    return;
+  }
+  if (agentId && sessionKeyAgentId && agentId.toLowerCase() !== sessionKeyAgentId) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `agent "${agentId}" does not match session key agent "${sessionKeyAgentId}"`,
+      ),
+    );
+    return;
+  }
   const requestedOwner = sessionKey
     ? resolveRequestedSessionAgentId(
         context.getRuntimeConfig(),
@@ -47,6 +68,17 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
     : undefined;
   if (requestedOwner && !requestedOwner.ok) {
     respond(false, undefined, requestedOwner.error);
+    return;
+  }
+  if (
+    respondRefusedCronAgent(
+      requestedOwner?.agentId ??
+        callerScope?.agentId ??
+        agentId ??
+        tryResolveAmbientOwnerAgentId(context.getRuntimeConfig()),
+      respond,
+    )
+  ) {
     return;
   }
   const resolvedAgentId = requestedOwner?.agentId ?? callerScope?.agentId ?? agentId;
@@ -75,34 +107,7 @@ export const cronWakeHandler: GatewayRequestHandler = async ({
     );
     return;
   }
-  // The resolver normalizes agent ids. Reject conflicting raw spellings too,
-  // so an explicitly named target is never silently rewritten.
-  const sessionKeyAgentId = sessionKey
-    ? parseAgentSessionKey(sessionKey)?.agentId?.trim().toLowerCase()
-    : undefined;
-  if (callerScope && agentId && normalizeAgentId(agentId) !== callerScope.agentId) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "wake agentId outside caller scope"),
-    );
-    return;
-  }
-  if (agentId && sessionKeyAgentId && agentId.toLowerCase() !== sessionKeyAgentId) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        "wake agentId contradicts the agent that owns sessionKey; pass a single wake target",
-      ),
-    );
-    return;
-  }
   const wakeConfig = context.getRuntimeConfig();
-  if (respondRefusedCronAgent(resolvedAgentId, respond)) {
-    return;
-  }
   // Resolving a default wake agent can fail; role-free requests must retain their existing path.
   if (wakeConfig.gateway?.roles) {
     const knownWakeAgentId = resolvedAgentId ?? context.cron.getDefaultAgentId();

@@ -1,6 +1,8 @@
+import { onCleanup } from "solid-js";
+
 type VisibilityGroup = {
   observer: IntersectionObserver;
-  rows: Map<Element, Set<Element>>;
+  rows: Map<Element, Map<Element, (offscreen: boolean) => void>>;
 };
 
 const groups = new WeakMap<Element, VisibilityGroup>();
@@ -8,13 +10,13 @@ const groups = new WeakMap<Element, VisibilityGroup>();
 function visibilityGroup(root: Element): VisibilityGroup {
   let group = groups.get(root);
   if (!group) {
-    const rows = new Map<Element, Set<Element>>();
+    const rows = new Map<Element, Map<Element, (offscreen: boolean) => void>>();
     const observer = new IntersectionObserver(
       (entries) => {
         for (const entry of entries) {
-          for (const indicator of rows.get(entry.target) ?? []) {
+          for (const notify of rows.get(entry.target)?.values() ?? []) {
             // Edge contact already intersects at threshold zero; entering further may not notify.
-            indicator.classList.toggle("session-run-indicator--offscreen", !entry.isIntersecting);
+            notify(!entry.isIntersecting);
           }
         }
       },
@@ -26,63 +28,20 @@ function visibilityGroup(root: Element): VisibilityGroup {
   return group;
 }
 
-export class SessionRunVisibilityController {
-  private element?: Element;
-  private observation?: { root: Element; row: Element; group: VisibilityGroup };
-  private pending = false;
+export function createSessionRunVisibility(
+  onOffscreenChange: (offscreen: boolean) => void,
+): (element: Element) => void {
+  let current: Element | undefined;
+  let observation: { root: Element; row: Element; group: VisibilityGroup } | undefined;
+  let pending = false;
 
-  private connected = false;
-
-  connect(element: Element) {
-    if (this.element !== element) {
-      this.disconnect();
-    }
-    this.element = element;
-    this.connected = true;
-    this.schedule();
-  }
-
-  private schedule() {
-    if (this.pending || !this.connected) {
+  const release = () => {
+    if (!observation || !current) {
       return;
     }
-    this.pending = true;
-    // Child-owned rows attach after the sidebar updates; wait for this template's commit.
-    queueMicrotask(() => {
-      this.pending = false;
-      const element = this.element;
-      if (!this.connected || !element?.isConnected) {
-        return;
-      }
-      const row = element.closest(".session-row-host");
-      const root = element.closest(".sidebar-shell__body");
-      if (!row || !root) {
-        return;
-      }
-      if (this.observation?.root !== root || this.observation.row !== row) {
-        this.disconnect();
-        this.connected = true;
-        const group = visibilityGroup(root);
-        const indicators = group.rows.get(row) ?? new Set<Element>();
-        indicators.add(element);
-        group.rows.set(row, indicators);
-        this.observation = { root, row, group };
-      }
-      // A queued-state class binding can replace the paused class without moving the row.
-      // Reobserve so only native visibility delivery restores it after the completed render.
-      this.observation.group.observer.unobserve(row);
-      this.observation.group.observer.observe(row);
-    });
-  }
-
-  disconnect() {
-    this.connected = false;
-    if (!this.observation || !this.element) {
-      return;
-    }
-    const { root, row, group } = this.observation;
+    const { root, row, group } = observation;
     const indicators = group.rows.get(row);
-    indicators?.delete(this.element);
+    indicators?.delete(current);
     if (indicators?.size === 0) {
       group.observer.unobserve(row);
       group.rows.delete(row);
@@ -91,6 +50,45 @@ export class SessionRunVisibilityController {
       group.observer.disconnect();
       groups.delete(root);
     }
-    this.observation = undefined;
-  }
+    observation = undefined;
+  };
+  onCleanup(() => {
+    release();
+    current = undefined;
+  });
+
+  return (next) => {
+    if (current !== next) {
+      release();
+      current = next;
+    }
+    if (pending) {
+      return;
+    }
+    pending = true;
+    // Child-owned rows attach after the sidebar updates; wait for this template's commit.
+    queueMicrotask(() => {
+      pending = false;
+      const element = current;
+      if (!element?.isConnected) {
+        return;
+      }
+      const row = element.closest(".session-row-host");
+      const root = element.closest(".sidebar-shell__body");
+      if (!row || !root) {
+        return;
+      }
+      if (observation?.root !== root || observation.row !== row) {
+        release();
+        const group = visibilityGroup(root);
+        const indicators = group.rows.get(row) ?? new Map<Element, (offscreen: boolean) => void>();
+        indicators.set(element, onOffscreenChange);
+        group.rows.set(row, indicators);
+        observation = { root, row, group };
+        // A new indicator needs native delivery even when this row is already observed.
+        group.observer.unobserve(row);
+        group.observer.observe(row);
+      }
+    });
+  };
 }

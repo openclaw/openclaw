@@ -1,10 +1,10 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  createMessageReceiptFromOutboundResults,
   resolveOutboundSendDep,
   type MessageReceipt,
   type OutboundSendDeps,
@@ -89,22 +89,19 @@ async function sendWithDeliveryResults(
     if (earlierResults.length === 0) {
       throw error;
     }
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        ...earlierResults.map((result) => attachChannelToResult("msteams", result)),
-        ...(partial?.deliveryResult.receipt
-          ? [{ receipt: partial.deliveryResult.receipt }]
-          : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({
-              channel: "msteams",
-              messageId,
-            }))),
-      ],
-    });
     throw createChannelPartialDeliveryError(partial?.cause ?? error, {
       ...partial?.deliveryResult,
-      messageIds: receipt.platformMessageIds,
-      receipt,
-      visibleReplySent: true,
+      ...createAcceptedChannelDeliveryResult({
+        results: [
+          ...earlierResults.map((result) => attachChannelToResult("msteams", result)),
+          ...(partial?.deliveryResult.receipt
+            ? [{ receipt: partial.deliveryResult.receipt }]
+            : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({
+                channel: "msteams",
+                messageId,
+              }))),
+        ],
+      }),
     });
   }
 }
@@ -315,7 +312,6 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
         createdAt: new Date().toISOString(),
         conversationId: result.conversationId,
         messageId: result.messageId,
-        votes: {},
       });
       return result;
     },

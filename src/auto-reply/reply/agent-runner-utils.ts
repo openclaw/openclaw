@@ -51,6 +51,7 @@ import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   buildReplyRunStateParams,
   resolveModelFallbackOptions,
+  resolveReplyScheduledToolPolicy,
   resolveRunModelHasVision,
 } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
@@ -298,7 +299,7 @@ function buildEmbeddedContextFromTemplate(params: {
     agentAccountId: sessionCtx.AccountId,
     conversationRoutePeerId: params.run.conversationRoutePeerId,
     messageTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
-    messageThreadId: sessionCtx.MessageThreadId ?? undefined,
+    messageThreadId: sessionCtx.MessageThreadId,
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
@@ -343,10 +344,7 @@ export function buildModelResolveContext(
 
 /** Bind either runtime to the same trusted source turn and requester. */
 export function mintReplyMessageActionTurnCapability(
-  turn: Pick<
-    AgentTurnParams,
-    "followupRun" | "sessionCtx" | "opts" | "isHeartbeat" | "runtimePolicySessionKey"
-  >,
+  turn: Pick<AgentTurnParams, "followupRun" | "sessionCtx" | "opts" | "runtimePolicySessionKey">,
   runId: string,
 ): string | undefined {
   // An event's captured delivery route is not a new trusted channel turn.
@@ -355,7 +353,7 @@ export function mintReplyMessageActionTurnCapability(
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
-  if (turn.isHeartbeat || (!channelIngress && turn.sessionCtx.Provider !== "webchat")) {
+  if (!channelIngress && turn.sessionCtx.Provider !== "webchat") {
     return undefined;
   }
   const context = buildEmbeddedContextFromTemplate({
@@ -447,83 +445,94 @@ export async function buildEmbeddedRunExecutionParams(params: {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
   const embeddedContext = buildEmbeddedContextFromTemplate(params);
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
-  // Retain the base-input snapshot across thinking and vision discovery.
-  const snapshot = { ...params };
-  const config = snapshot.run.config;
+  const config = params.run.config;
+  const automation = params.run.scheduledAutomation;
+  automation?.assertCurrent();
+  const job = automation?.job;
+  const scheduledToolPolicy = resolveReplyScheduledToolPolicy(params.run);
   const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
-    resolveModelFallbackOptions(snapshot.run);
+    resolveModelFallbackOptions(params.run);
   let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
-  if (snapshot.agentRuntime) {
+  if (params.agentRuntime) {
     // Keep the lifecycle-owned catalog module lazy until this turn has a selected runtime.
     const { loadProviderScopedThinkingCatalog } =
       await import("../../agents/model-catalog.runtime.js");
     const observedCatalog = normalizeThinkingCatalogProviders(
       await loadProviderScopedThinkingCatalog({
         config,
-        provider: snapshot.provider,
-        model: snapshot.model,
-        agentRuntime: snapshot.agentRuntime,
-        agentId: snapshot.run.agentId,
-        agentDir: snapshot.run.agentDir,
-        workspaceDir: snapshot.run.workspaceDir,
+        provider: params.provider,
+        model: params.model,
+        agentRuntime: params.agentRuntime,
+        agentId: params.run.agentId,
+        agentDir: params.run.agentDir,
+        workspaceDir: params.run.workspaceDir,
       }),
     );
-    const thinkingCatalog = findModelInCatalog(observedCatalog, snapshot.provider, snapshot.model)
+    const thinkingCatalog = findModelInCatalog(observedCatalog, params.provider, params.model)
       ? observedCatalog
-      : snapshot.run.thinkingCatalog;
+      : params.run.thinkingCatalog;
     modelThinkingCapability = prepareModelRunCapabilities(
       [thinkingCatalog, []],
-      [snapshot.provider, snapshot.model, snapshot.agentRuntime],
+      [params.provider, params.model, params.agentRuntime],
     ).modelThinkingCapability;
   }
   const enforceFinalTag =
-    !snapshot.run.skipProviderRuntimeHints &&
-    (snapshot.run.enforceFinalTag ||
-      isReasoningTagProvider(snapshot.provider, {
+    !params.run.skipProviderRuntimeHints &&
+    (params.run.enforceFinalTag ||
+      isReasoningTagProvider(params.provider, {
         config,
-        workspaceDir: snapshot.run.workspaceDir,
-        modelId: snapshot.model,
+        workspaceDir: params.run.workspaceDir,
+        modelId: params.model,
       }));
+  const modelHasVision = await resolveRunModelHasVision(params);
+  automation?.assertCurrent();
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
     ...embeddedContext,
     ...senderContext,
-    ...buildReplyRunStateParams(snapshot.run),
-    providerReviewAcknowledgment: snapshot.run.providerReviewAcknowledgment,
-    permissionMode: snapshot.run.permissionMode,
-    sessionRoot: snapshot.run.sessionRoot,
-    agentDir: snapshot.run.agentDir,
+    ...buildReplyRunStateParams(params.run),
+    providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
+    permissionMode: params.run.permissionMode,
+    sessionRoot: params.run.sessionRoot,
+    agentDir: params.run.agentDir,
     config,
-    trustedInternalHandoff: snapshot.run.trustedInternalHandoff,
-    scheduledToolPolicy: snapshot.run.scheduledToolPolicy,
-    runtimePluginToolGrant: snapshot.run.runtimePluginToolGrant,
+    trustedInternalHandoff: params.run.trustedInternalHandoff,
+    scheduledToolPolicy,
+    ...(job
+      ? {
+          jobId: job.id,
+          scheduledRuntimeAuthority: job.runtimeAuthority,
+          scheduledRuntimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired === true,
+        }
+      : {}),
+    runtimePluginToolGrant: params.run.runtimePluginToolGrant,
     enforceFinalTag,
-    silentExpected: snapshot.run.silentExpected,
-    silentReplyPromptMode: snapshot.run.silentReplyPromptMode,
-    sourceReplyDeliveryMode: snapshot.run.sourceReplyDeliveryMode,
-    toolBindings: snapshot.run.toolBindings,
-    skillLibraryAuthoring: snapshot.run.skillLibraryAuthoring,
-    provider: snapshot.provider,
-    model: snapshot.model,
-    modelHasVision: await resolveRunModelHasVision(snapshot),
+    silentExpected: params.run.silentExpected,
+    silentReplyPromptMode: params.run.silentReplyPromptMode,
+    sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
+    toolBindings: params.run.toolBindings,
+    skillLibraryAuthoring: params.run.skillLibraryAuthoring,
+    provider: params.provider,
+    model: params.model,
+    modelHasVision,
     ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
     requestedRouteResolution: "resolved" as const,
-    modelSelectionLocked: snapshot.run.modelSelectionLocked,
+    modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbackAvailability,
     modelFallbacksOverride,
     ...authProfile,
-    thinkLevel: snapshot.run.thinkLevel,
-    thinkingExplicit: snapshot.run.thinkingExplicit,
-    fastMode: snapshot.run.fastMode,
-    fastModeAutoOnSeconds: snapshot.run.fastModeAutoOnSeconds,
-    verboseLevel: snapshot.run.verboseLevel,
-    reasoningLevel: snapshot.run.reasoningLevel,
-    execOverrides: snapshot.run.execOverrides,
-    bashElevated: snapshot.run.bashElevated,
-    timeoutMs: snapshot.run.timeoutMs,
-    runTimeoutOverrideMs: snapshot.run.runTimeoutOverrideMs,
-    runId: snapshot.runId,
-    promptCacheKey: snapshot.promptCacheKey,
-    allowTransientCooldownProbe: snapshot.allowTransientCooldownProbe,
+    thinkLevel: params.run.thinkLevel,
+    thinkingExplicit: params.run.thinkingExplicit,
+    fastMode: params.run.fastMode,
+    fastModeAutoOnSeconds: params.run.fastModeAutoOnSeconds,
+    verboseLevel: params.run.verboseLevel,
+    reasoningLevel: params.run.reasoningLevel,
+    execOverrides: params.run.execOverrides,
+    bashElevated: params.run.bashElevated,
+    timeoutMs: params.run.timeoutMs,
+    runTimeoutOverrideMs: params.run.runTimeoutOverrideMs,
+    runId: params.runId,
+    promptCacheKey: params.promptCacheKey,
+    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
 }

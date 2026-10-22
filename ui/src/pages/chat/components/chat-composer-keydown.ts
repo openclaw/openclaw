@@ -1,15 +1,12 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import { keepMobileReturnNative } from "../../../lib/browser-platform.ts";
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
-import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
+import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
-import { handleSkillMenuKeydown, type SkillMenuHost } from "./chat-composer-skill-menu.tsx";
-import {
-  handleInlineSlashArgKeydown,
-  handleSlashMenuKeydown,
-  type SlashMenuHost,
-} from "./chat-composer-slash-menu.tsx";
+import type { SkillMenuHost } from "./chat-composer-skill-menu.tsx";
+import type { SlashMenuHost } from "./chat-composer-slash-menu.tsx";
 import { commitComposerDraft } from "./chat-composer-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
@@ -21,7 +18,6 @@ type ComposerKeyDownDeps = {
   skillMenuHost: SkillMenuHost;
   slashMenuHost: SlashMenuHost;
   mentionMenuHost: HumanMentionMenuHost;
-  requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
   submitDraft: (
@@ -31,7 +27,7 @@ type ComposerKeyDownDeps = {
   ) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
-  goalComposer: GoalComposerController;
+  goalComposer: GoalComposer;
 };
 
 export function createComposerKeyDownHandler({
@@ -42,7 +38,6 @@ export function createComposerKeyDownHandler({
   skillMenuHost,
   slashMenuHost,
   mentionMenuHost,
-  requestUpdate,
   sendShortcut,
   canSubmitDraft,
   submitDraft,
@@ -57,15 +52,18 @@ export function createComposerKeyDownHandler({
     if (!(target instanceof HTMLTextAreaElement)) {
       return;
     }
+    if (keepMobileReturnNative(event)) {
+      return;
+    }
     if (state.composerComposing || isComposingKeyboardEvent(event)) {
       return;
     }
 
-    if (state.emojiMenu.handleKeydown(event, props.paneId, requestUpdate)) {
+    if (state.emojiMenu.handleKeydown(event, props.paneId)) {
       return;
     }
 
-    if (state.mentionMenu.handleKeydown(event, mentionMenuHost, requestUpdate)) {
+    if (state.mentionMenu.handleKeydown(event, mentionMenuHost)) {
       return;
     }
 
@@ -87,9 +85,8 @@ export function createComposerKeyDownHandler({
 
     if (
       props.connected &&
-      (handleSkillMenuKeydown(event, state, skillMenuHost, requestUpdate) ||
-        handleInlineSlashArgKeydown(event, state, slashMenuHost, requestUpdate, sendShortcut) ||
-        handleSlashMenuKeydown(event, state, slashMenuHost, requestUpdate))
+      (state.skillMenu.handleKeydown(event, skillMenuHost) ||
+        state.slashMenu.handleKeydown(event, slashMenuHost, sendShortcut))
     ) {
       return;
     }
@@ -131,9 +128,6 @@ export function createComposerKeyDownHandler({
         if (result.preventDefault) {
           event.preventDefault();
         }
-        // History navigation updates the renderer-owned draft outside a
-        // reactive property; commit it before placing the caret in the DOM.
-        requestUpdate();
         if (result.restoreCaret) {
           restoreHistoryCaret(target, result.restoreCaret);
         }
@@ -143,8 +137,8 @@ export function createComposerKeyDownHandler({
 
     if (
       event.key === "Escape" &&
-      !state.skillMenuOpen &&
-      !state.slashMenuOpen &&
+      !state.skillMenu.state.skillMenuOpen &&
+      !state.slashMenu.state.slashMenuOpen &&
       !state.mentionMenu.open &&
       !props.replyTarget &&
       !state.dictation?.active &&
@@ -196,4 +190,24 @@ export function createComposerKeyDownHandler({
       submitDraft(target.value, event, followUpModeOverride);
     }
   };
+}
+
+export function handleQueueEditKeydown(
+  event: KeyboardEvent,
+  edit: ChatComposerProps["queuedEdit"],
+): void {
+  if (keepMobileReturnNative(event)) {
+    return;
+  }
+  if (isComposingKeyboardEvent(event)) {
+    return;
+  }
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    edit?.onCancel();
+  } else if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    edit?.onEditSubmit?.();
+  }
 }

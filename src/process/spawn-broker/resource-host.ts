@@ -1,8 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomBytes } from "node:crypto";
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
@@ -19,7 +15,7 @@ import { BrokerNativeResourceCloseError } from "./resource-protocol.js";
 export type BrokerNativeResourceLease = {
   readonly attachment: BrokerResourceAttachment;
   receive(response: BrokerResourceResponse): void;
-  ownerMessage(value: unknown): { sequence: number; result: Promise<void> };
+  ownerMessage(value: unknown): { sequence: number };
   close(): Promise<void>;
   release(): void;
   abandonUnattached(): void;
@@ -45,7 +41,6 @@ type Claim = {
     {
       request: Extract<BrokerResourceRequest, { type: "resource-owner" }>;
       size: number;
-      completion: Deferred;
     }
   >;
   pending?: { requestId: number; completion: Deferred };
@@ -134,11 +129,9 @@ export class BrokerResourceClaims {
           throw new SpawnBrokerError("Native resource owner delivery capacity exceeded");
         }
         claim.ownerSequence = sequence;
-        const completion = createDeferredCore();
-        void completion.promise.catch(() => {});
         const request: Extract<BrokerResourceRequest, { type: "resource-owner" }> =
           deserialize(serialized);
-        claim.ownerMessages.set(sequence, { request, size: serialized.length, completion });
+        claim.ownerMessages.set(sequence, { request, size: serialized.length });
         this.bufferedBytes += serialized.length;
         this.bufferedMessages++;
         void (async () => {
@@ -150,12 +143,11 @@ export class BrokerResourceClaims {
           }
         })().catch((cause: unknown) => {
           const error = toErrorObject(cause, "Native resource owner delivery failed");
-          completion.reject(error);
           if (this.claims.get(captured.id) === claim && !claim.closed && !claim.failure) {
             claim.inContext(() => claim.callbacks.failed(error));
           }
         });
-        return { sequence, result: completion.promise };
+        return { sequence };
       },
       close: () => {
         if (claim.closed) {
@@ -208,7 +200,7 @@ export class BrokerResourceClaims {
         const error = new SpawnBrokerError("Native resource was never dispatched");
         claim.attached.reject(error);
         claim.pending?.completion.reject(error);
-        this.remove(claim, error);
+        this.remove(claim);
       },
     };
   }
@@ -244,10 +236,7 @@ export class BrokerResourceClaims {
             decodeNativeWorkerFailure(response.error),
             "Native resource owner callback failed",
           );
-          pending.completion.reject(error);
           claim.inContext(() => claim.callbacks.failed(error));
-        } else {
-          pending.completion.resolve();
         }
       }
       return;
@@ -264,10 +253,7 @@ export class BrokerResourceClaims {
         return;
       }
       claim.closed = true;
-      this.clearOwnerMessages(
-        claim,
-        new SpawnBrokerError("Native resource closed before owner delivery was acknowledged"),
-      );
+      this.clearOwnerMessages(claim);
       claim.pending?.completion.resolve();
       claim.pending = undefined;
       this.host.refreshReference();
@@ -285,16 +271,11 @@ export class BrokerResourceClaims {
         );
       }
     } else if (response.type === "resource-failed") {
-      // Factory/operation failure is observable, but the broker can still own cleanup.
+      // A delayed factory/operation failure cannot settle the separate native close obligation.
       const error = toErrorObject(
         decodeNativeWorkerFailure(response.error),
         "Native resource failed",
       );
-      claim.pending?.completion.reject(error);
-      claim.pending = undefined;
-      for (const pending of claim.ownerMessages.values()) {
-        pending.completion.reject(error);
-      }
       claim.inContext(() => claim.callbacks.failed(error));
       return;
     }
@@ -312,6 +293,13 @@ export class BrokerResourceClaims {
       }
     });
     return this.sealPromise;
+  }
+
+  /** The broker reported refused initialization and its process and pipes have joined. */
+  closeBeforeStartup(): void {
+    for (const claim of this.claims.values()) {
+      this.receive({ type: "resource-closed", id: claim.attachment.id, requestId: 0 });
+    }
   }
 
   fail(error: Error): void {
@@ -337,58 +325,21 @@ export class BrokerResourceClaims {
     claim.failure = error;
     claim.attached.reject(error);
     claim.pending?.completion.reject(error);
-    for (const pending of claim.ownerMessages.values()) {
-      pending.completion.reject(error);
-    }
     claim.pending = undefined;
     return true;
   }
 
-  private clearOwnerMessages(claim: Claim, error: Error): void {
+  private clearOwnerMessages(claim: Claim): void {
     for (const pending of claim.ownerMessages.values()) {
       this.bufferedBytes -= pending.size;
       this.bufferedMessages--;
-      pending.completion.reject(error);
     }
     claim.ownerMessages.clear();
   }
 
-  private remove(claim: Claim, error?: Error): void {
-    this.clearOwnerMessages(
-      claim,
-      error ??
-        new SpawnBrokerError("Native resource released before owner delivery was acknowledged"),
-    );
+  private remove(claim: Claim): void {
+    this.clearOwnerMessages(claim);
     this.claims.delete(claim.attachment.id);
     this.host.refreshReference();
   }
-}
-
-const UNIX_SOCKET_PATH_BYTES = 103;
-
-function createNativeResourceDirectory(): string {
-  const directory = mkdtempSync(join(tmpdir(), "oc-br-"));
-  if (
-    process.platform === "win32" ||
-    Buffer.byteLength(join(directory, "resource.sock")) <= UNIX_SOCKET_PATH_BYTES
-  ) {
-    return directory;
-  }
-  // A configured temp root can exceed Darwin's sockaddr_un even for a short private socket.
-  rmSync(directory, { recursive: true, force: true });
-  return mkdtempSync("/tmp/oc-br-");
-}
-
-export function createNativeResourceAuthority() {
-  const directory = createNativeResourceDirectory();
-  chmodSync(directory, 0o700);
-  const secret = randomBytes(32).toString("hex");
-  return {
-    directory,
-    secret,
-    endpoint:
-      process.platform === "win32"
-        ? `\\\\.\\pipe\\oc-br-${secret}`
-        : join(directory, "resource.sock"),
-  };
 }

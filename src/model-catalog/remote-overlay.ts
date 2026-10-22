@@ -116,12 +116,7 @@ export async function prepareRemoteModelCatalogStartupSnapshot(
   if (inherited !== undefined) {
     return inherited.catalog;
   }
-  let bundledGeneratedAt: number | undefined;
-  try {
-    bundledGeneratedAt = bundledCatalogGeneratedAt();
-  } catch {
-    return publishRemoteModelCatalogStartupSnapshot(null);
-  }
+  const bundledGeneratedAt = bundledCatalogGeneratedAt();
   if (bundledGeneratedAt === undefined) {
     return publishRemoteModelCatalogStartupSnapshot(null);
   }
@@ -158,10 +153,9 @@ export function runOutsideRemoteModelCatalogSnapshot<T>(run: () => T): T {
   return remoteCatalogScope.exit(run);
 }
 
-/** Preparation does not change the pair visible to current readers. */
-export async function readRemoteModelCatalogUpdate(
+async function readStoredRemoteModelCatalog(
   config: OpenClawConfig,
-): Promise<ActiveRemoteModelCatalog | undefined> {
+): Promise<{ snapshot: ActiveRemoteModelCatalog; bundledGeneratedAt: number } | undefined> {
   if (!isRemoteModelCatalogRefreshEnabled(config)) {
     return undefined;
   }
@@ -175,11 +169,29 @@ export async function readRemoteModelCatalogUpdate(
     bundledGeneratedAt,
   );
   context.admission.assertCurrent();
-  return snapshot &&
-    snapshot.generatedAt > bundledGeneratedAt &&
-    isRemoteCatalogSourceActive(config, snapshot.sourceUrl)
-    ? snapshot
+  return snapshot && isRemoteCatalogSourceActive(config, snapshot.sourceUrl)
+    ? { snapshot, bundledGeneratedAt }
     : undefined;
+}
+
+/** Preparation does not change the pair visible to current readers. */
+export async function readRemoteModelCatalogUpdate(
+  config: OpenClawConfig,
+): Promise<ActiveRemoteModelCatalog | undefined> {
+  const stored = await readStoredRemoteModelCatalog(config);
+  return stored && stored.snapshot.generatedAt > stored.bundledGeneratedAt
+    ? stored.snapshot
+    : undefined;
+}
+
+/** Stored recommendations stay valid when the catalog is older than this build. */
+export async function readRemoteModelCatalogProviderRecommendations(
+  config: OpenClawConfig,
+  provider: string,
+): Promise<readonly string[] | undefined> {
+  return (await readStoredRemoteModelCatalog(config))?.snapshot.recommendations[
+    normalizeProviderId(provider)
+  ];
 }
 
 /** The prepared catalog owner commits this pair in the same turn as its rows. */

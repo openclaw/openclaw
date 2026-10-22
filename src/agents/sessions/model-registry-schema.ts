@@ -113,6 +113,7 @@ const ProviderAuthModeSchema = Type.Union([
   Type.Literal("aws-sdk"),
   Type.Literal("oauth"),
   Type.Literal("token"),
+  Type.Literal("none"),
 ]);
 export type ProviderAuthMode = Static<typeof ProviderAuthModeSchema>;
 
@@ -144,6 +145,7 @@ const ModelDefinitionSchema = Type.Object({
   ),
   contextWindow: Type.Optional(Type.Number()),
   contextTokens: Type.Optional(Type.Number()),
+  parameterCount: Type.Optional(Type.Integer({ minimum: 1 })),
   maxTokens: Type.Optional(Type.Number()),
   params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),

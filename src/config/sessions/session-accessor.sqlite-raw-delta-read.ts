@@ -49,7 +49,7 @@ export function readTranscriptRawDeltaFromProjection(
 
 /** The caller owns this synchronous snapshot and any already-captured frontier. */
 export function readRawDeltaInTransaction(
-  database: import("node:sqlite").DatabaseSync,
+  database: import("../../infra/sql-connection.js").EngineConnection,
   scope: ResolvedTranscriptReadScope,
   encodedCursor: string | undefined,
   maxEvents: number,

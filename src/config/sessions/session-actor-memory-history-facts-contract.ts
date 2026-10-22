@@ -1,4 +1,5 @@
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
 import type {
   SessionTranscriptBoundedMessageTailOptions,
   SessionTranscriptBoundedMessageTailPage,
@@ -43,7 +44,7 @@ type Reads = {
     }>;
   };
   title: {
-    input: { includeInterSession?: boolean };
+    input: { includeInterSession?: boolean; skillCommands?: SkillCommandSpec[] };
     output: { kind: "session-title-fields"; fields: SessionTitleFields };
   };
   preview: {

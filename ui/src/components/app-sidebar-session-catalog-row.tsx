@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createEffect, Show, untrack } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type {
   SessionCatalog,
   SessionCatalogHost,
@@ -12,72 +12,32 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import {
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
   type CatalogSessionMenuRequest,
+  type CatalogBackingSessionDisplay,
+  type CatalogRowControls,
 } from "./app-sidebar-session-catalogs.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
+import { renderRecentSession as RecentSession } from "./app-sidebar-session-row-render.tsx";
 import { Icon } from "./solid/icon.tsx";
 import {
   SessionGlyph,
   SessionRowBadges,
   sessionRunVisibility,
 } from "./solid/session-presentation.tsx";
-const CATALOG_CONTROL_SELECTORS = [
-  ".sidebar-recent-session__link",
-  "[data-child-session-toggle]",
-  "[data-sidebar-session-pin]",
-  "[data-sidebar-session-archive]",
-  "[data-sidebar-session-menu]",
-  "[data-catalog-session-menu]",
+const CATALOG_CONTROLS = [
+  ["link", ".sidebar-recent-session__link"],
+  ["children", "[data-child-session-toggle]"],
+  ["pin", "[data-sidebar-session-pin]"],
+  ["archive", "[data-sidebar-session-archive]"],
+  ["menu", "[data-sidebar-session-menu]"],
+  ["catalogMenu", "[data-catalog-session-menu]"],
 ] as const;
-function catalogRowRef(
-  identityKey: string,
-  sessionKey: string,
-  catalogKey: CatalogSessionKey,
-  menuOpen: boolean,
-  params: SessionCatalogGroupsParams,
-): ((element: Element | undefined) => void) | undefined {
-  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const activeRow = active?.closest<HTMLElement>("[data-session-key]");
-  const selector = CATALOG_CONTROL_SELECTORS.find((candidate) => active?.matches(candidate));
-  const restoreFocus =
-    selector !== undefined &&
-    (activeRow?.dataset.catalogSessionKey === identityKey ||
-      activeRow?.dataset.sessionKey === identityKey ||
-      activeRow?.dataset.sessionKey === sessionKey);
-  if (!menuOpen && !restoreFocus) {
-    return undefined;
-  }
-  return (element) => {
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
-    if (menuOpen) {
-      params.onCatalogMenuTriggerRendered(
-        catalogKey,
-        element.querySelector("[data-catalog-session-menu]") ??
-          element.querySelector(".sidebar-recent-session__link") ??
-          undefined,
-      );
-    }
-    if (restoreFocus) {
-      queueMicrotask(() => {
-        if (element.isConnected && document.activeElement === document.body) {
-          (
-            element.querySelector<HTMLElement>(selector) ??
-            element.querySelector<HTMLElement>(".sidebar-recent-session__link")
-          )?.focus({
-            preventScroll: true,
-          });
-        }
-      });
-    }
-  };
-}
 export function renderCatalogSessionRow(
   readCatalog: () => SessionCatalog,
   readHost: () => SessionCatalogHost,
@@ -109,7 +69,8 @@ export function renderCatalogSessionRow(
   const identityKey = createMemo(() => buildCatalogSessionKey(catalogKey()));
   const key = createMemo(
     () =>
-      readSession().sessionKey ?? buildCatalogSessionKey(catalogKey(), params.newSessionAgentId),
+      readSession().sessionKey ??
+      buildCatalogSessionKey(catalogKey(), params.snapshot.newSessionAgentId),
   );
   const label = createMemo(() => readSession().name || readSession().threadId);
   const meta = createMemo(() => formatSidebarTimestamp(timestamp()));
@@ -118,25 +79,25 @@ export function renderCatalogSessionRow(
     sessionNavigationTarget({
       face: routeId,
       sessionKey: key(),
-      fallbackAgentId: params.newSessionAgentId,
-      basePath: params.basePath,
-      mainKey: params.mainKey,
+      fallbackAgentId: params.snapshot.newSessionAgentId,
+      basePath: params.snapshot.basePath,
+      mainKey: params.snapshot.mainKey,
     }),
   );
-  const href = createMemo(() => target().href),
-    navigation = createMemo(() => target().options);
   const catalogMenu = createMemo<CatalogSessionMenuRequest>(() => ({
     key: catalogKey(),
-    agentId: params.newSessionAgentId,
+    agentId: params.snapshot.newSessionAgentId,
     routeId,
-    navigation: navigation(),
+    navigation: target().options,
     canOpenTerminal: readSession().canOpenTerminal === true,
     canDelete: readSession().canArchive && readCatalog().capabilities.archive,
     name: readSession().name ?? readSession().threadId,
     displayName: readSession().name,
     meta: meta(),
   }));
-  const menuOpen = createMemo(() => params.isMenuOpen(catalogKey()));
+  const menuOpen = createMemo(() =>
+    params.host.sidebarMenus.catalogMenuView.isOpenFor(catalogKey()),
+  );
   const adoptedRow = createMemo(() => {
     const readSessionValue = readSession();
     const readLiveRowsByKeyValue = readLiveRowsByKey();
@@ -144,129 +105,164 @@ export function renderCatalogSessionRow(
       ? readLiveRowsByKeyValue.get(readSessionValue.sessionKey)
       : undefined;
   });
-  const rowRef = createMemo(() => {
-    // Adoption swaps the rendered row even when the catalog key is unchanged.
-    adoptedRow();
-    return catalogRowRef(identityKey(), key(), catalogKey(), menuOpen(), params);
-  });
+  const rowRef: NonNullable<CatalogBackingSessionDisplay["rowRef"]> = (
+    element,
+    controls,
+    previousFocus,
+  ) => {
+    const stop = params.host.sessionProjection.mountCatalogRow(key());
+    const active = previousFocus instanceof HTMLElement ? previousFocus : null;
+    const activeRow = active?.closest<HTMLElement>("[data-session-key]");
+    const control = CATALOG_CONTROLS.find(([, selector]) => active?.matches(selector))?.[0];
+    const restoreFocus =
+      control !== undefined &&
+      (activeRow?.dataset.catalogSessionKey === identityKey() ||
+        activeRow?.dataset.sessionKey === identityKey() ||
+        activeRow?.dataset.sessionKey === key());
+    if (menuOpen()) {
+      params.host.sidebarMenus.catalogMenu.retargetTrigger(
+        catalogKey(),
+        controls.catalogMenu ?? controls.link,
+      );
+    }
+    if (restoreFocus && control) {
+      queueMicrotask(() => {
+        if (element.isConnected && document.activeElement === document.body) {
+          const focusTarget = controls[control];
+          (focusTarget && element.contains(focusTarget) ? focusTarget : controls.link)?.focus({
+            preventScroll: true,
+          });
+        }
+      });
+    }
+    return stop;
+  };
   const color = createMemo(() => normalizeSessionColorValue(readSession().color ?? ""));
-  const active = createMemo(() => key() === params.routeSessionKey);
-  const running = createMemo(
-    () => readSession().status === "active" || readSession().status === "running",
-  );
-  const canOpenTerminal = createMemo(
-    () => readSession().canOpenTerminal === true && params.terminalAvailable,
-  );
-  const openTerminal = () => params.onOpenTerminal(catalogKey(), params.newSessionAgentId);
+  const active = createMemo(() => key() === params.snapshot.routeSessionKey);
+  const running = () => readSession().status === "active" || readSession().status === "running";
+  const canOpenTerminal = () =>
+    readSession().canOpenTerminal === true && params.snapshot.terminalAvailable;
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
-    params.onOpenMenu(catalogMenu(), x, y, trigger);
-  const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
-    handleContextMenuEvent(
+    params.host.sidebarMenus.catalogMenu.open(catalogMenu(), x, y, trigger);
+  const CatalogRow = () => {
+    const controls: CatalogRowControls = {};
+    const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (
       event,
-      event instanceof KeyboardEvent
-        ? event.currentTarget.querySelector<HTMLElement>("[data-catalog-session-menu]")
-        : null,
-      (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
+    ) =>
+      handleContextMenuEvent(
+        event,
+        event instanceof KeyboardEvent ? (controls.catalogMenu ?? null) : null,
+        (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
+      );
+    const marqueeLabel = (
+      <Show when={JSON.stringify([label(), readSession().status, readSession().pullRequest])} keyed>
+        {(_identity) => <>{renderHoverMarquee(label(), "sidebar-recent-session__name")}</>}
+      </Show>
     );
-  const marqueeLabel = (
-    <Show when={JSON.stringify([label(), readSession().status, readSession().pullRequest])} keyed>
-      {(_identity) => <>{renderHoverMarquee(label(), "sidebar-recent-session__name")}</>}
-    </Show>
-  );
-  let element: HTMLDivElement | undefined;
-  createEffect(
-    () => rowRef(),
-    (callback) => untrack(() => callback?.(element)),
-  );
-  const row = (
-    <div
-      ref={(node) => {
-        element = node;
-      }}
-      class={`sidebar-recent-session session-row-host sidebar-recent-session--single-line ${color() ? "sidebar-recent-session--colored" : ""} ${active() ? "sidebar-recent-session--active" : ""} ${projectChild ? "sidebar-recent-session--catalog-project-child" : ""} ${running() ? "session-row-host--running" : ""}`}
-      style={color() ? `--session-color: var(--session-color-${color()})` : undefined}
-      data-session-key={key()}
-      data-catalog-session-key={identityKey()}
-      data-session-row-action-count="1"
-      role="listitem"
-      onContextMenu={openMenuFromEvent}
-      onKeyDown={openMenuFromEvent}
-    >
-      <a
-        href={href()}
-        class="sidebar-recent-session__link"
-        aria-current={active() ? "page" : undefined}
-        onClick={(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          if (params.catalogOpenTarget === "terminal" && canOpenTerminal()) {
-            openTerminal();
-          } else {
-            params.onNavigate?.(routeId, navigation());
-          }
+    let element: HTMLDivElement;
+    let previousFocus: Element | null;
+    onSettled(() => rowRef(element, controls, previousFocus));
+    return (
+      <div
+        ref={(node) => {
+          element = node;
+          previousFocus = document.activeElement;
         }}
+        class={[
+          "sidebar-recent-session session-row-host sidebar-recent-session--single-line",
+          {
+            "sidebar-recent-session--colored": Boolean(color()),
+            "sidebar-recent-session--active": active(),
+            "sidebar-recent-session--catalog-project-child": projectChild,
+            "session-row-host--running": running(),
+          },
+        ]}
+        style={color() ? `--session-color: var(--session-color-${color()})` : undefined}
+        data-session-key={key()}
+        data-catalog-session-key={identityKey()}
+        data-session-row-action-count="1"
+        role="listitem"
+        onContextMenu={openMenuFromEvent}
+        onKeyDown={openMenuFromEvent}
       >
-        <span class="sidebar-session-indicator">
-          {running() ? (
-            <SessionGlyph
-              content={undefined}
-              running={running()}
-              runVisibility={sessionRunVisibility}
-            />
-          ) : undefined}
-        </span>
-        <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row"> {marqueeLabel} </span>
-          <span class="sidebar-recent-session__details">
-            <span class="sidebar-recent-session__details-endcap">
-              {<SessionRowBadges pullRequest={readSession().pullRequest} />}
+        <a
+          ref={(node) => (controls.link = node)}
+          href={target().href}
+          class="sidebar-recent-session__link"
+          aria-current={active() ? "page" : undefined}
+          onClick={(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            if (params.snapshot.catalogOpenTarget === "terminal" && canOpenTerminal()) {
+              openCatalogSessionInTerminal(
+                params.host,
+                catalogKey(),
+                params.snapshot.newSessionAgentId,
+              );
+            } else {
+              params.host.onNavigate?.(routeId, target().options);
+            }
+          }}
+        >
+          <span class="sidebar-session-indicator">
+            {running() ? (
+              <SessionGlyph
+                content={undefined}
+                running={running()}
+                runVisibility={sessionRunVisibility}
+              />
+            ) : undefined}
+          </span>
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__title-row"> {marqueeLabel} </span>
+            <span class="sidebar-recent-session__details">
+              <span class="sidebar-recent-session__details-endcap">
+                {<SessionRowBadges pullRequest={readSession().pullRequest} />}
+              </span>
             </span>
           </span>
+        </a>
+        <span class="sidebar-recent-session__aside session-row-aside">
+          <span class="session-row-actions">
+            <button
+              ref={(node) => (controls.catalogMenu = node)}
+              class="session-action"
+              data-catalog-session-menu="true"
+              type="button"
+              title={t("chat.sidebar.openSessionMenu")}
+              aria-label={`${t("chat.sidebar.openSessionMenu")}: ${label()}`}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen() ? "true" : "false"}
+              onClick={(event) => {
+                event.stopPropagation();
+                const trigger = event.currentTarget;
+                const rect = trigger.getBoundingClientRect();
+                openMenu(rect.right, rect.bottom + 4, trigger);
+              }}
+            >
+              <Icon name="moreHorizontal" />
+            </button>
+          </span>
         </span>
-      </a>
-      <span class="sidebar-recent-session__aside session-row-aside">
-        <span class="session-row-actions">
-          <button
-            class="session-action"
-            data-catalog-session-menu="true"
-            type="button"
-            title={t("chat.sidebar.openSessionMenu")}
-            aria-label={t("chat.sidebar.openSessionMenu")}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen() ? "true" : "false"}
-            onClick={(event) => {
-              event.stopPropagation();
-              const trigger = event.currentTarget;
-              const rect = trigger.getBoundingClientRect();
-              openMenu(rect.right, rect.bottom + 4, trigger);
-            }}
-          >
-            <Icon name="moreHorizontal" />
-          </button>
-        </span>
-      </span>
-    </div>
-  );
+      </div>
+    );
+  };
   return (
-    <Show when={adoptedRow()} fallback={row}>
-      {(liveRow) =>
-        params.renderLiveRow(liveRow, {
-          get catalogIdentityKey() {
-            return identityKey();
-          },
-          get catalogMenu() {
-            return catalogMenu();
-          },
-          get rowRef() {
-            return rowRef();
-          },
-          get pullRequest() {
-            return readSession().pullRequest;
-          },
-        })
-      }
+    <Show when={adoptedRow()} fallback={<CatalogRow />}>
+      {(liveRow) => (
+        <RecentSession
+          host={params.host}
+          session={params.snapshot.toSidebarSession(liveRow())}
+          display={{
+            catalogIdentityKey: identityKey(),
+            catalogMenu: catalogMenu(),
+            rowRef,
+            pullRequest: readSession().pullRequest,
+          }}
+        />
+      )}
     </Show>
   );
 }

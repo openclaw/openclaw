@@ -9,7 +9,6 @@ import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js
 
 export function classifyPortListener(listener: PortListener): PortListenerKind {
   const command = normalizeLowercaseStringOrEmpty(listener.command ?? "");
-  const commandLine = normalizeLowercaseStringOrEmpty(listener.commandLine ?? "");
   // The inspected command identifies the listener owner. Check it before argv,
   // where a socat forward may name OpenClaw. Observed macOS output also uses `socat1`.
   if (command === "socat" || command === "socat1" || command === "socat.exe") {
@@ -23,12 +22,9 @@ export function classifyPortListener(listener: PortListener): PortListenerKind {
   if (classifyOpenClawArgv(argv, { command: "gateway", pid: listener.pid }).kind === "openclaw") {
     return "gateway";
   }
-  const hasSshCommand = /(?:^|[/\\])ssh(?:\.exe)?$/.test(command);
+  const executable = normalizeLowercaseStringOrEmpty(argv[0] ?? "");
   const hasSshExecutable =
-    hasSshCommand ||
-    /(?:^|[\s"'])(?:(?:"[^"]*[/\\])|(?:'[^']*[/\\])|(?:\S*[/\\]))?ssh(?:\.exe)?(?:[\s"']|$)/.test(
-      commandLine,
-    );
+    /(?:^|[/\\])ssh(?:\.exe)?$/.test(command) || /(?:^|[/\\])ssh(?:\.exe)?$/.test(executable);
   if (hasSshExecutable) {
     // The probe row already proves this process owns the queried port. Exact
     // ssh executables may get their forwards from ssh_config or host aliases.
@@ -37,11 +33,9 @@ export function classifyPortListener(listener: PortListener): PortListenerKind {
   if (
     command === "sshd" ||
     /(?:^|[/\\])sshd(?:\.exe)?$/.test(command) ||
-    /(?:^|[/\\])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?$/.test(command)
+    /(?:^|[/\\])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?$/.test(command) ||
+    /(?:^|[/\\])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?$/.test(executable)
   ) {
-    return "non_gateway";
-  }
-  if (/(?:^|[/\\\s])[^/\\\s]*ssh[^/\\\s]*(?:\.exe)?(?:[/\\\s"']|$)/.test(commandLine)) {
     return "non_gateway";
   }
   return "unknown";

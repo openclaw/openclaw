@@ -29,10 +29,7 @@ import {
   type LiveEditDiffProgressState,
 } from "./embedded-agent-live-edit-diff.js";
 
-type PendingToolUse = {
-  toolCallId: string;
-  name: string;
-  kind: CliToolUseStartDelta["kind"];
+type PendingToolUse = Pick<CliToolUseStartDelta, "toolCallId" | "name" | "kind"> & {
   inputJsonParts: string[];
   inputJsonLength: number;
   /**
@@ -377,7 +374,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
   }
 }
 
-type ThinkingTracker = {
+export type ThinkingTracker = {
   currentMessageId?: string;
   // Thinking text already streamed via thinking_delta, keyed by the Anthropic
   // content-block index. Snapshot frames repeat streamed thinking, so each block
@@ -394,25 +391,6 @@ type ThinkingTracker = {
   progressTokens: number;
 };
 
-export function createThinkingTracker(): ThinkingTracker {
-  return {
-    streamedByIndex: new Map(),
-    highestStreamedIndex: Number.NEGATIVE_INFINITY,
-    emittedText: "",
-    nextSyntheticBlockIndex: 0,
-    progressTokens: 0,
-  };
-}
-
-function resetThinkingBlockState(tracker: ThinkingTracker): void {
-  tracker.streamedByIndex.clear();
-  tracker.highestStreamedIndex = Number.NEGATIVE_INFINITY;
-  tracker.emittedText = "";
-  tracker.currentSyntheticBlockIndex = undefined;
-  tracker.nextSyntheticBlockIndex = 0;
-  tracker.progressTokens = 0;
-}
-
 function resetThinkingTrackerForMessage(
   tracker: ThinkingTracker,
   messageId: string | undefined,
@@ -426,15 +404,13 @@ function resetThinkingTrackerForMessage(
   }
   // Anthropic content-block indexes restart at 0 for each message, so a prior
   // tool-round message's per-index thinking must not bleed into the next one.
-  resetThinkingBlockState(tracker);
+  tracker.streamedByIndex.clear();
+  tracker.highestStreamedIndex = Number.NEGATIVE_INFINITY;
+  tracker.emittedText = "";
+  tracker.currentSyntheticBlockIndex = undefined;
+  tracker.nextSyntheticBlockIndex = 0;
+  tracker.progressTokens = 0;
   tracker.currentMessageId = messageId;
-}
-
-function beginClaudeContentBlock(tracker: ThinkingTracker, index: unknown): void {
-  tracker.currentSyntheticBlockIndex =
-    index === undefined
-      ? tracker.nextSyntheticBlockIndex++
-      : (resolveClaudeContentBlockIndex(tracker, index) ?? undefined);
 }
 
 function resolveClaudeContentBlockIndex(tracker: ThinkingTracker, index: unknown): number | null {
@@ -453,29 +429,6 @@ function assembleThinkingTextByIndex(streamedByIndex: Map<number, string>): stri
     .toSorted(([left], [right]) => left - right)
     .map(([, text]) => text)
     .join("");
-}
-
-function emitClaudeThinking(
-  tracker: ThinkingTracker,
-  index: number,
-  streamed: string,
-  delta: string,
-  onThinkingDelta: (delta: CliThinkingDelta) => void,
-): void {
-  const appendToAggregate = index >= tracker.highestStreamedIndex;
-  tracker.streamedByIndex.set(index, `${streamed}${delta}`);
-  tracker.highestStreamedIndex = Math.max(tracker.highestStreamedIndex, index);
-  tracker.emittedText = appendToAggregate
-    ? `${tracker.emittedText}${delta}`
-    : assembleThinkingTextByIndex(tracker.streamedByIndex);
-  onThinkingDelta({ text: tracker.emittedText, delta, isReasoningSnapshot: true });
-}
-
-function readThinkingProgressTokens(delta: Record<string, unknown>): number | undefined {
-  if (delta.type !== "thinking_delta" || delta.thinking !== "") {
-    return undefined;
-  }
-  return asPositiveFiniteNumber(delta.estimated_tokens);
 }
 
 export function dispatchClaudeCliThinking(params: {
@@ -502,7 +455,11 @@ export function dispatchClaudeCliThinking(params: {
       return;
     }
     if (event.type === "content_block_start") {
-      beginClaudeContentBlock(tracker, event.index);
+      const index = event.index;
+      tracker.currentSyntheticBlockIndex =
+        index === undefined
+          ? tracker.nextSyntheticBlockIndex++
+          : (resolveClaudeContentBlockIndex(tracker, index) ?? undefined);
       return;
     }
     if (event.type === "content_block_stop") {
@@ -518,7 +475,11 @@ export function dispatchClaudeCliThinking(params: {
     if (blockIndex === null) {
       return;
     }
-    const progressTokensDelta = readThinkingProgressTokens(event.delta);
+    const delta = event.delta;
+    const progressTokensDelta =
+      delta.type === "thinking_delta" && delta.thinking === ""
+        ? asPositiveFiniteNumber(delta.estimated_tokens)
+        : undefined;
     const onThinkingProgress = params.onThinkingProgress;
     if (progressTokensDelta !== undefined && onThinkingProgress) {
       tracker.progressTokens += progressTokensDelta;
@@ -534,7 +495,15 @@ export function dispatchClaudeCliThinking(params: {
       return;
     }
     const streamed = tracker.streamedByIndex.get(blockIndex) ?? "";
-    emitClaudeThinking(tracker, blockIndex, streamed, event.delta.thinking, params.onThinkingDelta);
+    const thinking = event.delta.thinking;
+    const onThinkingDelta = params.onThinkingDelta;
+    const appendToAggregate = blockIndex >= tracker.highestStreamedIndex;
+    tracker.streamedByIndex.set(blockIndex, `${streamed}${thinking}`);
+    tracker.highestStreamedIndex = Math.max(tracker.highestStreamedIndex, blockIndex);
+    tracker.emittedText = appendToAggregate
+      ? `${tracker.emittedText}${thinking}`
+      : assembleThinkingTextByIndex(tracker.streamedByIndex);
+    onThinkingDelta({ text: tracker.emittedText, delta: thinking, isReasoningSnapshot: true });
     return;
   }
 
@@ -566,14 +535,9 @@ export function dispatchClaudeCliThinking(params: {
   }
 }
 
-export function dispatchGeminiCliStreamingToolEvent(params: {
-  backend: CliBackendConfig;
-  providerId: string;
-  parsed: Record<string, unknown>;
-  tracker: ToolUseTracker;
-  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
-  onToolResult?: (delta: CliToolResultDelta) => void;
-}): void {
+export function dispatchGeminiCliStreamingToolEvent(
+  params: Omit<Parameters<typeof dispatchClaudeCliStreamingToolEvent>[0], "onToolInputDelta">,
+): void {
   if (!isGeminiStreamJsonDialect(params)) {
     return;
   }

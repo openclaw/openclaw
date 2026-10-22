@@ -4,11 +4,17 @@ import type { personActivityLink } from "./person-activity-link.ts";
 
 type ActivityLink = ReturnType<typeof personActivityLink>;
 
-export function PersonName(props: { label: string; link: ActivityLink; class: string }) {
+export function PersonName(props: {
+  label: string;
+  link: ActivityLink;
+  class: string;
+  ref?: (element: HTMLAnchorElement) => void;
+}) {
   return (
     <Show when={props.link} fallback={<span class={props.class}>{props.label}</span>}>
       <a
-        class={`${props.class} person-activity-link`}
+        ref={props.ref}
+        class={[props.class, "person-activity-link"]}
         href={props.link?.href}
         onClick={(event) => props.link?.open(event)}
       >

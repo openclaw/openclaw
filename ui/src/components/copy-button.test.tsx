@@ -1,59 +1,54 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { LitContent } from "../lit/solid-content.tsx";
-import { renderWorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.ts";
+import { WorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.tsx";
 import { DevicePairSetup } from "../pages/devices/view-pairing.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { renderWizardStepControls } from "./wizard-step-controls.ts";
+import { WizardStepControls } from "./wizard-step-controls.tsx";
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
 const fallback = vi.fn(() => true);
-const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+function stubProperty(target: object, name: string, value: unknown) {
+  const descriptor = Object.getOwnPropertyDescriptor(target, name);
+  Object.defineProperty(target, name, { configurable: true, value });
+  onTestFinished(
+    () =>
+      void (descriptor
+        ? Object.defineProperty(target, name, descriptor)
+        : Reflect.deleteProperty(target, name)),
+  );
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
   writeText.mockReset().mockResolvedValue(undefined);
   fallback.mockClear();
-  Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
-  Object.defineProperty(document, "execCommand", { configurable: true, value: fallback });
+  stubProperty(navigator, "clipboard", { writeText });
+  stubProperty(document, "execCommand", fallback);
 });
 
 afterEach(() => {
   cleanupSolid();
   vi.useRealTimers();
-  if (clipboardDescriptor) {
-    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "clipboard");
-  }
-  if (execCommandDescriptor) {
-    Object.defineProperty(document, "execCommand", execCommandDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
 });
 
 const surfaces = [
   {
     name: "wizard code",
     View: (props: { text: string }) => (
-      <LitContent
-        value={renderWizardStepControls({
-          step: {
-            id: "sign-in",
-            type: "progress",
-            executor: "gateway",
-            externalUrl: "https://example.com/device",
-            deviceCode: { code: props.text },
-          },
-          value: undefined,
-          busy: false,
-          inputId: "wizard-input",
-          onValueChange: vi.fn(),
-          onAnswer: vi.fn(),
-        })}
+      <WizardStepControls
+        step={{
+          id: "sign-in",
+          type: "progress",
+          executor: "gateway",
+          externalUrl: "https://example.com/device",
+          deviceCode: { code: props.text },
+        }}
+        value={undefined}
+        busy={false}
+        inputId="wizard-input"
+        onValueChange={vi.fn()}
+        onAnswer={vi.fn()}
       />
     ),
     selector: ".wizard-step__actions button",
@@ -90,37 +85,38 @@ const surfaces = [
   {
     name: "workspace conflict command",
     View: (props: { text: string }) => (
-      <LitContent
-        value={renderWorkspaceConflictNotice({
-          conflict: { paths: [props.text], stagedResultRef: "refs/openclaw/worker-results/test" },
-        })}
+      <WorkspaceConflictNotice
+        conflict={{ paths: [props.text], stagedResultRef: "refs/openclaw/worker-results/test" }}
       />
     ),
     selector: ".chat-workspace-conflict-path-actions button",
   },
 ];
 
-describe("copy payload lifetime", () => {
-  it.each(surfaces)("retires pending $name copying when its payload changes", async (surface) => {
-    const pending = createDeferred();
-    writeText.mockReturnValueOnce(pending.promise);
-    const [text, setText] = createSignal("first");
-    const { container } = mountSolid(() => <surface.View text={text()} />);
-    const button = container.querySelector<HTMLButtonElement>(surface.selector)!;
-    button.click();
-    expect(writeText).toHaveBeenCalledOnce();
-    setText("second");
-    flush();
-    const current = container.querySelector<HTMLButtonElement>(surface.selector)!;
-    expect(current.disabled).toBe(false);
-    pending.reject(new Error("Synthetic clipboard rejection"));
-    await vi.advanceTimersByTimeAsync(0);
+it.each(surfaces)("retires pending $name copying when its payload changes", async (surface) => {
+  const pending = createDeferred();
+  writeText.mockReturnValueOnce(pending.promise);
+  const [text, setText] = createSignal("first");
+  const { container } = mountSolid(() => <surface.View text={text()} />);
+  const button = container.querySelector<HTMLButtonElement>(surface.selector)!;
+  button.click();
+  expect(writeText).toHaveBeenCalledOnce();
+  setText("second");
+  flush();
+  const current = container.querySelector<HTMLButtonElement>(surface.selector)!;
+  const label = current.querySelector("[data-copy-label]")!;
+  const idleLabel = label.textContent;
+  expect(current.disabled).toBe(false);
+  pending.reject(new Error("Synthetic clipboard rejection"));
+  await vi.advanceTimersByTimeAsync(0);
 
-    expect(fallback).not.toHaveBeenCalled();
-    expect(current.dataset.copyState).toBeUndefined();
-    current.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(writeText.mock.lastCall?.[0]).toContain("second");
-    expect(current.dataset.copyState).toBe("copied");
-  });
+  expect(fallback).not.toHaveBeenCalled();
+  expect(current.dataset.copyState).toBeUndefined();
+  current.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(writeText.mock.lastCall?.[0]).toContain("second");
+  expect(current.dataset.copyState).toBe("copied");
+  expect(label.textContent).toBe("Copied!");
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(label.textContent).toBe(idleLabel);
 });

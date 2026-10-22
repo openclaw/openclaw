@@ -12,7 +12,10 @@ import {
   runOpenClawAgentWriteAdmission,
   withOpenClawAgentDatabaseWrite,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
@@ -65,35 +68,28 @@ function sourceReplacement(model: string): MemorySourceIndexReplacement {
   };
 }
 
+const replaceSource = (database: MemoryIndexDatabase, model: string) =>
+  database.replaceSource(
+    sourceReplacement(model),
+    () => {},
+    async () => true,
+  );
+
+function field(value: unknown, key: string): unknown {
+  return value !== null && typeof value === "object" ? Reflect.get(value, key) : undefined;
+}
+
 function indexCommands(calls: unknown[][]): string[] {
   return calls.flatMap(([message]) => {
-    if (
-      typeof message === "object" &&
-      message !== null &&
-      "input" in message &&
-      typeof message.input === "object" &&
-      message.input !== null &&
-      "kind" in message.input &&
-      message.input.kind === "index-read" &&
-      "command" in message.input &&
-      typeof message.input.command === "object" &&
-      message.input.command !== null &&
-      "type" in message.input.command &&
-      typeof message.input.command.type === "string"
-    ) {
-      return [message.input.command.type];
+    const input = field(message, "input");
+    const type = field(field(input, "command"), "type");
+    if (field(input, "kind") === "index-read" && typeof type === "string") {
+      return [type];
     }
-    if (
-      typeof message !== "object" ||
-      message === null ||
-      !("type" in message) ||
-      message.type !== "execute" ||
-      !("input" in message) ||
-      !(message.input instanceof Uint8Array)
-    ) {
+    if (field(message, "type") !== "execute" || !(input instanceof Uint8Array)) {
       return [];
     }
-    const command = deserialize(message.input) as {
+    const command = deserialize(input) as {
       type: string;
       input?: { command?: { type: string } };
     };
@@ -118,7 +114,7 @@ function recordIndexCommands(target: "messagePort" | "worker") {
     ) {
       record(message, () => nativePost.call(this, message, options));
     });
-    return { commands, restore: () => posts.mockRestore() };
+    return { commands, [Symbol.dispose]: () => posts.mockRestore() };
   }
   const prototype: Pick<Worker, "postMessage"> = Worker.prototype;
   const nativePost = prototype.postMessage;
@@ -129,7 +125,7 @@ function recordIndexCommands(target: "messagePort" | "worker") {
   ) {
     record(message, () => nativePost.call(this, message, transferList));
   });
-  return { commands, restore: () => posts.mockRestore() };
+  return { commands, [Symbol.dispose]: () => posts.mockRestore() };
 }
 
 it("retains session entry facts across memory publication and refreshes after a session write", async () => {
@@ -144,45 +140,26 @@ it("retains session entry facts across memory publication and refreshes after a 
       entry: { sessionId: "memory-publication", updatedAt: 1, label: "Before" },
     });
     expect((await getSessionEntryAsync(target))?.label).toBe("Before");
-    const messages = vi.spyOn(MessagePort.prototype, "postMessage");
+    using messages = vi.spyOn(MessagePort.prototype, "postMessage");
     const entryReads = () =>
-      messages.mock.calls.filter(([message]) => {
-        return (
-          typeof message === "object" &&
-          message !== null &&
-          "input" in message &&
-          typeof message.input === "object" &&
-          message.input !== null &&
-          "kind" in message.input &&
-          message.input.kind === "session-entry-read"
-        );
-      });
-    try {
-      await database.writeMetadata(metadata);
-      await database.replaceSource(
-        sourceReplacement("fts-only"),
-        () => {},
-        async () => true,
+      messages.mock.calls.filter(
+        ([message]) => field(field(message, "input"), "kind") === "session-entry-read",
       );
-      expect((await getSessionEntryAsync(target))?.label).toBe("Before");
-      expect(entryReads()).toEqual([]);
+    await database.writeMetadata(metadata);
+    await replaceSource(database, "fts-only");
+    expect((await getSessionEntryAsync(target))?.label).toBe("Before");
+    expect(entryReads()).toEqual([]);
 
-      await withOpenClawAgentDatabaseWrite(
-        { agentId: "main", path: target.storePath },
-        ({ db }) => {
-          db.prepare(
-            "UPDATE session_nodes SET entry_json = ?, updated_at = 2, label = 'After' WHERE session_key = ?",
-          ).run(
-            JSON.stringify({ sessionId: "memory-publication", updatedAt: 2, label: "After" }),
-            target.sessionKey,
-          );
-        },
+    await withOpenClawAgentDatabaseWrite({ agentId: "main", path: target.storePath }, ({ db }) => {
+      db.prepare(
+        "UPDATE session_nodes SET entry_json = ?, updated_at = 2, label = 'After' WHERE session_key = ?",
+      ).run(
+        JSON.stringify({ sessionId: "memory-publication", updatedAt: 2, label: "After" }),
+        target.sessionKey,
       );
-      expect((await getSessionEntryAsync(target))?.label).toBe("After");
-      expect(entryReads()).toHaveLength(1);
-    } finally {
-      messages.mockRestore();
-    }
+    });
+    expect((await getSessionEntryAsync(target))?.label).toBe("After");
+    expect(entryReads()).toHaveLength(1);
   });
 });
 
@@ -190,40 +167,50 @@ it("retains published memory facts across session and embedding-cache writes", a
   await withPublishedIndex(async (database) => {
     await database.writeMetadata(metadata);
     const facts = database.facts;
-    const messages = recordIndexCommands("messagePort");
-    try {
-      await upsertSessionEntry({
-        agentId: "main",
-        storePath: database.db.location()!,
-        sessionKey: "agent:main:memory-facts",
-        entry: { sessionId: "memory-facts", updatedAt: 1 },
-      });
-      await database.refreshFacts();
-      await database.mutateEmbeddingCache(
-        {
-          kind: "upsert",
-          header: {
-            agentId: "main",
-            provider: { id: "test", model: "test" },
-            providerKey: "test",
-            maxEntries: 2,
-          },
-          entries: [{ hash: "test", embedding: [1] }],
-        },
+    const identities = [{ provider: "test", model: "test", providerKey: "test" }];
+    const readCache = () =>
+      database.read(
+        { type: "cache.read", input: { providerIdentities: identities, hashes: ["test"] } },
         () => {},
-        () => true,
       );
-      await database.refreshFacts();
-      expect(database.facts).toBe(facts);
-      expect(messages.commands).not.toContain("index.facts");
+    expect(await readCache()).toEqual(new Map());
+    using messages = recordIndexCommands("messagePort");
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: database.db.location()!,
+      sessionKey: "agent:main:memory-facts",
+      entry: { sessionId: "memory-facts", updatedAt: 1 },
+    });
+    await database.refreshFacts();
+    await database.mutateEmbeddingCache(
+      {
+        kind: "upsert",
+        header: {
+          agentId: "main",
+          provider: { id: "test", model: "test" },
+          providerKey: "test",
+          maxEntries: 2,
+        },
+        entries: [{ hash: "test", embedding: [1] }],
+      },
+      () => {},
+      () => true,
+    );
+    expect(await readCache()).toEqual(new Map([["test", [1]]]));
+    await database.mutateEmbeddingCache(
+      { kind: "clear", identities },
+      () => {},
+      () => true,
+    );
+    expect(await readCache()).toEqual(new Map());
+    await database.refreshFacts();
+    expect(database.facts).toBe(facts);
+    expect(messages.commands).not.toContain("index.facts");
 
-      await database.writeMetadata({ ...metadata, model: "updated-model" });
-      await database.refreshFacts();
-      expect(database.facts.meta?.model).toBe("updated-model");
-      expect(messages.commands).not.toContain("index.facts");
-    } finally {
-      messages.restore();
-    }
+    await database.writeMetadata({ ...metadata, model: "updated-model" });
+    await database.refreshFacts();
+    expect(database.facts.meta?.model).toBe("updated-model");
+    expect(messages.commands).not.toContain("index.facts");
   });
 });
 
@@ -231,10 +218,15 @@ it("keeps no-op and refused publication preparation SQL-free without opening a w
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const borrowed = borrowOpenClawAgentDatabase({ agentId: "main" });
     const source = readOpenClawAgentDatabaseIdentity(borrowed);
-    const database = new MemoryIndexDatabase(borrowed.db, borrowed.release, false, {
-      agentId: "main",
-      path: source.filename,
-    });
+    const database = new MemoryIndexDatabase(
+      requireNativeSqliteDatabase(borrowed.db),
+      borrowed.release,
+      false,
+      {
+        agentId: "main",
+        path: source.filename,
+      },
+    );
     const sql = observeHostDataSql();
     const messages = vi.spyOn(Worker.prototype, "postMessage");
     try {
@@ -247,17 +239,10 @@ it("keeps no-op and refused publication preparation SQL-free without opening a w
       ).rejects.toBe(refused);
       expect(sql.queries).toEqual([]);
       expect(
-        messages.mock.calls.filter(([request]) => {
-          const value: unknown = request;
-          return (
-            value !== null &&
-            typeof value === "object" &&
-            "type" in value &&
-            value.type === "open" &&
-            "databasePath" in value &&
-            value.databasePath === source.filename
-          );
-        }),
+        messages.mock.calls.filter(
+          ([request]) =>
+            field(request, "type") === "open" && field(request, "databasePath") === source.filename,
+        ),
       ).toEqual([]);
     } finally {
       messages.mockRestore();
@@ -271,11 +256,7 @@ it("reads committed index state while another operation holds the writer FIFO", 
   signal,
 }) => {
   await withPublishedIndex(async (database) => {
-    await database.replaceSource(
-      sourceReplacement("fts-only"),
-      () => {},
-      async () => true,
-    );
+    await replaceSource(database, "fts-only");
     await database.closePublicationWorker();
     const sql = observeHostDataSql();
     const entered = createDeferred<void>();
@@ -322,11 +303,7 @@ it("publishes committed metadata, presence, and revision facts with source mutat
       hasSemanticChunks: false,
     });
     for (const model of ["fts-only", "test-model"]) {
-      await database.replaceSource(
-        sourceReplacement(model),
-        () => {},
-        async () => true,
-      );
+      await replaceSource(database, model);
       expect(database.facts).toMatchObject({
         meta: metadata,
         hasIndexedChunks: true,
@@ -364,7 +341,7 @@ it("refreshes facts once after another in-process writer commits", async () => {
       db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
     });
     const sql = observeHostDataSql();
-    const messages = recordIndexCommands("worker");
+    using messages = recordIndexCommands("worker");
     try {
       for (let turn = 0; turn < 3; turn++) {
         await database.refreshFacts();
@@ -382,7 +359,6 @@ it("refreshes facts once after another in-process writer commits", async () => {
       expect(sql.queries).toEqual([]);
       expect(messages.commands).toEqual(["index.facts"]);
     } finally {
-      messages.restore();
       sql.restore();
     }
   });
@@ -390,16 +366,13 @@ it("refreshes facts once after another in-process writer commits", async () => {
 
 it("refreshes invalidated source and vector facts after an in-process write", async () => {
   await withPublishedIndex(async (database) => {
-    await database.replaceSource(
-      sourceReplacement("test-model"),
-      () => {},
-      async () => true,
-    );
+    await replaceSource(database, "test-model");
     await withOpenClawAgentDatabaseWrite(database.writeOptions!, ({ db }) => {
       db.prepare("UPDATE memory_index_sources SET hash = '' WHERE source = ?").run("memory");
       db.prepare(
         "INSERT INTO memory_index_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
       ).run("memory_vector_rebuild_v1", "1");
+      db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
     });
     const sql = observeHostDataSql();
     try {
@@ -419,6 +392,7 @@ it("refreshes invalidated source and vector facts after an in-process write", as
         "clean",
         "memory_vector_rebuild_v1",
       );
+      db.prepare("UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1").run();
     });
     await database.refreshFacts();
     expect(database.facts.invalidatedSources).toEqual([]);

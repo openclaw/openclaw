@@ -8,6 +8,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isMessageOnlyCodexSourceReply,
   isSystemAgentOnlyCodexDynamicToolAllowlist,
@@ -42,12 +43,14 @@ export function buildDeveloperInstructions(
   params: CodexThreadPromptContext,
   options: {
     dynamicTools?: readonly CodexDynamicToolSpec[];
+    nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
   } = {},
 ): string {
   const deferredToolNames = new Set<string>();
   const toolNames = new Map<string, string>();
   let messageTool: Parameters<typeof buildUiPresentationPrompt>[0]["messageTool"];
+  let sessionsSpawnTool: { name: string; parameters: unknown } | undefined;
   let hasSessionsYield = false;
   let hasSeenDirectNamespace = false;
   for (const spec of options.dynamicTools ?? []) {
@@ -62,7 +65,7 @@ export function buildDeveloperInstructions(
       const name = tool.name.trim();
       const qualifiedName = spec.type === "namespace" ? `${spec.name}.${name}` : name;
       if (tool.deferLoading === true && name) {
-        deferredToolNames.add(name);
+        deferredToolNames.add(qualifiedName);
       }
       if (!toolNames.has(name)) {
         toolNames.set(name, qualifiedName);
@@ -70,10 +73,26 @@ export function buildDeveloperInstructions(
       if (name === "message") {
         messageTool ??= { name: qualifiedName, parameters: tool.inputSchema };
       }
+      if (name === "sessions_spawn") {
+        sessionsSpawnTool ??= { name: qualifiedName, parameters: tool.inputSchema };
+      }
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
     }
   }
   const hasSessionsSpawn = toolNames.has("sessions_spawn");
+  const spawnProperties = asOptionalRecord(
+    asOptionalRecord(sessionsSpawnTool?.parameters)?.properties,
+  );
+  const spawnRuntime = asOptionalRecord(spawnProperties?.runtime);
+  // Placed workers omit the runtime selector; ordinary sessions advertise its
+  // allowed values. Do not instruct the model to pass an unsupported selector.
+  const managedDelegationTool = sessionsSpawnTool
+    ? !spawnProperties || !Object.hasOwn(spawnProperties, "runtime")
+      ? `\`${sessionsSpawnTool.name}\``
+      : Array.isArray(spawnRuntime?.enum) && spawnRuntime.enum.includes("subagent")
+        ? `\`${sessionsSpawnTool.name}\` with \`runtime="subagent"\``
+        : undefined
+    : undefined;
   const nativeCommandGuidance = listRegisteredPluginAgentPromptGuidance({
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,
@@ -85,16 +104,21 @@ export function buildDeveloperInstructions(
     !isMessageOnlyCodexSourceReply(params);
   const nativeDelegationAvailable =
     delegationGuidanceAvailable &&
+    options.nativeCodeModeEnabled !== false &&
+    params.delegationCapability !== "host_only" &&
     params.pluginHarnessToolPolicyRestricted !== true &&
     params.requireWorkspaceOnly !== true &&
     !isCodexResponsesOAuthRun(params) &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);
   const deferredToolDiscoveryGuidance =
-    deferredToolNames.size > 0 || nativeDelegationAvailable
-      ? options.nativeCodeModeOnlyEnabled === true
-        ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
-        : "Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have."
+    (options.nativeCodeModeEnabled === true ? deferredToolNames.size > 0 : toolNames.size > 0) ||
+    nativeDelegationAvailable
+      ? options.nativeCodeModeEnabled === true
+        ? options.nativeCodeModeOnlyEnabled === true
+          ? "Deferred tools may be absent from the direct tool list. Use Codex's native JavaScript `exec` to filter `ALL_TOOLS` by name and description, then invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Call directly listed tools by their exact qualified names."
+          : "Call directly listed tools by their exact qualified names. Use `tool_search` for deferred tools when it is directly callable. Otherwise use Codex's native JavaScript `exec` to filter `ALL_TOOLS` and invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Do not repeat a completed call to retrieve a result you already have."
+        : "Call the supplied OpenClaw tools by their exact qualified names. Shell command tools execute operating-system commands, not JavaScript tool discovery."
       : undefined;
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
@@ -107,11 +131,10 @@ export function buildDeveloperInstructions(
     toolNames.has(SKILL_WORKSHOP_TOOL_NAME)
       ? buildSkillWorkshopPromptSection().join("\n")
       : undefined,
-    // Codex defers native collab tools behind tool_search on search-capable
-    // models (codex-rs spec_plan add_collaboration_tools). Without this hint
-    // models cannot see spawn_agent and grab the always-direct sessions_spawn.
+    // Deferred native tools still need discovery. Inherited dynamic schemas do
+    // not give native children OpenClaw executors, so choose that owner up front.
     nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred. For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
+      ? `Use Codex native \`spawn_agent\` for work that only needs Codex-native tools. \`spawn_agent\` and the other native collaboration tools may be deferred. Native children cannot execute OpenClaw-owned dynamic tools, even when they inherit their schemas.${managedDelegationTool ? ` For new delegated work that needs OpenClaw tools, use ${managedDelegationTool} from the start.` : " Keep work needing OpenClaw tools in this session when no managed worker route is available."} For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn. Do not respawn existing work to switch tool routes.`
       : undefined,
     hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
@@ -126,9 +149,9 @@ export function buildDeveloperInstructions(
           // Subagent/none prompt modes stay lean and must not be told to delegate further.
           isMinimal: params.promptMode === "minimal" || params.promptMode === "none",
           hiddenDelegationTool: nativeDelegationAvailable
-            ? "native `spawn_agent`"
-            : hasSessionsSpawn
-              ? "`sessions_spawn`"
+            ? `native \`spawn_agent\` for Codex-native work${managedDelegationTool ? `, or ${managedDelegationTool} for new work needing OpenClaw tools` : ""}`
+            : sessionsSpawnTool
+              ? (managedDelegationTool ?? `\`${sessionsSpawnTool.name}\``)
               : "",
           hasVisibleSessionSpawn: hasSessionsSpawn,
           hasSessionsYield,
@@ -155,5 +178,5 @@ export function buildDeveloperInstructions(
     params.gitCoauthorPrompt,
     params.extraSystemPrompt,
   ];
-  return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
+  return sections.filter((section) => section?.trim()).join("\n\n");
 }

@@ -2,6 +2,7 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { captureUserProfileAuthorityRead } from "./user-profile-events.js";
+import { prepareUserProfileCatalog, readUserProfileSnapshot } from "./user-profile-list.js";
 import type { CachedGitHubIdentity, CachedGitHubIdentityBinding } from "./user-profiles.types.js";
 
 type ProfileReadOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -13,20 +14,24 @@ export async function prepareCurrentUserProfileAliases(
 ) {
   const context = captureOpenClawStateWorkerContext(options);
   const authority = await captureUserProfileAuthorityRead(context.admission, undefined, "identity");
-  const reply = await executeExistingOpenClawStateRead(
-    { path: context.admission.databasePath, env: context.environment },
-    { type: "userProfiles.aliases.resolve", profileId },
-    { current: true },
-  );
-  context.admission.assertCurrent();
-  const isCurrent = authority.bind([profileId, reply?.profileId ?? profileId]);
+  const catalog = await prepareUserProfileCatalog({
+    ...options,
+    path: context.admission.databasePath,
+  });
+  let profile;
+  try {
+    profile = catalog.readCurrentIdentity(profileId);
+  } finally {
+    catalog.release();
+  }
+  const isCurrent = authority.bind([profileId, profile?.profileId ?? profileId]);
   const assertCurrent = () => {
     if (!isCurrent?.()) {
       throw new Error("Profile aliases changed while preparing disclosure. Retry the request.");
     }
   };
   assertCurrent();
-  return { aliases: new Set(reply?.aliases ?? [profileId]), assertCurrent };
+  return { aliases: new Set(profile?.aliases ?? [profileId]), assertCurrent };
 }
 
 export async function resolveCanonicalCachedGitHubIdentity(
@@ -45,18 +50,6 @@ export async function resolveCanonicalCachedGitHubIdentity(
 
 export async function listProfiles(options: ProfileReadOptions = {}) {
   return (await readUserProfileSnapshot(undefined, options)).profiles;
-}
-
-export async function readUserProfileSnapshot(
-  githubAccountIds?: readonly number[],
-  options: ProfileReadOptions = {},
-) {
-  const context = captureOpenClawStateWorkerContext(options);
-  const { executeOpenClawStateWorker } = await import("./openclaw-state-worker-store.js");
-  return await executeOpenClawStateWorker(context, {
-    type: "userProfiles.list",
-    input: githubAccountIds ? { githubAccountIds } : undefined,
-  });
 }
 
 /** Candidate IDs and search labels; current recipient policy remains caller-owned. */

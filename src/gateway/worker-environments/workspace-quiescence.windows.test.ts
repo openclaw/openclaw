@@ -11,8 +11,29 @@ import { workspaceQuiescenceArgv } from "./workspace-quiescence-scripts.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function quiescenceCommand(...args: Parameters<typeof workspaceQuiescenceArgv>) {
-  return [process.execPath, ...workspaceQuiescenceArgv(...args).slice(1)];
+async function fixture() {
+  const root = tempDirs.make("openclaw-windows-quiescence-test-");
+  const home = path.join(root, "home");
+  const directory = path.join(root, "workspace");
+  await Promise.all([fs.mkdir(home), fs.mkdir(directory)]);
+  const workspace = await fs.realpath(directory);
+  const run = (
+    input: Parameters<typeof workspaceQuiescenceArgv>[1],
+    mode: Parameters<typeof workspaceQuiescenceArgv>[2] = "shared-host",
+  ) =>
+    runCommandWithTimeout(
+      [process.execPath, ...workspaceQuiescenceArgv(workspace, input, mode).slice(1)],
+      { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: home, USERPROFILE: home } },
+    );
+  return {
+    home,
+    workspace,
+    run,
+    acquire: () => run({ action: "acquire", nonce: "", timeoutMs: 20_000 }),
+    renew: (nonce: string) =>
+      run({ action: "renew", nonce, timeoutMs: 20_000, validationMode: "final" }),
+    release: (nonce: string) => run({ action: "release", nonce }, "dedicated"),
+  };
 }
 
 function leaseDatabase(home: string) {
@@ -34,54 +55,21 @@ function readLease(home: string, workspace: string) {
 
 describe.runIf(process.platform === "win32")("Windows workspace quiescence", () => {
   it("serializes file-backed shared-host lease acquisition, renewal, and release", async () => {
-    const root = tempDirs.make("openclaw-windows-quiescence-test-");
-    const home = path.join(root, "home");
-    const workspace = path.join(root, "workspace");
-    await fs.mkdir(home);
-    await fs.mkdir(workspace);
-    const realWorkspace = await fs.realpath(workspace);
-    const environment = { ...process.env, HOME: home, USERPROFILE: home };
-
-    const quiesced = await runCommandWithTimeout(
-      quiescenceCommand(
-        realWorkspace,
-        { action: "acquire", nonce: "", timeoutMs: 20_000 },
-        "shared-host",
-      ),
-      { timeoutMs: 10_000, baseEnv: environment },
-    );
+    const { home, workspace: realWorkspace, acquire, renew, release, run } = await fixture();
+    const quiesced = await acquire();
     expect(quiesced.code).toBe(0);
     const nonce = /^quiesced ([a-f0-9]{32})\n$/u.exec(quiesced.stdout)?.[1];
     expect(nonce).toBeDefined();
     expect(readLease(home, realWorkspace)?.lease_json).toContain('"sharedHost":true');
 
-    const overlapping = await runCommandWithTimeout(
-      quiescenceCommand(
-        realWorkspace,
-        { action: "acquire", nonce: "", timeoutMs: 20_000 },
-        "shared-host",
-      ),
-      { timeoutMs: 10_000, baseEnv: environment },
-    );
+    const overlapping = await acquire();
     expect(overlapping.code).not.toBe(0);
     expect(overlapping.stderr).toContain("workspace quiescence lease is already active");
 
-    const renewed = await runCommandWithTimeout(
-      quiescenceCommand(
-        realWorkspace,
-        { action: "renew", nonce: nonce!, timeoutMs: 20_000, validationMode: "final" },
-        "shared-host",
-      ),
-      { timeoutMs: 10_000, baseEnv: environment },
-    );
+    const renewed = await renew(nonce!);
     expect(renewed).toMatchObject({ code: 0, stdout: `renewed ${nonce}\n` });
 
-    await expect(
-      runCommandWithTimeout(
-        quiescenceCommand(realWorkspace, { action: "release", nonce: nonce! }, "dedicated"),
-        { timeoutMs: 10_000, baseEnv: environment },
-      ),
-    ).resolves.toMatchObject({ code: 0 });
+    await expect(release(nonce!)).resolves.toMatchObject({ code: 0 });
     expect(readLease(home, realWorkspace)).toBeUndefined();
 
     const database = new DatabaseSync(leaseDatabase(home));
@@ -105,24 +93,7 @@ describe.runIf(process.platform === "win32")("Windows workspace quiescence", () 
         );
     }
     database.close();
-    const simultaneous = await Promise.all([
-      runCommandWithTimeout(
-        quiescenceCommand(
-          realWorkspace,
-          { action: "acquire", nonce: "", timeoutMs: 20_000 },
-          "shared-host",
-        ),
-        { timeoutMs: 10_000, baseEnv: environment },
-      ),
-      runCommandWithTimeout(
-        quiescenceCommand(
-          realWorkspace,
-          { action: "acquire", nonce: "", timeoutMs: 20_000 },
-          "shared-host",
-        ),
-        { timeoutMs: 10_000, baseEnv: environment },
-      ),
-    ]);
+    const simultaneous = await Promise.all([acquire(), acquire()]);
     expect(simultaneous.filter((result) => result.code === 0)).toHaveLength(1);
     expect(simultaneous.find((result) => result.code !== 0)?.stderr).toContain(
       "workspace quiescence lease is already active",
@@ -132,42 +103,17 @@ describe.runIf(process.platform === "win32")("Windows workspace quiescence", () 
     const winner = simultaneous.find((result) => result.code === 0)!;
     const winnerNonce = /^quiesced ([a-f0-9]{32})\n$/u.exec(winner.stdout)?.[1];
     expect(winnerNonce).toBeDefined();
-    await expect(
-      runCommandWithTimeout(
-        quiescenceCommand(realWorkspace, { action: "release", nonce: winnerNonce! }, "dedicated"),
-        { timeoutMs: 10_000, baseEnv: environment },
-      ),
-    ).resolves.toMatchObject({ code: 0 });
+    await expect(release(winnerNonce!)).resolves.toMatchObject({ code: 0 });
     expect(readLease(home, realWorkspace)).toBeUndefined();
 
-    const dedicated = await runCommandWithTimeout(
-      quiescenceCommand(
-        realWorkspace,
-        { action: "acquire", nonce: "", timeoutMs: 20_000 },
-        "dedicated",
-      ),
-      { timeoutMs: 10_000, baseEnv: environment },
-    );
+    const dedicated = await run({ action: "acquire", nonce: "", timeoutMs: 20_000 }, "dedicated");
     expect(dedicated.code).not.toBe(0);
     expect(dedicated.stderr).toContain("workspace quiescence requires POSIX");
   });
 
   it("retains the active lease when a transactional renewal is interrupted", async () => {
-    const root = tempDirs.make("openclaw-windows-quiescence-recovery-test-");
-    const home = path.join(root, "home");
-    const workspace = path.join(root, "workspace");
-    await fs.mkdir(home);
-    await fs.mkdir(workspace);
-    const realWorkspace = await fs.realpath(workspace);
-    const environment = { ...process.env, HOME: home, USERPROFILE: home };
-    const quiesced = await runCommandWithTimeout(
-      quiescenceCommand(
-        realWorkspace,
-        { action: "acquire", nonce: "", timeoutMs: 20_000 },
-        "shared-host",
-      ),
-      { timeoutMs: 10_000, baseEnv: environment },
-    );
+    const { home, workspace: realWorkspace, acquire, renew, release } = await fixture();
+    const quiesced = await acquire();
     const nonce = /^quiesced ([a-f0-9]{32})\n$/u.exec(quiesced.stdout)?.[1];
     expect(nonce).toBeDefined();
     const before = readLease(home, realWorkspace)?.lease_json;
@@ -194,22 +140,8 @@ setInterval(() => {}, 1000);`,
     await once(interrupted, "exit");
     expect(readLease(home, realWorkspace)?.lease_json).toBe(before);
 
-    await expect(
-      runCommandWithTimeout(
-        quiescenceCommand(
-          realWorkspace,
-          { action: "renew", nonce: nonce!, timeoutMs: 20_000, validationMode: "final" },
-          "shared-host",
-        ),
-        { timeoutMs: 10_000, baseEnv: environment },
-      ),
-    ).resolves.toMatchObject({ code: 0, stdout: `renewed ${nonce}\n` });
-    await expect(
-      runCommandWithTimeout(
-        quiescenceCommand(realWorkspace, { action: "release", nonce: nonce! }, "dedicated"),
-        { timeoutMs: 10_000, baseEnv: environment },
-      ),
-    ).resolves.toMatchObject({ code: 0 });
+    await expect(renew(nonce!)).resolves.toMatchObject({ code: 0, stdout: `renewed ${nonce}\n` });
+    await expect(release(nonce!)).resolves.toMatchObject({ code: 0 });
     expect(readLease(home, realWorkspace)).toBeUndefined();
   });
 });
