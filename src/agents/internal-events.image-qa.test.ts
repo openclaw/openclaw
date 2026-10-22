@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { describe, expect, it } from "vitest";
-import { startQaMockOpenAiServer } from "../../extensions/qa-lab/api.js";
+import { beforeAll, describe, expect, it } from "vitest";
 import { labelRuntimeContextText } from "../llm/types.js";
 import { isRecord } from "../plugin-sdk/string-coerce-runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import {
   buildAgentInternalEventContext,
   formatGeneratedMediaDeliveredForPrompt,
@@ -25,8 +25,19 @@ const event: AgentInternalEvent = {
   replyInstruction: "Review the generated image and reply briefly.",
 };
 const user = (text: string) => ({ role: "user", content: [{ type: "input_text", text }] });
+type QaProviderApi = {
+  startQaMockOpenAiServer: () => Promise<{ baseUrl: string; stop: () => Promise<void> }>;
+};
 
 describe("image completion producer context through the QA provider", () => {
+  let startQaMockOpenAiServer: QaProviderApi["startQaMockOpenAiServer"];
+  beforeAll(async () => {
+    ({ startQaMockOpenAiServer } = await loadBundledPluginFacade<QaProviderApi>({
+      pluginId: "qa-lab",
+      artifactBasename: "api.js",
+    }));
+  });
+
   it.each(["v4 developer", "queued host delivery"] as const)(
     "recognizes %s without replaying an unavailable image tool",
     async (projection) => {
