@@ -41,6 +41,8 @@ function fixture(source = "export {};\n") {
     "flush",
     "getOwner",
     "runWithOwner",
+    "onCleanup",
+    "manualImport",
   ]) {
     write(root, `config/control-ui-${pattern}-baseline.txt`, "");
   }
@@ -69,6 +71,11 @@ describe("Control UI controller guard", () => {
     'element["addEventListener"]("click", handler);',
     'element?.querySelector<HTMLElement>("button");',
     'element[`querySelectorAll`]("button");',
+    'import { createComponent as render } from "solid-js"; render(View, {});',
+    'import * as solid from "solid-js"; solid["createComponent"]?.(View, {});',
+    "const view = <div classList={{ active: true }} />;",
+    "const view = <div {...{ classList: { active: true } }} />;",
+    "const view = <div {...{ classList }} />;",
   ])("rejects forbidden production call syntax: %s", (source) => {
     const root = fixture();
     write(root, "ui/src/new.tsx", source);
@@ -89,7 +96,7 @@ describe("Control UI controller guard", () => {
       write(
         root,
         `ui/src/${name}`,
-        "element.querySelector('button'); element.addEventListener('click', fn);",
+        'import { createComponent, onCleanup } from "solid-js"; createComponent(View, {}); onCleanup(dispose); const view = <div classList={{ active: true }} />; element.querySelector("button");',
       );
     }
     expect(main(root, [])).toBe(0);
@@ -104,6 +111,12 @@ describe("Control UI controller guard", () => {
     ["untrack", "ui/src/view.ts", "untrack(read);"],
     ["addEventListener", "ui/src/view.ts", "signal.addEventListener('abort', done);"],
     ["querySelector", "ui/src/components/markdown.ts", "root.querySelectorAll<HTMLElement>('a');"],
+    [
+      "onCleanup",
+      "ui/src/pages/view.ts",
+      'import { onCleanup } from "solid-js"; onCleanup(dispose);',
+    ],
+    ["manualImport", "ui/src/pages/view.tsx", 'let component = import("./panel.tsx");'],
   ])("ratchets %s per file and rejects allowance inflation", (pattern, file, source) => {
     const root = fixture();
     write(root, file, source);
@@ -124,6 +137,98 @@ describe("Control UI controller guard", () => {
     expect(fs.readFileSync(baseline, "utf8")).not.toContain(`${file}\t`);
     write(root, file, source);
     expect(main(root, [])).toBe(1);
+  });
+
+  it("permits the remaining context factory, native classList, and unrelated factory names", () => {
+    const root = fixture();
+    write(
+      root,
+      "ui/src/lib/reactive/context.ts",
+      'import { createComponent } from "solid-js"; createComponent(Context, props);',
+    );
+    write(
+      root,
+      "ui/src/view.tsx",
+      [
+        'import { createComponent as render } from "./factory.ts";',
+        'import { createComponent } from "solid-js";',
+        'render(View, {}); element.classList.toggle("active");',
+        "function local(createComponent: any) { createComponent(View, {}); }",
+        "// <div classList={{ active: true }} />",
+      ].join("\n"),
+    );
+    expect(main(root, [])).toBe(0);
+  });
+
+  it("ratchets view lifetime cleanup but permits computation cleanup and reactive primitives", () => {
+    const root = fixture();
+    const source = [
+      'import { onCleanup as cleanup, createMemo as memo, createEffect as effect, createStore } from "solid-js";',
+      'import * as solid from "@solidjs/signals";',
+      "memo(() => { cleanup(dispose); return read(); });",
+      "effect(() => { solid.onCleanup(dispose); return read(); }, apply);",
+      "createStore((draft) => { cleanup(dispose); draft.value = read(); });",
+      "memo((() => { cleanup(dispose); return read(); }));",
+      "function local(cleanup: any) { cleanup(dispose); }",
+    ].join("\n");
+    write(root, "ui/src/view.tsx", source);
+    write(
+      root,
+      "ui/src/lib/reactive/resource.ts",
+      'import { onCleanup } from "solid-js"; onCleanup(dispose);',
+    );
+    write(root, "config/control-ui-createEffect-baseline.txt", "ui/src/view.tsx\t1\n");
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "existing effect"]);
+    expect(main(root, [])).toBe(0);
+    write(root, "ui/src/view.tsx", source + "\ncleanup(dispose);");
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("onCleanup calls must not increase");
+    errors.mockClear();
+    write(
+      root,
+      "ui/src/view.tsx",
+      source.replace(
+        "effect(() => { solid.onCleanup(dispose); return read(); }, apply);",
+        "effect(read, () => { cleanup(dispose); });",
+      ),
+    );
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("onCleanup calls must not increase");
+  });
+
+  it("ratchets stored import loaders while preserving lazy components, route loaders, and utility reads", () => {
+    const root = fixture();
+    const file = "ui/src/pages/view.tsx";
+    const source = [
+      'import { lazy as deferred } from "solid-js";',
+      'const Panel = deferred(() => import("./panel.tsx"));',
+      'const AsyncPanel = deferred(async () => { const module = await import("./panel.tsx"); return module; });',
+      'const route = { component: () => import("./page.tsx") };',
+      'async function command() { const { save } = await import("./save.ts"); await save(); }',
+      'type Module = typeof import("./panel.tsx");',
+    ].join("\n");
+    write(root, file, source);
+    write(
+      root,
+      "ui/src/pages/route.tsx",
+      'const route = { component: async () => { const entry = await import("./page.tsx"); await entry.Page.preload(); return entry; } };',
+    );
+    expect(main(root, [])).toBe(0);
+    for (const loader of [
+      'let loaded; loaded = import("./panel.tsx").then(module => { setPanel(module.Panel); });',
+      'async function load() { setPanel(await import("./panel.tsx")); }',
+      'import("./panel.tsx").then(module => { state.panel = module.Panel; });',
+      'function load() { return import("./panel.tsx").then(module => setPanel(module.Panel)); }',
+      'const panel = cached ?? await import("./panel.tsx");',
+      'const panel = cached || await import("./panel.tsx");',
+      'async function load() { const { Panel } = await import("./panel.tsx"); setPanel(Panel); }',
+    ]) {
+      errors.mockClear();
+      write(root, file, source + "\n" + loader);
+      expect(main(root, []), loader).toBe(1);
+      expect(errors.mock.calls.flat().join("\n")).toContain("manualImport calls must not increase");
+    }
   });
 
   it.each(["flush", "getOwner", "runWithOwner"])(

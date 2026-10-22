@@ -27,6 +27,17 @@ removing calls, run `pnpm check:control-ui-controllers --prune` and commit the
 shrunk baselines with the source change. Staged lint checks the index; CI and
 `--base <ref>` compare allowances against the merge base. Do not raise allowances.
 
+The same guard bans hand-written Solid `createComponent` outside the named
+context adapter and bans JSX `classList` (native DOM `element.classList` is valid).
+It also ratchets `onCleanup` in TSX and the app/components/pages/plugins view
+modules, excluding `lib/reactive/**` and inline computation callbacks. Effect
+apply callbacks return teardown rather than registering cleanup. The
+`manualImport` baseline counts imports stored in bindings/assignments, passed
+directly to consumers, or chained with `.then` in those view modules. It excludes
+`lazy` callbacks, route modules, destructured non-JSX utility reads, and type imports.
+It is a syntactic census, not interprocedural data flow: review helper-based
+loaders and whether a stored import is component code before replacing it.
+
 Run from the repository root; scope paths to your area:
 
 ```sh
@@ -96,6 +107,11 @@ async reads do not duplicate owner requests, errors are visible, optimistic
 proxies cannot become write authority, and `refresh` targets the actual
 derivation. A rejected action promise needs an explicit error consumer;
 `Errored` does not catch an ignored event-handler promise.
+Trace a saving flag to the action that writes it and the control that reads it;
+the AST guard cannot infer that contract from names or from a nearby optimistic
+signal. Existing owner mutation facts remain authoritative. `isPending` is for
+pending reads, not proof that a mutation is busy; a readable optimistic value
+can still have an in-flight write.
 
 1. Read the module, its owner, its callers, and its tests. Name the contract each
    piece serves before deleting anything.
