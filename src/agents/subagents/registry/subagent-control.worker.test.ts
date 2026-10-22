@@ -591,6 +591,16 @@ describe("subagent progress drafts", () => {
   type TestDraft = { push: Mock; retire: Mock };
   const newDraft = (): TestDraft => ({ push: vi.fn(), retire: vi.fn() });
 
+  it("keeps progress titles whole at the 120-unit UTF-16 bound", async () => {
+    const prefix = "a".repeat(119);
+    const spawns = await yieldCohort("parent-turn", ["a"], undefined, { a: `${prefix}😀tail` });
+    const draft = newDraft();
+    expect(adoptSubagentProgressDraft(spawns, draft)).toBe(true);
+    expect(draft.push).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: "a", kind: "subagent", title: prefix }),
+    );
+  });
+
   async function adoptCohort(children = ["a", "b"], origin?: Parameters<typeof yieldCohort>[2]) {
     const spawns = await yieldCohort("parent-turn", children, origin);
     const draft = newDraft();

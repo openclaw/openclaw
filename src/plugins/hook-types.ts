@@ -766,6 +766,7 @@ export type PluginHookBeforeInstallRequest = {
   requestedSpecifier?: string;
 };
 
+/** @public Part of the stable native plugin contract facade. */
 export type PluginHookBeforeInstallBuiltinScan = {
   status: "ok" | "error";
   scannedFiles: number;

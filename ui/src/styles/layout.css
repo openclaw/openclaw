@@ -1317,6 +1317,11 @@ openclaw-settings-save-indicator:empty {
   cursor: var(--cursor-action);
 }
 
+/* Pinned renders in its own list container above the chip list or agent roster. */
+.sidebar-recent-sessions--pinned {
+  margin-block-end: var(--sidebar-group-gap);
+}
+
 .shell:not(.shell--mobile-nav) .sidebar-recent-sessions {
   margin-inline: -6px;
 }
@@ -4159,7 +4164,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   outline: none;
 }
 
-.content > * + * {
+/* Child position preserves spacing without a universal sibling invalidation set. */
+.content > :where(:not(:first-child)) {
   margin-top: 20px;
 }
 
@@ -4178,8 +4184,8 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--chat > * + *,
-.content--custodian > * + * {
+.content--chat > :where(:not(:first-child)),
+.content--custodian > :where(:not(:first-child)) {
   margin-top: 0;
 }
 
@@ -4201,7 +4207,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
   padding-bottom: 0;
 }
 
-.content--workboard > * + * {
+.content--workboard > :where(:not(:first-child)) {
   margin-top: 14px;
 }
 

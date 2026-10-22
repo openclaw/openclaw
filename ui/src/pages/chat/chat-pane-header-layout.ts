@@ -201,7 +201,7 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     chatProps: ChatProps;
     paneChatProps: ChatProps;
     detailsActions: PaneDetailsActions;
-    subagentStop: { onAbort: () => void } | undefined;
+    subagentStop: { target: string; onAbort: () => void } | undefined;
     ownsSubagentsPanel: boolean;
     mobileHost: ChatMobileHost | undefined;
     sidebarLayout: SidebarLayout;

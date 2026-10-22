@@ -208,13 +208,23 @@ describe("CI automation popup scope", () => {
     fixWrite.reject(new Error("Lost acknowledgement"));
     await h.settle();
     h.toggles(false, true);
+    expect(h.root.textContent).toContain("Lost acknowledgement");
+    expect(h.checkbox().closest("fieldset")?.disabled).toBe(true);
+    expect(h.root.querySelector<HTMLButtonElement>(".chat-ci__automation-retry")!.disabled).toBe(
+      true,
+    );
     h.jobs = [job("first"), job("first", "autoMerge")];
     h.writes = {};
     mergeWrite.resolve({ job: job("first", "autoMerge") });
     await h.settle();
     expect(h.root.textContent).toContain("Lost acknowledgement");
     h.toggles(true, true);
+    const retryRead = createDeferred<ReturnType<typeof inventory>>();
+    h.read = retryRead.promise;
     h.root.querySelector<HTMLButtonElement>(".chat-ci__automation-retry")!.click();
+    await h.settle();
+    expect(h.root.querySelector('[role="alert"]')).toBeNull();
+    retryRead.resolve(inventory(h.jobs));
     await h.settle();
     expect(h.root.querySelector('[role="alert"]')).toBeNull();
     expect(h.calls("cron.add")).toHaveLength(2);
@@ -316,6 +326,12 @@ describe("CI automation popup scope", () => {
         h.element.gateway = createGatewayHarness().gateway;
       }
       await h.settle();
+      // A retired scope must clear its pending checkbox before its RPC settles.
+      expect(h.checkbox().checked).toBe(false);
+      expect(h.checkbox().disabled).toBe(false);
+      if (change === "session") {
+        expect(h.checkbox().closest("fieldset")?.disabled).toBe(false);
+      }
       pending.reject(new Error("Old context failure"));
       await h.settle();
       expect(h.root.textContent).not.toContain("Old context failure");
@@ -339,6 +355,9 @@ describe("CI automation popup scope", () => {
     h.writes = {};
     h.snapshot({ phase: "connected" });
     await h.settle();
+    expect(h.checkbox().checked).toBe(true);
+    expect(h.checkbox().disabled).toBe(false);
+    expect(h.checkbox().closest("fieldset")?.disabled).toBe(false);
     pending.resolve({ ...job("first"), enabled: false });
     await h.settle();
     expect(h.checkbox().checked).toBe(true);

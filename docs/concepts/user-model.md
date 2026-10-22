@@ -112,7 +112,22 @@ conversation history. Do not store secrets in these files.
 
 Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified. The Profile header follows your live user identity, including names cleared from another browser, even when several agents are configured. Unidentified connections retain the default-agent preview.
 
-Authenticated users can read their own profile with `operator.read`, `operator.sessions.read`, or their implied write/admin scopes, even when the shared People roster is unavailable. Refresh and reconnect read the current authenticated profile. Editing the name, avatar, or credit preference still requires `operator.write`; session access does not grant profile editing or access to other profiles. Profile image downloads retain their separate read permission and may display initials for session-only access.
+Authenticated users can read their own profile with `operator.read`, `operator.sessions.read`, or their implied write/admin scopes, even when the shared People roster is unavailable. Refresh and reconnect read the current authenticated profile. Those same grants allow members to edit their own display name, avatar, and Git co-author credit preference without general write or administrator access. Session-only users can download their own avatar, but cannot use this access to browse other people’s profile images or the People roster. The server checks the authenticated profile on every edit; selecting another profile ID does not grant access. Server-wide upload restrictions still apply.
+
+### Member and administrator controls
+
+| Members control for themselves                                   | Administrator or verified-provider controls                                |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Display name and avatar                                          | Editing another person’s profile                                           |
+| Git co-author credit consent and personal appearance preferences | Roles, permission ceilings, invitations, and server-wide settings          |
+| Personal instructions, where available                           | Shared agent instructions and defaults                                     |
+| Their own GitHub connection through verified sign-in             | Verified identity claims, email/channel identity links, and profile merges |
+
+A display name or avatar is presentation, not proof of identity or authority.
+Verified GitHub identity remains read-only; changing a personal connection does
+not change that identity or grant permissions. Personal model-account management
+keeps its existing write requirements; this change does not expand access to
+credentials, shared provider accounts, or billing.
 
 A single-user Gateway gives unidentified operator connections one durable local owner profile, shared across devices and tabs, including device-token reconnects. The Gateway host account's full name fills an unset display name. A saved name is never overwritten. If no full name is available, the sidebar and Profile header show **Owner** until you set a name. Login names are not used. The owner profile has no email and does not change permissions or identity scopes. It cannot be merged with a personal profile or assigned an operator role. Sign in with a personal identity for those operations. If a build older than v2026.9.2 merged the owner profile into a person, connections stay unidentified and log a repair hint. Run `openclaw doctor --fix`, then reconnect to restore the owner identity. The person keeps their emails, role, and GitHub identities.
 

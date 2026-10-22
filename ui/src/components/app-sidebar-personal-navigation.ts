@@ -18,6 +18,7 @@ import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.
 import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
+  type SidebarPinZone,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
@@ -271,4 +272,36 @@ export function personalSidebarOwnerProjection(
     selectedProfileId: host.sessionOwnerFilterId === self?.id ? self.id : undefined,
     self,
   });
+}
+
+/** Rendering and selection share archive visibility; saved pins survive restoration. */
+export function sidebarPinnedSessionRows(
+  zone: SidebarPinZone,
+  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+): SidebarRecentSession[] {
+  return zone.entries.flatMap((entry) => {
+    const row =
+      entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
+    return row && row.archived !== true && !archiveVisibility?.(row.key) ? [row] : [];
+  });
+}
+
+export function sidebarVisibleRowsInOrder(
+  zone: SidebarPinZone,
+  visibleRows: SidebarRecentSession[],
+  host: {
+    readonly collapsedSessionSections: ReadonlySet<string>;
+    readonly sessionDataContext?: {
+      sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
+    };
+  },
+): SidebarRecentSession[] {
+  return host.collapsedSessionSections.has("pinned")
+    ? visibleRows
+    : [
+        ...sidebarPinnedSessionRows(zone, (key) =>
+          host.sessionDataContext?.sessions.archiveVisibility(key),
+        ),
+        ...visibleRows,
+      ];
 }

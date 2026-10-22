@@ -3,9 +3,11 @@ import { classifySessionKind } from "../../../../../src/sessions/classify-sessio
 import {
   normalizeRoleForGrouping,
   resolveMessageRole,
-  resolveMessageSender,
 } from "../../../lib/chat/message-normalizer.ts";
-import { sessionParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
+import {
+  resolveMessageSender,
+  sessionParticipantIdentityKey,
+} from "../../../lib/chat/sender-label.ts";
 import {
   isSubagentSessionKey,
   isUiGlobalScopeConfigured,

@@ -44,15 +44,6 @@ export function UsagePageShell(props: {
   );
 }
 
-export function renderUsageLoadingStatus(label: JSX.Element) {
-  return (
-    <span class="settings-status settings-status--accent">
-      <span class="usage-loading-spinner" aria-hidden="true" />
-      {label}
-    </span>
-  );
-}
-
 export function renderUsageEmptyState(onRefresh: () => void) {
   return (
     <section class="settings-group usage-panel usage-empty-state">

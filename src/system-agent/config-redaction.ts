@@ -333,14 +333,13 @@ export function isSystemAgentSensitiveConfigValue(path: string, value: unknown):
 function isSensitiveConfigPathParts(
   path: string[],
   metadata: SystemAgentConfigRedactionMetadata,
-  includeAncestors = true,
 ): boolean {
   const { uiHints } = metadata;
   const canonicalPath = path.join(".");
   const sensitiveHint = resolveConfigUiHint(
     path,
     uiHints,
-    includeAncestors,
+    true,
     (candidate) => candidate.sensitive !== undefined,
   );
   if (sensitiveHint?.sensitive === true || isSensitiveConfigPath(canonicalPath)) {

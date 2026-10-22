@@ -26,7 +26,7 @@ import {
 } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { excludeComposerAttachments, readQueuedMessageById } from "./chat-queue.ts";
-import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
+import { formatTerminalChatSendAckError, isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
@@ -42,7 +42,6 @@ import {
 } from "./chat-send-queue-state.ts";
 import { requestChatSend } from "./chat-send-request.ts";
 import {
-  formatTerminalChatSendAckError,
   OFFLINE_QUEUE_STORAGE_ERROR,
   requiresChatInputConsumption,
   surfaceChatDeliveryFailure,

@@ -68,7 +68,6 @@ export async function prepareGatewayLifecycle(params: {
   const sandboxRegistry = prepareSandboxRegistryClose();
   const talkClose = prepareTalkConnectionClose(runtime.clients, log);
   const {
-    minimalTestGateway,
     transportBridge,
     sessionMessageSubscribers,
     isConnectionActive,
@@ -87,6 +86,7 @@ export async function prepareGatewayLifecycle(params: {
     runtimeStateRef,
     gatewayInstanceRuntimeRef,
     startupState,
+    unavailableGatewayMethods,
     readinessEventLoopHealth,
     browserAuthRateLimiter,
     chatRunState,
@@ -248,9 +248,6 @@ export async function prepareGatewayLifecycle(params: {
       runtimeState.pluginServices = services;
     },
   });
-  const unavailableGatewayMethods = new Set<string>(
-    minimalTestGateway ? [] : STARTUP_UNAVAILABLE_GATEWAY_METHODS,
-  );
   // Kernel methods are the only writers for readiness and advertised-method state.
   const kernel = {
     pluginRuntimeGeneration,
@@ -262,10 +259,20 @@ export async function prepareGatewayLifecycle(params: {
       startupState.sidecarsReady = true;
     },
     unlockStartupMethods: (options?: { keepChatSendUnavailable?: boolean }) => {
+      const chatWasUnavailable = unavailableGatewayMethods.has("chat.send");
       for (const method of STARTUP_UNAVAILABLE_GATEWAY_METHODS) {
         if (method !== "chat.send" || !options?.keepChatSendUnavailable) {
           unavailableGatewayMethods.delete(method);
         }
+      }
+      if (
+        chatWasUnavailable &&
+        !unavailableGatewayMethods.has("chat.send") &&
+        startupState.sidecarsReady &&
+        runtime.getReadiness().ready
+      ) {
+        runtime.startupTrace.mark("ready");
+        log.info("gateway ready");
       }
     },
     publishMethodSurface: (methods: readonly string[]) => {
@@ -485,6 +492,7 @@ export async function prepareGatewayLifecycle(params: {
         getEventLoopHealth: readinessEventLoopHealth.snapshot,
         getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
         getSessionRowProjection: runtime.getSessionRowProjection,
+        getCronStorePath: () => runtimeState.cronState.storePath,
       }),
     );
   };

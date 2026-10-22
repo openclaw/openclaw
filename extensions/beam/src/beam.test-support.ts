@@ -71,7 +71,7 @@ export function persistentBeamTestStore(pluginId = "beam") {
 }
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
-export const beamTestLogger = { warn: () => {}, info: () => {}, error: () => {} };
+const beamTestLogger = { warn: () => {}, info: () => {}, error: () => {} };
 export function beamTestServiceContext(): OpenClawPluginServiceContextV2 {
   return {
     config: {},

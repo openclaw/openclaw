@@ -32,8 +32,10 @@
    only when supported by the selected instrumentation.
 4. **Verify capture.** Apply the main skill's artifact rules. Save per-step trace
    JSON, CPU profile, source-mapped hotspots, screenshot, status, and errors.
-   Label trace/profiler overhead. `control-ui-cold-load-probes.ts` also wraps Lit
-   updates and message delivery: disclose those changes and simulated delays.
+   Label trace/profiler overhead. `control-ui-cold-load-probes.ts` records Solid
+   pane render passes, explicit lifecycle notifications, and message delivery;
+   fine-grained bindings and page snapshot computations are outside those render
+   counts. Disclose instrumentation and simulated delays.
    Close CDP, browser, and server resources on success and failure.
    **Done:** artifacts are nonempty and readable, screenshots show the asserted
    states, mapping coverage is reported, and failed attempts remain inspectable.

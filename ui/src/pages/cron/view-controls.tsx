@@ -1,17 +1,31 @@
-import { createUniqueId } from "solid-js";
+import { createMemo, createUniqueId, Errored, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { CronProps } from "./view-types.ts";
-export function ErrorBanner(props: { error: string | null }) {
+import type { CronJobActionProps, CronProps } from "./view-types.ts";
+export function ErrorBanner(props: { error: string | null; reads?: CronProps["reads"] }) {
+  const modelRequest = createMemo(() => props.reads?.modelRequest());
   return (
     <>
       {props.error ? (
         <div class="cron-error-banner" role="alert">
           {props.error}
         </div>
+      ) : props.reads ? (
+        <Loading on={modelRequest()}>
+          <Errored
+            fallback={(error) => (
+              <div class="cron-error-banner" role="alert">
+                {formatUiError(error())}
+              </div>
+            )}
+          >
+            {props.reads.models()}
+          </Errored>
+        </Loading>
       ) : undefined}
     </>
   );
@@ -43,11 +57,12 @@ export function AdminRequired(props: CronProps) {
 }
 // Run now and pause/resume are visible controls (rows and detail header);
 // the menu only carries the low-traffic actions.
-export function JobMenu(props: CronProps & { job: CronJob }) {
+export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
   const id = createUniqueId();
   const displayName = () => props.job.displayName ?? props.job.name;
   return (
     <Menu
+      lazy
       id={id}
       label={t("cron.actions.moreJob", { name: displayName() })}
       class="cron-job-menu"
@@ -100,7 +115,7 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
   );
 }
 export function EnabledSwitch(
-  props: CronProps & {
+  props: CronJobActionProps & {
     job: CronJob;
     compact?: boolean;
   },

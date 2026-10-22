@@ -93,9 +93,13 @@ export class SessionOrganizer {
   ): Promise<void> {
     const scope = this.deps.sessionData.beginSessionMutation(allowDeferred);
     if (scope) {
-      const operations = await this.loadOperations(scope);
-      if (operations) {
-        await run(operations, scope);
+      try {
+        const operations = await this.loadOperations(scope);
+        if (operations) {
+          await run(operations, scope);
+        }
+      } catch (error) {
+        this.deps.sessionData.publishSessionMutationError(scope, error);
       }
     }
   }
@@ -274,9 +278,8 @@ export class SessionOrganizer {
 
   startSessionDrag(session: SidebarRecentSession): void {
     this.draggingSessionKey = session.key;
-    this.draggingSidebarEntry = this.isPersonalSessionPin(session.key)
-      ? `session:${session.key}`
-      : null;
+    const shortcut = serializeSidebarEntry({ type: "session", key: session.key, rail: true });
+    this.draggingSidebarEntry = this.deps.sidebarEntries.includes(shortcut) ? shortcut : null;
     this.sidebarZoneDragActive = session.pinnable;
     this.notify();
   }
@@ -309,10 +312,14 @@ export class SessionOrganizer {
   private draggedSidebarEntry(dataTransfer: DataTransfer | null): string | null {
     const navigation = this.draggedSidebarNavigation(dataTransfer);
     if (navigation) {
-      return serializeSidebarEntry(navigation);
+      return serializeSidebarEntry(
+        navigation.type === "session" ? { ...navigation, rail: true } : navigation,
+      );
     }
     const sessionKey = readSessionDragData(dataTransfer);
-    return sessionKey ? serializeSidebarEntry({ type: "session", key: sessionKey }) : null;
+    return sessionKey
+      ? serializeSidebarEntry({ type: "session", key: sessionKey, rail: true })
+      : null;
   }
 
   private isSidebarZoneDragCompatible(dataTransfer: DataTransfer | null): boolean {
@@ -419,7 +426,7 @@ export class SessionOrganizer {
     const routeDrag = sidebarRouteDragActive(event.dataTransfer);
     const sessionKey = this.draggingSessionKey ?? readSessionDragData(event.dataTransfer);
     const session = sessionKey ? this.deps.findSidebarMenuSessionByKey(sessionKey) : undefined;
-    if (!routeDrag && !session?.isChild && !(session && this.isPersonalSessionPin(session.key))) {
+    if (!routeDrag && !session?.isChild) {
       return;
     }
     event.preventDefault();
@@ -453,23 +460,16 @@ export class SessionOrganizer {
       event.preventDefault();
       event.stopPropagation();
       void this.promoteSession(session);
-    } else if (session && this.isPersonalSessionPin(session.key)) {
-      event.preventDefault();
-      this.setPersonalSessionPin(session.key, false);
     }
     this.finishSidebarEntryDrag();
   }
 
-  /** A dialog that never opens still owes the operator a visible outcome. */
-  private async loadDialog<T>(load: Promise<T>): Promise<T | null> {
+  /** Preparation failures belong to the same scope as the requested dialog. */
+  private async runDialog(scope: SidebarSessionMutationScope, run: () => Promise<void>) {
     try {
-      return await load;
+      await run();
     } catch (error) {
-      const scope = this.deps.sessionData.beginSessionMutation();
-      if (scope) {
-        this.deps.sessionData.publishSessionMutationError(scope, error);
-      }
-      return null;
+      this.deps.sessionData.publishSessionMutationError(scope, error);
     }
   }
 
@@ -479,8 +479,10 @@ export class SessionOrganizer {
       return;
     }
     const signal = this.deps.sessionData.sessionDraftSignal;
-    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
-    await dialogs?.createSessionGroupDialog(this.deps, scope, signal, sessions, this.notify);
+    await this.runDialog(scope, async () => {
+      const dialogs = await import("./session-organizer-group-dialogs.runtime.ts");
+      await dialogs.createSessionGroupDialog(this.deps, scope, signal, sessions, this.notify);
+    });
   }
 
   async renameSessionGroupFromMenu(group: string): Promise<void> {
@@ -489,16 +491,18 @@ export class SessionOrganizer {
       return;
     }
     const signal = this.deps.sessionData.sessionDraftSignal;
-    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
-    await dialogs?.renameSessionGroupDialog(this.deps, scope, signal, group, (next) => {
-      const from = `category:${group}`;
-      if (this.collapsedSessionSections.has(from)) {
-        const collapsed = new Set(this.collapsedSessionSections);
-        collapsed.delete(from);
-        collapsed.add(`category:${next}`);
-        this.saveCollapsedSessionSections(collapsed);
-      }
-      this.notify();
+    await this.runDialog(scope, async () => {
+      const dialogs = await import("./session-organizer-group-dialogs.runtime.ts");
+      await dialogs.renameSessionGroupDialog(this.deps, scope, signal, group, (next) => {
+        const from = `category:${group}`;
+        if (this.collapsedSessionSections.has(from)) {
+          const collapsed = new Set(this.collapsedSessionSections);
+          collapsed.delete(from);
+          collapsed.add(`category:${next}`);
+          this.saveCollapsedSessionSections(collapsed);
+        }
+        this.notify();
+      });
     });
   }
 
@@ -518,8 +522,10 @@ export class SessionOrganizer {
     if (!scope) {
       return;
     }
-    const dialogs = await this.loadDialog(import("./session-organizer-group-dialogs.runtime.ts"));
-    await dialogs?.editSessionGroupDefaultsDialog(this.deps, scope, group);
+    await this.runDialog(scope, async () => {
+      const dialogs = await import("./session-organizer-group-dialogs.runtime.ts");
+      await dialogs.editSessionGroupDefaultsDialog(this.deps, scope, group);
+    });
   }
 
   saveCollapsedSessionSections(sections: ReadonlySet<string>) {
@@ -582,7 +588,11 @@ export class SessionOrganizer {
 
   sectionDragOver(event: DragEvent, sectionId: string, category?: string) {
     const dataTransfer = event.dataTransfer;
-    if (sidebarSectionDragActive(dataTransfer) && this.draggingSidebarSection !== sectionId) {
+    if (
+      sidebarSectionDragActive(dataTransfer) &&
+      this.draggingSidebarSection !== sectionId &&
+      sectionId !== "pinned"
+    ) {
       event.preventDefault();
       if (dataTransfer) {
         dataTransfer.dropEffect = "move";
@@ -634,7 +644,7 @@ export class SessionOrganizer {
   sectionDrop(event: DragEvent, sectionId: string, category?: string) {
     const sourceSectionId = readSidebarSectionDragData(event.dataTransfer);
     const sessionKey = readSessionDragData(event.dataTransfer);
-    if (!sourceSectionId && !sessionKey) {
+    if ((!sourceSectionId && !sessionKey) || (sourceSectionId && sectionId === "pinned")) {
       return;
     }
     // Rows can be dragged from a browsed agent section, so search all caches.

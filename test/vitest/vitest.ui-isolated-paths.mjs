@@ -15,6 +15,9 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/app-sidebar.catalog.test.ts",
   "ui/src/components/gateway-url-confirmation.test.ts",
   "ui/src/components/link-reader-title-tooltip.test.ts",
+  // Import rejection fixtures must not poison the shared module registry.
+  "ui/src/components/lazy-entry-feedback.test.tsx",
+  "ui/src/components/sidebar-attention-lazy-failure.test.ts",
   "ui/src/components/markdown-tables.test.ts",
   "ui/src/components/mcp-app-bridge.test.ts",
   "ui/src/components/mcp-app-panel.test.tsx",

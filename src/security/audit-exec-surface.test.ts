@@ -247,7 +247,7 @@ describe("security audit exec surface findings", () => {
       env: stateDir ? { OPENCLAW_STATE_DIR: stateDir } : {},
       ...(stateDir ? { stateDir } : {}),
       includeFilesystem: false,
-      includeChannelSecurity: false,
+      plugins: [],
     });
   }
 

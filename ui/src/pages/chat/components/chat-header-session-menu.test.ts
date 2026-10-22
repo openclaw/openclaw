@@ -13,6 +13,7 @@ import {
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
 import { createSessionOwnerMenuHarness } from "../../../test-helpers/session-owner-menu.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
@@ -23,7 +24,7 @@ import type { ChatPageHost } from "../chat-state-host.ts";
 import type { HeaderMenuAction } from "./chat-header-session-menu.ts";
 import { PaneHeaderView } from "./chat-pane-header.tsx";
 import "./chat-header-session-menu.ts";
-import type { ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
 import { openNativeSessionMenu } from "./native-session-menu.runtime.ts";
 
 type HeaderMenuElement = HTMLElementTagNameMap["openclaw-chat-header-session-menu"];
@@ -103,7 +104,7 @@ async function mountMenu(
   container.append(menu);
   await menu.updateComplete;
   if (open) {
-    openMenu(menu);
+    await openMenu(menu);
     await materializeSubmenus(menu);
     await menu.updateComplete;
   }
@@ -138,15 +139,15 @@ async function mountPaneMenu(
     throw new Error("Expected chat header session menu");
   }
   await menu.updateComplete;
-  openMenu(menu);
+  await openMenu(menu);
   await menu.updateComplete;
   await materializeSubmenus(menu);
   return menu;
 }
 
-function openMenu(menu: HeaderMenuElement) {
+async function openMenu(menu: HeaderMenuElement) {
   expect(menu.openMenu()).toBe(true);
-  flush();
+  await waitForSolid(() => expect(menu.querySelector('[data-value="rename"]')).not.toBeNull());
 }
 
 function whenHidden(menu: HeaderMenuElement) {
@@ -244,7 +245,7 @@ function submenuItems(trigger: HTMLElement): MenuItemElement[] {
 async function select(menu: HeaderMenuElement, value: string) {
   await menu.updateComplete;
   if (!panel(menu).matches(":popover-open")) {
-    openMenu(menu);
+    await openMenu(menu);
   }
   const target = menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
   if (!target) {
@@ -282,7 +283,7 @@ describe("chat header session menu", () => {
     expect(panel(menu).matches(":popover-open")).toBe(false);
     menu.session = { ...menu.session, label: "Latest session", pinned: true };
     await menu.updateComplete;
-    openMenu(menu);
+    await openMenu(menu);
     const pin = item(menu, "Unpin session");
     const hidden = whenHidden(menu);
     panel(menu).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -292,7 +293,7 @@ describe("chat header session menu", () => {
     await expectParked(menu, () => {
       menu.session = { ...menu.session, pinned: false, unread: true };
     });
-    openMenu(menu);
+    await openMenu(menu);
     expect(item(menu, "Pin session")).toBe(pin);
     expect(item(menu, "Mark as read")).toBeDefined();
   });
@@ -301,7 +302,7 @@ describe("chat header session menu", () => {
     const owner = createSessionOwnerMenuHarness();
     owner.context.agents.state.agentsList!.agents.push({ id: "retired", name: "Retired" });
     const menu = await mountMenu({ context: owner.context }, false);
-    openMenu(menu);
+    await openMenu(menu);
     item(menu, "Assign to…").click();
     flush();
     await profileDirectory(owner.context.gateway).load();
@@ -320,7 +321,7 @@ describe("chat header session menu", () => {
       ];
       owner.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
     });
-    openMenu(menu);
+    await openMenu(menu);
     expect(item(menu, "Updated research")).toBe(research);
     expect(item(menu, "Me")).toBe(self);
     expect(
@@ -700,7 +701,7 @@ describe("chat header session menu", () => {
         kind: "assign-owner",
         owner: { type: "human", id: "profile-ada" },
       });
-      openMenu(menu);
+      await openMenu(menu);
       await menu.updateComplete;
       expect(rootLabels(menu)).toEqual(initialLabels);
     } else {
@@ -804,7 +805,7 @@ describe("chat header session menu", () => {
       }
       expect(onAction.mock.calls).toEqual(allowed ? gatedActions.map((kind) => [{ kind }]) : []);
       onAction.mockClear();
-      openMenu(menu);
+      await openMenu(menu);
       dropdown.dispatchEvent(
         new KeyboardEvent("keydown", { key: "f", bubbles: true, cancelable: true }),
       );

@@ -40,6 +40,7 @@ import {
   formatMb,
   formatMs,
   formatStats,
+  gatewayBenchCpuProfileArgs,
   hasHelpFlag,
   parseGatewayBenchRuntimeOptions,
   parseNonNegativeInt,
@@ -1820,15 +1821,7 @@ async function runGatewaySample(
     try {
       const nodeOptions = [
         ...(preload ? ["--import", preload] : []),
-        ...(options.cpuProfDir
-          ? [
-              "--cpu-prof",
-              "--cpu-prof-dir",
-              options.cpuProfDir,
-              "--cpu-prof-name",
-              `openclaw-gateway-${options.benchCase.id}-${options.sampleIndex}-${Date.now()}.cpuprofile`,
-            ]
-          : []),
+        ...gatewayBenchCpuProfileArgs(options.cpuProfDir),
         ...(options.heapProfDir ? ["--heap-prof", "--heap-prof-dir", options.heapProfDir] : []),
       ];
       const childArgs = buildGatewayBenchChildArgs(

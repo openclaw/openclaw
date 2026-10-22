@@ -3603,6 +3603,8 @@ describe("runCodexAppServerAttempt", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({
       pluginConfig: readCodexPluginConfig(pluginConfig),
     });
+    vi.stubEnv("CODEX_API_KEY", "old-codex-env-key");
+    vi.stubEnv("OPENAI_API_KEY", "");
     const cacheKey = buildCodexPluginAppCacheKey({
       appServer,
       agentDir,
@@ -3612,7 +3614,6 @@ describe("runCodexAppServerAttempt", () => {
         : {
             envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
               startOptions: appServer.start,
-              ...(key === "changed" ? { baseEnv: { CODEX_API_KEY: "old-codex-env-key" } } : {}),
             }),
           }),
     });
@@ -3639,7 +3640,6 @@ describe("runCodexAppServerAttempt", () => {
       };
     } else if (key === "changed") {
       vi.stubEnv("CODEX_API_KEY", "new-codex-env-key");
-      vi.stubEnv("OPENAI_API_KEY", "");
     }
     await finishRun(runCodexAppServerAttempt(params, { pluginConfig }), harness);
     const { requests } = harness;

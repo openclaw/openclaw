@@ -1,6 +1,5 @@
 import { Portal } from "@solidjs/web";
 import {
-  Loading,
   Show,
   createEffect,
   createMemo,
@@ -21,8 +20,9 @@ import { createResizeObserver } from "../../../lib/reactive/observers.ts";
 import type { MobileDetailsBindings } from "../chat-details-mobile-host-content.tsx";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
-import "../../../styles/chat/details.css";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import "../../../styles/chat/details.css";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -533,13 +533,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
   function SessionContent(content: { children: Element }) {
     return (
       <Show when={sessionOpened()}>
-        <Loading
+        <ChatLazyBoundary
           fallback={
             <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
           }
         >
           {content.children}
-        </Loading>
+        </ChatLazyBoundary>
       </Show>
     );
   }
@@ -616,7 +616,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                         <Show
                           when={props.chat?.progressCard || props.chat?.progressCardInitialLoading}
                         >
-                          <Loading>
+                          <ChatLazyBoundary>
                             <ChatDetailsProgress
                               onHideProgress={() => {
                                 // The top-layer inspector must not cover the Undo toast.
@@ -630,7 +630,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
                               props={props.chat}
                               presented={isPresented() && opened()}
                             />
-                          </Loading>
+                          </ChatLazyBoundary>
                         </Show>
                       </>
                     }

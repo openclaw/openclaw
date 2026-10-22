@@ -4,16 +4,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
-import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
-import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { recordSkillFileHost, resolveSkillFileHost } from "../../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
-  mapSandboxSkillEntriesForPrompt,
   remapExplicitSkillSelectionPath,
   remapSkillReferencePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
+import { prepareRuntimeSkillEntries, resolveRuntimeSkillsPrompt } from "./skills-prompt.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const hostSkillPath = "/usr/lib/node_modules/openclaw/skills/demo/SKILL.md";
@@ -69,26 +67,9 @@ async function writeSkill(root: string, name: string, metadata: string) {
   return dir;
 }
 
-async function promptFor(runtime: ReturnType<typeof resolveSandboxSkillRuntimeInputs>) {
-  const { skillsWorkspaceDir, skillsPromptWorkspaceDir, skillsSnapshot, skillsEligibility } =
-    runtime;
-  const { shouldLoadSkillEntries, skillEntries } = await resolveEmbeddedRunSkillEntries({
-    workspaceDir: skillsWorkspaceDir,
-    eligibility: skillsEligibility,
-    skillsSnapshot,
-    workspaceOnly: runtime.workspaceOnly,
-  });
-  const entries = mapSandboxSkillEntriesForPrompt({
-    entries: shouldLoadSkillEntries ? skillEntries : undefined,
-    skillsWorkspaceDir,
-    skillsPromptWorkspaceDir,
-  });
-  const prompt = await resolveSkillsPrompt({
-    skillsSnapshot,
-    entries,
-    workspaceDir: skillsPromptWorkspaceDir,
-    eligibility: skillsEligibility,
-  });
+async function promptFor(params: Parameters<typeof prepareRuntimeSkillEntries>[0]) {
+  const { skillEntries } = await prepareRuntimeSkillEntries(params);
+  const { prompt } = await resolveRuntimeSkillsPrompt(params);
   return { prompt, skillEntries };
 }
 
@@ -190,7 +171,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       bins.includes("sandboxbin"),
     );
 
-    const runtime = resolveSandboxSkillRuntimeInputs({
+    const params = {
       sandbox: {
         ...materializedSandbox,
         skillsEligibility,
@@ -199,8 +180,9 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       },
       skillsAnchorWorkspace: effectiveWorkspace,
       skillsSnapshot,
-    });
-    const { prompt, skillEntries } = await promptFor(runtime);
+    };
+    const runtime = resolveSandboxSkillRuntimeInputs(params);
+    const { prompt, skillEntries } = await promptFor(params);
 
     if (skillsSnapshot === snapshot) {
       expect(prompt).toContain(deliveredPath("demo"));
@@ -226,10 +208,8 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     const skillsEligibility = remoteEligibility("darwin", "remote mac available");
 
     const { prompt } = await promptFor({
-      skillsWorkspaceDir: root,
-      skillsPromptWorkspaceDir: root,
-      skillsEligibility,
-      workspaceOnly: true,
+      skillsAnchorWorkspace: root,
+      sandbox: { enabled: true, skillsWorkspaceDir: root, skillsEligibility },
     });
 
     expect(prompt).toContain("remote mac available");

@@ -32,7 +32,8 @@ import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pan
 import { ChatPaneMobileComposition } from "./chat-pane-mobile-composition.tsx";
 import { ChatPanePlacement } from "./chat-pane-placement.tsx";
 import { ChatPaneVersionsMenu } from "./chat-pane-versions-menu.tsx";
-import { ChatSessionPublicIndicator, ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
+import { ChatSessionPublicIndicator } from "./chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "./chat-session-sharing.solid.tsx";
 import { ContinueInTerminalDialog } from "./continue-in-terminal-dialog.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);

@@ -4838,7 +4838,12 @@ cache updates and delivery acknowledgments compare the current payload inside
 the worker transaction. Only definite comparison conflicts retry, at most four
 times; failed reads never advance the audit cursor and uncertain writes never
 replay. Config observation captures its audit writer before filesystem reads and
-rechecks its health owner at transaction and commit admission. Cold synchronous
+rechecks its health owner at transaction and commit admission. Accepted config writes
+and rollback consume the health worker's conditional-write outcome without rereading
+their own writes. Only definite comparison conflicts refresh and reconsider, at
+most four times; unavailable reads and uncertain writes stop best-effort health
+bookkeeping without replay. Newer baselines and anomaly markers retain their
+existing compensation guards. This adds no schema or stored fields. Cold synchronous
 config loading retains native audit registration; Doctor and update inspection
 retain native tail reads. Schemas, audit collection and retention, stored payloads,
 prompt bytes, and update behavior are unchanged.

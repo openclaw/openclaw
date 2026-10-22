@@ -170,7 +170,7 @@ describe("profile avatar HTTP endpoint", () => {
     getRuntimeConfig.mockReset();
     resolveHostAccountAvatar.mockReset().mockResolvedValue(null);
     authorizeControlUiReadRequestOrReply.mockImplementation(({ res }: { res: ServerResponse }) =>
-      bindHttpResponseAuthority({}, res, () => true),
+      bindHttpResponseAuthority({ operatorScopes: ["operator.read"] }, res, () => true),
     );
     getRuntimeConfig.mockReturnValue({
       gateway: { controlUi: { allowedOrigins: ["https://control.example"] } },

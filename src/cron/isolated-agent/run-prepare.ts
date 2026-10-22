@@ -538,6 +538,7 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           sourceSessionKey,
           sourceEntry,
           storePath: cronSession.storePath,
+          cronStorePath: input.cronStorePath,
           assertCurrent: assertPreparationCurrent,
           signal: input.abortSignal ?? input.signal,
           baseSessionKey,

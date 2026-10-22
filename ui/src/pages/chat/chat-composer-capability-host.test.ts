@@ -381,6 +381,26 @@ describe("ChatComposerCapabilityHost", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("refreshes Tool access on reopen while sharing an in-flight request", async () => {
+    const beforeRun = toolsResult("before-run");
+    const afterRun = toolsResult("after-run");
+    const second = deferred<unknown>();
+    const request = vi.fn().mockResolvedValueOnce(beforeRun).mockReturnValueOnce(second.promise);
+    const { props } = toolsHarness(request);
+
+    props().onOpenToolAccess?.("github");
+    await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(beforeRun));
+    props().onLoadView?.("tools:github");
+    expect(request).toHaveBeenCalledTimes(1);
+
+    props().onOpenToolAccess?.("github");
+    props().onOpenToolAccess?.("github");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(props().toolsEffectiveLoading).toBe(true);
+    second.resolve(afterRun);
+    await vi.waitFor(() => expect(props().toolsEffectiveResult).toBe(afterRun));
+  });
+
   it.each(["before", "after"] as const)(
     "ignores a same-key predecessor finishing %s its replacement",
     async (order) => {

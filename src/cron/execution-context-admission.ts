@@ -33,7 +33,7 @@ import {
   unadmittedScheduledOccurrence,
 } from "./scheduled-occurrence.js";
 import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
-import type { CronStoredJob } from "./types.js";
+import type { CronParentUnavailable, CronStoredJob } from "./types.js";
 
 type OccurrenceAdmissionParams = {
   cfg: OpenClawConfig;
@@ -200,6 +200,7 @@ export async function admitScheduledOccurrence(
   let parentRow: ScheduledAdmissionFacts["parentRow"];
   let owner: boolean | undefined;
   let generation: Awaited<ReturnType<typeof prepareSessionGenerationFacts>> | undefined;
+  let pause: CronParentUnavailable | undefined;
   try {
     if (!("error" in principal) && principal.kind === "parent") {
       const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
@@ -209,7 +210,24 @@ export async function admitScheduledOccurrence(
       if (principal.requester.kind !== "operator-source") {
         owner = await checkRequesterOwner(params.cfg, principal.requester);
       }
-      if (classifyScheduledParent(principal.parent, parentRow) === "current") {
+      const parentState = classifyScheduledParent(principal.parent, parentRow);
+      const parentSessionKey = principal.parent.sessionKey;
+      // A reset parent keeps running as an unbound parent; a failed read never pauses.
+      if (parentState === "removed" || parentState === "archived") {
+        pause = { reason: parentState, parentSessionKey };
+      } else if (
+        parentState === "current" &&
+        !parentRow.missing &&
+        parentRow.worktree &&
+        !parentRow.worktree.exists
+      ) {
+        pause = {
+          reason: "worktree-missing",
+          parentSessionKey,
+          worktreePath: parentRow.worktree.path,
+        };
+      }
+      if (parentState === "current") {
         // A revisionless link holds the generation classification just validated.
         const observedRevision = parentRow.missing ? undefined : parentRow.lifecycleRevision;
         generation = await prepareSessionGenerationFacts({
@@ -230,6 +248,7 @@ export async function admitScheduledOccurrence(
     principal.kind === "parent" &&
     principal.requester.kind === "operator-source";
   return {
+    ...(pause ? { pause } : {}),
     mint(run) {
       let result: ScheduledExecutionContextResult;
       try {

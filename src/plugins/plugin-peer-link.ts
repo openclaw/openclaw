@@ -102,7 +102,7 @@ async function readPackageOpenClawLinkDependencies(
   try {
     const manifest = await readSafePackageManifest(packageDir);
     const dependency = manifest ? resolveOpenClawHostDependency(manifest) : null;
-    return dependency ? { openclaw: dependency.spec } : {};
+    return dependency ? { openclaw: dependency.spec } : undefined;
   } catch (error) {
     if (!onPackageReadError) {
       throw error;
@@ -257,7 +257,7 @@ export async function auditDeclaredOpenClawHostDependency(params: {
   packageName?: string;
 }): Promise<OpenClawPeerLinkAuditIssue | null> {
   const dependencies = await readPackageOpenClawLinkDependencies(params.packageDir);
-  if (!dependencies || !Object.hasOwn(dependencies, "openclaw")) {
+  if (!dependencies) {
     return null;
   }
   return await auditOpenClawPeerDependencyLink(params);
@@ -461,9 +461,6 @@ export async function reconcileRegisteredOpenClawHostLinks(params: {
     if (!dependencies) {
       continue;
     }
-    if (!Object.hasOwn(dependencies, "openclaw")) {
-      continue;
-    }
     const issue = await auditOpenClawPeerDependencyLink({
       packageDir,
       packageName: pluginId,
@@ -503,9 +500,6 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
     if (!openClawLinkDependencies) {
       continue;
     }
-    if (!Object.hasOwn(openClawLinkDependencies, "openclaw")) {
-      continue;
-    }
     const result = await linkOpenClawPeerDependencies({
       installedDir: packageDir,
       peerDependencies: openClawLinkDependencies,
@@ -533,7 +527,7 @@ export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
       packageDir,
       params.onPackageReadError,
     );
-    if (!openClawLinkDependencies || !Object.hasOwn(openClawLinkDependencies, "openclaw")) {
+    if (!openClawLinkDependencies) {
       continue;
     }
     const issue = auditOpenClawPeerDependency({

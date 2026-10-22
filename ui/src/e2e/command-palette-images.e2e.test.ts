@@ -45,7 +45,10 @@ function anchors(palette: Locator) {
         throw new Error("Missing anchor: " + selector);
       }
       const { x, y } = node.getBoundingClientRect();
-      return { selector, x, y };
+      // The explicit mode heading intentionally precedes the existing input/actions.
+      const heading =
+        element.querySelector(".cmd-palette__session-heading")?.getBoundingClientRect().height ?? 0;
+      return { selector, x, y: selector === ".cmd-palette" ? y : y - heading };
     }),
   );
 }

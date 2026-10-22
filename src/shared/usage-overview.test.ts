@@ -168,6 +168,7 @@ function sources(secondDate = "2026-02-01") {
       dailyBreakdown: [{ ...daily(date, tokens), ...totals }],
       dailyMessageCounts: [{ ...zeroMessages, date, total: 1, assistant: 1, toolCalls: 1 }],
       modelUsage: [{ provider, model, count: 1, totals }],
+      dailyModelUsage: [{ date, provider, model, tokens, cost: tokens / 10, count: 1 }],
       messageCounts: { ...zeroMessages, total: 1, assistant: 1, toolCalls: 1 },
       toolUsage: { totalCalls: 1, uniqueTools: 1, tools: [{ name: "read", count: 1 }] },
     };
@@ -188,6 +189,7 @@ function sources(secondDate = "2026-02-01") {
         dailyBreakdown: [...firstDay.dailyBreakdown!, ...secondDay.dailyBreakdown!],
         dailyMessageCounts: [...firstDay.dailyMessageCounts!, ...secondDay.dailyMessageCounts!],
         modelUsage: [...firstDay.modelUsage!, ...secondDay.modelUsage!],
+        dailyModelUsage: [...firstDay.dailyModelUsage!, ...secondDay.dailyModelUsage!],
         missingCostEntries: 2,
         missingCostByModel: { "provider::a/model": 1, "provider/a::model": 1 },
         messageCounts: { ...zeroMessages, total: 2, assistant: 2, toolCalls: 2 },
@@ -234,7 +236,7 @@ it("aggregates prepared family rows and all agents before selecting the page", (
   });
 });
 
-it("keeps an excluded agent's costs only in the calendar facet after day selection", () => {
+it("keeps excluded days' costs and providers in the calendar while summaries follow selection", () => {
   const result = overview(sources("2026-02-03"), {
     selectedDays: ["2026-02-01"],
     recentKeys: [],
@@ -254,6 +256,11 @@ it("keeps an excluded agent's costs only in the calendar facet after day selecti
     { date: "2026-02-02", totalTokens: 20 },
     { date: "2026-02-03", totalTokens: 30 },
   ]);
+  expect(result.aggregates.modelDaily).toEqual([
+    { date: "2026-02-01", provider: "provider::a", model: "model", tokens: 10, cost: 1, count: 1 },
+    { date: "2026-02-02", provider: "provider", model: "a::model", tokens: 20, cost: 2, count: 1 },
+    { date: "2026-02-03", provider: "provider::a", model: "model", tokens: 30, cost: 3, count: 1 },
+  ]);
   expect(result.aggregates.daily).toEqual([
     { date: "2026-02-01", tokens: 10, cost: 1, messages: 1, toolCalls: 1, errors: 0 },
     { date: "2026-02-02", tokens: 20, cost: 2, messages: 1, toolCalls: 1, errors: 0 },
@@ -264,6 +271,25 @@ it("keeps an excluded agent's costs only in the calendar facet after day selecti
     byCreator: [{ key: "person", totals: { totalTokens: 10 }, sessionCount: 1 }],
   });
 });
+
+it.each([{ query: "agent:first" }, { selectedSessions: ["family"] }])(
+  "keeps non-calendar filters on both calendar series: %j",
+  (filter) => {
+    const result = overview(sources("2026-02-03"), {
+      ...filter,
+      selectedDays: ["2026-02-01"],
+    });
+    expect(result.aggregates.costDaily?.map((entry) => entry.date)).toEqual([
+      "2026-02-01",
+      "2026-02-02",
+    ]);
+    expect(result.aggregates.modelDaily?.map((entry) => entry.date)).toEqual([
+      "2026-02-01",
+      "2026-02-02",
+    ]);
+    expect(result.totals.totalTokens).toBe(10);
+  },
+);
 
 it("counts activity independently of recently modified empty comparison rows", () => {
   const result = overview(

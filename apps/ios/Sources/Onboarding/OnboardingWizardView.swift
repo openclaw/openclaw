@@ -842,9 +842,7 @@ extension OnboardingWizardView {
                     .font(OpenClawType.subheadSemiBold)
             }
         }
-        .font(OpenClawType.subheadSemiBold)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+        .buttonStyle(OpenClawPrimaryActionButtonStyle())
         .disabled(!self.canConnectManual || self.connectingGateway != nil)
     }
 

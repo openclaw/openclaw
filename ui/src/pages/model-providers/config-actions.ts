@@ -44,7 +44,7 @@ export function createModelProviderConfigActions(deps: {
   async function mutateApiKey(
     provider: string,
     configKey: string,
-    apiKey: string | null,
+    apiKey: string,
     action: "edit" | "add" = "edit",
   ) {
     const client = gateway.client;
@@ -91,11 +91,7 @@ export function createModelProviderConfigActions(deps: {
             provider: configKey,
             apiKey,
             success: t(
-              action === "add"
-                ? "modelProviders.add.saved"
-                : apiKey === null
-                  ? "modelProviders.apiKey.removed"
-                  : "modelProviders.apiKey.saved",
+              action === "add" ? "modelProviders.add.saved" : "modelProviders.apiKey.saved",
               { provider },
             ),
           },

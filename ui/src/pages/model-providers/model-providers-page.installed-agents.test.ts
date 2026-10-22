@@ -281,9 +281,12 @@ it("lists every reported agent with its installation status only when advertised
   const page = await mountAgents(context);
   await waitForSolid(() => expect(agentRow(page, "pi")).not.toBeNull());
   expect(agentText(page)).not.toContain("Models available");
-  expect(agentRow(page, "qwen")?.textContent).toContain("Not detected");
+  // A missing app has no switch to flip; it is named on the shared not-detected line.
+  expect(agentRow(page, "qwen")).toBeNull();
+  expect(page.querySelector("[data-installed-agents-missing]")?.textContent).toContain(
+    "Not detected on the Gateway computer: Qwen Code.",
+  );
   expect(agentRow(page, "pi")?.textContent).toContain("Not verified");
-  expect(agentRow(page, "qwen")?.textContent).toContain("Use Qwen Code");
   expect(agentRow(page, "kilo")?.textContent).toContain("Use Kilo");
   expect(page.renderRoot.textContent).not.toContain("Saving");
   expect(requestCount(request, "config.patch")).toBe(0);

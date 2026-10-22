@@ -1,9 +1,7 @@
 import { createComponent } from "solid-js";
 import { vi } from "vitest";
-import {
-  ChatSessionSharing,
-  type ChatSessionSharingProps,
-} from "../pages/chat/components/chat-session-sharing.solid.tsx";
+import type { ChatSessionSharingProps } from "../pages/chat/components/chat-session-sharing-shared.tsx";
+import { ChatSessionSharing } from "../pages/chat/components/chat-session-sharing.solid.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 
 export function mountPeopleSharing(

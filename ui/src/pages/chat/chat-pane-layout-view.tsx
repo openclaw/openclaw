@@ -32,7 +32,7 @@ function PaneSubagentHeader(props: {
   sessionKey: string;
   title: string;
   onBack: () => void;
-  stop: Parameters<typeof PaneSubagentStop>[0] | undefined;
+  stop: (Parameters<typeof PaneSubagentStop>[0] & { target: string }) | undefined;
   details: ChatDetailsViewProps | undefined;
   /** Supplied by the chrome owner for desktop, including embedded child panes. */
   desktop?: { sessionKey: string };
@@ -45,6 +45,7 @@ function PaneSubagentHeader(props: {
     const stop = props.stop;
     return stop
       ? {
+          target: stop.target,
           label: t("chat.runControls.stop"),
           accessibleLabel: t("chat.subagentsPanel.stop", { name: props.title }),
           disabled: false,

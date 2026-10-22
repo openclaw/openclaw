@@ -39,6 +39,14 @@ are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Stopped update and Doctor database snapshots tolerate concurrent read-only SQLite
+probes. The transient `-shm` WAL index is rebuilt privately, never copied or used
+to detect durable changes. Empty WAL files created by readers count as absent.
+Changes to the main database, WAL data, or rollback journal still refuse the
+stopped backup and identify the changed file. This repair must
+be present in the runtime performing the snapshot, including the candidate worker
+when the installed updater delegates capture to it.
+
 Memory embedding migrations space maintenance renewals from the completion of
 each renewal, so slow renewals leave time for conversion work. The candidate must
 contain this fix; it does not change an older migration already running.

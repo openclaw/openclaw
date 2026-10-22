@@ -5,7 +5,6 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { replaceChatOutboxQueue } from "./chat-outbox-queue.ts";
 import {
-  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   loadChatComposerState,
   loadCapturedChatComposerState,
   markChatComposerEdit,
@@ -13,6 +12,7 @@ import {
   persistChatComposerState,
 } from "./composer-draft-storage.ts";
 import { chatAttachmentDraftSignature, normalizeChatComposerDraft } from "./composer-draft.ts";
+import { reportChatComposerDraftStorageError } from "./composer-persistence-feedback.ts";
 import { captureChatComposerDraftSnapshot } from "./composer-persistence-snapshot.ts";
 import {
   type captureChatComposerOwner,
@@ -79,8 +79,7 @@ export class ChatComposerPersistence {
       if (!state) {
         return;
       }
-      state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
-      state.chatError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;
+      reportChatComposerDraftStorageError(state);
     },
     () => this.persistChangedState(),
   );

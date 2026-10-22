@@ -13,8 +13,8 @@ import {
 } from "../server-context.lifecycle.js";
 import { makeBrowserProfile, makeBrowserServerState } from "../server-context.test-harness.js";
 import { expectResponseContaining, runRoute } from "./agent-route.test-support.js";
-import { registerBrowserAgentScreencastRoutes } from "./agent.screencast.js";
 import { handleRouteError, resolveSafeRouteTabUrl } from "./agent.shared.js";
+import { registerBrowserRoutes } from "./index.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 import type { BrowserRequest } from "./types.js";
 
@@ -64,7 +64,7 @@ function setup(
     }),
   } as unknown as BrowserRouteContext;
   const { app, postHandlers } = createBrowserRouteApp();
-  registerBrowserAgentScreencastRoutes(app, ctx);
+  registerBrowserRoutes(app, ctx);
   const route = postHandlers.get("/screencast")!;
   return {
     state,
