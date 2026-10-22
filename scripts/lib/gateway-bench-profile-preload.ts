@@ -1,8 +1,9 @@
 import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
-import { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
+import v8, { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
@@ -116,6 +117,31 @@ if (isMainThread) {
     GatewayProfileCommand["kind"],
     ReturnType<typeof getWorkerMessageMetrics>
   >();
+  const deserializeCaptures = new Map<
+    GatewayProfileCommand["kind"],
+    Map<string, { count: number; bytes: number }>
+  >();
+  const nativeDeserialize = v8.deserialize;
+  const measuredDeserialize: typeof v8.deserialize = (buffer) => {
+    const value: unknown = nativeDeserialize(buffer);
+    const kind =
+      value !== null &&
+      typeof value === "object" &&
+      "kind" in value &&
+      typeof value.kind === "string"
+        ? value.kind
+        : "untyped";
+    for (const groups of deserializeCaptures.values()) {
+      let metric = groups.get(kind);
+      if (!metric) {
+        metric = { count: 0, bytes: 0 };
+        groups.set(kind, metric);
+      }
+      metric.count++;
+      metric.bytes += buffer.byteLength;
+    }
+    return value;
+  };
   const namedDiagnostics = new Map<
     string | undefined,
     ReturnType<typeof startGatewayBenchDiagnostics>
@@ -292,12 +318,21 @@ if (isMainThread) {
         }
         diagnosticCaptures.set(message.kind, startGatewayBenchDiagnostics());
         workerMessageStarts.set(message.kind, getWorkerMessageMetrics());
+        deserializeCaptures.set(message.kind, new Map());
+        v8.deserialize = measuredDeserialize;
+        syncBuiltinESMExports();
         if (message.kind === "heap") {
           markGc("heap-start", message.profilePath);
         }
       } else if (message.action === "stop") {
         if (!active.has(message.kind)) {
           throw new Error(`Gateway ${message.kind} profile has not started`);
+        }
+        const deserialized = Object.fromEntries(deserializeCaptures.get(message.kind) ?? []);
+        deserializeCaptures.delete(message.kind);
+        if (deserializeCaptures.size === 0) {
+          v8.deserialize = nativeDeserialize;
+          syncBuiltinESMExports();
         }
         if (message.kind === "heap") {
           // Exclude diagnostics aggregation and profile materialization from promotion.
@@ -336,6 +371,11 @@ if (isMainThread) {
             JSON.stringify(workerMessages),
             { mode: 0o600 },
           );
+          writeFileSync(
+            `${message.profilePath}.deserialize.json`,
+            JSON.stringify({ scope: "main-isolate", groups: deserialized }),
+            { mode: 0o600 },
+          );
           if (diagnostics) {
             writeFileSync(`${message.profilePath}.diagnostics.json`, JSON.stringify(diagnostics), {
               mode: 0o600,
@@ -359,6 +399,9 @@ if (isMainThread) {
     );
   });
   process.once("disconnect", () => {
+    v8.deserialize = nativeDeserialize;
+    syncBuiltinESMExports();
+    deserializeCaptures.clear();
     for (const finish of namedDiagnostics.values()) {
       finish();
     }

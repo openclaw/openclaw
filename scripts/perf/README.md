@@ -2249,6 +2249,7 @@ Supported scenarios:
 | ---------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                               |
 | `sessions.describe`    | One detailed parent-row RPC, including the harness's synthetic children                                    |
+| `sessions.patch`       | One title, expiring status-note, or model-selection mutation on a retained fixture session                 |
 | `connect`              | One owned socket replacement and validated hello handshake; no sidebar restoration                         |
 | `reconnect`            | One owned socket replacement, subscriptions, and verified current sidebar                                  |
 | `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list |
@@ -2265,6 +2266,63 @@ and update timestamps with the pre-storm page. The report separates handshake
 latency from time until all sidebars are current. Intentional disconnection does
 not imply event replay. These scenarios isolate RPC costs; they do not generate
 background session activity at production rates.
+
+For entry-patch transfer measurements, prepare separate matching small fixtures
+sequentially, then run the existing driver against the source Gateway:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-fixture --sessions 5000 --runs 6000 \
+  --approvals 0 --cron 0 --projects 0 --transcript-mib 16 --port 41580
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/new-fixture --entry src/entry.ts --scenario sessions.patch \
+  --port 41580 --mock-port 41581 --clients 8 --runs 1 --rpc-concurrency 4 \
+  --warmup-operations 240 --operations 2400 --rounds 1 \
+  --allocations --diagnostics --trace-gc --capture-responses \
+  --start-at <shared-future-epoch-ms> --revision <measured-commit-sha>
+```
+
+No Gateway bundle is required for this source entry. The fixture retains 5,000
+session entries and 6,000 run records with only 16 MiB of synthetic transcript
+content; inspect the generated database sizes before choosing larger fixtures.
+Each connected client has a distinct unarchived fixture target. Successive
+mutations set a unique user title (`label`), set an expiring status note, select
+a second configured synthetic model, then clear each of those fields. Every
+response verifies the changed value. Warmup and measured operations continue
+the same mutation sequence, avoiding repeated no-op writes. Connected clients
+subscribe to session rows, so row publication is included. This scenario does
+not drive viewer-declaration churn or real running/settled agent lifecycles;
+use the separate `transcript-broadcast` or `memory-soak` turn scenario for that
+additional coverage.
+
+The report includes allocation and promotion per completed patch, worker message
+counts and known payload bytes, and RPC p50/p95/p99 with sample counts. Worker
+payload bytes include transferred buffers; they are not an exact count of bytes
+deserialized by `node:v8`. Each profile's `.deserialize.json` sidecar separately
+records exact main-isolate `v8.deserialize` input bytes and call counts, grouped
+by the decoded root's `kind` (or `untyped`). The observer runs only inside profile
+captures and is restored afterward. Divide a group's bytes by the completed
+operation count to compare deserialize bytes per patch or turn. The generic
+entry-patch transfer also carries lifecycle and transcript work, so inspect these
+groups in a matched real-turn scenario before attributing its cost to the
+`sessions.patch` RPC. Inspect `unmeasuredMessages` and allocation caller stacks
+alongside them. `--capture-responses` also saves six complete mutation
+responses in `patch-responses.json` after measurement. Compare those goldens
+between revisions, normalizing only recorded timestamps and sandbox paths;
+fixture session identities and requested values are deterministic.
+
+Use the host's shared guard and exclusive measurement slot, run both sides
+concurrently with the same start time and interleaved CPUs, and swap sides for
+the second pair. Report absolute and relative paired deltas. Baselines differing
+by more than 5× or opposite-signed pair deltas are inconclusive; if such a metric
+gates, run a third pair and decide on the absolute mean. A p95 requires 200
+samples per side and a p99 requires 1,000. Major GC tails are context below 50
+collections per side. Report each side's maximum GC pause; per-pause tails are
+context when collection counts fall at least 20% without increased total GC time,
+unless the candidate maximum exceeds the greater of 50 ms or twice the baseline
+maximum. Gate on total GC time per patch, promotion, and eligible event-loop
+p99. Reject a mean paired regression of at least 20%, or at least 10% in both
+pairs, subject to those sample-count and inconclusive-result rules.
 
 Every measured scenario records per-method request-to-response p50/p99, call rate,
 and uncompressed wire response bytes. Transcript samples also report
