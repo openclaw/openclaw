@@ -9,7 +9,11 @@ import {
   formatCliJsonFailure,
 } from "../failure-output.js";
 import { CronCliError } from "./cron-cli-error.js";
-import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
+import {
+  resolveCronCreateScheduleFromArgs,
+  resolveCronEditScheduleRequest,
+  applyExistingStreamSchedulePatch,
+} from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
@@ -516,5 +520,60 @@ describe("handleCronCliError", () => {
     expect(stderr).toContain("openclaw doctor");
     expect(stderr.includes("Stack:")).toBe(debug);
     expect(json.error.message.includes("Runtime load failed")).toBe(debug);
+  });
+});
+
+const streamCommand = '["node","events.mjs"]';
+it.each([
+  [resolveCronCreateScheduleFromArgs, { streamCommand: "node events.mjs" }, "JSON array"],
+  [
+    resolveCronCreateScheduleFromArgs,
+    { streamCommand, streamMode: "match" },
+    "--stream-match is required",
+  ],
+  [
+    resolveCronCreateScheduleFromArgs,
+    { every: "1m", streamBatchMs: "250" },
+    "require --stream-command",
+  ],
+  [
+    resolveCronEditScheduleRequest,
+    { streamBatchMs: "100", tz: "UTC" },
+    "not valid with stream schedule edits",
+  ],
+  [
+    resolveCronEditScheduleRequest,
+    { streamMode: "line", exact: true },
+    "not valid with stream schedule edits",
+  ],
+] as const)("rejects invalid stream options %#", (resolve, options, message) => {
+  expect(() => resolve(options)).toThrow(message);
+});
+it.each([
+  [{ streamMode: "line" }, { mode: "line", match: undefined }],
+  [{ streamMatch: "^updated:" }, { mode: "match", match: "^updated:" }],
+] as const)("patches existing stream metadata %j", (options, patch) => {
+  const request = resolveCronEditScheduleRequest(options);
+  if (request.kind !== "patch-existing-stream") {
+    throw new Error("expected stream patch");
+  }
+  expect(
+    applyExistingStreamSchedulePatch(
+      {
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        mode: "match",
+        match: "^ready:",
+        batchMs: 100,
+      },
+      request,
+    ),
+  ).toEqual({
+    kind: "stream",
+    command: ["node", "events.mjs"],
+    batchMs: 100,
+    cwd: undefined,
+    maxBatchBytes: undefined,
+    ...patch,
   });
 });
