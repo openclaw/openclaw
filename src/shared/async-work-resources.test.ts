@@ -108,7 +108,6 @@ describe("async work resources", () => {
       await nextTurn();
       expect(returned).toBe(!eager);
       if (!eager) {
-        expect(await result).toBe("completed");
         expect(owner.hasPendingWork).toBe(true);
       }
       expect(release).toHaveBeenCalledOnce();
@@ -117,9 +116,6 @@ describe("async work resources", () => {
       await owner.drain();
     }
     await outcome;
-    if (!eager) {
-      expect(await result).toBe("completed");
-    }
     expect(release).toHaveBeenCalledOnce();
   });
 

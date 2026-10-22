@@ -275,14 +275,11 @@ it("counts activity independently of recently modified empty comparison rows", (
       usage: key === "active" ? usage({ firstActivity: 1, totalTokens: 7 }) : usage({}),
     })),
   );
-  expect(result.overview).toMatchObject({
-    total: 2,
-    selectedSessionCount: 1,
-    selectedRowCount: 2,
-    unfilteredSessionCount: 2,
+  expect(result).toMatchObject({
+    overview: { total: 2, selectedSessionCount: 1, selectedRowCount: 2, unfilteredSessionCount: 2 },
+    aggregates: { sessionCount: 1 },
+    totals: { totalTokens: 7 },
   });
-  expect(result.aggregates.sessionCount).toBe(1);
-  expect(result.totals.totalTokens).toBe(7);
   const emptySelected = overview(
     [{ key: "empty", agentId: "main", updatedAt: 2, usage: usage({}) }],
     { selectedSessions: ["empty"] },

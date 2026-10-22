@@ -96,10 +96,8 @@ describe("isPidAlive", () => {
   });
 });
 
-describe("isPidDefinitelyDead", () => {
-  it("returns true for invalid PIDs", () => {
-    expect(invalidPids.map(isPidDefinitelyDead)).toEqual(invalidPids.map(() => true));
-  });
+it("isPidDefinitelyDead returns true for invalid PIDs", () => {
+  expect(invalidPids.map(isPidDefinitelyDead)).toEqual(invalidPids.map(() => true));
 });
 
 describe("Linux process liveness", () => {
