@@ -468,7 +468,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   let audioAsVoice = false;
   let replyTarget = resolveDeliveryReplyTarget(delivery);
   const normalizeText = (text: string, block = false): MessageContentItem[] => {
-    if (!isAssistantMessage) {
+    if (!isAssistantMessage || asOptionalRecord(m["__openclaw"])?.catalogSource === true) {
       return [{ type: "text", text, ...(block ? { name: undefined, args: undefined } : {}) }];
     }
     audioAsVoice = delivery?.audioAsVoice === true;

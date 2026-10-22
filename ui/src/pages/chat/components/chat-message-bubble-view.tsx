@@ -544,6 +544,15 @@ function BubbleContents(props: ContentProps) {
           <ToolOutcome outcome="failed" exitCode={props.state().failedToolCard!.exitCode} />
         </openclaw-chat-tool-outcome>
       </Show>
+      <Show
+        when={
+          !props.state().hasToolCards &&
+          asNullableRecord(asNullableRecord(props.state().message)?.["__openclaw"])
+            ?.catalogTruncated === true
+        }
+      >
+        <p role="status">{t("chat.catalogOutputTruncated")}</p>
+      </Show>
     </>
   );
 }
