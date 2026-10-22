@@ -20,6 +20,7 @@ import {
   type ChatSessionSharingOutcome,
   VISIBILITY_LABEL_KEYS,
   ChatSessionSharingModeIcon,
+  ChatSessionSharingError,
   createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
 
@@ -302,9 +303,17 @@ export function useChatSessionSharingMenu(
       kind: "content",
       id: "error",
       content: (
-        <div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
-          {props.state?.error ?? presentation.error()}
-        </div>
+        <ChatSessionSharingError
+          error={props.state?.error}
+          completion={presentation.completion()}
+          pending={presentation.busy()}
+        >
+          {(error) => (
+            <div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
+              {error}
+            </div>
+          )}
+        </ChatSessionSharingError>
       ),
     }),
     { lazy: true },
@@ -354,13 +363,6 @@ export function useChatSessionSharingMenu(
       </Show>
     ),
   };
-  const items = createMemo(
-    () => [
-      ...baseItems(),
-      membersSection,
-      ...(props.state?.error || presentation.error() ? [errorEntry()] : []),
-    ],
-    { lazy: true },
-  );
+  const items = createMemo(() => [...baseItems(), membersSection, errorEntry()], { lazy: true });
   return { items, select: presentation.select };
 }

@@ -38,6 +38,7 @@ import {
   createChatSessionSharingPresentation,
   canManageChatSessionSharing,
   ChatSessionSharingModeIcon,
+  ChatSessionSharingError,
   projectChatSessionSharingRoster,
   chatSessionMembershipLabel,
 } from "./chat-session-sharing-shared.tsx";
@@ -94,9 +95,9 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     scope();
     return false;
   });
-  const [copyError, setCopyError] = createSignal(() => {
+  const [copyCompletion, setCopyCompletion] = createSignal<Promise<void> | undefined>(() => {
     scope();
-    return "";
+    return undefined;
   });
   const [immediate, setImmediate] = createSignal(false);
   const [accessOpen, setAccessOpen] = createSignal(() => {
@@ -146,15 +147,23 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     const selectedScope = scope();
     if (value === "public:copy") {
       setCopied(false);
-      setCopyError("");
     }
-    const outcome = await presentation.select(value);
+    const pending = presentation.select(value);
+    if (value === "public:copy") {
+      const completed = pending.then((outcome) => {
+        if (scope() === selectedScope && menu?.overlay.open && outcome?.status === "failed") {
+          throw new Error(outcome.error);
+        }
+      });
+      setCopyCompletion(completed);
+      void completed.catch(() => undefined);
+    }
+    const outcome = await pending;
     if (scope() !== selectedScope || !menu?.overlay.open || !outcome) {
       return;
     }
     if (value === "public:copy") {
       setCopied(outcome?.status === "success");
-      setCopyError(outcome?.status === "failed" ? outcome.error : "");
     }
     if (outcome?.status === "success" && value.startsWith("visibility:")) {
       resetSearch();
@@ -304,10 +313,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   );
   const showPermissions = () =>
     props.membersAvailable !== false &&
-    (!result() ||
-      Boolean(props.state?.read) ||
-      Boolean(props.state?.error ?? presentation.error()) ||
-      people().length > 0);
+    (!result() || Boolean(props.state?.read) || Boolean(props.state?.error) || people().length > 0);
   const permissionItems = () => (showPermissions() ? rosterItems()().map((item) => item()) : []);
   // The observer and its ref share the mounted permissions subtree's lifetime.
   const SharingPermissions = (view: { children: JSX.Element }) => {
@@ -423,11 +429,17 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     kind: "content",
     id: "error",
     content: (
-      <Show when={props.state?.error ?? presentation.error()}>
-        <div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
-          {props.state?.error ?? presentation.error()}
-        </div>
-      </Show>
+      <ChatSessionSharingError
+        error={props.state?.error}
+        completion={presentation.completion()}
+        pending={presentation.busy()}
+      >
+        {(error) => (
+          <div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
+            {error}
+          </div>
+        )}
+      </ChatSessionSharingError>
     ),
   };
   const overviewItems = createMemo(
@@ -475,7 +487,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               onClick={(event) => {
                 setImmediate(event.detail === 0);
                 setCopied(false);
-                setCopyError("");
+                setCopyCompletion(undefined);
                 void select(result()?.publicShare ? "public:disable" : "public:enable");
               }}
             >
@@ -515,11 +527,16 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                   </span>
                   <Icon name={copied() ? "check" : "copy"} />
                 </button>
-                <Show when={copyError()}>
-                  <div class="chat-pane__sharing-status--error" role="alert">
-                    {copyError()}
-                  </div>
-                </Show>
+                <ChatSessionSharingError
+                  completion={copyCompletion()}
+                  pending={presentation.busy()}
+                >
+                  {(error) => (
+                    <div class="chat-pane__sharing-status--error" role="alert">
+                      {error}
+                    </div>
+                  )}
+                </ChatSessionSharingError>
               </div>
             </div>
           </section>
@@ -565,7 +582,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
         setAccessOpen(false);
         resetSearch();
         setCopied(false);
-        setCopyError("");
+        setCopyCompletion(undefined);
       }
     },
     onEscape: () => {
