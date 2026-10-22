@@ -154,3 +154,71 @@ it("warns about the workspace only for a selected or sole personal account", () 
   expect(container.textContent).toContain("reclaim the workspace");
   expect(onSelect).not.toHaveBeenCalled();
 });
+
+it("keeps an admitted publication action busy until its completion settles", async () => {
+  const completion = Promise.withResolvers<void>();
+  const retired = Promise.withResolvers<void>();
+  const readiness = { read: null, retired: retired.promise };
+  const onPublish = vi.fn(() => completion.promise);
+  paint({ readiness, onPublish });
+  const button = publish()!;
+  button.click();
+  await waitForSolid(() => expect(button.disabled).toBe(true));
+  expect(onPublish).toHaveBeenCalledOnce();
+  paint({
+    readiness,
+    locked: true,
+    result: {
+      status: "requested",
+      requestId: "request-one",
+      message: "Publication was accepted.",
+    },
+  });
+  completion.resolve();
+  await waitForSolid(() => {
+    expect(publish()).toBe(button);
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toContain("Check");
+  });
+  expect(container.textContent).toContain("Publication queued");
+});
+
+it("contains an unexpected action rejection in the publication error boundary", async () => {
+  const completion = Promise.withResolvers<void>();
+  paint({ onPublish: () => completion.promise });
+  publish()!.click();
+  completion.reject(new Error("Publication action unavailable"));
+  await waitForSolid(() =>
+    expect(container.textContent).toContain("Publication action unavailable"),
+  );
+  container.querySelector<HTMLButtonElement>(".lazy-view-error button")?.click();
+  await waitForSolid(() => expect(publish()?.textContent).toContain("Publish PR"));
+});
+
+it("consumes a late action rejection after publication controls unmount", async () => {
+  const completion = Promise.withResolvers<void>();
+  paint({ onPublish: () => completion.promise });
+  publish()!.click();
+  await waitForSolid(() => expect(publish()?.disabled).toBe(true));
+  clearChatPullRequests(container);
+  completion.reject(new Error("Retired publication action unavailable"));
+  await waitForSolid(() => expect(container.textContent).toBe(""));
+});
+
+it("consumes a rejection when the owner synchronously replaces the action control", async () => {
+  const completion = Promise.withResolvers<void>();
+  paint({
+    onPublish: () => {
+      paint({ optionsUnavailable: true, error: "Publication discovery unavailable" });
+      return completion.promise;
+    },
+  });
+  publish()!.click();
+  await waitForSolid(() =>
+    expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
+  );
+  completion.reject(new Error("Replaced publication action unavailable"));
+  await waitForSolid(() =>
+    expect(container.querySelector('button[aria-label="Refresh publication"]')).not.toBeNull(),
+  );
+});

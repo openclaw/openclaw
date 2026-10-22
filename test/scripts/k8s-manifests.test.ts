@@ -56,6 +56,7 @@ it("keeps deployment mounts, secrets, and security posture deployable", () => {
   const template = assertRecord(spec.template, "deployment template");
   const podSpec = assertRecord(template.spec, "pod spec");
   const gateway = findNamed(podSpec.containers, "gateway");
+  const env = (name: string) => findNamed(gateway.env, name);
   expect(gateway).toMatchObject({
     command: ["node", "/app/dist/index.js", "gateway", "run"],
     securityContext: {
@@ -64,17 +65,13 @@ it("keeps deployment mounts, secrets, and security posture deployable", () => {
       runAsNonRoot: true,
     },
   });
-  expect(findNamed(gateway.env, "HOME")).toMatchObject({ value: "/home/node" });
-  expect(findNamed(gateway.env, "OPENCLAW_CONFIG_DIR")).toMatchObject({
-    value: "/home/node/.openclaw",
-  });
+  expect(env("HOME")).toMatchObject({ value: "/home/node" });
+  expect(env("OPENCLAW_CONFIG_DIR")).toMatchObject({ value: "/home/node/.openclaw" });
   const homeMount = findNamed(gateway.volumeMounts, "openclaw-home");
   expect(homeMount).toMatchObject({ mountPath: "/home/node/.openclaw" });
   expect(homeMount.readOnly).not.toBe(true);
-  expect(findNamed(gateway.env, "XDG_CACHE_HOME")).toMatchObject({
-    value: "/home/node/.openclaw/.cache",
-  });
-  expect(findNamed(gateway.env, "OPENCLAW_GATEWAY_TOKEN")).toMatchObject({
+  expect(env("XDG_CACHE_HOME")).toMatchObject({ value: "/home/node/.openclaw/.cache" });
+  expect(env("OPENCLAW_GATEWAY_TOKEN")).toMatchObject({
     valueFrom: { secretKeyRef: { key: "OPENCLAW_GATEWAY_TOKEN", name: "openclaw-secrets" } },
   });
   expect(findNamed(podSpec.volumes, "openclaw-home")).toMatchObject({

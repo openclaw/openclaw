@@ -8,7 +8,7 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { isClawsAvailable } from "../pages/claws/availability.ts";
-import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ShellLazyOverlayHost } from "./app-shell-lazy-view.tsx";

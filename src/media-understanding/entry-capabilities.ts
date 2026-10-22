@@ -45,11 +45,10 @@ export function resolveEffectiveMediaEntryCapabilities(params: {
       );
 }
 
-export function matchesMediaEntryCapability(params: {
+export function matchesImageEntryCapability(params: {
   entry: MediaUnderstandingModelConfig;
-  capability: MediaUnderstandingCapability;
   providerRegistry: MediaUnderstandingCapabilityRegistry;
 }): boolean {
   const capabilities = resolveEffectiveMediaEntryCapabilities(params);
-  return capabilities?.includes(params.capability) ?? false;
+  return capabilities?.includes("image") ?? false;
 }

@@ -1,6 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { describe, expect, it } from "vitest";
 import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuTestConfig } from "./bot.test-support.js";
 import { resolveFeishuChatType } from "./chat-type.js";
 import {
   assertFeishuChatReadAllowed,
@@ -10,7 +10,7 @@ import {
 } from "./read-policy.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
-const cfg = { channels: { feishu: {} } } as OpenClawConfig;
+const cfg = createFeishuTestConfig({});
 
 function createAccount(
   config: Partial<ResolvedFeishuAccount["config"]> = {},
@@ -96,17 +96,13 @@ describe("Feishu read policy", () => {
   ] satisfies Array<Parameters<typeof read>[0] & { name: string }>)("$name", expectDenied);
 
   it("requires an effective wildcard before open policy allows non-current DMs", () => {
-    const mergedCfg = {
-      channels: {
-        feishu: {
-          appId: "cli_test",
-          appSecret: "secret_test",
-          dmPolicy: "allowlist",
-          allowFrom: ["ou_admin"],
-          accounts: { sales: { dmPolicy: "open" } },
-        },
-      },
-    } as OpenClawConfig;
+    const mergedCfg = createFeishuTestConfig({
+      appId: "cli_test",
+      appSecret: "secret_test",
+      dmPolicy: "allowlist",
+      allowFrom: ["ou_admin"],
+      accounts: { sales: { dmPolicy: "open" } },
+    });
     const account = resolveFeishuAccount({ cfg: mergedCfg, accountId: "sales" });
 
     const target = { cfg: mergedCfg, account, chatId: "oc_other", chatType: "p2p" } as const;
@@ -127,17 +123,12 @@ describe("Feishu read policy", () => {
   it("requires metadata only when an unknown target has mixed scope policy", () => {
     const account = createAccount({ allowFrom: ["*"] });
     const target = { cfg, account, chatId: "oc_unknown" };
-    expect(
-      resolveFeishuChatReadPreliminaryAuthorization({
-        ...target,
-        ctx: {},
-      }),
-    ).toEqual({ chatId: "oc_unknown", decision: "needs-metadata" });
-    expect(
-      resolveFeishuChatReadPreliminaryAuthorization({
-        ...target,
-        ctx: { conversationReadOrigin: "direct-operator" },
-      }),
-    ).toEqual({ chatId: "oc_unknown", decision: "allow" });
+    const authorization = (ctx: ReadParams["ctx"]) =>
+      resolveFeishuChatReadPreliminaryAuthorization({ ...target, ctx });
+    expect(authorization({})).toEqual({ chatId: "oc_unknown", decision: "needs-metadata" });
+    expect(authorization({ conversationReadOrigin: "direct-operator" })).toEqual({
+      chatId: "oc_unknown",
+      decision: "allow",
+    });
   });
 });

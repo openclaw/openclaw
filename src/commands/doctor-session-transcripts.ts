@@ -493,7 +493,9 @@ export async function noteSessionTranscriptHealth(options?: {
     `- Transcript events: imported=${report.totals.importedTranscriptEvents}; validated=${report.totals.validatedTranscriptEvents}.`,
   ];
   for (const target of informationalIndexes) {
-    lines.push(...target.issues.map((issue) => `- ${issue.message}`));
+    for (const issue of target.issues) {
+      lines.push(`- ${issue.message}`);
+    }
   }
   if (report.totals.archivedTranscriptFiles > 0) {
     lines.push(
@@ -511,7 +513,9 @@ export async function noteSessionTranscriptHealth(options?: {
   if (params.onFindings) {
     params.onFindings(findings);
   } else {
-    lines.push(...warnings.map((warning) => `- ${warning}`));
+    for (const warning of warnings) {
+      lines.push(`- ${warning}`);
+    }
   }
   if (actionableIssues > 0) {
     lines.push(

@@ -19,9 +19,9 @@ export type NativeSqlite = Pick<typeof import("node:sqlite"), "DatabaseSync" | "
 };
 
 /** The runtime owner reuses its prepared one-row library probe, once per process load. */
-export function probeSqliteIteratorBehavior(statement: StatementSync): SqliteIteratorBehavior {
+export function probeSqliteIteratorBehavior(statement: StatementSync) {
   const previous = statement.iterate();
-  previous.next();
+  const row = previous.next().value;
   previous.next();
   const nextAfterDoneIsTerminal = previous.next().done === true;
   previous.return?.();
@@ -29,7 +29,13 @@ export function probeSqliteIteratorBehavior(statement: StatementSync): SqliteIte
   try {
     current.next();
     previous.return?.();
-    return { nextAfterDoneIsTerminal, returnAfterDoneIsInert: current.next().done === true };
+    return {
+      row,
+      iteratorBehavior: {
+        nextAfterDoneIsTerminal,
+        returnAfterDoneIsInert: current.next().done === true,
+      },
+    };
   } finally {
     current.return?.();
   }

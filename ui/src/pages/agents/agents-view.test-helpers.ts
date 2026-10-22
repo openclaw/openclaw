@@ -40,7 +40,8 @@ export function createAgentViewTestProps(
     requestGeneration: 0,
     chatModelCatalogRead: null,
     agentFilesLoading: false,
-    agentFilesError: null,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFilesList: null,
     agentFileActive: null,
     agentFileEditors: {},
@@ -56,6 +57,7 @@ export function createAgentViewTestProps(
   };
   return {
     readData: () => data,
+    presentationRetired: () => new Promise<void>(() => {}),
     readChannels: () => ({
       channelsSnapshot: null,
       channelsRead: null,
@@ -95,7 +97,6 @@ export function createAgentViewTestProps(
       onRunNow: () => undefined,
     },
     agentFiles: {
-      agentFilesError: null,
       listRead: null,
       ...inertAgentFileControls,
     },
