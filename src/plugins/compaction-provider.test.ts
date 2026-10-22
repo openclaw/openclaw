@@ -37,9 +37,7 @@ function registerProvider(
   );
   builder.registry.plugins.push(record);
   const instance = expectDefined(getPluginInstance(record), "compaction provider instance");
-  onTestFinished(async () => {
-    await instance.dispose();
-  });
+  onTestFinished(() => instance.dispose());
   return instance;
 }
 

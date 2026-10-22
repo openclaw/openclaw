@@ -116,13 +116,9 @@ describe("synthetic auth runtime refs", () => {
   });
 
   it("does not treat a provided index with registry diagnostics as validated synthetic auth", () => {
-    const index = {
-      plugins: [{ syntheticAuthRefs: ["local-provider"] }],
-    };
-
     expect(
       resolveRuntimeSyntheticAuthProviderRefs({
-        index: index as unknown as NonNullable<
+        index: { plugins: [{ syntheticAuthRefs: ["local-provider"] }] } as unknown as NonNullable<
           Parameters<typeof resolveRuntimeSyntheticAuthProviderRefs>[0]
         >["index"],
         registryDiagnostics: [{ code: "persisted-registry-missing" }],
@@ -139,14 +135,7 @@ describe("synthetic auth runtime refs", () => {
           { provider: { id: "plain-provider" } },
         ],
         cliBackends: [{ backend: { id: "runtime-cli", resolveSyntheticAuth: () => undefined } }],
-        plugins: [
-          {
-            syntheticAuthRefs: ["manifest-provider"],
-            contracts: {
-              externalAuthProviders: ["manifest-provider"],
-            },
-          },
-        ],
+        plugins: [{ syntheticAuthRefs: ["manifest-provider"] }],
       },
     });
 

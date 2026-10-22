@@ -63,12 +63,6 @@ describe("resolveEffectivePluginIds", () => {
     expect(collectConfiguredStartupChannelIds({ configs: [{}, {}], env: {} })).toEqual([]);
   });
 
-  it("includes a selected context-engine slot even when omitted from explicit allow and entries", () => {
-    expect(resolve({ plugins: { slots: { contextEngine: "lossless-claw" } } })).toEqual([
-      "lossless-claw",
-    ]);
-  });
-
   it("keeps the selected slot but rechecks bundled owner policy after channel callbacks", () => {
     mocks.listPotentialConfiguredChannelIds.mockReturnValue(["test-channel"]);
     mocks.loadManifestMetadataSnapshot.mockReturnValue(
@@ -89,20 +83,18 @@ describe("resolveEffectivePluginIds", () => {
     ]);
   });
 
-  it("keeps the built-in legacy context engine out of plugin preload ids", () => {
-    expect(resolve({ plugins: { slots: { contextEngine: "legacy" } } })).toStrictEqual([]);
-  });
-
   it.each([
-    ["plugins disabled", { enabled: false }],
-    ["denylisted", { deny: ["lossless-claw"] }],
-    ["entry disabled", { entries: { "lossless-claw": { enabled: false } } }],
-  ] satisfies Array<[string, NonNullable<OpenClawConfig["plugins"]>]>)(
-    "does not preload a selected context-engine slot when %s",
-    (_name, policy) => {
+    ["selected without explicit allow or entry", {}, ["lossless-claw"]],
+    ["built-in legacy", { slots: { contextEngine: "legacy" } }, []],
+    ["plugins disabled", { enabled: false }, []],
+    ["denylisted", { deny: ["lossless-claw"] }, []],
+    ["entry disabled", { entries: { "lossless-claw": { enabled: false } } }, []],
+  ] satisfies Array<[string, NonNullable<OpenClawConfig["plugins"]>, string[]]>)(
+    "preloads the expected context-engine slot: %s",
+    (_name, policy, expected) => {
       expect(
-        resolve({ plugins: { ...policy, slots: { contextEngine: "lossless-claw" } } }),
-      ).toStrictEqual([]);
+        resolve({ plugins: { slots: { contextEngine: "lossless-claw" }, ...policy } }),
+      ).toStrictEqual(expected);
     },
   );
 });
