@@ -2347,14 +2347,6 @@ opt-in; the additional requests do not warm the measured workload.
 For `sessions.list` response comparisons, `--capture-responses` can run without
 allocation or CPU profiling.
 
-For a bounded owner probe without a Gateway, run
-`node --import ./scripts/tsx.mjs scripts/perf/session-list-order-measure.ts`.
-It reports five sampled allocation/thread-CPU observations for preparation per row
-and warm top-200 sorting over 5,000 rows, plus the selected keys for all three sorts.
-Use `--count-work` in a separate process for exact comparator, pin, activity, and
-key-normalization call counts. That pass enables coverage before loading the owner
-and excludes performance measurements. Run the same script on both revisions.
-
 For profile-reference filtering over 5,000 prepared sessions, run:
 
 ```sh
