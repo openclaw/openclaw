@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { createMemo, Errored, For, isPending, latest, Loading } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
@@ -16,6 +16,7 @@ import {
   SettingsSegmented,
 } from "../../components/solid/settings-ui.tsx";
 import { formatThinkingOverrideLabel } from "../../lib/chat/thinking.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   canonicalModelAuthProviderId,
   listEffectiveModelAuthProviders,
@@ -25,6 +26,7 @@ import { formatCompletionRoute, type CompletionRoute } from "../../lib/model-run
 import { modelSettingFallbacks, modelSettingPrimary } from "../../lib/model-setting.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
+import type { ModelProviderCatalogReceipt } from "./core-load.ts";
 import { modelCatalogRef, type DefaultModelSelection, type ModelPickerEntry } from "./data.ts";
 import { renderMutationMessage } from "./view-status.tsx";
 
@@ -42,6 +44,7 @@ export type DefaultModelsViewProps = {
   fastModeOverridden: boolean;
   loading?: boolean;
   catalogDiscovering?: boolean;
+  catalogReceipt?: ModelProviderCatalogReceipt | null;
   /** Retryable discovery error from the current catalog publication or explicit Retry. */
   catalogDiscoveryError?: string | null;
   canMutate: boolean;
@@ -176,23 +179,78 @@ function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): Fas
 }
 
 // Discovery progress does not change the saved selection or disable known models.
-function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
+function CatalogFeedback(props: {
+  discovering: boolean;
+  error?: string;
+  onRetry: () => void;
+}): JSX.Element {
   return (
-    <div class="model-providers__catalog-feedback">
-      {props.catalogDiscovering ? (
+    <>
+      {props.discovering ? (
         <div class="model-providers__catalog-progress" role="status" aria-live="polite">
           <span class="btn__spinner" aria-hidden="true" />
           <span>{t("modelProviders.defaults.discoveringMore")}</span>
         </div>
       ) : undefined}
-      {props.catalogDiscoveryError ? (
+      {props.error ? (
         <div class="model-providers__catalog-progress" role="alert" aria-live="polite">
-          <span>{props.catalogDiscoveryError}</span>
-          <button class="btn btn--sm" type="button" onClick={() => props.onCatalogRetry()}>
+          <span>{props.error}</span>
+          <button class="btn btn--sm" type="button" onClick={() => props.onRetry()}>
             {t("modelProviders.defaults.retryDiscover")}
           </button>
         </div>
       ) : undefined}
+    </>
+  );
+}
+
+function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
+  const receipt = createMemo(() => props.catalogReceipt);
+  const error = createMemo(() => props.catalogDiscoveryError);
+  const read = createMemo(() => {
+    const currentError = error();
+    return (receipt()?.promise ?? Promise.resolve(null)).then((completionError) => {
+      const failure = completionError ?? currentError;
+      if (failure) {
+        throw new Error(failure);
+      }
+      return null;
+    });
+  });
+  return (
+    <div class="model-providers__catalog-feedback">
+      <Errored
+        fallback={(failure, reset) => {
+          const retry = () => {
+            props.onCatalogRetry();
+            reset();
+          };
+          return (
+            <Loading fallback={<CatalogFeedback discovering onRetry={retry} />}>
+              <CatalogFeedback
+                discovering={isPending(read) || Boolean(props.catalogDiscovering)}
+                error={isPending(read) ? undefined : formatUiError(failure())}
+                onRetry={retry}
+              />
+            </Loading>
+          );
+        }}
+      >
+        <Loading
+          fallback={
+            <CatalogFeedback
+              discovering={Boolean(receipt()) || Boolean(props.catalogDiscovering)}
+              onRetry={() => props.onCatalogRetry()}
+            />
+          }
+        >
+          {latest(read)}
+          <CatalogFeedback
+            discovering={isPending(read) || Boolean(props.catalogDiscovering)}
+            onRetry={() => props.onCatalogRetry()}
+          />
+        </Loading>
+      </Errored>
     </div>
   );
 }
