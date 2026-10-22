@@ -5,7 +5,7 @@ import { Menu } from "../../components/solid/menu.tsx";
 import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import type { CronProps } from "./view-types.ts";
+import type { CronJobActionProps, CronProps } from "./view-types.ts";
 export function ErrorBanner(props: { error: string | null; reads?: CronProps["reads"] }) {
   const modelRequest = createMemo(() => props.reads?.modelRequest());
   return (
@@ -57,7 +57,7 @@ export function AdminRequired(props: CronProps) {
 }
 // Run now and pause/resume are visible controls (rows and detail header);
 // the menu only carries the low-traffic actions.
-export function JobMenu(props: CronProps & { job: CronJob }) {
+export function JobMenu(props: CronJobActionProps & { job: CronJob }) {
   const id = createUniqueId();
   const displayName = () => props.job.displayName ?? props.job.name;
   return (
@@ -115,7 +115,7 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
   );
 }
 export function EnabledSwitch(
-  props: CronProps & {
+  props: CronJobActionProps & {
     job: CronJob;
     compact?: boolean;
   },

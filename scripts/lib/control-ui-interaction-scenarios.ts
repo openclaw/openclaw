@@ -474,6 +474,31 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     },
   },
   {
+    id: "cron-search-typing-pending",
+    route: pathForRoute("cron"),
+    expected: "Typing updates the filter while one held request retains all 500 jobs.",
+    prepare: async (page, gateway) => {
+      await prepareCron(page);
+      await page.getByRole("searchbox", { name: "Search automations" }).click();
+      await gateway.deferNext("cron.list");
+    },
+    run: async (page, gateway) => {
+      const before = (await gateway.getRequests("cron.list")).length;
+      const search = page.getByRole("searchbox", { name: "Search automations" });
+      await search.pressSequentially(cronQuery);
+      await gateway.waitForRequest("cron.list", { match: { query: "W", offset: 0 } });
+      await frames(page);
+      if (
+        (await search.inputValue()) !== cronQuery ||
+        (await page.locator(".cron-table__row").count()) !== 500 ||
+        (await page.locator(".cron-table").getAttribute("aria-busy")) !== "true" ||
+        (await gateway.getRequests("cron.list")).length - before !== 1
+      ) {
+        throw new Error("Expected the typed filter and 500 retained rows with one pending request");
+      }
+    },
+  },
+  {
     id: "cron-menu-open",
     route: pathForRoute("cron"),
     expected: "The first of 500 jobs opens its enabled Run if due, Clone, and Remove actions.",
