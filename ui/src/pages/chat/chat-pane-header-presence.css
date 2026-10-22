@@ -23,10 +23,19 @@
 }
 
 .chat-pane__presence--desktop .viewer-avatar--overflow {
-  width: 26px;
-  height: 26px;
-  background: color-mix(in srgb, var(--muted) 28%, var(--panel-strong));
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background: color-mix(in srgb, var(--muted) 12%, var(--panel-strong));
   color: var(--text);
+  font-size: 11px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
+}
+
+.chat-pane__presence--desktop
+  .viewer-facepile
+  > openclaw-tooltip:not(:first-child)
+  .viewer-avatar--overflow {
+  margin-inline-start: calc(var(--space-1) / 2);
 }
