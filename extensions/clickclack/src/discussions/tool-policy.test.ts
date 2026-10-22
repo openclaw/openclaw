@@ -259,7 +259,7 @@ describe("ClickClack discussion session tool policy", () => {
   });
 
   it("uses a different side-session identity after a server retarget", async () => {
-    const { mainSessionKey, runtime, sideSessionKey } = await setup();
+    const { runtime, sideSessionKey } = await setup();
     const retargeted = discussionSessionKey({
       runtime,
       agentId: "research",
