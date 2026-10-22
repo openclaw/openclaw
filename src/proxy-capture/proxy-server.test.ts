@@ -129,6 +129,7 @@ type ProxyResponseResult = {
   complete: boolean;
   errorMessage?: string;
   statusCode?: number;
+  statusLine?: string;
 };
 
 function captureMethodCall<Key extends PropertyKey, Args extends unknown[], Result>(
@@ -139,57 +140,105 @@ function captureMethodCall<Key extends PropertyKey, Args extends unknown[], Resu
   return (receiver: typeof owner, ...args: Args): Result => method.apply(receiver, args);
 }
 
+type ProxyClientOptions = {
+  abortAfterBytes?: number;
+  abortWithReset?: boolean;
+  signal?: AbortSignal;
+  streaming?: boolean;
+};
+
 async function getThroughProxy(
   proxyUrl: string,
   targetUrl: string,
   requestBody?: string,
-): Promise<ProxyResponseResult> {
+  options: ProxyClientOptions = {},
+) {
   const proxy = new URL(proxyUrl);
-  return await new Promise<ProxyResponseResult>((resolve) => {
-    let body = "";
-    let response: IncomingMessage | undefined;
-    const finish = (error?: Error) => {
-      resolve({
-        body,
-        complete: response?.complete ?? false,
-        ...(error ? { errorMessage: error.message } : {}),
-        ...(response?.statusCode === undefined ? {} : { statusCode: response.statusCode }),
-      });
-    };
-    const req = httpRequest(
-      {
-        host: proxy.hostname,
-        port: Number(proxy.port),
-        method: requestBody === undefined ? "GET" : "POST",
-        path: targetUrl,
-        headers: {
-          connection: "close",
-          ...(requestBody === undefined
-            ? {}
-            : {
-                "content-length": Buffer.byteLength(requestBody),
-                "content-type": "text/plain; charset=utf-8",
-              }),
+  return new Promise<ProxyResponseResult & { aborted: boolean; bodyBytes: number }>(
+    (resolve, reject) => {
+      const chunks: Buffer[] = [];
+      let response: IncomingMessage | undefined;
+      let aborted = false,
+        bodyBytes = 0;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const finish = (error?: Error) => {
+        clearTimeout(timeout);
+        options.signal?.removeEventListener("abort", abort);
+        if (error && options.streaming && !aborted) {
+          reject(error);
+        } else {
+          resolve({
+            body: Buffer.concat(chunks).toString(),
+            complete: response?.complete ?? false,
+            statusCode: response?.statusCode,
+            statusLine:
+              response &&
+              `HTTP/${response.httpVersion} ${response.statusCode} ${response.statusMessage}`,
+            errorMessage: error?.message,
+            aborted,
+            bodyBytes,
+          });
+        }
+      };
+      const abort = () => {
+        aborted = true;
+        if (options.abortWithReset && response?.socket) {
+          response.socket.resetAndDestroy();
+        } else {
+          req.destroy();
+        }
+        finish();
+      };
+      const req = httpRequest(
+        {
+          hostname: proxy.hostname,
+          port: proxy.port,
+          path: targetUrl,
+          method: requestBody === undefined ? "GET" : "POST",
+          headers: {
+            connection: "close",
+            ...(requestBody === undefined
+              ? {}
+              : {
+                  "content-length": Buffer.byteLength(requestBody),
+                  "content-type": "text/plain; charset=utf-8",
+                }),
+          },
         },
-      },
-      (res) => {
-        response = res;
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          body += chunk;
-        });
-        res.on("end", () => finish());
-        res.on("error", finish);
-        res.on("close", () => {
-          if (!res.complete) {
-            finish(new Error("response closed before completion"));
-          }
-        });
-      },
-    );
-    req.on("error", finish);
-    req.end(requestBody);
-  });
+        (res) => {
+          response = res;
+          res.on("data", (chunk: Buffer) => {
+            bodyBytes += chunk.length;
+            if (!options.streaming) {
+              chunks.push(chunk);
+            }
+            if (options.abortAfterBytes !== undefined && bodyBytes >= options.abortAfterBytes) {
+              abort();
+            }
+          });
+          res.on("end", () => finish());
+          res.on("error", finish);
+          res.on("close", () => {
+            if (!res.complete) {
+              finish(new Error("response closed before completion"));
+            }
+          });
+        },
+      );
+      req.on("error", finish);
+      if (options.streaming) {
+        timeout = setTimeout(() => {
+          req.destroy();
+          finish(new Error("slow proxy client timed out"));
+        }, 15000);
+      }
+      options.signal?.addEventListener("abort", abort, { once: true });
+      if (options.signal?.aborted) {
+        abort();
+      }
+      req.end(requestBody);
+    },
+  );
 }
 
 async function startStreamingProxyOrigin(responseBodyBytes: number) {
@@ -246,75 +295,6 @@ async function startStreamingProxyOrigin(responseBodyBytes: number) {
     responseClosed: responseClosed.promise,
     state,
   };
-}
-
-async function streamThroughProxy(params: {
-  abortAfterBytes?: number;
-  abortWithReset?: boolean;
-  signal?: AbortSignal;
-  proxyUrl: string;
-  targetUrl: string;
-}): Promise<{ aborted: boolean; bodyBytes: number; statusLine: string }> {
-  const proxy = new URL(params.proxyUrl);
-  return new Promise((resolve, reject) => {
-    let aborted = false;
-    let bodyBytes = 0;
-    let statusLine = "";
-    const finish = () => {
-      clearTimeout(timeout);
-      params.signal?.removeEventListener("abort", abort);
-      resolve({ aborted, bodyBytes, statusLine });
-    };
-    const abort = () => {
-      aborted = true;
-      req.destroy();
-      finish();
-    };
-    const req = httpRequest(
-      {
-        hostname: proxy.hostname,
-        port: proxy.port,
-        path: params.targetUrl,
-        headers: { host: "127.0.0.1", connection: "close" },
-      },
-      (res) => {
-        statusLine = `HTTP/${res.httpVersion} ${res.statusCode} ${res.statusMessage}`;
-        res.on("data", (chunk: Buffer) => {
-          bodyBytes += chunk.length;
-          if (params.abortAfterBytes !== undefined && bodyBytes >= params.abortAfterBytes) {
-            aborted = true;
-            if (params.abortWithReset) {
-              res.socket?.resetAndDestroy();
-            } else {
-              req.destroy();
-            }
-            finish();
-          }
-        });
-        res.on("end", finish);
-        res.on("error", (error) => {
-          if (!aborted) {
-            reject(error);
-          }
-        });
-      },
-    );
-    const timeout = setTimeout(() => {
-      req.destroy();
-      reject(new Error("slow proxy client timed out"));
-    }, 15000);
-    req.on("error", (error) => {
-      if (!aborted) {
-        reject(error);
-      }
-    });
-    req.on("close", finish);
-    params.signal?.addEventListener("abort", abort, { once: true });
-    if (params.signal?.aborted) {
-      abort();
-    }
-    req.end();
-  });
 }
 
 async function startConnectProxy(connectTarget: string) {
@@ -461,10 +441,9 @@ describe("startDebugProxyServer", () => {
       firstDrain.resolve();
       return emitted;
     });
-    const forwarding = streamThroughProxy({
-      proxyUrl: proxy.proxyUrl,
+    const forwarding = getThroughProxy(proxy.proxyUrl, targetUrl, undefined, {
+      streaming: true,
       signal: abortController.signal,
-      targetUrl,
     });
     cleanup.push(async () => {
       abortController.abort();
@@ -502,11 +481,10 @@ describe("startDebugProxyServer", () => {
 
       // Start the async reader before the bounded abort assertions measure cleanup.
       await readCaptureEvents(settings.sessionId, 20);
-      const aborted = await streamThroughProxy({
+      const aborted = await getThroughProxy(proxy.proxyUrl, `${origin.url}/capture`, undefined, {
+        streaming: true,
         abortAfterBytes: 64 * 1024,
         abortWithReset,
-        proxyUrl: proxy.proxyUrl,
-        targetUrl: `${origin.url}/capture`,
       });
 
       expect(aborted).toMatchObject({

@@ -43,6 +43,61 @@ import {
 import type { CaptureEventRecord } from "./types.js";
 
 const roots: string[] = [];
+const redactedPrefix = "first [REDACTED] café";
+const frame = (payload: string | Buffer, flowId = "fixture") => ({
+  url: "wss://example.test/stream",
+  direction: "inbound" as const,
+  kind: "ws-frame" as const,
+  flowId,
+  payload,
+});
+
+function secretPrefix() {
+  registerSecretValueForRedaction("fixture-secret-value");
+  const bytes = Buffer.from("first fixture-secret-value café");
+  const chunks = [bytes.subarray(0, 15), bytes.subarray(15, -1), bytes.subarray(-1)];
+  return { bytes, chunks, stream: pendingResponse(chunks) };
+}
+
+function readCapture(root: string, settings: DebugProxySettings) {
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => {
+      const rows = readDebugProxyCaptureSessionEvents(db, settings.sessionId);
+      const blobId = rows[0]?.dataBlobId;
+      return {
+        session: listDebugProxyCaptureSessions(db).find(({ id }) => id === settings.sessionId),
+        rows,
+        payload: typeof blobId === "string" ? readDebugProxyCaptureBlob(db, blobId) : undefined,
+      };
+    },
+    { env: { OPENCLAW_STATE_DIR: root } },
+  );
+}
+
+function recordTerminals(store: DebugProxyCaptureStore, onTerminal = () => {}) {
+  const terminals: CaptureEventRecord[] = [];
+  const record = store.recordEvent.bind(store);
+  const recording = vi.spyOn(store, "recordEvent").mockImplementation((event) => {
+    expect(store.isClosed).toBe(false);
+    record(event);
+    if (event.kind !== "request") {
+      terminals.push(event);
+      onTerminal();
+    }
+  });
+  return { terminals, recording };
+}
+
+function expectTerminal(terminals: CaptureEventRecord[], expected: Partial<CaptureEventRecord>) {
+  expect(terminals).toEqual([expect.objectContaining(expected)]);
+}
+
+function expectRows(
+  rows: ReturnType<typeof readDebugProxyCaptureSessionEvents> | undefined,
+  expected: Partial<CaptureEventRecord>[],
+) {
+  expect(rows).toEqual(expect.arrayContaining(expected.map((row) => expect.objectContaining(row))));
+}
 afterEach(() => {
   closeDebugProxyCaptureStore();
   vi.restoreAllMocks();
@@ -107,8 +162,7 @@ function observePendingCapture(response: Response, prefixChunks: number) {
     const read = reader.read.bind(reader);
     let reads = 0;
     vi.spyOn(reader, "read").mockImplementation(() => {
-      reads += 1;
-      const last = reads === prefixChunks + 1;
+      const last = ++reads === prefixChunks + 1;
       if (last) {
         pending.resolve();
       }
@@ -159,22 +213,8 @@ describe("capture store lifecycle", () => {
       getStore,
       persistEventPayload: (_store, payload) => persistEventPayload(store, payload),
     };
-    registerSecretValueForRedaction("fixture-secret-value");
-    const bytes = Buffer.from("first fixture-secret-value caf\u00e9");
-    const stream = pendingResponse([
-      bytes.subarray(0, 15),
-      bytes.subarray(15, -1),
-      bytes.subarray(-1),
-    ]);
-    const terminals: CaptureEventRecord[] = [];
-    const record = store.recordEvent.bind(store);
-    const recording = vi.spyOn(store, "recordEvent").mockImplementation((event) => {
-      expect(store.isClosed).toBe(false);
-      record(event);
-      if (event.kind !== "request") {
-        terminals.push(event);
-      }
-    });
+    const { bytes, stream } = secretPrefix();
+    const { terminals, recording } = recordTerminals(store);
     const end = vi.spyOn(store, "endSession");
     try {
       store.upsertSession({
@@ -199,12 +239,7 @@ describe("capture store lifecycle", () => {
         sibling.release();
       }
       expect(store.isClosed).toBe(true);
-      expect(terminals).toHaveLength(1);
-      expect(terminals[0]).toMatchObject({
-        kind: "response",
-        status: 200,
-        dataText: "first [REDACTED] caf\u00e9",
-      });
+      expectTerminal(terminals, { kind: "response", status: 200, dataText: redactedPrefix });
       expect(JSON.parse(terminals[0]!.metaJson!)).toMatchObject({ bodyCapture: "finalized" });
       expect(end).toHaveBeenCalledExactlyOnceWith(settings.sessionId);
 
@@ -246,16 +281,8 @@ describe("capture store lifecycle", () => {
       const store = new DebugProxyCaptureStore({ env: { OPENCLAW_STATE_DIR: root } });
       const deps: DebugProxyCaptureRuntimeDeps = { getStore: () => store };
       const stream = pendingResponse([Buffer.from("prefix")]);
-      const terminals: CaptureEventRecord[] = [];
       const done = createDeferredCore();
-      const record = store.recordEvent.bind(store);
-      vi.spyOn(store, "recordEvent").mockImplementation((event) => {
-        record(event);
-        if (event.kind !== "request") {
-          terminals.push(event);
-          done.resolve();
-        }
-      });
+      const { terminals } = recordTerminals(store, () => done.resolve());
       registerSecretValueForRedaction("fixture-error-secret");
       const reason = new Error("fixture read failure: fixture-error-secret");
       try {
@@ -273,8 +300,7 @@ describe("capture store lifecycle", () => {
         }
         await done.promise;
         await stream.settled;
-        expect(terminals).toHaveLength(1);
-        expect(terminals[0]).toMatchObject({
+        expectTerminal(terminals, {
           kind: mode === "error" ? "error" : "response",
           status: 200,
           dataText: "prefix",
@@ -515,25 +541,14 @@ describe("capture admission generation", () => {
       });
       for (const index of [first, second]) {
         const fresh = resolveDebugProxySettings(envs[index]);
-        captureWsEvent(
-          {
-            url: "wss://example.test/identity",
-            direction: "inbound",
-            kind: "ws-frame",
-            flowId: `database-${index}`,
-            payload: "before-close",
-          },
-          fresh,
-          deps,
-        );
+        captureWsEvent(frame("before-close", `database-${index}`), fresh, deps);
         expect(recordings[index]!.mock.lastCall?.[0].kind).toBe("ws-frame");
         finalizeDebugProxyCapture(fresh, deps);
         expect(stores[index]!.isClosed).toBe(true);
         const terminals = recordings[index]!.mock.calls.map(([event]) => event).filter(
           (event) => event.kind === "response",
         );
-        expect(terminals).toHaveLength(1);
-        expect(terminals[0]).toMatchObject({
+        expectTerminal(terminals, {
           flowId: `database-${index}`,
           dataText: `database-${index}`,
         });
@@ -587,28 +602,21 @@ describe("capture admission generation", () => {
       persistEventPayload: () => ({}),
       fetchTarget: { fetch: vi.fn() } as unknown as typeof globalThis,
     };
-    const frame = {
-      url: "wss://example.test/stream",
-      direction: "inbound" as const,
-      kind: "ws-frame" as const,
-      flowId: "fixture",
-      payload: "frame",
-    };
-    captureWsEvent(frame, undefined, deps);
+    captureWsEvent(frame("frame"), undefined, deps);
     finalizeDebugProxyCapture(undefined, deps);
-    captureWsEvent(frame, undefined, deps);
+    captureWsEvent(frame("frame"), undefined, deps);
     expect(getStore).toHaveBeenCalledTimes(1);
     expect(record).toHaveBeenCalledTimes(1);
 
     settings = captureSettings(root, "second");
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", settings.sessionId);
-    captureWsEvent(frame, undefined, deps);
+    captureWsEvent(frame("frame"), undefined, deps);
     expect(getStore).toHaveBeenCalledTimes(2);
     expect(record).toHaveBeenCalledTimes(2);
     finalizeDebugProxyCapture(undefined, deps);
 
     initializeDebugProxyCapture("replacement", undefined, deps);
-    captureWsEvent(frame, undefined, deps);
+    captureWsEvent(frame("frame"), undefined, deps);
     expect(getStore).toHaveBeenCalledTimes(3);
     expect(record).toHaveBeenCalledTimes(3);
     finalizeDebugProxyCapture(undefined, deps);
@@ -737,13 +745,6 @@ describe("async capture lifecycle", () => {
       fetch: vi.fn(async () => new Response("host")),
     };
     const deps = { fetchTarget };
-    const frame = (payload: string) => ({
-      url: "wss://example.test",
-      kind: "ws-frame" as const,
-      direction: "outbound" as const,
-      flowId: payload,
-      payload,
-    });
     const legacy = pendingResponse([Buffer.from("legacy prefix")]);
     const host = pendingResponse([Buffer.from("host prefix")]);
     let hostWriting: Promise<void> | undefined;
@@ -772,22 +773,13 @@ describe("async capture lifecycle", () => {
       captureWsEvent(frame("late legacy"), settings, deps);
       await fetchTarget.fetch("https://example.test/after-legacy");
       await captureWsEventAsync(frame("host still active"), settings, deps);
-      const read = () =>
-        withExistingOpenClawStateDatabaseReadOnly(
-          ({ db }) => ({
-            session: listDebugProxyCaptureSessions(db).find(({ id }) => id === settings.sessionId),
-            rows: readDebugProxyCaptureSessionEvents(db, settings.sessionId),
-          }),
-          { env: { OPENCLAW_STATE_DIR: root } },
-        );
+      const read = () => readCapture(root, settings);
       const before = read();
       expect(before?.session?.endedAt).toBeNull();
-      expect(before?.rows).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: "response", dataText: "legacy prefix" }),
-          expect.objectContaining({ kind: "ws-frame", dataText: "host still active" }),
-        ]),
-      );
+      expectRows(before?.rows, [
+        { kind: "response", dataText: "legacy prefix" },
+        { kind: "ws-frame", dataText: "host still active" },
+      ]);
       expect(before?.rows.some((row) => row.dataText === "late legacy")).toBe(false);
       expect(before?.rows.some((row) => row.dataText === "host prefix")).toBe(false);
       initializeDebugProxyCapture("legacy-reinitialized", settings, deps);
@@ -797,13 +789,11 @@ describe("async capture lifecycle", () => {
       await hostWriting;
       expect(reopenedStore.isClosed).toBe(true);
       expect(read()?.session?.endedAt).toBeTypeOf("number");
-      expect(read()?.rows).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ kind: "response", dataText: "host prefix" }),
-          expect.objectContaining({ kind: "ws-frame", dataText: "legacy reopened" }),
-          expect.objectContaining({ kind: "response", path: "/after-legacy", dataText: "host" }),
-        ]),
-      );
+      expectRows(read()?.rows, [
+        { kind: "response", dataText: "host prefix" },
+        { kind: "ws-frame", dataText: "legacy reopened" },
+        { kind: "response", path: "/after-legacy", dataText: "host" },
+      ]);
     } finally {
       legacy.controller.close();
       host.controller.close();
@@ -838,23 +828,14 @@ describe("async capture lifecycle", () => {
       process.kill(process.pid, ${JSON.stringify(signal)});
     `;
       const child = runRuntimeScript(root, script, [], { HOME: root, XDG_CACHE_HOME: root });
-      expect(child.error, child.stderr).toBeUndefined();
-      expect(child.signal, child.stderr).toBeNull();
-      expect(child.status, child.stderr).toBe(exitCode);
-      const persisted = withExistingOpenClawStateDatabaseReadOnly(
-        ({ db }) => {
-          const events = readDebugProxyCaptureSessionEvents(db, settings.sessionId);
-          const blobId = events[0]?.dataBlobId;
-          return {
-            session: listDebugProxyCaptureSessions(db).find((row) => row.id === settings.sessionId),
-            events,
-            payload: typeof blobId === "string" ? readDebugProxyCaptureBlob(db, blobId) : undefined,
-          };
-        },
-        { env: { OPENCLAW_STATE_DIR: root } },
-      );
+      expect([child.error, child.signal, child.status], child.stderr).toEqual([
+        undefined,
+        null,
+        exitCode,
+      ]);
+      const persisted = readCapture(root, settings);
       expect(persisted?.session?.endedAt).toBeTypeOf("number");
-      expect(persisted?.events).toEqual([
+      expect(persisted?.rows).toEqual([
         expect.objectContaining({
           kind: "ws-frame",
           flowId: "queued-at-signal",
@@ -869,25 +850,19 @@ describe("async capture lifecycle", () => {
     const root = stateRoot();
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const settings = captureSettings(root, "async-lifecycle");
-    registerSecretValueForRedaction("fixture-secret-value");
+    const { chunks, stream } = secretPrefix();
     const wsBytes = Buffer.from("websocket original");
     const wsMeta = { provider: "fixture", detail: { phase: "accepted" } };
     const wsWriting = captureWsEventAsync(
       {
-        url: "wss://example.test/socket",
+        ...frame(wsBytes, "ws-before-admission"),
         direction: "outbound",
-        kind: "ws-frame",
-        flowId: "ws-before-admission",
-        payload: wsBytes,
         meta: wsMeta,
       },
       settings,
     );
     wsBytes.fill(0);
     wsMeta.detail.phase = "mutated";
-    const bytes = Buffer.from("first fixture-secret-value café");
-    const chunks = [bytes.subarray(0, 15), bytes.subarray(15, -1), bytes.subarray(-1)];
-    const stream = pendingResponse(chunks);
     let caller: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let sourceClosed = false;
     try {
