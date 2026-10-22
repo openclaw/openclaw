@@ -133,10 +133,6 @@ export function ChatDetailSlot(props: ChatDetailSlotProps) {
           prop:canvasPluginSurfaceUrl={props.host.canvasPluginSurfaceUrl}
           prop:embedSandboxMode={props.host.embedSandboxMode}
           prop:allowExternalEmbedUrls={props.host.allowExternalEmbedUrls}
-          prop:githubContext={{
-            githubRepo: props.chat.githubRepo,
-            githubRepositories: props.chat.githubRepositories,
-          }}
           prop:onOpenWorkspaceFile={(target: MarkdownFileLinkTarget) => {
             void openSessionWorkspaceFile(
               props.host,
