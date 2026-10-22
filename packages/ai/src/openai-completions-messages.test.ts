@@ -214,92 +214,83 @@ it("counts every reply when labeling sparse images from an unnamed tool", () => 
 
 describe("convertMessages relocatable region", () => {
   const compat = () => resolveOpenAICompletionsCompat(model);
-
-  it("keeps Runtime in system content when the only user turn contains an unsupported empty image", () => {
-    const context = runtimeContext([user([image("")])]);
-    const cacheOptOutIndexes = new Set<number>();
-
-    const converted = convert(context, model, { cacheOptOutIndexes });
-
-    expect(converted).toEqual([{ role: "system", content: "Stable prefix\nRuntime facts" }]);
-    expect(cacheOptOutIndexes.size).toBe(0);
-  });
-
-  it("preserves the emitted unsupported image placeholder and surrounding text on the carrier", () => {
-    const context = runtimeContext([user([text("before"), image(), text("after")])]);
-    const converted = convert(context);
-
-    expect(converted).toEqual([
-      { role: "system", content: "Stable prefix" },
-      {
-        role: "user",
-        content: [
+  const system = { role: "system", content: "Stable prefix" };
+  const wireUser = (content: unknown) => ({ role: "user", content });
+  const wireImage = { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } };
+  it.each<
+    [
+      name: string,
+      input: Context,
+      target: Model<"openai-completions">,
+      expected: unknown[],
+      optOut?: number[],
+    ]
+  >([
+    [
+      "keeps Runtime in system content for an unsupported empty image",
+      runtimeContext([user([image("")])]),
+      model,
+      [{ role: "system", content: "Stable prefix\nRuntime facts" }],
+      [],
+    ],
+    [
+      "preserves the unsupported image placeholder and surrounding carrier text",
+      runtimeContext([user([text("before"), image(), text("after")])]),
+      model,
+      [
+        system,
+        wireUser([
           text("before"),
           text("(image omitted: model does not support images)"),
           text("after"),
           text("Runtime facts"),
-        ],
-      },
-    ]);
-  });
-
-  it("uses the first emitted tool-result image carrier and preserves later cache opt-outs", () => {
-    const context = runtimeContext(
-      [
-        user([]),
-        assistant([
-          { type: "toolCall", id: "image_call", name: "read", arguments: { path: "image.png" } },
         ]),
-        imageResult("image_call", "read", ["aW1n"], 3),
-        runtimeNotice("later context", 4),
       ],
-      { tools: tools("read") },
-    );
-    const cacheOptOutIndexes = new Set<number>();
-
-    const converted = convert(context, imageModel, { cacheOptOutIndexes });
-
-    expect(converted).toEqual([
-      { role: "system", content: "Stable prefix" },
-      expectedToolCall("image_call", "read", '{"path":"image.png"}'),
-      { role: "tool", tool_call_id: "image_call", content: "(see attached image)" },
-      {
-        role: "user",
-        content: [
-          text("Image(s) from tool result #1 (read):"),
-          { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
-          text("Runtime facts"),
+    ],
+    [
+      "uses the first tool-result image carrier and preserves later cache opt-outs",
+      runtimeContext(
+        [
+          user([]),
+          assistant([
+            { type: "toolCall", id: "image_call", name: "read", arguments: { path: "image.png" } },
+          ]),
+          imageResult("image_call", "read", ["aW1n"], 3),
+          runtimeNotice("later context", 4),
         ],
-      },
-      { role: "developer", content: "OpenClaw runtime context:\nlater context" },
-    ]);
-    expect(cacheOptOutIndexes).toEqual(new Set([3, 4]));
-  });
-
-  it("keeps mixed-media shipped carriers out of the prompt cache", () => {
-    const legacyCarrier = user([text("legacy plugin runtime context"), image()], {
-      runtimeContextCarrier: true,
-      runtimeContextCarrierRetained: false,
-    });
-    const cacheOptOutIndexes = new Set<number>();
-
-    const converted = convert(
-      { systemPrompt: "Stable prefix", messages: [legacyCarrier] },
+        { tools: tools("read") },
+      ),
       imageModel,
-      { cacheOptOutIndexes },
-    );
-
-    expect(converted).toEqual([
-      { role: "system", content: "Stable prefix" },
+      [
+        system,
+        expectedToolCall("image_call", "read", '{"path":"image.png"}'),
+        { role: "tool", tool_call_id: "image_call", content: "(see attached image)" },
+        wireUser([text("Image(s) from tool result #1 (read):"), wireImage, text("Runtime facts")]),
+        { role: "developer", content: "OpenClaw runtime context:\nlater context" },
+      ],
+      [3, 4],
+    ],
+    [
+      "keeps mixed-media shipped carriers out of the prompt cache",
       {
-        role: "user",
-        content: [
-          text("legacy plugin runtime context"),
-          { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+        systemPrompt: "Stable prefix",
+        messages: [
+          user([text("legacy plugin runtime context"), image()], {
+            runtimeContextCarrier: true,
+            runtimeContextCarrierRetained: false,
+          }),
         ],
       },
-    ]);
-    expect(cacheOptOutIndexes).toEqual(new Set([1]));
+      imageModel,
+      [system, wireUser([text("legacy plugin runtime context"), wireImage])],
+      [1],
+    ],
+  ])("%s", (_name, input, target, expected, optOut) => {
+    const cacheOptOutIndexes = new Set<number>();
+    expect(convert(input, target, { cacheOptOutIndexes })).toEqual(expected);
+    if (optOut) {
+      expect(cacheOptOutIndexes).toEqual(new Set(optOut));
+    }
   });
 
   it.each([
