@@ -10,44 +10,11 @@ import {
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { compactionWatchdogs } from "./compaction-watchdog.js";
-import type {
-  ContextEngine,
-  CompactResult,
-  ContextEngineRuntimeContext,
-  ContextEngineSessionTarget,
-} from "./types.js";
+import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
 
 const loadCompactRuntime = createLazyRuntimeModule(
   () => import("../agents/embedded-agent-runner/compact.runtime.js"),
 );
-
-function assertCompactionSessionIdentity(params: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey?: string;
-  sessionTarget?: ContextEngineSessionTarget;
-}): void {
-  const targetAgentId = normalizeOptionalString(params.sessionTarget?.agentId);
-  const targetSessionId = normalizeOptionalString(params.sessionTarget?.sessionId);
-  const targetSessionKey = normalizeOptionalString(params.sessionTarget?.sessionKey);
-  const requestedAgentId = normalizeOptionalString(params.agentId);
-  const callerSessionId = normalizeOptionalString(params.sessionId);
-  const requestedSessionKey = normalizeOptionalString(params.sessionKey);
-  const requestedSessionKeyAgentId = parseAgentSessionKey(requestedSessionKey)?.agentId;
-  if (
-    (requestedAgentId && targetAgentId && requestedAgentId !== targetAgentId) ||
-    (callerSessionId && targetSessionId && callerSessionId !== targetSessionId) ||
-    (requestedSessionKey && targetSessionKey && requestedSessionKey !== targetSessionKey) ||
-    (requestedSessionKeyAgentId && targetAgentId && requestedSessionKeyAgentId !== targetAgentId)
-  ) {
-    throw new Error("Context-engine successor target conflicts with the caller session identity");
-  }
-  const agentId = targetAgentId ?? requestedAgentId;
-  const sessionKeyAgentId = parseAgentSessionKey(targetSessionKey ?? requestedSessionKey)?.agentId;
-  if (sessionKeyAgentId && agentId && sessionKeyAgentId !== agentId) {
-    throw new Error("Context-engine successor session key conflicts with its agent identity");
-  }
-}
 
 /**
  * Delegate a context-engine compaction request to OpenClaw's built-in runtime compaction path.
@@ -80,12 +47,27 @@ export async function delegateCompactionToRuntime(
   const sessionKey = params.sessionKey ?? runtimeContext.sessionKey;
   // Reject contradictory caller identity before loading or invoking the compactor:
   // target precedence inside the runtime must not hide an invalid request.
-  assertCompactionSessionIdentity({
-    agentId,
-    sessionId: params.sessionId,
-    sessionKey,
-    sessionTarget,
-  });
+  const sessionId = params.sessionId;
+  const targetAgentId = normalizeOptionalString(sessionTarget?.agentId);
+  const targetSessionId = normalizeOptionalString(sessionTarget?.sessionId);
+  const targetSessionKey = normalizeOptionalString(sessionTarget?.sessionKey);
+  const requestedAgentId = normalizeOptionalString(agentId);
+  const callerSessionId = normalizeOptionalString(sessionId);
+  const requestedSessionKey = normalizeOptionalString(sessionKey);
+  const requestedSessionKeyAgentId = parseAgentSessionKey(requestedSessionKey)?.agentId;
+  if (
+    (requestedAgentId && targetAgentId && requestedAgentId !== targetAgentId) ||
+    (callerSessionId && targetSessionId && callerSessionId !== targetSessionId) ||
+    (requestedSessionKey && targetSessionKey && requestedSessionKey !== targetSessionKey) ||
+    (requestedSessionKeyAgentId && targetAgentId && requestedSessionKeyAgentId !== targetAgentId)
+  ) {
+    throw new Error("Context-engine successor target conflicts with the caller session identity");
+  }
+  const resolvedAgentId = targetAgentId ?? requestedAgentId;
+  const sessionKeyAgentId = parseAgentSessionKey(targetSessionKey ?? requestedSessionKey)?.agentId;
+  if (sessionKeyAgentId && resolvedAgentId && sessionKeyAgentId !== resolvedAgentId) {
+    throw new Error("Context-engine successor session key conflicts with its agent identity");
+  }
   const { compactEmbeddedAgentSessionOnDemand } = await loadCompactRuntime();
   const watchdog = params.abortSignal && compactionWatchdogs.get(params.abortSignal);
   const currentTokenCount =
