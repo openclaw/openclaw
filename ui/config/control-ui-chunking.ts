@@ -77,8 +77,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Pending New Session previews must render while the Chat route entry waits.
       return "chat-route-entry";
     case "ui/src/i18n/locales/en-chat-composer.ts":
-    case "ui/src/i18n/locales/en-chat-session.ts":
-      // Share deferred English compression without combining either route's renderers.
+      // New Session shares composer copy; session copy stays with Chat's boot group.
       return "chat-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
