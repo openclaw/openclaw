@@ -139,30 +139,30 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     expect(cancel).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    ["invalid UTF-8", "malformed JSON response"],
-    ["oversized body", "JSON response exceeds 16777216 bytes"],
-  ])("rejects getMe %s", async (kind, error) => {
-    const cancel = vi.fn();
-    const fetcher = withFetchPreconnect(async () =>
-      kind === "invalid UTF-8"
-        ? new Response(
-            Buffer.concat([
-              Buffer.from('{"id":"bot-1","username":"bad'),
-              Buffer.from([0xff]),
-              Buffer.from('"}'),
-            ]),
-            { headers: { "content-type": "application/json" }, status: 200 },
-          )
-        : oversizedDiscordProbeJsonResponse(cancel),
+  it("rejects invalid UTF-8 in getMe probe JSON responses", async () => {
+    const body = Buffer.concat([
+      Buffer.from('{"id":"bot-1","username":"bad'),
+      Buffer.from([0xff]),
+      Buffer.from('"}'),
+    ]);
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response(body, { headers: { "content-type": "application/json" }, status: 200 }),
     );
     await expect(probeGetMe(fetcher)).resolves.toMatchObject({
       ok: false,
-      error: expect.stringContaining(`discord.probe.getMe: ${error}`),
+      error: expect.stringContaining("discord.probe.getMe: malformed JSON response"),
     });
-    if (kind === "oversized body") {
-      expect(cancel).toHaveBeenCalledOnce();
-    }
+  });
+
+  it("bounds oversized getMe probe JSON responses and cancels the stream", async () => {
+    const cancel = vi.fn();
+    const fetcher = withFetchPreconnect(async () => oversizedDiscordProbeJsonResponse(cancel));
+    await expect(probeGetMe(fetcher)).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining("discord.probe.getMe: JSON response exceeds 16777216 bytes"),
+    });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("uses one total deadline across getMe headers and a trickling JSON body", async () => {
@@ -184,7 +184,7 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     expect(terminated).toHaveBeenCalledOnce();
   });
 
-  it.each(["summary", "id"])("bounds stalled application-%s response bodies", async (kind) => {
+  it("bounds stalled application-summary response bodies during probes", async () => {
     vi.useFakeTimers();
     const terminated = vi.fn();
     const fetcher = withFetchPreconnect(async (input, init) => {
@@ -195,25 +195,32 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       }
       return stalledJsonResponse(init?.signal, terminated);
     });
-    const pending =
-      kind === "id"
-        ? lookup(fetcher, 50)
-        : Promise.race([
-            probeDiscord("MTIz.abc.def", 50, { fetcher, includeApplication: true }),
-            new Promise<{ ok: false; timedOut: true }>((resolve) => {
-              setTimeout(() => resolve({ ok: false, timedOut: true }), 50);
-            }),
-          ]);
+    const probe = probeDiscord("MTIz.abc.def", 50, { fetcher, includeApplication: true });
+    const outerStatusResult = Promise.race([
+      probe,
+      new Promise<{ ok: false; timedOut: true }>((resolve) => {
+        setTimeout(() => resolve({ ok: false, timedOut: true }), 50);
+      }),
+    ]);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(50);
-    if (kind === "id") {
-      await expect(pending).resolves.toBeUndefined();
-    } else {
-      await expect(pending).resolves.toMatchObject({
-        ok: true,
-        bot: { id: "bot-1", username: "openclaw" },
-      });
-    }
+    await expect(outerStatusResult).resolves.toMatchObject({
+      ok: true,
+      bot: { id: "bot-1", username: "openclaw" },
+    });
+    expect(terminated).toHaveBeenCalledOnce();
+  });
+
+  it("bounds stalled application-id response bodies", async () => {
+    vi.useFakeTimers();
+    const terminated = vi.fn();
+    const fetcher = withFetchPreconnect(async (_input, init) =>
+      stalledJsonResponse(init?.signal, terminated),
+    );
+    const pending = lookup(fetcher, 50);
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(pending).resolves.toBeUndefined();
     expect(terminated).toHaveBeenCalledOnce();
   });
 

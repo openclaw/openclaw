@@ -1,5 +1,5 @@
-import { once } from "node:events";
-import { createServer, type IncomingMessage, type RequestListener, type Server } from "node:http";
+import { createServer, type RequestListener, type Server } from "node:http";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withFetchPreconnect, type FetchMock } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
@@ -9,20 +9,28 @@ import { jsonResponse } from "./test-http-helpers.js";
 const DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
 const servers: Server[] = [];
 
-async function mockDiscordServer(handler: RequestListener) {
-  const exchange: { request?: IncomingMessage; response?: Response } = {};
-  const server = createServer((request, response) => {
-    exchange.request = request;
-    handler(request, response);
+async function listenLoopbackServer(server: Server): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("expected loopback TCP address"));
+        return;
+      }
+      resolve(address.port);
+    });
   });
+}
+
+async function mockDiscordServer(
+  handler: RequestListener,
+  onResponse?: (response: Response) => void,
+): Promise<void> {
+  const server = createServer(handler);
   servers.push(server);
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback TCP address");
-  }
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const baseUrl = `http://127.0.0.1:${await listenLoopbackServer(server)}`;
   const realFetch = globalThis.fetch.bind(globalThis);
   vi.stubGlobal(
     "fetch",
@@ -32,11 +40,10 @@ async function mockDiscordServer(handler: RequestListener) {
       expect(originalUrl.pathname).toMatch(/^\/api\/v10\//);
       const loopbackUrl = new URL(`${originalUrl.pathname}${originalUrl.search}`, baseUrl);
       const response = await realFetch(loopbackUrl, init);
-      exchange.response = response;
+      onResponse?.(response);
       return response;
     }),
   );
-  return exchange;
 }
 
 async function fetchError(response: Response) {
@@ -45,11 +52,6 @@ async function fetchError(response: Response) {
     retry: { attempts: 1 },
   }).catch((err: unknown) => err);
 }
-const request = <T>(
-  path: string,
-  options: Parameters<typeof requestDiscord>[2] = {},
-  token = "test",
-) => requestDiscord<T>(path, token, { retry: { attempts: 1 }, ...options });
 
 function successfulFetch() {
   return withFetchPreconnect(vi.fn<FetchMock>(async () => jsonResponse({ id: "42" }, 200)));
@@ -118,34 +120,72 @@ describe("fetchDiscord", () => {
     expect(String(error)).not.toContain("retry after");
   });
 
+  it("retries rate limits before succeeding", async () => {
+    let calls = 0;
+    const fetcher = withFetchPreconnect(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return jsonResponse({ message: "You are being rate limited.", retry_after: 0 }, 429);
+      }
+      return jsonResponse([{}], 200);
+    });
+
+    const result = await fetchDiscord<unknown[]>("/users/@me/guilds", "test", fetcher, {
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(result).toHaveLength(1);
+    expect(calls).toBe(2);
+  });
+
   it("sends JSON request bodies through the shared retry helper", async () => {
     const fetcher = successfulFetch();
 
-    const result = await request<{ id: string }>("/channels/c/messages", {
+    const result = await requestDiscord<{ id: string }>("/channels/c/messages", "test", {
       body: { content: "hello" },
       fetcher,
+      retry: { attempts: 1 },
     });
 
-    const requestInit = fetcher.mock.calls[0]?.[1];
+    const request = fetcher.mock.calls[0]?.[1];
     expect(result).toEqual({ id: "42" });
-    expect(requestInit).toMatchObject({
-      method: "POST",
-      body: JSON.stringify({ content: "hello" }),
+    expect(request).toMatchObject({ method: "POST", body: JSON.stringify({ content: "hello" }) });
+    expect(new Headers(request?.headers).get("content-type")).toBe("application/json");
+  });
+
+  it("caps oversized request timeouts before creating abort signals", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const fetcher = successfulFetch();
+
+    await requestDiscord<{ id: string }>("/channels/c/messages", "test", {
+      fetcher,
+      retry: { attempts: 1 },
+      timeoutMs: Number.MAX_SAFE_INTEGER,
     });
-    expect(new Headers(requestInit?.headers).get("content-type")).toBe("application/json");
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(fetcher.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[0]?.value);
   });
 
   it("rejects malformed UTF-8 in otherwise valid Discord JSON", async () => {
-    const exchange = await mockDiscordServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write('[{"id":"guild-');
-      res.write(Buffer.from([0xff]));
-      res.end('"}]');
-    });
-    await expect(request("/users/@me/guilds")).rejects.toThrow(
-      "Discord API /users/@me/guilds returned malformed JSON",
+    let response: Response | undefined;
+    await mockDiscordServer(
+      (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('[{"id":"guild-');
+        res.write(Buffer.from([0xff]));
+        res.end('"}]');
+      },
+      (nextResponse) => {
+        response = nextResponse;
+      },
     );
-    expect(exchange.response?.bodyUsed).toBe(true);
+    await expect(
+      requestDiscord("/users/@me/guilds", "test", { retry: { attempts: 1 } }),
+    ).rejects.toThrow("Discord API /users/@me/guilds returned malformed JSON");
+    expect(response?.bodyUsed).toBe(true);
   });
 
   it.each(["HTML", "JSON"])("redacts reflected bot credentials from %s errors", async (format) => {
@@ -153,17 +193,21 @@ describe("fetchDiscord", () => {
     const status = json ? 429 : 502;
     const uniqueSecret = "discord-loopback-secret";
     const token = `proof-prefix-${uniqueSecret}-proof-suffix`;
-    const exchange = await mockDiscordServer((req, res) => {
-      const message = `proxy failure Authorization: ${req.headers.authorization}; request rejected`;
+    let authorization: string | undefined;
+    await mockDiscordServer((req, res) => {
+      authorization = req.headers.authorization;
+      const message = `proxy failure Authorization: ${authorization}; request rejected`;
       res.writeHead(status, { "content-type": json ? "application/json" : "text/html" });
       res.end(
         json ? JSON.stringify({ message, retry_after: 0 }) : `<html><body>${message}</body></html>`,
       );
     });
-    const error = await request("/gateway/bot", {}, token).catch((err: unknown) => err);
+    const error = await requestDiscord("/gateway/bot", token, {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(DiscordApiError);
-    expect(exchange.request?.headers.authorization).toBe(`Bot ${token}`);
+    expect(authorization).toBe(`Bot ${token}`);
     const message = String(error);
     expect(message).toContain(`Discord API /gateway/bot failed (${status})`);
     expect(message).toContain("proxy failure");
@@ -180,20 +224,28 @@ describe("fetchDiscord", () => {
 
   it("rejects oversized valid JSON requestDiscord responses from a real loopback HTTP server", async () => {
     const oversizedPayloadBytes = DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES + 256 * 1024;
-    const exchange = await mockDiscordServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write('{"id":"');
-      res.end(`${"x".repeat(oversizedPayloadBytes)}"}`);
-    });
-    const error = await request("/channels/123/messages", {}, "test-token").catch(
-      (err: unknown) => err,
+    let contentLength: string | null | undefined;
+    let requestUrl: string | undefined;
+    await mockDiscordServer(
+      (req, res) => {
+        requestUrl = req.url;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('{"id":"');
+        res.end(`${"x".repeat(oversizedPayloadBytes)}"}`);
+      },
+      (response) => {
+        contentLength = response.headers.get("content-length");
+      },
     );
+    const error = await requestDiscord("/channels/123/messages", "test-token", {
+      retry: { attempts: 1 },
+    }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(Error);
     expect(String(error)).toContain("Discord API /channels/123/messages response body too large");
     expect(String(error)).toContain(`limit: ${DISCORD_SUCCESS_RESPONSE_LIMIT_BYTES} bytes`);
-    expect(exchange.request?.url).toBe("/api/v10/channels/123/messages");
-    expect(exchange.response?.headers.get("content-length")).toBeNull();
+    expect(requestUrl).toBe("/api/v10/channels/123/messages");
+    expect(contentLength).toBeNull();
   });
 
   it("aborts promptly during 429 retry backoff when the caller signal fires", async () => {
@@ -202,7 +254,7 @@ describe("fetchDiscord", () => {
       jsonResponse({ message: "rate limited", retry_after: 30 }, 429),
     );
     const controller = new AbortController();
-    const pending = requestDiscord("/users/@me/guilds", "test-token", {
+    const request = requestDiscord("/users/@me/guilds", "test-token", {
       fetcher: withFetchPreconnect(fetcher),
       retry: { attempts: 3 },
       signal: controller.signal,
@@ -212,7 +264,7 @@ describe("fetchDiscord", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     controller.abort();
 
-    await expect(pending).rejects.toThrow(/abort/i);
+    await expect(request).rejects.toThrow(/abort/i);
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });

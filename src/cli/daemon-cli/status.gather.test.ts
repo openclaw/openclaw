@@ -132,7 +132,7 @@ function officialPlugin(pluginId = "whatsapp", resolvedVersion = "2026.5.4") {
   };
 }
 
-async function useRealSchemaPreflight(env: NodeJS.ProcessEnv) {
+async function useRealSchemaPreflight(env: Record<string, string>) {
   const actual = await vi.importActual<typeof import("../../state/openclaw-database-preflight.js")>(
     "../../state/openclaw-database-preflight.js",
   );

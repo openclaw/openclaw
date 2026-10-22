@@ -4,7 +4,6 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { sessionRequest } from "./hydration-family.test-support.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -38,9 +37,14 @@ const enrichedOptions = { ...foregroundOptions, includeDerivedTitles: true };
 
 function listRequest(read?: (call: number, params?: unknown) => unknown, patch?: () => unknown) {
   let calls = 0;
-  return sessionRequest({
-    "sessions.list": read && ((params) => read(++calls, params)),
-    "sessions.patch": patch,
+  return vi.fn(async (method: string, params?: unknown) => {
+    if (method === "sessions.list" && read) {
+      return read(++calls, params);
+    }
+    if (method === "sessions.patch" && patch) {
+      return patch();
+    }
+    throw new Error(`Unexpected request: ${method}`);
   });
 }
 
@@ -115,9 +119,12 @@ it("keeps derived titles when a foreground refresh queues behind an archive repl
       }
       return sessionsResult(
         [
-          asOptionalRecord(params)?.includeDerivedTitles === true
-            ? titled
-            : sessionRow(key, "title-session", 1, { label: key }),
+          sessionRow(key, "title-session", 1, {
+            label: key,
+            ...(asOptionalRecord(params)?.includeDerivedTitles === true
+              ? { derivedTitle: titled.derivedTitle }
+              : {}),
+          }),
         ],
         1,
       );
@@ -144,11 +151,40 @@ it("keeps derived titles when a foreground refresh queues behind an archive repl
   expect(listCalls).toHaveLength(3);
   expect(listCalls[1]?.[1]).toMatchObject({ agentId: "main", includeDerivedTitles: true });
   expect(listCalls[2]?.[1]).toMatchObject({ agentId: "main", includeDerivedTitles: true });
-  expect(sessions.state.result?.sessions[0]).toMatchObject({
-    derivedTitle: titled.derivedTitle,
-    archived: true,
-  });
+  expect(sessions.state.result?.sessions[0]?.derivedTitle).toBe("Readable planning title");
+  expect(sessions.state.result?.sessions[0]?.archived).toBe(true);
   expect(archiveReverted).toBe(false);
+  stop();
+});
+
+it("retains the routed archived descriptor through its foreground replacement", async () => {
+  const key = "agent:main:dashboard:archived";
+  const request = listRequest(
+    (call) =>
+      sessionsResult(
+        call === 1
+          ? [sessionRow(key, "archived-session", 1, { derivedTitle: "Readable archived title" })]
+          : [{ key: "agent:main:main", kind: "direct", updatedAt: 2 }],
+        call,
+      ),
+    () => archiveReceipt(key, "archived-session", 2),
+  );
+  const { sessions } = fixture(request, key);
+
+  await sessions.refresh(enrichedOptions);
+  const titleHistory: Array<string | undefined> = [];
+  const stop = sessions.subscribe((state) => {
+    titleHistory.push(state.result?.sessions.find((row) => row.key === key)?.derivedTitle);
+  });
+
+  await sessions.patch(key, { archived: true }, { agentId: "main" });
+
+  expect(titleHistory).not.toContain(undefined);
+  expect(sessions.state.result?.sessions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ key, archived: true, derivedTitle: "Readable archived title" }),
+    ]),
+  );
   stop();
 });
 
@@ -161,13 +197,7 @@ it("retains confirmed archive state after the routed row is evicted", async () =
       return sessionsResult(
         call === 3
           ? [other]
-          : [
-              sessionRow(key, "archived-session", 10, {
-                archived: false,
-                derivedTitle: "Readable archived title",
-              }),
-              other,
-            ],
+          : [sessionRow(key, "archived-session", 10, { archived: false }), other],
         call,
       );
     },
@@ -175,19 +205,8 @@ it("retains confirmed archive state after the routed row is evicted", async () =
   );
   const { sessions, gateway, emitEvent } = fixture(request, key);
 
-  await sessions.refresh(enrichedOptions);
-  const titleHistory: Array<string | undefined> = [];
-  const stop = sessions.subscribe((state) => {
-    titleHistory.push(state.result?.sessions.find((row) => row.key === key)?.derivedTitle);
-  });
+  await sessions.refresh(foregroundOptions);
   await sessions.patch(key, { archived: true }, { agentId: "main" });
-  stop();
-  expect(titleHistory).not.toContain(undefined);
-  expect(sessions.state.result?.sessions).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({ key, archived: true, derivedTitle: "Readable archived title" }),
-    ]),
-  );
   gateway.snapshot.sessionKey = otherKey;
   await sessions.refresh(foregroundOptions);
   expect(sessions.state.result?.sessions.some((row) => row.key === key)).toBe(false);
@@ -223,9 +242,9 @@ it.each(["before", "after"] as const)(
     const response = createDeferred<typeof confirmation>();
     let failRefresh = false;
     const snapshots: GatewaySessionRow[] = [
-      sessionRow(key, "archived-session", 10),
+      { key, kind: "direct", sessionId: "archived-session", updatedAt: 10 },
       { key, kind: "direct", updatedAt: 30, archived: false },
-      sessionRow(key, "replacement-session", 40, { archived: false }),
+      { key, kind: "direct", sessionId: "replacement-session", updatedAt: 40, archived: false },
     ];
     const request = listRequest(
       (call) => {
@@ -289,10 +308,14 @@ it.each(["before", "after"] as const)(
 
 it("restores Active membership when an archive and restore share a timestamp", async () => {
   vi.useFakeTimers();
-  const original = sessionRow("agent:main:restored-archive", "restored-archive", 10, {
+  const original: GatewaySessionRow = {
+    key: "agent:main:restored-archive",
     agentId: "main",
+    sessionId: "restored-archive",
+    kind: "direct",
+    updatedAt: 10,
     archived: false,
-  });
+  };
   let offered = original;
   const client = createTestGatewayClient(async (method) => {
     if (method === "sessions.list") {
@@ -439,31 +462,40 @@ it.each(["primary", "managed"] as const)(
   },
 );
 
-it("does not retain enrichment across a session generation reset", async () => {
-  const key = "agent:main:dashboard:session";
-  const request = listRequest((call) =>
-    sessionsResult(
-      [
-        sessionRow(
-          key,
-          `session-${call}`,
-          call,
-          call === 1 ? { derivedTitle: "Previous session title" } : {},
-        ),
-      ],
-      call,
-    ),
-  );
-  const { sessions } = fixture(request, key);
-  await sessions.refresh(enrichedOptions);
-  await sessions.refresh(enrichedOptions);
-  expect(sessions.state.result?.sessions[0]).toMatchObject({
-    key,
-    sessionId: "session-2",
-    updatedAt: 2,
-  });
-  expect(sessions.state.result?.sessions[0]?.derivedTitle).toBeUndefined();
-});
+it.each([false, true])(
+  "preserves enrichment only within the same session (reset: %s)",
+  async (reset) => {
+    const key = reset ? "agent:main:dashboard:session" : "agent:main:dashboard:session-1";
+    const enrichment = reset
+      ? { derivedTitle: "Previous session title" }
+      : {
+          derivedTitle: "Readable planning title",
+          lastMessagePreview: "Latest visible reply",
+        };
+    const request = listRequest((call) =>
+      sessionsResult(
+        [
+          sessionRow(
+            key,
+            reset ? `session-${call}` : "session-1",
+            call,
+            call === 1 ? enrichment : {},
+          ),
+        ],
+        call,
+      ),
+    );
+    const { sessions } = fixture(request, key);
+    await sessions.refresh(enrichedOptions);
+    await sessions.refresh(enrichedOptions);
+    expect(sessions.state.result?.sessions[0]).toMatchObject(
+      reset ? { key, sessionId: "session-2", updatedAt: 2 } : { key, updatedAt: 2, ...enrichment },
+    );
+    if (reset) {
+      expect(sessions.state.result?.sessions[0]?.derivedTitle).toBeUndefined();
+    }
+  },
+);
 
 it("does not preserve another agent's raw-global row through background hydration", async () => {
   const opsGoal: SessionGoal = {
@@ -477,9 +509,9 @@ it("does not preserve another agent's raw-global row through background hydratio
     tokensUsed: 0,
     continuationTurns: 0,
   };
-  const request = listRequest((call) =>
-    sessionsResult(
-      call === 1
+  const request = listRequest((listCallCount) => {
+    return sessionsResult(
+      listCallCount === 1
         ? [
             {
               key: "global",
@@ -491,9 +523,9 @@ it("does not preserve another agent's raw-global row through background hydratio
             },
           ]
         : [],
-      call,
-    ),
-  );
+      listCallCount,
+    );
+  });
   const { sessions, gateway } = fixture(request, "global", undefined, "ops");
 
   await sessions.refresh({ agentId: "ops", force: true });

@@ -1,7 +1,10 @@
 import { ChannelType } from "discord-api-types/v10";
+import { resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DiscordError } from "./internal/rest-errors.js";
 import { RequestClient } from "./internal/rest.js";
 import { discordOutbound } from "./outbound-adapter.js";
+import { recordDiscordMessageCreateAmbiguity } from "./retry.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 
 const sendPayload = (() => {
@@ -11,6 +14,20 @@ const sendPayload = (() => {
   }
   return handler;
 })();
+
+it("plain text delegates to sendText", async () => {
+  resetGlobalHookRunner();
+  const sendDiscord = vi.fn().mockResolvedValue({ messageId: "dc-1", channelId: "123456" });
+  const result = await sendPayload({
+    cfg: {},
+    to: "channel:123456",
+    text: "",
+    payload: { text: "hello" },
+    deps: { sendDiscord },
+  });
+  expect(sendDiscord).toHaveBeenCalledExactlyOnceWith("channel:123456", "hello", expect.anything());
+  expect(result.channel).toBe("discord");
+});
 
 describe("Discord forum outbound payload ownership", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -165,4 +182,80 @@ describe("Discord forum outbound payload ownership", () => {
     await expect(delivery.run()).rejects.toThrow(error);
     expect(delivery.requests.filter((request) => request.startsWith("POST"))).toEqual([]);
   });
+});
+
+function runVoicePayload(mode: "ambiguous" | "source" | "remaining" | "encoder") {
+  const deliveredText = mode === "ambiguous" || mode === "encoder";
+  const error =
+    mode === "source"
+      ? new DiscordError(new Response(null, { status: 503 }), {
+          message: "audio source unavailable",
+        })
+      : mode === "ambiguous"
+        ? Object.assign(new Error("voice create failed after acceptance"), { status: 503 })
+        : new Error("ffmpeg unavailable");
+  const onDeliveryResult = vi.fn();
+  const voiceDelivery = vi.fn(async () => {
+    if (mode === "ambiguous") {
+      recordDiscordMessageCreateAmbiguity(error);
+    }
+    throw error;
+  });
+  let textDeliveryCalls = 0;
+  const textDelivery = vi.fn(async (_to: string, _text: string, sendOptions?: unknown) => {
+    const callIndex = textDeliveryCalls++;
+    if (mode === "remaining" && callIndex > 0) {
+      throw new Error("remaining media unavailable");
+    }
+    const result = { messageId: "fallback-text", channelId: "123456" };
+    await (
+      sendOptions as
+        | { onDeliveryResult?: (deliveryResult: typeof result) => Promise<void> }
+        | undefined
+    )?.onDeliveryResult?.(result);
+    return result;
+  });
+  const promise = sendPayload({
+    cfg: {},
+    to: "channel:123456",
+    text: "",
+    payload: {
+      ...(deliveredText
+        ? { ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true } }
+        : { text: "answer" }),
+      mediaUrls: [
+        "https://example.test/voice.ogg",
+        ...(mode === "remaining" ? ["https://example.test/remaining.png"] : []),
+      ],
+      audioAsVoice: true,
+    },
+    deps: { discord: textDelivery, discordVoice: voiceDelivery },
+    onDeliveryResult,
+  });
+  return { error, onDeliveryResult, promise, textDelivery, voiceDelivery };
+}
+
+it.each([
+  ["ambiguous", 0],
+  ["source", 1],
+  ["remaining", 2],
+  ["encoder", 0],
+] as const)("preserves %s voice failure and fallback delivery", async (mode, textCalls) => {
+  const { error, promise, textDelivery, voiceDelivery, onDeliveryResult } = runVoicePayload(mode);
+  await expect(promise).rejects.toBe(error);
+  expect(voiceDelivery).toHaveBeenCalledOnce();
+  expect(textDelivery).toHaveBeenCalledTimes(textCalls);
+  if (textCalls === 1) {
+    expect(textDelivery).toHaveBeenCalledExactlyOnceWith(
+      "channel:123456",
+      "answer",
+      expect.objectContaining({ cfg: {} }),
+    );
+    expect(onDeliveryResult).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ channel: "discord", messageId: "fallback-text" }),
+    );
+  }
+  if (mode === "encoder") {
+    expect(onDeliveryResult).not.toHaveBeenCalled();
+  }
 });

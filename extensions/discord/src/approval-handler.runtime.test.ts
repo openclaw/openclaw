@@ -27,31 +27,21 @@ function approvalAction(decision: "allow-once" | "deny"): ExecApprovalActionDesc
   };
 }
 
-async function buildApprovalPayloadText(
-  input: string | { severity?: "info" | "warning" | "critical"; expiresAtMs?: number } = {},
-): Promise<string> {
-  const plugin = typeof input !== "string";
-  const expiresAtMs = plugin ? (input.expiresAtMs ?? 1_000) : 1_000;
-  const approvalId = plugin ? "plain-plugin-id" : "approval-1";
-  const title = plugin ? "Install plugin" : "Exec Approval Required";
-  const description = "Approve the requested plugin";
+async function buildExecApprovalPayloadText(commandText: string): Promise<string> {
   const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
     ...handlerContext,
-    request: plugin
-      ? request(approvalId, { title, description }, expiresAtMs)
-      : request(approvalId, { command: input }),
-    approvalKind: plugin ? "plugin" : "exec",
+    request: request("approval-1", { command: commandText }),
+    approvalKind: "exec",
     nowMs: 0,
     view: {
+      approvalKind: "exec",
       phase: "pending",
-      approvalId,
-      title,
-      expiresAtMs,
+      approvalId: "approval-1",
+      title: "Exec Approval Required",
+      commandText,
+      expiresAtMs: 1_000,
       metadata: [],
-      actions: [approvalAction(plugin ? "deny" : "allow-once")],
-      ...(plugin
-        ? { approvalKind: "plugin" as const, description, severity: input.severity ?? "warning" }
-        : { approvalKind: "exec" as const, commandText: input }),
+      actions: [approvalAction("allow-once")],
     },
   });
   expect(pending.body).not.toHaveProperty("nonce");
@@ -59,15 +49,50 @@ async function buildApprovalPayloadText(
   return JSON.stringify(pending);
 }
 
+async function buildPluginApprovalPayloadText(params?: {
+  severity?: "info" | "warning" | "critical";
+  expiresAtMs?: number;
+}): Promise<string> {
+  const expiresAtMs = params?.expiresAtMs ?? 1_000;
+  const pending = await discordApprovalNativeRuntime.presentation.buildPendingPayload({
+    ...handlerContext,
+    request: request(
+      "plain-plugin-id",
+      { title: "Install plugin", description: "Approve the requested plugin" },
+      expiresAtMs,
+    ),
+    approvalKind: "plugin",
+    nowMs: 0,
+    view: {
+      approvalKind: "plugin",
+      phase: "pending",
+      approvalId: "plain-plugin-id",
+      title: "Install plugin",
+      description: "Approve the requested plugin",
+      severity: params?.severity ?? "warning",
+      metadata: [],
+      actions: [approvalAction("deny")],
+      expiresAtMs,
+    },
+  } as never);
+  return JSON.stringify(pending);
+}
+
 describe("discordApprovalNativeRuntime", () => {
   it.each([
-    ["resolved", true, 204, 200, ["DELETE"]],
-    ["resolved", true, 404, 200, ["DELETE", "PATCH"]],
-    ["expired", true, 204, 200, ["PATCH"]],
-    ["resolved", false, 204, 403, ["PATCH"]],
+    { phase: "resolved", cleanup: true, deleteStatus: 204, editStatus: 200, methods: ["DELETE"] },
+    {
+      phase: "resolved",
+      cleanup: true,
+      deleteStatus: 404,
+      editStatus: 200,
+      methods: ["DELETE", "PATCH"],
+    },
+    { phase: "expired", cleanup: true, deleteStatus: 204, editStatus: 200, methods: ["PATCH"] },
+    { phase: "resolved", cleanup: false, deleteStatus: 204, editStatus: 403, methods: ["PATCH"] },
   ] as const)(
-    "finalizes %s approvals with cleanup=%s and DELETE=%s/PATCH=%s",
-    async (phase, cleanup, deleteStatus, editStatus, methods) => {
+    "finalizes $phase approvals with cleanup=$cleanup and DELETE=$deleteStatus/PATCH=$editStatus",
+    async ({ phase, cleanup, deleteStatus, editStatus, methods }) => {
       const container = { type: 17, components: [{ type: 10, content: "Approved" }] };
       const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
         const status = init?.method === "DELETE" ? deleteStatus : editStatus;
@@ -105,10 +130,10 @@ describe("discordApprovalNativeRuntime", () => {
   );
 
   it("encodes the explicit owner kind in exec and plugin approval buttons", async () => {
-    const execPayload = await buildApprovalPayloadText("hostname");
+    const execPayload = await buildExecApprovalPayloadText("hostname");
     expect(execPayload).toContain("execapproval:kind=exec;id=approval-1;action=allow-once");
     expect(execPayload).toContain('"allowed_mentions":{"parse":[]}');
-    await expect(buildApprovalPayloadText()).resolves.toContain(
+    await expect(buildPluginApprovalPayloadText()).resolves.toContain(
       "execapproval:kind=plugin;id=plain-plugin-id;action=deny",
     );
   });
@@ -171,7 +196,7 @@ describe("discordApprovalNativeRuntime", () => {
     { severity: "info" as const, accentColor: 0x5865f2 },
     { severity: "critical" as const, accentColor: 0xed4245 },
   ])("preserves $severity plugin approval styling and clamps expiry", async (params) => {
-    const payload = await buildApprovalPayloadText({
+    const payload = await buildPluginApprovalPayloadText({
       severity: params.severity,
       expiresAtMs: -1,
     });
@@ -241,8 +266,8 @@ describe("discordApprovalNativeRuntime", () => {
   it("does not split emoji graphemes when truncating exec command previews", async () => {
     const prefix = "a".repeat(999);
 
-    await expect(buildApprovalPayloadText(`${prefix}😀x`)).resolves.toContain(`${prefix}...`);
-    await expect(buildApprovalPayloadText(`${prefix}🇺🇸x`)).resolves.toContain(`${prefix}...`);
+    await expect(buildExecApprovalPayloadText(`${prefix}😀x`)).resolves.toContain(`${prefix}...`);
+    await expect(buildExecApprovalPayloadText(`${prefix}🇺🇸x`)).resolves.toContain(`${prefix}...`);
   });
 
   it("routes origin approval updates to the Discord thread channel when threadId is present", async () => {

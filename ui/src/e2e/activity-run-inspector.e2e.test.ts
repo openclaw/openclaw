@@ -7,7 +7,6 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { showHeading, showText } from "./activity-assertions.test-support.ts";
 import {
   decisionDisplay,
   presentResult,
@@ -28,6 +27,25 @@ beforeEach(() => {
     proofDir = createControlUiE2eArtifactDir("activity-run-inspector-r6");
   }
 });
+
+function unavailableResult(params: {
+  state: "unknown" | "unsupported";
+  reasonCode: string;
+  remediation?: Array<{ code: string; text: string }>;
+}): AuditRunInspectResult {
+  return {
+    schemaVersion: 1,
+    run: { runId: "typed-state", status: params.state === "unknown" ? "unknown" : "known" },
+    identity: {
+      state: params.state,
+      reasonCode: params.reasonCode,
+      missingEvidence: ["identity.context"],
+      remediation: params.remediation ?? [],
+    },
+    decisionDisplays: [],
+    coverage: { state: params.state, missingEvidence: ["identity.context"] },
+  };
+}
 
 function ambiguousResult(
   runId: string,
@@ -112,7 +130,7 @@ async function measureWithinAncestor(element: Locator, ancestorSelector: string)
 }
 
 suite.define(() => {
-  it("deep-links, reloads durable evidence, and supports keyboard mode navigation", async () => {
+  it("deep-links, reloads durable evidence, and exposes text-first accessible states", async () => {
     const context = await newContext({ video: true });
     const page = await context.newPage();
     const runId = "run:durable/one";
@@ -121,50 +139,79 @@ suite.define(() => {
       methodResponses: { "audit.run.inspect": presentResult(runId) },
     });
 
-    await page.goto(`${suite.server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
-    await showHeading(page, "Identity and authority");
-    expect(await gateway.waitForRequest("audit.run.inspect")).toMatchObject({
-      params: { runId, decisionLimit: 50, executionLimit: 50 },
-    });
-    expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
+    try {
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
+      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
+      expect(await gateway.waitForRequest("audit.run.inspect")).toMatchObject({
+        params: { runId, decisionLimit: 50, executionLimit: 50 },
+      });
+      expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
 
-    expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
-    const modePanel = page.locator("#activity-mode-panel");
-    expect(await modePanel.getAttribute("role")).toBeNull();
-    expect(await modePanel.getAttribute("aria-labelledby")).toBeNull();
-    const backToSessions = page.getByRole("link", { name: "Back to sessions" });
-    await backToSessions.waitFor();
-    expect(await backToSessions.getAttribute("href")).toBe("/activity");
-    await screenshot(page, "01-present-unattributed.png");
+      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
+      const modePanel = page.locator("#activity-mode-panel");
+      expect(await modePanel.getAttribute("role")).toBeNull();
+      expect(await modePanel.getAttribute("aria-labelledby")).toBeNull();
+      const backToSessions = page.getByRole("link", { name: "Back to sessions" });
+      await backToSessions.waitFor();
+      expect(await backToSessions.getAttribute("href")).toBe("/activity");
+      await page.getByRole("status", { name: "Inspection coverage: Unattributed" }).waitFor();
+      for (const state of ["Present", "Absent", "Unknown", "Unsupported"]) {
+        await page.locator(`[aria-label="Evidence state: ${state}"]`).first().waitFor();
+      }
+      for (const dimension of [
+        "Trust domain",
+        "Ingress",
+        "Invoker",
+        "Represented subject",
+        "Sponsor",
+        "Agent principal",
+        "Runtime instance",
+        "Applicable grant 1",
+        "Assurance evidence 1",
+        "Lineage",
+      ]) {
+        await page.getByText(dimension, { exact: true }).waitFor();
+      }
+      await page.getByText("Best-effort audit warning", { exact: false }).waitFor();
+      await page
+        .getByText("Additional decision receipts are available", { exact: false })
+        .waitFor();
+      expect(await page.getByText("receipt-safe-ref", { exact: false }).count()).toBe(0);
+      expect(await page.getByText("context-safe-ref", { exact: false }).count()).toBe(0);
+      expect(await page.getByText("execution-safe-ref", { exact: false }).count()).toBe(0);
+      await screenshot(page, "01-present-unattributed.png");
 
-    await page.reload();
-    await showHeading(page, "Identity and authority");
-    expect(await gateway.waitForRequest("audit.run.inspect")).toMatchObject({
-      params: { runId, decisionLimit: 50, executionLimit: 50 },
-    });
-    expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
+      await page.reload();
+      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
+      expect(await gateway.waitForRequest("audit.run.inspect")).toMatchObject({
+        params: { runId, decisionLimit: 50, executionLimit: 50 },
+      });
+      expect((await gateway.getRequests("audit.run.inspect")).length).toBe(1);
 
-    await backToSessions.click();
-    await page.getByRole("tab", { name: "Sessions" }).waitFor();
-    expect(await page.getByRole("tab").count()).toBe(2);
-    expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
-    const liveTab = page.getByRole("tab", { name: "Live activity" });
-    await liveTab.focus();
-    await expect
-      .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
-      .toBe("Live activity");
-    await page.keyboard.press("Enter");
-    await page.locator(".activity-empty").waitFor();
-    await expect
-      .poll(() => modePanel.getAttribute("aria-labelledby"))
-      .toBe("activity-mode-tab-live");
-    expect(new URL(page.url()).search).toBe("?view=live");
-    await page.goBack();
-    await expect
-      .poll(() => page.getByRole("tab", { name: "Sessions" }).getAttribute("aria-selected"))
-      .toBe("true");
-    await page.goBack();
-    await showHeading(page, "Identity and authority");
+      await backToSessions.click();
+      await page.getByRole("tab", { name: "Sessions" }).waitFor();
+      expect(await page.getByRole("tab").count()).toBe(2);
+      expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
+      const liveTab = page.getByRole("tab", { name: "Live activity" });
+      await liveTab.focus();
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
+        .toBe("Live activity");
+      await page.keyboard.press("Enter");
+      await page.locator(".activity-empty").waitFor();
+      await expect
+        .poll(() => modePanel.getAttribute("aria-labelledby"))
+        .toBe("activity-mode-tab-live");
+      expect(new URL(page.url()).search).toBe("?view=live");
+      await page.goBack();
+      await expect
+        .poll(() => page.getByRole("tab", { name: "Sessions" }).getAttribute("aria-selected"))
+        .toBe("true");
+      await page.goBack();
+      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
   });
 
   it("pages, deep-links, and safely explains approval and unsupported receipts", async () => {
@@ -273,117 +320,123 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-matrix`);
-    await page.getByRole("list", { name: "Decision receipt list" }).waitFor();
-    await showHeading(page, "Receipt detail");
-    await page.getByText("Allowed", { exact: true }).first().waitFor();
-    await page.getByText("Enforced", { exact: true }).first().waitFor();
-    await showText(page, "operator_approval_allowed_by_reviewer");
-    await showText(page, "Display provenance");
-    await showText(page, "Verified producer");
-    await showText(page, "operator-approval");
-    await showText(page, "No follow-up is required.");
-    expect(
-      await page
-        .getByText("Policy references used", { exact: true })
-        .locator("xpath=following-sibling::dd")
-        .textContent(),
-    ).toBe("1");
-    expect(
-      await page
-        .getByText("Grant references used", { exact: true })
-        .locator("xpath=following-sibling::dd")
-        .textContent(),
-    ).toBe("1");
+    try {
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-matrix`);
+      await page.getByRole("list", { name: "Decision receipt list" }).waitFor();
+      await page.getByRole("heading", { name: "Receipt detail" }).waitFor();
+      await page.getByText("Allowed", { exact: true }).first().waitFor();
+      await page.getByText("Enforced", { exact: true }).first().waitFor();
+      await page.getByText("operator_approval_allowed_by_reviewer", { exact: true }).waitFor();
+      await page.getByText("Display provenance", { exact: true }).waitFor();
+      await page.getByText("Verified producer", { exact: true }).waitFor();
+      await page.getByText("operator-approval", { exact: true }).waitFor();
+      await page.getByText("No follow-up is required.", { exact: true }).waitFor();
+      expect(
+        await page
+          .getByText("Policy references used", { exact: true })
+          .locator("xpath=following-sibling::dd")
+          .textContent(),
+      ).toBe("1");
+      expect(
+        await page
+          .getByText("Grant references used", { exact: true })
+          .locator("xpath=following-sibling::dd")
+          .textContent(),
+      ).toBe("1");
 
-    const deniedLink = page.getByText(denied.action.summary!, { exact: true }).locator("..");
-    await deniedLink.focus();
-    await page.keyboard.press("Enter");
-    await showText(page, "operator_approval_denied_by_reviewer");
-    expect(new URL(page.url()).searchParams.get("receipt")).toBe("approval-decision:102");
-    await page.reload();
-    await showText(page, "operator_approval_denied_by_reviewer");
+      const deniedLink = page.getByText(denied.action.summary!, { exact: true }).locator("..");
+      await deniedLink.focus();
+      await page.keyboard.press("Enter");
+      await page.getByText("operator_approval_denied_by_reviewer", { exact: true }).waitFor();
+      expect(new URL(page.url()).searchParams.get("receipt")).toBe("approval-decision:102");
+      await page.reload();
+      await page.getByText("operator_approval_denied_by_reviewer", { exact: true }).waitFor();
 
-    await page.getByRole("button", { name: "Load more receipts" }).click();
-    expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toMatchObject({
-      runId: "receipt-matrix",
-      decisionCursor: "a:10:2",
-      decisionLimit: 50,
-    });
-    await page.getByText(expired.action.summary!, { exact: true }).click();
-    await showText(page, "operator_approval_expired");
-    const selectedUrl = new URL(page.url());
-    expect(selectedUrl.searchParams.get("receipt")).toBe("approval-decision:103");
-    expect(selectedUrl.searchParams.get("decision")).toBe("a:10:2");
-    await page.reload();
-    await showText(page, "operator_approval_expired");
-    expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toMatchObject({
-      runId: "receipt-matrix",
-      decisionCursor: "a:10:2",
-      decisionLimit: 50,
-    });
+      await page.getByRole("button", { name: "Load more receipts" }).click();
+      expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toMatchObject({
+        runId: "receipt-matrix",
+        decisionCursor: "a:10:2",
+        decisionLimit: 50,
+      });
+      await page.getByText(expired.action.summary!, { exact: true }).click();
+      await page.getByText("operator_approval_expired", { exact: true }).waitFor();
+      const selectedUrl = new URL(page.url());
+      expect(selectedUrl.searchParams.get("receipt")).toBe("approval-decision:103");
+      expect(selectedUrl.searchParams.get("decision")).toBe("a:10:2");
+      await page.reload();
+      await page.getByText("operator_approval_expired", { exact: true }).waitFor();
+      expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toMatchObject({
+        runId: "receipt-matrix",
+        decisionCursor: "a:10:2",
+        decisionLimit: 50,
+      });
 
-    for (const [receipt, reasonCode] of [
-      [cancelled, "operator_approval_cancelled_run_aborted"],
-      [unknown, "operator_approval_execution_link_missing"],
-      [unsupported, "observation_enforcement_unsupported"],
-    ] as const) {
-      await page.getByText(receipt.action.summary!, { exact: true }).click();
-      await page.getByText(reasonCode, { exact: true }).waitFor();
-    }
-    await page.getByText("Unknown", { exact: true }).first().waitFor();
-    await page.getByText("Unsupported", { exact: true }).first().waitFor();
-    await page.getByText(delivered.action.summary!, { exact: true }).click();
-    await showText(page, "message_delivered");
-    expect(new URL(page.url()).searchParams.get("receipt")).toBe("message-decision:2000000000007");
-    const surfaces = await page.locator("body").evaluate((body) => {
-      const elements = [body, ...body.querySelectorAll<HTMLElement>("*")];
-      const historyUrls = (window as typeof window & { activityHistoryUrls?: readonly string[] })
-        .activityHistoryUrls;
-      return {
-        // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
-        visibleText: body instanceof HTMLElement ? body.innerText : "",
-        textContent: body.textContent ?? "",
-        aria: elements
-          .flatMap((element) =>
-            ["aria-label", "aria-labelledby", "aria-describedby", "title", "alt"].map((name) =>
-              element.getAttribute(name),
-            ),
-          )
-          .filter((value): value is string => value !== null)
-          .join("\n"),
-        hrefs: elements
-          .filter((element): element is HTMLAnchorElement => element instanceof HTMLAnchorElement)
-          .flatMap((link) => [link.getAttribute("href") ?? "", link.href])
-          .join("\n"),
-        location: location.href,
-        historyState: JSON.stringify(history.state),
-        historyUrls: [...(historyUrls ?? [])].join("\n"),
-      };
-    });
-    const accessibilityTree = await page.locator("body").ariaSnapshot();
-    for (const hidden of [
-      "hidden-action-id",
-      "hidden-resource-id",
-      "hidden-target-id",
-      "hidden-evaluator-id",
-      "hidden-policy-id",
-      "hidden-grant-id",
-      "hidden-record-id",
-      "rm -rf",
-      "/private/operator-path",
-      "credential-value",
-      "raw-payload",
-      privateApprovalReceiptId,
-      privateResolutionRef,
-      privateMessageReceiptId,
-      privateEventId,
-    ]) {
-      for (const surface of [...Object.values(surfaces), accessibilityTree]) {
-        expect(surface).not.toContain(hidden);
+      for (const [receipt, reasonCode] of [
+        [cancelled, "operator_approval_cancelled_run_aborted"],
+        [unknown, "operator_approval_execution_link_missing"],
+        [unsupported, "observation_enforcement_unsupported"],
+      ] as const) {
+        await page.getByText(receipt.action.summary!, { exact: true }).click();
+        await page.getByText(reasonCode, { exact: true }).waitFor();
       }
+      await page.getByText("Unknown", { exact: true }).first().waitFor();
+      await page.getByText("Unsupported", { exact: true }).first().waitFor();
+      await page.getByText(delivered.action.summary!, { exact: true }).click();
+      await page.getByText("message_delivered", { exact: true }).waitFor();
+      expect(new URL(page.url()).searchParams.get("receipt")).toBe(
+        "message-decision:2000000000007",
+      );
+      const surfaces = await page.locator("body").evaluate((body) => {
+        const elements = [body, ...body.querySelectorAll<HTMLElement>("*")];
+        const historyUrls = (window as typeof window & { activityHistoryUrls?: readonly string[] })
+          .activityHistoryUrls;
+        return {
+          // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+          visibleText: body instanceof HTMLElement ? body.innerText : "",
+          textContent: body.textContent ?? "",
+          aria: elements
+            .flatMap((element) =>
+              ["aria-label", "aria-labelledby", "aria-describedby", "title", "alt"].map((name) =>
+                element.getAttribute(name),
+              ),
+            )
+            .filter((value): value is string => value !== null)
+            .join("\n"),
+          hrefs: elements
+            .filter((element): element is HTMLAnchorElement => element instanceof HTMLAnchorElement)
+            .flatMap((link) => [link.getAttribute("href") ?? "", link.href])
+            .join("\n"),
+          location: location.href,
+          historyState: JSON.stringify(history.state),
+          historyUrls: [...(historyUrls ?? [])].join("\n"),
+        };
+      });
+      const accessibilityTree = await page.locator("body").ariaSnapshot();
+      for (const hidden of [
+        "hidden-action-id",
+        "hidden-resource-id",
+        "hidden-target-id",
+        "hidden-evaluator-id",
+        "hidden-policy-id",
+        "hidden-grant-id",
+        "hidden-record-id",
+        "rm -rf",
+        "/private/operator-path",
+        "credential-value",
+        "raw-payload",
+        privateApprovalReceiptId,
+        privateResolutionRef,
+        privateMessageReceiptId,
+        privateEventId,
+      ]) {
+        for (const surface of [...Object.values(surfaces), accessibilityTree]) {
+          expect(surface).not.toContain(hidden);
+        }
+      }
+      await screenshot(page, "16-receipt-detail-message.png");
+    } finally {
+      await suite.closeBrowserContext(context);
     }
-    await screenshot(page, "16-receipt-detail-message.png");
   });
 
   it("renders the Gateway's unverified receipt state without claiming a verified producer", async () => {
@@ -413,36 +466,40 @@ suite.define(() => {
       methodResponses: { "audit.run.inspect": response },
     });
 
-    await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-matrix`);
-    await showHeading(page, "Receipt detail");
-    await page.getByText("Unknown", { exact: true }).first().waitFor();
-    await page
-      .getByText("Receipt-controlled explanations and next steps are hidden", {
-        exact: false,
-      })
-      .waitFor();
-    expect(
+    try {
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-matrix`);
+      await page.getByRole("heading", { name: "Receipt detail" }).waitFor();
+      await page.getByText("Unknown", { exact: true }).first().waitFor();
       await page
-        .getByText("Policy references used", { exact: true })
-        .locator("xpath=following-sibling::dd")
-        .textContent(),
-    ).toBe("0");
-    expect(
-      await page
-        .getByText("Grant references used", { exact: true })
-        .locator("xpath=following-sibling::dd")
-        .textContent(),
-    ).toBe("0");
+        .getByText("Receipt-controlled explanations and next steps are hidden", {
+          exact: false,
+        })
+        .waitFor();
+      expect(
+        await page
+          .getByText("Policy references used", { exact: true })
+          .locator("xpath=following-sibling::dd")
+          .textContent(),
+      ).toBe("0");
+      expect(
+        await page
+          .getByText("Grant references used", { exact: true })
+          .locator("xpath=following-sibling::dd")
+          .textContent(),
+      ).toBe("0");
 
-    const detail = page.locator(".run-inspector__receipt-detail");
-    await showText(detail, "decision_fact_display_unverified");
-    await showText(detail, "decision.display_provenance");
-    expect(await detail.getByText("Verified producer", { exact: true }).count()).toBe(0);
-    await screenshot(
-      page,
-      "18-unverified-receipt-privacy.png",
-      detail.getByText("decision_fact_display_unverified", { exact: true }),
-    );
+      const detail = page.locator(".run-inspector__receipt-detail");
+      await detail.getByText("decision_fact_display_unverified", { exact: true }).waitFor();
+      await detail.getByText("decision.display_provenance", { exact: true }).waitFor();
+      expect(await detail.getByText("Verified producer", { exact: true }).count()).toBe(0);
+      await screenshot(
+        page,
+        "18-unverified-receipt-privacy.png",
+        detail.getByText("decision_fact_display_unverified", { exact: true }),
+      );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
   });
 
   it("keeps loaded receipts visible when later-page inspection fails", async () => {
@@ -490,14 +547,18 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-page-error`);
-    await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
-    await page.getByRole("button", { name: "Load more receipts" }).click();
-    await page
-      .getByRole("alert")
-      .getByText("More receipts could not be loaded", { exact: false })
-      .waitFor();
-    await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
+    try {
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=receipt-page-error`);
+      await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
+      await page.getByRole("button", { name: "Load more receipts" }).click();
+      await page
+        .getByRole("alert")
+        .getByText("More receipts could not be loaded", { exact: false })
+        .waitFor();
+      await page.getByText("A denied approval remains visible.", { exact: true }).first().waitFor();
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
   });
 
   it("restarts stale receipt deep links on page one while preserving the exact selector", async () => {
@@ -541,7 +602,7 @@ suite.define(() => {
           decision: decisionCursor,
         });
         await page.goto(`${suite.server.baseUrl}activity?${search.toString()}`);
-        await showHeading(page, "Run inspection failed");
+        await page.getByRole("heading", { name: "Run inspection failed" }).waitFor();
         const restart = page.getByRole("button", { name: "Restart inspection" });
         await restart.waitFor();
         expect(await page.getByRole("button", { name: "Retry inspection" }).count()).toBe(0);
@@ -555,7 +616,7 @@ suite.define(() => {
           .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
           .toBe("Restart inspection");
         await page.keyboard.press("Enter");
-        await showHeading(page, "Identity and authority");
+        await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
         const request = await gateway.waitForRequest("audit.run.inspect", { after: requestCount });
         const expectedParams = {
           [`${scenario.kind}Id`]: scenario.id,
@@ -585,89 +646,93 @@ suite.define(() => {
       sessions: [{ key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" }],
     });
 
-    await page.goto(`${suite.server.baseUrl}activity?view=live`);
-    await page.locator(".activity-empty").waitFor();
-    await gateway.waitForRequest("sessions.messages.subscribe", {
-      match: { key: "agent:main:main" },
-    });
-
-    for (let index = 0; index < 40; index += 1) {
-      await gateway.emitGatewayEvent("agent", {
-        runId: `run-layout-${index}`,
-        seq: 1,
-        stream: "tool",
-        ts: Date.now() + index,
-        sessionKey: "agent:main:main",
-        data: {
-          phase: "start",
-          name: `layout_tool_${index}`,
-          toolCallId: `tool-layout-${index}`,
-          args: {},
-        },
+    try {
+      await page.goto(`${suite.server.baseUrl}activity?view=live`);
+      await page.locator(".activity-empty").waitFor();
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:main:main" },
       });
+
+      for (let index = 0; index < 40; index += 1) {
+        await gateway.emitGatewayEvent("agent", {
+          runId: `run-layout-${index}`,
+          seq: 1,
+          stream: "tool",
+          ts: Date.now() + index,
+          sessionKey: "agent:main:main",
+          data: {
+            phase: "start",
+            name: `layout_tool_${index}`,
+            toolCallId: `tool-layout-${index}`,
+            args: {},
+          },
+        });
+      }
+
+      const stream = page.locator(".activity-stream");
+      await expect.poll(() => page.locator(".activity-entry").count()).toBe(40);
+      const layout = await page.locator("#activity-mode-panel").evaluate((modePanel) => {
+        const livePanel = modePanel.querySelector<HTMLElement>("#activity-live-panel");
+        const streamElement = modePanel.querySelector<HTMLElement>(".activity-stream");
+        if (!livePanel || !streamElement) {
+          throw new Error("Live Activity layout is incomplete");
+        }
+        const modeStyle = getComputedStyle(modePanel);
+        const liveStyle = getComputedStyle(livePanel);
+        const workspace = modePanel.closest<HTMLElement>(".settings-workspace--fill-height");
+        return {
+          documentScrollHeight: document.documentElement.scrollHeight,
+          liveDisplay: liveStyle.display,
+          liveFlexGrow: liveStyle.flexGrow,
+          modeDisplay: modeStyle.display,
+          modeFlexGrow: modeStyle.flexGrow,
+          streamBottom: streamElement.getBoundingClientRect().bottom,
+          streamClientHeight: streamElement.clientHeight,
+          streamScrollHeight: streamElement.scrollHeight,
+          viewportHeight: window.innerHeight,
+          workspaceBottom: workspace?.getBoundingClientRect().bottom ?? 0,
+        };
+      });
+      expect(layout.modeDisplay).toBe("flex");
+      expect(layout.modeFlexGrow).toBe("1");
+      expect(layout.liveDisplay).toBe("flex");
+      expect(layout.liveFlexGrow).toBe("1");
+      expect(layout.streamScrollHeight).toBeGreaterThan(layout.streamClientHeight);
+      expect(layout.streamBottom).toBeLessThanOrEqual(layout.workspaceBottom + 1);
+      expect(layout.documentScrollHeight).toBeLessThanOrEqual(layout.viewportHeight + 1);
+      await stream.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event("scroll"));
+      });
+      await expect
+        .poll(() =>
+          stream.evaluate(
+            (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+      await screenshot(page, "13-populated-live-activity.png");
+
+      await page.setViewportSize({ height: 900, width: 720 });
+      const mobileLayout = await page.locator("main.content").evaluate((content) => {
+        const outlet = content.querySelector("openclaw-router-outlet");
+        const streamElement = content.querySelector<HTMLElement>(".activity-stream");
+        if (!outlet || !streamElement) {
+          throw new Error("Mobile Live Activity layout is incomplete");
+        }
+        return {
+          contentClientHeight: content.clientHeight,
+          contentOverflowY: getComputedStyle(content).overflowY,
+          contentScrollHeight: content.scrollHeight,
+          outletDisplay: getComputedStyle(outlet).display,
+        };
+      });
+      expect(mobileLayout.contentOverflowY).toBe("auto");
+      expect(mobileLayout.outletDisplay).toBe("block");
+      expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
+    } finally {
+      await suite.closeBrowserContext(context);
     }
-
-    const stream = page.locator(".activity-stream");
-    await expect.poll(() => page.locator(".activity-entry").count()).toBe(40);
-    const layout = await page.locator("#activity-mode-panel").evaluate((modePanel) => {
-      const livePanel = modePanel.querySelector<HTMLElement>("#activity-live-panel");
-      const streamElement = modePanel.querySelector<HTMLElement>(".activity-stream");
-      if (!livePanel || !streamElement) {
-        throw new Error("Live Activity layout is incomplete");
-      }
-      const modeStyle = getComputedStyle(modePanel);
-      const liveStyle = getComputedStyle(livePanel);
-      const workspace = modePanel.closest<HTMLElement>(".settings-workspace--fill-height");
-      return {
-        documentScrollHeight: document.documentElement.scrollHeight,
-        liveDisplay: liveStyle.display,
-        liveFlexGrow: liveStyle.flexGrow,
-        modeDisplay: modeStyle.display,
-        modeFlexGrow: modeStyle.flexGrow,
-        streamBottom: streamElement.getBoundingClientRect().bottom,
-        streamClientHeight: streamElement.clientHeight,
-        streamScrollHeight: streamElement.scrollHeight,
-        viewportHeight: window.innerHeight,
-        workspaceBottom: workspace?.getBoundingClientRect().bottom ?? 0,
-      };
-    });
-    expect(layout.modeDisplay).toBe("flex");
-    expect(layout.modeFlexGrow).toBe("1");
-    expect(layout.liveDisplay).toBe("flex");
-    expect(layout.liveFlexGrow).toBe("1");
-    expect(layout.streamScrollHeight).toBeGreaterThan(layout.streamClientHeight);
-    expect(layout.streamBottom).toBeLessThanOrEqual(layout.workspaceBottom + 1);
-    expect(layout.documentScrollHeight).toBeLessThanOrEqual(layout.viewportHeight + 1);
-    await stream.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-      element.dispatchEvent(new Event("scroll"));
-    });
-    await expect
-      .poll(() =>
-        stream.evaluate(
-          (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
-        ),
-      )
-      .toBeLessThanOrEqual(1);
-    await screenshot(page, "13-populated-live-activity.png");
-
-    await page.setViewportSize({ height: 900, width: 720 });
-    const mobileLayout = await page.locator("main.content").evaluate((content) => {
-      const outlet = content.querySelector("openclaw-router-outlet");
-      const streamElement = content.querySelector<HTMLElement>(".activity-stream");
-      if (!outlet || !streamElement) {
-        throw new Error("Mobile Live Activity layout is incomplete");
-      }
-      return {
-        contentClientHeight: content.clientHeight,
-        contentOverflowY: getComputedStyle(content).overflowY,
-        contentScrollHeight: content.scrollHeight,
-        outletDisplay: getComputedStyle(outlet).display,
-      };
-    });
-    expect(mobileLayout.contentOverflowY).toBe("auto");
-    expect(mobileLayout.outletDisplay).toBe("block");
-    expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
   });
 
   it("keeps populated desktop run evidence reachable without taking mobile page scrolling", async () => {
@@ -680,71 +745,78 @@ suite.define(() => {
       methodResponses: { "audit.run.inspect": presentResult(runId) },
     });
 
-    await page.goto(`${suite.server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
-    const inspector = page.locator(".run-inspector");
-    const finalReceiptContent = page.getByText(
-      "Treat this receipt as attribution only; it does not prove authorization.",
-      { exact: true },
-    );
-    await finalReceiptContent.waitFor({ state: "attached" });
+    try {
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=${encodeURIComponent(runId)}`);
+      const inspector = page.locator(".run-inspector");
+      const finalReceiptContent = page.getByText(
+        "Treat this receipt as attribution only; it does not prove authorization.",
+        { exact: true },
+      );
+      await finalReceiptContent.waitFor({ state: "attached" });
 
-    const desktopLayout = await inspector.evaluate((element) => ({
-      clientHeight: element.clientHeight,
-      documentScrollHeight: document.documentElement.scrollHeight,
-      overflowY: getComputedStyle(element).overflowY,
-      scrollHeight: element.scrollHeight,
-      viewportHeight: window.innerHeight,
-    }));
-    expect(desktopLayout.overflowY).toBe("auto");
-    expect(desktopLayout.scrollHeight).toBeGreaterThan(desktopLayout.clientHeight);
-    expect(desktopLayout.documentScrollHeight).toBeLessThanOrEqual(
-      desktopLayout.viewportHeight + 1,
-    );
+      const desktopLayout = await inspector.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        documentScrollHeight: document.documentElement.scrollHeight,
+        overflowY: getComputedStyle(element).overflowY,
+        scrollHeight: element.scrollHeight,
+        viewportHeight: window.innerHeight,
+      }));
+      expect(desktopLayout.overflowY).toBe("auto");
+      expect(desktopLayout.scrollHeight).toBeGreaterThan(desktopLayout.clientHeight);
+      expect(desktopLayout.documentScrollHeight).toBeLessThanOrEqual(
+        desktopLayout.viewportHeight + 1,
+      );
 
-    await inspector.evaluate((element) => {
-      element.scrollTop = element.scrollHeight;
-    });
-    await expect
-      .poll(() =>
-        inspector.evaluate(
-          (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
-        ),
-      )
-      .toBeLessThanOrEqual(1);
-    const finalContentPosition = await measureWithinAncestor(finalReceiptContent, ".run-inspector");
-    expect(finalContentPosition.elementTop).toBeGreaterThanOrEqual(
-      finalContentPosition.ancestorTop,
-    );
-    // Bound is 2, not 1: the scroll poll above tolerates a <=1px remainder
-    // (scrollHeight/clientHeight are integer-rounded) and the rects here are
-    // fractional, so sub-pixel rendering can add up to another pixel.
-    expect(finalContentPosition.elementBottom).toBeLessThanOrEqual(
-      finalContentPosition.ancestorBottom + 2,
-    );
-    await screenshot(page, "14-bounded-run-inspector.png");
+      await inspector.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      await expect
+        .poll(() =>
+          inspector.evaluate(
+            (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+      const finalContentPosition = await measureWithinAncestor(
+        finalReceiptContent,
+        ".run-inspector",
+      );
+      expect(finalContentPosition.elementTop).toBeGreaterThanOrEqual(
+        finalContentPosition.ancestorTop,
+      );
+      // Bound is 2, not 1: the scroll poll above tolerates a <=1px remainder
+      // (scrollHeight/clientHeight are integer-rounded) and the rects here are
+      // fractional, so sub-pixel rendering can add up to another pixel.
+      expect(finalContentPosition.elementBottom).toBeLessThanOrEqual(
+        finalContentPosition.ancestorBottom + 2,
+      );
+      await screenshot(page, "14-bounded-run-inspector.png");
 
-    await page.setViewportSize({ height: 900, width: 720 });
-    const mobileLayout = await page.locator("main.content").evaluate((content) => {
-      const inspectorElement = content.querySelector<HTMLElement>(".run-inspector");
-      if (!inspectorElement) {
-        throw new Error("Mobile run inspector layout is incomplete");
-      }
-      return {
-        contentClientHeight: content.clientHeight,
-        contentOverflowY: getComputedStyle(content).overflowY,
-        contentScrollHeight: content.scrollHeight,
-        inspectorClientHeight: inspectorElement.clientHeight,
-        inspectorScrollHeight: inspectorElement.scrollHeight,
-      };
-    });
-    expect(mobileLayout.contentOverflowY).toBe("auto");
-    expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
-    expect(mobileLayout.inspectorScrollHeight).toBeLessThanOrEqual(
-      mobileLayout.inspectorClientHeight + 1,
-    );
+      await page.setViewportSize({ height: 900, width: 720 });
+      const mobileLayout = await page.locator("main.content").evaluate((content) => {
+        const inspectorElement = content.querySelector<HTMLElement>(".run-inspector");
+        if (!inspectorElement) {
+          throw new Error("Mobile run inspector layout is incomplete");
+        }
+        return {
+          contentClientHeight: content.clientHeight,
+          contentOverflowY: getComputedStyle(content).overflowY,
+          contentScrollHeight: content.scrollHeight,
+          inspectorClientHeight: inspectorElement.clientHeight,
+          inspectorScrollHeight: inspectorElement.scrollHeight,
+        };
+      });
+      expect(mobileLayout.contentOverflowY).toBe("auto");
+      expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
+      expect(mobileLayout.inspectorScrollHeight).toBeLessThanOrEqual(
+        mobileLayout.inspectorClientHeight + 1,
+      );
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
   });
 
-  it("pages ambiguous executions and navigates to an exact execution", async () => {
+  it("renders empty, typed unavailable, corrupt, and expired results without guessing", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -752,6 +824,30 @@ suite.define(() => {
       methodResponses: {
         "audit.run.inspect": {
           cases: [
+            {
+              match: { runId: "missing" },
+              response: unavailableResult({ state: "unknown", reasonCode: "run_not_found" }),
+            },
+            {
+              match: { runId: "expired" },
+              response: unavailableResult({
+                state: "unsupported",
+                reasonCode: "identity_context_unavailable",
+                remediation: [
+                  {
+                    code: "run_again_after_expiry",
+                    text: "This run is outside the 30-day retention window.",
+                  },
+                ],
+              }),
+            },
+            {
+              match: { runId: "corrupt" },
+              response: unavailableResult({
+                state: "unknown",
+                reasonCode: "identity_context_corrupt",
+              }),
+            },
             {
               match: { runId: "ambiguous", executionCursor: "50" },
               response: ambiguousResult("ambiguous", "execution-candidate-51"),
@@ -773,31 +869,45 @@ suite.define(() => {
       },
     });
 
-    await page.goto(`${suite.server.baseUrl}activity?view=run`);
-    await showHeading(page, "No run selected");
-    expect((await gateway.getRequests("audit.run.inspect")).length).toBe(0);
-    await screenshot(page, "02-empty.png");
+    try {
+      await page.goto(`${suite.server.baseUrl}activity?view=run`);
+      await page.getByRole("heading", { name: "No run selected" }).waitFor();
+      expect((await gateway.getRequests("audit.run.inspect")).length).toBe(0);
+      await screenshot(page, "02-empty.png");
 
-    await page.goto(`${suite.server.baseUrl}activity?view=run&run=ambiguous`);
-    await showHeading(page, "Multiple executions match this run");
-    await screenshot(page, "11-ambiguous.png");
-    await page.getByRole("button", { name: "Load more executions" }).click();
-    await page.getByRole("link", { name: "execution-candidate-51" }).waitFor();
-    expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toEqual({
-      runId: "ambiguous",
-      executionCursor: "50",
-      decisionLimit: 50,
-      executionLimit: 50,
-    });
-    expect(await page.getByRole("button", { name: "Load more executions" }).count()).toBe(0);
-    await page.getByRole("link", { name: "execution-candidate-51" }).click();
-    await showHeading(page, "Identity and authority");
-    expect(new URL(page.url()).searchParams.get("execution")).toBe("execution-candidate-51");
-    expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toEqual({
-      executionId: "execution-candidate-51",
-      decisionLimit: 50,
-    });
-    await screenshot(page, "12-exact-selection.png");
+      for (const [runId, heading, screenshotName] of [
+        ["missing", "Run not found", "03-not-found.png"],
+        ["expired", "Identity evidence expired", "04-expired.png"],
+        ["corrupt", "Identity evidence is corrupt", "05-corrupt.png"],
+      ] as const) {
+        await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
+        await page.getByRole("heading", { name: heading }).waitFor();
+        await screenshot(page, screenshotName);
+      }
+
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=ambiguous`);
+      await page.getByRole("heading", { name: "Multiple executions match this run" }).waitFor();
+      await screenshot(page, "11-ambiguous.png");
+      await page.getByRole("button", { name: "Load more executions" }).click();
+      await page.getByRole("link", { name: "execution-candidate-51" }).waitFor();
+      expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toEqual({
+        runId: "ambiguous",
+        executionCursor: "50",
+        decisionLimit: 50,
+        executionLimit: 50,
+      });
+      expect(await page.getByRole("button", { name: "Load more executions" }).count()).toBe(0);
+      await page.getByRole("link", { name: "execution-candidate-51" }).click();
+      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
+      expect(new URL(page.url()).searchParams.get("execution")).toBe("execution-candidate-51");
+      expect((await gateway.getRequests("audit.run.inspect")).at(-1)?.params).toEqual({
+        executionId: "execution-candidate-51",
+        decisionLimit: 50,
+      });
+      await screenshot(page, "12-exact-selection.png");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
   });
 
   it("shows loading, request failure, and retry while retaining evidence offline", async () => {
@@ -810,27 +920,33 @@ suite.define(() => {
       methodResponses: { "audit.run.inspect": presentResult(runId) },
     });
 
-    await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
-    await showHeading(page, "Loading run inspection");
-    await screenshot(page, "06-loading.png");
-    await gateway.rejectDeferred("audit.run.inspect", {
-      code: "UNAVAILABLE",
-      message: "temporarily unavailable",
-      retryable: true,
-    });
-    await showHeading(page, "Run inspection failed");
-    await screenshot(page, "07-error.png");
-    await page.getByRole("button", { name: "Retry inspection" }).click();
-    await showHeading(page, "Identity and authority");
+    try {
+      await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
+      await page.getByRole("heading", { name: "Loading run inspection" }).waitFor();
+      await screenshot(page, "06-loading.png");
+      await gateway.rejectDeferred("audit.run.inspect", {
+        code: "UNAVAILABLE",
+        message: "temporarily unavailable",
+        retryable: true,
+      });
+      await page.getByRole("heading", { name: "Run inspection failed" }).waitFor();
+      await screenshot(page, "07-error.png");
+      await page.getByRole("button", { name: "Retry inspection" }).click();
+      await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
 
-    const receipts = page.locator(".run-inspector__receipt-list");
-    const evidence = await receipts.textContent();
-    await gateway.setOnline(false);
-    await waitForControlUiGatewayReconnecting(page);
-    expect(await receipts.textContent()).toBe(evidence);
-    expect(await page.getByRole("heading", { name: "Gateway disconnected" }).count()).toBe(0);
-    expect(await page.getByRole("button", { name: "Load more receipts" }).isDisabled()).toBe(true);
-    await screenshot(page, "08-disconnected.png");
+      const receipts = page.locator(".run-inspector__receipt-list");
+      const evidence = await receipts.textContent();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      expect(await receipts.textContent()).toBe(evidence);
+      expect(await page.getByRole("heading", { name: "Gateway disconnected" }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Load more receipts" }).isDisabled()).toBe(
+        true,
+      );
+      await screenshot(page, "08-disconnected.png");
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
   });
 
   it("distinguishes missing access from an older unsupported Gateway", async () => {

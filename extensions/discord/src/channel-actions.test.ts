@@ -4,15 +4,42 @@ import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 
 function expectedDiscordActions(omitted: string[] = []): string[] {
-  return (
-    "send poll react reactions emoji-list upload-file read edit delete pin unpin list-pins " +
-    "permissions thread-create thread-list thread-reply search sticker member-info role-info " +
-    "emoji-upload sticker-upload channel-info channel-list channel-create channel-edit " +
-    "channel-delete channel-move category-create category-edit category-delete voice-status " +
-    "event-list event-create"
-  )
-    .split(" ")
-    .filter((action) => !omitted.includes(action));
+  return [
+    "send",
+    "poll",
+    "react",
+    "reactions",
+    "emoji-list",
+    "upload-file",
+    "read",
+    "edit",
+    "delete",
+    "pin",
+    "unpin",
+    "list-pins",
+    "permissions",
+    "thread-create",
+    "thread-list",
+    "thread-reply",
+    "search",
+    "sticker",
+    "member-info",
+    "role-info",
+    "emoji-upload",
+    "sticker-upload",
+    "channel-info",
+    "channel-list",
+    "channel-create",
+    "channel-edit",
+    "channel-delete",
+    "channel-move",
+    "category-create",
+    "category-edit",
+    "category-delete",
+    "voice-status",
+    "event-list",
+    "event-create",
+  ].filter((action) => !omitted.includes(action));
 }
 
 const handleDiscordMessageActionMock = vi.hoisted(() =>
@@ -98,10 +125,14 @@ describe("discordMessageActions", () => {
       accounts: { work: { token: "Bot token-work", actions: { reactions: true, polls: false } } },
     });
 
-    const discover = (accountId: string) =>
-      discordMessageActions.describeMessageTool?.({ cfg, accountId });
-    const defaultDiscovery = discover("default");
-    const workDiscovery = discover("work");
+    const defaultDiscovery = discordMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "default",
+    });
+    const workDiscovery = discordMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "work",
+    });
 
     expect(defaultDiscovery?.actions).toEqual(
       expectedDiscordActions(["react", "reactions", "emoji-list"]),
@@ -172,6 +203,7 @@ describe("discordMessageActions", () => {
       { channelId: "123456" },
       { target: "channel:123456" },
       { to: "channel:123456" },
+      { channelId: "123456" },
     ]) {
       expect(matches(args)).toBe(true);
     }

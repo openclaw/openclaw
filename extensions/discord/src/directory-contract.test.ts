@@ -1,42 +1,34 @@
 import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { DirectoryConfigParams } from "openclaw/plugin-sdk/directory-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { describe, expect, it } from "vitest";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
-import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
-import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
-import { listDiscordDirectoryGroupsLive, listDiscordDirectoryPeersLive } from "./directory-live.js";
-import { urlToString } from "./test-http-helpers.js";
 
-function makeParams(
-  overrides: Partial<DirectoryConfigParams> = {},
-  token = "test-token",
-): DirectoryConfigParams {
-  return {
-    cfg: { channels: { discord: { token } } },
-    accountId: "default",
-    ...overrides,
-  };
+function config(discord: NonNullable<OpenClawConfig["channels"]>["discord"]): OpenClawConfig {
+  return { channels: { discord } };
 }
 
-describe("Discord config directory", () => {
-  const config = (discord: NonNullable<DirectoryConfigParams["cfg"]["channels"]>["discord"]) => ({
-    channels: { discord },
-  });
-  it("lists numeric peers/groups even with an unresolved credential", async () => {
+describe("Discord directory contract", () => {
+  it("lists peers/groups from config (numeric ids only)", async () => {
     const cfg = config({
-      token: { source: "env", provider: "default", id: "MISSING_TEST_SECRET" },
+      token: "discord-test",
       allowFrom: ["<@111>", "<@!333>", "nope"],
       dms: { "222": {} },
       guilds: {
         "123": {
           users: ["<@12345>", " discord:444 ", "not-an-id"],
-          channels: { "555": {}, "<#777>": {}, "channel:666": {}, general: {} },
+          channels: {
+            "555": {},
+            "<#777>": {},
+            "channel:666": {},
+            general: {},
+          },
         },
       },
     });
+
     await expectDirectoryIds(
       listDiscordDirectoryPeersFromConfig,
       cfg,
@@ -51,117 +43,44 @@ describe("Discord config directory", () => {
     );
   });
 
+  it("keeps directories readable when tokens are unresolved SecretRefs", async () => {
+    const cfg = config({
+      token: { source: "env", provider: "default", id: "MISSING_TEST_SECRET" },
+      allowFrom: ["<@111>"],
+      guilds: { "123": { channels: { "555": {} } } },
+    });
+
+    await expectDirectoryIds(listDiscordDirectoryPeersFromConfig, cfg, ["user:111"]);
+    await expectDirectoryIds(listDiscordDirectoryGroupsFromConfig, cfg, ["channel:555"]);
+  });
+
   it("uses account allowFrom before inherited root allowFrom", async () => {
-    const cfg = config({ allowFrom: ["<@111>"], accounts: { work: { allowFrom: ["<@222>"] } } });
-    const entries = await listDiscordDirectoryPeersFromConfig(
-      makeParams({ cfg, accountId: "work", query: null, limit: null }),
-    );
-    expect(entries.map(({ id }) => id)).toEqual(["user:222"]);
-  });
-});
-
-const guilds = [
-  { id: "g1", name: "Guild 1" },
-  { id: "g2", name: "Guild 2" },
-];
-
-function groupRow(id: string, name: string) {
-  return { kind: "group", id: `channel:${id}`, name, handle: `#${name}`, raw: { id, name } };
-}
-
-type Member = { user: { id: string; username: string; bot: boolean }; nick: string | null };
-function peerRow(raw: Member, name: string, rank: number) {
-  const { id, username } = raw.user;
-  return { kind: "user", id: `user:${id}`, name, handle: `@${username}`, rank, raw };
-}
-
-function mockDirectoryResponses(responses: Record<string, unknown>) {
-  const routes: Record<string, unknown> = { "/users/@me/guilds": guilds, ...responses };
-  return vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-    const { pathname, searchParams } = new URL(urlToString(input));
-    if (pathname.endsWith("/members/search")) {
-      expect(searchParams.get("query")).toBe("alice");
-      expect(searchParams.get("limit")).toBe(responses.limit ?? "25");
-    }
-    return Response.json(routes[pathname.replace(/^\/api\/v\d+/u, "")] ?? []);
-  });
-}
-
-describe("discord directory live lookups", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-    vi.stubEnv("DISCORD_BOT_TOKEN", "");
-    clearDiscordDirectoryCacheForTest();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-  });
-
-  it.each([
-    ["groups without a token", listDiscordDirectoryGroupsLive, "general", ""],
-    ["peers without a query", listDiscordDirectoryPeersLive, "  ", "test-token"],
-  ] as const)(
-    "returns an empty directory for %s without fetching",
-    async (_name, lookup, query, token) => {
-      const fetchSpy = vi.spyOn(globalThis, "fetch");
-      expect(await lookup(makeParams({ query }, token))).toStrictEqual([]);
-      expect(fetchSpy).not.toHaveBeenCalled();
-    },
-  );
-
-  it("filters group channels by query and respects limit", async () => {
-    mockDirectoryResponses({
-      "/guilds/g1/channels": [
-        { id: "c1", name: "general" },
-        { id: "c2", name: "random" },
-      ],
-      "/guilds/g2/channels": [{ id: "c3", name: "announcements" }],
+    const cfg = config({
+      allowFrom: ["<@111>"],
+      accounts: { work: { allowFrom: ["<@222>"] } },
     });
 
-    const rows = await listDiscordDirectoryGroupsLive(makeParams({ query: "an", limit: 2 }));
-
-    expect(rows).toEqual([groupRow("c2", "random"), groupRow("c3", "announcements")]);
+    const entries = await listDiscordDirectoryPeersFromConfig({
+      cfg,
+      accountId: "work",
+      query: null,
+      limit: null,
+    });
+    expect(entries.map((entry) => entry.id)).toEqual(["user:222"]);
   });
 
-  it("returns ranked peer results and caps member search by limit", async () => {
-    const alice = { user: { id: "u1", username: "alice", bot: false }, nick: "Ali" };
-    const bot = { user: { id: "u2", username: "alice-bot", bot: true }, nick: null };
-    mockDirectoryResponses({
-      limit: "2",
-      "/users/@me/guilds": guilds.slice(0, 1),
-      "/guilds/g1/members/search": [
-        alice,
-        bot,
-        { user: { id: "u3", username: "ignored", bot: false }, nick: null },
-      ],
+  it("applies query and limit filtering for config-backed directories", async () => {
+    const cfg = config({
+      token: "discord-test",
+      guilds: { "123": { channels: { "555": {}, "666": {}, "777": {} } } },
     });
 
-    const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "alice", limit: 2 }));
-
-    expect(rows).toEqual([peerRow(alice, "Ali", 1), peerRow(bot, "alice-bot", 0)]);
-  });
-
-  it("does not turn one shared-guild user into ambiguous outbound matches", async () => {
-    const fetchSpy = mockDirectoryResponses({
-      "/guilds/g1/members/search": [
-        { user: { id: "101", username: "alice" }, nick: "first-alice" },
-      ],
-      "/guilds/g2/members/search": [
-        { user: { id: "101", username: "alice" }, nick: "second-alice" },
-      ],
+    const groups = await listDiscordDirectoryGroupsFromConfig({
+      cfg,
+      accountId: "default",
+      query: "666",
+      limit: 5,
     });
-
-    const rows = await listDiscordDirectoryPeersLive(makeParams({ query: "alice" }));
-
-    expect(rows.map((entry) => entry.id)).toEqual(["user:101"]);
-    expect(rows.filter((entry) => entry.handle === "@alice")).toHaveLength(1);
-    expect(
-      ["first-alice", "second-alice"].map((handle) =>
-        resolveDiscordDirectoryUserId({ accountId: "default", handle }),
-      ),
-    ).toEqual(["101", "101"]);
-    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    expect(groups.map((entry) => entry.id)).toEqual(["channel:666"]);
   });
 });

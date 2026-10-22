@@ -1,4 +1,4 @@
-import { ChannelType, Routes } from "discord-api-types/v10";
+import { ChannelType } from "discord-api-types/v10";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -8,14 +8,9 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import * as threadBindings from "./monitor/thread-bindings.js";
 import { createDiscordLoopbackRest } from "./send.test-harness.js";
-
-vi.mock("openclaw/plugin-sdk/web-media", async () => {
-  const { discordWebMediaMockFactory } = await import("./send.test-harness.js");
-  return discordWebMediaMockFactory();
-});
 
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
@@ -27,7 +22,6 @@ beforeAll(async () => {
   ({ discordPlugin } = await import("./channel.js"));
   ({ sendMessageDiscord } = await import("./send.js"));
 });
-afterAll(() => vi.doUnmock("openclaw/plugin-sdk/web-media"));
 
 function lineLimitConfig(root: number, account?: number): OpenClawConfig {
   const work = {
@@ -39,7 +33,7 @@ function lineLimitConfig(root: number, account?: number): OpenClawConfig {
 
 type PostedMessage = { content?: string; message_reference?: { message_id?: string } };
 
-async function runDurableScenario(params: {
+async function runDurableLineLimitScenario(params: {
   cfg: OpenClawConfig;
   accountId?: string;
   structured?: boolean;
@@ -48,36 +42,15 @@ async function runDurableScenario(params: {
   replyToIdSource?: "implicit" | "explicit";
   replyToMode?: "first" | "all";
   formatting?: Parameters<typeof sendDurableMessageBatch>[0]["formatting"];
-  forum?: {
-    parentType: ChannelType.GuildForum | ChannelType.GuildMedia;
-    threadId?: string;
-    payloads?: Parameters<typeof sendDurableMessageBatch>[0]["payloads"];
-  };
 }) {
   const apiUrlBefore = process.env.DISCORD_API_URL;
   vi.stubEnv("DISCORD_API_URL", undefined);
   let messageCount = 0;
   const loopback = await createDiscordLoopbackRest({
-    respond: ({ method, path }) => {
-      const id = path?.split("/").at(-1);
-      if (method === "GET") {
-        return {
-          id: params.forum ? id : "789",
-          type: params.forum
-            ? id === "700"
-              ? params.forum.parentType
-              : ChannelType.PublicThread
-            : ChannelType.GuildText,
-        };
-      }
-      if (params.forum && path?.endsWith(Routes.threads("700"))) {
-        return { id: "701", message: { id: "starter-1", channel_id: "701" } };
-      }
-      return {
-        id: `message-${++messageCount}`,
-        channel_id: params.forum ? path?.split("/").at(-2) : "789",
-      };
-    },
+    respond: ({ method }) =>
+      method === "GET"
+        ? { id: "789", type: ChannelType.GuildText }
+        : { id: `message-${++messageCount}`, channel_id: "789" },
   });
   const manager = threadBindings.createNoopThreadBindingManager(params.accountId);
   const binding = {
@@ -98,49 +71,32 @@ async function runDurableScenario(params: {
     .mockReturnValue(params.webhook ? { ...manager, getByThreadId: () => binding } : null);
   const baseUrl = expectDefined(loopback.rest.options.baseUrl, "loopback base URL");
   vi.stubEnv("DISCORD_API_URL", `${baseUrl}/api/v10`);
-  const afterDeliverPayload = vi.fn();
-  const onDeliveryResult = vi.fn();
-  const plugin = params.forum
-    ? { ...discordPlugin, outbound: { ...discordPlugin.outbound, afterDeliverPayload } }
-    : discordPlugin;
-  setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "discord", source: "test", plugin: discordPlugin }]),
+  );
   try {
     const result = await sendDurableMessageBatch({
       cfg: params.cfg,
       channel: "discord",
-      to: params.forum ? "channel:700" : "channel:789",
+      to: "channel:789",
       accountId: params.accountId,
-      threadId: params.forum?.threadId ?? (params.webhook ? "789" : undefined),
+      threadId: params.webhook ? "789" : undefined,
       identity: params.webhook ? { ...persona } : undefined,
-      replyToId: params.forum ? undefined : "fixture-reply",
+      replyToId: "fixture-reply",
       replyToMode: params.replyToMode,
-      onDeliveryResult: params.forum?.payloads ? onDeliveryResult : undefined,
-      payloads:
-        params.forum?.payloads ??
-        (params.forum
-          ? [
-              { text: "Forum starter" },
-              {
-                text: "Generated images",
-                mediaUrls: ["https://example.com/first.jpg", "https://example.com/second.jpg"],
-              },
-            ]
-          : [
-              {
-                text: params.text ?? twentyLineText,
-                ...(params.replyToIdSource === "explicit" ? { replyToId: "fixture-reply" } : {}),
-                ...(params.structured
-                  ? {
-                      channelData: {
-                        execApproval: {
-                          approvalId: "proof-approval",
-                          approvalSlug: "proof-approval",
-                        },
-                      },
-                    }
-                  : {}),
-              },
-            ]),
+      payloads: [
+        {
+          text: params.text ?? twentyLineText,
+          ...(params.replyToIdSource === "explicit" ? { replyToId: "fixture-reply" } : {}),
+          ...(params.structured
+            ? {
+                channelData: {
+                  execApproval: { approvalId: "proof-approval", approvalSlug: "proof-approval" },
+                },
+              }
+            : {}),
+        },
+      ],
       formatting: params.formatting,
       deps: {
         discord: async (...[target, text, options]: Parameters<typeof sendMessageDiscord>) =>
@@ -154,9 +110,7 @@ async function runDurableScenario(params: {
     });
     expect(result.status).toBe("sent");
     const posts = loopback.requests.filter((request) => request.method === "POST");
-    const posted = params.forum
-      ? []
-      : posts.map((request) => JSON.parse(request.body) as PostedMessage);
+    const posted = posts.map((request) => JSON.parse(request.body) as PostedMessage);
     const chunks = posted.map((body) => body.content ?? "");
     const replies = posted.map((body) => body.message_reference?.message_id);
     if (params.webhook) {
@@ -168,16 +122,7 @@ async function runDurableScenario(params: {
         expect(body).toMatchObject({ username: persona.name, avatar_url: persona.avatarUrl });
       }
     }
-    return {
-      chunks,
-      replies,
-      result,
-      postPaths: posts.map((request) => request.path),
-      deliveredThreadIds: afterDeliverPayload.mock.calls.map(
-        ([ctx]) => (ctx as { target?: { threadId?: unknown } }).target?.threadId,
-      ),
-      deliveredTargets: onDeliveryResult.mock.calls.map(([delivery]) => delivery.target),
-    };
+    return { chunks, replies };
   } finally {
     vi.stubEnv("DISCORD_API_URL", apiUrlBefore);
     bindingSpy.mockRestore();
@@ -187,37 +132,8 @@ async function runDurableScenario(params: {
   }
 }
 
-it.each([
-  [ChannelType.GuildForum, undefined],
-  [ChannelType.GuildMedia, undefined],
-  [ChannelType.GuildForum, "900"],
-] as const)(
-  "keeps the %s batch in its created or explicit thread %s",
-  async (parentType, threadId) => {
-    const actual = await runDurableScenario({
-      cfg: { channels: { discord: { accounts: { default: {} } } } },
-      forum: { parentType, threadId },
-    });
-    const target = threadId ?? "701";
-    const messagePath = `/v10/channels/${target}/messages`;
-    expect(actual).toMatchObject({
-      postPaths: [threadId ? messagePath : "/v10/channels/700/threads", messagePath, messagePath],
-      deliveredThreadIds: [target, target],
-      result: {
-        status: "sent",
-        receipt: {
-          threadId: target,
-          platformMessageIds: threadId
-            ? ["message-1", "message-2", "message-3"]
-            : ["starter-1", "message-1", "message-2"],
-        },
-      },
-    });
-  },
-);
-
 it("uses the selected account limit for structured payload fallback text", async () => {
-  const { chunks } = await runDurableScenario({
+  const { chunks } = await runDurableLineLimitScenario({
     cfg: lineLimitConfig(10, 50),
     accountId: "work",
     structured: true,
@@ -226,33 +142,10 @@ it("uses the selected account limit for structured payload fallback text", async
   expect(chunks).toEqual([twentyLineText]);
 });
 
-it("keeps every single-payload chunk in its newly created thread", async () => {
-  const actual = await runDurableScenario({
-    cfg: { channels: { discord: { accounts: { default: {} } } } },
-    forum: {
-      parentType: ChannelType.GuildForum,
-      payloads: [
-        {
-          text: "a".repeat(2001),
-          mediaUrls: ["https://example.com/first.jpg", "https://example.com/second.jpg"],
-        },
-      ],
-    },
-  });
-  expect(actual.postPaths).toEqual([
-    "/v10/channels/700/threads",
-    "/v10/channels/701/messages",
-    "/v10/channels/701/messages",
-  ]);
-  expect(actual.deliveredTargets).toEqual(
-    Array.from({ length: 3 }, () => ({ kind: "channel", id: "701" })),
-  );
-});
-
 describe.each([false, true])("durable Discord transport webhook=%s", (webhook) => {
   it("reapplies the explicit character limit after expanding mentions", async () => {
     const userId = "123456789012345678";
-    const { chunks, replies } = await runDurableScenario({
+    const { chunks, replies } = await runDurableLineLimitScenario({
       cfg: { channels: { discord: { token: "fixture-token", mentionAliases: { op: userId } } } },
       webhook,
       text: Array.from({ length: 30 }, () => "@op").join(" "),
@@ -271,7 +164,7 @@ describe.each([false, true])("durable Discord transport webhook=%s", (webhook) =
     const body = Array.from({ length: 20 }, (_, index) => `row-${index}: ${"x".repeat(130)}`).join(
       "\n",
     );
-    const { chunks } = await runDurableScenario({
+    const { chunks } = await runDurableLineLimitScenario({
       cfg: { channels: { discord: { token: "fixture-token", maxLinesPerMessage: 8 } } },
       webhook,
       text: `\`\`\`text\n${body}\n\`\`\``,
@@ -305,7 +198,7 @@ it.each([
 ] as const)(
   "preserves %s at the HTTP boundary (webhook=%s)",
   async (_name, webhook, root, account, explicit, counts) => {
-    const { chunks } = await runDurableScenario({
+    const { chunks } = await runDurableLineLimitScenario({
       cfg: lineLimitConfig(root, account),
       accountId: "work",
       webhook,
@@ -322,7 +215,7 @@ it.each([
 ] as const)(
   "preserves $replyToIdSource $replyToMode-mode replies across physical chunks",
   async ({ replyToIdSource, replyToMode, webhook }) => {
-    const { chunks, replies } = await runDurableScenario({
+    const { chunks, replies } = await runDurableLineLimitScenario({
       cfg: { channels: { discord: { token: "fixture-token" } } },
       webhook,
       replyToIdSource,

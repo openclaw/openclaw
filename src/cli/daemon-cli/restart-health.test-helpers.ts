@@ -205,7 +205,10 @@ export function ownerLease(pid: number, state: "live" | "dead" = "live", started
 
 export async function waitForRunningGateway(
   options: Partial<
-    Parameters<typeof import("./restart-health.js").waitForGatewayHealthyRestart>[0]
+    Extract<
+      Parameters<typeof import("./restart-health.js").waitForGatewayHealthyRestart>[0],
+      { service: unknown }
+    >
   > = {},
 ) {
   const { waitForGatewayHealthyRestart } = await import("./restart-health.js");

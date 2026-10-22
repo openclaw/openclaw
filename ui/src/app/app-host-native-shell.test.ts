@@ -350,7 +350,9 @@ it.each(["modal", "onboarding", "read-only", "unavailable", "offline"])(
     if (guard === "modal") {
       (document.openClawModalLayers ??= new Set()).add(modal);
     }
-    onTestFinished(() => document.openClawModalLayers?.delete(modal));
+    onTestFinished(() => {
+      document.openClawModalLayers?.delete(modal);
+    });
     const key = keydown({ key: "O", code: "KeyO", metaKey: true, shiftKey: true });
     document.dispatchEvent(key);
     expect(key.defaultPrevented).toBe(false);

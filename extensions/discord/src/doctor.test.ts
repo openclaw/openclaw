@@ -21,12 +21,6 @@ function normalize(discord: Record<string, unknown>) {
 }
 
 const realtime = (wakeNames: string[]) => ({ voice: { realtime: { wakeNames } } });
-const previewWarnings = (cfg: OpenClawConfig) =>
-  discordDoctor.collectPreviewWarnings?.({
-    cfg,
-    doctorFixCommand: "openclaw doctor --fix",
-    env: {},
-  });
 
 describe("discord doctor", () => {
   it("strips retired gateway, queue, and retry tuning at root and account scope", () => {
@@ -68,16 +62,24 @@ describe("discord doctor", () => {
   );
 
   it("seeds the inherited root streaming settings when migrating account delivery aliases", () => {
-    // Account streaming replaces the root object, so migration must copy inherited settings.
-    const streaming = { mode: "off", block: { coalesce: { idleMs: 5 } } };
+    // Account `streaming` objects replace the root object wholesale on merge,
+    // so the migrated account must carry the settings it previously inherited.
     const result = normalize({
-      streaming: structuredClone(streaming),
+      streaming: { mode: "off", block: { coalesce: { idleMs: 5 } } },
       accounts: { work: { chunkMode: "newline" } },
     });
 
     expect(result.config.channels?.discord).toEqual({
-      streaming,
-      accounts: { work: { streaming: { ...streaming, chunkMode: "newline" } } },
+      streaming: { mode: "off", block: { coalesce: { idleMs: 5 } } },
+      accounts: {
+        work: {
+          streaming: {
+            mode: "off",
+            chunkMode: "newline",
+            block: { coalesce: { idleMs: 5 } },
+          },
+        },
+      },
     });
     expect(result.changes).toEqual([
       "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
@@ -197,7 +199,13 @@ describe("discord doctor", () => {
     expect(
       collectDiscordMissingEnvTokenWarnings({ cfg, env: { DISCORD_BOT_TOKEN: "Bot tok" } }),
     ).toStrictEqual([]);
-    expect(await previewWarnings(cfg)).toStrictEqual([missingTokenWarning]);
+    expect(
+      await discordDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      }),
+    ).toStrictEqual([missingTokenWarning]);
   });
 
   it("warns when Discord transcript auto-start cannot choose between voice accounts", async () => {
@@ -224,7 +232,12 @@ describe("discord doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const warnings = (await previewWarnings(cfg)) ?? [];
+    const warnings =
+      (await discordDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+        env: {},
+      })) ?? [];
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("transcripts.autoStart[0]");

@@ -404,6 +404,7 @@ function createBoundaryShard() {
 
 /** The fixed cross-area smoke travels through the same exact-file owners as changed tests. */
 const PR_SMOKE_TEST_FILES = [
+  "test/gateway-rpc-exporters.test.ts",
   "src/config/io.load-async.test.ts",
   "src/config/io.compat.test.ts",
   "src/config/utility-model-separation-migration.io.test.ts",

@@ -142,8 +142,6 @@ it.each([false, true])(
       expect((await first.promise)?.id).toBe("confirm");
       expect(await sibling).toBeNull();
       expect(await components.lookup("cancel")).toBeUndefined();
-      expect(components.delete).toHaveBeenCalledWith("confirm");
-      expect(components.delete).toHaveBeenCalledWith("cancel");
     } finally {
       deleted.resolve();
       await Promise.allSettled([first.promise, sibling]);

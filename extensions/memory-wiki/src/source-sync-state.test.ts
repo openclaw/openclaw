@@ -17,6 +17,7 @@ import {
   readMemoryWikiSourceSyncState,
   setImportedSourceEntry,
   writeMemoryWikiSourceSyncState,
+  type MemoryWikiImportedSourceState,
 } from "./source-sync-state.js";
 import { createMemoryKeyedStore, createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -58,7 +59,7 @@ function expectMissing(read: Promise<unknown>) {
 
 function prune(
   vaultRoot: string,
-  state: ReturnType<typeof createImportedSourceState>,
+  state: MemoryWikiImportedSourceState,
   group: "bridge" | "unsafe-local" = "bridge",
 ) {
   return pruneImportedSourceEntries({ vaultRoot, group, activeKeys: new Set(), state });

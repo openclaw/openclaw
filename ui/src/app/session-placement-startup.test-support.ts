@@ -141,14 +141,16 @@ export function startupMethods<T extends (...args: never[]) => unknown>(request:
   return request.mock.calls.map(([method]) => method);
 }
 
-export function startupRequest<T extends unknown[]>(
-  handlers: Record<string, (...args: T) => unknown>,
+type StartupRequestParams = { idempotencyKey?: string; [key: string]: unknown };
+
+export function startupRequest(
+  handlers: Record<string, (params: StartupRequestParams) => unknown>,
 ) {
-  return vi.fn((method: string, ...args: T) => {
+  return vi.fn((method: string, params: StartupRequestParams = {}) => {
     const handler = Object.hasOwn(handlers, method) ? handlers[method] : undefined;
     if (!handler) {
       throw new Error(`Unexpected ${method}`);
     }
-    return handler(...args);
+    return handler(params);
   });
 }

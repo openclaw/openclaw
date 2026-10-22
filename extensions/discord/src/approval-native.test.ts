@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
 import { getDiscordApprovalCapability } from "./approval-native.js";
+import { shouldHandleDiscordApprovalRequest } from "./approval-shared.js";
 
 const STORE_PATH = path.join(os.tmpdir(), "openclaw-discord-approval-native-test.json");
 const NATIVE_APPROVAL_CFG = {
@@ -109,6 +110,19 @@ describe("createDiscordNativeApprovalAdapter", () => {
     });
   });
 
+  it("honors ownerAllowFrom fallback when gating approval requests", async () => {
+    expect(
+      await shouldHandleDiscordApprovalRequest({
+        cfg: {
+          commands: { ownerAllowFrom: ["discord:123"] },
+        } as never,
+        accountId: "main",
+        configOverride: { enabled: true } as never,
+        request: execRequest({ command: "pwd", ...ORIGIN, turnSourceTo: "channel:123456789" }),
+      }),
+    ).toBe(true);
+  });
+
   it("lets only the current typed Discord owner approve owner-derived exec requests", async () => {
     const capability = getDiscordApprovalCapability();
     const cfg = {
@@ -159,50 +173,47 @@ describe("createDiscordNativeApprovalAdapter", () => {
     ).toBe(false);
   });
 
-  it.each([undefined, "work"])("describes the %s exec-approval setup path", (accountId) => {
+  it("describes the correct Discord exec-approval setup path", () => {
     const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
       channel: "discord",
       channelLabel: "Discord",
-      accountId,
     });
-    const prefix = accountId ? `channels.discord.accounts.${accountId}` : "channels.discord";
-    expect(text).toContain(`\`${prefix}.execApprovals.approvers\``);
+
+    expect(text).toContain("`channels.discord.execApprovals.approvers`");
     expect(text).toContain("Approve it from the Web UI for now.");
     expect(text).not.toMatch(/terminal UI|\bTUI\b/i);
     expect(text).toContain("`commands.ownerAllowFrom`");
     expect(text).not.toContain("`channels.discord.dm.allowFrom`");
-    if (accountId) {
-      expect(text).not.toContain("`channels.discord.execApprovals.approvers`");
-    }
   });
 
-  it.each([
-    [
-      "prefixed turn source",
-      { ...ORIGIN, turnSourceTo: "channel:123456789" },
-      { to: "123456789" },
-      "main",
-    ],
-    [
-      "account-scoped DM",
-      { ...ORIGIN, sessionKey: "agent:main:discord:default:direct:123456789" },
-      null,
-      "main",
-    ],
-    [
-      "raw channel source",
-      { ...ORIGIN, sessionKey: "agent:main:discord:channel:123456789" },
-      { to: "123456789", threadId: undefined },
-      "main",
-    ],
-    [
-      "thread session fallback",
-      { sessionKey: "agent:main:discord:channel:987654321:thread:444555666" },
-      { to: "987654321", threadId: "444555666" },
-      "default",
-    ],
-  ] as const)("resolves %s", async (_name, request, expected, accountId) => {
-    expect(await resolveOriginTarget(request, { accountId })).toEqual(expected);
+  it("describes the named-account Discord exec-approval setup path", () => {
+    const text = getDiscordApprovalCapability().describeExecApprovalSetup?.({
+      channel: "discord",
+      channelLabel: "Discord",
+      accountId: "work",
+    });
+
+    expect(text).toContain("`channels.discord.accounts.work.execApprovals.approvers`");
+    expect(text).toContain("`commands.ownerAllowFrom`");
+    expect(text).not.toContain("`channels.discord.execApprovals.approvers`");
+  });
+
+  it("normalizes prefixed turn-source channel ids", async () => {
+    const target = await resolveOriginTarget({
+      ...ORIGIN,
+      turnSourceTo: "channel:123456789",
+    });
+
+    expect(target).toEqual({ to: "123456789" });
+  });
+
+  it("falls back to approver DMs for account-scoped Discord direct sessions", async () => {
+    const target = await resolveOriginTarget({
+      sessionKey: "agent:main:discord:default:direct:123456789",
+      ...ORIGIN,
+    });
+
+    expect(target).toBeNull();
   });
 
   it("ignores session-store turn targets for Discord DM sessions", async () => {
@@ -231,6 +242,26 @@ describe("createDiscordNativeApprovalAdapter", () => {
     );
 
     expect(target).toBeNull();
+  });
+
+  it("accepts raw turn-source ids when a Discord channel session backs them", async () => {
+    const target = await resolveOriginTarget({
+      sessionKey: "agent:main:discord:channel:123456789",
+      ...ORIGIN,
+    });
+
+    expect(target).toEqual({ to: "123456789", threadId: undefined });
+  });
+
+  it("falls back to extracting thread ids from the session key", async () => {
+    const target = await resolveOriginTarget(
+      {
+        sessionKey: "agent:main:discord:channel:987654321:thread:444555666",
+      },
+      { accountId: "default" },
+    );
+
+    expect(target).toEqual({ to: "987654321", threadId: "444555666" });
   });
 
   it("rejects origin delivery for requests bound to another Discord account", async () => {

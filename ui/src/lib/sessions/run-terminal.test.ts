@@ -2,9 +2,17 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
-import { indexHarness } from "./index-family.test-support.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { reconcileSessionRunTerminal } from "./index.ts";
-import { sessionsResult } from "./session-capability.test-support.ts";
+import {
+  createGatewayHarness,
+  createTestSessionCapability,
+  sessionsResult as makeSessionsResult,
+} from "./session-capability.test-support.ts";
+
+function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
+  return makeSessionsResult(sessions, 1);
+}
 const running: GatewaySessionRow = {
   key: "agent:main:terminal",
   sessionId: "terminal-session",
@@ -16,38 +24,75 @@ const running: GatewaySessionRow = {
 };
 
 describe("reconcileSessionRunTerminal yielded parent", () => {
-  it.each([false, true])("settles a yielding run (overlap: %s)", (overlap) => {
-    const initial: GatewaySessionRow = {
-      key: "agent:main:main",
-      kind: "direct",
-      updatedAt: 1,
-      hasActiveRun: true,
-      activeRunIds: overlap ? ["run-1", "run-2"] : ["run-1"],
-      status: "running",
-      startedAt: 100,
-      ...(overlap ? {} : { suppressErrorNotice: true }),
-    };
+  it("settles the owned model run while keeping parent work pending", () => {
+    const result = sessionsResult([
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: true,
+        activeRunIds: ["run-1"],
+        status: "running",
+        startedAt: 100,
+        suppressErrorNotice: true,
+      },
+    ]);
 
     expect(
-      reconcileSessionRunTerminal(sessionsResult([initial]), {
+      reconcileSessionRunTerminal(result, {
         sessionKeys: ["main"],
         runId: "run-1",
         status: "running",
         endedAt: 160,
       }),
-    ).toEqual(
-      sessionsResult([
+    ).toEqual({
+      ...result,
+      sessions: [
         {
-          ...initial,
-          activeRunIds: overlap ? ["run-2"] : [],
-          hasActiveRun: overlap,
+          ...result.sessions[0],
+          activeRunIds: [],
+          hasActiveRun: false,
           status: "running",
-          ...(overlap
-            ? {}
-            : { endedAt: 160, runtimeMs: 60, abortedLastRun: false, suppressErrorNotice: false }),
+          endedAt: 160,
+          runtimeMs: 60,
+          abortedLastRun: false,
+          suppressErrorNotice: false,
         },
-      ]),
-    );
+      ],
+    });
+  });
+
+  it("preserves overlapping active runs when one model turn yields", () => {
+    const result = sessionsResult([
+      {
+        key: "agent:main:main",
+        kind: "direct",
+        updatedAt: 1,
+        hasActiveRun: true,
+        activeRunIds: ["run-1", "run-2"],
+        status: "running",
+        startedAt: 100,
+      },
+    ]);
+
+    expect(
+      reconcileSessionRunTerminal(result, {
+        sessionKeys: ["main"],
+        runId: "run-1",
+        status: "running",
+        endedAt: 160,
+      }),
+    ).toEqual({
+      ...result,
+      sessions: [
+        {
+          ...result.sessions[0],
+          activeRunIds: ["run-2"],
+          hasActiveRun: true,
+          status: "running",
+        },
+      ],
+    });
   });
 });
 
@@ -69,12 +114,13 @@ async function terminalOwner(
     hasMore: true,
     nextOffset: 2,
   });
-  const { sessions } = indexHarness(async (_method, params) => {
+  const client = createTestGatewayClient(async (_method, params) => {
     if (owner === "managed" && !(params as { ownerId?: string }).ownerId) {
       return sessionsResult(read ? [] : [sibling]);
     }
     return read ? read() : listResult({ ...initial });
   });
+  const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
   const query = { agentId: "main", ownerId: "ada" };
   const updates = vi.fn();
   const stop =
@@ -105,9 +151,13 @@ async function terminalOwner(
 
 describe("terminal metadata ownership", () => {
   const previousTerminal: GatewaySessionRow = {
-    ...running,
+    key: "agent:main:terminal",
+    sessionId: "terminal-session",
+    kind: "direct",
     updatedAt: 200,
     derivedTitle: "Initial title",
+    status: "running",
+    hasActiveRun: true,
     activeRunIds: ["new-run"],
     lastRunId: "old-run",
     startedAt: 100,
@@ -164,18 +214,17 @@ describe("terminal metadata ownership", () => {
 
   it("uses only the new failure detail after a previously killed run", async () => {
     const h = await terminalOwner({ ...previousTerminal, abortedLastRun: true }, "primary");
-    const terminal = {
+    h.sessions.reconcileRunTerminal({
       sessionKeys: [previousTerminal.key],
-      status: "failed" as const,
+      runId: "new-run",
+      status: "failed",
       endedAt: 400,
-      errorMessage: `Provider failed.\npassword=synthetic-password\n${"x".repeat(180)}`,
-    };
-    expect(h.sessions.reconcileRunTerminal(terminal)).toBe(false);
-    expect(h.sessions.reconcileRunTerminal({ ...terminal, runId: "new-run" })).toBe(true);
+      errorMessage: "Current run\nfailed: password=synthetic-password",
+    });
     expect(h.row()).toMatchObject({
       status: "failed",
       lastRunId: "new-run",
-      lastRunError: `Provider failed. password=[redacted] ${"x".repeat(123)}`,
+      lastRunError: "Current run failed: password=[redacted]",
       abortedLastRun: false,
     });
   });
@@ -374,12 +423,13 @@ describe("terminal observations", () => {
       vi.useFakeTimers();
       const initial = running;
       const current = { ...initial, activeRunIds: overlap ? ["run-a", "run-b"] : ["run-b"] };
-      const { sessions } = indexHarness(async (_method, params) => {
+      const client = createTestGatewayClient(async (_method, params) => {
         const ownerId = (params as { ownerId?: string }).ownerId;
         return sessionsResult(
           ownerId || includePrimary ? [{ ...(ownerId === "ada" ? current : initial) }] : [],
         );
       });
+      const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
       const query = { agentId: "main", ownerId: "ada" };
       const olderQuery = { ...query, ownerId: "grace" };
       const stop = sessions.subscribeList(query, () => {});

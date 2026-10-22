@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,11 +7,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { requireGatewayRecord } from "../src/gateway/test-helpers.assertions.js";
+import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../src/utils/message-channel.js";
 import {
   type GatewayInstance,
   connectNode,
+  connectGatewayStatusClient,
   postJson,
   spawnGatewayInstance,
   stopGatewayInstance,
@@ -125,6 +128,136 @@ describe("gateway multi-instance e2e", () => {
     },
   );
 
+  it(
+    "preserves scheduler runtime across a scheduler-disabled Gateway edit",
+    { timeout: E2E_TIMEOUT_MS },
+    async () => {
+      const model = buildMockOpenAiResponsesProvider("http://127.0.0.1:9/v1", "scheduler-canary");
+      const manager = await createOpenClawTestInstance({
+        name: "cron-passive-manager",
+        config: {
+          cron: { enabled: false },
+          plugins: { enabled: false },
+          agents: {
+            defaults: {
+              model: { primary: model.modelRef },
+              models: { [model.modelRef]: { agentRuntime: { id: "openclaw" } } },
+            },
+          },
+          models: {
+            mode: "replace",
+            providers: {
+              [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
+            },
+          },
+        },
+        env: { OPENCLAW_SKIP_CRON: "0" },
+      });
+      let managerClient: GatewayClient | undefined;
+      await runQaGatewayFixture(
+        async () => {
+          // Creation captures a durable account; only the injected offline runner executes it.
+          await manager.state.writeAuthProfiles({
+            version: 1,
+            profiles: {
+              "openai:cron-passive-manager": {
+                type: "api_key",
+                provider: "openai",
+                key: "synthetic-cron-scheduler-key",
+              },
+            },
+          });
+          await manager.startGateway();
+          managerClient = await connectGatewayStatusClient(manager);
+          const canary = await managerClient.request<{ id: string }>("cron.add", {
+            name: "shared-store canary",
+            enabled: true,
+            schedule: { kind: "every", everyMs: 3_600_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: {
+              kind: "agentTurn",
+              model: "openai/gpt-4.1@openai:cron-passive-manager",
+              message: "run canary",
+              toolsAllow: [],
+            },
+            delivery: { mode: "none" },
+          });
+          const target = await managerClient.request<{ id: string }>("cron.add", {
+            name: "shared-store edit target",
+            enabled: true,
+            schedule: { kind: "cron", expr: "0 6 * * *" },
+            sessionTarget: "main",
+            wakeMode: "now",
+            payload: { kind: "systemEvent", text: "edit target" },
+          });
+
+          await managerClient.request("cron.list", { includeDisabled: true });
+
+          // Exclusive cron custody requires stopping the Gateway before the offline scheduler.
+          await managerClient.stopAndWait();
+          managerClient = undefined;
+          await manager.stopGateway();
+          const scheduler = spawnSync(
+            process.execPath,
+            [
+              "--import",
+              path.join(process.cwd(), "scripts/tsx.mjs"),
+              "--input-type=module",
+              "--eval",
+              `
+import { CronService } from "./src/cron/service.ts";
+import { resolveCronJobsStorePath } from "./src/cron/store.ts";
+import { toPublicCronJob } from "./src/cron/public-job.ts";
+import { createTestGatewayScheduler } from "./src/test-utils/gateway-scheduler-clock.ts";
+const cron = new CronService({
+  scheduler: createTestGatewayScheduler(),
+  nowMs: () => Date.now(),
+  cronEnabled: true,
+  storePath: resolveCronJobsStorePath(),
+  log: { debug() {}, info() {}, warn() {}, error() {} },
+  enqueueSystemEvent() {},
+  requestHeartbeat() {},
+  async runIsolatedAgentJob() { return { status: "ok", summary: "scheduler canary completed" }; },
+});
+try {
+  await cron.start();
+  const result = await cron.run(process.argv[1], "force");
+  if (!result.ok || !("ran" in result) || !result.ran) throw new Error(JSON.stringify(result));
+  console.log(JSON.stringify(toPublicCronJob(cron.getJob(process.argv[1]))));
+} finally {
+  cron.stop();
+}
+`,
+              canary.id,
+            ],
+            { cwd: process.cwd(), env: manager.env, encoding: "utf8", timeout: E2E_TIMEOUT_MS },
+          );
+          expect(scheduler.stderr).toBe("");
+          expect(
+            scheduler.status,
+            scheduler.error?.message ?? scheduler.signal ?? scheduler.stderr,
+          ).toBe(0);
+          const before = JSON.parse(scheduler.stdout) as {
+            state: { lastRunAtMs?: number; lastStatus?: string };
+          };
+          expect(before.state).toMatchObject({ lastRunAtMs: expect.any(Number), lastStatus: "ok" });
+
+          await manager.startGateway();
+          managerClient = await connectGatewayStatusClient(manager);
+          await managerClient.request("cron.update", {
+            id: target.id,
+            patch: { description: "updated through passive Gateway" },
+          });
+          const after = await managerClient.request<{ state: unknown }>("cron.get", {
+            id: canary.id,
+          });
+          expect(after.state).toEqual(before.state);
+        },
+        () => cleanupGateways([manager], managerClient ? [managerClient] : []),
+      );
+    },
+  );
   it(
     "keeps a real node.invoke timeout stable across a gateway wall-clock change",
     { timeout: E2E_TIMEOUT_MS },

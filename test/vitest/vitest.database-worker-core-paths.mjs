@@ -1317,6 +1317,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/plugins/beam-http-identity.test.ts",
   "test/plugins/codex-client-version-catalog-worker.test.ts",
   "test/plugins/codex-session-catalog-naming.test.ts",
+  "test/gateway-rpc-exporters.test.ts",
   "test/scripts/mantis-telegram-proof.test.ts",
   "src/plugin-sdk/runtime-doctor-migrations.test.ts",
   "src/plugin-state/plugin-blob-store.test.ts",
