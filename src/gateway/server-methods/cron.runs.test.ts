@@ -133,7 +133,6 @@ async function withCronHistory(
       resolveDefaultAgentId: () => (options.unresolvedDefault ? undefined : agentId),
       cronEnabled: false,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(),
     });
     try {

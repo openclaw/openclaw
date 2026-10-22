@@ -192,6 +192,15 @@ describe.skipIf(!browserAvailable)("Claws discovery and Add", () => {
         .locator(".plugin-catalog-results__body")
         .evaluate((element) => element.getBoundingClientRect().width);
       expect(Math.abs(searchWidth - bodyWidth)).toBeLessThan(2);
+      // Four-column cards are too narrow to fit the name between the artwork and Add.
+      const titleRow = await page
+        .locator("[data-claws-featured] [data-claws-entry] .agents-home__claw-head")
+        .first()
+        .evaluate((head) => ({
+          head: head.getBoundingClientRect().width,
+          name: head.querySelector("h3")?.getBoundingClientRect().width ?? 0,
+        }));
+      expect(Math.abs(titleRow.head - titleRow.name)).toBeLessThan(1);
       expect(await gateway.getRequests("claws.catalog.search")).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

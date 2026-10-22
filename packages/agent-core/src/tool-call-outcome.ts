@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { ToolArgumentValidationError } from "./errors.js";
 import {
   appendToolLoopWarning,
   copyInternalToolResultState,
@@ -114,6 +115,20 @@ export type ImmediateToolCallOutcome = {
 
 export function immediateToolCallError(message: string): ImmediateToolCallOutcome {
   return { kind: "immediate", result: createErrorToolResult(message), isError: true };
+}
+
+export function immediateToolArgumentValidationError(error: unknown): ImmediateToolCallOutcome {
+  return {
+    ...immediateToolCallError(coerceErrorMessage(error)),
+    errorKind: "argument-validation",
+  };
+}
+
+/** Classify only preparation rejections, not generic or execution failures. */
+export function immediateToolPreparationError(error: unknown): ImmediateToolCallOutcome {
+  return error instanceof ToolArgumentValidationError
+    ? immediateToolArgumentValidationError(error)
+    : immediateToolCallError(coerceErrorMessage(error));
 }
 
 /**

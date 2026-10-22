@@ -21,7 +21,6 @@ export type GatewayReloadPlan = {
   refreshHooksPolicy?: boolean;
   restartGmailWatcher: boolean;
   restartCron: boolean;
-  restartHeartbeat: boolean;
   reloadPlugins: boolean;
   /** Canonical config/install deltas that require a plugin replacement. */
   reloadPluginPaths?: string[];
@@ -49,7 +48,6 @@ const RELOAD_ACTIONS = [
   "refreshHooksPolicy",
   "restartGmailWatcher",
   "restartCron",
-  "restartHeartbeat",
   "reloadPlugins",
   "disposeMcpRuntimes",
 ] as const;
@@ -140,7 +138,6 @@ function expandReloadPolicies(policies: ReloadPolicy[]): ReloadRule[] {
 }
 
 const AGENT_ROSTER_RELOAD_ACTIONS: readonly ReloadAction[] = [
-  "restartHeartbeat",
   "refreshHooksPolicy",
   "reloadInternalHooks",
 ];
@@ -194,6 +191,7 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
       "discovery.mdns.mode",
       "mcp.apps.sandboxOrigin",
       "agents.defaults",
+      "models",
       "desktop.host",
       "cloudWorkers",
     ],
@@ -206,18 +204,6 @@ const CORE_RELOAD_POLICIES: ReloadPolicy[] = [
     actions: ["reloadInternalHooks"],
   },
   { prefixes: ["hooks"], kind: "hot", actions: ["reloadHooks"] },
-  {
-    prefixes: [
-      "agents.defaults.heartbeat",
-      "agents.defaults.models",
-      "agents.defaults.modelPolicy",
-      "agents.defaults.model",
-      "models",
-      "agent.heartbeat",
-    ],
-    kind: "hot",
-    actions: ["restartHeartbeat"],
-  },
   {
     prefixes: ["agents.entries"],
     kind: "hot",
@@ -524,7 +510,6 @@ export function buildGatewayReloadPlan(
     reloadInternalHooks: false,
     restartGmailWatcher: false,
     restartCron: false,
-    restartHeartbeat: false,
     reloadPlugins: false,
     restartChannels: new Set(),
     restartServices: new Set(),

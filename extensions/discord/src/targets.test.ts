@@ -7,7 +7,8 @@ import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
 } from "./group-policy.js";
-import { parseDiscordTarget, resolveDiscordChannelId, resolveDiscordTarget } from "./targets.js";
+import { parseDiscordTarget, resolveDiscordChannelId } from "./target-parsing.js";
+import { resolveDiscordTarget } from "./target-resolver.js";
 
 const config = (discord: NonNullable<OpenClawConfig["channels"]>["discord"]): OpenClawConfig => ({
   channels: { discord },

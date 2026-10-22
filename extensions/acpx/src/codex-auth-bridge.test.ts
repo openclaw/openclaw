@@ -2,10 +2,11 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import * as jsonReader from "@openclaw/fs-safe/json";
 import { describe, expect, it, vi } from "vitest";
 import acpxPackage from "../package.json" with { type: "json" };
 import { GENERATED_ADAPTER_ORPHAN_SCENARIO } from "./adapter-wrapper-script.test-support.js";
-import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
+import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { useAuthBridgeFixture } from "./codex-auth-bridge.test-support.js";
 import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
@@ -16,7 +17,11 @@ vi.mock("@openclaw/fs-safe/json", async (importOriginal) => ({
 
 const execFileAsync = promisify(execFile);
 const WRAPPER_STDERR_LOG_MAX_CHARS = 256 * 1024;
-const createWrapperFixture = useAuthBridgeFixture();
+const createWrapperFixture = useAuthBridgeFixture((codexBin) =>
+  vi
+    .spyOn(jsonReader, "tryReadJson")
+    .mockResolvedValueOnce({ name: CODEX_ACP_PACKAGE, bin: codexBin }),
+);
 const apiKeyAuth = (key: string) => ({ OPENAI_API_KEY: key, tokens: null, last_refresh: null });
 
 async function adapterFixture(source = "console.log('ok');\n") {
