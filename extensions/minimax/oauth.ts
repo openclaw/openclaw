@@ -16,6 +16,10 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
+} from "openclaw/plugin-sdk/provider-oauth-runtime";
+import {
   ensureGlobalUndiciEnvProxyDispatcher,
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
@@ -85,9 +89,10 @@ async function parseMiniMaxOAuthTokenResponse(
   let payload:
     | {
         status?: string;
+        error?: unknown;
         base_resp?: { status_code?: number; status_msg?: string };
-        access_token?: string | null;
-        refresh_token?: string | null;
+        access_token?: unknown;
+        refresh_token?: unknown;
         expired_in?: unknown;
         resource_url?: string;
         notification_message?: string;
@@ -99,6 +104,16 @@ async function parseMiniMaxOAuthTokenResponse(
     } catch {
       payload = undefined;
     }
+  }
+
+  if (
+    previousRefresh !== undefined &&
+    (!response.ok ||
+      payload?.error !== undefined ||
+      payload?.status === "error" ||
+      (payload?.base_resp?.status_code !== undefined && payload.base_resp.status_code !== 0))
+  ) {
+    throw createOAuthRefreshResponseError("MiniMax OAuth refresh", response.status, payload);
   }
 
   if (!response.ok) {
@@ -125,8 +140,14 @@ async function parseMiniMaxOAuthTokenResponse(
   }
 
   // A refresh response may omit refresh_token when the server does not rotate it.
-  const refresh = payload.refresh_token || previousRefresh;
-  if (!payload.access_token || !refresh || !payload.expired_in) {
+  const refresh = payload.refresh_token === undefined ? previousRefresh : payload.refresh_token;
+  if (
+    typeof payload.access_token !== "string" ||
+    !payload.access_token.trim() ||
+    typeof refresh !== "string" ||
+    !refresh.trim() ||
+    !payload.expired_in
+  ) {
     return { status: "error", message: "MiniMax OAuth returned incomplete token payload." };
   }
   const expires = resolveExpiresAtMsFromDurationOrEpoch(payload.expired_in, {
@@ -225,7 +246,10 @@ export async function refreshMiniMaxPortalOAuthCredential(
     await release();
   }
   if (result.status !== "success") {
-    throw new Error(`MiniMax OAuth refresh failed: ${result.message ?? "token not issued"}`);
+    throw createOAuthRefreshError(
+      "MiniMax OAuth refresh returned invalid credentials. Sign in again.",
+      { version: 1, phase: "after-token-response", outcome: "unknown" },
+    );
   }
   return {
     ...credential,

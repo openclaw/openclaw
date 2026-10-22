@@ -184,6 +184,30 @@ describe("realtime voice session harness", () => {
     });
   });
 
+  it("bounds settled response suppression in FIFO order without refreshing duplicates", () => {
+    const harness = createHarness();
+    onTestFinished(() => harness.close());
+    for (let index = 0; index < 64; index += 1) {
+      harness.ensureTurn();
+      expect(harness.finishResponse({ status: "completed", responseId: `resp-${index}` }).ok).toBe(
+        true,
+      );
+    }
+
+    const turnId = harness.ensureTurn();
+    expect(harness.finishResponse({ status: "completed", responseId: "resp-0" }).ok).toBe(false);
+    expect(harness.talk.activeTurnId).toBe(turnId);
+    expect(harness.finishResponse({ status: "completed", responseId: "resp-64" }).ok).toBe(true);
+
+    const nextTurnId = harness.ensureTurn();
+    for (const responseId of ["resp-1", "resp-63", "resp-64"]) {
+      expect(harness.finishResponse({ status: "completed", responseId }).ok).toBe(false);
+      expect(harness.talk.activeTurnId).toBe(nextTurnId);
+    }
+    expect(harness.finishResponse({ status: "completed", responseId: "resp-0" }).ok).toBe(true);
+    expect(harness.talk.activeTurnId).toBeUndefined();
+  });
+
   it("does not let a delayed duplicate terminal event settle a newer turn", () => {
     const { harness, callbacks } = createBridgeFixture();
     callbacks?.onEvent?.({ direction: "server", type: "response.created", responseId: "resp-old" });

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
@@ -16,6 +16,7 @@ import {
 import { ChatDetailsProcessRow } from "./chat-details-process-row.tsx";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { createProcessesPresentation } from "./chat-processes-presentation.ts";
 import { ChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -319,6 +320,7 @@ function DetailsProcesses(
     processes: () => ProcessesPanelData | undefined;
   },
 ) {
+  const presentation = createProcessesPresentation(() => props.processes(), true);
   const [processesExpanded, setProcessesExpanded] = createSignal(false);
   const processRows = createMemo(() =>
     attentionOrder(props.processes()?.snapshot.rows ?? [], processState),
@@ -334,7 +336,7 @@ function DetailsProcesses(
       props.details.onOpenProcesses?.();
     }
   };
-  return (
+  const Content = (contentProps: { retry: () => void }) => (
     <Show when={processRows().length > 0 || processError()}>
       <BackgroundGroup
         kind="processes"
@@ -353,7 +355,7 @@ function DetailsProcesses(
             <button
               type="button"
               class="chip chat-summary__automation-retry"
-              onClick={() => void props.processes()?.refresh()}
+              onClick={() => contentProps.retry()}
             >
               {t("common.retry")}
             </button>
@@ -372,5 +374,27 @@ function DetailsProcesses(
         </div>
       </BackgroundGroup>
     </Show>
+  );
+  const retry = () => void props.processes()?.refresh();
+  const consumeRead = () => {
+    latest(presentation.read);
+    return null;
+  };
+  return (
+    <Errored
+      fallback={(_error, reset) => (
+        <Content
+          retry={() => {
+            retry();
+            reset();
+          }}
+        />
+      )}
+    >
+      <Loading on={presentation.scope()} fallback={<Content retry={retry} />}>
+        {consumeRead()}
+        <Content retry={retry} />
+      </Loading>
+    </Errored>
   );
 }

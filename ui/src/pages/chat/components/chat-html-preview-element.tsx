@@ -225,14 +225,14 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         sessionFileSource: host.sessionFileSource && { ...host.sessionFileSource },
         generation: getCanvasWidgetFrameConnectionGeneration(),
       };
-      binding = current;
-      onCleanup(() => {
-        if (binding === current) {
-          binding = undefined;
-        }
-      });
       const view = createMemo<PreviewView | undefined>(
         async () => {
+          binding = current;
+          onCleanup(() => {
+            if (binding === current) {
+              binding = undefined;
+            }
+          });
           try {
             const document = await client.request<CanvasDocumentViewResult>(
               "canvas.document.preview",

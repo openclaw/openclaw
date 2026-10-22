@@ -38,114 +38,6 @@ type SessionModelRunOutcome =
   | { success: true }
   | { success: false; error?: unknown; reason?: FailoverReason };
 
-async function reconcileAgentPatchedSessionModel(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  sessionKey: string;
-  storePath?: string;
-  outcome: SessionModelRunOutcome;
-  expectedMarkerTs?: number;
-  validatedFallback?: AgentPatchedSessionModelFallback;
-  expectedSession?: { sessionId: string; lifecycleRevision?: string };
-}): Promise<void> {
-  const reason = params.outcome.success
-    ? undefined
-    : (params.outcome.reason ?? resolveFailoverReasonFromError(params.outcome.error));
-  if (!params.outcome.success && (!reason || !REVERT_REASONS.has(reason))) {
-    return;
-  }
-
-  let note: string | undefined;
-  let sessionId: string | undefined;
-  const reconciledEntry = await patchSessionEntryCore(
-    {
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    (entry) => {
-      if (
-        params.expectedSession &&
-        (entry.sessionId !== params.expectedSession.sessionId ||
-          entry.lifecycleRevision !== params.expectedSession.lifecycleRevision)
-      ) {
-        return null;
-      }
-      const marker = entry.modelFallback;
-      if (marker?.source !== "agent-patch") {
-        return null;
-      }
-      if (params.expectedMarkerTs !== undefined && marker.ts !== params.expectedMarkerTs) {
-        if (
-          params.outcome.success &&
-          params.validatedFallback &&
-          marker.ts > params.expectedMarkerTs &&
-          params.expectedMarkerTs > (marker.lastValidatedPatchTs ?? -1)
-        ) {
-          return {
-            modelFallback: {
-              ...params.validatedFallback,
-              ts: marker.ts,
-              lastValidatedPatchTs: params.expectedMarkerTs,
-            },
-          };
-        }
-        return null;
-      }
-      sessionId = entry.sessionId;
-      if (params.outcome.success) {
-        return { modelFallback: undefined };
-      }
-      const failed = resolveSessionModelRef(params.cfg, entry, params.agentId);
-      note = `System note: model ${failed.provider}/${failed.model} failed; reverted to ${marker.prevProvider}/${marker.prevModel}.`;
-      return {
-        model: marker.prevModel,
-        modelProvider: marker.prevProvider,
-        modelOverride: marker.prevModelOverride,
-        providerOverride: marker.prevProviderOverride,
-        modelOverrideSource: marker.prevModelOverrideSource,
-        modelOverrideRouteResolution: marker.prevModelOverrideRouteResolution,
-        modelOverrideFallbackOriginProvider: marker.prevModelOverrideFallbackOriginProvider,
-        modelOverrideFallbackOriginModel: marker.prevModelOverrideFallbackOriginModel,
-        authProfileOverride: marker.prevAuthProfileOverride,
-        authProfileOverrideSource: marker.prevAuthProfileOverrideSource,
-        authProfileOverrideCompactionCount: marker.prevAuthProfileOverrideCompactionCount,
-        contextWindow: marker.prevContextWindow,
-        thinkingLevel: marker.prevThinkingLevel,
-        modelFallback: undefined,
-        liveModelSwitchPending: undefined,
-      };
-    },
-  );
-  if (note && sessionId) {
-    try {
-      const timestamp = Date.now();
-      await appendTranscriptMessage(
-        {
-          agentId: params.agentId,
-          sessionId,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          expectedLifecycleRevision: reconciledEntry?.lifecycleRevision,
-          expectedWriterRunId: reconciledEntry?.activeWriterRunId,
-        },
-        {
-          config: params.cfg,
-          message: {
-            role: "custom" as const,
-            customType: "openclaw.system-note",
-            content: note,
-            display: true,
-            timestamp,
-          },
-        },
-      );
-    } catch {
-      // Rollback is authoritative; transcript note is best effort.
-    }
-  }
-}
-
 export async function createAgentPatchedSessionModelRunGuard(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
@@ -233,17 +125,106 @@ export async function createAgentPatchedSessionModelRunGuard(params: {
     reconciled = true;
     try {
       const sessionKey = target.sessionKey;
-      const reconcileModel = () =>
-        reconcileAgentPatchedSessionModel({
-          cfg: params.cfg,
-          agentId: target.agentId,
-          sessionKey,
-          storePath: target.storePath,
-          expectedMarkerTs: markerTs,
-          expectedSession,
-          ...(validatedFallback ? { validatedFallback } : {}),
-          outcome: success ? { success: true } : { success: false, ...failure },
-        });
+      const reconcileModel = async () => {
+        const { cfg } = params;
+        const { agentId, storePath } = target;
+        const expectedMarkerTs = markerTs;
+        const outcome: SessionModelRunOutcome = success
+          ? { success: true }
+          : { success: false, ...failure };
+        const reason = outcome.success
+          ? undefined
+          : (outcome.reason ?? resolveFailoverReasonFromError(outcome.error));
+        if (!outcome.success && (!reason || !REVERT_REASONS.has(reason))) {
+          return;
+        }
+
+        let note: string | undefined;
+        let sessionId: string | undefined;
+        const reconciledEntry = await patchSessionEntryCore(
+          { agentId, sessionKey, storePath },
+          (entry) => {
+            if (
+              expectedSession &&
+              (entry.sessionId !== expectedSession.sessionId ||
+                entry.lifecycleRevision !== expectedSession.lifecycleRevision)
+            ) {
+              return null;
+            }
+            const marker = entry.modelFallback;
+            if (marker?.source !== "agent-patch") {
+              return null;
+            }
+            if (expectedMarkerTs !== undefined && marker.ts !== expectedMarkerTs) {
+              if (
+                outcome.success &&
+                validatedFallback &&
+                marker.ts > expectedMarkerTs &&
+                expectedMarkerTs > (marker.lastValidatedPatchTs ?? -1)
+              ) {
+                return {
+                  modelFallback: {
+                    ...validatedFallback,
+                    ts: marker.ts,
+                    lastValidatedPatchTs: expectedMarkerTs,
+                  },
+                };
+              }
+              return null;
+            }
+            sessionId = entry.sessionId;
+            if (outcome.success) {
+              return { modelFallback: undefined };
+            }
+            const failed = resolveSessionModelRef(cfg, entry, agentId);
+            note = `System note: model ${failed.provider}/${failed.model} failed; reverted to ${marker.prevProvider}/${marker.prevModel}.`;
+            return {
+              model: marker.prevModel,
+              modelProvider: marker.prevProvider,
+              modelOverride: marker.prevModelOverride,
+              providerOverride: marker.prevProviderOverride,
+              modelOverrideSource: marker.prevModelOverrideSource,
+              modelOverrideRouteResolution: marker.prevModelOverrideRouteResolution,
+              modelOverrideFallbackOriginProvider: marker.prevModelOverrideFallbackOriginProvider,
+              modelOverrideFallbackOriginModel: marker.prevModelOverrideFallbackOriginModel,
+              authProfileOverride: marker.prevAuthProfileOverride,
+              authProfileOverrideSource: marker.prevAuthProfileOverrideSource,
+              authProfileOverrideCompactionCount: marker.prevAuthProfileOverrideCompactionCount,
+              contextWindow: marker.prevContextWindow,
+              thinkingLevel: marker.prevThinkingLevel,
+              modelFallback: undefined,
+              liveModelSwitchPending: undefined,
+            };
+          },
+        );
+        if (note && sessionId) {
+          try {
+            const timestamp = Date.now();
+            await appendTranscriptMessage(
+              {
+                agentId,
+                sessionId,
+                sessionKey,
+                storePath,
+                expectedLifecycleRevision: reconciledEntry?.lifecycleRevision,
+                expectedWriterRunId: reconciledEntry?.activeWriterRunId,
+              },
+              {
+                config: cfg,
+                message: {
+                  role: "custom" as const,
+                  customType: "openclaw.system-note",
+                  content: note,
+                  display: true,
+                  timestamp,
+                },
+              },
+            );
+          } catch {
+            // Rollback is authoritative; transcript note is best effort.
+          }
+        }
+      };
       if (source) {
         const lifetime = { assertCurrent() {}, assertReadable() {} };
         const actor = source.owner

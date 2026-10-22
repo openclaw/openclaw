@@ -15,6 +15,7 @@ import {
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { GitHubConnections } from "./github-connections.tsx";
+import { createMutationRunner } from "./github-identity-harness.test-support.ts";
 
 const system: ToolsGitHubStatusResult["effective"] = {
   ...disconnectedGitHub.system,
@@ -298,4 +299,35 @@ it("closes setup and resets its purpose when the same Gateway snapshot changes p
   button("Manage connections").click();
   await waitForFast(() => expect(purpose()).toBe("personal"));
   expect(query(".settings-secret input")).toBeNull();
+});
+
+it("disables connection controls while a PAT save is pending", async () => {
+  const stored = createDeferredCore<{ ok: boolean }>();
+  const request = vi.fn(async (method: string) =>
+    method === "secrets.store.set"
+      ? stored.promise
+      : method === "users.github.status"
+        ? personalStatus
+        : status(),
+  );
+  const ui = mount(["operator.admin"], "profile-a", request);
+  vi.mocked(ui.context.runtimeConfig.runExternalMutation).mockImplementation(
+    createMutationRunner(ui.context.gateway.snapshot.client!),
+  );
+  await ui.waitText(["@system-account"]);
+  ui.openPat();
+  const token = ui.query<HTMLInputElement>(".settings-secret input")!;
+  token.value = "synthetic-pending-pat";
+  token.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  ui.button("Save Identity").click();
+  flush();
+  try {
+    await waitForFast(() => expect(ui.button("Saving…").disabled).toBe(true));
+    expect(ui.button("Verify").disabled).toBe(true);
+    expect(ui.button("Change System GitHub").disabled).toBe(true);
+  } finally {
+    stored.resolve({ ok: true });
+  }
+  await waitForFast(() => expect(ui.button("Verify").disabled).toBe(false));
 });

@@ -338,7 +338,7 @@ export function rejectNodePairingRequest(state: InventoryState, requestId: strin
  * token only to a device rotating its own token, so a cross-device rotation is a real
  * outcome with no secret to show rather than a failure.
  */
-type RotatedDeviceTokenOutcome =
+export type RotatedDeviceTokenOutcome =
   | { delivery: "in-band"; token: string }
   | { delivery: "withheld-cross-device" };
 

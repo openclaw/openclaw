@@ -5,9 +5,11 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { createAgentCapability } from "../../lib/agents/index.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import {
+  running,
   callsFor,
   authButton,
   waitForElement,
@@ -158,13 +160,44 @@ describe("ModelSetupPage detection ownership", () => {
     expect(selectedModelDetail(page)).toBe("current-model");
   });
 
+  it("replaces failed detection with loading while the agent roster is pending", async () => {
+    const { context, request, detectCalls } = fixture;
+    const agents = createAgentCapability(context.gateway);
+    const retry = createDeferred<SystemAgentSetupDetectResult>();
+    request.mockRejectedValueOnce(new Error("Detection failed before roster refresh."));
+    request.mockImplementation(() => retry.promise);
+    try {
+      const page = await mountPage({ ...context, agents });
+      await waitForText(page, "Detection failed before roster refresh.");
+
+      context.settingsAgentSelection.state.selectedId = null;
+      page.routeData = { firstRun: false };
+      await vi.waitFor(() => {
+        expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+        expect(page.querySelector('[role="alert"]')).toBeNull();
+      });
+      expect(detectCalls()).toHaveLength(1);
+
+      context.settingsAgentSelection.state.selectedId = "main";
+      page.routeData = { firstRun: false };
+      await vi.waitFor(() => expect(detectCalls()).toHaveLength(2));
+      expect(page.querySelector(".model-setup__loading")).not.toBeNull();
+      retry.resolve(detection);
+      await waitForElement(page, '[data-auth-choice="provider-auth"]');
+      expect(page.querySelector('[role="alert"]')).toBeNull();
+    } finally {
+      retry.resolve(detection);
+      agents.dispose();
+    }
+  });
+
   it("resumes the provider wizard after reconnect", async () => {
     const { context, request, setGatewayPhase } = fixture;
     let oldWizardSignal: AbortSignal | undefined;
     let nextCalls = 0;
     request.mockImplementation(async (method, _params, options) => {
       if (method === "openclaw.setup.auth.start") {
-        return { done: false, status: "running" };
+        return running;
       }
       if (method === "wizard.next") {
         nextCalls += 1;

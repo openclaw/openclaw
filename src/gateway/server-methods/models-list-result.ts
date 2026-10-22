@@ -36,7 +36,6 @@ import {
 } from "../../agents/model-visibility-policy.js";
 import {
   createModelCatalogIdentityKeyResolver,
-  openAIModelCatalogRoutePolicy,
   resolveModelCatalogIdentityKey,
 } from "../../agents/openai-model-routes.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
@@ -440,14 +439,14 @@ async function prepareOwnedModelsListResult({
       });
       const credential = evaluation.selectedCredential;
       const route = evaluation.selectedRoute;
-      const serviceTierObservation =
+      const serviceTierObservations =
         projectionIsCurrent() &&
         evaluation.availability === true &&
         speedPolicy.supportsServiceTierRecovery &&
         credential &&
         credential.source !== "harness" &&
         route
-          ? accountCatalog?.readServiceTierObservation({
+          ? accountCatalog?.readServiceTierObservations({
               identityKey: credential.identityKey,
               modelId: entry.id,
               runtimeId: preparedEntry.agentRuntime?.id ?? "openclaw",
@@ -462,7 +461,14 @@ async function prepareOwnedModelsListResult({
           ? { supportsServiceTierRecovery: true }
           : {}),
         ...(serviceTiers === undefined ? {} : { serviceTiers }),
-        ...(serviceTierObservation ? { serviceTierObservation } : {}),
+        ...(serviceTierObservations?.length
+          ? {
+              serviceTierObservation: serviceTierObservations.at(-1),
+              serviceTierObservations: serviceTierObservations.toSorted((a, b) =>
+                a.requestedTier.localeCompare(b.requestedTier),
+              ),
+            }
+          : {}),
         ...(projectedAvailability === undefined ? {} : { available: projectedAvailability }),
         ...(projectedAvailability === false && evaluation.unavailableReason
           ? {
@@ -540,7 +546,6 @@ async function prepareOwnedModelsListResult({
       policy: visibilityPolicy,
       retainedModel,
       selectedModel,
-      routePolicy: openAIModelCatalogRoutePolicy,
       routeVariants,
       prepareEntry: (entry, variants) => {
         const key = resolveModelCatalogIdentityKey(entry);
@@ -601,7 +606,6 @@ async function prepareOwnedModelsListResult({
           return resolveLogicalModelCatalogEntryState({
             evaluation,
             authBacked: evaluation.availability === true || syntheticLocal,
-            routePolicy: openAIModelCatalogRoutePolicy,
           });
         };
       },

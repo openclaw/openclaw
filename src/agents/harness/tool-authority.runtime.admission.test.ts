@@ -190,7 +190,12 @@ describe("host-prepared embedded tool authority", () => {
                 }
                 resume.resolve();
                 if (transition === "cancel-both") {
-                  await expect(pending).rejects.toBe(sourceError);
+                  const injection = await pending;
+                  await expect(injection.acceptance).resolves.toBe(false);
+                  await expect(injection.outcome).resolves.toEqual({
+                    status: "failed",
+                    error: sourceError,
+                  });
                 } else {
                   const injection = await pending;
                   await expect(injection.acceptance).resolves.toBe(false);

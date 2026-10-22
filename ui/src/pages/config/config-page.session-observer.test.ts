@@ -913,9 +913,11 @@ describe("ConfigPage meeting capture", () => {
       const tabs = captureTab.closest(".hub-tabs")!;
       expect(tabs.querySelector("[active]")?.getAttribute("data-tab-value")).toBe("messages");
       captureTab.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      flush();
-      const capture = container.querySelector("openclaw-meeting-capture-settings") as HTMLElement;
-      expect(container.querySelector("#config-section-panel")?.contains(capture)).toBe(true);
+      const capture = await waitForSolid(() => {
+        const element = container.querySelector("openclaw-meeting-capture-settings") as HTMLElement;
+        expect(container.querySelector("#config-section-panel")?.contains(element)).toBe(true);
+        return element;
+      });
       flush();
       const advanced = capture.querySelector<HTMLDetailsElement>("details")!;
       expect(advanced).not.toBeNull();

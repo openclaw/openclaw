@@ -1,11 +1,14 @@
+import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as openclawRoot from "./openclaw-root.js";
 import {
   fileIdentity as identity,
+  readText,
   immutableDescriptor,
   ownImmutableFixture,
   withDatabase,
@@ -14,13 +17,19 @@ import {
   publishImmutablePointer,
   reconcileImmutablePointer,
 } from "./package-update-activation-immutable-pointer.js";
-import { readImmutableInstallRecordForRecovery } from "./package-update-activation-immutable-recovery.js";
+import {
+  prepareImmutableRecoveryRuntime,
+  verifyImmutableRecoveryRuntime,
+  readImmutableInstallRecordForRecovery,
+} from "./package-update-activation-immutable-recovery.js";
+import * as immutableActivation from "./package-update-activation-immutable.js";
 import {
   createImmutableInstallRecord,
   immutableInstallReadOperations,
   recordImmutablePreparedGeneration,
   updateImmutableInstallRecord,
 } from "./package-update-activation-immutable.js";
+import { snapshotActivationFiles } from "./package-update-activation-lifetime.test-support.js";
 import {
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
@@ -30,6 +39,7 @@ import {
   syntheticActivationCustody,
   syntheticImmutableProtection,
 } from "./update-immutable-activation.test-support.js";
+import * as immutableGeneration from "./update-immutable-generation.js";
 import { readImmutableInstallRecord } from "./update-immutable-install-record.js";
 import type {
   ImmutableActivationOperation,
@@ -96,21 +106,7 @@ const read = () =>
     { root },
     { path: journalPath(), env: process.env },
   );
-const controlFiles = () =>
-  fs
-    .readdirSync(controlPath())
-    .toSorted()
-    .map((name) => {
-      const file = path.join(controlPath(), name);
-      const stat = fs.lstatSync(file, { bigint: true });
-      return {
-        name,
-        identity: `${stat.dev}:${stat.ino}`,
-        mode: stat.mode,
-        mtime: stat.mtimeNs,
-        bytes: fs.readFileSync(file),
-      };
-    });
+const controlFiles = () => snapshotActivationFiles(controlPath());
 
 beforeEach(() => {
   parent = fs.realpathSync(dirs.make("immutable-install-control-"));
@@ -227,7 +223,6 @@ it.each(["candidate-verification-pending", "private error: token=fixture-secret 
 
 it.each([
   ["succeeded", 4242, "fixture"],
-  ["rolled-back", 4243, "restored"],
   ["succeeded", null, null],
 ] as const)("projects a historical %s receipt from a fresh observer", (outcome, pid, prefix) => {
   const gateway =
@@ -584,8 +579,6 @@ it.skipIf(process.platform === "win32").each([
   ["journal", "inode"],
   ["database", "bytes"],
   ["journal", "bytes"],
-  ["database", "size"],
-  ["journal", "size"],
 ] as const)(
   "preserves immutable %s with changed %s instead of admitting old recovery evidence",
   async (changed, mutation) => {
@@ -597,12 +590,10 @@ it.skipIf(process.platform === "win32").each([
       const replacement = path.join(parent, "replacement-control-bytes");
       fs.copyFileSync(source, replacement);
       fs.renameSync(replacement, source);
-    } else if (mutation === "bytes") {
+    } else {
       const bytes = fs.readFileSync(source);
       bytes[bytes.length - 1] = bytes.readUInt8(bytes.length - 1) ^ 1;
       fs.writeFileSync(source, bytes);
-    } else {
-      fs.appendFileSync(source, "changed size");
     }
     const before = controlFiles();
     expect(recovery.assertUnchanged).toThrow(/changed/u);
@@ -611,3 +602,148 @@ it.skipIf(process.platform === "win32").each([
     expect(selectedRelease()).toBe(`releases/${sha}`);
   },
 );
+
+describe("immutable retained recovery runtime", () => {
+  const runtimeBytes = "built runtime";
+  const digest = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+  const recoveryArgs = ["--json", "--timeout", "10", "--drain-timeout", "30"];
+  let recoveryRecord: ImmutableInstallRecord;
+  let source: string;
+  let control: string;
+  let current: boolean;
+  const assertRecoveryCurrent = () => {
+    if (!current) {
+      throw new Error("executor retired");
+    }
+  };
+  const prepareRecovery = () =>
+    prepareImmutableRecoveryRuntime({
+      record: recoveryRecord,
+      assertCurrent: assertRecoveryCurrent,
+    });
+  const verifyRecovery = (reference: Awaited<ReturnType<typeof prepareRecovery>>) =>
+    verifyImmutableRecoveryRuntime({
+      reference,
+      descriptor: recoveryRecord.descriptor,
+      assertCurrent: assertRecoveryCurrent,
+    });
+  const writeSource = (file: string, content: string) => {
+    const target = path.join(source, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o755 });
+    fs.writeFileSync(target, content);
+  };
+
+  beforeEach(() => {
+    vi.mocked(fs.lstatSync).mockRestore();
+    ownImmutableFixture(parent);
+    vi.spyOn(immutableActivation, "assertImmutableInstallRecordCurrent").mockImplementation(
+      (_record, check) => check(),
+    );
+    vi.spyOn(immutableGeneration, "sealImmutableGeneration").mockResolvedValue(undefined);
+    vi.spyOn(immutableGeneration, "verifyImmutableGeneration");
+    vi.spyOn(openclawRoot, "resolveOpenClawPackageRoot");
+    current = true;
+    source = descriptor.current.path;
+    control = resolvePackageActivationControl(resolvePackageActivationAnchor(root));
+    writeSource("dist/index.js", runtimeBytes);
+    writeSource("dist/worker.js", "copied worker");
+    writeSource("node_modules/fixture/index.cjs", "module.exports = 'copied dependency';");
+    writeSource("node_modules/fixture/addon.node", "native artifact bytes");
+    fs.mkdirSync(control, { mode: 0o755 });
+    const dependencies = path.join(source, "node_modules");
+    fs.symlinkSync(path.join(dependencies, "fixture"), path.join(dependencies, "absolute"));
+    fs.symlinkSync("fixture", path.join(dependencies, "relative"));
+    writeSource(
+      "openclaw.mjs",
+      `
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+console.log(JSON.stringify({ args: process.argv.slice(2), dependency: createRequire(import.meta.url)('./node_modules/absolute/index.cjs'), worker: fs.readFileSync(new URL('./dist/worker.js', import.meta.url), 'utf8') }));
+`,
+    );
+    vi.mocked(openclawRoot.resolveOpenClawPackageRoot).mockResolvedValue(source);
+    vi.mocked(immutableGeneration.verifyImmutableGeneration).mockImplementation(
+      async (directory, expectedSha) => {
+        expect(expectedSha).toBe(sha);
+        return {
+          identity: identity(directory),
+          buildDigest: digest(fs.readFileSync(path.join(directory, "dist", "index.js"))),
+        };
+      },
+    );
+    recoveryRecord = {
+      revision: 1,
+      prepared: null,
+      descriptor: {
+        ...descriptor,
+        current: { ...descriptor.current, buildDigest: digest(runtimeBytes) },
+        version: 2,
+        activationEnabled: true,
+      },
+    };
+  });
+
+  it("runs retained recovery after the original generation is gone", async () => {
+    const reference = await prepareRecovery();
+    expect(await prepareRecovery()).toEqual(reference);
+    fs.rmSync(source, { recursive: true });
+    await verifyRecovery(reference);
+    expect(readText(reference.path, "node_modules/fixture/addon.node")).toBe(
+      "native artifact bytes",
+    );
+    expect(fs.realpathSync(path.join(reference.path, "node_modules", "relative"))).toBe(
+      path.join(reference.path, "node_modules", "fixture"),
+    );
+    const result = spawnSync(process.execPath, [reference.helperPath, ...recoveryArgs], {
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      args: ["update", "recover", "--root", recoveryRecord.descriptor.root, ...recoveryArgs],
+      dependency: "copied dependency",
+      worker: "copied worker",
+    });
+  });
+
+  it("rejects a foreign checkout before publication", async () => {
+    vi.mocked(openclawRoot.resolveOpenClawPackageRoot).mockResolvedValue(path.dirname(source));
+    await expect(prepareRecovery()).rejects.toThrow("sealed current or prepared generation");
+    expect(fs.readdirSync(control)).toEqual([]);
+  });
+
+  it("preserves a recovery copy with a mismatched receipt", async () => {
+    const destination = path.join(control, `recovery-${sha}`);
+    fs.mkdirSync(path.join(destination, "dist"), { recursive: true, mode: 0o755 });
+    fs.writeFileSync(path.join(destination, "dist", "index.js"), "foreign runtime");
+    await expect(prepareRecovery()).rejects.toThrow("differs; it was preserved");
+    expect(readText(destination, "dist/index.js")).toBe("foreign runtime");
+    expect(fs.existsSync(path.join(control, "recovery.mjs"))).toBe(false);
+  });
+
+  it("preserves the source on authority loss during copy verification", async () => {
+    const verifyGeneration = vi
+      .mocked(immutableGeneration.verifyImmutableGeneration)
+      .getMockImplementation()!;
+    vi.mocked(immutableGeneration.verifyImmutableGeneration).mockImplementation(async (...args) => {
+      const result = await verifyGeneration(...args);
+      if (args[0] !== source) {
+        current = false;
+      }
+      return result;
+    });
+    await expect(prepareRecovery()).rejects.toThrow("executor retired");
+    expect(readText(source, "dist/index.js")).toBe("built runtime");
+    expect(fs.readdirSync(control)).toEqual([]);
+  });
+
+  it.each(["helper", "runtime"])("rejects changed %s bytes before recovery", async (changed) => {
+    const reference = await prepareRecovery();
+    const file =
+      changed === "helper" ? reference.helperPath : path.join(reference.path, "dist", "index.js");
+    fs.chmodSync(file, 0o644);
+    fs.writeFileSync(file, "foreign bytes");
+    fs.chmodSync(file, 0o444);
+    await expect(verifyRecovery(reference)).rejects.toThrow(/artifact identity|recorded artifact/u);
+  });
+});

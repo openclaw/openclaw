@@ -24,7 +24,6 @@ import {
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
 } from "./agent-session-loop-correctness.test-support.js";
-import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { MessageEndEvent, ToolDefinition } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
 
@@ -61,7 +60,7 @@ function mockExchange(content: AssistantMessage["content"], reply: string) {
       createAssistantResultStream(createAssistant(model, content, "toolUse")),
     )
     .mockImplementation((model: Model) =>
-      createAssistantResultStream(createAssistant(model, [text(reply)])),
+      createAssistantResultStream(createAssistant(model, reply)),
     );
 }
 
@@ -267,12 +266,11 @@ it.each(["value", "apiKey", "account"])(
         },
       };
     };
-    const resourceLoader = client
-      ? await createResourceLoader((api) => {
-          api.on("message_end", extendReply);
-        })
-      : undefined;
-    const { session } = await createTestSession({ sessionManager, customTools, resourceLoader });
+    const { session } = await createTestSession({
+      sessionManager,
+      customTools,
+      extension: client ? (api) => api.on("message_end", extendReply) : undefined,
+    });
     const started: string[] = [];
     session.subscribe((event) => {
       if (event.type === "tool_execution_start") {

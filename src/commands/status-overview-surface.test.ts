@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildGatewayStatusJsonPayload,
-  buildStatusOverviewSurfaceRows,
-  buildStatusUpdateSurface,
-} from "./status-all/format.js";
+import { buildStatusOverviewSurfaceRows, buildStatusUpdateSurface } from "./status-all/format.js";
 import {
   baseStatusExpectedUpdateChannelLabel,
-  baseStatusGatewaySnapshot,
   baseStatusOverviewSurface,
 } from "./status.test-support.ts";
 
@@ -66,19 +61,5 @@ describe("status-overview-surface", () => {
       { Item: "Agents", Value: "2 total" },
       { Item: "Secrets", Value: "none" },
     ]);
-  });
-
-  it("builds the shared gateway json payload from the overview surface", () => {
-    expect(buildGatewayStatusJsonPayload(baseStatusGatewaySnapshot)).toEqual({
-      mode: "remote",
-      url: "wss://gateway.example.com",
-      urlSource: "config",
-      misconfigured: false,
-      reachable: true,
-      connectLatencyMs: 42,
-      self: { host: "gateway", version: "1.2.3" },
-      error: null,
-      authWarning: "warn-text",
-    });
   });
 });

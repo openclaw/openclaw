@@ -130,6 +130,7 @@ export async function changeSessionPlacement(params: {
   fallbackAgentId: string;
   isCurrent: () => boolean;
   currentRow: () => GatewaySessionRow | undefined;
+  onAdmittedCommand?: (completion: Promise<void>) => void;
   onPendingChange: (key: string | null) => void;
   publishError: (error: unknown) => void;
   reconcileMutation: SessionCapability["reconcileMutation"];
@@ -289,51 +290,55 @@ export async function changeSessionPlacement(params: {
     return;
   }
   const session = { key: params.row.key, ...(agentId ? { agentId } : {}) };
-  params.onPendingChange(params.row.key);
-  try {
-    if (expectedSource) {
-      await client.request("sessions.move", {
-        ...session,
-        expected: expectedSource,
-        target,
-        ...(abandonSource ? { abandonSource: true } : {}),
-      });
-    } else if (target.kind === "gateway") {
-      if (!restartPlacement) {
-        params.publishError(t("sessionsView.actionUnavailable"));
-        return;
+  const completion = (async () => {
+    params.onPendingChange(params.row.key);
+    try {
+      if (expectedSource) {
+        await client.request("sessions.move", {
+          ...session,
+          expected: expectedSource,
+          target,
+          ...(abandonSource ? { abandonSource: true } : {}),
+        });
+      } else if (target.kind === "gateway") {
+        if (!restartPlacement) {
+          params.publishError(t("sessionsView.actionUnavailable"));
+          return;
+        }
+        await client.request(
+          "sessions.reclaim",
+          { ...session, recoverToGateway: { expectedGeneration: restartPlacement.generation } },
+          { timeoutMs: null },
+        );
+      } else {
+        await client.request("sessions.dispatch", {
+          ...session,
+          ...(target.kind === "profile"
+            ? {
+                profileId: target.profileId,
+                ...(target.os ? { os: target.os } : {}),
+                ...(target.machineClass ? { machineClass: target.machineClass } : {}),
+              }
+            : { deviceId: target.deviceId }),
+        });
       }
-      await client.request(
-        "sessions.reclaim",
-        { ...session, recoverToGateway: { expectedGeneration: restartPlacement.generation } },
-        { timeoutMs: null },
-      );
-    } else {
-      await client.request("sessions.dispatch", {
-        ...session,
-        ...(target.kind === "profile"
-          ? {
-              profileId: target.profileId,
-              ...(target.os ? { os: target.os } : {}),
-              ...(target.machineClass ? { machineClass: target.machineClass } : {}),
-            }
-          : { deviceId: target.deviceId }),
-      });
-    }
-    if (params.isCurrent()) {
-      const outcome = await params.reconcileMutation(agentId);
-      if (outcome.status === "failed" && params.isCurrent()) {
-        params.publishError(outcome.error);
-      }
-    }
-  } catch (error) {
-    if (params.isCurrent()) {
-      await params.reconcileMutation(agentId).catch(() => undefined);
       if (params.isCurrent()) {
-        params.publishError(error);
+        const outcome = await params.reconcileMutation(agentId);
+        if (outcome.status === "failed" && params.isCurrent()) {
+          params.publishError(outcome.error);
+        }
       }
+    } catch (error) {
+      if (params.isCurrent()) {
+        await params.reconcileMutation(agentId).catch(() => undefined);
+        if (params.isCurrent()) {
+          params.publishError(error);
+        }
+      }
+    } finally {
+      params.onPendingChange(null);
     }
-  } finally {
-    params.onPendingChange(null);
-  }
+  })();
+  params.onAdmittedCommand?.(completion);
+  await completion;
 }

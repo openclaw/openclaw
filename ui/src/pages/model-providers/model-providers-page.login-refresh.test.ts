@@ -4,7 +4,12 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ModelAuthStatusResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { loginHarness, openLogin, openPicker } from "./model-providers-page.login.test-support.ts";
+import {
+  chooseLogin,
+  loginHarness,
+  openLogin,
+  openPicker,
+} from "./model-providers-page.login.test-support.ts";
 import {
   appendPage,
   createAuthStatus,
@@ -13,12 +18,99 @@ import {
   modelPicker,
   openModelPicker,
   submitCredential,
+  unmountPage,
 } from "./model-providers-page.test-support.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
+
+it("keeps the credential step disabled until its configuration refresh settles", async () => {
+  const { context, request } = createHarness("writer");
+  await context.runtimeConfig.ensureLoaded();
+  const originalRequest = request.getMockImplementation()!;
+  const refresh = createDeferred();
+  let holdRefresh = false;
+  let refreshing = false;
+  let nextCalls = 0;
+  request.mockImplementation(async (method, ...args) => {
+    if (method === "models.authStatus") {
+      return {
+        ts: 1,
+        providers: [],
+        providerCapabilities: [
+          {
+            provider: "example",
+            apiKeySupported: true,
+            loginOptions: [
+              {
+                id: "example-secret",
+                brandId: "example",
+                label: "Example API key",
+                kind: "secret",
+              },
+            ],
+          },
+        ],
+      };
+    }
+    if (method === "models.authLogin") {
+      return { done: false, status: "running" };
+    }
+    if (method === "wizard.next") {
+      if (++nextCalls > 1) {
+        return { done: true, status: "done" };
+      }
+      holdRefresh = true;
+      return {
+        done: false,
+        status: "running",
+        step: {
+          id: "credential",
+          type: "text",
+          sensitive: true,
+          message: "Enter your key",
+          initialValue: "synthetic-test-credential",
+        },
+      };
+    }
+    if (method === "config.get" && holdRefresh) {
+      refreshing = true;
+      await refresh.promise;
+    }
+    return originalRequest(method, ...args);
+  });
+  const page = appendPage(context);
+  try {
+    await chooseLogin(page);
+    await waitForSolid(() => expect(refreshing).toBe(true));
+    const input = page.querySelector<HTMLInputElement>('input[name="wizard-text"]')!;
+    const submit = page.querySelector<HTMLButtonElement>(
+      '.wizard-step__form button[type="submit"]',
+    )!;
+    expect(input).not.toBeNull();
+    expect(input.disabled).toBe(true);
+    expect(submit.disabled).toBe(true);
+
+    holdRefresh = false;
+    refresh.resolve();
+    await waitForSolid(() => {
+      expect(page.querySelector('input[name="wizard-text"]')).toBe(input);
+      expect(input.disabled).toBe(false);
+      expect(submit.disabled).toBe(false);
+    });
+    submit.click();
+    await waitForSolid(() =>
+      expect(page.querySelector(".model-setup-wizard--done")).not.toBeNull(),
+    );
+    expect(nextCalls).toBe(2);
+  } finally {
+    refresh.resolve();
+    unmountPage(page);
+  }
+});
+
 it("refreshes the connected provider without reloading usage or replacing other rows", async () => {
   const existingProvider: ModelAuthStatusResult["providers"][number] = {
     provider: "openai",

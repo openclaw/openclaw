@@ -1,6 +1,7 @@
-import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
+import type { AssistantMessage, Context, ProviderReplayState } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import {
   createCompactionCapture,
@@ -22,18 +23,12 @@ import {
   resolveCompactionReplayPressure as measurePressure,
 } from "./provider-compaction-replay.js";
 
-const model = {
-  id: "gpt-5.6-luna",
+const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1_000_000,
   maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 const replayIdentity = { sessionId: "session-a", authProfileId: "profile-a" };
 const replayMetadata = buildOpenAIResponsesReasoningReplayMetadata(model, replayIdentity);
 const wire = (messages: Context["messages"]) =>

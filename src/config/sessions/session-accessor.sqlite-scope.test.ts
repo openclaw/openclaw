@@ -234,11 +234,7 @@ test.each(["ok", "error"] as const)(
     const message = outcome === "ok" ? "slow SQLite session write" : "SQLite session write failed";
     const fields = {
       operation: "session.transcript.batch",
-      elapsedMs: 1_250,
-      queueWaitMs: 0,
-      writerExecutionMs: 1_250,
-      completionDelayMs: 0,
-      reentrant: false,
+      ...timing(1_250),
     };
     try {
       const { record } = await withFileLog(async (env) => {
