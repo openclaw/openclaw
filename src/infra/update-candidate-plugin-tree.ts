@@ -7,6 +7,7 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
+import { isPackageActivationStateDirectoryName } from "./package-update-activation-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
@@ -320,9 +321,14 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         // The complete-wave owner pass records the authoritative host identity.
         continue;
       } else if (entry.isDirectory()) {
-        if (isGitRuntimeStagingName(entry.name) && !roots.has(file)) {
+        const recoveryState =
+          retainedHostRoot !== undefined &&
+          moduleOwners.has(directory) &&
+          isPackageActivationStateDirectoryName(entry.name);
+        if ((isGitRuntimeStagingName(entry.name) || recoveryState) && !roots.has(file)) {
           // Transaction links describe their final location. Incidental inventory
-          // must not read candidate or rollback contents as live dependencies.
+          // must not retain candidate, rollback, or recovery state as dependencies.
+          // Hard links make the live journal fail its private-file guard.
           staging.add(file);
         } else {
           await scan(file);

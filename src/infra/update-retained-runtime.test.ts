@@ -9,6 +9,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import {
+  privatePackageActivationIdentity,
+  resolvePackageActivationAnchor,
+  resolvePackageActivationControl,
+} from "./package-update-activation-paths.js";
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
@@ -28,6 +33,41 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
       cleanup();
     }
   }),
+);
+
+it.skipIf(process.platform === "win32").each(["anchor", "control"] as const)(
+  "keeps a sibling publication %s journal private while retaining a global npm runtime",
+  async (layout) => {
+    const modules = path.join(tempDirs.make("retained-private-journal-"), "lib/node_modules");
+    const root = await fixture(modules, "npm");
+    const anchor = resolvePackageActivationAnchor(root);
+    const directory = layout === "control" ? resolvePackageActivationControl(anchor) : anchor;
+    await mkdir(directory, { mode: 0o700 });
+    const journal = path.join(directory, "operation.sqlite");
+    // Opaque mutable fixture bytes, never a SQLite receipt or mutation authority.
+    await writeFile(journal, "private recovery fixture\n", { mode: 0o600 });
+    const identity = privatePackageActivationIdentity(journal, false);
+    const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs"));
+
+    await withRetainedUpdateRuntime(moduleUrl.href, async (retain) => {
+      const metrics = await retain({
+        mutationRoots: [root],
+        installTarget: { manager: "npm", command: "npm", globalRoot: modules, packageRoot: root },
+        timeoutMs: 30_000,
+        assertCurrent() {},
+      });
+      expect(metrics).toBeDefined();
+      const retained = captureRuntimeWorkerSource(moduleUrl).moduleUrl;
+      expect(retained.href).not.toBe(moduleUrl.href);
+      expect(await readFile(retained, "utf8")).toBe(await readFile(moduleUrl, "utf8"));
+      expect((await stat(journal)).nlink).toBe(1);
+      expect(privatePackageActivationIdentity(journal, false)).toBe(identity);
+    });
+
+    expect((await stat(journal)).nlink).toBe(1);
+    expect(privatePackageActivationIdentity(journal, false)).toBe(identity);
+    expect(await readFile(journal, "utf8")).toBe("private recovery fixture\n");
+  },
 );
 
 it.each([false, true])(

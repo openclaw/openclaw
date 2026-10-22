@@ -6,6 +6,13 @@ import {
   type VitestRuntimeTestSelection,
 } from "./vitest-build-prerequisites.mts";
 
+// These update suites reach compiled process declarations during collection.
+// Prepare their generation before a Vitest borrower adds its own module graph.
+const updateRuntimeWorkerTestFiles = [
+  "src/infra/update-retained-runtime.test.ts",
+  "src/infra/package-update-activation-lifetime.test.ts",
+];
+
 /** Bind installed CLI matching without adding runtime dependencies to CI planning. */
 export function resolveVitestRuntimeCliSelections(
   config: string,
@@ -20,7 +27,7 @@ export function resolveVitestRuntimeCliSelections(
   }));
 }
 
-/** Keep known database-worker compilation outside dynamically imported test cases. */
+/** Keep known worker compilation outside Vitest collection and test cases. */
 export function shouldPrepareVitestCoreWorkers(
   config: string,
   args: string[],
@@ -37,7 +44,7 @@ export function shouldPrepareVitestCoreWorkers(
     );
   return (
     includesInfra &&
-    databaseWorkerCoreTestFiles.some((file) =>
+    [...databaseWorkerCoreTestFiles, ...updateRuntimeWorkerTestFiles].some((file) =>
       matchesVitestCliSelection(file, [file], args, "", env, includePatterns),
     )
   );
