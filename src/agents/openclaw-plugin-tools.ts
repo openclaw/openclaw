@@ -503,6 +503,7 @@ function* resolveOpenClawPluginToolSteps(
       name: toolName,
       label: toolName,
       description: `${descriptor.description} (node: ${entry.displayName?.trim() || entry.nodeId})`,
+      // SAFETY: normalized paired-node JSON schemas need no TypeBox-only metadata when forwarded.
       parameters: descriptor.parameters as never,
       ...(mcpTool
         ? { executionMode: "sequential" as const, resultContentSource: "network" as const }
