@@ -1,7 +1,6 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { registerListener } from "../../../../src/shared/listeners.js";
-import { getOrCreateWeakOwnerMap } from "../../../../src/shared/weak-owner-map.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -53,7 +52,11 @@ export function fetchAgentIdentity(
   client: GatewayBrowserClient,
   agentId: string,
 ): Promise<AgentIdentityResult | null> {
-  const cache = getOrCreateWeakOwnerMap(identityRequests, client);
+  let cache = identityRequests.get(client);
+  if (!cache) {
+    cache = new Map();
+    identityRequests.set(client, cache);
+  }
   const key = agentId.trim();
   const cached = cache.get(key);
   if (cached && Date.now() < cached.refreshAt) {

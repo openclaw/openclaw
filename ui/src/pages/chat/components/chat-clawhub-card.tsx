@@ -1,7 +1,7 @@
 import { lazy, Loading, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { pathForPluginCatalogEntry } from "../../../app-route-paths.ts";
-import { PluginOfficialBadge } from "../../../components/solid/plugin-official-badge.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../styles/chat/clawhub-card.css";
@@ -52,7 +52,15 @@ export function ChatClawHubCard(props: ChatClawHubCardProps) {
                   <span class="chat-clawhub-card__icon skeleton" aria-hidden="true" />
                   <span class="chat-clawhub-card__identity">
                     <span class="card-title chat-clawhub-card__name">
-                      <span>{card().name}</span> <PluginOfficialBadge />
+                      <span>{card().name}</span>{" "}
+                      <span
+                        class="plugin-official-badge"
+                        role="img"
+                        aria-label={t("pluginsPage.official")}
+                        title={t("pluginsPage.official")}
+                      >
+                        <Icon name="badgeCheck" />
+                      </span>
                     </span>
                     <Show when={card().description}>
                       {(description) => <span class="card-sub">{description()}</span>}

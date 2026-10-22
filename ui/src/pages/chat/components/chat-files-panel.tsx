@@ -309,16 +309,6 @@ defineSolidBridge<Props, Methods>(
                 rendered();
                 return preview();
               };
-              const PathLabel = () => (
-                <span
-                  ref={createTextOverflow(() => entry().label)}
-                  class="sidebar-file-view__path"
-                  title={entry().label}
-                >
-                  {entry().label}
-                </span>
-              );
-
               const readResult = createMemo(() => ({ pending: entry().readResult }), {
                 equals: (previous, next) => previous.pending === next.pending,
               });
@@ -355,7 +345,13 @@ defineSolidBridge<Props, Methods>(
                       class="chat-files-panel__fallback-rail sidebar-file-view__path-bar session-panel-rail"
                       data-presentation="desktop"
                     >
-                      <PathLabel />
+                      <span
+                        ref={createTextOverflow(() => entry().label)}
+                        class="sidebar-file-view__path"
+                        title={entry().label}
+                      >
+                        {entry().label}
+                      </span>
                     </div>
                   </Show>
                   <Show when={rendered().presentation === "mobile"}>
@@ -383,7 +379,13 @@ defineSolidBridge<Props, Methods>(
                               class="sidebar-file-view__path-bar session-panel-rail"
                               data-presentation="desktop"
                             >
-                              <PathLabel />
+                              <span
+                                ref={createTextOverflow(() => entry().label)}
+                                class="sidebar-file-view__path"
+                                title={entry().label}
+                              >
+                                {entry().label}
+                              </span>
                             </div>
                             <div class="sidebar-file-view__workspace-body">
                               <PanelEmptyState

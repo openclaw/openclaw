@@ -15,11 +15,6 @@ export type AvatarDataUrlResult =
   | { ok: true; dataUrl: string }
   | { ok: false; reason: "unusable" | "too-detailed" };
 
-export const AVATAR_REJECTION_MESSAGE_KEYS = {
-  unusable: "agents.identity.imageUnusable",
-  "too-detailed": "agents.identity.imageTooDetailed",
-} as const satisfies Record<Extract<AvatarDataUrlResult, { ok: false }>["reason"], string>;
-
 const UNUSABLE: AvatarDataUrlResult = { ok: false, reason: "unusable" };
 const TOO_DETAILED: AvatarDataUrlResult = { ok: false, reason: "too-detailed" };
 

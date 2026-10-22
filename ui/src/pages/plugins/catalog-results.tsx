@@ -9,7 +9,6 @@ import {
 } from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
-import { PluginOfficialBadge } from "../../components/solid/plugin-official-badge.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -24,7 +23,12 @@ import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skel
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
-import { renderPluginAuthor, PluginCardSummary, renderPluginStateStatus } from "./plugin-card.tsx";
+import {
+  renderPluginAuthor,
+  PluginCardSummary,
+  renderPluginOfficialBadge,
+  renderPluginStateStatus,
+} from "./plugin-card.tsx";
 import type { PluginDiscoveryIntent, PluginDiscoveryState } from "./plugin-discovery.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
@@ -267,7 +271,7 @@ function CatalogCard(props: {
           <div class="installed-plugins-card__identity">
             <div class="plugin-card-title-row">
               <h3>{props.plugin.catalog.name}</h3>
-              {props.plugin.catalog.official ? <PluginOfficialBadge /> : undefined}
+              {props.plugin.catalog.official ? renderPluginOfficialBadge() : undefined}
             </div>
             {renderPluginAuthor(props.plugin.catalog.author)}
           </div>

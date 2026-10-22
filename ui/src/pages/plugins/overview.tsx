@@ -5,7 +5,6 @@ import {
   type PluginUiCapability,
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { PluginOfficialBadge } from "../../components/solid/plugin-official-badge.tsx";
 import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatDateMs } from "../../lib/format.ts";
@@ -16,7 +15,7 @@ import type {
 } from "../../lib/plugins/index.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { formatCompactCount } from "./catalog-results.tsx";
-import { renderPluginAuthor } from "./plugin-card.tsx";
+import { renderPluginAuthor, renderPluginOfficialBadge } from "./plugin-card.tsx";
 import { renderPluginRowMessage } from "./plugin-row-message.tsx";
 import { renderPluginSecurityAudit } from "./security-audit.tsx";
 
@@ -112,7 +111,7 @@ export function renderPublisherIdentity(options: {
     <div class="plugin-catalog-detail__publisher">
       <span class="plugin-catalog-detail__publisher-name">
         {name ? <strong>{name}</strong> : renderPluginAuthor(handle)}
-        {official ? <PluginOfficialBadge /> : undefined}
+        {official ? renderPluginOfficialBadge() : undefined}
       </span>
       {name ? renderPluginAuthor(handle) : undefined}
     </div>

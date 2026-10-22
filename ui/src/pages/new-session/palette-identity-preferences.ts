@@ -1,4 +1,3 @@
-import { getOrCreateWeakOwnerMap } from "../../../../src/shared/weak-owner-map.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import {
@@ -21,7 +20,11 @@ export function acquirePaletteIdentityPreferences(owner: Owner): PaletteIdentity
     handshakes = new WeakMap();
     owners.set(owner.client, handshakes);
   }
-  const profiles = getOrCreateWeakOwnerMap(handshakes, owner.hello);
+  let profiles = handshakes.get(owner.hello);
+  if (!profiles) {
+    profiles = new Map();
+    handshakes.set(owner.hello, profiles);
+  }
   const key = JSON.stringify([owner.gatewayUrl, owner.profileId]);
   let state = profiles.get(key);
   if (!state) {

@@ -3,7 +3,6 @@ import { createDeferred } from "@solidjs/signals";
 import { createMemo, createSignal, Errored, isPending, Loading, onSettled, Show } from "solid-js";
 import type { ClawHubRecommendation } from "../../../../../src/shared/clawhub-recommendations.js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { PluginOfficialBadge } from "../../../components/solid/plugin-official-badge.tsx";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { loadPluginDiscoveryDetail } from "../../../lib/plugins/index.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
@@ -327,7 +326,14 @@ export function ChatClawHubCardBody(
                     )}
                   </Show>
                   <Show when={current().official}>
-                    <PluginOfficialBadge />
+                    <span
+                      class="plugin-official-badge"
+                      role="img"
+                      aria-label={t("pluginsPage.official")}
+                      title={t("pluginsPage.official")}
+                    >
+                      <Icon name="badgeCheck" />
+                    </span>
                   </Show>
                 </span>
                 <Show when={current().description}>

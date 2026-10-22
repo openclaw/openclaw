@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { lazy, Loading, Show } from "solid-js";
 
 const Images = lazy(() => import("./chat-message-images-solid.tsx"), {
@@ -7,23 +6,13 @@ const Images = lazy(() => import("./chat-message-images-solid.tsx"), {
 const Attachments = lazy(() => import("./chat-message-attachments-solid.tsx"), {
   export: "AssistantAttachments",
 });
-export const MessageAttachment = withLoading(
-  lazy(() => import("./chat-message-attachments-solid.tsx"), { export: "MessageAttachment" }),
-);
-export const ToolPreview = withLoading(
-  lazy(() => import("./widget-card-view.tsx"), { export: "ToolPreview" }),
-);
-export const ChatClawHubCard = withLoading(
-  lazy(() => import("./chat-clawhub-card.tsx"), { export: "ChatClawHubCard" }),
-);
-
-function withLoading<Props extends object>(Content: (props: Props) => JSX.Element) {
-  return (props: Props) => (
-    <Loading>
-      <Content {...props} />
-    </Loading>
-  );
-}
+const Attachment = lazy(() => import("./chat-message-attachments-solid.tsx"), {
+  export: "MessageAttachment",
+});
+const Preview = lazy(() => import("./widget-card-view.tsx"), { export: "ToolPreview" });
+const Recommendation = lazy(() => import("./chat-clawhub-card.tsx"), {
+  export: "ChatClawHubCard",
+});
 
 // Chat and pending New Session messages share these boundaries. Empty media
 // collections must not load the renderers or the players they register.
@@ -48,5 +37,35 @@ export function AssistantAttachments(
         <Attachments {...props} />
       </Loading>
     </Show>
+  );
+}
+
+export function MessageAttachment(
+  props: Parameters<typeof import("./chat-message-attachments-solid.tsx").MessageAttachment>[0],
+) {
+  return (
+    <Loading>
+      <Attachment {...props} />
+    </Loading>
+  );
+}
+
+export function ToolPreview(
+  props: Parameters<typeof import("./widget-card-view.tsx").ToolPreview>[0],
+) {
+  return (
+    <Loading>
+      <Preview {...props} />
+    </Loading>
+  );
+}
+
+export function ChatClawHubCard(
+  props: Parameters<typeof import("./chat-clawhub-card.tsx").ChatClawHubCard>[0],
+) {
+  return (
+    <Loading>
+      <Recommendation {...props} />
+    </Loading>
   );
 }

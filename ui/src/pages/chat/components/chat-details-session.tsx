@@ -193,15 +193,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
           const session = () => props.props?.selectedSession;
           const creatorName = () => session()?.createdActor?.label || session()?.createdActor?.id;
           const owner = () => session()?.owner?.actor;
-          const OwnerLabel = () => (
-            <div class="chat-details__person">
-              <span>{t("chat.sessionDetails.owner")}</span>
-              <span ref={createTextOverflow(() => owner()?.label || owner()?.id || owner()?.type)}>
-                {owner()?.label || owner()?.id || owner()?.type}
-              </span>
-            </div>
-          );
-
           const people = () => session()?.expandedParticipants ?? session()?.participants ?? [];
           const count = () => session()?.participantCount ?? people().length;
           const partialPeople = () =>
@@ -346,7 +337,18 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                               </span>
                               <Icon name="chevronDown" />
                             </summary>
-                            {owner() && <OwnerLabel />}
+                            {owner() && (
+                              <div class="chat-details__person">
+                                <span>{t("chat.sessionDetails.owner")}</span>
+                                <span
+                                  ref={createTextOverflow(
+                                    () => owner()?.label || owner()?.id || owner()?.type,
+                                  )}
+                                >
+                                  {owner()?.label || owner()?.id || owner()?.type}
+                                </span>
+                              </div>
+                            )}
                             <For each={people()}>
                               {(person) => (
                                 <div class="chat-details__person">
@@ -426,7 +428,16 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                             </div>
                           </Show>
                           <Show when={owner() && !owner()?.identity}>
-                            <OwnerLabel />
+                            <div class="chat-details__person">
+                              <span>{t("chat.sessionDetails.owner")}</span>
+                              <span
+                                ref={createTextOverflow(
+                                  () => owner()?.label || owner()?.id || owner()?.type,
+                                )}
+                              >
+                                {owner()?.label || owner()?.id || owner()?.type}
+                              </span>
+                            </div>
                           </Show>
                         </ChatDetailsDesktopSection>
                       </Show>

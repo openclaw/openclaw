@@ -93,7 +93,12 @@ export async function resizeChatAttachmentImage(
         type: "module",
       });
       const listeners = new AbortController();
+      let settled = false;
       const finish = (result: File | null) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         listeners.abort();
         worker.terminate();
         signal.removeEventListener("abort", abort);

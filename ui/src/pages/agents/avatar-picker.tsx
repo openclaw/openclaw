@@ -22,7 +22,6 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import {
-  AVATAR_REJECTION_MESSAGE_KEYS,
   imageToAvatarDataUrl,
   svgToAvatarDataUrl,
   type AvatarDataUrlResult,
@@ -142,7 +141,13 @@ export function AvatarPicker(props: AvatarPickerProps) {
 
   const requireImage = (result: AvatarDataUrlResult) => {
     if (!result.ok) {
-      throw new Error(t(AVATAR_REJECTION_MESSAGE_KEYS[result.reason]));
+      throw new Error(
+        t(
+          result.reason === "too-detailed"
+            ? "agents.identity.imageTooDetailed"
+            : "agents.identity.imageUnusable",
+        ),
+      );
     }
     return result.dataUrl;
   };

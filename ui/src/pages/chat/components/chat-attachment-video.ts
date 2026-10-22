@@ -23,7 +23,12 @@ export function compressChatAttachmentVideo(
       });
       const listeners = new AbortController();
       let timer: ReturnType<typeof setTimeout>;
+      let settled = false;
       const finish = (prepared?: File, reason: VideoCompressionError = "failed") => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         clearTimeout(timer);
         listeners.abort();
         worker.terminate();
@@ -45,6 +50,9 @@ export function compressChatAttachmentVideo(
       worker.addEventListener(
         "message",
         ({ data }: MessageEvent<VideoCompressionResponse>) => {
+          if (settled) {
+            return;
+          }
           if (data.type === "progress") {
             armWatchdog();
             onProgress(data.progress);

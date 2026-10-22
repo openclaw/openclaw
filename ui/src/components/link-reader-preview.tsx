@@ -7,7 +7,6 @@ import {
   LINK_READER_BADGE_TONES,
   type ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
-import { getOrCreateWeakOwnerMap } from "../../../src/shared/weak-owner-map.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { takeGraphemes } from "../lib/graphemes.ts";
@@ -484,7 +483,11 @@ export function previewContextFor(
   client: GatewayBrowserClient,
   agentId: string | undefined,
 ): PreviewContext {
-  const contexts = getOrCreateWeakOwnerMap(previewContexts, client);
+  let contexts = previewContexts.get(client);
+  if (!contexts) {
+    contexts = new Map();
+    previewContexts.set(client, contexts);
+  }
   const key = agentId ?? "";
   let context = contexts.get(key);
   if (!context || context.recoveryScope !== client.recoveryScope) {

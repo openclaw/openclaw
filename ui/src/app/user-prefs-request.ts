@@ -2,7 +2,6 @@ import type {
   UsersPrefsGetParams,
   UsersPrefsGetResult,
 } from "../../../packages/gateway-protocol/src/schema/users.ts";
-import { getOrCreateWeakOwnerMap } from "../../../src/shared/weak-owner-map.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { userPreferenceReads as reads } from "./user-prefs-cache.ts";
 
@@ -12,7 +11,11 @@ export function loadUserPreferences(
   profileId: string,
   params: UsersPrefsGetParams = {},
 ): Promise<UsersPrefsGetResult> {
-  const cache = getOrCreateWeakOwnerMap(reads, client);
+  let cache = reads.get(client);
+  if (!cache) {
+    cache = new Map();
+    reads.set(client, cache);
+  }
   const key = JSON.stringify([profileId, params.keys?.toSorted()]);
   const cached = cache.get(key);
   if (cached) {

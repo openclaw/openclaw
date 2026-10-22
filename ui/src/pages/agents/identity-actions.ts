@@ -6,7 +6,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { updateAgentIdentity } from "../../lib/agents/mutations.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { AVATAR_REJECTION_MESSAGE_KEYS, fileToAvatarDataUrl } from "./avatar-image.ts";
+import { fileToAvatarDataUrl, type AvatarDataUrlResult } from "./avatar-image.ts";
 
 registerSettingsEnglish();
 
@@ -15,6 +15,11 @@ export type AgentIdentityDraft = {
   emoji: string | null;
   avatar: string | null;
 };
+
+const AVATAR_REJECTION_MESSAGE_KEYS = {
+  unusable: "agents.identity.imageUnusable",
+  "too-detailed": "agents.identity.imageTooDetailed",
+} as const satisfies Record<Extract<AvatarDataUrlResult, { ok: false }>["reason"], string>;
 
 type AgentIdentityEditorHost = {
   identityDraft: AgentIdentityDraft;

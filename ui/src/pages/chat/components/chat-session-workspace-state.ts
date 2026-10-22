@@ -1,5 +1,4 @@
 import { createChangeListeners } from "../../../../../src/shared/listeners.js";
-import { getOrCreateWeakOwnerMap } from "../../../../../src/shared/weak-owner-map.js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { showConfirmChoiceDialog } from "../../../components/confirm-dialog.ts";
 import { t } from "../../../i18n/index.ts";
@@ -116,7 +115,11 @@ function requestWorkspaceFiles(
   path: string,
   search = "",
 ) {
-  const requests = getOrCreateWeakOwnerMap(fileLoads, workspace);
+  let requests = fileLoads.get(workspace);
+  if (!requests) {
+    requests = new Map();
+    fileLoads.set(workspace, requests);
+  }
   const key = JSON.stringify([path, search]);
   const pending = requests.get(key);
   if (pending) {
@@ -206,7 +209,11 @@ export function retainSessionWorkspaceArtifacts(
   state: SessionWorkspaceHost,
   messageRole?: "assistant",
 ): () => void {
-  const demands = getOrCreateWeakOwnerMap(artifactDemands, state);
+  let demands = artifactDemands.get(state);
+  if (!demands) {
+    demands = new Map();
+    artifactDemands.set(state, demands);
+  }
   const role = messageRole ?? "all";
   demands.set(role, (demands.get(role) ?? 0) + 1);
   void loadSessionWorkspaceArtifacts(state, false, messageRole);
@@ -220,7 +227,11 @@ export function loadSessionWorkspaceDirectory(
 ): Promise<void> {
   const workspace = getSessionWorkspace(state);
   const directories = (workspace.directories ??= Object.create(null));
-  const requests = getOrCreateWeakOwnerMap(directoryLoads, workspace);
+  let requests = directoryLoads.get(workspace);
+  if (!requests) {
+    requests = new Map();
+    directoryLoads.set(workspace, requests);
+  }
   const pending = requests.get(path);
   if (pending) {
     return pending;

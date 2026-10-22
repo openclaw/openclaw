@@ -1,4 +1,5 @@
 import type { JSX } from "@solidjs/web";
+import { Icon } from "../../components/solid/icon.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 
@@ -25,6 +26,19 @@ export function renderPluginStateStatus(state: InstalledPluginState, className: 
       title={label}
     >
       <span class="settings-status__dot" aria-hidden="true" />
+    </span>
+  );
+}
+
+export function renderPluginOfficialBadge(): JSX.Element {
+  return (
+    <span
+      class="plugin-official-badge"
+      role="img"
+      aria-label={t("pluginsPage.official")}
+      title={t("pluginsPage.official")}
+    >
+      {<Icon name="badgeCheck" />}
     </span>
   );
 }

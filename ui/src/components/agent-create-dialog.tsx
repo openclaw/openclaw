@@ -10,11 +10,7 @@ import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import {
-  AVATAR_REJECTION_MESSAGE_KEYS,
-  fileToAvatarDataUrl,
-  type AvatarDataUrlResult,
-} from "../pages/agents/avatar-image.ts";
+import { fileToAvatarDataUrl, type AvatarDataUrlResult } from "../pages/agents/avatar-image.ts";
 import {
   AvatarPicker,
   type AvatarPickerActions,
@@ -91,7 +87,13 @@ export function AgentCreateDialog(props: {
     try {
       const result = yield fileToAvatarDataUrl(file, props.context.config);
       if (!result.ok) {
-        throw new Error(t(AVATAR_REJECTION_MESSAGE_KEYS[result.reason]));
+        throw new Error(
+          t(
+            result.reason === "too-detailed"
+              ? "agents.identity.imageTooDetailed"
+              : "agents.identity.imageUnusable",
+          ),
+        );
       }
       setAvatar(result.dataUrl);
     } catch (error) {
