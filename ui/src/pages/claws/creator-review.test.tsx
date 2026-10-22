@@ -42,7 +42,7 @@ function createReviewContext(initial = reviewed) {
     throw new Error(`Unexpected method ${method}`);
   });
   const context = createContext(request);
-  context.router.subscribe = () => () => undefined;
+  context.router.subscribe = () => () => true;
   const flow = clawCreatorFlow(context);
   flow.open("research", "ec8f46b0-4ca3-4991-8a73-dfdcc8764087");
   return { context, flow, request };
