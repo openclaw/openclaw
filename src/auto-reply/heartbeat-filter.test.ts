@@ -1,3 +1,4 @@
+/** Tests heartbeat filtering and skip behavior for empty heartbeat context. */
 import { describe, expect, it } from "vitest";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import { filterHeartbeatTranscriptArtifacts, isHeartbeatUserMessage } from "./heartbeat-filter.js";
@@ -19,7 +20,7 @@ function assistant(content: unknown) {
 
 const wake = user(INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat);
 const followup = user("what changed while I was away?");
-const textBlock = (text: string, type = "text") => ({ type, text });
+const modelQuestion = user("what model are you");
 const filter = (messages: Parameters<typeof filterHeartbeatTranscriptArtifacts>[0]) =>
   filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT);
 
@@ -28,15 +29,6 @@ function expectFiltered(
   expected: Parameters<typeof filter>[0] = [followup],
 ) {
   expect(filter(messages)).toEqual(expected);
-}
-
-function expectRemoved(...messages: Parameters<typeof filter>[0]) {
-  expectFiltered([wake, ...messages, followup]);
-}
-
-function expectPreserved(...messages: Parameters<typeof filter>[0]) {
-  const transcript = [wake, ...messages, followup];
-  expect(filter(transcript)).toEqual(transcript);
 }
 
 function functionCall(call_id: string, name: string, args: string, id?: string) {
@@ -54,7 +46,7 @@ function toolResult(toolCallId: string, text: string, isError?: boolean) {
     role: "toolResult",
     toolCallId,
     ...(isError ? { isError } : {}),
-    content: [textBlock(text)],
+    content: [{ type: "text", text }],
   };
 }
 
@@ -69,7 +61,11 @@ function anthropicResult(
 function heartbeatCall(type: "toolCall" | "tool_use", attention = true) {
   const outcome = attention
     ? createHeartbeatAttentionOutcome()
-    : { outcome: "no_change", notify: false, summary: "No visible update." };
+    : {
+        outcome: "no_change",
+        notify: false,
+        summary: "No visible update.",
+      };
   return assistant([
     type === "tool_use"
       ? { type, id: "toolu_heartbeat", name: "heartbeat_respond", input: outcome }
@@ -137,48 +133,6 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
     },
   );
 
-  it.each<[string, Parameters<typeof filter>[0]]>([
-    [
-      "native Responses span",
-      [
-        functionCall("call_bash", "bash", '{"command":"inspect monitor scratch"}'),
-        functionResult("call_bash", "checked monitor scratch"),
-        functionCall("call_heartbeat", "heartbeat_respond", '{"notify":false}'),
-        functionResult("call_heartbeat", '{"notify":false}'),
-      ],
-    ],
-    [
-      "post-result continuation",
-      [
-        heartbeatCall("toolCall", false),
-        toolResult("call_heartbeat", "HEARTBEAT_OK"),
-        assistant("No visible update. notify=false"),
-      ],
-    ],
-    ["pre-terminal text", [assistant("Checking heartbeat status..."), assistant("HEARTBEAT_OK")]],
-    [
-      "failed notify=true call",
-      [
-        heartbeatCall("toolCall"),
-        toolResult("call_heartbeat", "heartbeat response rejected", true),
-      ],
-    ],
-    [
-      "Anthropic is_error",
-      [
-        heartbeatCall("tool_use"),
-        user([anthropicResult("tool_result", "heartbeat response rejected", true)]),
-      ],
-    ],
-    [
-      "Anthropic error type",
-      [
-        heartbeatCall("tool_use"),
-        user([anthropicResult("tool_result_error", "heartbeat response rejected")]),
-      ],
-    ],
-  ])("removes %s", (_name, messages) => expectRemoved(...messages));
-
   it.each([
     "[OpenClaw heartbeat poll]",
     "[OpenClaw exec completion]",
@@ -204,31 +158,74 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
   it.each(HIDDEN_REASONING_BLOCKS)(
     "removes no-op heartbeat pairs with hidden %s blocks",
     (_label, reasoningBlock) => {
-      expectRemoved(assistant([reasoningBlock, textBlock("HEARTBEAT_OK")]));
+      const nextUserMessage = user("What time is it?");
+
+      expectFiltered(
+        [
+          wake,
+          assistant([reasoningBlock, { type: "text", text: "HEARTBEAT_OK" }]),
+          nextUserMessage,
+        ],
+        [nextUserMessage],
+      );
     },
   );
 
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
     for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
-      const next = user([textBlock("what model are you", "input_text")]);
       expectFiltered(
         [
           user([
-            textBlock(
-              `${deliveryHint} ${INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat}`,
-              "input_text",
-            ),
+            {
+              type: "input_text",
+              text: `${deliveryHint} ${INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat}`,
+            },
           ]),
-          assistant([textBlock("HEARTBEAT_OK", "output_text")]),
-          next,
+          assistant([{ type: "output_text", text: "HEARTBEAT_OK" }]),
+          user([{ type: "input_text", text: "what model are you" }]),
         ],
-        [next],
+        [user([{ type: "input_text", text: "what model are you" }])],
       );
     }
   });
 
+  it("removes native OpenAI Responses heartbeat function-call spans", () => {
+    expectFiltered(
+      [
+        wake,
+        functionCall("call_bash", "bash", '{"command":"inspect monitor scratch"}'),
+        functionResult("call_bash", "checked monitor scratch"),
+        functionCall("call_heartbeat", "heartbeat_respond", '{"notify":false}'),
+        functionResult("call_heartbeat", '{"notify":false}'),
+        modelQuestion,
+      ],
+      [modelQuestion],
+    );
+  });
+
+  it("removes assistant continuations after heartbeat response-tool results", () => {
+    expectFiltered(
+      [
+        wake,
+        heartbeatCall("toolCall", false),
+        toolResult("call_heartbeat", "HEARTBEAT_OK"),
+        assistant("No visible update. notify=false"),
+        modelQuestion,
+      ],
+      [modelQuestion],
+    );
+  });
+
+  it("removes pre-terminal assistant text once a heartbeat ack arrives", () => {
+    expectFiltered(
+      [wake, assistant("Checking heartbeat status..."), assistant("HEARTBEAT_OK"), modelQuestion],
+      [modelQuestion],
+    );
+  });
+
   it("preserves top-level notify=true heartbeat response-tool calls followed by a final ack", () => {
-    expectPreserved(
+    const messages = [
+      wake,
       {
         role: "assistant",
         content: null,
@@ -248,11 +245,15 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         content: [{ type: "text", text: '{"notify":true}' }],
       },
       assistant("HEARTBEAT_OK"),
-    );
+      followup,
+    ];
+
+    expect(filter(messages)).toEqual(messages);
   });
 
   it("preserves OpenAI Responses notify=true heartbeat calls keyed by call_id", () => {
-    expectPreserved(
+    const messages = [
+      wake,
       functionCall(
         "call_heartbeat",
         "heartbeat_respond",
@@ -260,18 +261,56 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         "fc_item_123",
       ),
       functionResult("call_heartbeat", '{"notify":true}'),
-    );
+      followup,
+    ];
+
+    expect(filter(messages)).toEqual(messages);
   });
 
   it("preserves Anthropic-style notify=true heartbeat calls completed by mixed user turns", () => {
-    expectPreserved(
+    const messages = [
+      wake,
       heartbeatCall("tool_use"),
-      user([anthropicResult("tool_result", "recorded"), textBlock("heartbeat delivery recorded")]),
-    );
+      user([
+        anthropicResult("tool_result", "recorded"),
+        { type: "text", text: "heartbeat delivery recorded" },
+      ]),
+      followup,
+    ];
+
+    expect(filter(messages)).toEqual(messages);
+  });
+
+  it("removes failed notify=true heartbeat response-tool calls", () => {
+    expectFiltered([
+      wake,
+      heartbeatCall("toolCall"),
+      toolResult("call_heartbeat", "heartbeat response rejected", true),
+      followup,
+    ]);
+  });
+
+  it("removes Anthropic-style failed notify=true heartbeat calls keyed by tool_use_id", () => {
+    expectFiltered([
+      wake,
+      heartbeatCall("tool_use"),
+      user([anthropicResult("tool_result", "heartbeat response rejected", true)]),
+      followup,
+    ]);
+  });
+
+  it("removes Anthropic-style error result heartbeat calls keyed by tool_use_id", () => {
+    expectFiltered([
+      wake,
+      heartbeatCall("tool_use"),
+      user([anthropicResult("tool_result_error", "heartbeat response rejected")]),
+      followup,
+    ]);
   });
 
   it("does not treat unrelated helper tool results as completed notify=true responses", () => {
-    expectRemoved(
+    expectFiltered([
+      wake,
       assistant([
         {
           type: "toolCall",
@@ -287,13 +326,14 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         },
       ]),
       toolResult("call_bash", "checked monitor scratch"),
-    );
+      followup,
+    ]);
   });
 
   it("preserves mixed user text after silent heartbeat response-tool spans", () => {
     const mixedUserMessage = user([
       anthropicResult("tool_result", "recorded"),
-      textBlock("what model are you"),
+      { type: "text", text: "what model are you" },
     ]);
     const assistantMessage = assistant("I am OpenClaw.");
     expectFiltered(
