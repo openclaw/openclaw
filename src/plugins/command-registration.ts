@@ -137,6 +137,17 @@ function validatePluginCommandDefinition(
       return guidanceError;
     }
   }
+  if (command.runtimeCapabilities !== undefined) {
+    if (
+      !Array.isArray(command.runtimeCapabilities) ||
+      command.runtimeCapabilities.some((capability: unknown) => capability !== "subagents")
+    ) {
+      return "Command runtimeCapabilities must contain supported capability names";
+    }
+    if (command.runtimeCapabilities.length > 0 && command.requireAuth !== true) {
+      return "Command runtime capabilities require requireAuth: true";
+    }
+  }
   if (command.requiredScopes !== undefined) {
     if (!Array.isArray(command.requiredScopes)) {
       return "Command requiredScopes must be an array of operator scopes";
@@ -305,6 +316,7 @@ export function registerPluginCommandInRegistry(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
   opts?: Parameters<typeof registerPluginCommand>[2],
+  commandRuntimeCapabilities?: readonly string[],
 ): CommandRegistrationResult {
   if (getPluginCommandExecutionCount(registry) > 0) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
@@ -321,10 +333,27 @@ export function registerPluginCommandInRegistry(
     return { ok: false, error: definitionError };
   }
 
+  // Only the managed registrar may supply its admitted manifest declaration.
+  // The deprecated direct registrar accepts a caller-supplied pluginId, not identity.
+  const declaredCapabilities = commandRuntimeCapabilities ?? [];
+  const undeclared =
+    command.runtimeCapabilities?.filter(
+      (capability) => !declaredCapabilities.includes(capability),
+    ) ?? [];
+  if (undeclared.length > 0) {
+    return {
+      ok: false,
+      error: `Plugin must declare contracts.commandRuntimeCapabilities for: ${undeclared.join(", ")}`,
+    };
+  }
+
   const name = command.name.trim();
   const description = command.description.trim();
   const normalizedCommand = {
     ...command,
+    ...(command.runtimeCapabilities
+      ? { runtimeCapabilities: [...command.runtimeCapabilities] }
+      : {}),
     // The direct SDK registrar also supports host callers outside a managed instance.
     handler: wrapCurrentPluginInstance(
       command.handler,

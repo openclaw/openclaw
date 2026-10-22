@@ -28,6 +28,8 @@ export const PLUGIN_MANIFEST_CONTRACT_KEYS = [
   "usageProviders",
   "migrationProviders",
   "gatewayMethodDispatch",
+  /** Invocation-scoped command runtime families, reviewed before loading plugin code. */
+  "commandRuntimeCapabilities",
   "tools",
 ] as const;
 

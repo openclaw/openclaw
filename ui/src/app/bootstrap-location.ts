@@ -281,12 +281,6 @@ export function subscribeForegroundChatBootstrap({
   initialChatRoute: boolean;
 }): () => void {
   connectionBootstrap.setForegroundRoute(initialChatRoute ? undefined : null);
-  const stopConnection = gateway.subscribe((snapshot) => {
-    connectionBootstrap.synchronize({
-      client: snapshot.client,
-      connected: snapshot.phase === "connected",
-    });
-  });
   const synchronizeRoute = (state: ReturnType<ApplicationRouter["getState"]>) => {
     const match = state.pendingMatches[0] ?? state.matches[0];
     if (!match && state.status === "idle") {
@@ -320,6 +314,14 @@ export function subscribeForegroundChatBootstrap({
     );
   };
   const synchronize = () => synchronizeRoute(router.getState());
+  const stopConnection = gateway.subscribe((snapshot) => {
+    connectionBootstrap.synchronize({
+      client: snapshot.client,
+      connected: snapshot.phase === "connected",
+    });
+    // Literal routes can settle before hello assigns their storage scope.
+    synchronize();
+  });
   const stops = [
     stopConnection,
     router.subscribe(synchronizeRoute),

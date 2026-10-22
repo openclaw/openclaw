@@ -21,6 +21,7 @@ import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { classifyFailoverReason } from "../../failover/classify.js";
 import { getFailoverErrorCode } from "../../failover/error.js";
+import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { resolveProviderModelAuthPolicy } from "../../model-auth-policy.js";
@@ -396,6 +397,7 @@ export function createEmbeddedRunAuthController(params: {
         agentDir: params.agentDir,
         runId: params.runId,
         modelId: params.modelId,
+        retryAfterMs: resolveRetryAfterMs(errorText, Date.now(), error),
       });
     } catch (markError) {
       params.log.warn(

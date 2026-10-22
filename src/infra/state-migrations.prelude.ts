@@ -5,6 +5,7 @@ import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 import type {
   AgentDatabaseMigrationTarget,
   PreparedAgentDatabaseMigrationDiscovery,
@@ -29,7 +30,9 @@ export function buildUnresolvedBlockedPreludeSteps(
   invocationPurpose: LegacyStateMigrationInvocationPurpose,
 ): LegacyStateMigrationStep[] {
   const ids = [
-    ...(mode === "doctor" ? ["media-persistence", "session-entry-state"] : []),
+    ...(mode === "doctor"
+      ? ["session-entry-state-preparation", "media-persistence", "session-entry-state"]
+      : []),
     ...(invocationPurpose === "doctor" ? ["transcript-directives"] : []),
     ...(mode === "doctor"
       ? ["profile-workspace", "plugin-migration-preparation", "orphan-session-keys"]
@@ -40,7 +43,7 @@ export function buildUnresolvedBlockedPreludeSteps(
     phase: "shared",
     source: [],
     target: [],
-    requiredness: id === "session-entry-state" ? "required" : "conditional",
+    requiredness: id.startsWith("session-entry-state") ? "required" : "conditional",
     reversibility: "checkpoint-required",
     run: () => ({ changes: [], warnings: [] }),
   }));
@@ -208,12 +211,85 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   };
   let preparedRepairTargets: readonly AgentDatabaseMigrationTarget[] | undefined =
     params.mode === "doctor" ? [] : undefined;
+  let inspectedEntryStatePaths = new Set<string>();
+  let mediaEntryStatePreparationError: Error | undefined;
+  const versionMigrationPaths = new Set(
+    params.agentDatabaseMigrationDiscovery?.versionMigrations?.map((migration) => migration.path),
+  );
   const steps: LegacyStateMigrationStep[] = [];
   if (params.mode === "doctor") {
     steps.push(
+      sharedStep(
+        "session-entry-state-preparation",
+        agentPersistence,
+        agentPersistence,
+        async () => {
+          const { repairLegacySessionEntryStates } =
+            await import("../commands/doctor-session-delivery-state.js");
+          const report = await repairLegacySessionEntryStates({
+            apply: true,
+            cfg: params.config,
+            env: stateEnv,
+            deferToMediaPreparation: true,
+            excludedDatabasePaths: versionMigrationPaths,
+            integrityCheck: params.integrityCheck,
+            ...(params.agentDatabaseMigrationDiscovery
+              ? {
+                  registeredDatabases:
+                    params.agentDatabaseMigrationDiscovery.registeredAgentDatabases,
+                }
+              : {}),
+            onInspectedTargets: (targets) => {
+              inspectedEntryStatePaths = new Set(targets.map((target) => target.canonicalPath));
+            },
+          });
+          return {
+            changes:
+              report.repaired > 0
+                ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
+                : [],
+            warnings: [],
+          };
+        },
+        undefined,
+        "required",
+      ),
       sharedStep("media-persistence", agentPersistence, agentPersistence, () =>
         migrateLegacyMediaPersistence({
           ...agentMigrationOptions,
+          isSessionEntryStatePrepared: (target) =>
+            inspectedEntryStatePaths.has(normalizeDatabasePath(target.realPath)),
+          prepareSessionEntryState: async (target) => {
+            try {
+              const { repairLegacySessionEntryStates } =
+                await import("../commands/doctor-session-delivery-state.js");
+              const report = await repairLegacySessionEntryStates({
+                apply: true,
+                cfg: params.config,
+                env: stateEnv,
+                integrityCheck: params.integrityCheck,
+                targets: [
+                  { agentId: target.agentId, storePath: target.path, sqlitePath: target.path },
+                ],
+                onInspectedTargets: (targets) => {
+                  for (const inspected of targets) {
+                    inspectedEntryStatePaths.add(inspected.canonicalPath);
+                  }
+                },
+              });
+              return {
+                completed: true,
+                changes:
+                  report.repaired > 0
+                    ? [`Canonicalized entry state for ${report.repaired} durable session row(s).`]
+                    : [],
+              };
+            } catch (error) {
+              mediaEntryStatePreparationError ??=
+                error instanceof Error ? error : new Error(String(error));
+              return { completed: false, changes: [] };
+            }
+          },
           onPreparedRepairTargets: (targets) => {
             preparedRepairTargets = targets;
           },
@@ -224,6 +300,9 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
         agentPersistence,
         agentPersistence,
         async () => {
+          if (mediaEntryStatePreparationError) {
+            throw mediaEntryStatePreparationError;
+          }
           const { repairLegacySessionEntryStates } =
             await import("../commands/doctor-session-delivery-state.js");
           const report = await repairLegacySessionEntryStates({
@@ -231,11 +310,15 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
             cfg: params.config,
             env: stateEnv,
             integrityCheck: params.integrityCheck,
-            targets: preparedRepairTargets?.map((target) => ({
-              agentId: target.agentId,
-              storePath: target.path,
-              sqlitePath: target.path,
-            })),
+            targets: preparedRepairTargets
+              ?.filter(
+                (target) => !inspectedEntryStatePaths.has(normalizeDatabasePath(target.realPath)),
+              )
+              .map((target) => ({
+                agentId: target.agentId,
+                storePath: target.path,
+                sqlitePath: target.path,
+              })),
           });
           return {
             changes:

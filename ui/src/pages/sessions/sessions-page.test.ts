@@ -25,6 +25,12 @@ import {
   sessionMutationGatewayHello,
 } from "../../test-helpers/gateway-methods.ts";
 import {
+  answerConfirmDialog,
+  createModalDialogTestFixture,
+  getRenderedModalDialog,
+  waitForConfirmDialogActions,
+} from "../../test-helpers/modal-dialog.ts";
+import {
   openSubmenu,
   selectMenuValue,
   settleSessionMenu,
@@ -147,6 +153,90 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe("sessions page lifecycle", () => {
+  it("keeps a failed rename editable until a confirmed retry succeeds", async () => {
+    const actual = await vi.importActual<typeof import("../../components/input-dialog.ts")>(
+      "../../components/input-dialog.ts",
+    );
+    vi.mocked(showInputDialog).mockImplementation(actual.showInputDialog);
+    const fixture = createModalDialogTestFixture();
+    const pending = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
+    const target = sessionRow("rename-command", { label: "Before rename" });
+    const patch = vi
+      .fn<SessionCapability["patch"]>()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({
+        ok: true,
+        key: target.key,
+        path: "",
+        entry: { sessionId: target.sessionId! },
+      });
+    const { page } = await mountMutation({ patch });
+    page.result = sessionsResult([target], 1);
+    try {
+      await selectMenuValue(await openRowMenu(page, target), "rename");
+      const { modal } = await getRenderedModalDialog(document.body);
+      const input = modal.querySelector<HTMLInputElement>('input[name="value"]')!;
+      const form = modal.querySelector("form")!;
+      input.value = "Retryable rename";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await waitForFast(() => expect(patch).toHaveBeenCalledOnce());
+      expect(input.disabled).toBe(true);
+      pending.reject(new Error("Rename unavailable. Try again."));
+      await waitForFast(() =>
+        expect(modal.querySelector('[role="alert"]')?.textContent).toContain(
+          "Rename unavailable. Try again.",
+        ),
+      );
+      expect(input.value).toBe("Retryable rename");
+      expect(input.disabled).toBe(false);
+      expect(document.activeElement).toBe(input);
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await waitForFast(() =>
+        expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull(),
+      );
+      expect(patch).toHaveBeenCalledTimes(2);
+    } finally {
+      pending.resolve(null);
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps command confirmation visible and reports a failed effect after the menu closes", async () => {
+    const actual = await vi.importActual<typeof import("../../components/confirm-dialog.ts")>(
+      "../../components/confirm-dialog.ts",
+    );
+    vi.mocked(showConfirmDialog).mockImplementation(actual.showConfirmDialog);
+    const fixture = createModalDialogTestFixture();
+    const pending = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const target = sessionRow("command", { label: "Command fixture" });
+    const { page, sessions } = await mountMutation({ deleteMany: vi.fn(() => pending.promise) });
+    page.result = sessionsResult([target], 1);
+    try {
+      const menu = await openRowMenu(page, target);
+      await openSubmenu(menu, "Advanced");
+      await selectMenuValue(menu, "delete");
+      const actions = await waitForConfirmDialogActions();
+      expect((await getRenderedModalDialog(document.body)).dialog.open).toBe(true);
+      expect(page.querySelector("openclaw-session-menu")).toBeNull();
+      expect(sessions.deleteMany).not.toHaveBeenCalled();
+      answerConfirmDialog(actions, "confirm");
+      await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+      expect(page.textContent).toContain("Working…");
+      pending.reject(new Error("Deletion unavailable. Try again."));
+      await waitForFast(() =>
+        expect(page.querySelector('[role="alert"]')?.textContent).toContain(
+          "Deletion unavailable. Try again.",
+        ),
+      );
+      expect(page.textContent).not.toContain("Working…");
+      expect(page.textContent).toContain("Command fixture");
+    } finally {
+      pending.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      await fixture.cleanup();
+    }
+  });
+
   it("disables refresh during transport loss and restores it after reconnect", async () => {
     const { page, connection, sessions } = await mountMutation();
     const refreshList = vi.mocked(sessions.refreshList);
@@ -165,6 +255,52 @@ describe("sessions page lifecycle", () => {
     const requests = refreshList.mock.calls.length;
     refresh().click();
     await waitForFast(() => expect(refreshList).toHaveBeenCalledTimes(requests + 1));
+  });
+
+  it("retires command status and isolates later commands after the agent scope changes", async () => {
+    const pending = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const next = createDeferred<Awaited<ReturnType<SessionCapability["deleteMany"]>>>();
+    const sessions = createSessions({
+      deleteMany: vi.fn().mockReturnValueOnce(pending.promise).mockReturnValueOnce(next.promise),
+    });
+    const context = createContext(createGateway().gateway, sessions);
+    const listeners = new Set<() => void>();
+    context.agentSelection.subscribe = (listener) => {
+      const notify = () => listener(context.agentSelection.state);
+      listeners.add(notify);
+      return () => listeners.delete(notify);
+    };
+    const target = sessionRow("old-scope-command");
+    const page = await createRenderedPage(context, sessionsResult([target], 1), "all");
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+    try {
+      const menu = await openRowMenu(page, target);
+      await openSubmenu(menu, "Advanced");
+      await selectMenuValue(menu, "delete");
+      await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+      expect(page.textContent).toContain("Working…");
+      context.agentSelection.state.scopeId = "reviewer";
+      listeners.forEach((notify) => notify());
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("Working…");
+      const nextTarget = sessionRow("new-scope-command", {
+        key: "agent:reviewer:new-scope-command",
+      });
+      page.result = sessionsResult([nextTarget], 2);
+      const nextMenu = await openRowMenu(page, nextTarget);
+      await openSubmenu(nextMenu, "Advanced");
+      await selectMenuValue(nextMenu, "delete");
+      await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledTimes(2));
+      expect(page.textContent).toContain("Working…");
+      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      await waitForFast(() => expect(page.textContent).not.toContain("Working…"));
+      pending.reject(new Error("Old agent deletion failed"));
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("Old agent deletion failed");
+    } finally {
+      pending.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+      next.resolve({ deleted: [], errors: [], preservedWorktrees: [] });
+    }
   });
 
   it("pins from the page menu without changing shared pin metadata", async () => {
@@ -706,6 +842,24 @@ describe("sessions page new group", () => {
     expect(alert?.classList.contains("sessions-error")).toBe(true);
     expect(alert?.textContent).toContain("Group name rejected");
   });
+
+  it.each(["failure", "retirement"])(
+    "does not assign a dropped row after catalog %s",
+    async (outcome) => {
+      const catalog = createDeferred<SessionGroupMutationResult>();
+      const { page, sessions, connection } = await mount(() => catalog.promise);
+      const operation = page.onAssignCategory(key, group);
+      await waitForFast(() => expect(sessions.groupsPut).toHaveBeenCalledWith([group]));
+      if (outcome === "retirement") {
+        connection.emit({ client: createTestGatewayClient(async () => ({ profiles: [] })) });
+        catalog.resolve("completed");
+      } else {
+        catalog.reject(new Error("Group name rejected"));
+      }
+      await operation;
+      expect(sessions.patch).not.toHaveBeenCalled();
+    },
+  );
 
   it("requires a refresh before starting an unbound move", async () => {
     const { page, sessions } = await mount(async () => "completed");
