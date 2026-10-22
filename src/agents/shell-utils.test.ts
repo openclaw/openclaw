@@ -124,7 +124,7 @@ describe("getShellConfig", () => {
     { envShell: "/usr/bin/fish", binary: "bash", args: ["--noprofile", "--norc", "-c"] },
     { envShell: "/usr/bin/fish", binary: "sh", args: ["-c"] },
     { envShell: "/usr/bin/fish", binary: "", args: ["--no-config", "-c"] },
-    { envShell: "/bin/zsh", binary: "", args: ["-f", "-c"] },
+    { envShell: "/bin/zsh", binary: "", args: ["-f", "+o", "equals", "+o", "nomatch", "-c"] },
     { envShell: "/bin/bash", binary: "", args: ["--noprofile", "--norc", "-c"] },
     { envShell: undefined, binary: "", args: ["-c"] },
     { envShell: "/usr/bin/false", binary: "sh", args: ["-c"] },

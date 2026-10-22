@@ -1,4 +1,4 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+import type { IncomingMessage } from "node:http";
 
 type DispatcherInit = RequestInit & { dispatcher?: unknown };
 
@@ -18,45 +18,32 @@ export function stripDispatcher(init: RequestInit | undefined): RequestInit | un
   return rest;
 }
 
-export function writeOversizedJson(
-  res: ServerResponse,
-  totalBytes: number,
-  jsonPrefix: string,
-): { bytesPulled: () => number; canceled: () => boolean } {
+export function createOversizedJsonResponse(totalBytes: number, jsonPrefix: string) {
   const chunk = Buffer.alloc(1024 * 1024, 0x20);
   let bytesPulled = 0;
   let canceled = false;
-  let ended = false;
-  res.writeHead(200, { "content-type": "application/json" });
-  res.on("close", () => {
-    if (!ended && bytesPulled < totalBytes) {
-      canceled = true;
-    }
-  });
-  const prefix = Buffer.from(jsonPrefix);
-  bytesPulled += prefix.byteLength;
-  res.write(prefix);
-  const sendChunk = () => {
-    if (bytesPulled >= totalBytes) {
-      if (!res.destroyed) {
-        ended = true;
-        res.end('"}');
+  // Observe the reader's pulls and cancellation, independent of TCP buffering.
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (bytesPulled >= totalBytes) {
+        controller.enqueue(Buffer.from('"}'));
+        controller.close();
+        return;
       }
-      return;
-    }
-    const remaining = totalBytes - bytesPulled;
-    const size = Math.min(chunk.byteLength, remaining);
-    bytesPulled += size;
-    const ok = res.write(chunk.subarray(0, size));
-    if (ok) {
-      setImmediate(sendChunk);
-      return;
-    }
-    res.once("drain", sendChunk);
-  };
-  setImmediate(sendChunk);
+      const next =
+        bytesPulled === 0
+          ? Buffer.from(jsonPrefix)
+          : chunk.subarray(0, Math.min(chunk.byteLength, totalBytes - bytesPulled));
+      bytesPulled += next.byteLength;
+      controller.enqueue(next);
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
   return {
+    response: new Response(body, { headers: { "content-type": "application/json" } }),
     bytesPulled: () => bytesPulled,
-    canceled: () => canceled || (!ended && bytesPulled < totalBytes),
+    canceled: () => canceled,
   };
 }

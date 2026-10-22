@@ -13,6 +13,8 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -56,10 +58,30 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowTextToSpeech
+import java.util.concurrent.CountDownLatch
 
 @RunWith(RobolectricTestRunner::class)
 @Config(application = WearApplication::class, sdk = [35])
 class WearChatEventFlowTest {
+  @Test
+  fun flowOnlyDrainsItsOwnBackgroundLoopers() {
+    val foreign = HandlerThread("foreign-fixture").apply { start() }
+    val untouched = CountDownLatch(1)
+    try {
+      shadowOf(foreign.looper).pause()
+      assertTrue(Handler(foreign.looper).post { untouched.countDown() })
+      withFlow { flow ->
+        flow.observeApp(autoSpeak = true)
+        assertNotNull(ShadowTextToSpeech.getLastTextToSpeechInstance())
+        assertEquals("another fixture owns this work", 1L, untouched.count)
+      }
+    } finally {
+      foreign.quitSafely()
+      foreign.join(5_000)
+      assertTrue("foreign fixture thread must exit", !foreign.isAlive)
+    }
+  }
+
   @Test
   @Config(qualifiers = "en-rUS-w227dp-h227dp-round-xhdpi")
   @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -2708,6 +2730,7 @@ class WearChatEventFlowTest {
     }
 
   private class Flow {
+    private val existingLoopers = ShadowLooper.getAllLoopers().toSet()
     private val app = RuntimeEnvironment.getApplication() as WearApplication
     private var originalScale: Float? = null
     private val owner =
@@ -2776,7 +2799,7 @@ class WearChatEventFlowTest {
         shadowOf(Looper.getMainLooper()).idle()
         ShadowLooper
           .getAllLoopers()
-          .filter { it != Looper.getMainLooper() && it.thread.isAlive }
+          .filter { it != Looper.getMainLooper() && it !in existingLoopers && it.thread.isAlive }
           .forEach { shadowOf(it).idle() }
       }
     }

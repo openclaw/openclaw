@@ -75,7 +75,8 @@ function getPosixShellArgs(shellPath: string): string[] {
     case "bash":
       return ["--noprofile", "--norc", "-c"];
     case "zsh":
-      return ["-f", "-c"];
+      // Agent commands commonly contain literal separators or unmatched globs.
+      return ["-f", "+o", "equals", "+o", "nomatch", "-c"];
     case "fish":
       return ["--no-config", "-c"];
     default:
