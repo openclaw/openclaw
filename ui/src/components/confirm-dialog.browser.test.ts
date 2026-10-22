@@ -159,9 +159,13 @@ describe("promise dialog native focus and dismissal", () => {
       await expect.poll(() => document.activeElement).toBe(button("Cancel"));
     }
     button(primary).focus();
-    await page.viewport(1280, 844);
-    await page.viewport(390, 844);
-    await expect.poll(() => document.activeElement).toBe(button(primary));
+    for (const width of [1280, 390]) {
+      await page.viewport(width, 844);
+      await expect
+        .poll(order)
+        .toEqual(width === 1280 ? ["Cancel", secondary, primary] : [secondary, primary, "Cancel"]);
+      await expect.poll(() => document.activeElement).toBe(button(primary));
+    }
     controller.abort();
     await expect(result).resolves.toBeNull();
     expect(document.activeElement).toBe(trigger);

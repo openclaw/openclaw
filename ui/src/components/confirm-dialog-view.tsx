@@ -1,5 +1,6 @@
 import { createSignal, For, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import { createMediaQuery } from "../lib/reactive/platform.ts";
 import type {
   ConfirmDialogChoice,
@@ -36,10 +37,34 @@ function ConfirmDialogView(props: {
   const title = () => initialOptions.title ?? t("common.confirm");
   let skipRequested = false;
   let cancelButton!: HTMLButtonElement;
+  let actions!: HTMLElement;
   const [acknowledged, setAcknowledged] = createSignal(!initialOptions.requiredAcknowledgement);
   const mobileChoices = initialOptions.groupChoicesOnMobile
     ? createMediaQuery("(max-width: 640px)")
     : () => false;
+  if (initialOptions.groupChoicesOnMobile) {
+    createPendingFocus(
+      () => ({ mobile: mobileChoices(), focused: actions?.ownerDocument.activeElement }),
+      {
+        requested: (next, previous) => previous !== undefined && next.mobile !== previous.mobile,
+        focus: ({ focused }) => {
+          if (!(focused instanceof HTMLElement) || !actions.contains(focused)) {
+            return;
+          }
+          // Keyed DOM moves can blur the retained control; never replace newer user focus.
+          queueMicrotask(() => {
+            const doc = focused.ownerDocument;
+            if (
+              focused.isConnected &&
+              (doc.activeElement === doc.body || doc.activeElement === doc.documentElement)
+            ) {
+              focused.focus({ preventScroll: true });
+            }
+          });
+        },
+      },
+    );
+  }
   const cancelAction = (
     <button
       ref={(element) => {
@@ -129,6 +154,9 @@ function ConfirmDialogView(props: {
           </label>
         ) : undefined}
         <openclaw-modal-actions
+          ref={(element) => {
+            actions = element;
+          }}
           class={["exec-approval-actions", { "confirm-dialog-actions--stacked": mobileChoices() }]}
         >
           {initialOptions.groupChoicesOnMobile ? (
