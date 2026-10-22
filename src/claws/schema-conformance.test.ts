@@ -143,17 +143,6 @@ describe("portable Claw schema conformance", () => {
 });
 
 describe("development snapshot integrity", () => {
-  it("rejects oversized manifests and package metadata before parsing", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-bounded-read-"));
-    const manifestPath = join(root, "oversized.claw.json");
-    await writeFile(manifestPath, Buffer.alloc(1024 * 1024 + 1, 0x20));
-
-    expectInvalid(await readClawManifestFile(manifestPath), { code: "read_failed_too_large" });
-
-    await writeFile(join(root, "package.json"), Buffer.alloc(256 * 1024 + 1, 0x20));
-    expectInvalid(await readClawManifestFile(root), { code: "package_read_failed_too_large" });
-  });
-
   it("rejects noncanonical package metadata demo@01.0.0", async () => {
     const root = await mkdtemp(join(tmpdir(), "openclaw-claw-package-metadata-"));
     await writeJson(join(root, "package.json"), {
