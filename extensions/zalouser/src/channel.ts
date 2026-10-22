@@ -142,16 +142,6 @@ async function sendZalouserFromContext({
   return result;
 }
 
-function adaptZalouserOutboundProgress(
-  onDeliveryResult: ((result: OutboundDeliveryResult) => Promise<void> | void) | undefined,
-) {
-  return onDeliveryResult
-    ? async (result: ChannelMessageSendResult) => {
-        await onDeliveryResult(toZalouserOutboundDeliveryResult(result));
-      }
-    : undefined;
-}
-
 function toZalouserOutboundDeliveryResult(
   result: ChannelMessageSendResult,
 ): OutboundDeliveryResult {
@@ -171,7 +161,11 @@ const sendZalouserOutbound: NonNullable<ChannelOutboundAdapter["sendMedia"]> = a
   toZalouserOutboundDeliveryResult(
     await sendZalouserFromContext({
       ...ctx,
-      onDeliveryResult: adaptZalouserOutboundProgress(onDeliveryResult),
+      onDeliveryResult: onDeliveryResult
+        ? async (result) => {
+            await onDeliveryResult(toZalouserOutboundDeliveryResult(result));
+          }
+        : undefined,
     }),
   );
 
