@@ -3,6 +3,13 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createFlowInput,
+  createScenarioEnvironment,
+  polledReply,
+  runtimeEnv as flowEnv,
+  sentMessage,
+} from "./discord-flow.test-support.js";
 import { createDiscordQaEndpointFetcher } from "./discord-live.endpoint.js";
 import {
   buildDiscordWebMessageUrl,
@@ -13,6 +20,9 @@ import {
   renderDiscordThreadReplyAttachmentHtml,
 } from "./discord-live.evidence.js";
 import * as testing from "./discord-live.runtime.js";
+import { discordQaTranscriptsVoiceAuthorizationScenario } from "./discord-transcripts-authorization.runtime.js";
+import { createDiscordQaScenarioEnvironment } from "./scenario-environment.js";
+import { runDiscordScenario } from "./scenario-runtime.js";
 
 const guildId = "123456789012345678";
 const channelId = "223456789012345678";
@@ -54,6 +64,54 @@ const discordStatus = (connected: boolean, extra = {}) => ({
   },
 });
 
+function stubFetch(...responses: Response[]) {
+  const fetcher = vi.fn<typeof fetch>();
+  for (const response of responses) {
+    fetcher.mockResolvedValueOnce(response);
+  }
+  vi.stubGlobal("fetch", fetcher);
+  return fetcher;
+}
+
+function expectChannelUsers(patch: OpenClawConfig | undefined, voiceUser: string) {
+  expect(patch?.channels?.discord?.accounts?.sut?.guilds?.[guildId]).toMatchObject({
+    users: [driverId],
+    channels: { [channelId]: { users: [driverId] }, [voiceChannelId]: { users: [voiceUser] } },
+  });
+}
+
+async function prepareScenario(voiceDestination?: string) {
+  const patches: OpenClawConfig[] = [];
+  const call = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "config.get") {
+      return {
+        config: {},
+        hash: "config-hash",
+        appliedConfigHash: "runtime-hash",
+        configRevisionHash: "runtime-hash",
+      };
+    }
+    if (method === "config.patch") {
+      patches.push(JSON.parse((params as { raw: string }).raw) as OpenClawConfig);
+      return { hash: "config-hash" };
+    }
+    if (method === "channels.status") {
+      return {
+        channelAccounts: { discord: [{ accountId: "sut", running: true, connected: true }] },
+      };
+    }
+    throw new Error(`unexpected gateway call: ${method}`);
+  });
+  const { prepareFlow } = createDiscordQaScenarioEnvironment({
+    accountId: "sut",
+    driverIdentity: { id: driverId, bot: true },
+    sutIdentity: { id: sutId, bot: true },
+    runtimeEnv: { ...flowEnv, voiceChannelId: voiceDestination },
+  });
+  const prepared = await prepareFlow(createFlowInput(undefined, call));
+  return { call, patches, configureScenario: prepared.discordScenarioContext.configureScenario };
+}
+
 describe("discord live qa runtime", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -86,26 +144,23 @@ describe("discord live qa runtime", () => {
     await once(server, "listening");
     const port = (server.address() as AddressInfo).port;
     const endpointFetch = createDiscordQaEndpointFetcher(`http://127.0.0.1:${port}/api/v10`);
-
-    try {
-      const writeResponse = await endpointFetch(
-        new Request("https://discord.com/api/v10/channels/123/messages", {
-          body: JSON.stringify({ content: "hello" }),
+    const request = (method: string, suffix: string, body?: string) =>
+      endpointFetch(
+        new Request(`https://discord.com/api/v10/channels/123/messages${suffix}`, {
+          method,
+          body,
           headers: {
             authorization: "Bot qa-token",
-            "content-type": "application/json",
+            ...(body ? { "content-type": "application/json" } : {}),
           },
-          method: "POST",
         }),
       );
+
+    try {
+      const writeResponse = await request("POST", "", JSON.stringify({ content: "hello" }));
       await expect(writeResponse.json()).resolves.toEqual({ ok: true });
 
-      const deleteResponse = await endpointFetch(
-        new Request("https://discord.com/api/v10/channels/123/messages/456", {
-          headers: { authorization: "Bot qa-token" },
-          method: "DELETE",
-        }),
-      );
+      const deleteResponse = await request("DELETE", "/456");
       expect(deleteResponse.status).toBe(204);
       expect(deleteResponse.body).toBeNull();
       expect(received).toEqual([
@@ -172,22 +227,8 @@ describe("discord live qa runtime", () => {
 
   it("injects a temporary Discord account into the QA gateway config", () => {
     const baseCfg: OpenClawConfig = {
-      plugins: {
-        allow: ["memory-core", "qa-channel"],
-        entries: {
-          "memory-core": { enabled: true },
-          "qa-channel": { enabled: true },
-        },
-      },
-      channels: {
-        "qa-channel": {
-          enabled: true,
-          baseUrl: "http://127.0.0.1:43123",
-          botUserId: "openclaw",
-          botDisplayName: "OpenClaw QA",
-          allowFrom: ["*"],
-        },
-      },
+      plugins: { allow: ["qa-channel"], entries: { "qa-channel": { enabled: true } } },
+      channels: { "qa-channel": { enabled: true } },
     };
 
     const next = testing.buildDiscordQaConfig(baseCfg, configTarget);
@@ -280,10 +321,7 @@ describe("discord live qa runtime", () => {
     expect(matches(driverId)).toBe(false);
   });
 
-  it("computes Discord RTT from trigger and reply timestamps", () => {
-    expect(
-      testing.computeDiscordRttMs("2026-04-22T11:59:59.125Z", "2026-04-22T12:00:00.875Z"),
-    ).toBe(1750);
+  it("rejects invalid Discord RTT timestamps", () => {
     expect(testing.computeDiscordRttMs("bad", "2026-04-22T12:00:00.875Z")).toBeUndefined();
   });
 
@@ -399,32 +437,19 @@ describe("discord live qa runtime", () => {
   });
 
   it("normalizes missing current Discord voice state to null", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => Response.json({ message: "Unknown Voice State" }, { status: 404 })),
-    );
+    stubFetch(Response.json({ message: "Unknown Voice State" }, { status: 404 }));
 
     await expect(
-      testing.getCurrentDiscordVoiceState({
-        token: "token",
-        guildId,
-      }),
+      testing.getCurrentDiscordVoiceState({ token: "token", guildId }),
     ).resolves.toBeNull();
   });
 
   it("waits for required Discord application commands to be registered", async () => {
     vi.useFakeTimers();
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce(Response.json([{ id: "623456789012345679", name: "commands" }]))
-        .mockResolvedValueOnce(
-          Response.json([
-            { id: "623456789012345679", name: "commands" },
-            { id: "623456789012345678", name: "help" },
-          ]),
-        ),
+    const commands = { id: "623456789012345679", name: "commands" };
+    stubFetch(
+      Response.json([commands]),
+      Response.json([commands, { id: "623456789012345678", name: "help" }]),
     );
 
     const registeredPromise = testing.assertDiscordApplicationCommandsRegistered({
@@ -468,17 +493,9 @@ describe("discord live qa runtime", () => {
   });
 
   it("retries Discord REST requests after a 429 rate limit", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValueOnce(
-          Response.json(
-            { message: "You are being rate limited.", retry_after: 0 },
-            { status: 429 },
-          ),
-        )
-        .mockResolvedValueOnce(Response.json({ id: driverId })),
+    stubFetch(
+      Response.json({ message: "You are being rate limited.", retry_after: 0 }, { status: 429 }),
+      Response.json({ id: driverId }),
     );
 
     await expect(testing.getCurrentDiscordUser("token")).resolves.toEqual({
@@ -486,4 +503,124 @@ describe("discord live qa runtime", () => {
     });
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+  it("rejects transcript capture without an explicit destination before discovery or gateway access", async () => {
+    const resolveVoiceChannel = vi
+      .spyOn(testing, "resolveDiscordQaVoiceChannel")
+      .mockRejectedValue(new Error("must not discover a voice destination"));
+    const { call, configureScenario } = await prepareScenario();
+
+    await expect(configureScenario(discordQaTranscriptsVoiceAuthorizationScenario)).rejects.toThrow(
+      "requires an explicit QA voiceChannelId",
+    );
+    expect(resolveVoiceChannel).not.toHaveBeenCalled();
+    expect(call).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("configures the voice channel (explicit: %s)", async (explicit) => {
+    const voiceChannel = {
+      id: voiceChannelId,
+      guild_id: guildId,
+      type: 2,
+      name: "qa-voice",
+      position: 1,
+    };
+    const request = vi.fn<typeof fetch>(async () =>
+      Response.json(
+        explicit
+          ? voiceChannel
+          : [
+              { id: channelId, name: "general", position: 0, type: 0 },
+              voiceChannel,
+              { id: "623456789012345678", name: "stage", position: 2, type: 13 },
+            ],
+      ),
+    );
+    vi.stubGlobal("fetch", request);
+    const { configureScenario, patches } = await prepareScenario(
+      explicit ? voiceChannelId : undefined,
+    );
+    const configured = await configureScenario(
+      explicit
+        ? discordQaTranscriptsVoiceAuthorizationScenario
+        : testing.discordQaVoiceAutojoinScenario,
+    );
+
+    expect(configured.voiceChannel).toEqual(voiceChannel);
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[0]).toBe(
+      `https://discord.com/api/v10/${explicit ? `channels/${voiceChannelId}` : `guilds/${guildId}/channels`}`,
+    );
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.channels?.discord?.voice).toEqual({
+      enabled: true,
+      mode: "stt-tts",
+      autoJoin: explicit ? [] : [{ guildId, channelId: voiceChannelId }],
+    });
+    if (explicit) {
+      expect(patches[0]?.tools?.alsoAllow).toContain("transcripts");
+      expect(patches[0]?.agents?.entries?.qa?.tools?.alsoAllow).toContain("transcripts");
+      expectChannelUsers(patches[0], sutId);
+      await configured.configureTranscriptVoiceAccess?.(true);
+      expect(patches).toHaveLength(2);
+      expectChannelUsers(patches[1], driverId);
+      expect(request).toHaveBeenCalledOnce();
+    }
+  });
+
+  it.each([true, false])(
+    "observes channel replies with cleanup headroom (expect reply: %s)",
+    async (expectReply) => {
+      const implementation = {
+        buildRun: () => ({
+          kind: "channel-message" as const,
+          expectReply,
+          input: "ping",
+          expectedTextIncludes: expectReply ? ["pong"] : [],
+          matchText: "pong",
+        }),
+      };
+      const environment = createScenarioEnvironment({
+        configureScenario: vi.fn(async () => ({ cfg: {}, run: implementation.buildRun() })),
+        scenario: {
+          id: "discord-canary",
+          title: "Discord canary",
+          timeoutMs: expectReply ? 30_000 : 8_000,
+        },
+      });
+      const timestamps = {
+        requestStartedAt: "2026-09-02T12:00:00.000Z",
+        responseObservedAt: "2026-09-02T12:00:01.750Z",
+      };
+      vi.spyOn(testing, "sendChannelMessage").mockResolvedValue(
+        sentMessage(voiceChannelId, timestamps.requestStartedAt),
+      );
+      const poll = vi.spyOn(testing, "pollChannelMessages");
+      if (expectReply) {
+        poll.mockResolvedValue(
+          polledReply("623456789012345678", "pong", timestamps.responseObservedAt),
+        );
+      } else {
+        poll.mockImplementation(async ({ timeoutMs }) => {
+          throw new Error(`timed out after ${timeoutMs}ms waiting for Discord message`);
+        });
+      }
+      await expect(runDiscordScenario(environment, implementation)).resolves.toEqual(
+        expectReply
+          ? {
+              details: "reply matched",
+              ...timestamps,
+              rttMs: 1750,
+              rttMeasurement: {
+                ...timestamps,
+                finalMatchedReplyRttMs: 1750,
+                source: "request-to-observed-message",
+              },
+            }
+          : { details: "no reply" },
+      );
+      if (!expectReply) {
+        expect(poll).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5_000 }));
+      }
+    },
+  );
 });
