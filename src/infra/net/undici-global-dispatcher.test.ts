@@ -59,6 +59,8 @@ const {
   const setGlobalDispatcherLocal = vi.fn((next: unknown) => {
     currentDispatcher = next;
   });
+  const timeoutOptions = (timeoutMs?: number) =>
+    timeoutMs ? { bodyTimeout: timeoutMs, headersTimeout: timeoutMs } : {};
   return {
     Agent: AgentLocal,
     EnvHttpProxyAgent: EnvHttpProxyAgentLocal,
@@ -74,9 +76,18 @@ const {
     isProxylineDispatcher: vi.fn(
       (dispatcher: unknown) => dispatcher instanceof ManagedUndiciDispatcher,
     ),
-    createHttp1Agent: vi.fn((_options?: Record<string, unknown>) => new AgentLocal()),
+    createHttp1Agent: vi.fn(
+      (options?: Record<string, unknown>, timeoutMs?: number) =>
+        new AgentLocal({ ...options, ...timeoutOptions(timeoutMs), allowH2: false }),
+    ),
     createHttp1EnvHttpProxyAgent: vi.fn(
-      (_options?: Record<string, unknown>) => new EnvHttpProxyAgentLocal(),
+      (options?: Record<string, unknown>, timeoutMs?: number) =>
+        new EnvHttpProxyAgentLocal({
+          ...options,
+          ...timeoutOptions(timeoutMs),
+          allowH2: false,
+          clientFactory: "ip-safe-test-client-factory",
+        }),
     ),
     loadUndiciGlobalDispatcherDeps: vi.fn(() => ({
       getGlobalDispatcher,
@@ -160,6 +171,12 @@ function installProxyDispatcher<T>(dispatcher: T, options = DEFAULT_PROXY_OPTION
   setCurrentDispatcher(dispatcher);
   return dispatcher;
 }
+function expectCurrentAgent(constructor: typeof Agent, options: Record<string, unknown>) {
+  const next = getCurrentDispatcher() as InstanceType<typeof Agent>;
+  expect(next).toBeInstanceOf(constructor);
+  expect(next.options).toEqual(options);
+}
+
 describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
   it("explicitly tunes the global dispatcher when requested for embedded attempts", () => {
     getDefaultAutoSelectFamily.mockReturnValue(false);
@@ -168,15 +185,24 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
 
     expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledTimes(1);
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
-    expect(createHttp1Agent).toHaveBeenCalledWith({
+    expectCurrentAgent(Agent, {
       bodyTimeout: 1_900_000,
       headersTimeout: 1_900_000,
+      allowH2: false,
       connect: {
         autoSelectFamily: false,
         autoSelectFamilyAttemptTimeout: 300,
       },
     });
+    expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
+  });
+
+  it("records timeout bridge but does not override unsupported custom proxy dispatcher types", () => {
+    setCurrentDispatcher(new ProxyAgent());
+
+    api.ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
+
+    expect(setGlobalDispatcher).not.toHaveBeenCalled();
     expect(globalUndiciStreamTimeoutMs).toBe(1_900_000);
   });
 
@@ -271,7 +297,12 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
       api.ensureGlobalUndiciEnvProxyDispatcher();
 
       expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-      expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+      expectCurrentAgent(EnvHttpProxyAgent, {
+        httpProxy: "https://proxy.example:8443",
+        httpsProxy,
+        allowH2: false,
+        clientFactory: "ip-safe-test-client-factory",
+      });
       api.ensureGlobalUndiciEnvProxyDispatcher();
       expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
       stopActiveManagedProxyRegistration(registration);
@@ -321,8 +352,20 @@ describe("forceResetGlobalDispatcher", () => {
 
     expect(loadUndiciGlobalDispatcherDeps).toHaveBeenCalledTimes(1);
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(getCurrentDispatcher()).toBeInstanceOf(Agent);
-    expect(createHttp1Agent).toHaveBeenCalledWith();
+    expectCurrentAgent(Agent, { allowH2: false });
+  });
+
+  it("replaces a stale EnvHttpProxyAgent when restored proxy env is still configured", () => {
+    installProxyDispatcher(new EnvHttpProxyAgent());
+
+    api.forceResetGlobalDispatcher();
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expectCurrentAgent(EnvHttpProxyAgent, {
+      ...DEFAULT_PROXY_OPTIONS,
+      allowH2: false,
+      clientFactory: "ip-safe-test-client-factory",
+    });
   });
 
   it.each(["bootstrap", "reset"])("preserves Proxyline during %s", (operation) => {

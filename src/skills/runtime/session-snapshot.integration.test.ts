@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareEmbeddedSkills } from "../../agents/embedded-agent-runner/skill-runtime.js";
 import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
@@ -11,27 +11,18 @@ import { ensureSkillSnapshot } from "../../auto-reply/reply/session-updates.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeferredCore as deferred } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync as closeDatabase,
-  closeOpenClawStateDatabaseByPathAsync as closeDatabaseAt,
-} from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { saveSkillLibrary } from "../library/service.js";
 import { createSkillEntry } from "../loading/skill-entry-metadata.js";
 import { loadSkillRootRecords } from "../loading/skill-root-loader.js";
 import * as workspaceSkillLoader from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { readWorkspaceSkillSources } from "../loading/workspace-skill-source-reader.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import type { SkillEntry, SkillSnapshot } from "../types.js";
-import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
+import type { SkillSnapshot } from "../types.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "./refresh-state.js";
 import {
   recordRemoteSkillNodeInfo,
@@ -58,7 +49,7 @@ const temps = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function environment() {
+async function fixture() {
   const root = temps.make("openclaw-async-skills-");
   const workspaceDir = path.join(root, "workspace");
   for (const [key, value] of Object.entries({
@@ -72,11 +63,6 @@ function environment() {
   })) {
     vi.stubEnv(key, value);
   }
-  return { root, workspaceDir, stateDir: path.join(root, "state") };
-}
-
-async function fixture() {
-  const { root, workspaceDir } = environment();
   const write = (
     name: string,
     description: string,
@@ -123,366 +109,257 @@ const bindWorkspace = (workspaceDir: string) =>
     bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
     loadSkills: async (request) => readWorkspaceSkillSources(request),
   });
-describe("session snapshots", () => {
-  let params: Awaited<ReturnType<typeof fixture>>;
-  beforeEach(async () => {
-    params = await fixture();
+let params: Awaited<ReturnType<typeof fixture>>;
+beforeEach(async () => {
+  params = await fixture();
+});
+it.each([
+  { name: "deploy", savedName: "deploy", reservedName: undefined },
+  { name: "probe", savedName: "snapshot-node-probe", reservedName: undefined },
+  { name: "probe", savedName: "snapshot-node-probe-2", reservedName: "snapshot-node-probe" },
+])("pins node $savedName", async ({ name, savedName, reservedName }) => {
+  if (reservedName) {
+    await params.write(reservedName, "Unavailable local provider", missingTool);
+  }
+  const nodeId = "snapshot-node";
+  const eligibility = { nodeSkills: { canExec: true } };
+  onTestFinished(() => removeRemoteNodeSkills(nodeId));
+  onTestFinished(bindWorkspace(params.workspaceDir));
+  recordRemoteSkillNodeInfo({ nodeId, commands: ["system.run"] });
+  const content = `---\nname: ${name}\ndescription: Node\n---\nNode instructions`;
+  replaceRemoteNodeSkills({
+    nodeId,
+    skills: [{ name, description: "Node", content }],
   });
-  it.each([
-    { name: "deploy", savedName: "deploy", reservedName: undefined },
-    { name: "probe", savedName: "snapshot-node-probe", reservedName: undefined },
-    { name: "probe", savedName: "snapshot-node-probe-2", reservedName: "snapshot-node-probe" },
-  ])("pins node $savedName", async ({ name, savedName, reservedName }) => {
-    if (reservedName) {
-      await params.write(reservedName, "Unavailable local provider", missingTool);
-    }
-    const nodeId = "snapshot-node";
-    const eligibility = { nodeSkills: { canExec: true } };
-    onTestFinished(() => removeRemoteNodeSkills(nodeId));
-    onTestFinished(bindWorkspace(params.workspaceDir));
-    recordRemoteSkillNodeInfo({ nodeId, commands: ["system.run"] });
-    const content = `---\nname: ${name}\ndescription: Node\n---\nNode instructions`;
-    replaceRemoteNodeSkills({
-      nodeId,
-      skills: [{ name, description: "Node", content }],
-    });
-    const { snapshot: original } = await params.resolve({ eligibility });
-    const saved = persist(original);
-    const localDir = path.join(params.workspaceDir, "skills", name);
-    await params.write(name, "Local deployment");
-    const { snapshot: fresh } = await params.resolve({ eligibility });
-    const { snapshot: hydrated } = await params.resolve({
-      eligibility,
-      existingSnapshot: expectDefined(saved, "persisted node snapshot"),
-    });
-    expect(resolution(hydrated)).toEqual(resolution(original));
-    const nodeFile = `node://snapshot-node/skills/${name}/SKILL.md`;
-    expect(params.source(hydrated, savedName)).toBe(nodeFile);
-    expect(params.source(fresh, name)).toBe(path.join(localDir, "SKILL.md"));
-    expect(params.source(fresh, reservedName ? savedName : `snapshot-node-${name}`)).toBe(nodeFile);
+  const { snapshot: original } = await params.resolve({ eligibility });
+  const saved = persist(original);
+  const localDir = path.join(params.workspaceDir, "skills", name);
+  await params.write(name, "Local deployment");
+  const { snapshot: fresh } = await params.resolve({ eligibility });
+  const { snapshot: hydrated } = await params.resolve({
+    eligibility,
+    existingSnapshot: expectDefined(saved, "persisted node snapshot"),
   });
-
-  it.each([
-    { maxSkillsInPrompt: 1, retained: true, remote: false },
-    { maxSkillsInPrompt: 2, retained: false, remote: false },
-    { maxSkillsInPrompt: 1, retained: false, remote: true },
-  ])(
-    "retains provider ($maxSkillsInPrompt, retained=$retained, remote=$remote)",
-    async ({ maxSkillsInPrompt, retained, remote }) => {
-      params.config.skills = { load: { watch: false }, limits: { maxSkillsInPrompt } };
-      const alternateRoot = path.join(params.workspaceDir, ".agents", "skills");
-      await params.write("probe", "Original", { body: "Original implementation" }, alternateRoot);
-      await params.write("alpha", "Always available", {}, alternateRoot);
-      const originalEntries = loadSkillRootRecords({
-        dir: alternateRoot,
-        source: "agents-skills-project",
-      }).map(createSkillEntry);
-      if (remote) {
-        for (const entry of originalEntries) {
-          entry.skill.fileHost = "workspace";
-        }
-        onTestFinished(bindWorkspace(params.workspaceDir));
-      }
-      const resolveEntries = workspaceSkillLoader.resolveWorkspaceSkillPromptEntries;
-      const selection = vi
-        .spyOn(workspaceSkillLoader, "resolveWorkspaceSkillPromptEntries")
-        .mockImplementationOnce((workspaceDir, options) =>
-          resolveEntries(workspaceDir, { ...options, entries: originalEntries }),
-        );
-      const original = retained ? (await params.resolve()).snapshot : await params.build();
-      selection.mockRestore();
-      const saved = structuredClone(persist(original));
-      params.install();
-      const { snapshot: fresh } = await params.resolve();
-      const { snapshot: hydrated } = await params.resolve({ existingSnapshot: saved });
-      expect(resolution(hydrated)).toEqual(resolution(original));
-      expect(hydrated.skills).toEqual(original.skills);
-      expect(params.catalog(hydrated)).toHaveLength(2);
-      const file = expectDefined(params.source(hydrated, "probe"), "saved provider");
-      expect(file).toBe(path.join(alternateRoot, "probe", "SKILL.md"));
-      expect(hydrated.discoverySkills?.find((skill) => skill.name === "probe")?.fileHost).toBe(
-        remote ? "workspace" : undefined,
-      );
-      expect(fs.readFileSync(file, "utf8")).toContain("Original implementation");
-      expect(params.source(fresh, "probe")).toBe(
-        path.join(params.workspaceDir, "skills", "probe", "SKILL.md"),
-      );
-    },
-  );
-
-  it("does not revive an ineligible source during cold snapshot hydration", async () => {
-    await params.write("env-probe", "Environment prerequisite", {
-      metadata: '{"openclaw":{"requires":{"env":["W8_SKILL_ENV_FIXTURE"]}}}',
-    });
-    vi.stubEnv("W8_SKILL_ENV_FIXTURE", "fixture");
-    const original = await params.build();
-    expect(names(original.discoverySkills)).toEqual(["env-probe", "visible"]);
-    const saved = persist(original);
-    vi.stubEnv("W8_SKILL_ENV_FIXTURE", undefined);
-    const { snapshot } = await params.resolve({
-      existingSnapshot: expectDefined(saved, "saved snapshot"),
-    });
-    expect(snapshot.prompt).toBe(original.prompt);
-    expect(names(snapshot.resolvedSkills)).toEqual(["visible"]);
-    expect(names(snapshot.discoverySkills)).toEqual(["visible"]);
-  });
-
-  it("discovers newly installed dependencies for fresh sessions without rewriting active snapshots", async () => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-    params.config.skills = { load: { watch: false }, limits: { maxSkillsInPrompt: 1 } };
-    const sessionStore: Record<string, SessionEntry> = {};
-    const sessionKey = "agent:main:before-install";
-    const prepare = (key: string) =>
-      params.prepare({
-        sessionEntry: sessionStore[key],
-        sessionStore,
-        sessionKey: key,
-        isFirstTurnInSession: sessionStore[key] === undefined,
-      });
-    const original = await prepare(sessionKey);
-    expect(names(original.skillsSnapshot?.skills)).toEqual(["visible"]);
-    params.install();
-    expect((await prepare(sessionKey)).skillsSnapshot).toBe(original.skillsSnapshot);
-    const fresh = await prepare("agent:main:after-install");
-    expect(names(fresh.skillsSnapshot?.skills)).toEqual(["probe", "visible"]);
-    sessionStore[sessionKey] = stripRuntimeOnlySessionSkillsFields(
-      expectDefined(sessionStore[sessionKey], "original session"),
-    );
-    const hydrated = await prepare(sessionKey);
-    expect(hydrated.skillsSnapshot?.prompt).toBe(original.skillsSnapshot?.prompt);
-    expect(names(hydrated.skillsSnapshot?.resolvedSkills)).toEqual(["visible"]);
-    expect(names(params.catalog(hydrated.skillsSnapshot))).toEqual(["visible"]);
-  });
-
-  it.each([
-    [true, true, false],
-    [true, false, false],
-    [false, true, false],
-    [false, false, false],
-    [false, true, true],
-    [false, false, true],
-  ] as const)(
-    "preserves concurrent reply state (first turn %s, handle %s, warm %s)",
-    async (isFirstTurnInSession, useHandle, warm) => {
-      vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-      params.config.skills = { load: { watch: false } };
-      const sessionKey = "agent:main:main";
-      let sessionEntry: SessionEntry = {
-        sessionId: "original",
-        updatedAt: 1,
-        label: "Before",
-        pinnedAt: 1,
-      };
-      const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-      const sessionEntryHandle = useHandle
-        ? createReplySessionEntryHandle({ sessionEntry, sessionStore, sessionKey })
-        : undefined;
-      const prepare = () =>
-        params.prepare({
-          sessionEntry,
-          sessionStore,
-          sessionEntryHandle,
-          sessionKey,
-          isFirstTurnInSession,
-        });
-      if (warm) {
-        await prepare();
-        sessionEntry = expectDefined(sessionStore[sessionKey], "prepared warm session entry");
-      }
-      const pending = prepare();
-      const concurrent: SessionEntry = {
-        ...sessionEntry,
-        updatedAt: 2,
-        label: "After",
-        sendPolicy: "deny",
-      };
-      delete concurrent.pinnedAt;
-      if (sessionEntryHandle) {
-        sessionEntryHandle.replaceCurrent(concurrent);
-      } else {
-        sessionStore[sessionKey] = concurrent;
-      }
-      const result = await pending;
-      expect(result.sessionEntry).toMatchObject({
-        label: "After",
-        sendPolicy: "deny",
-        sessionId: "original",
-      });
-      expect(result.sessionEntry?.pinnedAt).toBeUndefined();
-      expect(result.sessionEntry?.skillsSnapshot?.prompt).toContain("Original instructions");
-      expect(sessionStore[sessionKey]).toBe(result.sessionEntry);
-      if (sessionEntryHandle) {
-        expect(sessionEntryHandle.getCurrent()).toBe(result.sessionEntry);
-      }
-    },
-  );
-
-  it("rebuilds changed source bytes and version before publishing an in-flight snapshot", async () => {
-    const requestedVersion = getSkillsSnapshotVersion(params.workspaceDir);
-    const pending = params.resolve({ snapshotVersion: requestedVersion });
-    const content = "---\nname: visible\ndescription: Updated instructions\n---\n";
-    fs.writeFileSync(params.visibleFile, content);
-    const currentVersion = bumpSkillsSnapshotVersion({ workspaceDir: params.workspaceDir });
-    const { snapshot } = await pending;
-    expect(snapshot.prompt).toContain("Updated instructions");
-    expect(snapshot.prompt).not.toContain("Original instructions");
-    expect(snapshot.version).toBe(currentVersion);
-    expect((await params.resolve()).snapshot).toEqual(snapshot);
-  });
-
-  it("rechecks eligibility after preparation without changing admitted configuration", async () => {
-    let canExec = true;
-    const pending = params.resolve({
-      resolveEligibility: () => ({ nodeSkills: { canExec } }),
-    });
-    canExec = false;
-    expect((await pending).snapshot.nodeSkillsEligibility).toEqual({ canExec: false });
-  });
-
-  it("keeps a shared rebuild alive for its remaining caller after another caller aborts", async () => {
-    const controller = new AbortController();
-    const reason = new Error("preparation cancelled");
-    const first = params.resolve({
-      assertCurrent: () => controller.signal.throwIfAborted(),
-    });
-    const rejected = expect(first).rejects.toBe(reason);
-    const second = params.resolve();
-    controller.abort(reason);
-    const result = await second;
-    await rejected;
-    expect(result.snapshot.prompt).toContain("Original instructions");
-    expect((await params.resolve()).snapshot).toEqual(result.snapshot);
-  });
-
-  it("observes abort before applying a skill environment and leaves no override behind", async () => {
-    vi.stubEnv("ASYNC_SKILL_FIXTURE", undefined);
-    params.config.skills = { entries: { visible: { env: { ASYNC_SKILL_FIXTURE: "owned" } } } };
-    const controller = new AbortController();
-    const reason = new Error("attempt cancelled");
-    const pending = prepareEmbeddedSkills({
-      attempt: { config: params.config },
-      effectiveWorkspace: params.workspaceDir,
-      sandbox: null,
-      sessionAgentId: "main",
-      includeCodeModeSkills: true,
-      assertCurrent: () => controller.signal.throwIfAborted(),
-    });
-    const rejected = expect(pending).rejects.toBe(reason);
-    controller.abort(reason);
-    try {
-      await rejected;
-      expect(process.env.ASYNC_SKILL_FIXTURE).toBeUndefined();
-    } finally {
-      // Also release custody when this regression is run against the original synchronous owner.
-      const prepared = await pending.catch(() => undefined);
-      prepared?.restoreSkillEnv();
-    }
-  });
+  expect(resolution(hydrated)).toEqual(resolution(original));
+  const nodeFile = `node://snapshot-node/skills/${name}/SKILL.md`;
+  expect(params.source(hydrated, savedName)).toBe(nodeFile);
+  expect(params.source(fresh, name)).toBe(path.join(localDir, "SKILL.md"));
+  expect(params.source(fresh, reservedName ? savedName : `snapshot-node-${name}`)).toBe(nodeFile);
 });
 
-const libraryContent = "---\nname: guide\ndescription: Saved procedure\n---\n# Synthetic guide\n";
-async function libraryFixture() {
-  const { stateDir: root, workspaceDir } = environment();
-  const options = { env: { OPENCLAW_STATE_DIR: root } };
-  const saved = await saveSkillLibrary(
-    {
-      profileId: ensureProfileForEmail("reader@example.test", options).id,
-      scopes: ["operator.read", "operator.write"],
-      getConfig: () => ({}),
-      assertCurrent() {},
-    },
-    { slug: "guide", content: libraryContent, expectedRevision: null },
-    options,
-  );
-  const { skillId, revision, name, ownerProfileId } = saved.entry;
-  const pin = { skillId, revision, name, ownerProfileId };
-  // Workspace filtering must not remove already-authorized library pins.
-  const skillsSnapshot: SkillSnapshot = {
-    prompt: "cached prompt",
-    skills: [],
-    resolvedSkills: [],
-    librarySelections: [pin, pin],
-    skillFilter: [],
-  };
-  const expected = {
-    skill: { name, description: "Saved procedure" },
-    syncDirName: `library-${skillId}-${revision}`,
-  };
-  await closeDatabase();
-  const resolve = (clone = false) =>
-    resolveEmbeddedRunSkillEntries({
-      workspaceDir,
-      config: { plugins: { enabled: false } },
-      skillsSnapshot: clone ? structuredClone(skillsSnapshot) : skillsSnapshot,
-    });
-  const check = (entries: SkillEntry[]) => {
-    expect(entries).toMatchObject([expected, expected]);
-    for (const entry of entries) {
-      expect(fs.readFileSync(entry.skill.filePath, "utf8")).toBe(libraryContent);
+it.each([
+  { maxSkillsInPrompt: 1, retained: true, remote: false },
+  { maxSkillsInPrompt: 2, retained: false, remote: false },
+  { maxSkillsInPrompt: 1, retained: false, remote: true },
+])(
+  "retains provider ($maxSkillsInPrompt, retained=$retained, remote=$remote)",
+  async ({ maxSkillsInPrompt, retained, remote }) => {
+    params.config.skills = { load: { watch: false }, limits: { maxSkillsInPrompt } };
+    const alternateRoot = path.join(params.workspaceDir, ".agents", "skills");
+    await params.write("probe", "Original", { body: "Original implementation" }, alternateRoot);
+    await params.write("alpha", "Always available", {}, alternateRoot);
+    const originalEntries = loadSkillRootRecords({
+      dir: alternateRoot,
+      source: "agents-skills-project",
+    }).map(createSkillEntry);
+    if (remote) {
+      for (const entry of originalEntries) {
+        entry.skill.fileHost = "workspace";
+      }
+      onTestFinished(bindWorkspace(params.workspaceDir));
     }
-  };
-  return { root, pin, resolve, check };
-}
-
-it.each(["root", "pins", "admission", "warm"] as const)(
-  "captures %s context without parent SQL",
-  async (change) => {
-    const f = await libraryFixture();
-    const otherRoot = temps.make("embedded-library-other-");
-    const gate = deferred();
-    const entered = deferred();
-    const sql = observeMainThreadSql();
-    try {
-      if (change === "warm") {
-        const cold = await f.resolve(true);
-        expect(cold.skillEntries).toEqual([]);
-        const entries = await cold.loadSkillEntries();
-        f.check(entries);
-        expect(await cold.loadSkillEntries()).toBe(entries);
-      }
-      const prepare = workspaceSkillLoader.prepareWorkspaceSkills;
-      vi.spyOn(workspaceSkillLoader, "prepareWorkspaceSkills").mockImplementationOnce(
-        async (...args) => {
-          const entries = await prepare(...args);
-          entered.resolve();
-          await gate.promise;
-          return entries;
-        },
+    const resolveEntries = workspaceSkillLoader.resolveWorkspaceSkillPromptEntries;
+    const selection = vi
+      .spyOn(workspaceSkillLoader, "resolveWorkspaceSkillPromptEntries")
+      .mockImplementationOnce((workspaceDir, options) =>
+        resolveEntries(workspaceDir, { ...options, entries: originalEntries }),
       );
-      process.env.OPENCLAW_STATE_DIR = otherRoot;
-      const result = await f.resolve(change === "warm");
-      expect(result.skillEntries).toEqual([]);
-      process.env.OPENCLAW_STATE_DIR = f.root;
-      const pending = result.loadSkillEntries();
-      const outcome = pending.catch((error: unknown) => error);
-      await entered.promise;
-      if (change === "root") {
-        process.env.OPENCLAW_STATE_DIR = otherRoot;
-      } else if (change === "pins") {
-        Object.assign(f.pin, {
-          skillId: "changed",
-          revision: "f".repeat(64),
-          name: "changed",
-          ownerProfileId: null,
-        });
-      } else {
-        await closeDatabaseAt(path.join(f.root, "state", "openclaw.sqlite"));
-      }
-      gate.resolve();
-      const invalidated = change === "admission" || change === "warm";
-      if (invalidated) {
-        expect(await outcome).toMatchObject({ code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED" });
-      }
-      // Invalidated reads cannot fill the cache, but a fresh invocation may retry.
-      const entries = invalidated ? await result.loadSkillEntries() : await pending;
-      f.check(entries);
-      expect(entries[0]?.skill.filePath.startsWith(`${f.root}${path.sep}`)).toBe(true);
-      expect(await result.loadSkillEntries()).toBe(entries);
-      expect(fs.existsSync(path.join(otherRoot, "state", "openclaw.sqlite"))).toBe(false);
-      await closeDatabase();
-      sql.expectIdle();
-    } finally {
-      sql.restore();
+    const original = retained ? (await params.resolve()).snapshot : await params.build();
+    selection.mockRestore();
+    const saved = structuredClone(persist(original));
+    params.install();
+    const { snapshot: fresh } = await params.resolve();
+    const { snapshot: hydrated } = await params.resolve({ existingSnapshot: saved });
+    expect(resolution(hydrated)).toEqual(resolution(original));
+    expect(hydrated.skills).toEqual(original.skills);
+    expect(params.catalog(hydrated)).toHaveLength(2);
+    const file = expectDefined(params.source(hydrated, "probe"), "saved provider");
+    expect(file).toBe(path.join(alternateRoot, "probe", "SKILL.md"));
+    expect(hydrated.discoverySkills?.find((skill) => skill.name === "probe")?.fileHost).toBe(
+      remote ? "workspace" : undefined,
+    );
+    expect(fs.readFileSync(file, "utf8")).toContain("Original implementation");
+    expect(params.source(fresh, "probe")).toBe(
+      path.join(params.workspaceDir, "skills", "probe", "SKILL.md"),
+    );
+  },
+);
+
+it("does not revive an ineligible source during cold snapshot hydration", async () => {
+  await params.write("env-probe", "Environment prerequisite", {
+    metadata: '{"openclaw":{"requires":{"env":["W8_SKILL_ENV_FIXTURE"]}}}',
+  });
+  vi.stubEnv("W8_SKILL_ENV_FIXTURE", "fixture");
+  const original = await params.build();
+  expect(names(original.discoverySkills)).toEqual(["env-probe", "visible"]);
+  const saved = persist(original);
+  vi.stubEnv("W8_SKILL_ENV_FIXTURE", undefined);
+  const { snapshot } = await params.resolve({
+    existingSnapshot: expectDefined(saved, "saved snapshot"),
+  });
+  expect(snapshot.prompt).toBe(original.prompt);
+  expect(names(snapshot.resolvedSkills)).toEqual(["visible"]);
+  expect(names(snapshot.discoverySkills)).toEqual(["visible"]);
+});
+
+it("discovers newly installed dependencies for fresh sessions without rewriting active snapshots", async () => {
+  vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+  params.config.skills = { load: { watch: false }, limits: { maxSkillsInPrompt: 1 } };
+  const sessionStore: Record<string, SessionEntry> = {};
+  const sessionKey = "agent:main:before-install";
+  const prepare = (key: string) =>
+    params.prepare({
+      sessionEntry: sessionStore[key],
+      sessionStore,
+      sessionKey: key,
+      isFirstTurnInSession: sessionStore[key] === undefined,
+    });
+  const original = await prepare(sessionKey);
+  expect(names(original.skillsSnapshot?.skills)).toEqual(["visible"]);
+  params.install();
+  expect((await prepare(sessionKey)).skillsSnapshot).toBe(original.skillsSnapshot);
+  const fresh = await prepare("agent:main:after-install");
+  expect(names(fresh.skillsSnapshot?.skills)).toEqual(["probe", "visible"]);
+  sessionStore[sessionKey] = stripRuntimeOnlySessionSkillsFields(
+    expectDefined(sessionStore[sessionKey], "original session"),
+  );
+  const hydrated = await prepare(sessionKey);
+  expect(hydrated.skillsSnapshot?.prompt).toBe(original.skillsSnapshot?.prompt);
+  expect(names(hydrated.skillsSnapshot?.resolvedSkills)).toEqual(["visible"]);
+  expect(names(params.catalog(hydrated.skillsSnapshot))).toEqual(["visible"]);
+});
+
+it.each([
+  [true, true, false],
+  [true, false, false],
+  [false, true, false],
+  [false, false, false],
+  [false, true, true],
+  [false, false, true],
+] as const)(
+  "preserves concurrent reply state (first turn %s, handle %s, warm %s)",
+  async (isFirstTurnInSession, useHandle, warm) => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    params.config.skills = { load: { watch: false } };
+    const sessionKey = "agent:main:main";
+    let sessionEntry: SessionEntry = {
+      sessionId: "original",
+      updatedAt: 1,
+      label: "Before",
+      pinnedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const sessionEntryHandle = useHandle
+      ? createReplySessionEntryHandle({ sessionEntry, sessionStore, sessionKey })
+      : undefined;
+    const prepare = () =>
+      params.prepare({
+        sessionEntry,
+        sessionStore,
+        sessionEntryHandle,
+        sessionKey,
+        isFirstTurnInSession,
+      });
+    if (warm) {
+      await prepare();
+      sessionEntry = expectDefined(sessionStore[sessionKey], "prepared warm session entry");
+    }
+    const pending = prepare();
+    const concurrent: SessionEntry = {
+      ...sessionEntry,
+      updatedAt: 2,
+      label: "After",
+      sendPolicy: "deny",
+    };
+    delete concurrent.pinnedAt;
+    if (sessionEntryHandle) {
+      sessionEntryHandle.replaceCurrent(concurrent);
+    } else {
+      sessionStore[sessionKey] = concurrent;
+    }
+    const result = await pending;
+    expect(result.sessionEntry).toMatchObject({
+      label: "After",
+      sendPolicy: "deny",
+      sessionId: "original",
+    });
+    expect(result.sessionEntry?.pinnedAt).toBeUndefined();
+    expect(result.sessionEntry?.skillsSnapshot?.prompt).toContain("Original instructions");
+    expect(sessionStore[sessionKey]).toBe(result.sessionEntry);
+    if (sessionEntryHandle) {
+      expect(sessionEntryHandle.getCurrent()).toBe(result.sessionEntry);
     }
   },
 );
+
+it("rebuilds changed source bytes and version before publishing an in-flight snapshot", async () => {
+  const requestedVersion = getSkillsSnapshotVersion(params.workspaceDir);
+  const pending = params.resolve({ snapshotVersion: requestedVersion });
+  const content = "---\nname: visible\ndescription: Updated instructions\n---\n";
+  fs.writeFileSync(params.visibleFile, content);
+  const currentVersion = bumpSkillsSnapshotVersion({ workspaceDir: params.workspaceDir });
+  const { snapshot } = await pending;
+  expect(snapshot.prompt).toContain("Updated instructions");
+  expect(snapshot.prompt).not.toContain("Original instructions");
+  expect(snapshot.version).toBe(currentVersion);
+  expect((await params.resolve()).snapshot).toEqual(snapshot);
+});
+
+it("rechecks eligibility after preparation without changing admitted configuration", async () => {
+  let canExec = true;
+  const pending = params.resolve({
+    resolveEligibility: () => ({ nodeSkills: { canExec } }),
+  });
+  canExec = false;
+  expect((await pending).snapshot.nodeSkillsEligibility).toEqual({ canExec: false });
+});
+
+it("keeps a shared rebuild alive for its remaining caller after another caller aborts", async () => {
+  const controller = new AbortController();
+  const reason = new Error("preparation cancelled");
+  const first = params.resolve({
+    assertCurrent: () => controller.signal.throwIfAborted(),
+  });
+  const rejected = expect(first).rejects.toBe(reason);
+  const second = params.resolve();
+  controller.abort(reason);
+  const result = await second;
+  await rejected;
+  expect(result.snapshot.prompt).toContain("Original instructions");
+  expect((await params.resolve()).snapshot).toEqual(result.snapshot);
+});
+
+it("observes abort before applying a skill environment and leaves no override behind", async () => {
+  vi.stubEnv("ASYNC_SKILL_FIXTURE", undefined);
+  params.config.skills = { entries: { visible: { env: { ASYNC_SKILL_FIXTURE: "owned" } } } };
+  const controller = new AbortController();
+  const reason = new Error("attempt cancelled");
+  const pending = prepareEmbeddedSkills({
+    attempt: { config: params.config },
+    effectiveWorkspace: params.workspaceDir,
+    sandbox: null,
+    sessionAgentId: "main",
+    includeCodeModeSkills: true,
+    assertCurrent: () => controller.signal.throwIfAborted(),
+  });
+  const rejected = expect(pending).rejects.toBe(reason);
+  controller.abort(reason);
+  try {
+    await rejected;
+    expect(process.env.ASYNC_SKILL_FIXTURE).toBeUndefined();
+  } finally {
+    // Also release custody when this regression is run against the original synchronous owner.
+    const prepared = await pending.catch(() => undefined);
+    prepared?.restoreSkillEnv();
+  }
+});

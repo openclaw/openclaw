@@ -206,6 +206,8 @@ it.each([false, true])("rotates actual auth snapshots (inherited=%s)", async (in
   const expected = ["old", "new"].flatMap((key) =>
     calls(key).map(([dir, credential]) => [dir, credential, key]),
   );
+  const compare = (left: readonly (string | undefined)[], right: readonly (string | undefined)[]) =>
+    left.join("\0").localeCompare(right.join("\0"));
   try {
     for (const key of ["old", "new"]) {
       publish(key);
@@ -214,8 +216,8 @@ it.each([false, true])("rotates actual auth snapshots (inherited=%s)", async (in
     expect(create).toHaveBeenCalledTimes(agents.length * 2);
     expect(close.mock.calls).toEqual(expect.arrayContaining(calls("old")));
     expect(close).toHaveBeenCalledTimes(agents.length);
-    expect(inherited ? requests.toSorted() : requests).toEqual(
-      inherited ? expected.toSorted() : expected,
+    expect(inherited ? requests.toSorted(compare) : requests).toEqual(
+      inherited ? expected.toSorted(compare) : expected,
     );
     if (!inherited) {
       publish();
@@ -227,7 +229,9 @@ it.each([false, true])("rotates actual auth snapshots (inherited=%s)", async (in
     await embeddings.close?.();
     clearRuntimeAuthProfileStoreSnapshots();
   }
-  expect(close.mock.calls.toSorted()).toEqual([...calls("old"), ...calls("new")].toSorted());
+  expect(close.mock.calls.toSorted(compare)).toEqual(
+    [...calls("old"), ...calls("new")].toSorted(compare),
+  );
 });
 
 it("retires cached agent providers and fails closed after runtime config replacement", async () => {

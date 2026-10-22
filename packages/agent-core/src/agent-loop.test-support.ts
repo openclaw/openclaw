@@ -55,11 +55,7 @@ export function captureAgent(
   return { agent, requests, events };
 }
 
-export function expectedToolResult<T extends object>(
-  toolCallId: string,
-  isError: boolean,
-  rest?: T,
-) {
+export function expectedToolResult(toolCallId: string, isError: boolean, rest?: object) {
   return { role: "toolResult" as const, toolCallId, isError, ...rest };
 }
 

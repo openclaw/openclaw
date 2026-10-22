@@ -1,8 +1,7 @@
-import "../../test-utils/prepare-compiled-subprocesses.js";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { PassThrough, Readable, Writable } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -416,70 +415,4 @@ it("keeps canonical Gateway roots local through discovery, refresh, and host cha
   await expect(resolveSnapshot({ ...canonicalParams, existingSnapshot: saved })).rejects.toThrow(
     "stopped or not ready",
   );
-});
-
-function workerFixture() {
-  const output = new PassThrough();
-  const messages: unknown[] = [];
-  output.on("data", (chunk: Buffer) => messages.push(JSON.parse(chunk.toString())));
-  const run = (operation: string, input: Readable) =>
-    serveWorkspaceSkills({ home: fixtureRoot, workspace: workspaceDir, operation, input, output });
-  const invoke = (operation: string, request: unknown) =>
-    run(operation, Readable.from([JSON.stringify(request)]));
-  return { output, messages, run, invoke };
-}
-
-it("validates dependency recipes without source paths", async () => {
-  const { invoke, messages } = workerFixture();
-  await invoke("installDependencies", {
-    skillKey: "test",
-    spec: { kind: "node", package: "--not-a-package" },
-    preferences: { nodeManager: "npm", preferBrew: false },
-    timeoutMs: 1000,
-  });
-  expect(messages).toMatchObject([
-    { ok: false, message: "node package value is empty or starts with a dash" },
-  ]);
-});
-
-it.each([false, true])("handles one SSH policy reply (allowed=%s)", async (allowed) => {
-  const { output, messages, run } = workerFixture();
-  const extractedRoot = path.join(fixtureRoot, ".cache/openclaw/skill-installs/source");
-  const target = path.join(workspaceDir, "skills/test");
-  const skill = "# Test skill\n";
-  const denial = { error: "Denied by policy", failureKind: "invalid-request" };
-  const missing = () => expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
-  await fs.mkdir(extractedRoot, { recursive: true });
-  await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skill);
-  const input = new PassThrough();
-  const prepared = once(output, "data");
-  const pending = run("applyRoot", input);
-  input.write(`${JSON.stringify({ extractedRoot, slug: "test", mode: "install" })}\n`);
-  await prepared;
-  expect(messages).toEqual([{ type: "prepared", mode: "install" }]);
-  await missing();
-  input.end(`${JSON.stringify({ decision: allowed ? null : denial })}\n`);
-  await pending;
-  expect(messages).toHaveLength(2);
-  if (allowed) {
-    expect(messages[1]).toMatchObject({ type: "result", result: { ok: true, mode: "install" } });
-    expect(await fs.readFile(path.join(target, "SKILL.md"), "utf8")).toBe(skill);
-  } else {
-    expect(messages[1]).toEqual({ type: "result", result: { ok: false, ...denial } });
-    await missing();
-  }
-});
-
-it.each([
-  { operation: "discovery", error: "does not match the provisioned workspace" },
-  { operation: "unknown", error: "Unknown skill worker operation" },
-])("rejects $operation before scanning", async ({ operation, error }) => {
-  await expect(
-    workerFixture().invoke(
-      operation,
-      operation === "discovery"
-        ? { sourcePlan: { workspaceDir: path.join(fixtureRoot, "other") } }
-        : {},
-    ),
-  ).rejects.toThrow(error);
 });

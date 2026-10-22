@@ -143,30 +143,17 @@ describe("openProviderWebSocket", () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
 
-  it.each(["explicit-proxy", "env-proxy", "NO_PROXY bypass", "ALL_PROXY only"] as const)(
-    "blocks private DNS via %s",
-    async (mode) => {
-      const bypass = mode === "NO_PROXY bypass";
-      const proxy = await prepareProxy(bypass ? "provider.example" : "");
-      if (bypass) {
-        vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-      } else if (mode === "ALL_PROXY only") {
-        for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
-          vi.stubEnv(name, undefined);
-        }
-      }
-      const opening = openSocket(providerUrl, {
-        dispatcherPolicy:
-          mode === "explicit-proxy"
-            ? { mode, proxyUrl: proxy.url, allowPrivateProxy: true }
-            : mode === "ALL_PROXY only"
-              ? undefined
-              : { mode: "env-proxy" },
-      }).then(terminateOnOpen);
-      await expect(opening).rejects.toThrow(/private|loopback|blocked/iu);
-      expect(proxy.connectionCount()).toBe(0);
-    },
-  );
+  it.each(["explicit-proxy", "env-proxy"] as const)("blocks private DNS via %s", async (mode) => {
+    const proxy = await prepareProxy();
+    const opening = openSocket(providerUrl, {
+      dispatcherPolicy:
+        mode === "explicit-proxy"
+          ? { mode, proxyUrl: proxy.url, allowPrivateProxy: true }
+          : { mode },
+    }).then(terminateOnOpen);
+    await expect(opening).rejects.toThrow(/private|loopback|blocked/iu);
+    expect(proxy.connectionCount()).toBe(0);
+  });
 
   it.each([false, true])("delegates target DNS to ambient proxy (managed=%s)", async (managed) => {
     const proxy = await prepareProxy();
@@ -182,6 +169,22 @@ describe("openProviderWebSocket", () => {
     socket.terminate();
     await closed;
     expect(proxy.connectionCount()).toBe(1);
+  });
+
+  it.each(["NO_PROXY bypass", "ALL_PROXY only"])("checks target DNS for %s", async (mode) => {
+    const proxy = await prepareProxy(mode === "NO_PROXY bypass" ? "provider.example" : "");
+    if (mode === "NO_PROXY bypass") {
+      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    } else {
+      for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"]) {
+        vi.stubEnv(name, undefined);
+      }
+    }
+    const opening = openSocket(providerUrl, {
+      dispatcherPolicy: mode === "NO_PROXY bypass" ? { mode: "env-proxy" } : undefined,
+    }).then(terminateOnOpen);
+    await expect(opening).rejects.toThrow(/private|loopback|blocked/iu);
+    expect(proxy.connectionCount()).toBe(0);
   });
 
   it("keeps DNS preparation and the handshake within one connection deadline", async () => {

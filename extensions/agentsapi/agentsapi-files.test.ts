@@ -71,7 +71,7 @@ describe("Agents API input attachment custody", () => {
     ]);
   });
 
-  it.each(["owned", "managed", "unowned", "workspace", "foreign"])(
+  it.each(["owned", "managed", "project", "unowned", "workspace", "foreign"])(
     "enforces attachment custody: %s",
     async (source) => {
       const fixture = await createStagedInputOwnershipFixture(workspaceDir);
@@ -81,11 +81,13 @@ describe("Agents API input attachment custody", () => {
       const managed = source === "managed" || foreign ? await save(originalBytes) : undefined;
       const accepted = source === "owned" || source === "managed";
       const relativePath =
-        source === "unowned"
-          ? fixture.unownedFiles[2]!
-          : foreign
-            ? path.join("inbound", managed!.id)
-            : fixture.ownedFiles[0]!;
+        source === "project"
+          ? "project/input-secret.txt"
+          : source === "unowned"
+            ? fixture.unownedFiles[2]!
+            : foreign
+              ? path.join("inbound", managed!.id)
+              : fixture.ownedFiles[0]!;
       const filePath = path.join(workspaceDir, relativePath);
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await fs.writeFile(filePath, stagedBytes);
@@ -117,11 +119,20 @@ describe("Agents API input attachment custody", () => {
     const full = await save(bytes);
     const extra = await save("x");
     const fact = { path: full.path, sizeBytes: 1 };
-    expect(decodedFiles(await prepare([fact, fact]))).toEqual([bytes, bytes]);
+    const complete = decodedFiles(await prepare([fact, fact]));
+    expect(complete).toHaveLength(2);
+    for (const [index, file] of complete.entries()) {
+      expect(file.equals(bytes), `complete attachment ${index + 1}`).toBe(true);
+    }
 
     const smaller = await save(bytes.subarray(1));
     const partial = await prepare([fact, { path: extra.path }, fact, { path: smaller.path }]);
-    expect(decodedFiles(partial)).toEqual([bytes, Buffer.from("x"), bytes.subarray(1)]);
+    const accepted = decodedFiles(partial);
+    const expected = [bytes, Buffer.from("x"), bytes.subarray(1)];
+    expect(accepted).toHaveLength(expected.length);
+    for (const [index, expectedBytes] of expected.entries()) {
+      expect(accepted[index]!.equals(expectedBytes), `partial attachment ${index + 1}`).toBe(true);
+    }
     expect(
       JSON.parse(partial.mappingText.split("\n")[1]!).map(
         ({ attachment }: { attachment: number }) => attachment,

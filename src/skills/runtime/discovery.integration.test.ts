@@ -3,10 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement as beforeSettlement,
-  createDeferred,
-} from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -92,6 +89,11 @@ async function waitForLiveWatch(directory: string, workspaceDir = workspace) {
     await fs.rm(marker, { force: true });
   }
 }
+function trackSettlement(promise: Promise<unknown>) {
+  const settled = vi.fn();
+  void promise.then(settled, settled);
+  return settled;
+}
 function pauseAfter<T extends unknown[]>(operation: (...args: T) => Promise<void>) {
   const entered = createDeferred();
   const released = createDeferred();
@@ -125,6 +127,15 @@ async function plannedSource(dir: string, options: Parameters<typeof prepareSkil
   };
 }
 
+it("publishes explicit additions, edits, and removals before refresh resolves", async () => {
+  expect(await descriptions()).toEqual([]);
+  for (const text of ["Added", "Edited", undefined]) {
+    await (text ? write(text) : fs.rm(path.join(workspace, "skills"), { recursive: true }));
+    await refreshSkillsDiscovery({ workspaceDir: workspace });
+    expect(await descriptions()).toEqual(text ? [text] : []);
+  }
+});
+
 it("serves published skills while discovery is scanning another workspace", async () => {
   await write("Published instructions");
   const source = request();
@@ -143,14 +154,16 @@ it("serves published skills while discovery is scanning another workspace", asyn
     return run.apply(this, args);
   });
   const cold = descriptions(request(other));
+  const coldSettled = trackSettlement(cold);
   let warm: Promise<string[]> | undefined;
   try {
     await blocked.entered;
     warm = descriptions(source);
-    expect(
-      await beforeSettlement(warm, cold, "Cold discovery settled before the warm read"),
-    ).toEqual(["Published instructions"]);
-    await beforeSettlement(nextImmediate(), cold, "Cold discovery escaped its blocked worker");
+    const warmSettled = trackSettlement(warm);
+    await nextImmediate();
+    expect(warmSettled).toHaveBeenCalledOnce();
+    expect(coldSettled).not.toHaveBeenCalled();
+    expect(await warm).toEqual(["Published instructions"]);
   } finally {
     blocked.release();
     await Promise.allSettled([warm, cold]);
@@ -221,12 +234,6 @@ it("applies config refresh on the healthy worker and drops departed sources", as
   await completePassiveScan();
   expect(getSkillsSnapshotVersion(workspace)).toBe(retiredVersion);
   expect(await descriptions(request(nextWorkspace))).toEqual(["Current change"]);
-  await fs.rm(path.join(nextWorkspace, "skills"), { recursive: true });
-  await refreshSkillsDiscovery({ workspaceDir: nextWorkspace });
-  expect(await descriptions(request(nextWorkspace))).toEqual([]);
-  await write("Recreated", nextWorkspace);
-  await completePassiveScan();
-  expect(await descriptions(request(nextWorkspace))).toEqual(["Recreated"]);
   await closeSkillsWatchers();
   expect(discoveryPool()).toBeUndefined();
 });
@@ -269,13 +276,15 @@ it.each([false, true])(
       workspaceDir: workspace,
       ...(selected ? { sourcePlan: request().sourcePlan } : {}),
     });
+    const settled = trackSettlement(read);
     let reset: Promise<void> | undefined;
     try {
       await disposal.entered;
       reset = refreshSkillsDiscovery({ reason: "config-change" });
       await closing.entered;
       disposal.release();
-      await beforeSettlement(nextImmediate(), read, "Source registered before reset completed");
+      await nextImmediate();
+      expect(settled).not.toHaveBeenCalled();
       closing.release();
       await Promise.all([read, reset]);
       expect(await descriptions()).toEqual(["Current instructions"]);
@@ -331,7 +340,16 @@ it("keeps each source environment while refreshing a reused worker's plans and p
   expect(await second()).toEqual(["Second namespace"]);
 });
 
-it("keeps Windows watch handles outside replaceable skill directories", async () => {
+it("keeps watch=false passive state fixed while explicit refresh remains immediate", async () => {
+  expect(await descriptions(request(), false)).toEqual([]);
+  await write("Explicit only");
+  await vi.advanceTimersByTimeAsync(120_000);
+  expect(await descriptions(request(), false)).toEqual([]);
+  await refreshSkillsDiscovery({ workspaceDir: workspace });
+  expect(await descriptions(request(), false)).toEqual(["Explicit only"]);
+});
+
+it("rediscovers replaced workspaces and roots that disappear and return", async () => {
   await write("Original");
   expect(await descriptions(request(), false)).toEqual(["Original"]);
   const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
@@ -346,6 +364,14 @@ it("keeps Windows watch handles outside replaceable skill directories", async ()
   }
   expect(watch).toHaveBeenCalledOnce();
   expect(watch.mock.calls[0]![0]).toBe(workspace);
+  await fs.rename(workspace, path.join(temporary.make("skills-retired-"), "workspace"));
+  for (const description of ["Replacement", undefined, "Recreated"]) {
+    await (description
+      ? write(description)
+      : fs.rm(path.join(workspace, "skills"), { recursive: true }));
+    await completePassiveScan();
+    expect(await descriptions()).toEqual(description ? [description] : []);
+  }
 });
 
 it("refreshes supporting resources without publishing an unchanged catalog", async () => {

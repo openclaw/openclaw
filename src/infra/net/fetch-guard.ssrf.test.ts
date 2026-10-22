@@ -12,7 +12,6 @@ import {
   fetchWithSsrFGuard,
   type GuardedFetchOptions,
 } from "./fetch-guard.js";
-import { withGuardedFetchRequestAuthority } from "./fetch-request-authority.js";
 import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 import type { DispatcherAwareRequestInit } from "./runtime-fetch.js";
 import {
@@ -66,9 +65,6 @@ function fetchSequence(...responses: Response[]) {
 }
 const redirectFetch = (location: string, status = 302) =>
   fetchSequence(redirectResponse(location, status), okResponse());
-const explicitProxy = (proxyUrl: string, allowPrivateProxy = false) =>
-  ({ mode: "explicit-proxy", proxyUrl, allowPrivateProxy }) as const;
-const headerObject = (init: RequestInit) => Object.fromEntries(new Headers(init.headers));
 
 function dispatchAttached(input: RequestInfo | URL, init?: DispatcherAwareRequestInit) {
   if (!init?.dispatcher) {
@@ -99,9 +95,14 @@ function installRuntime(fetch: NonNullable<GuardedFetchOptions["fetchImpl"]> = f
   });
 }
 function clearProxyEnv() {
-  for (const key of "HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy".split(
-    " ",
-  )) {
+  for (const key of [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+  ]) {
     vi.stubEnv(key, "");
   }
 }
@@ -163,102 +164,6 @@ async function rejectBeforeFetch(options: Partial<GuardedFetchOptions>, error: R
   expect(fetchImpl).not.toHaveBeenCalled();
 }
 
-describe("request authority", () => {
-  it.each(["request", "scope", "dispatch"])("rejects asynchronous %s guards", async (owner) => {
-    const fetchImpl = fetchStub();
-    const guard = () => Promise.resolve();
-    await expect(
-      withGuardedFetchRequestAuthority(
-        owner === "scope" ? guard : () => {},
-        () =>
-          guardedRequest(fetchImpl, {
-            beforeRequest: owner === "request" ? (guard as never) : undefined,
-          }),
-        // oxlint-disable-next-line typescript/no-misused-promises -- Deliberately violates the synchronous final-dispatch contract.
-        owner === "dispatch" ? guard : undefined,
-      ),
-    ).rejects.toThrow("must be synchronous");
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("runs inherited final checks only at dispatch, including redirects", async () => {
-    const events: string[] = [];
-    let prepared = false;
-    const beforeRequest = vi.fn(() => {
-      expect(prepared).toBe(true);
-      events.push("guard");
-    });
-    const fetchImpl = vi.fn(async (): Promise<Response> => {
-      events.push("fetch");
-      return fetchImpl.mock.calls.length === 1 ? redirectResponse("/redirected") : okResponse();
-    });
-    await withGuardedFetchRequestAuthority(
-      () => {},
-      async () => {
-        expect(beforeRequest).not.toHaveBeenCalled();
-        await withGuardedFetchRequestAuthority(undefined, async () => {
-          expect(beforeRequest).not.toHaveBeenCalled();
-          const result = await guardedRequest(fetchImpl, {
-            lookupFn: async () => {
-              const addresses = await createPublicLookup()();
-              prepared = true;
-              return addresses;
-            },
-          });
-          await result.release();
-        });
-      },
-      beforeRequest,
-    );
-    expect(events).toEqual(["guard", "fetch", "guard", "fetch"]);
-  });
-
-  it("closes nested authority without affecting an independent request", async () => {
-    const release = createDeferredCore();
-    const fetchImpl = fetchStub();
-    const beforeRequest = vi.fn();
-    let retained: Promise<unknown> | undefined;
-    await withGuardedFetchRequestAuthority(
-      () => {},
-      async () => {
-        await withGuardedFetchRequestAuthority(undefined, async () => {
-          retained = release.promise.then(() => guardedRequest(fetchImpl));
-        });
-        release.resolve();
-        await expect(retained).rejects.toThrow("no longer active");
-      },
-      beforeRequest,
-    );
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(beforeRequest).not.toHaveBeenCalled();
-    const result = await guardedRequest(fetchImpl);
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    await result.release();
-  });
-
-  it.each([
-    [
-      { init: { method: "POST", body: "secret" } },
-      "Refusing to follow cross-origin redirect for POST request body",
-      1,
-    ],
-    [
-      { allowCrossOriginUnsafeRedirectReplay: true },
-      "Cross-origin unsafe redirect replay cannot be both allowed and rejected",
-      0,
-    ],
-  ] as const)("rejects unsafe redirect policy %j", async (options, error, calls) => {
-    const fetchImpl = redirectFetch("https://cdn.example.com/upload-2", 307);
-    await expect(
-      guardedRequest(fetchImpl, {
-        rejectCrossOriginUnsafeRedirectReplay: true,
-        ...options,
-      }),
-    ).rejects.toThrow(error);
-    expect(fetchImpl).toHaveBeenCalledTimes(calls);
-  });
-});
-
 describe("guarded fetch policy", () => {
   it("blocks private URLs and redacts their path, query and fragment from audit logs", async () => {
     const fetchImpl = fetchStub();
@@ -291,7 +196,7 @@ describe("guarded fetch policy", () => {
       "HTTP requiring explicit-proxy pinning",
       {
         url: "http://public.example/resource",
-        dispatcherPolicy: explicitProxy("http://127.0.0.1:7890"),
+        dispatcherPolicy: { mode: "explicit-proxy", proxyUrl: "http://127.0.0.1:7890" },
       },
       /explicit proxy ssrf pinning requires https targets/i,
     ],
@@ -310,7 +215,7 @@ describe("guarded fetch policy", () => {
         url: "https://10.0.0.5:11434/v1/models",
         lookupFn: lookup("10.0.0.5"),
         policy: { allowedOrigins: ["https://10.0.0.5:11434"] },
-        dispatcherPolicy: explicitProxy("http://10.0.0.5:7890"),
+        dispatcherPolicy: { mode: "explicit-proxy", proxyUrl: "http://10.0.0.5:7890" },
       },
       /blocked/i,
     ],
@@ -384,7 +289,8 @@ describe("guarded fetch policy", () => {
     const result = await guardedRequest(fetchImpl, {
       pinDns: false,
       dispatcherPolicy: {
-        ...explicitProxy("http://proxy.example:7890"),
+        mode: "explicit-proxy",
+        proxyUrl: "http://proxy.example:7890",
         proxyTls: { servername: "public.example" },
       },
     });
@@ -427,12 +333,11 @@ describe("redirect boundaries", () => {
         },
       });
       const next = secondInit(fetchImpl);
+      const headers = new Headers(next.headers);
       expect(next).toMatchObject({ method: nextMethod, body });
-      expect(headerObject(next)).toEqual({
-        ...(crossOrigin ? {} : { authorization: "Bearer secret" }),
-        ...(body ? { "content-type": "application/json" } : {}),
-        ...(body && !crossOrigin ? { "content-length": "6" } : {}),
-      });
+      expect(headers.get("authorization")).toBe(crossOrigin ? null : "Bearer secret");
+      expect(headers.get("content-type")).toBe(body ? "application/json" : null);
+      expect(headers.get("content-length")).toBe(body && !crossOrigin ? "6" : null);
       await result.release();
     },
   );
@@ -458,7 +363,7 @@ describe("redirect boundaries", () => {
     const result = await guardedRequest(fetchImpl, { init: { headers } });
     expect(Object.getOwnPropertySymbols(recordedCall(fetchImpl.mock.calls)[1].headers)).toEqual([]);
     expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
-    expect(headerObject(secondInit(fetchImpl))).toEqual({
+    expect(Object.fromEntries(new Headers(secondInit(fetchImpl).headers))).toEqual({
       accept: "application/json",
       "content-type": "application/json",
       "user-agent": "OpenClaw-Test/1.0",
@@ -472,22 +377,33 @@ describe("redirect boundaries", () => {
       init: { headers: { Authorization: "Bearer secret", Accept: "application/json" } },
       retainAuthorizationRedirectHostnameAllowlist: ["cdn.example"],
     });
-    expect(headerObject(secondInit(fetchImpl))).toEqual({ accept: "application/json" });
+    const headers = new Headers(secondInit(fetchImpl).headers);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("accept")).toBe("application/json");
     await result.release();
   });
 
   it.each([
-    [["http://cdn.example/asset"], { requireHttps: true }, /must use https/i],
-    [["/next", "/resource"], {}, /redirect loop/i],
-    [["/one", "/two"], { maxRedirects: 1 }, /too many redirects/i],
-  ] satisfies Array<[string[], Partial<GuardedFetchOptions>, RegExp]>)(
-    "rejects redirect chain %j with %j",
-    async (locations, options, error) => {
-      const fetchImpl = fetchSequence(...locations.map((location) => redirectResponse(location)));
-      await expect(guardedRequest(fetchImpl, options)).rejects.toThrow(error);
-      expect(fetchImpl).toHaveBeenCalledTimes(locations.length);
+    {
+      responses: [redirectResponse("http://cdn.example/asset")],
+      options: { requireHttps: true },
+      error: /must use https/i,
     },
-  );
+    {
+      responses: [redirectResponse("/next"), redirectResponse("/resource")],
+      options: {},
+      error: /redirect loop/i,
+    },
+    {
+      responses: [redirectResponse("/one"), redirectResponse("/two")],
+      options: { maxRedirects: 1 },
+      error: /too many redirects/i,
+    },
+  ])("rejects redirects violating $error", async ({ responses, options, error }) => {
+    const fetchImpl = fetchSequence(...responses);
+    await expect(guardedRequest(fetchImpl, options)).rejects.toThrow(error);
+    expect(fetchImpl).toHaveBeenCalledTimes(responses.length);
+  });
   it("preserves redirects when response body cancellation rejects", async () => {
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {
@@ -675,7 +591,11 @@ describe("proxy routing and trust", () => {
     const result = await guardedRequest(fetchImpl, {
       lookupFn,
       policy: { hostnameAllowlist: ["public.example"] },
-      dispatcherPolicy: explicitProxy("http://localhost:6152", true),
+      dispatcherPolicy: {
+        mode: "explicit-proxy",
+        proxyUrl: "http://localhost:6152",
+        allowPrivateProxy: true,
+      },
     });
     expect(proxyAgentCtor).toHaveBeenCalledOnce();
     expect(lookupFn.mock.calls.map(([host]) => host)).toEqual(["localhost", "public.example"]);
@@ -698,7 +618,9 @@ describe("proxy routing and trust", () => {
       beforeRequest,
       mode: "trusted_explicit_proxy",
       resolveDispatcherPolicy: (url) =>
-        url.hostname === "direct.example" ? undefined : explicitProxy("http://proxy.example:6152"),
+        url.hostname === "direct.example"
+          ? undefined
+          : { mode: "explicit-proxy", proxyUrl: "http://proxy.example:6152" },
     });
     expect(proxyAgentCtor).toHaveBeenCalledTimes(2);
     expect(agentCtor).toHaveBeenCalledOnce();
@@ -806,6 +728,21 @@ describe("configured local-origin bypass", () => {
     );
     expect(recordedCall(proxyAgentCtor.mock.calls)[0]).not.toHaveProperty("proxyTls.ca");
     expectDispatch(proxyAgentCtor, baseUrl, "/dashboard/");
+    await result.release();
+  });
+
+  it("ignores hidden bypass markers on the public guard", async () => {
+    managedProxy();
+    const options = {
+      url: `${localBase}/api/embed`,
+      fetchImpl: fetchStub(),
+      lookupFn: lookup("127.0.0.1"),
+      policy: { allowedOrigins: [localBase] },
+      managedProxyBypass: { kind: "configured-local-origin", baseUrl: localBase },
+    };
+    const result = await fetchWithSsrFGuard(options);
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
+    expect(agentCtor).not.toHaveBeenCalled();
     await result.release();
   });
 

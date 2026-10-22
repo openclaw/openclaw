@@ -809,6 +809,7 @@ it("cannot revive lost authority with a late closing receipt while output remain
 it.each(["lineage", "signal"] as const)(
   "retains cleanup owner diagnostics through bundle readback when %s settlement fails",
   async (failure) => {
+    mockProcessPlatform("darwin");
     const stub = mockWritableRelay();
     const groupProbe = vi.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });

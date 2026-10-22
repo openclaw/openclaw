@@ -74,14 +74,6 @@ async function workspaces(root: string) {
   }
   return dirs;
 }
-function pluginFixture(prefix: string) {
-  const root = temporary.make(prefix);
-  const stateDir = path.join(root, "state");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
-  pinConfigDir();
-  return { root, stateDir, pluginRoot: path.join(root, "plugin") };
-}
 
 const temporary = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -99,9 +91,13 @@ const temporary = useAutoCleanupTempDirTracker((cleanup) =>
 
 it("refreshes every agent from admitted metadata without inventory fallback in a private scope", async () => {
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-  const { root, pluginRoot } = pluginFixture("skills-refresh-metadata-");
+  const root = temporary.make("skills-refresh-metadata-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
   vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", path.join(root, "bundled"));
-  const workspaceDirs = await workspaces(root);
+  pinConfigDir();
+  const pluginRoot = path.join(root, "plugin");
+  const workspaceDirs = [path.join(root, "first"), path.join(root, "second")];
   const pluginMetadataSnapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       { id: "fixture", origin: "config", rootDir: pluginRoot, skills: ["guide"] },
@@ -109,7 +105,14 @@ it("refreshes every agent from admitted metadata without inventory fallback in a
     ],
   });
   for (const name of ["guide", "acp"]) {
-    await write(pluginRoot, name, name);
+    await writeSkill({ dir: path.join(pluginRoot, name), name, description: name });
+  }
+  for (const [index, workspaceDir] of workspaceDirs.entries()) {
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", `local-${index}`),
+      name: `local-${index}`,
+      description: `Workspace ${index}`,
+    });
   }
   // Only replace the thread transport; refresh and the worker execute their real owners.
   vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (input) =>
@@ -152,7 +155,12 @@ it("refreshes every agent from admitted metadata without inventory fallback in a
 it.each(["standalone", "gateway"])(
   "%s discovery shares plugin inventory across workspaces and follows owner publication",
   async (owner) => {
-    const { root, stateDir, pluginRoot } = pluginFixture("skills-scan-inventory-");
+    const root = temporary.make("skills-scan-inventory-");
+    const stateDir = path.join(root, "state");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+    pinConfigDir();
+    const pluginRoot = path.join(root, "plugin");
     const dirs = await workspaces(root);
     const config: OpenClawConfig = {
       plugins: { load: { paths: [pluginRoot] }, entries: { fixture: { enabled: true } } },

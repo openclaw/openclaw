@@ -296,7 +296,7 @@ it.each([false, true])(
     const updated = blank
       ? "Rules added after session creation."
       : "Follow the updated Gateway fixture rules.";
-    const contextFiles = blank
+    const contextFiles: Record<string, string> = blank
       ? {}
       : {
           "SOUL.md": "Use the fixture's calm, direct voice.",

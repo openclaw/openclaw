@@ -1,7 +1,6 @@
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as openClawTools from "../../agents/openclaw-tools.js";
-import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -14,8 +13,16 @@ import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSkillDispatchTools } from "./tool-dispatch.js";
 
+const makeTool = (name: string) => ({
+  name,
+  label: name,
+  description: `${name} tool`,
+  parameters: { type: "object", properties: {} },
+  execute: vi.fn(),
+});
+
 const createOpenClawToolsAsyncMock = vi.fn<typeof openClawTools.createOpenClawToolsAsync>(
-  async () => ["read", "cron", "exec", "conversations_send"].map(createStubTool),
+  async () => ["read", "cron", "exec", "conversations_send"].map(makeTool),
 );
 const sessionDirs = useSessionStoreTempDirs(
   (cleanup) =>
@@ -44,11 +51,8 @@ const dispatch = (params: Partial<Parameters<typeof resolveSkillDispatchTools>[0
 };
 const toolNames = (tools: Awaited<ReturnType<typeof dispatch>>) => tools.map((tool) => tool.name);
 const lastArgs = () => createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
-const liveDispatch = (tools: OpenClawConfig["tools"], params: Parameters<typeof dispatch>[0]) => {
-  const cfg = { plugins: { enabled: false }, tools };
-  setRuntimeConfigSnapshot(cfg);
-  return resolveSkillDispatchTools({ ...dispatchDefaults, ...params, cfg });
-};
+const liveDispatch = (params: Parameters<typeof dispatch>[0]) =>
+  resolveSkillDispatchTools({ ...dispatchDefaults, ...params });
 
 beforeEach(() => {
   // Exercise auth-source preparation even on hosts with configured search providers.
@@ -69,10 +73,12 @@ it.each([
 ] as const)(
   "gates ask_user on the inbound %j surface (deny: %s)",
   async (message, deny, available) => {
-    const tools = await liveDispatch(
-      { allow: ["ask_user"], deny: deny ? ["ask_user"] : [] },
-      { message },
-    );
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      tools: { allow: ["ask_user"], deny: deny ? ["ask_user"] : [] },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const tools = await liveDispatch({ message, cfg });
     expect(tools.some((tool) => tool.name === "ask_user")).toBe(available);
   },
 );
@@ -87,8 +93,11 @@ it.each([
 ] satisfies Array<[OpenClawConfig["tools"], string[]]>)(
   "limits gateway actions to the skill dispatch policy: %j",
   async (toolPolicy, actions) => {
-    const tools = await liveDispatch(toolPolicy, {
+    const config: OpenClawConfig = { plugins: { enabled: false }, tools: toolPolicy };
+    setRuntimeConfigSnapshot(config);
+    const tools = await liveDispatch({
       message: { surface: "webchat" },
+      cfg: config,
       sessionKey: "agent:main:main",
     });
 
@@ -191,6 +200,7 @@ it.each([false, true])("filters owner-only tools with senderIsOwner=%s", async (
     senderIsOwner,
   });
   expect(toolNames(tools).includes("conversations_send")).toBe(senderIsOwner);
+  expect(lastArgs()?.pluginToolDenylist).toEqual(expect.any(Array));
   expect(lastArgs()).toMatchObject({
     senderIsOwner,
     pluginToolDenylist: senderIsOwner

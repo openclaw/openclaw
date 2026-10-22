@@ -5,6 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { consumeResponseBytes } from "@openclaw/normalization-core";
 import {
   buildConnector,
   fetch as undiciFetch,
@@ -48,7 +49,23 @@ type ProxyFixture = Parameters<Parameters<typeof withProxyFixture>[0]>[0];
 type EnvOptions = Parameters<typeof createHttp1EnvHttpProxyAgent>[0];
 
 async function readProxyPayload(response: Response | UndiciResponse): Promise<string> {
-  return (await readResponseWithLimit(new Response(response.body), PAYLOAD_BYTES)).toString("utf8");
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("Proxy fixture response has no body");
+  }
+  const chunks: Uint8Array[] = [];
+  try {
+    const result = await consumeResponseBytes({
+      maxBytes: PAYLOAD_BYTES,
+      read: () => reader.read(),
+      onChunk: (chunk) => chunks.push(chunk),
+      onLimit: () => void reader.cancel().catch(() => undefined),
+    });
+    expect(result.truncated).toBe(false);
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function envProxy(

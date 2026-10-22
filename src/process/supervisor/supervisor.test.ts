@@ -5,7 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createProcessSupervisor } from "./supervisor.js";
 import { createStubChildAdapter, type StubChildAdapter } from "./supervisor.test-support.js";
-import type { ManagedRun, RunExit, SpawnInput } from "./types.js";
+import type { SpawnInput } from "./types.js";
 
 const { child, pty } = vi.hoisted(() => ({ child: vi.fn(), pty: vi.fn() }));
 vi.mock("./adapters/child.js", () => ({
@@ -38,10 +38,6 @@ async function start(input: Parameters<typeof spawn>[0] = {}, adapter = createSt
   prepare(adapter);
   return { adapter, run: await spawn(input) };
 }
-const expectExit = (run: ManagedRun, expected: Partial<RunExit>) =>
-  expect(run.wait()).resolves.toMatchObject(expected);
-const scopeCleanup = (processTree: "required-all" | "owned-only" | "transport-only") =>
-  supervisor.acquireScopeCleanup("scope", { processTree });
 function owned() {
   const extinction = createDeferred();
   const adapter = prepare(
@@ -100,7 +96,7 @@ describe("process supervisor", () => {
     await vi.advanceTimersByTimeAsync(15);
     expect(adapter.killMock).toHaveBeenCalledTimes(1);
     adapter.settle(null, "SIGKILL");
-    await expectExit(run, { reason: "no-output-timeout" });
+    await expect(run.wait()).resolves.toMatchObject({ reason: "no-output-timeout" });
   });
 
   it("escalates cancellation without replacing its first reason", async () => {
@@ -121,7 +117,7 @@ describe("process supervisor", () => {
     await vi.advanceTimersByTimeAsync(4_999);
     expect(adapter.killMock).not.toHaveBeenCalledWith("SIGKILL");
     await vi.advanceTimersByTimeAsync(1);
-    await expectExit(run, {
+    await expect(run.wait()).resolves.toMatchObject({
       reason: "manual-cancel",
       exitSignal: "SIGKILL",
       timedOut: false,
@@ -147,7 +143,7 @@ describe("process supervisor", () => {
       }
       await vi.advanceTimersByTimeAsync(25);
       const run = await pending;
-      await expectExit(run, {
+      await expect(run.wait()).resolves.toMatchObject({
         reason,
         timedOut: reason !== "manual-cancel",
         noOutputTimedOut: reason === "no-output-timeout",
@@ -184,7 +180,7 @@ describe("process supervisor", () => {
     await shutdown;
     expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
     expect(adapter.disposeMock).toHaveBeenCalledOnce();
-    await expectExit(run, { reason: "manual-cancel" });
+    await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
   });
 
   it("fences a replacement between all concurrent predecessors and later arrivals", async () => {
@@ -288,7 +284,11 @@ describe("process supervisor", () => {
     for (const run of cancelled) {
       expect(run.pid).toBeUndefined();
       expect(run.activity.resultSettled).toBe(true);
-      await expectExit(run, { reason: "manual-cancel", exitCode: null, exitSignal: null });
+      await expect(run.wait()).resolves.toMatchObject({
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: null,
+      });
     }
     first.settle(0);
     later.settle(0);
@@ -360,7 +360,7 @@ describe("process supervisor", () => {
           expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
           replacement.settle(0);
         } else {
-          await expectExit(run, { reason: "manual-cancel" });
+          await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
         }
         await run.wait();
       }
@@ -410,7 +410,7 @@ describe("process supervisor", () => {
   });
 
   it("launches literal PTY argv under transport-only scope cleanup", async () => {
-    const cleanup = scopeCleanup("transport-only");
+    const cleanup = supervisor.acquireScopeCleanup("scope", { processTree: "transport-only" });
     const adapter = Object.assign(createStubChildAdapter(), { supportsRawOutput: false });
     pty.mockResolvedValueOnce(adapter);
     const command = `printf '%s\\n' "a b" && printf '%s\\n' '$HOME'`;
@@ -425,7 +425,11 @@ describe("process supervisor", () => {
     expect(child).not.toHaveBeenCalled();
     adapter.emitStdout("interactive output");
     adapter.settle(0);
-    await expectExit(run, { reason: "exit", exitCode: 0, stdout: "interactive output" });
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "exit",
+      exitCode: 0,
+      stdout: "interactive output",
+    });
     await cleanup();
   });
 
@@ -454,7 +458,7 @@ describe("process supervisor", () => {
     now.mockReturnValue(1_000 + MAX_TIMER_TIMEOUT_MS + 600_000);
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.advanceTimersToNextTimerAsync();
-    await expectExit(run, {
+    await expect(run.wait()).resolves.toMatchObject({
       reason: "no-output-timeout",
       timedOut: true,
       noOutputTimedOut: true,
@@ -486,7 +490,7 @@ describe("process supervisor", () => {
         expect(adapter.killMock).not.toHaveBeenCalled();
       }
       adapter.settle(0);
-      await expectExit(run, {
+      await expect(run.wait()).resolves.toMatchObject({
         reason: "exit",
         exitCode: 0,
         timedOut: false,
@@ -537,45 +541,57 @@ describe("process supervisor", () => {
     expect(adapter.killMock).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await vi.advanceTimersToNextTimerAsync();
-    await expectExit(run, { reason: "no-output-timeout", noOutputTimedOut: true });
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "no-output-timeout",
+      noOutputTimedOut: true,
+    });
   });
 
-  it("fences every output consumer and the output clock on detach", async () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const { adapter, extinction } = owned();
-    const stdout = vi.fn(),
-      stderr = vi.fn(),
-      stdoutRaw = vi.fn(),
-      stderrRaw = vi.fn();
-    const run = await spawn({
-      onStdout: stdout,
-      onStderr: stderr,
-      onStdoutRaw: stdoutRaw,
-      onStderrRaw: stderrRaw,
-    });
-    now.mockReturnValue(2_000);
-    adapter.emitStdout("live stdout");
-    adapter.emitStderr("live stderr");
-    run.detachOutput?.();
-    now.mockReturnValue(3_000);
-    adapter.emitStdout("late");
-    adapter.emitStderr("late");
-    adapter.settle(0);
-    const result = await run.wait();
-    expect(stdout).toHaveBeenCalledExactlyOnceWith("live stdout");
-    expect(stderr).toHaveBeenCalledExactlyOnceWith("live stderr");
-    expect(stdoutRaw).toHaveBeenCalledExactlyOnceWith(Buffer.from("live stdout"));
-    expect(stderrRaw).toHaveBeenCalledExactlyOnceWith(Buffer.from("live stderr"));
-    expect(result).toMatchObject({ stdout: "live stdout", stderr: "live stderr" });
-    expect(run.activity.lastOutputAtMs).toBe(2_000);
-    extinction.resolve();
-    await run.waitForExtinction?.();
-    expect(adapter.disposeMock).toHaveBeenCalledOnce();
-  });
+  it.each(["settle", "detach"] as const)(
+    "fences every output consumer and the output clock on %s",
+    async (action) => {
+      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const { adapter, extinction } = owned();
+      const stdout = vi.fn(),
+        stderr = vi.fn(),
+        stdoutRaw = vi.fn(),
+        stderrRaw = vi.fn();
+      const run = await spawn({
+        onStdout: stdout,
+        onStderr: stderr,
+        onStdoutRaw: stdoutRaw,
+        onStderrRaw: stderrRaw,
+      });
+      now.mockReturnValue(2_000);
+      adapter.emitStdout("live stdout");
+      adapter.emitStderr("live stderr");
+      if (action === "settle") {
+        adapter.settle(null, "SIGKILL");
+        await run.wait();
+        expect(adapter.disposeMock).not.toHaveBeenCalled();
+      } else {
+        run.detachOutput?.();
+      }
+      now.mockReturnValue(3_000);
+      adapter.emitStdout("late");
+      adapter.emitStderr("late");
+      adapter.settle(0);
+      const result = await run.wait();
+      expect(stdout).toHaveBeenCalledExactlyOnceWith("live stdout");
+      expect(stderr).toHaveBeenCalledExactlyOnceWith("live stderr");
+      expect(stdoutRaw).toHaveBeenCalledExactlyOnceWith(Buffer.from("live stdout"));
+      expect(stderrRaw).toHaveBeenCalledExactlyOnceWith(Buffer.from("live stderr"));
+      expect(result).toMatchObject({ stdout: "live stdout", stderr: "live stderr" });
+      expect(run.activity.lastOutputAtMs).toBe(2_000);
+      extinction.resolve();
+      await run.waitForExtinction?.();
+      expect(adapter.disposeMock).toHaveBeenCalledOnce();
+    },
+  );
 
   it("retains a cleanup failure for its owner without poisoning a later scope", async () => {
     const { adapter, extinction } = owned();
-    const cleanup = scopeCleanup("required-all");
+    const cleanup = supervisor.acquireScopeCleanup("scope", { processTree: "required-all" });
     const run = await spawn({ scopeKey: "scope" });
     adapter.settle(0);
     await run.wait();
@@ -583,7 +599,9 @@ describe("process supervisor", () => {
     await expect(run.waitForExtinction!()).rejects.toThrow("cleanup identity lost");
     await expect(cleanup()).rejects.toThrow("cleanup identity lost");
     await expect(cleanup()).rejects.toThrow("cleanup identity lost");
-    await expect(scopeCleanup("required-all")()).resolves.toBeUndefined();
+    await expect(
+      supervisor.acquireScopeCleanup("scope", { processTree: "required-all" })(),
+    ).resolves.toBeUndefined();
     await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
     await expect(spawn()).rejects.toThrow("process supervisor is shut down");
   });
@@ -592,15 +610,17 @@ describe("process supervisor", () => {
     "reports unsupported %s tree ownership without blocking execution",
     async (owner) => {
       const adapter = prepare();
-      const ownedCleanup = scopeCleanup("owned-only");
-      const strictCleanup = scopeCleanup("required-all");
+      const ownedCleanup = supervisor.acquireScopeCleanup("scope", { processTree: "owned-only" });
+      const strictCleanup = supervisor.acquireScopeCleanup("scope", {
+        processTree: "required-all",
+      });
       const run = await spawn({
         scopeKey: "scope",
         ...(owner === "external" ? { cleanupOwnership: "external" } : {}),
       });
       adapter.emitStdout("available");
       adapter.settle(0);
-      await expectExit(run, { exitCode: 0, stdout: "available" });
+      await expect(run.wait()).resolves.toMatchObject({ exitCode: 0, stdout: "available" });
       if (owner === "external") {
         await expect(ownedCleanup()).resolves.toBeUndefined();
       } else {
@@ -625,7 +645,7 @@ describe("process supervisor", () => {
     expect(run.activity.resultSettled).toBe(false);
     adapter.emitStdout("ok");
     adapter.settle(0);
-    await expectExit(run, {
+    await expect(run.wait()).resolves.toMatchObject({
       reason: "exit",
       exitCode: 0,
       stdout: "ok",
@@ -656,7 +676,7 @@ describe("process supervisor", () => {
     const startup = deferStartup();
     const first = createStubChildAdapter();
     const { adapter: sibling, extinction } = owned();
-    const cleanup = scopeCleanup("transport-only");
+    const cleanup = supervisor.acquireScopeCleanup("scope", { processTree: "transport-only" });
     const input = { runId: "shared", scopeKey: "scope" };
     const pending = spawn(input);
     const siblingRun = await spawn(input);

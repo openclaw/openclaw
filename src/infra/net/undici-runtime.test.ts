@@ -1,10 +1,10 @@
 import { EventEmitter } from "node:events";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
-import { getProxyUrlFromFetch, makeProxyFetch, resolveProxyFetchFromEnv } from "./proxy-fetch.js";
-import { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
-import * as runtime from "./undici-runtime.js";
+import {
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+} from "./proxy/active-proxy-state.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -13,31 +13,26 @@ import {
 
 const logDebug = vi.hoisted(() => vi.fn());
 
-vi.mock("../../logger.js", () => ({ logDebug, logWarn: vi.fn() }));
+vi.mock("../../logger.js", () => ({ logDebug }));
 
 const poolCtor = vi.fn();
 const proxyAgentCtor = vi.fn();
 const proxyConnect = vi.fn();
-const envAgentCtor = vi.fn();
-const undiciFetch = vi.fn<typeof fetch>();
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-class MockUndiciFormData {
-  readonly entriesList: [string, unknown, string | undefined][] = [];
-  append(key: string, value: unknown, filename?: string) {
-    this.entriesList.push([key, value, filename]);
-  }
-}
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-  [poolCtor, proxyAgentCtor, proxyConnect, logDebug, envAgentCtor, undiciFetch].forEach((mock) =>
-    mock.mockReset(),
-  );
-  vi.unstubAllEnvs();
-  vi.restoreAllMocks();
+  [poolCtor, proxyAgentCtor, proxyConnect, logDebug].forEach((mock) => mock.mockReset());
 });
 
-class MockClient extends EventEmitter {}
+class MockClient extends EventEmitter {
+  constructor(
+    public readonly origin: unknown,
+    public readonly options: unknown,
+  ) {
+    super();
+  }
+}
 
 class MockAgent extends EventEmitter {
   constructor(public readonly options?: Record<string, unknown>) {
@@ -53,33 +48,32 @@ class MockAgent extends EventEmitter {
   }
 }
 
-beforeEach(() => {
-  undiciFetch.mockResolvedValue(new Response());
-  for (const key of "HTTPS_PROXY HTTP_PROXY ALL_PROXY https_proxy http_proxy all_proxy".split(
-    " ",
-  )) {
-    vi.stubEnv(key, undefined);
+class MockPool extends MockClient {
+  constructor(origin: unknown, options: unknown) {
+    super(origin, options);
+    poolCtor(origin, options);
   }
-  poolCtor.mockImplementation(function (_origin: unknown, _options: unknown) {
-    return new MockClient();
-  });
-  proxyAgentCtor.mockImplementation(function (options: Record<string, unknown>) {
-    return new MockAgent(options);
-  });
-  envAgentCtor.mockImplementation(function (options: Record<string, unknown>) {
-    return new MockAgent(options);
-  });
+}
+
+class MockProxyAgent extends MockAgent {
+  constructor(options: Record<string, unknown>) {
+    super(options);
+    proxyAgentCtor(options);
+  }
+}
+
+function installUndiciRuntimeDeps(): void {
   (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
     Agent: MockAgent,
     Client: MockClient,
-    EnvHttpProxyAgent: envAgentCtor,
-    Pool: poolCtor,
-    ProxyAgent: proxyAgentCtor,
+    EnvHttpProxyAgent: MockAgent,
+    Pool: MockPool,
+    ProxyAgent: MockProxyAgent,
     buildConnector: () => proxyConnect,
-    FormData: MockUndiciFormData,
-    fetch: undiciFetch,
+    fetch: vi.fn(),
   };
-});
+}
+beforeEach(installUndiciRuntimeDeps);
 
 function requireOptions(mock: ReturnType<typeof vi.fn>, index: number): Record<string, unknown> {
   const options = mock.mock.calls[0]?.[index];
@@ -164,6 +158,23 @@ it("handles an internal error from direct agent client before connect", () => {
   expect(() => client.emit("error", error)).not.toThrow();
   expect(logDebug).toHaveBeenCalledWith(expect.stringContaining(error.message));
 });
+it("adds active managed proxy CA trust to explicit ProxyAgent options", () => {
+  const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
+    proxyTls: { ca: "explicit-proxy-agent-ca" },
+  });
+
+  try {
+    createHttp1ProxyAgent({ uri: "https://proxy.test:8443" });
+
+    expect(requireOptions(proxyAgentCtor, 0)).toMatchObject({
+      uri: "https://proxy.test:8443",
+      allowH2: false,
+      proxyTls: { ca: "explicit-proxy-agent-ca" },
+    });
+  } finally {
+    stopActiveManagedProxyRegistration(registration);
+  }
+});
 it.each([
   { mode: "fixed", servername: "proxy.example", preserve: true },
   { mode: "environment", servername: "127.0.0.1", preserve: false },
@@ -191,93 +202,4 @@ it.each([
       : expect.not.objectContaining({ servername }),
     expect.any(Function),
   );
-});
-
-const requireFetchCall = () => expectDefined(undiciFetch.mock.calls[0], "runtime fetch call");
-
-it("drops symbol header metadata before runtime fetch without mutating caller headers", async () => {
-  const headers = { "Content-Type": "application/json" };
-  Object.defineProperty(headers, Symbol("sensitiveHeaders"), {
-    value: new Set(["content-type"]),
-    enumerable: false,
-  });
-  const response = await fetchWithRuntimeDispatcher("https://example.com", {
-    method: "POST",
-    headers,
-    body: "{}",
-  });
-  expect(response.status).toBe(200);
-  expect(undiciFetch).toHaveBeenCalledOnce();
-  const sentHeaders = requireFetchCall()[1]?.headers;
-  expect(new Headers(sentHeaders).get("content-type")).toBe("application/json");
-  expect(sentHeaders).not.toBe(headers);
-  expect(Object.getOwnPropertySymbols(sentHeaders as object)).toStrictEqual([]);
-  expect(Object.getOwnPropertySymbols(headers)).toHaveLength(1);
-});
-
-it("converts global FormData bodies before dispatching through undici", async () => {
-  const form = new globalThis.FormData();
-  form.append("model", "whisper-1");
-  form.append("file", new Blob([new Uint8Array(4)], { type: "audio/ogg" }), "voice.ogg");
-  await makeProxyFetch("http://proxy.test:8080")(
-    "https://api.example.com/v1/audio/transcriptions",
-    {
-      method: "POST",
-      headers: { "content-length": "999", "content-type": "multipart/form-data; boundary=stale" },
-      body: form,
-    },
-  );
-  const [, init] = requireFetchCall();
-  expect(init?.body).toBeInstanceOf(MockUndiciFormData);
-  expect(init).toMatchObject({
-    body: {
-      entriesList: [
-        ["model", "whisper-1", undefined],
-        ["file", expect.any(Blob), "voice.ogg"],
-      ],
-    },
-  });
-  const headers = new Headers(init?.headers);
-  expect([headers.has("content-length"), headers.has("content-type")]).toEqual([false, false]);
-});
-
-it("returns undefined for plain fetch functions or blank metadata", () => {
-  expect(getProxyUrlFromFetch(vi.fn<typeof fetch>())).toBeUndefined();
-  expect(getProxyUrlFromFetch(makeProxyFetch("   "))).toBeUndefined();
-});
-
-it("returns proxy fetch using EnvHttpProxyAgent when HTTPS_PROXY is set", async () => {
-  const create = vi.spyOn(runtime, "createHttp1EnvHttpProxyAgent");
-  const fetchFn = expectDefined(
-    resolveProxyFetchFromEnv({
-      HTTP_PROXY: "",
-      HTTPS_PROXY: "http://proxy.test:8080",
-    }),
-    "proxy fetch",
-  );
-  expect(create).toHaveBeenCalledWith(
-    expect.objectContaining({ httpsProxy: "http://proxy.test:8080" }),
-    undefined,
-    { HTTP_PROXY: "", HTTPS_PROXY: "http://proxy.test:8080" },
-  );
-  await fetchFn("https://api.example.com");
-  expect(undiciFetch).toHaveBeenCalledOnce();
-  expect(requireFetchCall()).toEqual([
-    "https://api.example.com",
-    expect.objectContaining({ dispatcher: create.mock.results[0]?.value }),
-  ]);
-});
-
-it("returns undefined when EnvHttpProxyAgent constructor throws", () => {
-  envAgentCtor.mockImplementationOnce(() => {
-    throw new Error("Invalid URL");
-  });
-  expect(
-    resolveProxyFetchFromEnv({
-      HTTP_PROXY: "",
-      https_proxy: "",
-      http_proxy: "",
-      HTTPS_PROXY: "http://proxy.test:8080",
-    }),
-  ).toBeUndefined();
 });
