@@ -155,8 +155,9 @@ describe("ClickClack durable room real-behavior proof", () => {
       }),
     );
 
-    sessionEntry = { ...sessionEntry!, archivedAt: 2 };
+    sessionEntry = { ...sessionEntry!, label: "Archived rename ignored", archivedAt: 2 };
     await service.reconcile(sessionKey);
+    expect(remote.patches).toHaveLength(0);
     sessionEntry = { sessionId: "session-reset", label: "Durable proof room", updatedAt: 3 };
     await service.reconcile(sessionKey);
     sessionEntry = undefined;

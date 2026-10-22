@@ -1,13 +1,14 @@
-import "./service-http-mock.test-support.js";
-import "./session-authority.test-support.js";
 import type {
   OpenClawPluginGatewayEvents,
   OpenClawPluginSessionsChangedEvent,
 } from "openclaw/plugin-sdk/core";
+import "./service-http-mock.test-support.js";
+import "./session-authority.test-support.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackDiscussionRoute } from "./routing.js";
+import { expectPatched } from "./service-case.test-support.js";
 import { discussionChannel, createHarness } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
 
@@ -42,55 +43,33 @@ function createGatewayEventsHarness() {
 
 describe("ClickClack discussion session events", () => {
   it("runs one catch-up reconciliation when gateway events bind", async () => {
-    vi.useFakeTimers();
     const gateway = createGatewayEventsHarness();
-    const harness = createHarness({ label: "Catch up" });
+    const h = fixture({ label: "Catch up" });
     const sessionKey = "agent:main:event-catch-up";
-    try {
-      await harness.service.open(sessionKey);
-      const reconcile = vi.spyOn(harness.service, "reconcile").mockResolvedValue(undefined);
-
-      await harness.service.bindGatewayEvents(
-        gateway.gatewayEvents,
-        createTestPluginServiceScheduler(),
-      );
-      await vi.advanceTimersByTimeAsync(0);
-
-      expect(reconcile).toHaveBeenCalledOnce();
-      expect(reconcile).toHaveBeenCalledWith(sessionKey);
-    } finally {
-      await harness.service.cleanup();
-      vi.useRealTimers();
-    }
+    await h.service.open(sessionKey);
+    const reconcile = vi.spyOn(h.service, "reconcile").mockResolvedValue(undefined);
+    await h.service.bindGatewayEvents(gateway.gatewayEvents, createTestPluginServiceScheduler());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(reconcile).toHaveBeenCalledWith(sessionKey);
   });
 
   it("reconciles a renamed bound session from sessions.changed", async () => {
-    vi.useFakeTimers();
     const gateway = createGatewayEventsHarness();
-    const harness = createHarness(
+    const h = fixture(
       { label: "Original", category: "Projects" },
       { gatewayEvents: gateway.gatewayEvents },
     );
     const sessionKey = "agent:main:event-rename";
-    try {
-      await harness.service.open(sessionKey);
-      harness.updateChannel.mockClear();
-      harness.setSessionEntry({ label: "Renamed", category: "Projects" });
-
-      gateway.emit({ sessionKey, label: "Renamed", reason: "rename" });
-      await vi.advanceTimersByTimeAsync(249);
-      expect(harness.updateChannel).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-
-      expect(harness.updateChannel).toHaveBeenCalledOnce();
-      expect(harness.updateChannel).toHaveBeenCalledWith(
-        "chn_discussion",
-        expect.objectContaining({ display_title: "Renamed", name: "renamed" }),
-      );
-    } finally {
-      await harness.service.cleanup();
-      vi.useRealTimers();
-    }
+    await h.service.open(sessionKey);
+    h.updateChannel.mockClear();
+    h.setSessionEntry({ label: "Renamed", category: "Projects" });
+    gateway.emit({ sessionKey, label: "Renamed", reason: "rename" });
+    await vi.advanceTimersByTimeAsync(249);
+    expect(h.updateChannel).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.updateChannel).toHaveBeenCalledOnce();
+    expectPatched(h, { display_title: "Renamed", name: "renamed" });
   });
 
   const services: ClickClackDiscussionService[] = [];
@@ -102,12 +81,12 @@ describe("ClickClack discussion session events", () => {
     vi.useRealTimers();
   });
   function fixture(...args: Parameters<typeof createHarness>) {
-    const harness = createHarness(...args);
-    services.push(harness.service);
-    return harness;
+    const h = createHarness(...args);
+    services.push(h.service);
+    return h;
   }
   it("does not overwrite a replacement attachment when metadata reconciliation settles late", async () => {
-    const harness = fixture({
+    const h = fixture({
       sessionId: "session-original",
       label: "Original",
       category: "Projects",
@@ -117,9 +96,9 @@ describe("ClickClack discussion session events", () => {
     const releaseUpdate = createDeferred<void>();
     let reconcile: Promise<void> | undefined;
     try {
-      await harness.service.open(sessionKey);
-      harness.updateChannel.mockClear();
-      harness.updateChannel.mockImplementationOnce(async (_channelId, patch) => {
+      await h.service.open(sessionKey);
+      h.updateChannel.mockClear();
+      h.updateChannel.mockImplementationOnce(async (_channelId, patch) => {
         updateEntered.resolve();
         await releaseUpdate.promise;
         return discussionChannel({
@@ -133,49 +112,45 @@ describe("ClickClack discussion session events", () => {
           archived: false,
         });
       });
-      harness.setSessionEntry({
+      h.setSessionEntry({
         sessionId: "session-original",
         label: "Renamed",
         category: "Projects",
       });
-
-      reconcile = harness.service.reconcile(sessionKey);
+      reconcile = h.service.reconcile(sessionKey);
       await updateEntered.promise;
-
-      harness.setSessionEntry({
+      h.setSessionEntry({
         sessionId: "session-replacement",
         label: "Replacement label",
         category: "Replacement section",
       });
       expect(
         await resolveClickClackDiscussionRoute({
-          runtime: harness.runtime,
+          runtime: h.runtime,
           accountId: "default",
           serverBaseUrl: "https://clickclack.example",
           workspaceId: "wsp_team",
           channelId: "chn_discussion",
         }),
       ).toMatchObject({ state: "active" });
-      const replacementBinding = harness.store.lookup(sessionKey);
+      const replacementBinding = h.store.lookup(sessionKey);
       expect(replacementBinding).toMatchObject({
         sessionId: "session-replacement",
         label: "Original",
         displayTitle: "Original",
         section: "Projects",
       });
-
       releaseUpdate.resolve();
       await reconcile;
-
-      expect(harness.store.lookup(sessionKey)).toEqual(replacementBinding);
-      await harness.service.reconcile(sessionKey);
-      expect(harness.store.lookup(sessionKey)).toMatchObject({
+      expect(h.store.lookup(sessionKey)).toEqual(replacementBinding);
+      await h.service.reconcile(sessionKey);
+      expect(h.store.lookup(sessionKey)).toMatchObject({
         sessionId: "session-replacement",
         label: "Replacement label",
         displayTitle: "Replacement label",
         section: "Replacement section",
       });
-      expect(harness.updateChannel).toHaveBeenLastCalledWith(
+      expect(h.updateChannel).toHaveBeenLastCalledWith(
         "chn_discussion",
         expect.objectContaining({
           display_title: "Replacement label",
@@ -185,16 +160,15 @@ describe("ClickClack discussion session events", () => {
     } finally {
       releaseUpdate.resolve();
       await Promise.allSettled(reconcile ? [reconcile] : []);
-      await harness.service.cleanup();
     }
   });
 
   it("debounces sessions.changed bursts per bound session", async () => {
     const gateway = createGatewayEventsHarness();
-    const harness = fixture({ label: "Burst" }, { gatewayEvents: gateway.gatewayEvents });
+    const h = fixture({ label: "Burst" }, { gatewayEvents: gateway.gatewayEvents });
     const sessionKey = "agent:main:event-burst";
-    await harness.service.open(sessionKey);
-    const reconcile = vi.spyOn(harness.service, "reconcile").mockResolvedValue(undefined);
+    await h.service.open(sessionKey);
+    const reconcile = vi.spyOn(h.service, "reconcile").mockResolvedValue(undefined);
 
     // Coalescing keeps the earliest scheduled run: bursts collapse into one
     // reconcile per window, and steady event traffic cannot postpone it.
@@ -206,7 +180,6 @@ describe("ClickClack discussion session events", () => {
     await vi.advanceTimersByTimeAsync(49);
     expect(reconcile).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
-
     expect(reconcile).toHaveBeenCalledOnce();
     expect(reconcile).toHaveBeenCalledWith(sessionKey);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -215,33 +188,31 @@ describe("ClickClack discussion session events", () => {
 
   it("unsubscribes and cancels event reconciliation during cleanup", async () => {
     const gateway = createGatewayEventsHarness();
-    const harness = fixture({ label: "Cleanup" }, { gatewayEvents: gateway.gatewayEvents });
+    const h = fixture({ label: "Cleanup" }, { gatewayEvents: gateway.gatewayEvents });
     const sessionKey = "agent:main:event-cleanup";
-    await harness.service.open(sessionKey);
-    const reconcile = vi.spyOn(harness.service, "reconcile").mockResolvedValue(undefined);
+    await h.service.open(sessionKey);
+    const reconcile = vi.spyOn(h.service, "reconcile").mockResolvedValue(undefined);
     gateway.emit({ sessionKey, phase: "message" });
-    await harness.service.cleanup();
+    await h.service.cleanup();
     await vi.advanceTimersByTimeAsync(250);
     gateway.emit({ sessionKey, reason: "rename" });
     await vi.advanceTimersByTimeAsync(250);
-
     expect(gateway.unsubscribe).toHaveBeenCalledOnce();
     expect(reconcile).not.toHaveBeenCalled();
   });
 
   it("defers events arriving during a failing reconcile to the backoff floor", async () => {
     const gateway = createGatewayEventsHarness();
-    const harness = fixture({ label: "Slow" }, { gatewayEvents: gateway.gatewayEvents });
+    const h = fixture({ label: "Slow" }, { gatewayEvents: gateway.gatewayEvents });
     const sessionKey = "agent:main:event-slow-failure";
-    await harness.service.open(sessionKey);
+    await h.service.open(sessionKey);
     let rejectInFlight: ((error: Error) => void) | undefined;
-    const reconcile = vi.spyOn(harness.service, "reconcile").mockImplementationOnce(
+    const reconcile = vi.spyOn(h.service, "reconcile").mockImplementationOnce(
       () =>
         new Promise<void>((_resolve, reject) => {
           rejectInFlight = reject;
         }),
     );
-
     gateway.emit({ sessionKey, label: "Slow renamed", reason: "rename" });
     await vi.advanceTimersByTimeAsync(250);
     expect(reconcile).toHaveBeenCalledOnce();
@@ -257,76 +228,60 @@ describe("ClickClack discussion session events", () => {
     expect(reconcile).toHaveBeenCalledTimes(2);
   });
 
-  it("does not poll bindings after a successful open while events are bound", async () => {
-    vi.useFakeTimers();
-    const gateway = createGatewayEventsHarness();
-    const harness = createHarness(
-      { label: "No poll" },
-      { gatewayEvents: gateway.gatewayEvents, startTimer: true },
+  it.each([true, false])("polls bindings only without gateway events (bound=%s)", async (bound) => {
+    const h = fixture(
+      { label: "Polling" },
+      {
+        gatewayEvents: bound ? createGatewayEventsHarness().gatewayEvents : undefined,
+        startTimer: true,
+      },
     );
-    try {
-      await harness.service.open("agent:main:no-poll");
-      const reconcileAll = vi.spyOn(harness.service, "reconcileAll");
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(reconcileAll).not.toHaveBeenCalled();
-    } finally {
-      await harness.service.cleanup();
-      vi.useRealTimers();
+    await h.service.open("agent:main:polling");
+    const reconcileAll = vi.spyOn(h.service, "reconcileAll");
+    if (!bound) {
+      reconcileAll.mockResolvedValue(undefined);
     }
-  });
-
-  it("keeps polling bindings when no gateway event subscription exists", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness({ label: "Poll fallback" }, { startTimer: true });
-    try {
-      await harness.service.open("agent:main:poll-fallback");
-      const reconcileAll = vi.spyOn(harness.service, "reconcileAll").mockResolvedValue(undefined);
-      await vi.advanceTimersByTimeAsync(60_000);
-      // Broadcaster-less runtimes never receive sessions.changed; without the
-      // interval poll their bindings would never reconcile renames or archives.
+    await vi.advanceTimersByTimeAsync(60_000);
+    if (bound) {
+      expect(reconcileAll).not.toHaveBeenCalled();
+    } else {
       expect(reconcileAll).toHaveBeenCalled();
-    } finally {
-      await harness.service.cleanup();
-      vi.useRealTimers();
     }
   });
 
   it("does not poll persisted bindings until the service starts", async () => {
-    const harness = fixture({ label: "Pre-start" });
+    const h = fixture({ label: "Pre-start" });
     let service: ClickClackDiscussionService | undefined;
     try {
-      await harness.service.open("agent:main:pre-start");
-      service = new ClickClackDiscussionService(harness.runtime);
+      await h.service.open("agent:main:pre-start");
+      service = new ClickClackDiscussionService(h.runtime);
       const reconcileAll = vi.spyOn(service, "reconcileAll").mockResolvedValue(undefined);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reconcileAll).not.toHaveBeenCalled();
-
       await service.bindGatewayEvents(undefined, createTestPluginServiceScheduler());
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reconcileAll).toHaveBeenCalled();
     } finally {
       await service?.cleanup();
-      await harness.service.cleanup();
     }
   });
 
   it("joins an admitted reconcile before retiring and restarting its activation", async () => {
     const gateway = createGatewayEventsHarness();
-    const harness = fixture({ label: "Stale" }, { gatewayEvents: gateway.gatewayEvents });
+    const h = fixture({ label: "Stale" }, { gatewayEvents: gateway.gatewayEvents });
     const sessionKey = "agent:main:event-stale-settle";
     const pending = Promise.withResolvers<void>();
     try {
-      await harness.service.open(sessionKey);
+      await h.service.open(sessionKey);
       const reconcile = vi
-        .spyOn(harness.service, "reconcile")
+        .spyOn(h.service, "reconcile")
         .mockImplementationOnce(() => pending.promise)
         .mockResolvedValue(undefined);
       gateway.emit({ sessionKey, label: "Stale renamed", reason: "rename" });
       await vi.advanceTimersByTimeAsync(250);
       expect(reconcile).toHaveBeenCalledOnce();
-
       let retired = false;
-      const closing = harness.service.cleanup().then(() => {
+      const closing = h.service.cleanup().then(() => {
         retired = true;
       });
       await vi.advanceTimersByTimeAsync(60_000);
@@ -334,53 +289,40 @@ describe("ClickClack discussion session events", () => {
       expect(reconcile).toHaveBeenCalledOnce();
       pending.resolve();
       await closing;
-      await harness.service.bindGatewayEvents(
-        gateway.gatewayEvents,
-        createTestPluginServiceScheduler(),
-      );
+      await h.service.bindGatewayEvents(gateway.gatewayEvents, createTestPluginServiceScheduler());
       await vi.advanceTimersByTimeAsync(0);
       expect(reconcile).toHaveBeenCalledTimes(2);
     } finally {
       pending.resolve();
-      await harness.service.cleanup();
     }
   });
 
   it("recovers the fallback poll after a broadcaster-less stop/start cycle", async () => {
-    const harness = fixture({ label: "Restart" }, { startTimer: true });
-    await harness.service.open("agent:main:poll-restart");
-    await harness.service.cleanup();
-    await harness.service.bindGatewayEvents(undefined, createTestPluginServiceScheduler());
-    const reconcileAll = vi.spyOn(harness.service, "reconcileAll").mockResolvedValue(undefined);
+    const h = fixture({ label: "Restart" }, { startTimer: true });
+    await h.service.open("agent:main:poll-restart");
+    await h.service.cleanup();
+    await h.service.bindGatewayEvents(undefined, createTestPluginServiceScheduler());
+    const reconcileAll = vi.spyOn(h.service, "reconcileAll").mockResolvedValue(undefined);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(reconcileAll).toHaveBeenCalled();
   });
 
   it("keeps the interval while an ambiguous discussion open is pending", async () => {
-    vi.useFakeTimers();
-    const harness = createHarness({ label: "Pending retry" }, { startTimer: true });
-    try {
-      harness.createChannel.mockRejectedValueOnce(new Error("ambiguous create"));
-      await expect(harness.service.open("agent:main:pending-retry")).rejects.toThrow(
-        "ambiguous create",
-      );
-      const reconcileAll = vi.spyOn(harness.service, "reconcileAll").mockResolvedValue(undefined);
-
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(reconcileAll).toHaveBeenCalledOnce();
-    } finally {
-      await harness.service.cleanup();
-      vi.useRealTimers();
-    }
+    const h = fixture({ label: "Pending retry" }, { startTimer: true });
+    h.createChannel.mockRejectedValueOnce(new Error("ambiguous create"));
+    await expect(h.service.open("agent:main:pending-retry")).rejects.toThrow("ambiguous create");
+    const reconcileAll = vi.spyOn(h.service, "reconcileAll").mockResolvedValue(undefined);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(reconcileAll).toHaveBeenCalledOnce();
   });
   it("retires polling after another runtime clears the last pending open", async () => {
-    const harness = fixture({ label: "Externally cleared" }, { startTimer: true });
-    harness.createChannel.mockRejectedValueOnce(new Error("ambiguous create"));
-    await expect(harness.service.open("agent:main:externally-cleared")).rejects.toThrow(
+    const h = fixture({ label: "Externally cleared" }, { startTimer: true });
+    h.createChannel.mockRejectedValueOnce(new Error("ambiguous create"));
+    await expect(h.service.open("agent:main:externally-cleared")).rejects.toThrow(
       "ambiguous create",
     );
-    harness.generationStore.clear();
-    const reconcileAll = vi.spyOn(harness.service, "reconcileAll");
+    h.generationStore.clear();
+    const reconcileAll = vi.spyOn(h.service, "reconcileAll");
     await vi.advanceTimersByTimeAsync(60_000);
     expect(reconcileAll).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(120_000);
