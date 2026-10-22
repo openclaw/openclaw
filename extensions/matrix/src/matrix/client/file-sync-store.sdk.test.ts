@@ -31,6 +31,20 @@ function verificationSync(nextBatch: string, eventId: string): ISyncResponse {
   return matrixSyncResponse(nextBatch, roomId, event, "pagination-cursor");
 }
 
+async function ingressFixture(root: string) {
+  const store = await SqliteBackedMatrixSyncStore.create(root);
+  const client = new MatrixClient("https://example.org", "fixture-token", { syncStore: store });
+  return { store, client, entered: createDeferred<void>(), release: createDeferred<void>() };
+}
+
+async function expectCursor(root: string, store: SqliteBackedMatrixSyncStore, token: string) {
+  await store.flush();
+  expect(store.getSyncToken()).toBe(token);
+  await expect((await SqliteBackedMatrixSyncStore.create(root)).getSavedSyncToken()).resolves.toBe(
+    token,
+  );
+}
+
 describe("Matrix SDK sync-cache verification routing", () => {
   const storage = useSyncStoreFixture("openclaw-matrix-sync-sdk-", true);
 
@@ -156,10 +170,7 @@ describe("Matrix sync ingress admission", () => {
   const storage = useSyncStoreFixture("openclaw-matrix-sync-ingress-");
 
   it("holds the cursor until admission and reports failure without losing the previous cursor", async () => {
-    const store = await SqliteBackedMatrixSyncStore.create(storage.root);
-    const client = new MatrixClient("https://example.org", "fixture-token", { syncStore: store });
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const { store, client, entered, release } = await ingressFixture(storage.root);
     const failure = new Error("ingress storage unavailable");
     const errors: Error[] = [];
     const savedSyncContexts: boolean[] = [];
@@ -184,21 +195,13 @@ describe("Matrix sync ingress admission", () => {
 
       release.resolve();
       await pending;
-      await store.flush();
-      expect(store.getSyncToken()).toBe("accepted-cursor");
-      await expect(
-        (await SqliteBackedMatrixSyncStore.create(storage.root)).getSavedSyncToken(),
-      ).resolves.toBe("accepted-cursor");
+      await expectCursor(storage.root, store, "accepted-cursor");
 
       store.setSyncToken("rejected-cursor");
       await expect(
         store.setSyncData(verificationSync("rejected-cursor", "$rejected")),
       ).rejects.toBe(failure);
-      await store.flush();
-      expect(store.getSyncToken()).toBe("accepted-cursor");
-      await expect(
-        (await SqliteBackedMatrixSyncStore.create(storage.root)).getSavedSyncToken(),
-      ).resolves.toBe("accepted-cursor");
+      await expectCursor(storage.root, store, "accepted-cursor");
       expect(savedSyncContexts).toEqual([false, false]);
       expect(errors).toEqual([failure]);
     } finally {
@@ -214,10 +217,7 @@ describe("Matrix sync ingress admission", () => {
     await seed.setSyncData(verificationSync("previous-cursor", cachedEventId));
     seed.setSyncToken("previous-cursor");
     await seed.flush();
-    const store = await SqliteBackedMatrixSyncStore.create(storage.root);
-    const client = new MatrixClient("https://example.org", "fixture-token", { syncStore: store });
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
+    const { store, client, entered, release } = await ingressFixture(storage.root);
     const admittedBatches: string[] = [];
     const dispose = await client.bindSyncIngress(async (sync, { hasSavedSync }) => {
       admittedBatches.push(sync.next_batch);
@@ -244,11 +244,7 @@ describe("Matrix sync ingress admission", () => {
       release.resolve();
       await Promise.all([pending, freeze]);
       store.markCleanShutdown();
-      await store.flush();
-      expect(store.getSyncToken()).toBe("previous-cursor");
-      await expect(
-        (await SqliteBackedMatrixSyncStore.create(storage.root)).getSavedSyncToken(),
-      ).resolves.toBe("previous-cursor");
+      await expectCursor(storage.root, store, "previous-cursor");
       expect(admittedBatches).toEqual(["previous-cursor", "shutdown-cursor"]);
     } finally {
       release.resolve();
