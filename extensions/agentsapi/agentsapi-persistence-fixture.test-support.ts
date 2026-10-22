@@ -41,7 +41,7 @@ async function createFixture(
   config: () => OpenClawConfig,
 ) {
   const params = await createAttempt(state.stateDir);
-  const openStore = () => createBindingStore<AgentsApiBinding>(state.env);
+  const openStore = <T = AgentsApiBinding>() => createBindingStore<T>(state.env);
   const scope = harnessScope(() => registerHarness(state.env, config), {
     params,
     ...mockClient(sessionId),
