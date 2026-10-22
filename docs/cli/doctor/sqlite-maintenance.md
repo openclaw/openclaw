@@ -6,7 +6,10 @@ read_when:
   - You are importing, validating, or recovering legacy session history
 ---
 
-Explicit SQLite maintenance runs offline, with the Gateway stopped. This page covers
+SQLite repairs and compaction run offline, with the Gateway stopped. The session
+`inspect` and `validate` modes are read-only and can run while the Gateway is up;
+they do not take the exclusive maintenance lock. Validation may add load, and
+separate reads can observe new commits while the Gateway runs. This page covers
 shared-state compaction and the targeted session SQLite modes.
 
 SQLite keeps pages freed by deletes available for reuse inside the database file.
@@ -95,6 +98,8 @@ compatible backup or upgrade OpenClaw for a newer schema.
 Session-key repair follows complete transcript-owner alias chains, including
 long chains in large databases. It preserves the terminal owner's session key and
 retained transcript history; shortening history is not required to bound the repair's stack.
+Archived registry discovery and recovery diagnostics also process complete
+inventories without expanding them into function arguments.
 
 Runtime session rows and transcripts live in SQLite, by default at
 `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Gateway startup uses

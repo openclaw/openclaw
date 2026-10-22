@@ -1,6 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
-  "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts",
+  "src/config/sessions/session-actor-initialization.test.ts",
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
   "src/sessions/background-session-result.test.ts",
@@ -190,6 +190,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/exec-session-event.test.ts",
   "src/infra/session-delivery-restart.test.ts",
   "src/infra/manual-session-wake.test.ts",
+  "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts",
   "src/plugin-sdk/session-transcript-lock.native.test.ts",
   "src/plugin-sdk/session-transcript-lock.worker.test.ts",
   "src/gateway/worker-environments/worker-turn-transcript-target.test.ts",

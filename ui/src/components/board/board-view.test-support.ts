@@ -16,6 +16,16 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 
+export const testId = (root: ParentNode, id: string) =>
+  root.querySelector<HTMLElement>(`[data-test-id="${id}"]`);
+export function expectText(element: Element | null | undefined, ...contents: string[]) {
+  for (const content of contents) {
+    expect(element?.textContent).toContain(content);
+  }
+}
+export const widgetSnapshot = (widget: Partial<BoardWidget> = {}) =>
+  snapshot({ widgets: [boardWidget(widget)] });
+
 export async function openBoardMenu(
   root: ParentNode,
   selector = ".board-widget__menu-trigger",
@@ -101,3 +111,6 @@ export async function mount(
   await settleCells(view);
   return view;
 }
+
+export const mountWidget = (widget: Partial<BoardWidget> = {}) =>
+  mount({ snapshot: widgetSnapshot(widget) });
