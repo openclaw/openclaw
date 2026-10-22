@@ -381,14 +381,43 @@ describe("published upgrade survivor consent recovery", () => {
     expect(check(update).status).not.toBe(0);
   });
 
+  it.each(["INSTALL_FAILED", undefined])("rejects unrelated plugin outcome %s", (code) => {
+    const update = deferredUpdate();
+    expectDefined(update.postUpdate.plugins.npm.outcomes[0], "Codex update outcome").code = code;
+    expect(check(update).status).not.toBe(0);
+  });
+
+  it("accepts only the reviewed externalized fixture packages after successful core replacement", () => {
+    const update = deniedUpdate();
+    update.postUpdate.plugins.warnings.push({
+      reason: "Config remained invalid after updated plugin migrations.",
+      message: "Post-update plugin migration did not produce a valid config; refusing to restart.",
+    });
+    const result = check(update);
+    expect(result.status, result.stderr).toBe(0);
+  });
+
   const invalidUpdates: Record<string, (result: ReturnType<typeof deniedUpdate>) => unknown> = {
+    "core update failure": (result) =>
+      (expectDefined(result.steps[0], "global update step").exitCode = 1),
+    "wrong installed version": (result) => (result.after.version = "2026.7.1-2"),
     "wrong baseline version": (result) => (result.before.version = "2026.8.1"),
     "missing core swap": (result) => result.steps.pop(),
+    "other update failure": (result) => (result.reason = "doctor"),
+    "plugin sync failure": (result) => result.postUpdate.plugins.sync.errors.push("network failed"),
+    "plugin update failure": (result) =>
+      result.postUpdate.plugins.npm.outcomes.push({ status: "error" }),
+    "integrity drift": (result) => result.postUpdate.plugins.integrityDrifts.push("changed"),
     "unreviewed plugin": (result) => {
       const warning = expectDefined(result.postUpdate.plugins.warnings[0], "Codex consent warning");
       warning.reason = warning.reason.replace("codex", "unreviewed");
       warning.message = warning.reason;
     },
+    "unrelated warning": (result) =>
+      result.postUpdate.plugins.warnings.push({
+        reason: "broken config",
+        message: "broken config",
+      }),
     "no consent denial": (result) => (result.postUpdate.plugins.warnings = []),
   };
   it.each(Object.entries(invalidUpdates))("refuses repair after %s", (_name, mutate) => {

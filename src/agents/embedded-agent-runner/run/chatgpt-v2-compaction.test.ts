@@ -20,7 +20,6 @@ import {
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
-import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { log } from "../logger.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
@@ -34,16 +33,18 @@ import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 registerAgentSessionLoopTestLifecycle();
 const initialHost = getAiTransportHost();
-const model = makeProviderModelFixture<"openai-chatgpt-responses">({
+const model = {
   id: "test-v2",
   name: "Test ChatGPT",
   api: "openai-chatgpt-responses",
   provider: "openai",
   baseUrl: "https://chatgpt.com/backend-api/codex",
   reasoning: true,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 32_000,
   maxTokens: 512,
-}) satisfies Model;
+} satisfies Model;
 const terminal = {
   type: "response.completed",
   response: {
@@ -147,17 +148,10 @@ function requestAt(index: number) {
   return request;
 }
 const persistedMessages = (manager: SessionManager) => manager.buildSessionContext().messages;
-const replayMessages = (messages: ReturnType<typeof persistedMessages>) =>
-  messages.filter((message) => message.role === "assistant" && message.providerReplay);
-const llmMessages = (messages: ReturnType<typeof persistedMessages>) =>
-  messages.filter(
-    (message) =>
-      message.role === "user" || message.role === "assistant" || message.role === "toolResult",
-  );
 const hasReplay = (manager: SessionManager) =>
-  replayMessages(persistedMessages(manager)).length > 0;
-const requestTypes = () => requests.map((body) => body.input.at(-1)?.type);
-const itemsOfType = (body: Body, type: string) => body.input.filter((item) => item.type === type);
+  persistedMessages(manager).some(
+    (message) => message.role === "assistant" && message.providerReplay,
+  );
 async function largeWindowFixture() {
   const manager = SessionManager.inMemory();
   manager.appendMessage({ role: "user", content: "remember copper", timestamp: 1 });
@@ -274,13 +268,6 @@ async function fixture(
   const onModelRequest =
     vi.fn<NonNullable<Parameters<typeof submitEmbeddedAttemptPrompt>[0]["onModelRequest"]>>();
   const boundary = createChatGPTV2CompactionBoundary(boundaryParams);
-  const compact = (
-    selectedBoundary = boundary,
-    context: Context = { messages: llmMessages(session.messages) },
-    options: Parameters<typeof boundary>[3] = { sessionId: session.sessionId },
-    anchor?: Parameters<typeof boundary>[4],
-    activeModel = model,
-  ) => selectedBoundary(session.agent.streamFn, activeModel, context, options, anchor);
   const submit = (prompt = "current request") =>
     submitEmbeddedAttemptPrompt({
       attempt: { sessionId: session.sessionId },
@@ -315,7 +302,6 @@ async function fixture(
     onFallback,
     onModelRequest,
     boundary,
-    compact,
     boundaryParams,
     submit,
   };
@@ -343,7 +329,12 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     expect(requests).toHaveLength(4);
     // Each boundary observes the request V2 prices, the compaction, then the checkpoint request.
     expect(
-      f.onModelRequest.mock.calls.map(([, context]) => replayMessages(context.messages).length),
+      f.onModelRequest.mock.calls.map(
+        ([, context]) =>
+          context.messages.filter(
+            (message) => message.role === "assistant" && message.providerReplay,
+          ).length,
+      ),
     ).toEqual([0, 0, 1, 1, 1, 2]);
     const firstCompact = requestAt(0),
       firstNormal = requestAt(1);
@@ -361,10 +352,12 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     expect(secondNormal.input.at(-1)).toEqual({ type: "compaction", encrypted_content: "opaque2" });
     const persisted = f.sessionManager.buildSessionContext().messages;
     expect(persisted.filter((message) => message.role === "user")).toHaveLength(2);
-    expect(replayMessages(persisted)).toHaveLength(2);
-    expect(replayMessages(persisted).at(-1)).toMatchObject({
-      providerReplay: { compactedWindow: { outputTokens: 5 } },
-    });
+    expect(
+      persisted.filter((message) => message.role === "assistant" && message.providerReplay),
+    ).toHaveLength(2);
+    expect(
+      persisted.findLast((message) => message.role === "assistant" && message.providerReplay),
+    ).toMatchObject({ providerReplay: { compactedWindow: { outputTokens: 5 } } });
     expect(
       f.events.filter(
         (event) => event.type === "compaction_end" && event.outcome.status === "completed",
@@ -419,14 +412,18 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     await f.submit();
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(f.execute).toHaveBeenCalledOnce();
-    expect(requestTypes()).toEqual(["compaction_trigger", "compaction", "function_call_output"]);
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "compaction_trigger",
+      "compaction",
+      "function_call_output",
+    ]);
     const compaction = requestAt(0),
       firstNormal = requestAt(1),
       afterTool = requestAt(2);
     expect(JSON.stringify(compaction)).toContain("current request");
     expect(realUserText(firstNormal)).toEqual(["remember copper", "current request"]);
-    expect(itemsOfType(afterTool, "function_call_output")).toHaveLength(1);
-    expect(itemsOfType(afterTool, "compaction")).toHaveLength(1);
+    expect(afterTool.input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
+    expect(afterTool.input.filter((item) => item.type === "compaction")).toHaveLength(1);
     const reopened = await fixture(
       SessionManager.fromEntries([manager.getHeader(), ...manager.getEntries()]),
       false,
@@ -436,8 +433,8 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     await reopened.submit("after restart");
     expect(requests).toHaveLength(1);
     const resumed = requestAt(0);
-    expect(itemsOfType(resumed, "function_call_output")).toHaveLength(1);
-    expect(itemsOfType(resumed, "compaction")).toHaveLength(1);
+    expect(resumed.input.filter((item) => item.type === "function_call_output")).toHaveLength(1);
+    expect(resumed.input.filter((item) => item.type === "compaction")).toHaveLength(1);
     expect(reopened.execute).not.toHaveBeenCalled();
   });
 
@@ -453,12 +450,12 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       contextTokenBudget: test.window,
       reserveTokens: test.reserve,
     });
-    const result = await f.compact(
-      boundary,
+    const result = await boundary(
+      f.session.agent.streamFn,
+      { ...model, contextWindow: test.window },
       { messages: [] },
       { sessionId: f.session.sessionId },
       { requestIndex: 1, messageCount: 0, contextTokens: test.tokens },
-      { ...model, contextWindow: test.window },
     );
     expect(Boolean(result)).toBe(test.compact);
     expect(requests).toHaveLength(test.compact ? 1 : 0);
@@ -477,19 +474,22 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     f.execute.mockImplementation(async () => {
       expect(f.session.agent.state.pendingToolCalls.size).toBe(1);
       await expect(
-        f.compact(
-          boundary,
+        boundary(
+          f.session.agent.streamFn,
+          { ...model, contextWindow: 500_000 },
           { messages: [] },
           { sessionId: f.session.sessionId },
           { requestIndex: 1, messageCount: 0, contextTokens: 465_674 },
-          { ...model, contextWindow: 500_000 },
         ),
       ).resolves.toBeUndefined();
       return { content: [{ type: "text", text: "settled" }], details: {} };
     });
     await f.submit();
     expect(f.execute).toHaveBeenCalledOnce();
-    expect(requestTypes()).toEqual(["message", "function_call_output"]);
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "message",
+      "function_call_output",
+    ]);
     expect(f.onFallback).not.toHaveBeenCalled();
   });
 
@@ -505,7 +505,11 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
           );
     await f.submit();
     await f.submit("next request");
-    expect(requestTypes()).toEqual(["compaction_trigger", "message", "message"]);
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "compaction_trigger",
+      "message",
+      "message",
+    ]);
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
     expect(hasReplay(manager)).toBe(false);
@@ -542,10 +546,13 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     };
     const anchor = { requestIndex: 1, messageCount: 2, contextTokens: 15_000 };
     await expect(
-      f.compact(boundary, context, { sessionId: f.session.sessionId }, anchor, {
-        ...model,
-        contextWindow: 32_768,
-      }),
+      boundary(
+        f.session.agent.streamFn,
+        { ...model, contextWindow: 32_768 },
+        context,
+        { sessionId: f.session.sessionId },
+        anchor,
+      ),
     ).resolves.toBeUndefined();
     expect(requests).toHaveLength(0);
     expect(f.onFallback).not.toHaveBeenCalled();
@@ -555,7 +562,10 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     const f = await fixture(SessionManager.inMemory(), true, { asyncProvider: true });
     await f.submit();
     expect(f.onFallback).not.toHaveBeenCalled();
-    expect(requestTypes()).toEqual(["compaction_trigger", "compaction"]);
+    expect(requests.map((body) => body.input.at(-1)?.type)).toEqual([
+      "compaction_trigger",
+      "compaction",
+    ]);
   });
 
   it.each([
@@ -577,15 +587,21 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
         ...f.boundaryParams,
         contextTokenBudget: 32_000,
       });
-      const result = f.compact(
-        boundary,
+      const result = boundary(
+        f.session.agent.streamFn,
+        { ...model, contextWindow: 200_000 },
         {
           systemPrompt: "stable system",
-          messages: llmMessages(persistedMessages(manager)),
+          messages: manager
+            .buildSessionContext()
+            .messages.filter(
+              (message) =>
+                message.role === "user" ||
+                message.role === "assistant" ||
+                message.role === "toolResult",
+            ),
         },
         { sessionId: f.session.sessionId },
-        undefined,
-        { ...model, contextWindow: 200_000 },
       );
       if (fits) {
         await expect(result).resolves.toMatchObject({
@@ -594,10 +610,18 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
         expect(requests).toHaveLength(1);
         expect(requests[0]?.input.at(-1)?.type).toBe("compaction_trigger");
         expect(f.onFallback).not.toHaveBeenCalled();
-        expect(replayMessages(persistedMessages(manager))).toHaveLength(1);
+        expect(
+          manager
+            .buildSessionContext()
+            .messages.filter((message) => message.role === "assistant" && message.providerReplay),
+        ).toHaveLength(1);
       } else {
         await expect(result).rejects.toBeInstanceOf(MidTurnPrecheckSignal);
-        expect(hasReplay(manager)).toBe(false);
+        expect(
+          manager
+            .buildSessionContext()
+            .messages.some((message) => message.role === "assistant" && message.providerReplay),
+        ).toBe(false);
         expect(requests).toHaveLength(0);
         expect(f.onFallback).toHaveBeenCalledOnce();
         expect(f.onFallback).toHaveBeenCalledWith(
@@ -638,7 +662,11 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       expect.stringContaining("exactly one nonempty compaction item"),
     );
     expect(f.execute).not.toHaveBeenCalled();
-    expect(hasReplay(f.sessionManager)).toBe(false);
+    expect(
+      f.sessionManager
+        .buildSessionContext()
+        .messages.some((message) => message.role === "assistant" && message.providerReplay),
+    ).toBe(false);
   });
 
   it("preserves retained input despite configured log redaction patterns", async () => {
@@ -650,13 +678,13 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     const content = "PRIVATE_VALUE API_TOKEN = computeToken()";
     const messages: Context["messages"] = [
       { role: "user", content, timestamp: 1 },
-      ...llmMessages(persistedMessages(f.sessionManager)).filter(
-        (message) => message.role !== "user",
+      ...persistedMessages(f.sessionManager).filter(
+        (message) => message.role === "assistant" || message.role === "toolResult",
       ),
     ];
-    await expect(f.compact(boundary, { messages }, {})).resolves.toMatchObject({
-      providerReplay: { compactedWindow: { outputTokens: 5 } },
-    });
+    await expect(
+      boundary(f.session.agent.streamFn, model, { messages }, {}),
+    ).resolves.toMatchObject({ providerReplay: { compactedWindow: { outputTokens: 5 } } });
     expect(requests).toHaveLength(1);
     expect(requests.map(realUserText)).toEqual([[content]]);
     expect(f.onFallback).not.toHaveBeenCalled();
@@ -672,13 +700,27 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
         throw failure;
       },
     });
-    await expect(f.compact(boundary)).rejects.toBe(failure);
+    await expect(
+      boundary(
+        f.session.agent.streamFn,
+        model,
+        {
+          messages: f.session.messages.filter(
+            (message) =>
+              message.role === "user" ||
+              message.role === "assistant" ||
+              message.role === "toolResult",
+          ),
+        },
+        { sessionId: f.session.sessionId },
+      ),
+    ).rejects.toBe(failure);
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(hasReplay(f.sessionManager)).toBe(true);
     const controller = new AbortController();
     controller.abort(new Error("cancelled"));
     await expect(
-      f.compact(f.boundary, { messages: [] }, { signal: controller.signal }),
+      f.boundary(f.session.agent.streamFn, model, { messages: [] }, { signal: controller.signal }),
     ).rejects.toThrow("cancelled");
     expect(f.onFallback).not.toHaveBeenCalled();
   });

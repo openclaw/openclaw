@@ -8,6 +8,7 @@ import {
 import { isReplaySafeToolCall } from "../../tool-mutation.js";
 import { buildAttemptReplayMetadata } from "./attempt-terminal-evidence.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import {
   createTerminalToolPresentationTracker,
   resolveEmbeddedRunTerminal,
@@ -15,30 +16,10 @@ import {
 } from "./terminal-resolution.js";
 import { makeTerminalInput } from "./terminal-resolution.test-support.js";
 
-const callAssistant = (id: string, name = "exec", args: Record<string, unknown> = {}) =>
-  buildEmbeddedRunnerAssistant({
-    stopReason: "toolUse",
-    content: [{ type: "toolCall", id, name, arguments: args }],
-  });
-
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "Your turn ended without a final result. Continue from the current transcript and produce the required result now. NO_REPLY is not allowed. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
-
-type FinalizationInput = Parameters<typeof resolveSettledTurnFinalizationRequest>[0];
-function finalizationRequest(
-  attempt: FinalizationInput["attempt"],
-  runParams: Partial<FinalizationInput["runParams"]> = {},
-  overrides: Partial<Omit<FinalizationInput, "attempt" | "runParams">> = {},
-) {
-  return resolveSettledTurnFinalizationRequest({
-    ...makeTerminalInput({ attempt, runParams: { sessionKey: undefined, ...runParams } }),
-    hasTerminalToolPresentation: false,
-    settledTurnFinalizationAvailable: true,
-    ...overrides,
-  });
-}
 
 describe("resolveSettledTurnFinalizationRequest", () => {
   it.each([
@@ -49,7 +30,12 @@ describe("resolveSettledTurnFinalizationRequest", () => {
   ])(
     "routes an empty stop after $toolName (error=$toolError, missing evidence=$missingEvidence, keeps tools=$keepsTools)",
     async ({ toolName, toolError = false, missingEvidence, keepsTools }) => {
-      const toolAssistant = callAssistant("file-1", toolName, { path: "index.txt" });
+      const toolAssistant = buildEmbeddedRunnerAssistant({
+        stopReason: "toolUse",
+        content: [
+          { type: "toolCall", id: "file-1", name: toolName, arguments: { path: "index.txt" } },
+        ],
+      });
       const assistant = buildEmbeddedRunnerAssistant({ content: [] });
       const toolMetas = [
         {
@@ -73,10 +59,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         lastToolError: toolError ? { toolName, error: "File unavailable" } : undefined,
         // Earlier attempts' effects must not override this attempt's explicit evidence.
-        replayMetadata: {
-          hadPotentialSideEffects: !missingEvidence,
-          replaySafe: missingEvidence,
-        },
+        replayMetadata: { hadPotentialSideEffects: !missingEvidence, replaySafe: missingEvidence },
         currentAttemptReplayMetadata: missingEvidence
           ? undefined
           : buildAttemptReplayMetadata({
@@ -132,22 +115,51 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
       currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     });
+    const terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
     const request = (terminalReplyExpectation: "required" | "optional" | "result-required") =>
-      finalizationRequest(attempt, { sessionId: "session:settled", terminalReplyExpectation });
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:settled",
+          runId: "run:settled",
+          terminalReplyExpectation,
+        } as never,
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: [],
+        hasTerminalToolPresentation: false,
+        terminalState,
+        settledTurnFinalizationAvailable: true,
+      });
 
     expect(request("required")).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(request("optional")).toBeNull();
     expect(request("result-required")).toBe(REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(
-      finalizationRequest(attempt, {
-        sessionId: "session:settled-heartbeat",
-        trigger: "heartbeat",
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:settled-heartbeat",
+          runId: "run:settled-heartbeat",
+          trigger: "heartbeat",
+        } as never,
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: [],
+        hasTerminalToolPresentation: false,
+        terminalState,
+        settledTurnFinalizationAvailable: true,
       }),
     ).toBe(REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
   });
 
   it("requires an available finalizer and no visible structured error", () => {
-    const assistant = callAssistant("tool-1");
+    const assistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-1", name: "exec", arguments: {} }],
+    });
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: [],
       toolMetas: [{ toolName: "exec", isError: true, replaySafe: false }],
@@ -160,20 +172,29 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       currentAttemptAssistant: assistant,
       lastToolError: { toolName: "exec", error: "post-processing error" },
     });
+    const terminalState = resolveEmbeddedRunAttemptTerminalState({ attempt, assistant });
     const request = (overrides: {
       payloadsWithToolMedia?: Parameters<
         typeof resolveSettledTurnFinalizationRequest
       >[0]["payloadsWithToolMedia"];
       settledTurnFinalizationAvailable?: boolean;
     }) =>
-      finalizationRequest(
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:settled-policy",
+          runId: "run:settled-policy",
+          trigger: "user",
+          terminalReplyExpectation: "required",
+        } as never,
         attempt,
-        { sessionId: "session:settled-policy", terminalReplyExpectation: "required" },
-        {
-          payloadsWithToolMedia: overrides.payloadsWithToolMedia ?? [],
-          settledTurnFinalizationAvailable: overrides.settledTurnFinalizationAvailable ?? true,
-        },
-      );
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: overrides.payloadsWithToolMedia ?? [],
+        hasTerminalToolPresentation: false,
+        terminalState,
+        settledTurnFinalizationAvailable: overrides.settledTurnFinalizationAvailable ?? true,
+      });
 
     expect(
       request({
@@ -203,7 +224,10 @@ describe("resolveSettledTurnFinalizationRequest", () => {
   });
 
   it("preserves optional authored silence after a settled tool failure", () => {
-    const toolAssistant = callAssistant("tool-rejected", "dispatch_action");
+    const toolAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-rejected", name: "dispatch_action", arguments: {} }],
+    });
     const silentAssistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "NO_REPLY" }],
     });
@@ -234,18 +258,32 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       lastToolError: { toolName: "dispatch_action", error: "Required argument missing" },
     });
     const request = (terminalReplyExpectation: "required" | "optional" | "result-required") =>
-      finalizationRequest(
-        attempt,
-        { sessionId: "session:rejected-silent", terminalReplyExpectation },
-        {
-          payloadsWithToolMedia: buildEmbeddedRunPayloads({
-            assistantTexts: attempt.assistantTexts,
-            lastAssistant: silentAssistant,
-            lastToolError: attempt.lastToolError,
-            sessionKey: "session:rejected-silent",
-          }),
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:rejected-silent",
+          runId: "run:rejected-silent",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "Review the completed work.",
+          timeoutMs: 60_000,
+          terminalReplyExpectation,
         },
-      );
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: buildEmbeddedRunPayloads({
+          assistantTexts: attempt.assistantTexts,
+          lastAssistant: silentAssistant,
+          lastToolError: attempt.lastToolError,
+          sessionKey: "session:rejected-silent",
+        }),
+        hasTerminalToolPresentation: false,
+        terminalState: resolveEmbeddedRunAttemptTerminalState({
+          attempt,
+          assistant: silentAssistant,
+        }),
+        settledTurnFinalizationAvailable: true,
+      });
 
     expect(request("required")).toBeNull();
     expect(request("optional")).toBeNull();
@@ -255,7 +293,10 @@ describe("resolveSettledTurnFinalizationRequest", () => {
   });
 
   it("finalizes after successful tools despite pre-tool progress and a stale error (#132762)", () => {
-    const failedAssistant = callAssistant("tool-failed");
+    const failedAssistant = buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id: "tool-failed", name: "exec", arguments: {} }],
+    });
     const progress = "I’ll inspect the file before answering.";
     const terminalAssistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",
@@ -296,14 +337,28 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         sessionKey: "session:stale-error",
       }),
     ) =>
-      finalizationRequest(
-        attempt,
-        { sessionId: "session:stale-error", terminalReplyExpectation: "required" },
-        {
-          activeErrorContext: { provider: "openai", model: "gpt-4.1-mini" },
-          payloadsWithToolMedia,
+      resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "session:stale-error",
+          runId: "run:stale-error",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "Inspect the file.",
+          timeoutMs: 60_000,
+          trigger: "user",
+          terminalReplyExpectation: "required",
         },
-      );
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-4.1-mini" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia,
+        hasTerminalToolPresentation: false,
+        terminalState: resolveEmbeddedRunAttemptTerminalState({
+          attempt,
+          assistant: terminalAssistant,
+        }),
+        settledTurnFinalizationAvailable: true,
+      });
 
     expect(request()).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(

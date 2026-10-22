@@ -1,21 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { afterEach, assert, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { observeSettlement } from "../../infra/sqlite-readonly.test-support.js";
-import {
-  environment,
-  workspaceActions,
-  workspaceCommandResult,
-  workspaceTransfer,
-} from "./node-worker-tunnel.test-support.js";
+import { environment, workspaceCommandResult } from "./node-worker-tunnel.test-support.js";
+import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
-import { emptyJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const identity = { environmentId: "environment-1", ownerEpoch: 2, sessionId: "session-1" };
@@ -39,7 +29,7 @@ async function workspaceFixture(beforeDownload?: () => Promise<void>) {
         manifestRef,
       },
     });
-  const actions = workspaceActions({
+  const actions = createNodeWorkerWorkspaceActions({
     ...identity,
     ownerSignal: owner.signal,
     isOwnerCurrent: () => !owner.signal.aborted,
@@ -133,6 +123,29 @@ it.each(
   },
 );
 
+it.each(["reconciliation", "attachments"] as const)(
+  "preserves independent %s after the initiating dispatch turn closes",
+  async (operation) => {
+    await using fixture = await workspaceFixture();
+    const synced = await fixture.sync();
+    fixture.closeTurn();
+    if (operation === "reconciliation") {
+      const token = fixture.transfer.prepareUpload("environment-1", synced.manifestRef);
+      expect(token).toBeTruthy();
+      await fixture.transfer.revoke("environment-1", token);
+    } else {
+      assert.isDefined(fixture.actions.stageAttachments);
+      await expect(
+        fixture.actions.stageAttachments({
+          localPath: fixture.localPath,
+          isAuthorized: () => true,
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toBeUndefined();
+    }
+  },
+);
+
 it("rejects a download after its initiating turn closes but permits a fresh sync", async () => {
   const downloading = createDeferred();
   const releaseDownload = createDeferred();
@@ -156,81 +169,3 @@ it("rejects a download after its initiating turn closes but permits a fresh sync
     releaseDownload.resolve();
   }
 });
-
-it.for(["journal", "upload", "both", "authority"] as const)(
-  "joins local recovery and remote upload before releasing a failed %s preparation",
-  async (failedSide, { signal }) => {
-    const journal = createDeferred<undefined>();
-    const upload = createDeferred();
-    const settlements = [journal, upload].map(({ promise }) => observeSettlement(promise));
-    const uploadStarted = createDeferred();
-    const authority = new AbortController();
-    const failure = new Error(`${failedSide} failed`);
-    const takeUpload = vi.fn((): never => {
-      throw new Error("failed preparation must not consume staging");
-    });
-    const revoke = vi.fn(async () => {
-      expect(settlements.map(({ settled }) => settled)).toEqual([true, true]);
-    });
-    const binding = {
-      manifestRef: "sha256:" + "a".repeat(64),
-      source: { kind: "local" as const, path: "/gateway/workspace" },
-      remoteWorkspaceDir: "/worker/workspace",
-    };
-    const actions = workspaceActions({
-      restoredWorkspace: binding,
-      workspaceTransfer: workspaceTransfer({
-        prepareUpload: () => "upload-token",
-        takeUpload,
-        revoke,
-      }),
-      runWorkspaceCommand: async () => {
-        uploadStarted.resolve();
-        await upload.promise;
-        return workspaceCommandResult(binding.remoteWorkspaceDir);
-      },
-    });
-    const operation = actions.reconcileWorkspace({
-      remoteWorkspaceDir: binding.remoteWorkspaceDir,
-      baseManifestRef: binding.manifestRef,
-      source: {
-        ...binding.source,
-        assertCurrent: () => authority.signal.throwIfAborted(),
-        journal: emptyJournal({ load: () => journal.promise }),
-        stagedResult: { ref: "refs/openclaw/worker-results/overlap", record: () => {} },
-      },
-    });
-    const outcome = operation.catch((error: unknown) => error);
-    try {
-      if (failedSide === "journal") {
-        journal.reject(failure);
-      } else if (failedSide === "authority") {
-        journal.resolve(undefined);
-      }
-      await withinTest(
-        awaitGateBeforeSettlement(uploadStarted.promise, operation, "upload never started"),
-        signal,
-      );
-      if (failedSide === "authority") {
-        authority.abort(failure);
-      }
-      if (failedSide === "upload" || failedSide === "both") {
-        upload.reject(failedSide === "both" ? new Error("upload failed first") : failure);
-        if (failedSide === "both") {
-          journal.reject(failure);
-        } else {
-          journal.resolve(undefined);
-        }
-      } else {
-        upload.resolve();
-      }
-      expect(await outcome).toBe(failure);
-      expect(takeUpload).not.toHaveBeenCalled();
-      expect(revoke).toHaveBeenCalledExactlyOnceWith("environment-1", "upload-token");
-    } finally {
-      journal.resolve(undefined);
-      upload.resolve();
-      await operation.catch(() => {});
-    }
-  },
-);

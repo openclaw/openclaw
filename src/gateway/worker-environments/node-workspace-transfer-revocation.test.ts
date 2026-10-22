@@ -1,12 +1,8 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  closeHttpServer,
-  listenLoopback,
-} from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -24,10 +20,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { nodeWorkspaceTransferReconcilePath } from "../../worker/node-workspace-transfer-protocol.js";
 import { hashWorkerCredential } from "./credential.js";
-import {
-  transferFixture,
-  workspaceFiles,
-} from "./node-workspace-transfer-fixtures.test-support.js";
+import { workspaceFiles } from "./node-workspace-transfer-fixtures.test-support.js";
 import {
   createNodeWorkspaceTransferHttpCallback,
   handleNodeWorkspaceTransferHttpRequest,
@@ -40,8 +33,31 @@ import { workerCredential } from "./store.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+async function listen(server: Server) {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("HTTP fixture did not bind");
+  }
+  return `127.0.0.1:${address.port}`;
+}
+
+async function closeServer(server: Server) {
+  server.closeAllConnections();
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+const makeService = (root: string) =>
+  createNodeWorkspaceTransferService({
+    temporaryRoot: path.join(root, "transfers"),
+    getOwner: () => transferOwner("session"),
+  });
 const prepareSync = (
-  service: ReturnType<typeof createNodeWorkspaceTransferService>,
+  service: ReturnType<typeof makeService>,
   localPath: string,
   authority: { isAuthorized: () => boolean; signal?: AbortSignal } = { isAuthorized: () => true },
 ) =>
@@ -80,10 +96,11 @@ it.each([
   { boundary: "after body", cancellation: "discard-and-close" },
   { boundary: "after body", cancellation: "discard-and-fail" },
 ] as const)("upload settles $boundary with $cancellation", async ({ boundary, cancellation }) => {
-  const { localPath, service } = await transferFixture(
-    tempDirs.make("workspace-upload-cancellation-"),
-  );
+  const root = tempDirs.make("workspace-upload-cancellation-");
+  const localPath = path.join(root, "source");
+  await fs.mkdir(localPath);
   const owner = new AbortController();
+  const service = makeService(root);
   const { snapshot } = await prepareSync(service, localPath, {
     isAuthorized: () => !owner.signal.aborted,
     signal: owner.signal,
@@ -125,12 +142,12 @@ it.each([
       return authorized;
     }).finally(() => finished.resolve());
   });
-  const address = await listenLoopback(server);
+  const address = await listen(server);
   const raw = Buffer.from(snapshot.rawManifest);
   const length = Buffer.alloc(4);
   length.writeUInt32BE(raw.length);
   const request = fetch(
-    `${address}${nodeWorkspaceTransferReconcilePath("environment", snapshot.manifestRef)}`,
+    `http://${address}${nodeWorkspaceTransferReconcilePath("environment", snapshot.manifestRef)}`,
     {
       method: "POST",
       headers: { authorization: `Bearer ${token}` },
@@ -218,7 +235,7 @@ it.each([
     await request;
     await finished.promise;
     await cleanup?.catch(() => undefined);
-    await closeHttpServer(server);
+    await closeServer(server);
     await service.closeAll().catch((error: unknown) => {
       if (error !== expectedDisposalError) {
         throw error;
@@ -381,10 +398,10 @@ it.each([
     }
     return guarded;
   });
-  const address = await listenLoopback(server, "ws");
+  const address = await listen(server);
   try {
     const result = await runNodeWorkerWorkspaceTransfer({
-      gatewayUrl: address,
+      gatewayUrl: `ws://${address}`,
       environmentId: "environment",
       workspaceDir,
       manifestHome: root,
@@ -432,8 +449,40 @@ it.each([
     }
   } finally {
     admission.close();
-    await closeHttpServer(server);
+    await closeServer(server);
     await service.closeAll();
+  }
+});
+
+it("fenceEnvironment aborts capability signals and denies new admissions", async () => {
+  const root = tempDirs.make("workspace-transfer-fence-");
+  const localPath = path.join(root, "source");
+  await fs.mkdir(localPath);
+  const service = makeService(root);
+  await service.initialize();
+  try {
+    const { snapshot, token } = await prepareSync(service, localPath);
+    const route = {
+      kind: "manifest",
+      direction: "download",
+      environmentId: "environment",
+      manifestRef: snapshot.manifestRef,
+    } as const;
+    const authorization = service.authorize({ route, token });
+    expect(authorization).toBeDefined();
+    if (!authorization) {
+      throw new Error("authorization missing before fence");
+    }
+    const signal = service.authorizationSignal(authorization);
+    expect(signal.aborted).toBe(false);
+
+    service.fenceEnvironment("environment");
+
+    expect(signal.aborted).toBe(true);
+    expect(service.isAuthorizationCurrent(authorization)).toBe(false);
+    expect(service.authorize({ route, token })).toBeUndefined();
+  } finally {
+    await service.closeAll().catch(() => undefined);
   }
 });
 
@@ -531,18 +580,16 @@ it("a permanent store revocation fences an in-flight blob response end to end", 
   } as const;
   const authorization = service.authorize({ route, token });
   expect(authorization).toBeDefined();
-  const signal = service.authorizationSignal(authorization!);
-  expect(signal.aborted).toBe(false);
 
   const callback = createNodeWorkspaceTransferHttpCallback(service);
   const server = createServer((req, res) => {
     void handleRequest(req, res, callback);
   });
-  const address = await listenLoopback(server);
+  const address = await listen(server);
   const controller = new AbortController();
   try {
     const response = await fetch(
-      `${address}/__openclaw__/worker-transfer/v1/environments/${environmentId}/blobs/${entry.sha256}`,
+      `http://${address}/__openclaw__/worker-transfer/v1/environments/${environmentId}/blobs/${entry.sha256}`,
       { headers: { authorization: `Bearer ${token}` }, signal: controller.signal },
     );
     expect(response.status).toBe(200);
@@ -554,7 +601,6 @@ it("a permanent store revocation fences an in-flight blob response end to end", 
     let bytes = first.value?.byteLength ?? 0;
 
     await store.revokeEnvironmentCredential(environmentId, { fenceWorkspaceTransfers: true });
-    expect(signal.aborted).toBe(true);
 
     try {
       for (;;) {
@@ -573,7 +619,7 @@ it("a permanent store revocation fences an in-flight blob response end to end", 
   } finally {
     unsubscribe();
     controller.abort();
-    await closeHttpServer(server);
+    await closeServer(server);
     await service.closeAll().catch(() => undefined);
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();

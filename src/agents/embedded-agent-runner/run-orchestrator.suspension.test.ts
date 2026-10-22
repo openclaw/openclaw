@@ -571,25 +571,38 @@ describe("embedded run detached session metadata", () => {
     await expectNoAgent();
   });
 
-  it("does not persist trajectory metadata for a detached caller manager", async () => {
-    const { params, run, expectNoAgent } = await createRun("detached");
-    const { prepareEmbeddedAttemptTrajectory } = await import("./run/attempt-trajectory.js");
-    runAttempt.mockImplementationOnce(async (attempt) => {
-      const recorder = await prepareEmbeddedAttemptTrajectory({
-        activeSession: { sessionId: attempt.sessionId },
-        attempt,
-        clientToolCount: 0,
-        effectiveToolCount: 0,
-        effectiveWorkspace: params.workspaceDir,
-        localModelLeanEnabled: false,
-        sessionAgentId: "research",
+  it.each([
+    ["openclaw", true],
+    ["openclaw", false],
+    ["codex", true],
+    ["codex", false],
+  ] as const)(
+    "does not persist detached %s trajectory metadata (caller manager: %s)",
+    async (harness, suppliedManager) => {
+      const { params, run, expectNoAgent } = await createRun("detached");
+      const { prepareEmbeddedAttemptTrajectory } = await import("./run/attempt-trajectory.js");
+      runAttempt.mockImplementationOnce(async (attempt) => {
+        const recorder = await prepareEmbeddedAttemptTrajectory({
+          activeSession: { sessionId: attempt.sessionId },
+          attempt,
+          clientToolCount: 0,
+          effectiveToolCount: 0,
+          effectiveWorkspace: params.workspaceDir,
+          localModelLeanEnabled: false,
+          sessionAgentId: "research",
+        });
+        await recorder?.flush();
+        return successfulAttempt(params.sessionId);
       });
-      await recorder?.flush();
-      return successfulAttempt(params.sessionId);
-    });
-    await expect(run({ agentHarnessRuntimeOverride: "openclaw" })).resolves.toMatchObject(verified);
-    await expectNoAgent();
-  });
+      await expect(
+        run({
+          agentHarnessRuntimeOverride: harness,
+          sessionManager: suppliedManager ? params.sessionManager : undefined,
+        }),
+      ).resolves.toMatchObject(verified);
+      await expectNoAgent();
+    },
+  );
 
   it("does not spend the candidate deferral on a detached run before durable runs", async () => {
     const { params, scope, database, seed, run } = await createRun("detached");

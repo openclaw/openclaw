@@ -1,53 +1,78 @@
 // @vitest-environment node
 // One Gateway client owns question outcomes across chat panes and sidebar projections.
 import type { QuestionResolveResult } from "@openclaw/gateway-protocol";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  compactAnswer,
-  createQuestionHarness,
-  expectPrompt,
-  recordQuestionResolution,
-  requestQuestion as requestBaseQuestion,
-  type QuestionState,
-  type QuestionClient,
-  type RequestFn,
-} from "./question-prompt.test-support.ts";
-import {
   cancelQuestionPrompt,
+  createQuestionPromptState,
   disposeQuestionPromptState,
+  handleQuestionPromptEvent,
   refreshPendingQuestionsWithRetry,
   setQuestionPromptClient,
   submitQuestionPrompt,
 } from "./question-prompt.ts";
 
-const { createState: createBaseState } = createQuestionHarness();
-const createQuestionClient = (): QuestionClient => ({
-  request: vi.fn<RequestFn>(async (_method, params) =>
-    (params as { cancel?: boolean } | undefined)?.cancel
-      ? { status: "cancelled" }
-      : { status: "answered", answers: compactAnswer },
-  ),
-});
-function createState(client: QuestionClient, onChange: () => void = vi.fn()) {
-  const state = createBaseState(onChange);
-  setQuestionPromptClient(state, client);
-  return state;
+type QuestionState = ReturnType<typeof createQuestionPromptState>;
+type QuestionClient = {
+  request: (method: string, params?: unknown) => Promise<unknown>;
+};
+
+const states: QuestionState[] = [];
+
+function createQuestionClient(): QuestionClient {
+  return {
+    request: vi.fn(async (_method: string, params?: unknown) =>
+      (params as { cancel?: boolean } | undefined)?.cancel
+        ? ({ status: "cancelled" } satisfies QuestionResolveResult)
+        : ({
+            status: "answered",
+            answers: { answers: { format: ["Compact"] } },
+          } satisfies QuestionResolveResult),
+    ),
+  };
 }
+
 function requestQuestion(
   state: QuestionState,
   id = "question-1",
   expiresAtMs = Date.now() + 60_000,
-) {
-  requestBaseQuestion(state, { id, expiresAtMs }, false);
+): void {
+  handleQuestionPromptEvent(state, {
+    event: "question.requested",
+    payload: {
+      id,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      questions: [
+        {
+          questionId: "format",
+          header: "Format",
+          question: "Which format should I use?",
+          options: [{ label: "Compact" }, { label: "Detailed" }],
+        },
+      ],
+      createdAtMs: 1_000,
+      expiresAtMs,
+      status: "pending",
+    },
+  });
 }
+
 function connectQuestionState(
   client: QuestionClient,
   onChange: () => void = vi.fn(),
   expiresAtMs?: number,
-) {
+): QuestionState {
   const state = createState(client, onChange);
   requestQuestion(state, "question-1", expiresAtMs);
+  return state;
+}
+
+function createState(client: QuestionClient, onChange: () => void = vi.fn()): QuestionState {
+  const state = createQuestionPromptState(onChange);
+  states.push(state);
+  setQuestionPromptClient(state, client);
   return state;
 }
 
@@ -65,9 +90,18 @@ const resolutionCases = [
   },
 ] as const;
 
+afterEach(() => {
+  for (const state of states.splice(0)) {
+    disposeQuestionPromptState(state);
+  }
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
+
 describe("Gateway-client question outcome ownership", () => {
   it("publishes in-place prompt changes synchronously and releases subscribers", () => {
-    const state = createBaseState(() => {});
+    const state = createQuestionPromptState();
+    states.push(state);
     const observed: Array<{ status: string; revision: number }> = [];
     const stop = state.subscribe(() => {
       const prompt = state.prompts.get("question-1");
@@ -77,7 +111,10 @@ describe("Gateway-client question outcome ownership", () => {
     });
     requestQuestion(state);
     const prompt = state.prompts.get("question-1");
-    recordQuestionResolution(state, { id: "question-1", status: "cancelled" });
+    handleQuestionPromptEvent(state, {
+      event: "question.resolved",
+      payload: { id: "question-1", status: "cancelled" },
+    });
     expect(state.prompts.get("question-1")).toBe(prompt);
     expect(observed.map(({ status }) => status)).toEqual(["pending", "cancelled"]);
     expect(observed[1]!.revision).toBeGreaterThan(observed[0]!.revision);
@@ -162,7 +199,7 @@ describe("Gateway-client question outcome ownership", () => {
       });
       list.resolve({ questions: [stalePending] });
       await vi.waitFor(() =>
-        expectPrompt(hydrating, {
+        expect(hydrating.prompts.get("question-1")).toMatchObject({
           status,
           answeredElsewhere: status === "answered",
           localResolutionConfirmed: false,
@@ -189,7 +226,7 @@ describe("Gateway-client question outcome ownership", () => {
         }),
       };
       const submitter = connectQuestionState(client);
-      const answers = compactAnswer;
+      const answers = { answers: { format: ["Compact"] } };
       const terminalRecord = {
         ...submitter.prompts.get("question-1"),
         status,
@@ -209,7 +246,7 @@ describe("Gateway-client question outcome ownership", () => {
       list.resolve({ questions: [] });
 
       await vi.waitFor(() =>
-        expectPrompt(hydrating, {
+        expect(hydrating.prompts.get("question-1")).toMatchObject({
           status,
           answeredElsewhere: status === "answered",
           localResolutionConfirmed: false,
@@ -230,7 +267,7 @@ describe("Gateway-client question outcome ownership", () => {
 
     await submitQuestionPrompt(submitter, "question-1", { format: ["Compact"] });
 
-    expectPrompt(otherGateway, {
+    expect(otherGateway.prompts.get("question-1")).toMatchObject({
       status: "pending",
       localResolutionConfirmed: false,
     });
@@ -289,7 +326,9 @@ describe("Gateway-client question outcome ownership", () => {
       onSubmitterChange.mockClear();
       disposeQuestionPromptState(submitter);
       const result: QuestionResolveResult =
-        status === "answered" ? { status, answers: compactAnswer } : { status };
+        status === "answered"
+          ? { status, answers: { answers: { format: ["Compact"] } } }
+          : { status };
       pending.resolve(result);
 
       await submission;
@@ -297,7 +336,7 @@ describe("Gateway-client question outcome ownership", () => {
       expect(submitter.prompts.get("question-1")?.status).toBe("pending");
       expect(onSubmitterChange).not.toHaveBeenCalled();
       for (const projection of [peer, sidebar]) {
-        expectPrompt(projection, {
+        expect(projection.prompts.get("question-1")).toMatchObject({
           status,
           answeredElsewhere: status === "answered",
           localResolutionConfirmed: false,
@@ -322,12 +361,18 @@ describe("Gateway-client question outcome ownership", () => {
   it("purges a disposed answer and unmatched private outcome before attaching another Gateway", () => {
     const firstClient = createQuestionClient();
     const reused = connectQuestionState(firstClient);
-    recordQuestionResolution(reused, {
-      id: "question-1",
-      status: "answered",
-      answers: { answers: { format: ["Private account answer"] } },
+    handleQuestionPromptEvent(reused, {
+      event: "question.resolved",
+      payload: {
+        id: "question-1",
+        status: "answered",
+        answers: { answers: { format: ["Private account answer"] } },
+      },
     });
-    recordQuestionResolution(reused, { id: "private-unmatched-question", status: "cancelled" });
+    handleQuestionPromptEvent(reused, {
+      event: "question.resolved",
+      payload: { id: "private-unmatched-question", status: "cancelled" },
+    });
     disposeQuestionPromptState(reused);
 
     setQuestionPromptClient(reused, createQuestionClient());
@@ -340,9 +385,9 @@ describe("Gateway-client question outcome ownership", () => {
     const client = createQuestionClient();
     const submitter = connectQuestionState(client);
     const remounted = connectQuestionState(client);
-    recordQuestionResolution(remounted, {
-      id: "same-gateway-unmatched-question",
-      status: "cancelled",
+    handleQuestionPromptEvent(remounted, {
+      event: "question.resolved",
+      payload: { id: "same-gateway-unmatched-question", status: "cancelled" },
     });
     disposeQuestionPromptState(remounted);
     setQuestionPromptClient(remounted, client);
@@ -425,7 +470,7 @@ describe("Gateway-client question outcome ownership", () => {
     await vi.advanceTimersByTimeAsync(1_000);
 
     for (const projection of [pane, sidebar]) {
-      expectPrompt(projection, {
+      expect(projection.prompts.get("question-1")).toMatchObject({
         status: "expired",
         locallyExpired: true,
         submitting: false,

@@ -240,6 +240,8 @@ it("parses the QR bootstrap and extracts both baseline-issued role credentials",
     operator: { token: operatorToken, scopes: operatorScopes },
   });
   expect(credentials.client.instanceId).toBe(MOBILE_PAIRING_CLIENT.instanceId);
+  expect(credentials.operator.scopes).not.toContain("operator.pairing");
+  expect(credentials.operator.scopes).not.toContain("operator.admin");
 });
 
 it("accepts only the known node authority expansion for the mobile identity", () => {
@@ -311,6 +313,8 @@ it("completes legacy baseline node pairing only for the bootstrapped identity", 
   ];
   const inspect = (state: Parameters<typeof inspectBaselineNodePairing>[0]) =>
     inspectBaselineNodePairing(state, "device-1");
+  expect(inspect(states[1])).toEqual({ pendingRequestId: "request-1", paired: false });
+  expect(inspect(states[2])).toEqual({ pendingRequestId: null, paired: true });
   expect(() =>
     inspect({
       pending: [{ requestId: "request-other", nodeId: "device-2" }],

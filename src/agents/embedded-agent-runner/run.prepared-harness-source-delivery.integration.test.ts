@@ -47,6 +47,7 @@ import type {
   PreparedModelRuntimeLeaseOptions,
   PreparedModelRuntimePluginGeneration,
 } from "../prepared-model-runtime.types.js";
+import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { markCoreTtsAttemptResult } from "../tools/tts-tool-result-provenance.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -216,26 +217,45 @@ describe("prepared harness source delivery", () => {
     followupRun.run.config = {
       session: { store: path.join(state.sessionsDir(), "sessions.json") },
     };
+    const emittedStreamingCallbacks: string[] = [];
     const emitStreaming = async (params: {
       onPartialReply?: (payload: ReplyPayload) => unknown;
       onBlockReply?: (payload: ReplyPayload) => unknown;
-      extraSystemPrompt?: string;
-      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     }) => {
-      const toolOnly = testCase.preparedVisibleReplies === "message_tool";
-      expect(params.sourceReplyDeliveryMode).toBe(toolOnly ? "message_tool_only" : "automatic");
-      const automatic = "Your replies are automatically sent to this conversation";
-      const privateReply = "Normal final replies are private";
-      expect(params.extraSystemPrompt).toContain(toolOnly ? privateReply : automatic);
-      expect(params.extraSystemPrompt).not.toContain(toolOnly ? automatic : privateReply);
+      emittedStreamingCallbacks.push("partial");
       await params.onPartialReply?.({ text: finalText });
+      emittedStreamingCallbacks.push("block");
       await params.onBlockReply?.({ text: "Streaming progress" });
     };
     let forbiddenSdkAuthorityObserved = false;
+    let modelVisiblePrompt = "";
+    const recordModelVisiblePrompt = (attemptParams: {
+      extraSystemPrompt?: string;
+      forceMessageTool?: boolean;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    }) => {
+      modelVisiblePrompt = buildConfiguredAgentSystemPrompt({
+        workspaceDir: followupRun.run.workspaceDir,
+        reasoningTagHint: false,
+        extraSystemPrompt: attemptParams.extraSystemPrompt,
+        sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
+        runtimeInfo: {
+          host: "host",
+          os: "linux",
+          arch: "arm64",
+          node: "24",
+          model: "model",
+          channel: "discord",
+          chatType: "direct",
+        },
+        tools: attemptParams.forceMessageTool ? [{ name: "message" } as never] : [],
+      });
+    };
     mockedBuildEmbeddedRunPayloads.mockReturnValue(
       forgedTtsDelivery || genuineTtsDelivery ? [] : [{ text: finalText }],
     );
     mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams) => {
+      recordModelVisiblePrompt(attemptParams);
       await emitStreaming(attemptParams);
       return makeAttemptResult({ assistantTexts: [finalText] });
     });
@@ -324,6 +344,7 @@ describe("prepared harness source delivery", () => {
               ? { supported: true, priority: 200 }
               : { supported: false, reason: "prepared OpenAI route only" },
           runAttempt: vi.fn(async (attemptParams) => {
+            recordModelVisiblePrompt(attemptParams);
             await emitStreaming(attemptParams);
             const result = makeAttemptResult({
               assistantTexts: [],
@@ -485,7 +506,12 @@ describe("prepared harness source delivery", () => {
       expect(retainedHost).toBeDefined();
       expect(() => retainedHost?.assertActive()).toThrow("no longer active");
     }
+    expect(mockedGlobalHookRunner.runBeforeModelResolve).toHaveBeenCalledWith(
+      { prompt: "hello" },
+      expect.any(Object),
+    );
     const cliSucceeded = testCase.candidatePath === "embedded-failure-cli";
+    expect(emittedStreamingCallbacks).toEqual(cliSucceeded ? [] : ["partial", "block"]);
     expect(onPartialReply).toHaveBeenCalledTimes(expectedStreaming);
     expect(result.queuedFinal).toBe(expectedDeliveries === 1);
     expect(deliver).toHaveBeenCalledTimes(expectedDeliveries + expectedStreaming);
@@ -507,7 +533,13 @@ describe("prepared harness source delivery", () => {
       );
     } else {
       expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(deliver).not.toHaveBeenCalled();
     }
+    expect(dispatcher.getQueuedCounts()).toEqual({
+      tool: 0,
+      block: expectedStreaming,
+      final: expectedDeliveries,
+    });
     if (forgedTtsDelivery) {
       expect(forbiddenSdkAuthorityObserved).toBe(false);
     }
@@ -521,87 +553,83 @@ describe("prepared harness source delivery", () => {
         cliSessionBindingFacts: { sourceReplyDeliveryMode: "automatic" },
         sourceReplyDeliveryMode: "automatic",
       });
+    } else if (testCase.preparedVisibleReplies === "automatic") {
+      expect(modelVisiblePrompt).toContain("Current-session final text normally routes to source");
+      expect(modelVisiblePrompt).toContain(
+        "Your replies are automatically sent to this conversation",
+      );
+      expect(modelVisiblePrompt).not.toContain("Normal final replies are private");
+    } else {
+      expect(modelVisiblePrompt).toContain(
+        "Current source visible reply MUST use `message(action=send)`",
+      );
+      expect(modelVisiblePrompt).toContain("Normal final replies are private");
+      expect(modelVisiblePrompt).not.toContain(
+        "Your replies are automatically sent to this conversation",
+      );
     }
   });
 
-  it.each(["preparation hint", "runtime override"] as const)(
-    "prepares primary and fallback runtimes with %s",
-    async (selection) => {
-      const override = selection === "runtime override";
-      const { runEmbeddedAgent, registerPreparedAgentHarness } =
-        await loadSourceDeliveryHarness("worker");
-      if (!override) {
-        registerPreparedAgentHarness({
-          id: "fallback-owner",
-          label: "Fallback owner",
-          supports: ({ provider }) =>
-            provider === "custom" ? { supported: true } : { supported: false },
-          runAttempt: vi.fn(async () => ({}) as never),
-        });
-      }
-      mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
-      mockCompletedAttempt("primary");
+  it("prepares a Codex primary without pinning a plugin-owned fallback", async () => {
+    const { runEmbeddedAgent, registerPreparedAgentHarness } =
+      await loadSourceDeliveryHarness("worker");
+    registerPreparedAgentHarness({
+      id: "fallback-owner",
+      label: "Fallback owner",
+      supports: ({ provider }) =>
+        provider === "custom" ? { supported: true } : { supported: false },
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+    mockCompletedAttempt("primary");
 
-      const runId = override ? "authoritative-runtime-override" : "runtime-preparation-hint";
-      const runParams = {
-        agentId: "worker",
-        sessionId: runId,
-        runId,
-        workspaceDir: state.workspaceDir,
-        prompt: "hello",
-        timeoutMs: 30_000,
-        provider: "openai",
-        model: "gpt-5.4",
-        ...(override
-          ? { agentHarnessRuntimeOverride: "codex" }
-          : { agentHarnessRuntimePreparationHint: "codex" }),
-        modelFallbacksOverride: [override ? "custom/plugin-fallback" : "fast"],
-        config: override
-          ? undefined
-          : {
-              agents: {
-                entries: {
-                  main: {},
-                  worker: {
-                    models: {
-                      "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
-                      "custom/plugin-fallback": {
-                        alias: "fast",
-                        agentRuntime: { id: "fallback-owner" },
-                      },
-                    },
-                  },
-                },
-                defaults: {
-                  models: {
-                    "custom/global-fallback": { alias: "fast" },
-                  },
+    const runParams = {
+      agentId: "worker",
+      sessionId: "runtime-preparation-hint",
+      workspaceDir: state.workspaceDir,
+      prompt: "hello",
+      runId: "runtime-preparation-hint",
+      timeoutMs: 30_000,
+      provider: "openai",
+      model: "gpt-5.4",
+      agentHarnessRuntimePreparationHint: "codex",
+      modelFallbacksOverride: ["fast"],
+      config: {
+        agents: {
+          entries: {
+            main: {},
+            worker: {
+              models: {
+                "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
+                "custom/plugin-fallback": {
+                  alias: "fast",
+                  agentRuntime: { id: "fallback-owner" },
                 },
               },
             },
-      } satisfies RunEmbeddedAgentInternalParams;
-      if (runParams.config) {
-        const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
-        setRuntimeConfigSnapshot(runParams.config);
-      }
-      await runEmbeddedAgent(runParams);
-
-      expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtimePluginSelections: [
-            { provider: "openai", modelId: "gpt-5.4", runtime: "codex", agentId: "worker" },
-            {
-              provider: "custom",
-              modelId: "plugin-fallback",
-              agentId: "worker",
-              ...(override ? { runtime: "codex" } : {}),
+          },
+          defaults: {
+            models: {
+              "custom/global-fallback": { alias: "fast" },
             },
-          ],
-        }),
-        expect.any(Object),
-      );
-    },
-  );
+          },
+        },
+      },
+    } satisfies RunEmbeddedAgentInternalParams;
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    setRuntimeConfigSnapshot(runParams.config);
+    await runEmbeddedAgent(runParams);
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: [
+          { provider: "openai", modelId: "gpt-5.4", runtime: "codex", agentId: "worker" },
+          { provider: "custom", modelId: "plugin-fallback", agentId: "worker" },
+        ],
+      }),
+      expect.any(Object),
+    );
+  });
 
   it("completes an admitted turn on A after plugin-runtime generation B publishes", async () => {
     const { runEmbeddedAgent } = await loadSourceDeliveryHarness();
@@ -789,4 +817,42 @@ describe("prepared harness source delivery", () => {
       }
     },
   );
+
+  it("keeps the runtime override authoritative across fallback preparation", async () => {
+    const { runEmbeddedAgent } = await loadSourceDeliveryHarness("worker");
+    mockedGlobalHookRunner.hasHooks.mockReturnValue(false);
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "primary" }]);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({ assistantTexts: ["primary"] }),
+    );
+    useOpenAIPlatformAuthFixture();
+
+    await runEmbeddedAgent({
+      agentId: "worker",
+      sessionId: "authoritative-runtime-override",
+      workspaceDir: state.workspaceDir,
+      prompt: "hello",
+      runId: "authoritative-runtime-override",
+      timeoutMs: 30_000,
+      provider: "openai",
+      model: "gpt-5.4",
+      modelFallbacksOverride: ["custom/plugin-fallback"],
+      agentHarnessRuntimeOverride: "codex",
+    });
+
+    expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimePluginSelections: [
+          { provider: "openai", modelId: "gpt-5.4", runtime: "codex", agentId: "worker" },
+          {
+            provider: "custom",
+            modelId: "plugin-fallback",
+            runtime: "codex",
+            agentId: "worker",
+          },
+        ],
+      }),
+      expect.any(Object),
+    );
+  });
 });

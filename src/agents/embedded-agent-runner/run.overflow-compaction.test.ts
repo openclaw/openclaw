@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type {
@@ -43,8 +44,12 @@ const completionMocks = vi.hoisted(() => ({
   completeWithPreparedSimpleCompletionModel: vi.fn(),
   resolveSimpleCompletionSelectionForAgent: vi.fn(),
 }));
+const compactRuntimeMocks = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionOnDemand: vi.fn(),
+}));
+
 vi.mock("../simple-completion-runtime.js", () => completionMocks);
-vi.mock("./compact.runtime.js", () => ({ compactEmbeddedAgentSessionOnDemand: vi.fn() }));
+vi.mock("./compact.runtime.js", () => compactRuntimeMocks);
 
 const baseRunParams = {
   agentId: "main",
@@ -163,6 +168,7 @@ function recover(
 
 describe("compactEmbeddedRunForRecovery", () => {
   beforeEach(() => {
+    compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockReset();
     for (const mock of Object.values(completionMocks)) {
       mock.mockReset();
     }
@@ -225,6 +231,37 @@ describe("compactEmbeddedRunForRecovery", () => {
         promptCache,
       },
     });
+  });
+
+  it("lets delegated native timeout recovery use its progress-aware watchdog", async () => {
+    vi.useFakeTimers();
+    try {
+      compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockImplementationOnce(
+        (params: { compactionTimeoutReset?: () => void }) =>
+          new Promise((resolve) => {
+            setTimeout(() => params.compactionTimeoutReset?.(), 900);
+            setTimeout(() => resolve({ ok: true, compacted: false }), 1_100);
+          }),
+      );
+      const pending = recover(
+        {
+          runParams: {
+            ...baseRunParams,
+            config: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } },
+          },
+          contextEngine: makeContextEngine(delegateCompactionToRuntime, false),
+        },
+        { trigger: "timeout_recovery", diagId: "diag-timeout_recovery" },
+      );
+      const assertion = expect(pending).resolves.toMatchObject({
+        result: { ok: true, compacted: false },
+      });
+      await vi.advanceTimersByTimeAsync(1_100);
+      await assertion;
+      expect(compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not trust the active run fallback during recovery compaction", async () => {

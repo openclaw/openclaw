@@ -15,7 +15,6 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { issueProviderReviewAcknowledgment } from "../../../sessions/provider-review.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 
 const store = vi.hoisted(() => ({
@@ -42,15 +41,18 @@ vi.mock("../../../config/sessions/provider-review-store.js", () => ({
     return store.entry;
   },
 }));
-const model = makeProviderModelFixture<"openai-chatgpt-responses">({
+const model = {
   id: "test-model",
   name: "Test",
   provider: "openai",
   api: "openai-chatgpt-responses",
   baseUrl: "https://chatgpt.com/backend-api",
+  reasoning: false,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128000,
   maxTokens: 1000,
-}) satisfies Model<"openai-chatgpt-responses">;
+} satisfies Model<"openai-chatgpt-responses">;
 const context: Context = {
   systemPrompt: "Keep existing permissions.",
   messages: [
@@ -231,18 +233,12 @@ async function fixture(
       client_metadata: { ...clientMetadata },
     }),
   };
-  const start = (nextContext = context, overrides: NonNullable<Parameters<StreamFn>[2]> = {}) =>
-    stream(model, nextContext, { ...options, ...overrides });
-  const run = async (nextContext = context, overrides: NonNullable<Parameters<StreamFn>[2]> = {}) =>
-    (await start(nextContext, overrides)).result();
   return {
     requests,
     fetchMock,
     stream,
     createWrapper,
     options,
-    start,
-    run,
     revoke: () => {
       current = false;
     },
@@ -270,9 +266,11 @@ describe("explicit direct Responses continuation", () => {
       };
       const messages = convertToLlm([...context.messages, carrier]);
       const before = JSON.stringify(messages);
-      const stream = await f.start(
+      const stream = await f.stream(
+        model,
         { ...context, messages },
         {
+          ...f.options,
           onPayload: (payload: unknown) => {
             assertResponsesPayload(payload);
             return {
@@ -316,7 +314,7 @@ describe("explicit direct Responses continuation", () => {
     const messages = [...context.messages, carrier];
     const before = JSON.stringify(messages);
 
-    const result = await f.run({ ...context, messages });
+    const result = await (await f.stream(model, { ...context, messages }, f.options)).result();
 
     expect(result.stopReason).toBe("stop");
     expect(f.requests).toHaveLength(1);
@@ -332,7 +330,7 @@ describe("explicit direct Responses continuation", () => {
     async (transport) => {
       const f = await fixture(transport);
       const dormantWrapper = f.createWrapper();
-      const result = await f.run();
+      const result = await (await f.stream(model, context, f.options)).result();
       expect(result.stopReason).toBe("stop");
       expect(store.entry?.providerReview).toBeUndefined();
       expect(() => f.createWrapper()).toThrow("cannot start another transport attempt");
@@ -366,7 +364,7 @@ describe("explicit direct Responses continuation", () => {
           },
         ],
       };
-      await f.run(later);
+      await (await f.stream(model, later, f.options)).result();
       expect(f.requests).toHaveLength(2);
       expect(f.requests[1]?.client_metadata).toEqual(clientMetadata);
     },
@@ -376,22 +374,25 @@ describe("explicit direct Responses continuation", () => {
     "does not clear on a failed first %s event",
     async (transport) => {
       const f = await fixture(transport, [failed]);
-      expect((await f.run()).stopReason).toBe("error");
+      expect((await (await f.stream(model, context, f.options)).result()).stopReason).toBe("error");
       expectBlocked();
     },
   );
 
   it("revalidates after awaited payload hooks and websocket connection", async () => {
     const http = await fixture("sse");
-    await http.run(context, {
-      onPayload: async () => {
-        http.revoke();
-      },
-    });
+    await (
+      await http.stream(model, context, {
+        ...http.options,
+        onPayload: async () => {
+          http.revoke();
+        },
+      })
+    ).result();
     expect(http.requests).toHaveLength(0);
     const ws = await fixture("websocket");
     ws.onConnect(ws.revoke);
-    await ws.run();
+    await (await ws.stream(model, context, ws.options)).result();
     expect(ws.requests).toHaveLength(0);
     expectBlocked();
   });
@@ -400,7 +401,7 @@ describe("explicit direct Responses continuation", () => {
     const f = await fixture("auto", [
       { type: "error", code: "websocket_connection_limit_reached", message: "connection limit" },
     ]);
-    expect((await f.run()).stopReason).toBe("error");
+    expect((await (await f.stream(model, context, f.options)).result()).stopReason).toBe("error");
     expect(f.requests).toHaveLength(1);
     expect(f.fetchMock).not.toHaveBeenCalled();
     expectBlocked();
@@ -410,7 +411,7 @@ describe("explicit direct Responses continuation", () => {
     const f = await fixture("sse");
     const gate = acceptanceGate();
     const controller = new AbortController();
-    const stream = await f.start(context, { signal: controller.signal });
+    const stream = await f.stream(model, context, { ...f.options, signal: controller.signal });
     const result = stream.result();
     await gate.entered;
     controller.abort();
@@ -457,16 +458,20 @@ describe("explicit direct Responses continuation", () => {
         strategy,
       );
       const gate = acceptanceGate(true);
-      const stream = await f.start({
-        ...context,
-        tools: [
-          {
-            name: call.name,
-            description: "Record a synthetic result",
-            parameters: Type.Object({ result: Type.String() }),
-          },
-        ],
-      });
+      const stream = await f.stream(
+        model,
+        {
+          ...context,
+          tools: [
+            {
+              name: call.name,
+              description: "Record a synthetic result",
+              parameters: Type.Object({ result: Type.String() }),
+            },
+          ],
+        },
+        f.options,
+      );
       const delivered: string[] = [];
       const executionOpportunity = vi.fn();
       const drain = (async () => {
@@ -503,7 +508,7 @@ describe("explicit direct Responses continuation", () => {
     "uses the selected managed ChatGPT HTTP route (refused: %s)",
     async (refused) => {
       const f = await fixture("auto", refused ? [failed] : [created, completed], "managed");
-      const result = await f.run();
+      const result = await (await f.stream(model, context, f.options)).result();
       expect(result.stopReason).toBe(refused ? "error" : "stop");
       expect(f.fetchMock).toHaveBeenCalledTimes(1);
       expect(store.entry?.providerReview?.id).toBe(refused ? "review-1" : undefined);
@@ -548,7 +553,7 @@ describe("explicit direct Responses continuation", () => {
         };
       },
     };
-    expect((await f.run(context, options)).stopReason).toBe("error");
+    expect((await (await f.stream(model, context, options)).result()).stopReason).toBe("error");
     expect(f.fetchMock).toHaveBeenCalledTimes(1);
     expectBlocked();
   });
@@ -566,7 +571,8 @@ describe("explicit direct Responses continuation", () => {
       }
     };
     const caller = new AbortController();
-    const stream = await f.start(context, {
+    const stream = await f.stream(model, context, {
+      ...f.options,
       signal: caller.signal,
       timeoutMs: 1000,
     });
@@ -586,7 +592,8 @@ describe("explicit direct Responses continuation", () => {
       const f = await fixture("sse", [created, completed], strategy);
       const gate = acceptanceGate();
       const caller = new AbortController();
-      const stream = await f.start(context, { signal: caller.signal, firstEventTimeoutMs: 1000 });
+      const options = { ...f.options, signal: caller.signal, firstEventTimeoutMs: 1000 };
+      const stream = await f.stream(model, context, options);
       let settled = false;
       const result = stream.result().then((message) => {
         settled = true;
@@ -619,9 +626,11 @@ describe("explicit direct Responses continuation", () => {
           { role: "user", content: "Runtime context", timestamp: 3, runtimeContextCarrier: true },
         ]
       : context.messages;
-    const stream = await f.start(
+    const stream = await f.stream(
+      model,
       { ...context, messages },
       {
+        ...f.options,
         onPayload: (payload: unknown) => {
           assertResponsesPayload(payload);
           if (change === "model") {
@@ -671,7 +680,8 @@ describe("explicit direct Responses continuation", () => {
 
   it("preserves effective settings, tools, and history transforms while keeping the exact steer", async () => {
     const f = await fixture("sse");
-    const stream = await f.start(context, {
+    const stream = await f.stream(model, context, {
+      ...f.options,
       onPayload: (payload: unknown) => {
         if (!isRecord(payload) || !Array.isArray(payload.input) || !isRecord(payload.input[0])) {
           throw new Error("Fixture expected Responses user input");
@@ -709,7 +719,8 @@ describe("explicit direct Responses continuation", () => {
     await expect(
       f.stream({ ...model, api: "openai-responses" }, context, f.options),
     ).rejects.toThrow("runtime and model");
-    const stream = await f.start(context, {
+    const stream = await f.stream(model, context, {
+      ...f.options,
       onPayload: (payload: unknown) => ({
         ...(payload as Record<string, unknown>),
         client_metadata: { "x-codex-turn-metadata": "invalid" },
