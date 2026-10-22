@@ -54,18 +54,6 @@ struct ChatAssistantRunGroup: Identifiable {
         }.first
     }
 
-    /// Keep the current turn eager and premeasure nearby history before live-edge positioning.
-    /// Anchor the window to that turn, not the group count; appended tools cannot retire a reader's row.
-    static func eagerHistoryStart(_ groups: [Self], warming count: Int) -> Int {
-        let latestTurnIndex = groups.lastIndex { group in
-            group.parts.contains { part in
-                if case let .row(row) = part { return row.startsTurn }
-                return false
-            }
-        } ?? groups.lastIndex(where: \.includesLive) ?? groups.endIndex
-        return max(groups.startIndex, latestTurnIndex - count)
-    }
-
     /// ScrollViewReader resolves the lazy group's root, not an unmeasured nested row.
     static func scrollTargets(_ groups: [Self]) -> [UUID: ID] {
         groups.reduce(into: [:]) { targets, group in

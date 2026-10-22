@@ -613,13 +613,18 @@ private actor LocalFixtureChatStore {
         let longAnchorFixture = ProcessInfo.processInfo.arguments.contains("--openclaw-long-history-anchor-fixture")
         let anchorFixture = longAnchorFixture ||
             ProcessInfo.processInfo.arguments.contains("--openclaw-history-anchor-fixture")
-        if anchorFixture, offset > 0 { try await Task.sleep(for: .seconds(2)) }
+        if anchorFixture, offset > 0 {
+            let slow = ProcessInfo.processInfo.arguments.contains("--openclaw-history-page-delay-fixture")
+            try await Task.sleep(for: .seconds(slow ? 5 : 2))
+        }
+        // Older pages much taller than the first one, like tool output and code in real history.
+        let uneven = ProcessInfo.processInfo.arguments.contains("--openclaw-history-uneven-fixture")
         let messages = anchorFixture ? (0..<(longAnchorFixture ? 600 : 18)).map { index in
             Self.message(
                 role: index.isMultiple(of: 2) ? "user" : "assistant",
                 text: "HISTORY_ANCHOR_\(index): " + String(
                     repeating: "A readable history paragraph.\n\n",
-                    count: longAnchorFixture ? 1 + index % 4 : 4),
+                    count: uneven && index < 499 && index % 3 == 0 ? 40 : longAnchorFixture ? 1 + index % 4 : 4),
                 timestamp: Double(index + 1),
                 transcriptMessageID: longAnchorFixture ? "long-history-\(index)" : nil,
                 transcriptRunID: longAnchorFixture ? "long-history-run-\(index / 2)" : nil)

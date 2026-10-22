@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 enum ScrollFollowTarget: Equatable {
     case latest
@@ -92,6 +95,8 @@ final class ChatHistoryScrollGeometry {
     var pagingRowID: UUID?
     #if os(iOS)
     var nativeViewport: ChatNativePrependViewport?
+    /// The UIKit marker on the measured row; a landing follows its position.
+    weak var anchorMarker: UIView?
     #endif
 
     func validatedRow(in rows: [ChatTranscriptRow]) -> ChatScrollRowGeometry? {
@@ -127,7 +132,7 @@ struct ChatScrollHistoryRowModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         let contentSpace = self.geometry.contentSpace
-        return content.onGeometryChange(for: ChatScrollRowGeometry?.self) { proxy in
+        let measured = content.onGeometryChange(for: ChatScrollRowGeometry?.self) { proxy in
             guard self.rowID == (self.command.preserving?.targetID ?? self.geometry.pagingRowID ?? self.boundaryID)
             else { return nil }
             return ChatScrollRowGeometry(
@@ -137,11 +142,17 @@ struct ChatScrollHistoryRowModifier: ViewModifier {
         } action: { row in
             guard let row else { return }
             self.geometry.row = row
-            #if os(iOS)
-            self.geometry.nativeViewport?.update(row: row)
-            #endif
             if row.preservationID != nil { self.preservationGeometry = row }
         }
+        #if os(iOS)
+        let isMeasured = self.rowID ==
+            (self.command.preserving?.targetID ?? self.geometry.pagingRowID ?? self.boundaryID)
+        return measured.background {
+            if isMeasured { ChatPrependAnchorMarker(geometry: self.geometry, rowID: self.rowID) }
+        }
+        #else
+        return measured
+        #endif
     }
 }
 

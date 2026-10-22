@@ -83,6 +83,9 @@ public struct OpenClawChatView: View {
     @State private var searchMessageID: UUID?
     @State private var isSearchPresented = false
     @State private var transcriptMemo = ChatTranscriptPresentationMemo()
+    @State private var disclosureExpansion = ChatDisclosureExpansion()
+    /// A page request arrived while the last page was landing.
+    @State private var deferredPageRequest = false
     @State private var composerFocusRequest = 0
     #if os(macOS)
     @Environment(\.openClawChatWindowCommands) private var windowCommands
@@ -119,7 +122,6 @@ public struct OpenClawChatView: View {
     private let mediaPlaybackAllowed: @MainActor @Sendable () -> Bool
 
     private enum Layout {
-        static let eagerHistoryGroups = 8
         static let outerPaddingHorizontal: CGFloat = 6
         static let newTurnAnchor = UnitPoint(x: 0.5, y: 0.18)
         static let liveEdgeThreshold: CGFloat = 48
@@ -407,29 +409,27 @@ extension OpenClawChatView {
             liveRunID: liveRunIDs.count == 1 ? liveRunIDs.first : nil,
             hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
-        let eagerStartIndex = ChatAssistantRunGroup.eagerHistoryStart(groups, warming: Layout.eagerHistoryGroups)
         return ZStack {
             ScrollView {
-                // Native prepend preservation requires measured heights, not lazy estimates.
+                // Prepend preservation needs measured heights: a lazy stack re-estimates its rows when a page lands.
+                // One ForEach keeps every group's identity, and with it a fold the reader opened, as turns arrive.
                 VStack(spacing: self.isDesktopLayout ? 16 : Layout.messageSpacing) {
                     self.messageListHeader()
-                    if eagerStartIndex > groups.startIndex {
-                        self.messageListRows(groups: Array(groups[..<eagerStartIndex]), transcript: transcript)
-                    }
-                    VStack(spacing: self.isDesktopLayout ? 16 : Layout.messageSpacing) {
-                        self.messageListRows(groups: Array(groups[eagerStartIndex...]), transcript: transcript)
-                        OpenClawQuestionCards(viewModel: self.viewModel)
-                        if self.usesInlineProgressCard { self.progressCard }
-                        if !self.showsComposer, !self.viewModel.hasBlockingRunActivity { self.turnRecapRow }
-                        self.subagentWaitRow
-                        Color.clear
-                            #if os(macOS)
-                                .frame(height: Layout.messageListPaddingBottom)
-                            #else
-                                .frame(height: Layout.messageListPaddingBottom + 1)
-                            #endif
-                            .id(self.scrollerBottomID)
-                    }
+                    self.messageListRows(groups: groups, transcript: transcript)
+                    OpenClawQuestionCards(viewModel: self.viewModel)
+                    if self.usesInlineProgressCard { self.progressCard }
+                    if !self.showsComposer, !self.viewModel.hasBlockingRunActivity { self.turnRecapRow }
+                    self.subagentWaitRow
+                    #if DEBUG && os(iOS)
+                    ChatPrependFixtureTickingRow()
+                    #endif
+                    Color.clear
+                        #if os(macOS)
+                            .frame(height: Layout.messageListPaddingBottom)
+                        #else
+                            .frame(height: Layout.messageListPaddingBottom + 1)
+                        #endif
+                        .id(self.scrollerBottomID)
                 }
                 .padding(.top, self.isDesktopLayout ? 24 : Layout.messageListPaddingTop)
                 .frame(maxWidth: self.readingColumnWidth)
@@ -444,6 +444,7 @@ extension OpenClawChatView {
                 #endif
             }
             .scrollPosition(self.$scrollPosition)
+            .environment(\.openClawDisclosureExpansion, self.disclosureExpansion)
             .accessibilityIdentifier("chat-transcript")
             #if !os(macOS)
             .scrollDismissesKeyboard(.interactively)
@@ -561,6 +562,8 @@ extension OpenClawChatView {
 
     private func handleSessionTargetChange() {
         self.speech?.stop()
+        self.disclosureExpansion.reset()
+        self.deferredPageRequest = false
         #if os(iOS)
         self.historyScrollGeometry.nativeViewport?.cancel()
         #endif
@@ -649,6 +652,9 @@ extension OpenClawChatView {
                     boundaryID: self.transcriptPresentation.historyAnchorID,
                     geometry: self.historyScrollGeometry,
                     preservationGeometry: self.$scrollCommand.historyGeometry))
+                #if DEBUG && os(iOS)
+                .modifier(ChatPrependFixtureLateGrowth())
+                #endif
         case let .tool(tool):
             ChatToolActivityList(items: [ChatToolActivityItem(live: tool)])
                 .padding(4)
@@ -1171,9 +1177,14 @@ extension OpenClawChatView {
         if chatReaderScrollReleasesFollow(phase) {
             self.readerInteractionRevision &+= 1
             #if os(iOS)
-            self.historyScrollGeometry.nativeViewport?.cancel()
-            #endif
+            // A pending landing keeps its row: the correction follows that row, not the offset.
+            if self.historyScrollGeometry.nativeViewport?.isPending != true {
+                self.historyScrollGeometry.nativeViewport?.cancel()
+                self.historyScrollGeometry.pagingRowID = nil
+            }
+            #else
             self.historyScrollGeometry.pagingRowID = nil
+            #endif
             self.scrollCommand.cancel()
             self.scrollPosition = ScrollPosition(idType: UUID.self)
             self.isUserScrolling = true
@@ -1199,7 +1210,11 @@ extension OpenClawChatView {
 
     private func loadEarlierHistory(isExplicit: Bool = false) {
         #if os(iOS)
-        guard self.historyScrollGeometry.nativeViewport?.isPreserving != true else { return }
+        // The last page is still landing: a new capture would drop the reader's row before its layout.
+        guard self.historyScrollGeometry.nativeViewport?.isPending != true else {
+            self.deferredPageRequest = true
+            return
+        }
         #endif
         guard self.viewModel.hasEarlierHistory,
               !self.viewModel.isLoadingEarlierHistory
@@ -1217,24 +1232,37 @@ extension OpenClawChatView {
         let readingRow = self.historyScrollGeometry.validatedRow(in: historyRows)
         #if os(iOS)
         let nativeViewport = self.historyScrollGeometry.nativeViewport
-        nativeViewport?.capture(row: readingRow)
+        nativeViewport?.capture()
         #endif
         let (firstRowID, offsetFromRow) = self.historyScrollGeometry
             .preserve(readingRow?.targetID ?? historyAnchorID)
         Task { @MainActor in
             let loaded = await self.viewModel.loadEarlierHistory()
             #if os(iOS)
-            if loaded, self.viewModel.currentSessionTarget == target,
-               self.readerInteractionRevision == interactionRevision,
-               let nativeViewport, nativeViewport.pageArrived(afterLayout: {
-                   // Finish this page's correction before capturing the next page's baseline.
-                   guard self.viewModel.currentSessionTarget == target,
-                         self.readerInteractionRevision == interactionRevision,
-                         !self.isUserScrolling, self.followTarget == nil, self.searchMessageID == nil,
-                         self.transcriptPresentation.historyAnchorID == historyAnchorID
-                   else { return }
-                   self.loadEarlierHistory()
-               })
+            #if DEBUG
+            if loaded {
+                ChatPrependFixture.pageLanded = true
+                if ChatPrependFixture.landingStallMs > 0 { usleep(UInt32(ChatPrependFixture.landingStallMs) * 1000) }
+            }
+            #endif
+            // A page that projects no rows has nothing to land: continue to the next one.
+            // A scroll during the request does not cancel a landing: it follows the reader's row.
+            if loaded, self.viewModel.currentSessionTarget == target, self.transcriptPresentation.rows != historyRows,
+               let nativeViewport, nativeViewport.pageArrived(
+                   anchor: self.historyScrollGeometry.anchorMarker,
+                   landed: { atTop in
+                       let deferred = self.deferredPageRequest
+                       self.deferredPageRequest = false
+                       // Continue past a page that only added work above the unchanged first message, and for
+                       // a reader who reached the top and asked for more while this page landed.
+                       let unchanged = self.transcriptPresentation.historyAnchorID == historyAnchorID &&
+                           self.readerInteractionRevision == interactionRevision
+                       guard unchanged || (deferred && atTop),
+                             self.viewModel.currentSessionTarget == target, !self.isUserScrolling,
+                             self.followTarget == nil, self.searchMessageID == nil
+                       else { return }
+                       self.loadEarlierHistory()
+                   })
             {
                 return
             }

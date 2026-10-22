@@ -2,64 +2,94 @@
 import SwiftUI
 import UIKit
 
-/// Adjusts the actual viewport in the same layout pass as a fully measured prepend.
+/// Holds the reader's row in place while an older page lands above it.
+/// The correction follows that row's own position: rows that finish sizing after the page lands are
+/// followed, and a first size change that was not the prepend (a live row below) is undone once the
+/// row is seen not to have moved.
 @MainActor
 final class ChatNativePrependViewport: NSObject {
     private weak var scrollView: UIScrollView?
+    /// Its marker is the reader's row's current one: SwiftUI can rebuild the row's views while the page lands.
+    weak var anchorSource: ChatHistoryScrollGeometry?
     private var sizeObservation: NSKeyValueObservation?
-    private var baseline: (row: ChatScrollRowGeometry, offset: CGFloat)?
-    private var row: ChatScrollRowGeometry?
-    private var ready = false
-    private var completionFrame: CADisplayLink?
-    private var waitsForFirstLayout = false
-    private var afterLayout: (() -> Void)?
+    /// From the page request until its landing settles. A user scroll does not end it:
+    /// the correction moves the offset by the anchor's movement only, so a scroll is kept.
+    private(set) var isPending = false
+    private var landing: Landing?
+    private var frameLink: CADisplayLink?
+
+    private struct Landing {
+        weak var anchor: UIView?
+        /// The followed row; a rebuilt marker is taken up only for this row.
+        let rowID: UUID?
+        let baseSize: CGFloat
+        let baseOffset: CGFloat
+        let start: CFTimeInterval
+        var lastSize: CGFloat
+        /// The anchor's content y that the current offset already accounts for.
+        var heldAnchorY: CGFloat?
+        /// The anchor's y before the page. SwiftUI sets the content size before it moves the rows,
+        /// and the row's old view can stay at this y for a frame; the row cannot return there.
+        var staleAnchorY: CGFloat?
+        var awaitsPrepend = true
+        var stableSince: CFTimeInterval
+        var lastTick: CFTimeInterval
+        /// Frames the row has read at its pre-page position since the size correction.
+        var staleFrames = 0
+        let landed: ((_ atTop: Bool) -> Void)?
+
+        func isStale(_ anchorY: CGFloat) -> Bool {
+            self.staleAnchorY.map { abs(anchorY - $0) <= 0.25 } ?? false
+        }
+    }
 
     func attach(to scrollView: UIScrollView) {
         guard self.scrollView !== scrollView else { return }
         self.cancel()
         self.scrollView = scrollView
         self.sizeObservation = scrollView.observe(\.contentSize, options: [.new]) { [weak self] _, _ in
-            MainActor.assumeIsolated { self?.applyIfReady() }
+            MainActor.assumeIsolated { self?.sizeChanged() }
         }
     }
 
-    var isPreserving: Bool {
-        self.baseline != nil
-    }
-
-    func capture(row: ChatScrollRowGeometry?) {
+    func capture() {
         self.cancel()
-        guard let scrollView, let row else { return }
-        self.baseline = (row, scrollView.contentOffset.y)
-        self.row = row
+        self.isPending = self.scrollView != nil
     }
 
-    func update(row: ChatScrollRowGeometry) {
-        guard row.targetID == self.baseline?.row.targetID else { return }
-        self.row = row
-        self.applyIfReady()
-    }
-
-    func pageArrived(afterLayout: (() -> Void)? = nil) -> Bool {
-        guard self.baseline != nil, self.scrollView?.window != nil else {
+    /// Starts following `anchor`, the reader's row, through the page's layout.
+    /// `landed` runs when the landing settles on its own, not when it is cancelled, with whether the
+    /// reader is at the top of the content.
+    func pageArrived(anchor: UIView?, landed: ((_ atTop: Bool) -> Void)? = nil) -> Bool {
+        guard self.isPending, let scrollView, scrollView.window != nil else {
             self.cancel()
             return false
         }
-        self.afterLayout = afterLayout
-        self.ready = true
-        self.waitsForFirstLayout = true
-        self.applyIfReady()
+        let now = CACurrentMediaTime()
+        let height = scrollView.contentSize.height
+        let anchorY = self.contentY(of: anchor)
+        self.landing = Landing(
+            anchor: anchorY == nil ? nil : anchor,
+            rowID: (anchor as? ChatPrependAnchorMarker.MarkerView)?.rowID,
+            baseSize: height,
+            baseOffset: scrollView.contentOffset.y,
+            start: now,
+            lastSize: height,
+            heldAnchorY: anchorY,
+            stableSince: now,
+            lastTick: now,
+            landed: landed)
+        let link = CADisplayLink(target: self, selector: #selector(self.frameTick))
+        self.frameLink = link
+        link.add(to: .main, forMode: .common)
         return true
     }
 
     func cancel() {
-        self.afterLayout = nil
-        self.baseline = nil
-        self.row = nil
-        self.ready = false
-        self.waitsForFirstLayout = false
-        self.completionFrame?.invalidate()
-        self.completionFrame = nil
+        self.isPending = false
+        self.landing = nil
+        self.frameLink?.invalidate()
+        self.frameLink = nil
     }
 
     func detach() {
@@ -68,34 +98,110 @@ final class ChatNativePrependViewport: NSObject {
         self.scrollView = nil
     }
 
-    private func applyIfReady() {
-        guard self.ready, let baseline, let row, let scrollView else { return }
-        if row.contentMinY != baseline.row.contentMinY { self.waitsForFirstLayout = false }
-        // Only this row's displacement belongs to the prepend; live output below it does not.
-        let offset = baseline.offset + row.contentMinY - baseline.row.contentMinY
-        if abs(scrollView.contentOffset.y - offset) > 0.25 {
-            UIView.performWithoutAnimation {
-                scrollView.setContentOffset(CGPoint(x: scrollView.contentOffset.x, y: offset), animated: false)
-            }
+    private func contentY(of view: UIView?) -> CGFloat? {
+        guard let view, let scrollView, view.window != nil, view.isDescendant(of: scrollView) else { return nil }
+        return view.convert(CGPoint.zero, to: scrollView).y
+    }
+
+    private func shift(by delta: CGFloat) {
+        guard let scrollView, abs(delta) > 0.25 else { return }
+        // Past the top edge the rubber band is transient: UIKit springs it back. Once the page gives
+        // it content to land on, that spring is gone and the overscroll would stay, so finish it here.
+        let overscroll = -scrollView.adjustedContentInset.top - scrollView.contentOffset.y
+        UIView.performWithoutAnimation {
+            scrollView.contentOffset.y += delta
         }
-        if self.completionFrame == nil {
-            let frame = CADisplayLink(target: self, selector: #selector(self.finishFrame))
-            self.completionFrame = frame
-            frame.add(to: .main, forMode: .common)
+        if overscroll > 0.5, !scrollView.isDragging {
+            scrollView.setContentOffset(
+                CGPoint(x: scrollView.contentOffset.x, y: scrollView.contentOffset.y + overscroll), animated: true)
         }
     }
 
-    @objc private func finishFrame() {
-        self.applyIfReady()
-        // An unchanged first sample can precede SwiftUI's page layout.
-        // Give that layout its frame, then also release a true zero-height prepend.
-        if self.waitsForFirstLayout {
-            self.waitsForFirstLayout = false
+    /// The page's own layout pass. Correct before that frame is drawn: by the anchor if its
+    /// position is already updated, else once by the size change, which the next frame checks.
+    private func sizeChanged() {
+        guard var landing = self.landing, let scrollView else { return }
+        let height = scrollView.contentSize.height
+        let sizeDelta = height - landing.lastSize
+        landing.lastSize = height
+        self.landing = landing
+        guard landing.heldAnchorY != nil else {
+            // No anchor row to follow: the size delta is the whole correction.
+            let target = landing.baseOffset + height - landing.baseSize
+            self.shift(by: target - scrollView.contentOffset.y)
+            self.landing?.awaitsPrepend = false
             return
         }
-        let afterLayout = self.afterLayout
+        if let anchorY = self.contentY(of: landing.anchor), let held = landing.heldAnchorY, abs(anchorY - held) > 0.25,
+           !landing.isStale(anchorY)
+        {
+            self.shift(by: anchorY - held)
+            self.landing?.heldAnchorY = anchorY
+            self.landing?.awaitsPrepend = false
+        } else if landing.awaitsPrepend, sizeDelta != 0 {
+            self.shift(by: sizeDelta)
+            self.landing?.heldAnchorY = landing.heldAnchorY.map { $0 + sizeDelta }
+            self.landing?.staleAnchorY = landing.heldAnchorY
+            self.landing?.awaitsPrepend = false
+        }
+    }
+
+    @objc private func frameTick() {
+        guard var landing = self.landing, let scrollView else {
+            self.cancel()
+            return
+        }
+        let now = CACurrentMediaTime()
+        let age = now - landing.start
+        // Stability needs observed frames: after a main-thread stall, rows can still be about to grow.
+        if now - landing.lastTick > 0.1 { landing.stableSince = now }
+        landing.lastTick = now
+        guard let held = landing.heldAnchorY else {
+            // Size-only landing: the first size change is applied in the same pass; one more frame settles it.
+            if !landing.awaitsPrepend || age > 1 { self.finish() }
+            return
+        }
+        let current = self.contentY(of: landing.anchor)
+        if current.map(landing.isStale) ?? true, let marker = self.anchorSource?.anchorMarker,
+           marker !== landing.anchor, landing.rowID != nil,
+           (marker as? ChatPrependAnchorMarker.MarkerView)?.rowID == landing.rowID,
+           let markerY = self.contentY(of: marker), !landing.isStale(markerY)
+        {
+            // A rebuilt row: its new marker has been through layout by this frame.
+            landing.anchor = marker
+        }
+        guard let anchorY = self.contentY(of: landing.anchor) else {
+            self.finish()
+            return
+        }
+        if landing.isStale(anchorY) {
+            // The old view usually reads its pre-page position for a frame before it moves or is replaced.
+            // Still there after three frames, the row has not moved: the size change was not the prepend.
+            landing.staleFrames += 1
+            guard landing.staleFrames >= 3 else {
+                self.landing = landing
+                return
+            }
+            landing.staleAnchorY = nil
+        }
+        if abs(anchorY - held) > 0.25 {
+            self.shift(by: anchorY - held)
+            landing.awaitsPrepend = false
+            landing.stableSince = now
+        }
+        landing.heldAnchorY = anchorY
+        self.landing = landing
+        let visible = scrollView.bounds.insetBy(dx: 0, dy: -scrollView.bounds.height)
+        let offscreen = !landing.awaitsPrepend && !visible.contains(CGPoint(x: visible.midX, y: anchorY))
+        let stable = !landing.awaitsPrepend && age > 0.6 && now - landing.stableSince > 0.3
+        if offscreen || stable || age > 3 { self.finish() }
+    }
+
+    private func finish() {
+        let landed = self.landing?.landed
+        let atTop = self.scrollView.map { $0.contentOffset.y <= -$0.adjustedContentInset.top + 1 } ?? false
         self.cancel()
-        afterLayout?()
+        landed?(atTop)
     }
 }
 
@@ -138,6 +244,7 @@ struct ChatNativePrependProbe: UIViewRepresentable {
             while let view = ancestor {
                 if let scrollView = view as? UIScrollView {
                     self.viewport.attach(to: scrollView)
+                    self.viewport.anchorSource = self.geometry
                     self.geometry?.nativeViewport = self.viewport
                     return
                 }
@@ -146,4 +253,83 @@ struct ChatNativePrependProbe: UIViewRepresentable {
         }
     }
 }
+
+/// Marks the top of the reader's row as a UIKit view, so a landing reads its position in the
+/// same layout pass as the scroll view's content size.
+struct ChatPrependAnchorMarker: UIViewRepresentable {
+    let geometry: ChatHistoryScrollGeometry
+    let rowID: UUID
+
+    func makeUIView(context: Context) -> MarkerView {
+        let view = MarkerView()
+        view.isUserInteractionEnabled = false
+        view.geometry = self.geometry
+        view.rowID = self.rowID
+        return view
+    }
+
+    func updateUIView(_ view: MarkerView, context: Context) {
+        view.geometry = self.geometry
+        view.rowID = self.rowID
+        if view.window != nil { self.geometry.anchorMarker = view }
+    }
+
+    static func dismantleUIView(_ view: MarkerView, coordinator: ()) {
+        if view.geometry?.anchorMarker === view { view.geometry?.anchorMarker = nil }
+    }
+
+    final class MarkerView: UIView {
+        weak var geometry: ChatHistoryScrollGeometry?
+        var rowID: UUID?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            if self.window != nil {
+                self.geometry?.anchorMarker = self
+            } else if self.geometry?.anchorMarker === self {
+                self.geometry?.anchorMarker = nil
+            }
+        }
+    }
+}
+
+#if DEBUG
+/// UI-test fixtures for history landings. Inert without their launch arguments.
+enum ChatPrependFixture {
+    private static let arguments = ProcessInfo.processInfo.arguments
+    static let landingStallMs = Self.arguments.contains("--openclaw-history-landing-stall-fixture") ? 2500 : 0
+    static let lateGrowth = Self.arguments.contains("--openclaw-history-late-growth-fixture")
+    static let tickingTail = Self.arguments.contains("--openclaw-history-ticking-tail-fixture")
+    nonisolated(unsafe) static var pageLanded = false
+}
+
+/// Rows of a landed page grow 0.4 s after they appear, like an image or preview finishing.
+struct ChatPrependFixtureLateGrowth: ViewModifier {
+    @State private var grown = false
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.bottom, self.grown ? 60 : 0)
+            .task {
+                guard ChatPrependFixture.lateGrowth, ChatPrependFixture.pageLanded else { return }
+                try? await Task.sleep(for: .milliseconds(400))
+                self.grown = true
+            }
+    }
+}
+
+/// A row below the reader that keeps changing height, like a live working row.
+struct ChatPrependFixtureTickingRow: View {
+    var body: some View {
+        if ChatPrependFixture.tickingTail {
+            TimelineView(.periodic(from: .now, by: 0.5)) { context in
+                let ticks = Int(context.date.timeIntervalSinceReferenceDate * 2)
+                Color.gray.opacity(0.2)
+                    .frame(height: 20 + CGFloat(ticks % 20 * 200))
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+#endif
 #endif

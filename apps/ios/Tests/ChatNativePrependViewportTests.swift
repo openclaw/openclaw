@@ -4,77 +4,112 @@ import XCTest
 
 @MainActor
 final class ChatNativePrependViewportTests: XCTestCase {
-    func testLayoutCompletionCorrectsBeforeReleasingAndContinuing() {
+    private var window: UIWindow!
+    private var scrollView: UIScrollView!
+    private var anchor: UIView!
+    private var viewport: ChatNativePrependViewport!
+
+    override func setUp() async throws {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let controller = UIViewController()
         window.rootViewController = controller
         window.isHidden = false
         let scrollView = UIScrollView(frame: window.bounds)
         controller.view.addSubview(scrollView)
+        scrollView.contentSize = CGSize(width: 390, height: 3000)
+        scrollView.contentOffset = CGPoint(x: 0, y: 300)
+        let anchor = UIView(frame: CGRect(x: 0, y: 400, width: 1, height: 1))
+        scrollView.addSubview(anchor)
         let viewport = ChatNativePrependViewport()
         viewport.attach(to: scrollView)
-        defer {
-            viewport.detach()
-            window.isHidden = true
-        }
-        // Drive the actual display-link selector deterministically, without waiting for screen refresh.
-        let finishFrame = NSSelectorFromString("finishFrame")
-        XCTAssertTrue(viewport.responds(to: finishFrame))
-        for displacement in [CGFloat(0), CGFloat(1000)] {
-            scrollView.contentSize = CGSize(width: 390, height: 3000)
-            scrollView.contentOffset = CGPoint(x: 0, y: 300)
-            let rowID = UUID()
-            viewport.capture(row: ChatScrollRowGeometry(targetID: rowID, preservationID: nil, contentMinY: 400))
-            var continued = false
-            XCTAssertTrue(viewport.pageArrived(afterLayout: {
-                XCTAssertFalse(viewport.isPreserving, "Release must precede the next capture")
-                XCTAssertEqual(scrollView.contentOffset.y, 300 + displacement, "Correct before continuing")
-                continued = true
-            }))
-            XCTAssertFalse(continued)
-            if displacement == 0 {
-                _ = viewport.perform(finishFrame)
-                XCTAssertTrue(viewport.isPreserving, "An unchanged sample gets the first-layout grace frame")
-                XCTAssertFalse(continued)
-            } else {
-                viewport.update(row: ChatScrollRowGeometry(
-                    targetID: rowID, preservationID: nil, contentMinY: 400 + displacement))
-                XCTAssertEqual(scrollView.contentOffset.y, 300 + displacement)
-                XCTAssertTrue(viewport.isPreserving)
-                XCTAssertFalse(continued)
-            }
-            _ = viewport.perform(finishFrame)
-            XCTAssertTrue(continued)
-            XCTAssertFalse(viewport.isPreserving)
-        }
+        (self.window, self.scrollView, self.anchor, self.viewport) = (window, scrollView, anchor, viewport)
     }
 
-    func testPrependIgnoresReplyGrowthBelowReadingRow() {
-        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
-        let controller = UIViewController()
-        window.rootViewController = controller
-        window.isHidden = false
-        let scrollView = UIScrollView(frame: window.bounds)
-        controller.view.addSubview(scrollView)
-        let viewport = ChatNativePrependViewport()
-        viewport.attach(to: scrollView)
-        defer {
-            viewport.detach()
-            window.isHidden = true
+    override func tearDown() async throws {
+        self.viewport.detach()
+        self.window.isHidden = true
+    }
+
+    /// Drives the display-link selector deterministically, without waiting for a screen refresh.
+    private func tick() {
+        _ = self.viewport.perform(NSSelectorFromString("frameTick"))
+    }
+
+    private var landedCount = 0
+
+    private func land() {
+        self.viewport.capture()
+        XCTAssertTrue(self.viewport.pageArrived(anchor: self.anchor) { _ in self.landedCount += 1 })
+    }
+
+    func testPrependCorrectsInTheLayoutPassAndFollowsTheRow() {
+        self.land()
+        // SwiftUI sets the content size before it moves the rows: the size change is applied at once.
+        self.scrollView.contentSize.height += 1000
+        XCTAssertEqual(self.scrollView.contentOffset.y, 1300)
+        self.anchor.frame.origin.y = 1400
+        self.tick()
+        XCTAssertEqual(self.scrollView.contentOffset.y, 1300, "The row arrived where the size change put it")
+        // A row above that finishes sizing later is followed by the row's own movement.
+        self.anchor.frame.origin.y = 1460
+        self.tick()
+        XCTAssertEqual(self.scrollView.contentOffset.y, 1360)
+        XCTAssertTrue(self.viewport.isPending)
+    }
+
+    func testStaleRowPositionInTheSamePassDoesNotUndoTheCorrection() {
+        self.land()
+        self.scrollView.contentSize.height += 1000
+        // A second size change in the same pass still reads the row at its pre-page position.
+        self.scrollView.contentSize.height += 1
+        XCTAssertEqual(self.scrollView.contentOffset.y, 1300)
+        self.tick()
+        XCTAssertEqual(self.scrollView.contentOffset.y, 1300, "The old view is waited out, not followed back")
+        self.anchor.frame.origin.y = 1400
+        self.tick()
+        XCTAssertEqual(self.scrollView.contentOffset.y, 1300)
+    }
+
+    func testGrowthBelowTheRowDoesNotMoveTheReader() {
+        self.land()
+        self.scrollView.contentSize.height += 1000
+        self.anchor.frame.origin.y = 1400
+        self.tick()
+        // A live row below the reader grows: the row does not move, so neither does the reader.
+        self.scrollView.contentSize.height += 500
+        self.tick()
+        XCTAssertEqual(self.scrollView.contentOffset.y, 1300)
+    }
+
+    func testGrowthBelowBeforeThePageIsUndoneWhenTheRowDoesNotMove() {
+        self.land()
+        // A live row below grows before the page's rows move: the first size change looks like the prepend.
+        self.scrollView.contentSize.height += 200
+        XCTAssertEqual(self.scrollView.contentOffset.y, 500)
+        for _ in 0..<3 {
+            self.tick()
         }
-        let rowID = UUID()
-        for growsBeforePage in [true, false] {
-            scrollView.contentSize = CGSize(width: 390, height: 2000)
-            scrollView.contentOffset = CGPoint(x: 0, y: 300)
-            viewport.capture(row: ChatScrollRowGeometry(targetID: rowID, preservationID: nil, contentMinY: 400))
-            if growsBeforePage { scrollView.contentSize.height += 200 }
-            XCTAssertTrue(viewport.pageArrived())
-            if !growsBeforePage { scrollView.contentSize.height += 200 }
-            XCTAssertEqual(scrollView.contentOffset.y, 300, "Tail growth alone must not move the reader")
-            scrollView.contentSize.height += 1000
-            viewport.update(row: ChatScrollRowGeometry(targetID: rowID, preservationID: nil, contentMinY: 1400))
-            XCTAssertEqual(scrollView.contentOffset.y, 1300, "Only the 1000-point prepend belongs above the row")
-            viewport.cancel()
-        }
+        XCTAssertEqual(self.scrollView.contentOffset.y, 300, "The row never moved, so the reader must not either")
+        // The page then lands and is followed by the row's own movement.
+        self.anchor.frame.origin.y = 1400
+        self.tick()
+        XCTAssertEqual(self.scrollView.contentOffset.y, 1300)
+    }
+
+    func testLandingThatSettlesReportsSoPagingContinues() {
+        self.land()
+        self.scrollView.contentSize.height += 1000
+        self.anchor.removeFromSuperview()
+        self.tick()
+        XCTAssertFalse(self.viewport.isPending)
+        XCTAssertEqual(self.landedCount, 1)
+    }
+
+    func testCancelledLandingDoesNotReport() {
+        self.land()
+        self.viewport.cancel()
+        XCTAssertFalse(self.viewport.isPending)
+        self.tick()
+        XCTAssertEqual(self.landedCount, 0)
     }
 }

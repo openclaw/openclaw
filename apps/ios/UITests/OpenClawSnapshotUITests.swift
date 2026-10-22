@@ -1274,6 +1274,33 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.attachScreenshot(named: "completed-work-collapsed-again")
     }
 
+    /// A fold the reader opened stays open as later turns arrive and the transcript's groups shift.
+    func testOpenedCompletedWorkStaysOpenAcrossNewTurns() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-long-chat-fixture"])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"].waitForExistence(timeout: 8))
+        let work = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Worked")).firstMatch
+        XCTAssertTrue(work.waitForExistence(timeout: 5))
+        work.tap()
+        let earlier = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "Earlier response context.")).firstMatch
+        XCTAssertTrue(earlier.waitForExistence(timeout: 5))
+        let input = self.chatMessageInput(in: app)
+        for turn in 1...5 {
+            self.waitForEnabled(input)
+            input.tap()
+            input.typeText("FOLD_TURN_\(turn)")
+            app.buttons["chat-send-message"].tap()
+            let reply = app.staticTexts.matching(NSPredicate(
+                format: "label CONTAINS %@ AND label CONTAINS %@", "I can help with", "FOLD_TURN_\(turn)")).firstMatch
+            XCTAssertTrue(reply.waitForExistence(timeout: 8))
+        }
+        self.attachScreenshot(named: "completed-work-open-after-new-turns")
+        XCTAssertTrue(earlier.exists, "Five new turns must not collapse the work the reader opened")
+    }
+
     func testManualReaderDoesNotJumpDuringToolStream() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
@@ -2928,9 +2955,10 @@ extension OpenClawSnapshotUITests {
 
 extension OpenClawSnapshotUITests {
     func testLongHistoryPrependPreservesReaderAndTrueLatest() throws {
+        // The 5 s page keeps the before-checks ahead of the landing: queries slow down while a page is pending.
         self.launchApp(
             for: Self.chatScreenshotTarget,
-            additionalArguments: ["--openclaw-long-history-anchor-fixture"])
+            additionalArguments: ["--openclaw-long-history-anchor-fixture", "--openclaw-history-page-delay-fixture"])
         let app = try XCTUnwrap(self.app)
         let transcript = try self.chatTranscript(in: app)
         let latest = app.staticTexts.matching(
@@ -2953,7 +2981,8 @@ extension OpenClawSnapshotUITests {
             let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
                 !earlier.exists || earlier.isEnabled
             }, object: earlier)
-            XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 8), .completed)
+            // The 5 s page plus the layout of up to 300 measured rows on a loaded simulator.
+            XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 15), .completed)
             self.attachScreenshot(named: "long-history-after-prepend-\(boundaryIndex)")
             XCTAssertTrue(
                 boundary.exists && boundary.frame.intersects(transcript.frame), "Reading row must stay visible")
@@ -2968,6 +2997,112 @@ extension OpenClawSnapshotUITests {
         }, object: latest)
         XCTAssertEqual(XCTWaiter.wait(for: [returned], timeout: 8), .completed)
         self.attachScreenshot(named: "long-history-true-latest-return")
+    }
+
+    func testPrependWhileDeceleratingAtTopPreservesReader() throws {
+        try self.probeHistoryLanding(named: "decelerating", fixture: "--openclaw-history-page-delay-fixture") {
+            transcript, earlier in
+            // Flings at offset 0 while the page request is pending: each is a user scroll.
+            var flings = 0
+            while self.historyPagePending(earlier), flings < 6 {
+                transcript.swipeDown(velocity: .fast)
+                flings += 1
+            }
+            return flings
+        }
+    }
+
+    func testPrependLandingDuringStallWithTouchPreservesReader() throws {
+        try self.probeHistoryLanding(named: "stall-touch", fixture: "--openclaw-history-landing-stall-fixture") {
+            transcript, _ in
+            // One fling that queues behind the 2.5 s landing stall. A second one could start after the
+            // landing and move the reader legitimately, which the drift check cannot tell from a jump.
+            transcript.swipeDown(velocity: .fast)
+            return 1
+        }
+    }
+
+    func testPrependWithTickingRowBelowPreservesReader() throws {
+        try self.probeHistoryLanding(named: "ticking-below", fixture: "--openclaw-history-ticking-tail-fixture")
+    }
+
+    func testPrependWithUnevenOlderRowsPreservesReader() throws {
+        try self.probeHistoryLanding(named: "uneven", fixture: "--openclaw-history-uneven-fixture")
+    }
+
+    func testPrependWithLateGrowingRowsAbovePreservesReader() throws {
+        try self.probeHistoryLanding(named: "late-growth", fixture: "--openclaw-history-late-growth-fixture")
+    }
+
+    /// One snapshot per check: `exists` then `isEnabled` races the button leaving the hierarchy.
+    private func historyPagePending(_ earlier: XCUIElement) -> Bool {
+        (try? earlier.snapshot())?.isEnabled == false
+    }
+
+    private func visibleHistoryAnchors(in transcript: XCUIElement) -> [Int] {
+        // One accessibility snapshot: resolving each row as its own query costs ~2 s per row here.
+        guard let root = try? transcript.snapshot() else { return [] }
+        var anchors: [Int] = []
+        var pending = [root]
+        while let node = pending.popLast() {
+            pending.append(contentsOf: node.children)
+            guard node.elementType == .staticText, node.label.hasPrefix("HISTORY_ANCHOR_"),
+                  !node.frame.isEmpty, node.frame.intersects(root.frame) else { continue }
+            if let index = Int(node.label.dropFirst("HISTORY_ANCHOR_".count).prefix(while: \.isNumber)) {
+                anchors.append(index)
+            }
+        }
+        return anchors.sorted()
+    }
+
+    /// Loads one 101-row page above HISTORY_ANCHOR_499 and logs PREPEND_PROBE with the reader's rows.
+    /// The boundary row must stay on screen within 4 pt of where it was before the request. Gesture probes
+    /// touch only while the page is pending, so no legitimate scroll is still moving the reader when it is read.
+    private func probeHistoryLanding(
+        named name: String,
+        fixture: String,
+        gesture: ((XCUIElement, XCUIElement) -> Int)? = nil) throws
+    {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-long-history-anchor-fixture", fixture])
+        let app = try XCTUnwrap(self.app)
+        let transcript = try self.chatTranscript(in: app)
+        let latest = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "HISTORY_ANCHOR_599:")).firstMatch
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let boundary = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "HISTORY_ANCHOR_499:")).firstMatch
+        let earlier = app.buttons["chat-load-earlier-history"]
+        for _ in 0..<80 {
+            transcript.swipeDown(velocity: .fast)
+            if self.historyPagePending(earlier) { break }
+        }
+        XCTAssertTrue(self.historyPagePending(earlier), "Pull-down must request the next page")
+        // Before the gestures: they move the reader, and the page can land while they run.
+        let before = boundary.exists ? boundary.frame.minY : nil
+        let visibleBefore = self.visibleHistoryAnchors(in: transcript)
+        let gestures = gesture?(transcript, earlier) ?? 0
+        if gesture != nil {
+            XCTAssertGreaterThan(gestures, 0, "The probe must touch while the landing is pending")
+        }
+        let loaded = XCTNSPredicateExpectation(predicate: NSPredicate { [unowned self] _, _ in
+            !self.historyPagePending(earlier)
+        }, object: earlier)
+        XCTAssertEqual(XCTWaiter.wait(for: [loaded], timeout: 15), .completed, "Page did not finish loading")
+        _ = XCTWaiter.wait(for: [XCTestExpectation(description: "settle")], timeout: 1.5)
+        self.attachScreenshot(named: "probe-\(name)-after")
+        let visibleAfter = self.visibleHistoryAnchors(in: transcript)
+        let onScreen = boundary.exists && boundary.frame.intersects(transcript.frame)
+        let drift = boundary.exists && before != nil ? boundary.frame.minY - before! : .infinity
+        let kept = onScreen && abs(drift) <= 4
+        print(
+            "PREPEND_PROBE \(name) gestures=\(gestures) boundaryBefore=\(before.map { "\($0)" } ?? "-") " +
+                "boundaryAfter=\(boundary.exists ? "\(boundary.frame.minY)" : "-") onScreen=\(onScreen) kept=\(kept) " +
+                "drift=\(drift.isFinite ? "\(Int(drift.rounded()))" : "-") " +
+                "visibleBefore=\(visibleBefore.first ?? -1)-\(visibleBefore.last ?? -1) " +
+                "visibleAfter=\(visibleAfter.first ?? -1)-\(visibleAfter.last ?? -1)")
+        XCTAssertTrue(kept, "Reader moved \(name): drift \(drift) pt, visible after landing \(visibleAfter)")
     }
 
     func testLoadingEarlierHistoryPreservesReadingPosition() throws {
@@ -3074,7 +3209,12 @@ extension OpenClawSnapshotUITests {
             "An unchanged message anchor must still preserve the reading row after disclosure layout")
         self.attachScreenshot(named: "disclosure-after-\(suffix)")
         if moreHistory {
-            XCTAssertTrue(earlier.exists && !earlier.isEnabled, "The follow-on request must be awaited")
+            // The follow-on request starts once this page's landing settles (about 0.6 s), not in the same frame.
+            let followOn = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                earlier.exists && !earlier.isEnabled
+            }, object: earlier)
+            XCTAssertEqual(
+                XCTWaiter.wait(for: [followOn], timeout: 3), .completed, "The follow-on request must be awaited")
             XCTAssertEqual(
                 reading.frame.minY, before, accuracy: 12, "The reader must stay fixed during the next request")
             let older = app.staticTexts.matching(
