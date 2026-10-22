@@ -367,7 +367,7 @@ it("serializes quiet polls so an older cursor cannot overwrite a newer one", asy
   await poll();
   expect(
     getQueriesForElement(page.container)
-      .getByRole("button", { name: "Refresh", exact: true })
+      .getByRole("button", { name: "Refresh" })
       .hasAttribute("disabled"),
   ).toBe(true);
   expect(page.container.querySelector(".log-row")).toBe(row);
@@ -423,7 +423,7 @@ it.each([false, true])("recovers a logs error with previously loaded rows: %s", 
   await waitForSolid(() =>
     expect(
       getQueriesForElement(page.container)
-        .getByRole("button", { name: "Refresh", exact: true })
+        .getByRole("button", { name: "Refresh" })
         .hasAttribute("disabled"),
     ).toBe(false),
   );
