@@ -219,8 +219,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
           onReclaimingChange: onPendingChange,
         });
       }
-      const placement = await import("../../components/session-placement.runtime.ts");
-      await placement.changeSessionPlacement({
+      const { changeSessionPlacement } =
+        await import("../../components/session-placement.runtime.ts");
+      await changeSessionPlacement({
         ...params,
         mode,
         presentation,
@@ -603,7 +604,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const browserUnavailableReason = browserPanelSurfaceUnavailableReason(snapshot);
     state.browserPanelUnavailableReason = browserUnavailableReason;
     state.browserPanelAvailable = browserUnavailableReason === null;
-    const desktopPanelAvailable = isDesktopPanelAvailable(snapshot);
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;
     // Restore offline/compact preferences immediately, then migrate ready-only
@@ -615,7 +615,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         settings: loadSettings(),
         sessionKey: sidebarSessionKey,
         browserAvailable: state.browserPanelAvailable,
-        desktopAvailable: desktopPanelAvailable,
+        desktopAvailable: isDesktopPanelAvailable(snapshot),
       });
       const persistedLayout = sidebarSettings.sidebarSessionLayouts?.[sidebarSessionKey];
       if (persistedLayout !== undefined) {
