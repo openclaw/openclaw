@@ -1,8 +1,10 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
+import { createSlackWriteClient } from "./client.js";
 import { noteSlackDraftConversationMessage } from "./draft-message-boundaries.js";
 import { createSlackDraftStream } from "./draft-stream.js";
+import { finalizeSlackPreviewEdit } from "./monitor/message-handler/preview-finalize.js";
 
 type DraftStreamParams = Parameters<typeof createSlackDraftStream>[0];
 type DraftSendFn = typeof import("./send.js").sendMessageSlack;
@@ -39,7 +41,10 @@ function slackDraftSendResult(messageId: string, channelId = "C123") {
 }
 
 function createDraftStreamHarness(
-  params: Pick<DraftStreamParams, "accountId" | "maxChars" | "eventScope" | "identity"> & {
+  params: Pick<
+    DraftStreamParams,
+    "accountId" | "maxChars" | "eventScope" | "identity" | "replyParentDeleted"
+  > & {
     threadTs?: string;
     send?: DraftSendFn;
     remove?: DraftRemoveFn;
@@ -61,6 +66,7 @@ function createDraftStreamHarness(
     maxChars: params.maxChars,
     eventScope: params.eventScope,
     identity: params.identity,
+    replyParentDeleted: params.replyParentDeleted,
     resolveThreadTs: params.threadTs ? () => params.threadTs : undefined,
     warn,
   });
@@ -112,9 +118,10 @@ describe("createSlackDraftStream", () => {
     expect(vi.mocked(send).mock.calls.at(-1)?.[1]).toBe("_then I’ll check the key releases._");
   });
 
-  it("uses the enterprise event client for draft writes", async () => {
+  it("uses the enterprise event writer for draft edits", async () => {
     const client = {} as NonNullable<DraftStreamParams["eventScope"]>["client"];
-    const eventScope = { teamId: "T_TEST", client };
+    const writeClient = {} as typeof client;
+    const eventScope = { teamId: "T_TEST", client, writeClient };
     const identity = { username: "test-agent", iconEmoji: ":robot_face:" };
     const text = "a".repeat(4205);
     const { stream, send, edit, remove, warn } = createDraftStreamHarness({ eventScope, identity });
@@ -131,10 +138,57 @@ describe("createSlackDraftStream", () => {
       "C123",
       "111.222",
       "hello world",
-      expect.objectContaining({ client }),
+      expect.objectContaining({ client: writeClient }),
     ]);
     expect(remove).toHaveBeenCalledWith("C123", "111.222", expect.objectContaining({ client }));
   });
+
+  it.each(["partial", "final"])(
+    "does not replay a rate-limited %s preview edit after its parent is deleted",
+    async (kind) => {
+      const deletion = new AbortController();
+      const updates: string[] = [];
+      const writeClient = createSlackWriteClient("synthetic-rate-limit", {
+        slackApiUrl: "https://synthetic.slack.invalid/api/",
+        fetch: async (input) => {
+          updates.push(new URL(input).pathname);
+          if (updates.length > 1) {
+            return Response.json({ ok: true });
+          }
+          // The writer discards the 429 response before its Retry-After wait.
+          const body = new ReadableStream({ cancel: () => deletion.abort() });
+          return new Response(body, { status: 429, headers: { "retry-after": "0" } });
+        },
+      });
+      const history = vi.fn(async () => ({ messages: [{ ts: "111.222", text: "draft" }] }));
+      const client = { conversations: { history } } as unknown as typeof writeClient;
+      const { stream, edit, editRendered } = createDraftStreamHarness({
+        eventScope: { teamId: "T_TEST", client, writeClient },
+        replyParentDeleted: deletion.signal,
+      });
+      const actions = await vi.importActual<typeof import("./actions.js")>("./actions.js");
+      edit.mockImplementation(actions.editSlackMessage);
+      editRendered.mockImplementation(actions.editSlackRenderedMessage);
+      await publish(stream, "draft");
+      if (kind === "partial") {
+        await publish(stream, "still working");
+      } else {
+        const finalizing = stream.finalizeMessage("111.222", (publication) =>
+          finalizeSlackPreviewEdit({
+            ...publication,
+            client,
+            token: "xoxb-test",
+            channelId: "C123",
+            messageId: "111.222",
+            text: "final reply",
+          }),
+        );
+        await expect(finalizing).rejects.toThrow();
+        expect(history).toHaveBeenCalledOnce();
+      }
+      expect(updates).toEqual(["/api/chat.update"]);
+    },
+  );
 
   it("does not send duplicate text", async () => {
     const { stream, send, edit } = createDraftStreamHarness();
@@ -231,6 +285,7 @@ describe("createSlackDraftStream", () => {
     const eventScope = {
       teamId: "T_FIRST",
       client: {} as NonNullable<DraftStreamParams["eventScope"]>["client"],
+      writeClient: {} as NonNullable<DraftStreamParams["eventScope"]>["client"],
     };
     const send = rotatingSend();
     const { stream, edit } = createDraftStreamHarness({

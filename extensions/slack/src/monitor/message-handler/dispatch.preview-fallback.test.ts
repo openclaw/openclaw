@@ -21,7 +21,7 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { buildSlackCompleteBlocksFallbackText } from "../../blocks-fallback.js";
 import { slackSetupPlugin } from "../../channel.setup.js";
 import type { SlackSendResult } from "../../send.js";
-import { getSlackSessionRuns } from "../session-run-targets.js";
+import { getSlackSessionRuns, retireSlackReplyParent } from "../session-run-targets.js";
 import {
   checkpoint,
   nativeChunks,
@@ -1128,7 +1128,7 @@ it("preserves rejected queue admission without retaining a publisher", async () 
   expect(onSettled).toHaveBeenCalledOnce();
 });
 
-it("tracks a first-mode root publisher without a status thread", async () => {
+it("retires a first-mode root before its pending final text and file can publish", async () => {
   const message = {
     type: "message" as const,
     channel: "C123",
@@ -1148,16 +1148,23 @@ it("tracks a first-mode root publisher without a status thread", async () => {
     message,
     replyToMode: "first",
   });
-  mockedReplyOptionEvents = [
+  const address = { channelId: message.channel, threadTs: message.ts };
+  mockedDispatchSequence = [
     checkpoint(async () => {
       expect(
-        getSlackSessionRuns(prepared.ctx, { channelId: message.channel, threadTs: message.ts }).map(
-          ({ route }) => route.sessionKey,
-        ),
+        getSlackSessionRuns(prepared.ctx, address).map(({ route }) => route.sessionKey),
       ).toEqual([prepared.route.sessionKey]);
+      retireSlackReplyParent(prepared.ctx, address);
     }),
+    finalReply({ text: "Review is ready.", mediaUrl: "https://example.com/review.png" }),
   ];
   await dispatchPreparedSlackMessage(prepared);
+  expectNoCalls(deliverRepliesMock, startSlackStreamMock, finalizeSlackPreviewEditMock);
+  const queued = capturedReplyOptions?.queuedDeliveryCorrelations?.[0];
+  const release = queued?.begin();
+  expect(queued?.shouldSuppressReply?.({ text: "deferred result" })).toBe(true);
+  expect(getSlackSessionRuns(prepared.ctx, address)).toEqual([]);
+  release?.();
 });
 
 it.each([false, true])(

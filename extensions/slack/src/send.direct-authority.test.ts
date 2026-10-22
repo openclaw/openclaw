@@ -14,7 +14,8 @@ import { sendMessageSlack } from "./send.js";
 import { clearSlackThreadParticipationCache } from "./sent-thread-cache.js";
 
 const POST = "/api/chat.postMessage",
-  OPEN = "/api/conversations.open";
+  OPEN = "/api/conversations.open",
+  HISTORY = "/api/conversations.history";
 const REVOKED = "direct delivery is no longer active";
 function directOptions(cfg: OpenClawConfig, live = () => true) {
   const assertDirectAdapterHandoff = () => {
@@ -40,6 +41,10 @@ function withSlackApi(
       paths.push(url);
       request.resume();
       void Promise.resolve(respond(url, paths.length)).then((payload) => {
+        if ("retryAfter" in payload) {
+          response.writeHead(429, { "retry-after": String(payload.retryAfter) }).end();
+          return;
+        }
         response
           .writeHead(200, { "content-type": "application/json" })
           .end(JSON.stringify(payload));
@@ -131,17 +136,71 @@ it("stops a revoked direct send after the per-target queue", async () => {
   );
 });
 
+it("does not dispatch a queued reply after its parent is deleted", async () => {
+  const started = createDeferred<void>(),
+    release = createDeferred<void>();
+  const threadTs = "171234.1";
+  let deleted = false;
+  await withSlackApi(
+    async (url) => {
+      if (url === HISTORY) {
+        const parent = { ts: threadTs, ...(deleted ? { subtype: "tombstone" } : {}) };
+        return { ok: true, messages: [parent] };
+      }
+      started.resolve();
+      await release.promise;
+      return { ok: true, ts: "171234.2", message: { thread_ts: threadTs } };
+    },
+    async (cfg, paths) => {
+      const opts = { ...directOptions(cfg), threadTs };
+      const first = sendMessageSlack("channel:C123", "first", opts);
+      await started.promise;
+      const onPlatformSendDispatch = vi.fn();
+      const second = sendMessageSlack("channel:C123", "queued", { ...opts, onPlatformSendDispatch });
+      deleted = true;
+      release.resolve();
+      await expect(first).resolves.toMatchObject({ messageId: "171234.2" });
+      await expect(second).rejects.toMatchObject({ retryable: false });
+      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+      expect(paths).toEqual([HISTORY, POST, HISTORY]);
+    },
+  );
+});
+
 it("reuses the credential-scoped DM cache across direct sends", async () => {
   await withSlackApi(
-    (url, attempt) =>
-      url === OPEN
+    (url, attempt) => {
+      if (url === HISTORY) {
+        return { ok: true, messages: [{ ts: "171234.1" }] };
+      }
+      return url === OPEN
         ? { ok: true, channel: { id: "D123" } }
-        : { ok: true, ts: `${attempt}.1`, channel: "D123" },
+        : { ok: true, ts: `${attempt}.1`, channel: "D123" };
+    },
     async (cfg, paths) => {
       const options = { ...directOptions(cfg), threadTs: "171234.1" };
       await sendMessageSlack("user:U123", "first", options);
       await sendMessageSlack("user:U123", "second", options);
-      expect(paths).toEqual([OPEN, POST, POST]);
+      expect(paths).toEqual([OPEN, HISTORY, POST, HISTORY, POST]);
+    },
+  );
+});
+
+it("rechecks the parent before replaying a rate-limited Slack write", async () => {
+  const threadTs = "171234.1";
+  let posts = 0;
+  await withSlackApi(
+    (url) => {
+      if (url === HISTORY) {
+        const parent = { ts: threadTs, ...(posts ? { subtype: "tombstone" } : {}) };
+        return { ok: true, messages: [parent] };
+      }
+      return ++posts === 1 ? { retryAfter: 0 } : { ok: true, ts: "171234.2" };
+    },
+    async (cfg, paths) => {
+      const options = { ...directOptions(cfg), threadTs };
+      await expect(sendMessageSlack("channel:C123", "message", options)).rejects.toThrow(/deleted/);
+      expect(paths).toEqual([HISTORY, POST, HISTORY]);
     },
   );
 });

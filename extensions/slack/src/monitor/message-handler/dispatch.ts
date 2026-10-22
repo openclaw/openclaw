@@ -57,6 +57,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         ...prepared.route,
         sessionKey: prepared.ctxPayload.SessionKey ?? prepared.route.sessionKey,
       },
+      setup.replyParentDeletion,
     );
   const upstreamLifecycle = prepared.turnAdoptionLifecycle;
   let releaseDeferred: (() => void) | undefined;
@@ -87,6 +88,7 @@ async function dispatchSlackMessageWithSetup(
 ) {
   const { prepared } = setup;
   const { account, ctx, message, route } = prepared;
+  const replyParentDeleted = setup.replyParentDeletion?.signal;
   const {
     cfg,
     disableBlockStreaming,
@@ -133,11 +135,15 @@ async function dispatchSlackMessageWithSetup(
     failurePolicyParams,
     () => delivery.observedReplyDelivery || previewLifecycle.previewFinalized,
   );
+  const queued = createSlackQueuedFailureNoticePolicy(failurePolicyParams, beginSessionRun);
 
   const deliverSlackPayload = async (
     incomingPayload: ReplyPayload,
     info: ReplyDispatchRuntimeInfo,
   ): Promise<LivePreviewDeliveryResult> => {
+    if (replyParentDeleted?.aborted) {
+      return { visibleReplySent: false };
+    }
     let payload = incomingPayload;
     if (info.participant && (payload.text || payload.mediaUrl || payload.mediaUrls?.length)) {
       payload = {
@@ -276,8 +282,9 @@ async function dispatchSlackMessageWithSetup(
           if (ttsSupplement) {
             ttsPreviewFinalization = { threadTs: edit.threadTs };
           }
-          const finalized = await draftStream?.finalizeMessage(preview.messageId, async () => {
-            await finalizeSlackPreviewEdit({
+          const finalized = await draftStream?.finalizeMessage(preview.messageId, (publication) =>
+            finalizeSlackPreviewEdit({
+              ...publication,
               client: slackClient,
               token: ctx.botToken,
               accountId: account.accountId,
@@ -286,8 +293,8 @@ async function dispatchSlackMessageWithSetup(
               text: edit.text,
               ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
               threadTs: edit.threadTs,
-            });
-          });
+            }),
+          );
           if (!finalized) {
             throw new Error("Slack preview moved below a newer conversation message");
           }
@@ -377,6 +384,9 @@ async function dispatchSlackMessageWithSetup(
         ...replyPipeline,
         // A channel transform marks intentional silence before core can synthesize an empty-reply error.
         transformReplyPayload: (payload) => {
+          if (replyParentDeleted?.aborted) {
+            return null;
+          }
           const transformed = replyPipeline.transformReplyPayload
             ? replyPipeline.transformReplyPayload(payload)
             : payload;
@@ -400,7 +410,11 @@ async function dispatchSlackMessageWithSetup(
         groupThreadReplyFormatter: formatSlackGroupThreadReply,
         // Followups can outlive this dispatch and retain their own source address.
         queuedDeliveryCorrelations: [
-          createSlackQueuedFailureNoticePolicy(failurePolicyParams, beginSessionRun),
+          {
+            ...queued,
+            shouldSuppressReply: (payload) =>
+              replyParentDeleted?.aborted || queued.shouldSuppressReply?.(payload) === true,
+          },
         ],
         ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
         skillFilter: prepared.channelConfig?.skills,
@@ -539,7 +553,7 @@ async function dispatchSlackMessageWithSetup(
     failurePolicy.recordDelivered();
   }
 
-  if (dispatchError || agentRunFailed) {
+  if (!replyParentDeleted?.aborted && (dispatchError || agentRunFailed)) {
     // A failed turn without a reply has no other visible outcome.
     await progress.finalizeDraftProgressCard("error", { postIfMissing: !anyReplyDelivered });
   }
@@ -563,7 +577,7 @@ async function dispatchSlackMessageWithSetup(
   // know the thread ts that was used (set by deliverNormally, streaming start,
   // or draft stream). Falls back to statusThreadTs for edge cases.
   const participationThreadTs = delivery.usedReplyThreadTs ?? statusThreadTs;
-  if (anyReplyDelivered && participationThreadTs) {
+  if (anyReplyDelivered && participationThreadTs && !replyParentDeleted?.aborted) {
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
       agentId: route.agentId,
       teamId: prepared.eventScope?.teamId,

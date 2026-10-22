@@ -156,6 +156,12 @@ describe("sendMessageSlack chunking", () => {
   });
 
   it("preserves the first canonical response thread across chunked sends", async () => {
+    const root = "1781803536.235489";
+    client.conversations.history.mockResolvedValueOnce({ ok: true, messages: [] });
+    client.conversations.replies.mockResolvedValueOnce({
+      ok: true,
+      messages: [{ ts: "1781932168.648159", thread_ts: root }],
+    });
     client.chat.postMessage
       .mockResolvedValueOnce({
         ts: "1781932190.115869",
@@ -185,6 +191,57 @@ describe("sendMessageSlack chunking", () => {
     expect(result.receipt.threadId).toBe("1781803536.235489");
     expect(hasSlackThreadParticipation("default", "C123", "1781803536.235489")).toBe(true);
     expect(hasSlackThreadParticipation("default", "C123", "1781932168.648159")).toBe(false);
+  });
+
+  it("preserves an accepted chunk when the listener then observes parent deletion", async () => {
+    const parent = new AbortController();
+    const onDeliveryResult = vi.fn(() => parent.abort());
+    const error = await send("a".repeat(8500), {
+      threadTs: "171234.100",
+      replyParentDeleted: parent.signal,
+      onDeliveryResult,
+    }).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+    expect(client.chat.postMessage).toHaveBeenCalledOnce();
+  });
+
+  it("honors parent deletion during the asynchronous dispatch handoff", async () => {
+    const parent = new AbortController();
+    await expect(
+      send("reply", {
+        threadTs: "171234.100",
+        replyParentDeleted: parent.signal,
+        onPlatformSendDispatch: async () => parent.abort(),
+      }),
+    ).rejects.toMatchObject({ retryable: false });
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("withholds an identity fallback when its reply parent has disappeared", async () => {
+    const threadTs = "171234.100";
+    client.conversations.history
+      .mockResolvedValueOnce({ ok: true, messages: [{ ts: threadTs }] })
+      .mockResolvedValueOnce({ ok: true, messages: [] });
+    client.chat.postMessage.mockRejectedValueOnce(
+      Object.assign(new Error("missing_scope"), {
+        data: { error: "missing_scope", needed: "chat:write.customize" },
+      }),
+    );
+    await expect(send("reply", { threadTs, identity: { username: "Claw" } })).rejects.toThrow(
+      /parent is missing/,
+    );
+    expect(client.chat.postMessage).toHaveBeenCalledOnce();
+  });
+
+  it("withholds a reply when parent visibility is unknown, without calling it deleted", async () => {
+    client.conversations.history.mockRejectedValueOnce(new Error("missing_scope"));
+    await expect(send("reply", { threadTs: "171234.100" })).rejects.toMatchObject({
+      retryable: true,
+      message: expect.stringContaining("missing_scope"),
+    });
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 });
 

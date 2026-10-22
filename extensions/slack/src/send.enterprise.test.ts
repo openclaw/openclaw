@@ -43,6 +43,12 @@ const postResult = (ts = "123.456") => ({ ok: true, ts, channel: "C123" });
 function createEnterpriseClient() {
   const stub = {
     chat: { postMessage: vi.fn<Post>(async () => postResult()) },
+    conversations: {
+      history: vi.fn(async ({ latest }: { latest: string }) => ({
+        ok: true,
+        messages: [{ ts: latest }],
+      })),
+    },
     files: {
       getUploadURLExternal: vi.fn(async () => ({
         ok: true,
@@ -173,6 +179,8 @@ describe("sendMessageSlack Enterprise listener scope", () => {
       [{ auditContext: "slack-enterprise-immediate-upload" }],
     ]);
     expect(client.files.getUploadURLExternal).toHaveBeenCalledOnce();
+    expect(client.conversations.history).toHaveBeenCalled();
+    expect(writeClient.conversations.history).not.toHaveBeenCalled();
     expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
     expect(writeClient.files.getUploadURLExternal).not.toHaveBeenCalled();
     expect(writeClient.files.completeUploadExternal).toHaveBeenCalledWith({

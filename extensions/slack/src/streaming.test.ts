@@ -1,4 +1,4 @@
-import { WebClient } from "@slack/web-api";
+import { WebClient, type WebClientOptions } from "@slack/web-api";
 import { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
@@ -70,6 +70,61 @@ function createBufferedSession(bufferSize: number) {
 }
 
 describe("stopSlackStream finalize error handling", () => {
+  it.each(["startStream", "appendStream", "stopStream"])(
+    "does not replay a rate-limited chat.%s after Slack deletes the parent",
+    async (method) => {
+      const deletion = new AbortController();
+      const requests: string[] = [];
+      const clientOptions: WebClientOptions = {
+        slackApiUrl: "https://synthetic.slack.invalid/api/",
+        fetch: async (input) => {
+          const name = new URL(input).pathname.split(".").at(-1) ?? "";
+          requests.push(name);
+          if (name === method && !deletion.signal.aborted) {
+            // Retire the parent as the transport discards Slack's rejected response,
+            // after the first write was allowed but before the serialized-body retry.
+            const body = new ReadableStream({ cancel: () => deletion.abort() });
+            return new Response(body, { status: 429, headers: { "retry-after": "0" } });
+          }
+          return Response.json({ ok: true, ts: streamTs });
+        },
+      };
+      const session = await startSlackStream({
+        ...target,
+        client: new WebClient("synthetic-rate-limit-fixture", clientOptions),
+        clientOptions,
+        text: "first reply",
+        chunks: [],
+        replyParentDeleted: deletion.signal,
+      });
+      if (method === "appendStream") {
+        await appendSlackStream({ session, text: "later reply", chunks: [] });
+      }
+      await stopSlackStream({ session });
+      expect(requests).toEqual(method === "startStream" ? [method] : ["startStream", method]);
+      expect(session).toMatchObject({ delivered: method !== "startStream", stoppedBySlack: true });
+    },
+  );
+
+  it("does not start a locally buffered reply when its parent is deleted before flush", async () => {
+    const { client, start, append, stop } = createNativeStreamClient();
+    const parentDeletion = new AbortController();
+    const session = await startSlackStream({
+      client,
+      ...target,
+      text: "pending",
+      replyParentDeleted: parentDeletion.signal,
+    });
+    expect(session).toMatchObject({ delivered: false, pendingText: "pending" });
+    parentDeletion.abort();
+    await appendSlackStream({ session, text: "late final", chunks: [] });
+    await expect(stopSlackStream({ session })).resolves.toEqual({});
+    expect(session).toMatchObject({ stoppedBySlack: true, delivered: false, pendingText: "pending" });
+    expect(start).not.toHaveBeenCalled();
+    expect(append).not.toHaveBeenCalled();
+    expect(stop).not.toHaveBeenCalled();
+  });
+
   it("discards a Slack-stopped stream's buffered tail without flushing or falling back", async () => {
     const { client, append, stop } = createNativeStreamClient();
     const session = await startTextStream(client, "visible text");

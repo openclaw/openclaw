@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createRequire } from "node:module";
 import { WebAPIRateLimitedError, type RetryOptions, type WebClientOptions } from "@slack/web-api";
 import {
@@ -31,6 +32,10 @@ export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
 export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
+
+// The Slack SDK owns the first request. Our explicit 429 replay must recheck
+// this particular send after sleeping, even when several sends share a client.
+export const slackWriteRetryCheck = new AsyncLocalStorage<() => Promise<void>>();
 
 const SLACK_READ_TIMEOUT_MS = 30_000;
 
@@ -246,10 +251,15 @@ export function resolveSlackWriteClientOptions(
     if (slackFetch) {
       // Replay the SDK's serialized body, not chatStream.append(), which retains
       // its buffer after rejection. Only an HTTP 429 proves this write was refused.
-      resolved.fetch = (input, init) =>
-        retryAsync(
+      resolved.fetch = (input, init) => {
+        const checkBeforeReplay = slackWriteRetryCheck.getStore();
+        let rateLimited = false;
+        return retryAsync(
           async () => {
             init?.signal?.throwIfAborted();
+            if (rateLimited) {
+              await checkBeforeReplay?.();
+            }
             const response = await slackFetch(input, init);
             if (response.status !== 429) {
               return response;
@@ -266,6 +276,7 @@ export function resolveSlackWriteClientOptions(
             if (retryAfter === undefined || retryAfter * 1000 > 2_147_000_000) {
               return response;
             }
+            rateLimited = true;
             throw new WebAPIRateLimitedError(retryAfter);
           },
           {
@@ -278,6 +289,7 @@ export function resolveSlackWriteClientOptions(
             sleep: (delayMs) => sleepWithAbort(delayMs, init?.signal),
           },
         );
+      };
     }
     // Preserve the explicit opt-out and avoid SDK sleeps/retries after our budget.
     resolved.rejectRateLimitedCalls = true;

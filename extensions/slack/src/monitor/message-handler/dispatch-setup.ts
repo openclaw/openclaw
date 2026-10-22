@@ -314,6 +314,7 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     slackProgressStyle,
     quietProgress,
     streamThreadHint,
+    replyParentDeletion: streamThreadHint ? new AbortController() : undefined,
     previewStreamingEnabled,
     hasSlackCustomIdentity,
     shouldUseDraftStream,

@@ -38,6 +38,7 @@ import {
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
 import {
+  createSlackLookupClient,
   createSlackReadClient,
   createSlackTokenCacheKey,
   createSlackWriteClient,
@@ -56,6 +57,7 @@ import {
   resolveSlackQuestionActionIds,
   SLACK_QUESTION_FINALIZATION_BLOCKS,
 } from "./reply-action-ids.js";
+import { createSlackSendDispatch } from "./reply-parent.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { cacheSlackDmChannelId, readCachedSlackDmChannelId } from "./slack-dm-channel-cache.js";
 import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
@@ -83,6 +85,7 @@ export type SlackSendIdentity = SlackPostMessageIdentity;
 
 type SlackResolvedDelivery = Readonly<{
   client: WebClient;
+  parentReaders?: WebClient[];
   /** Request-free identity for preserving the shared per-credential DM cache. */
   dmCacheOwner?: WebClient;
   credential: string;
@@ -127,6 +130,8 @@ type SlackSendOpts = {
   nativeDataFallbackBaseText?: string;
   mediaMaxBytes?: number;
   threadTs?: string;
+  /** Listener observed deletion of the source; stop publication, not the underlying work. */
+  replyParentDeleted?: AbortSignal;
   replyBroadcast?: boolean;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
@@ -366,6 +371,7 @@ function resolveSlackDelivery(params: {
     }
     return {
       client: params.eventScope.writeClient,
+      parentReaders: [params.eventScope.client],
       credential: SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL,
       identity: normalizeSlackSendIdentity(params.opts.identity),
       recipient: params.recipient,
@@ -398,8 +404,26 @@ function resolveSlackDelivery(params: {
         params.opts.assertDirectAdapterHandoff,
       )
     : cachedClient;
+  let parentReaders: WebClient[] | undefined;
+  if (params.opts.threadTs) {
+    const writeToken = client.token?.trim() || credential;
+    const readToken =
+      params.opts.client === client || params.opts.token?.trim()
+        ? writeToken
+        : resolveSlackOperationToken(params.account, "read") || writeToken;
+    // A user reader can miss a bot DM. Try only distinct authorized views, both
+    // with bounded lookups; never borrow a write client's unbounded retry policy.
+    parentReaders = [...new Set([readToken, writeToken])].map((token) =>
+      createSlackLookupClient(
+        token,
+        { teamId: params.recipient.teamId, slackApiUrl: client.slackApiUrl },
+        params.opts.assertDirectAdapterHandoff,
+      ),
+    );
+  }
   return {
     client,
+    parentReaders,
     ...(client !== cachedClient ? { dmCacheOwner: cachedClient } : {}),
     credential,
     identity:
@@ -895,14 +919,13 @@ export async function sendMessageSlack(
         await opts.onDeliveryResult?.(deliveryResult);
         return deliveryResult;
       };
-      let didDispatch = false;
-      const dispatchOnce = async () => {
-        if (didDispatch) {
-          return;
-        }
-        didDispatch = true;
-        await opts.onPlatformSendDispatch?.();
-      };
+      const beforeSend = createSlackSendDispatch({
+        readers: delivery.parentReaders,
+        channel: channelId,
+        threadTs: opts.threadTs,
+        replyParentDeleted: opts.replyParentDeleted,
+        onPlatformSendDispatch: opts.onPlatformSendDispatch,
+      });
       const explicitNativeDataFallbackBase = Object.hasOwn(opts, "nativeDataFallbackBaseText")
         ? (opts.nativeDataFallbackBaseText?.trim() ?? "")
         : undefined;
@@ -963,6 +986,7 @@ export async function sendMessageSlack(
           threadTs: opts.threadTs,
           identity: sendIdentity,
           unfurl,
+          beforeSend,
           ...part,
         });
         const { response } = posted;
@@ -1005,7 +1029,6 @@ export async function sendMessageSlack(
             partIndex: 0,
             partCount: 1,
           });
-          await dispatchOnce();
           try {
             return await postPart({
               text: accessibilityText,
@@ -1076,7 +1099,7 @@ export async function sendMessageSlack(
             threadTs: opts.threadTs,
             maxBytes: mediaMaxBytes,
             ...(opts.forceDocument ? { optimizeImages: false } : {}),
-            onPlatformSendDispatch: dispatchOnce,
+            beforeSend,
             assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
             ...(delivery.upload ? { auditContext: delivery.upload.auditContext } : {}),
           });
@@ -1112,9 +1135,6 @@ export async function sendMessageSlack(
               partIndex,
               partCount: messages.length,
             });
-        if (partIndex === 0 && !opts.mediaUrl) {
-          await dispatchOnce();
-        }
         const partDelivery = await postPart({
           ...part,
           replyBroadcast: carriesPrimaryMessageOptions ? opts.replyBroadcast : undefined,

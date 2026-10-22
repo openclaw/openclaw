@@ -45,6 +45,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     slackStreamFallbackTeamId,
   } = setup;
   const { account, ctx, forcedReplyThreadTs, message, slackMessageMetadata } = prepared;
+  const replyParentDeleted = setup.replyParentDeletion?.signal;
   const boundaryState: {
     streamBoundary: ReturnType<typeof trackSlackDraftMessage> | null;
     interruptedThreadTs: string | undefined;
@@ -83,6 +84,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
         client: slackClient,
         clientOptions: slackClientOptions,
         channel: message.channel,
+        replyParentDeleted,
         ...params,
         ...(slackIdentity ? { identity: slackIdentity } : {}),
         teamId: await resolveSlackStreamRecipientTeamId({
@@ -122,6 +124,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       textLimit: ctx.textLimit,
       mediaMaxBytes: ctx.mediaMaxBytes,
       replyThreadTs,
+      replyParentDeleted,
       replyToMode: replyDeliveryMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
@@ -225,7 +228,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     // The SDK retains definitely rejected text. Use the normal chunked sender;
     // one chat.postMessage cannot carry a tail beyond Slack's text limit.
     const fallbackText = fallbackError.pendingText.trim();
-    if (!fallbackText) {
+    if (!fallbackText || replyParentDeleted?.aborted) {
       return undefined;
     }
     const sent = await deliverPreparedReply(
@@ -324,7 +327,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       return { visibleReplySent: false };
     }
     await rotateInterruptedStream();
-    if (state.streamSession?.stoppedBySlack) {
+    if (replyParentDeleted?.aborted || state.streamSession?.stoppedBySlack) {
       return { visibleReplySent: false };
     }
     const replyThreadTs =
@@ -417,7 +420,7 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       await state.nativeProgressStreamStartPromise;
     }
     await rotateInterruptedStream();
-    if (state.streamSession?.stoppedBySlack) {
+    if (replyParentDeleted?.aborted || state.streamSession?.stoppedBySlack) {
       return { visibleReplySent: false };
     }
     let session = state.streamSession;
@@ -492,7 +495,10 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       }
     }
     if (session.stoppedBySlack && session.pendingText) {
-      emitStreamedDelivery(hookContent, { success: false, error: "Stopped by Slack user" });
+      emitStreamedDelivery(hookContent, {
+        success: false,
+        error: replyParentDeleted?.aborted ? "Slack reply parent deleted" : "Stopped by Slack user",
+      });
       return { visibleReplySent: false };
     }
     if (!fallbackDelivery?.visibleReplySent && (!session.delivered || session.pendingText)) {

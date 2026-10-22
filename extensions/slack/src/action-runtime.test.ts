@@ -7,6 +7,7 @@ import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { sendSlackMessage as sendSlackMessageThroughPublicOwner } from "./actions.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import * as slackClients from "./client.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
 import type { SlackSendResult } from "./send.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
@@ -672,6 +673,11 @@ it("keeps the batched reply thread available after a failed upload", async () =>
 it("records an accepted batched Slack text chunk when the next platform post fails", async () => {
   const context = { ...createReplyToFirstContext(), replyToMode: "batched" as const };
   const client = new WebClient("xoxb-test", { retryConfig: { retries: 0 } });
+  const parentReader = vi.spyOn(slackClients, "createSlackLookupClient").mockReturnValue(client);
+  vi.spyOn(client.conversations, "history").mockImplementation(async ({ latest }) => ({
+    ok: true,
+    messages: [{ ts: latest }],
+  }));
   vi.spyOn(client.chat, "postMessage")
     .mockResolvedValueOnce({ ok: true, channel: "C123", ts: "1111111111.111112" })
     .mockRejectedValueOnce(new Error("Second Slack text chunk failed"));
@@ -693,6 +699,7 @@ it("records an accepted batched Slack text chunk when the next platform post fai
 
   expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
   expect(context.hasRepliedRef.value).toBe(true);
+  parentReader.mockRestore();
 });
 
 it("keeps concurrent first replies threaded until a delivery succeeds", async () => {

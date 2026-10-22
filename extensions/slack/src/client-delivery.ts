@@ -15,6 +15,7 @@ import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { asOptionalObjectRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { slackWriteRetryCheck } from "./client-options.js";
 import { formatSlackError } from "./errors.js";
 import {
   postSlackMessageWithIdentityFallback,
@@ -179,8 +180,15 @@ function resolveSlackUploadTransportPolicy(params: { uploadUrl: string; slackApi
 export async function withSlackDnsRequestRetry<T>(
   operation: string,
   fn: () => Promise<T>,
+  beforeSend?: () => Promise<void>,
 ): Promise<T> {
-  return await retryAsync(fn, {
+  const attempt = beforeSend
+    ? async () => {
+        await beforeSend();
+        return await slackWriteRetryCheck.run(beforeSend, fn);
+      }
+    : fn;
+  return await retryAsync(attempt, {
     attempts: SLACK_DNS_RETRY_ATTEMPTS + 1,
     minDelayMs: 0,
     shouldRetry: hasSlackDnsRequestSignal,
@@ -220,12 +228,15 @@ export async function postSlackMessageBestEffort(params: {
   metadata?: MessageMetadata;
   mrkdwn?: boolean;
   unfurl?: SlackUnfurlOptions;
+  beforeSend?: () => Promise<void>;
 }) {
   const basePayload = buildSlackPostMessagePayload(params);
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   const post = async (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => ({
-    response: await withSlackDnsRequestRetry("chat.postMessage", () =>
-      postChatMessage(payload),
+    response: await withSlackDnsRequestRetry(
+      "chat.postMessage",
+      () => postChatMessage(payload),
+      params.beforeSend,
     ).catch(rethrowSlackPermanentOutboundApiRejection),
     identity,
   });
@@ -258,7 +269,7 @@ export async function uploadSlackFile(params: {
   caption?: string;
   threadTs?: string;
   maxBytes?: number;
-  onPlatformSendDispatch?: () => Promise<void>;
+  beforeSend?: () => Promise<void>;
   assertDirectAdapterHandoff?: () => void;
   auditContext?: string;
 }): Promise<string> {
@@ -338,19 +349,21 @@ export async function uploadSlackFile(params: {
     cleanupUploadTimeout();
   }
 
-  await params.onPlatformSendDispatch?.();
   // Completion is single-use after acceptance. Slack's method contract permits
   // the write client's explicit-429 retries; this owner retries pre-connect DNS only.
-  // Dispatch is already recorded above, so this call is the ambiguous send:
-  // no rejection here may claim non-dispatch, however definitive its code reads.
+  // Record dispatch after the transfer and immediately before completion. Once it
+  // starts, no rejection may claim non-dispatch, however definitive its code reads.
   const completionClient = params.completionClient ?? params.client;
-  const completeResp = await withSlackDnsRequestRetry("files.completeUploadExternal", () =>
-    completionClient.files.completeUploadExternal({
-      files: [{ id: uploadFileId, title: uploadTitle }],
-      channel_id: params.channelId,
-      ...(params.caption ? { initial_comment: params.caption } : {}),
-      ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
-    }),
+  const completeResp = await withSlackDnsRequestRetry(
+    "files.completeUploadExternal",
+    () =>
+      completionClient.files.completeUploadExternal({
+        files: [{ id: uploadFileId, title: uploadTitle }],
+        channel_id: params.channelId,
+        ...(params.caption ? { initial_comment: params.caption } : {}),
+        ...(params.threadTs ? { thread_ts: params.threadTs } : {}),
+      }),
+    params.beforeSend,
   );
   if (!completeResp.ok) {
     throw new Error(`Failed to complete upload: ${completeResp.error ?? "unknown error"}`);

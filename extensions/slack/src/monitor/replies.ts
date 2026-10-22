@@ -132,6 +132,7 @@ export async function deliverReplies(params: {
   textLimit: number;
   mediaMaxBytes?: number;
   replyThreadTs?: string;
+  replyParentDeleted?: AbortSignal;
   replyToMode: ReplyToMode;
   identity?: SlackSendIdentity;
   metadata?: MessageMetadata;
@@ -198,6 +199,7 @@ export async function deliverReplies(params: {
         cfg: params.cfg,
         token: params.token,
         accountId: params.accountId,
+        ...(params.replyParentDeleted ? { replyParentDeleted: params.replyParentDeleted } : {}),
         ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
         onDeliveryResult: (result) => {
           acceptedResults.push(result);

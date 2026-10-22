@@ -240,6 +240,25 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
+  it("withholds the share if the reply parent is deleted during byte transfer", async () => {
+    const parent = new AbortController();
+    globalThis.fetch = vi.fn(async () => {
+      parent.abort();
+      return new Response("ok");
+    });
+    const onPlatformSendDispatch = vi.fn();
+    await expect(
+      sendUpload(client, {
+        threadTs: "171.222",
+        replyParentDeleted: parent.signal,
+        onPlatformSendDispatch,
+      }),
+    ).rejects.toMatchObject({ retryable: false, message: expect.stringContaining("deleted") });
+    expect(globalThis.fetch).toHaveBeenCalledOnce();
+    expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
+    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+  });
+
   it("uploads the named original file, disposes transfer resources, then completes the threaded send", async () => {
     const events: string[] = [];
     const uploadResponse = new Response("ok", { status: 200 });

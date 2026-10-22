@@ -18,7 +18,8 @@ import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackMonitorEventScope, type SlackEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle, resolveSlackSenderAuthentication } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
-import type { SlackMessageChangedEvent } from "../types.js";
+import { retireSlackReplyParent } from "../session-run-targets.js";
+import type { SlackMessageChangedEvent, SlackMessageDeletedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
@@ -199,6 +200,16 @@ export function registerSlackMessageEvents(params: {
               });
               if (!ingressContext) {
                 return;
+              }
+              if (subtypeHandler.eventKind === "message_deleted") {
+                // deleted_ts is the removed message, while threadTs may be its surviving parent.
+                const threadTs = asString((message as SlackMessageDeletedEvent).deleted_ts);
+                const channelId = message.channel;
+                if (threadTs && retireSlackReplyParent(ctx, { channelId, threadTs, eventScope })) {
+                  slackInboundLog.info(
+                    `Slack deleted reply parent ${channelId}/${threadTs}; stopped publishing this reply`,
+                  );
+                }
               }
               enqueueRoutedSystemEvent(
                 subtypeHandler.describe(ingressContext.channelLabel),

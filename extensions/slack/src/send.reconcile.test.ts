@@ -7,6 +7,7 @@ import type { SlackPostMessagePayload } from "./post-message-payload.js";
 import { reconcileSlackUnknownSend, sendMessageSlack } from "./send.js";
 
 const clients = vi.hoisted(() => ({
+  createSlackLookupClient: vi.fn(),
   createSlackReadClient: vi.fn(),
   getSlackWriteClient: vi.fn(),
 }));
@@ -78,6 +79,7 @@ describe("Slack durable reconciliation", () => {
   }
   beforeEach(() => {
     client = createClient();
+    clients.createSlackLookupClient.mockReset().mockReturnValue(client);
     clients.createSlackReadClient.mockReset().mockReturnValue(client);
     clients.getSlackWriteClient.mockReset().mockReturnValue(client);
   });
@@ -227,6 +229,7 @@ describe("Slack durable reconciliation", () => {
 
   it("reconciles the persisted exact thread reply", async () => {
     const thread = "1782584644.377229";
+    client.conversations.history.mockResolvedValueOnce({ ok: true, messages: [{ ts: thread }] });
     const metadata = await marker({ threadTs: thread });
     client.conversations.replies.mockResolvedValueOnce({
       messages: [{ ts, metadata, thread_ts: thread }],

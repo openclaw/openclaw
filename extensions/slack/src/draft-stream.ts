@@ -50,6 +50,7 @@ export function createSlackDraftStream(params: {
   maxChars?: number;
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
+  replyParentDeleted?: AbortSignal;
   metadata?: MessageMetadata;
   warn?: (message: string) => void;
 }) {
@@ -68,6 +69,14 @@ export function createSlackDraftStream(params: {
     streamMessage = undefined;
     lastSentKey = "";
   };
+  // Every edit of this draft, including finalization, needs the same deletion-aware writer.
+  const editPublication = {
+    writeClient: params.eventScope?.writeClient,
+    replyParentDeleted: params.replyParentDeleted,
+  };
+  if (params.eventScope && !editPublication.writeClient) {
+    throw new Error("missing_enterprise_slack_write_client");
+  }
   const editPreview = (message: SlackDraftMessage, update: SlackVisibleDraftUpdate) =>
     (update.textIsSlackMrkdwn ? editSlackRenderedMessage : editSlackMessage)(
       message.channelId,
@@ -77,7 +86,8 @@ export function createSlackDraftStream(params: {
         cfg: params.cfg,
         token: params.token,
         accountId: params.accountId,
-        ...(params.eventScope ? { client: params.eventScope.client } : {}),
+        client: editPublication.writeClient,
+        replyParentDeleted: editPublication.replyParentDeleted,
         ...(update.blocks ? { blocks: update.blocks } : {}),
       },
     );
@@ -85,7 +95,7 @@ export function createSlackDraftStream(params: {
   const sendOrEditStreamMessage = async (pending: SlackDraftStreamUpdate) => {
     const update = normalizeUpdate(pending);
     const trimmed = update.text.trimEnd();
-    if (!trimmed) {
+    if (!trimmed || params.replyParentDeleted?.aborted) {
       return;
     }
     if (!streamMessage && update.allowNewMessage === false) {
@@ -141,6 +151,7 @@ export function createSlackDraftStream(params: {
             threadTs,
             identity: params.identity,
             eventScope: params.eventScope,
+            ...(params.replyParentDeleted ? { replyParentDeleted: params.replyParentDeleted } : {}),
             ...(visibleUpdate.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
             ...(params.metadata ? { metadata: params.metadata } : {}),
             ...(visibleUpdate.blocks ? { blocks: visibleUpdate.blocks } : {}),
@@ -239,13 +250,17 @@ export function createSlackDraftStream(params: {
 
   const finalizeMessage = async (
     messageId: string,
-    editFinal: () => Promise<void>,
+    editFinal: (publication: typeof editPublication) => Promise<void>,
   ): Promise<boolean> => {
     const currentMessage = streamMessage;
-    if (!currentMessage || currentMessage.messageId !== messageId) {
+    if (
+      !currentMessage ||
+      currentMessage.messageId !== messageId ||
+      params.replyParentDeleted?.aborted
+    ) {
       return false;
     }
-    await editFinal();
+    await editFinal(editPublication);
     // An accepted final stays final even if a human replied during the edit.
     currentMessage.retained = true;
     stopTrackingConversationBoundary();

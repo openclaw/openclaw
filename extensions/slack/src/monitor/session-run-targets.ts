@@ -29,7 +29,8 @@ export async function captureSlackSessionTargetGuard(
 }
 
 // Reloaded turn contexts inherit the same Bolt app; each new monitor owns a new app.
-const runs = new WeakMap<SlackMonitorContext["app"], Map<string, Set<SlackSessionRunTarget>>>();
+type ActivePublisher = SlackSessionRunTarget & { replyParentDeletion?: AbortController };
+const runs = new WeakMap<SlackMonitorContext["app"], Map<string, Set<ActivePublisher>>>();
 
 function addressKey(address: SlackSessionAddress): string {
   return JSON.stringify([address.eventScope?.teamId ?? "", address.channelId, address.threadTs]);
@@ -40,16 +41,18 @@ export function registerSlackSessionRun(
   ctx: SlackMonitorContext,
   address: SlackSessionAddress,
   route: ResolvedAgentRoute,
+  replyParentDeletion?: AbortController,
 ): () => void {
-  if (!address.threadTs) {
+  // A deferred registration for this same turn must not revive a deleted parent.
+  if (!address.threadTs || replyParentDeletion?.signal.aborted) {
     return () => {};
   }
-  const byAddress = runs.get(ctx.app) ?? new Map<string, Set<SlackSessionRunTarget>>();
+  const byAddress = runs.get(ctx.app) ?? new Map<string, Set<ActivePublisher>>();
   runs.set(ctx.app, byAddress);
   const key = addressKey(address);
-  const targets = byAddress.get(key) ?? new Set<SlackSessionRunTarget>();
+  const targets = byAddress.get(key) ?? new Set<ActivePublisher>();
   byAddress.set(key, targets);
-  const target = { route, isActive: () => targets.has(target) };
+  const target = { route, isActive: () => targets.has(target), replyParentDeletion };
   targets.add(target);
   return () => {
     targets.delete(target);
@@ -58,6 +61,25 @@ export function registerSlackSessionRun(
       byAddress.delete(key);
     }
   };
+}
+
+/** Retire publication to this exact deleted message; the agent run and its session stay intact. */
+export function retireSlackReplyParent(
+  ctx: SlackMonitorContext,
+  address: SlackSessionAddress & { threadTs: string },
+): boolean {
+  const byAddress = runs.get(ctx.app);
+  const key = addressKey(address);
+  const publishers = byAddress?.get(key);
+  if (!publishers) {
+    return false;
+  }
+  byAddress?.delete(key);
+  for (const { replyParentDeletion } of publishers) {
+    replyParentDeletion?.abort();
+  }
+  publishers.clear();
+  return true;
 }
 
 export function getSlackSessionRuns(

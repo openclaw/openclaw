@@ -147,8 +147,9 @@ export function createSlackDraftProgressCardRuntime(params: {
     }
     await params.draftStream.seal();
     try {
-      const finalized = await params.draftStream.finalizeMessage(messageId, async () => {
-        await finalizeSlackPreviewEdit({
+      const finalized = await params.draftStream.finalizeMessage(messageId, (publication) =>
+        finalizeSlackPreviewEdit({
+          ...publication,
           client: slackClient,
           token: ctx.botToken,
           accountId: account.accountId,
@@ -157,8 +158,8 @@ export function createSlackDraftProgressCardRuntime(params: {
           text: resolveCardText(blocks),
           blocks,
           threadTs: params.getThreadTs(),
-        });
-      });
+        }),
+      );
       if (finalized) {
         finalStatus = terminalStatus;
       }

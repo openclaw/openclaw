@@ -3,6 +3,7 @@ import type { WebClient, WebClientOptions } from "@slack/web-api";
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { slackWriteRetryCheck } from "./client-options.js";
 import { getSlackListenerWriteClient } from "./client.js";
 import { buildSlackMessageIdentityPayload } from "./post-message-identity.js";
 import type { SlackSendIdentity } from "./send.js";
@@ -13,8 +14,9 @@ export type SlackStreamSession = {
   threadTs: string;
   /** True once stopped locally, by Slack, or after an ambiguous delivery failure. */
   stopped: boolean;
-  /** Slack's native Stop event cancelled this stream, including any buffered tail. */
+  /** Slack stopped the stream or deleted its parent. Never flush or fall back with its tail. */
   stoppedBySlack?: boolean;
+  replyParentDeleted?: AbortSignal;
   /**
    * True once Slack acknowledges a start, append, or stop. Short appends can
    * remain buffered locally; a lost response also leaves delivery unconfirmed.
@@ -29,6 +31,7 @@ type StartSlackStreamParams = {
   clientOptions?: WebClientOptions;
   channel: string;
   threadTs: string;
+  replyParentDeleted?: AbortSignal;
   text?: string;
   chunks?: AnyChunk[];
   taskDisplayMode?: "plan" | "timeline";
@@ -100,13 +103,21 @@ function releaseSlackStream(session: SlackStreamSession): void {
   stateBySession.get(session)?.sessions.delete(session);
 }
 
+function writeSlackStream<T>(session: SlackStreamSession, send: () => Promise<T>): Promise<T> {
+  // Either SDK operation can also start the stream. Recheck deletion after a 429 wait,
+  // before replaying that rejected request; never abort a write Slack may already have accepted.
+  return slackWriteRetryCheck.run(async () => session.replyParentDeleted?.throwIfAborted(), send);
+}
+
 function applySlackStreamStop(session: SlackStreamSession): boolean {
   if (session.stoppedBySlack) {
     return true;
   }
   const state = stateBySession.get(session);
   const ts = session.streamer.ts;
-  if (!ts || !state?.stopped.delete(`${session.channel}:${ts}`)) {
+  // A parent can disappear while the entire stream is still buffered, before it has a ts.
+  const streamStopped = ts && state?.stopped.delete(`${session.channel}:${ts}`);
+  if (!session.replyParentDeleted?.aborted && !streamStopped) {
     return false;
   }
   session.stopped = true;
@@ -163,6 +174,7 @@ export async function startSlackStream(
     streamer,
     channel,
     threadTs,
+    replyParentDeleted: params.replyParentDeleted,
     stopped: false,
     delivered: false,
     pendingText: "",
@@ -193,10 +205,12 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
   try {
     // Short markdown chunks stay buffered in the SDK until buffer_size is reached;
     // structured chunks force a flush. Only a non-null response acknowledges delivery.
-    const result = await session.streamer.append({
-      ...(text ? { markdown_text: text } : {}),
-      ...(chunks ? { chunks } : {}),
-    });
+    const result = await writeSlackStream(session, () =>
+      session.streamer.append({
+        ...(text ? { markdown_text: text } : {}),
+        ...(chunks ? { chunks } : {}),
+      }),
+    );
     if (result) {
       session.delivered = true;
       session.pendingText = "";
@@ -227,16 +241,19 @@ export async function stopSlackStream(
   session.stopped = true;
 
   try {
-    const stopResponse = await session.streamer.stop(
-      chunks?.length || metadata
-        ? {
-            ...(chunks?.length ? { chunks } : {}),
-            ...(metadata ? { metadata } : {}),
-          }
-        : undefined,
+    const stopResponse = await writeSlackStream(session, () =>
+      session.streamer.stop(
+        chunks?.length || metadata
+          ? {
+              ...(chunks?.length ? { chunks } : {}),
+              ...(metadata ? { metadata } : {}),
+            }
+          : undefined,
+      ),
     );
     // Accept a Stop racing the SDK's internal start/finalize when ts was unknown.
-    if (applySlackStreamStop(session)) {
+    // If the parent disappeared in flight, keep the accepted message ID; no later write is allowed.
+    if (applySlackStreamStop(session) && !session.replyParentDeleted?.aborted) {
       return {};
     }
     session.delivered = true;

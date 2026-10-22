@@ -1,7 +1,9 @@
 import type { App } from "@slack/bolt";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageHandler } from "../message-handler.js";
 import { createInboundSlackTestContext } from "../message-handler/prepare.test-helpers.js";
+import { registerSlackSessionRun } from "../session-run-targets.js";
 import { createSlackSystemEventRouteResolver } from "../system-event-session.js";
 import {
   createSlackSystemEventTestHarness,
@@ -454,6 +456,38 @@ describe("registerSlackMessageEvents", () => {
       resetSystemEventsForTest();
     },
   );
+
+  it("retires a publishing parent only for its own deletion in the listener workspace", async () => {
+    const { ctx, handler } = createEnterpriseHandlers("message");
+    const channelId = "C123";
+    const threadTs = "123.001";
+    const client = {} as App["client"];
+    const eventScope = { teamId: "T_FIRST", client };
+    const address = { channelId, threadTs, eventScope };
+    const route = resolveAgentRoute({ cfg: {}, channel: "slack" });
+    const parentDeletion = new AbortController();
+    const release = registerSlackSessionRun(ctx, address, route, parentDeletion);
+    const deleted = (teamId: string, ts: string) =>
+      handler({
+        event: {
+          type: "message",
+          subtype: "message_deleted",
+          channel: channelId,
+          channel_type: "channel",
+          deleted_ts: ts,
+          previous_message: { user: "U123", ts, thread_ts: threadTs },
+        },
+        body: { api_app_id: "A_TEST", event_id: `Ev-${teamId}-${ts}` },
+        context: { isEnterpriseInstall: true, enterpriseId: "E_TEST", teamId },
+        client,
+      });
+    await deleted("T_SECOND", threadTs);
+    await deleted(eventScope.teamId, "123.002");
+    expect(parentDeletion.signal.aborted).toBe(false);
+    await deleted(eventScope.teamId, threadTs);
+    expect(parentDeletion.signal.aborted).toBe(true);
+    release();
+  });
 
   it("keeps bot edit and delete events on a remembered C-prefix mpDM session", async () => {
     const handlers: Record<string, MessageHandler> = {};

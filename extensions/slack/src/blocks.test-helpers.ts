@@ -11,6 +11,8 @@ type SlackEditTestClient = WebClient & {
 type SlackSendTestClient = WebClient & {
   conversations: {
     open: ReturnType<typeof vi.fn>;
+    history: ReturnType<typeof vi.fn>;
+    replies: ReturnType<typeof vi.fn>;
   };
   chat: {
     postMessage: ReturnType<typeof vi.fn>;
@@ -18,6 +20,13 @@ type SlackSendTestClient = WebClient & {
 };
 
 const slackBlockTestState = vi.hoisted(() => ({
+  parentConversations: {
+    history: vi.fn(async ({ latest }: { latest: string }) => ({
+      ok: true,
+      messages: [{ ts: latest }],
+    })),
+    replies: vi.fn(async () => ({ ok: true, messages: [] })),
+  },
   account: {
     accountId: "default",
     botToken: "xoxb-test",
@@ -25,6 +34,11 @@ const slackBlockTestState = vi.hoisted(() => ({
     config: {},
   },
   config: {},
+}));
+
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
+  createSlackLookupClient: () => ({ conversations: slackBlockTestState.parentConversations }),
 }));
 
 vi.mock("./accounts.js", async () => {
@@ -47,6 +61,7 @@ export function createSlackSendTestClient(): SlackSendTestClient {
   return {
     conversations: {
       open: vi.fn(async () => ({ channel: { id: "D123" } })),
+      ...slackBlockTestState.parentConversations,
     },
     chat: {
       postMessage: vi.fn(async () => ({ ts: "171234.567" })),

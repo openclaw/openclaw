@@ -16,6 +16,7 @@ import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } from "./client.js";
+import { slackWriteRetryCheck } from "./client-options.js";
 import {
   openSlackConversationWithClient,
   parseSlackConversationOpenInput,
@@ -401,11 +402,16 @@ export async function sendSlackMessage(
   });
 }
 
+type SlackEditOpts = SlackActionClientOpts & {
+  blocks?: (Block | KnownBlock)[];
+  replyParentDeleted?: AbortSignal;
+};
+
 export async function editSlackMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+  opts: SlackEditOpts = {},
 ) {
   const accountId =
     opts.accountId ?? (opts.cfg ? resolveDefaultSlackAccountId(opts.cfg) : undefined);
@@ -426,9 +432,16 @@ export async function editSlackRenderedMessage(
   channelId: string,
   messageId: string,
   content: string,
-  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+  opts: SlackEditOpts = {},
 ) {
   const client = await getClient(opts, "write");
+  const beforeUpdate = async () => opts.replyParentDeleted?.throwIfAborted();
+  const postUpdate = (payload: Parameters<typeof client.chat.update>[0]) => {
+    // An edit can wait for client preparation or an explicit 429 replay. The
+    // publication capability must remain live at both transport boundaries.
+    opts.replyParentDeleted?.throwIfAborted();
+    return slackWriteRetryCheck.run(beforeUpdate, () => client.chat.update(payload));
+  };
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   const editText = buildSlackEditTextPayload(content, blocks);
   const hasNativeData = hasSlackNativeDataBlock(blocks);
@@ -450,7 +463,7 @@ export async function editSlackRenderedMessage(
     ...(blocks ? { blocks } : {}),
   };
   try {
-    await client.chat.update(update);
+    await postUpdate(update);
   } catch (error) {
     if (!hasNativeData || !isSlackInvalidBlocksError(error)) {
       throw error;
@@ -484,7 +497,7 @@ export async function editSlackRenderedMessage(
     if (countSlackTextUtf8Bytes(fallbackText) > SLACK_EDIT_TEXT_MAX_BYTES) {
       throw slackNativeEditLimitError({ cause: error });
     }
-    await client.chat.update({
+    await postUpdate({
       channel: channelId,
       ts: messageId,
       text: fallbackText,

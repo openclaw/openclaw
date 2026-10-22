@@ -48,7 +48,10 @@ function blocksMatch(expected?: (Block | KnownBlock)[], actual?: unknown[]): boo
 }
 
 export async function finalizeSlackPreviewEdit(params: {
+  /** Listener client for readback when the update may already have reached Slack. */
   client: WebClient;
+  writeClient?: WebClient;
+  replyParentDeleted?: AbortSignal;
   token: string;
   accountId?: string;
   channelId: string;
@@ -61,7 +64,8 @@ export async function finalizeSlackPreviewEdit(params: {
     await editSlackRenderedMessage(params.channelId, params.messageId, params.text, {
       token: params.token,
       accountId: params.accountId,
-      client: params.client,
+      client: params.writeClient,
+      replyParentDeleted: params.replyParentDeleted,
       ...(params.blocks?.length ? { blocks: params.blocks } : {}),
     });
   } catch (err) {

@@ -130,6 +130,19 @@ describe("Slack edits", () => {
     ]);
   });
 
+  it("does not replace rejected native blocks after the reply parent is deleted", async () => {
+    const deletion = new AbortController();
+    client.chat.update.mockImplementationOnce(async () => {
+      deletion.abort();
+      throw Object.assign(new Error("invalid_blocks"), { data: { error: "invalid_blocks" } });
+    });
+
+    await expect(
+      edit("Summary", { blocks: [tableBlock], replyParentDeleted: deletion.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(client.chat.update).toHaveBeenCalledOnce();
+  });
+
   it("rejects a native chart whose complete fallback exceeds one edit", async () => {
     const categories = Array.from({ length: 20 }, (_, i) => ("Category-" + i).padEnd(20, "x"));
     const block = chart("Maximum series chart", {
