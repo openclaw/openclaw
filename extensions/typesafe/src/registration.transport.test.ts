@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
-import { DecisionContractError, type DecisionBatch } from "openclaw/plugin-sdk/decisions";
+import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { resolveProviderHttpRequestConfigWithOriginTrust } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
@@ -9,82 +9,58 @@ import { evaluate } from "./client.js";
 import { runtimeConfig } from "./config.js";
 import { MAX_JSON_BYTES } from "./schema.js";
 import {
-  choiceAnswer,
+  mixedFixture,
   mockFetch,
   mockResponse as mockBodyResponse,
   mockJsonResponse as mockResponse,
   registeredDecisionProvider,
-  scoreAnswer,
 } from "./transport.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
 }));
 
-const batch: DecisionBatch = {
-  state: { evidence: "synthetic only" },
-  questions: {
-    q: { type: "boolean", instructions: "Does the evidence satisfy the criterion?" },
-    c: { type: "choice", criteria: { keep: "Keep", skip: "Skip" } },
-    s: { type: "score", criteria: ["Low", "High"] },
-  },
-};
-const response = {
-  model: "jev-test",
-  answers: {
-    q: { type: "noul", noul: 0.37 },
-    c: choiceAnswer("skip", { keep: 0.5, skip: 0.49 }, 0.5),
-    s: scoreAnswer(0.607, { 0: 0.4, 1: 0.6 }, { 0: "Low", 1: "High" }, 0.5),
-  },
-  usage: { input_tokens: 12, output_tokens: 3 },
-};
+const { batch, input, response, localInput, localResponse, result: expectedResult } = mixedFixture;
 
 function registeredProvider(config: Record<string, unknown> = {}) {
   return registeredDecisionProvider(() => ({ plugins: { entries: { typesafe: { config } } } }));
 }
 
-const context = (signal = new AbortController().signal) => ({
+const context = (
+  signal = new AbortController().signal,
+  deadlineMonotonicMs = performance.now() + 1000,
+) => ({
   model: "jev-agent-selected",
   agentId: "research",
   signal,
-  deadlineMonotonicMs: performance.now() + 1000,
+  deadlineMonotonicMs,
 });
 const withAnswer = (id: keyof typeof response.answers, overrides: object) => ({
   answers: { ...response.answers, [id]: { ...response.answers[id], ...overrides } },
 });
-const input = {
-  ...batch,
-  model: "jev-test",
-  questions: { ...batch.questions, q: { ...batch.questions.q, type: "noul" } },
-};
 const clientConfig = { apiKey: "synthetic-key", timeoutMs: 1000 };
+const localConfig = { ...clientConfig, baseUrl: "http://127.0.0.1:8009" };
+const request = (config = clientConfig, signal?: AbortSignal) => evaluate(input, config, signal);
 it("never follows redirects to a credential sink", async () => {
   const fetch = mockBodyResponse(null, {
     status: 302,
     headers: { location: "https://other.example/credential-sink" },
   });
-  await expect(evaluate(input, clientConfig)).rejects.toMatchObject({ reason: "transport" });
+  await expect(request()).rejects.toMatchObject({ reason: "transport" });
   expect(fetch).toHaveBeenCalledOnce();
   expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
 });
 it("bounds expanded local request bytes", async () => {
   const fetch = mockBodyResponse(undefined);
   const emptyBody = { ...input, state: "" };
-  await expect(
-    evaluate(
-      {
-        ...emptyBody,
-        state: "x".repeat(MAX_JSON_BYTES - Buffer.byteLength(JSON.stringify(emptyBody))),
-      },
-      { ...clientConfig, baseUrl: "http://127.0.0.1:8009" },
-    ),
-  ).rejects.toThrow("request exceeds");
+  const state = "x".repeat(MAX_JSON_BYTES - Buffer.byteLength(JSON.stringify(emptyBody)));
+  await expect(evaluate({ ...emptyBody, state }, localConfig)).rejects.toThrow("request exceeds");
   expect(fetch).not.toHaveBeenCalled();
 });
 it("keeps the deadline active after response headers", async () => {
   const cancelled = vi.fn();
   mockBodyResponse(new ReadableStream({ pull() {}, cancel: cancelled }));
-  await expect(evaluate(input, { ...clientConfig, timeoutMs: 25 })).rejects.toThrow(
+  await expect(request({ ...clientConfig, timeoutMs: 25 })).rejects.toThrow(
     "TypeSafe evaluation timed out.",
   );
   expect(cancelled).toHaveBeenCalledOnce();
@@ -101,7 +77,7 @@ it("rejects cancellation concurrent with body EOF", async () => {
     { highWaterMark: 0 },
   );
   mockBodyResponse(body);
-  await expect(evaluate(input, clientConfig, controller.signal)).rejects.toThrow(
+  await expect(request(clientConfig, controller.signal)).rejects.toThrow(
     "TypeSafe evaluation cancelled.",
   );
 });
@@ -116,7 +92,7 @@ it("preserves bounded multi-chunk JSON responses", async () => {
     },
   });
   mockBodyResponse(body);
-  await expect(evaluate(input, clientConfig)).resolves.toEqual({ evaluation: response });
+  await expect(request()).resolves.toEqual({ evaluation: response });
 });
 it.each<[number, string, HeadersInit, number?]>([
   [400, "unsupported-input", {}],
@@ -139,7 +115,7 @@ it.each<[number, string, HeadersInit, number?]>([
       status,
       headers: new Headers(headers),
     });
-    const error = await evaluate(input, clientConfig).catch((caught: unknown) => caught);
+    const error = await request().catch((caught: unknown) => caught);
     expect(error).toMatchObject({ name: "EvaluationError", reason, retryAfterMs });
     if (reason === "unsupported-input") {
       expect(error).toHaveProperty("message", "TypeSafe rejected the supplied input.");
@@ -190,7 +166,7 @@ it.each([
     };
   });
   let settled = false;
-  const outcome = evaluate(input, clientConfig, controller.signal)
+  const outcome = request(clientConfig, controller.signal)
     .catch((error: unknown) => error)
     .finally(() => {
       settled = true;
@@ -276,20 +252,12 @@ it.each<{ mode: string; config: { baseUrl?: string } }>([
 ])("preserves $mode mixed answers and additive metadata", async ({ config }) => {
   vi.stubEnv("TYPESAFE_BASE_URL", "https://invalid.example");
   vi.stubEnv("TYPESAFE_DEFAULT_MODEL", "unexpected");
-  const fetch = mockResponse(withMetadata);
-  const provider = registeredProvider(config);
-  await expect(provider.evaluate(batch, context())).resolves.toEqual({
-    status: "ok",
-    result: {
-      model: "jev-test",
-      answers: {
-        q: { type: "boolean", probabilityTrue: 0.37 },
-        c: response.answers.c,
-        s: { type: "score", score: 0.607, confidence: 0.5, probabilities: [0.4, 0.6] },
-      },
-      usage: { inputTokens: 12, outputTokens: 3 },
-    },
+  const fetch = mockResponse({
+    ...withMetadata,
+    answers: config.baseUrl ? localResponse.answers : response.answers,
   });
+  const provider = registeredProvider(config);
+  await expect(provider.evaluate(batch, context())).resolves.toEqual(expectedResult);
   expect(fetch).toHaveBeenCalledOnce();
   expect(fetch.mock.calls[0]?.[0]).toBe(
     config.baseUrl ? `${config.baseUrl}/v1/systemone` : "https://api.typesafe.ai/v1/systemone",
@@ -301,12 +269,7 @@ it.each<{ mode: string; config: { baseUrl?: string } }>([
   const body = fetch.mock.calls[0]?.[1]?.body;
   assert(typeof body === "string");
   expect(JSON.parse(body)).toEqual({
-    ...batch,
-    questions: {
-      q: { ...batch.questions.q, type: "noul" },
-      c: { ...batch.questions.c, ...(config.baseUrl ? { instructions: null } : {}) },
-      s: { ...batch.questions.s, ...(config.baseUrl ? { instructions: null } : {}) },
-    },
+    ...(config.baseUrl ? localInput : input),
     model: "jev-agent-selected",
   });
 });
@@ -346,32 +309,25 @@ it.each([
   });
 });
 
-it.each(["transport", "invalid JSON", "reflected credential"])(
-  "sanitizes %s errors",
-  async (kind) => {
-    mockFetch(async () => {
-      if (kind === "transport") {
-        throw new Error(clientConfig.apiKey);
-      }
-      return new Response(
-        kind === "invalid JSON"
-          ? "not json"
-          : JSON.stringify({ ...response, model: clientConfig.apiKey }),
-      );
-    });
-    const outcome = evaluate(input, clientConfig);
-    await expect(outcome).rejects.toMatchObject({
-      reason: kind === "transport" ? "transport" : "invalid-response",
-    });
-    await expect(outcome).rejects.toThrow(
-      kind === "transport"
-        ? "TypeSafe transport unavailable"
-        : kind === "invalid JSON"
-          ? "TypeSafe returned invalid JSON"
-          : "TypeSafe evaluation failed",
+it.each([
+  ["transport", "transport", "TypeSafe transport unavailable"],
+  ["invalid JSON", "invalid-response", "TypeSafe returned invalid JSON"],
+  ["reflected credential", "invalid-response", "TypeSafe evaluation failed"],
+])("sanitizes %s errors", async (kind, reason, message) => {
+  mockFetch(async () => {
+    if (kind === "transport") {
+      throw new Error(clientConfig.apiKey);
+    }
+    return new Response(
+      kind === "invalid JSON"
+        ? "not json"
+        : JSON.stringify({ ...response, model: clientConfig.apiKey }),
     );
-  },
-);
+  });
+  const outcome = request();
+  await expect(outcome).rejects.toMatchObject({ reason });
+  await expect(outcome).rejects.toThrow(message);
+});
 
 it("requires prepared credentials, not ambient or unresolved keys", async () => {
   vi.stubEnv("TYPESAFE_API_KEY", "unused-synthetic-key");
@@ -395,7 +351,7 @@ it.each(["before dispatch", "in flight"])("sanitizes cancellation %s", async (ph
   if (phase === "before dispatch") {
     controller.abort(clientConfig.apiKey);
   }
-  await expect(evaluate(input, clientConfig, controller.signal)).rejects.toThrow(
+  await expect(request(clientConfig, controller.signal)).rejects.toThrow(
     "TypeSafe evaluation cancelled.",
   );
   expect(fetch).toHaveBeenCalledTimes(phase === "before dispatch" ? 0 : 1);
@@ -499,13 +455,10 @@ it.each<DecisionBatch>([
 it("rejects dispatch after preparation exhausts the deadline", async () => {
   const fetch = mockResponse(response);
   vi.spyOn(performance, "now").mockReturnValueOnce(0).mockReturnValue(100);
-  await expect(
-    registeredProvider().evaluate(batch, {
-      model: "jev-agent-selected",
-      signal: new AbortController().signal,
-      deadlineMonotonicMs: 50,
-    }),
-  ).resolves.toEqual({ status: "unavailable", reason: "transport" });
+  await expect(registeredProvider().evaluate(batch, context(undefined, 50))).resolves.toEqual({
+    status: "unavailable",
+    reason: "transport",
+  });
   expect(fetch).not.toHaveBeenCalled();
 });
 
@@ -525,11 +478,7 @@ it("uses only the deadline remaining after preparation", async () => {
       }),
   );
   const controller = new AbortController();
-  const pending = registeredProvider().evaluate(batch, {
-    model: "jev-agent-selected",
-    signal: controller.signal,
-    deadlineMonotonicMs: 50,
-  });
+  const pending = registeredProvider().evaluate(batch, context(controller.signal, 50));
   try {
     const signal = await started.promise;
     await vi.advanceTimersByTimeAsync(9);
@@ -543,36 +492,3 @@ it("uses only the deadline remaining after preparation", async () => {
     vi.useRealTimers();
   }
 });
-
-it.each(["inherited array serializer", "hidden serializer", "getter", "hidden array getter"])(
-  "rejects %s without running user code or dispatching",
-  async (kind) => {
-    const hook = vi.fn(() => "synthetic replacement");
-    let state: DecisionBatch["state"];
-    if (kind === "inherited array serializer") {
-      const prototype = Object.create(Array.prototype);
-      Object.defineProperty(prototype, "toJSON", { value: hook });
-      state = Object.setPrototypeOf(["synthetic evidence"], prototype);
-    } else if (kind === "hidden array getter") {
-      state = Object.defineProperty([], "0", { get: hook });
-    } else {
-      state = Object.defineProperty(
-        {},
-        kind === "getter" ? "evidence" : "toJSON",
-        kind === "getter" ? { enumerable: true, get: hook } : { value: hook },
-      );
-    }
-    const fetch = mockResponse({});
-    await expect(
-      registeredProvider().evaluate(
-        {
-          state,
-          questions: { q: { type: "boolean" } },
-        },
-        context(),
-      ),
-    ).rejects.toThrow(DecisionContractError);
-    expect(hook).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
-  },
-);

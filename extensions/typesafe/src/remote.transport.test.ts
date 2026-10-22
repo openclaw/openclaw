@@ -67,8 +67,11 @@ async function listen<T extends Server>(listener: T) {
   });
   return {
     listener,
-    claim,
-    releaseListener: () => closeServer(listener),
+    port: claim.port,
+    async close() {
+      await closeServer(listener);
+      await claim.release();
+    },
   };
 }
 
@@ -102,13 +105,11 @@ beforeAll(async () => {
       { key: PROXY_FIXTURE_KEY, cert: PROXY_FIXTURE_CERTIFICATE },
       (request, response) => {
         collectRequest(request, (body) => {
-          received.push({
-            url: request.url,
-            host: request.headers.host,
-            authorization: request.headers.authorization,
-            apiKey: request.headers["x-api-key"],
-            body: JSON.parse(body),
-          });
+          const {
+            url,
+            headers: { host, authorization, "x-api-key": apiKey },
+          } = request;
+          received.push({ url, host, authorization, apiKey, body: JSON.parse(body) });
           if (redirect) {
             response.writeHead(302, { location: redirect });
             response.end();
@@ -120,7 +121,7 @@ beforeAll(async () => {
       },
     ),
   );
-  baseUrl = `https://files.proxy.test:${fixture.claim.port}`;
+  baseUrl = `https://files.proxy.test:${fixture.port}`;
   // Network proof starts after host-policy/loader initialization, as on a running
   // Gateway. Cold import and deadline admission have separate registration.lazy tests.
   await import("./client.js");
@@ -131,17 +132,13 @@ beforeAll(async () => {
   });
   redactProviderResponseErrorText("{}", {});
 });
-afterAll(async () => {
-  await fixture.releaseListener();
-  await fixture.claim.release();
-});
+afterAll(() => fixture.close());
 beforeEach(() => {
   received.length = 0;
   redirect = undefined;
   responsePayload = JSON.stringify(answer);
   pinnedAddress = "10.123.0.5";
-  vi.mocked(lookup).mockReset();
-  vi.mocked(lookup).mockResolvedValue([{ address: "10.123.0.5", family: 4 }]);
+  lookup.mockReset().mockResolvedValue([{ address: pinnedAddress, family: 4 }]);
   vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
     Agent: FixtureAgent,
     EnvHttpProxyAgent,
@@ -204,8 +201,33 @@ const header = (value: string) => ({
   prefix: "Token ",
 });
 
-it.each([false, true])("uses private HTTPS with apiKey=%s", async (auth) => {
-  const registered = provider(settings(auth ? { apiKey: "synthetic-server-key" } : {}));
+const replacement = "replacement";
+const override = "Bearer override";
+const headerAuth = { mode: "header" as const, headerName: "X-API-Key", value: replacement };
+const staleHeaders = { authorization: "Bearer stale", "x-api-key": "stale" };
+const overrideRequest = (request: ModelProviderConfig["request"]) => ({
+  apiKey: "synthetic-default",
+  headers: staleHeaders,
+  request: { tls, ...request },
+});
+it.each<[string, Partial<ModelProviderConfig>, string | undefined, string | undefined]>([
+  ["anonymous", {}, undefined, undefined],
+  ["api key", { apiKey: "synthetic-server-key" }, "Bearer synthetic-server-key", undefined],
+  ["bearer", overrideRequest({ auth: bearer("override") }), override, "stale"],
+  ["header", overrideRequest({ auth: headerAuth }), undefined, replacement],
+  [
+    "headers",
+    overrideRequest({ headers: { Authorization: override, "X-API-Key": replacement } }),
+    override,
+    replacement,
+  ],
+])("uses private HTTPS with %s credentials", async (mode, config, authorization, apiKey) => {
+  const registered = provider(
+    settings({
+      ...config,
+      ...(mode === "bearer" ? { baseUrl: baseUrl + "/v1/" } : {}),
+    }),
+  );
   expect(registered.isReady?.()).toBe(true);
   await expect(registered.evaluate(batch, context())).resolves.toMatchObject({
     status: "ok",
@@ -218,7 +240,8 @@ it.each([false, true])("uses private HTTPS with apiKey=%s", async (auth) => {
     {
       url: "/v1/systemone",
       host: new URL(baseUrl).host,
-      authorization: auth ? "Bearer synthetic-server-key" : undefined,
+      authorization,
+      apiKey,
       body: {
         ...batch,
         model: "nemotron-deciffusion",
@@ -226,8 +249,7 @@ it.each([false, true])("uses private HTTPS with apiKey=%s", async (auth) => {
       },
     },
   ]);
-  expect(lookup).toHaveBeenCalled();
-  expect(lookup.mock.calls.every(([host]) => host === "files.proxy.test")).toBe(true);
+  expect([...new Set(lookup.mock.calls.map(([host]) => host))]).toEqual(["files.proxy.test"]);
   expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
 });
 
@@ -239,41 +261,6 @@ it("honors private-network opt-out and opt-in", async () => {
     status: "ok",
   });
   expect(received).toHaveLength(1);
-});
-
-it.each([
-  { mode: "bearer", request: { auth: bearer("synthetic-override") } },
-  {
-    mode: "header-auth",
-    request: {
-      auth: { mode: "header" as const, headerName: "X-API-Key", value: "synthetic-replacement" },
-    },
-  },
-  {
-    mode: "request-headers",
-    request: {
-      headers: { Authorization: "Bearer synthetic-override", "X-API-Key": "synthetic-replacement" },
-    },
-  },
-])("applies $mode after provider header defaults", async ({ mode, request }) => {
-  await expect(
-    evaluate({
-      ...(mode === "bearer" ? { baseUrl: baseUrl + "/v1/" } : {}),
-      apiKey: "synthetic-default",
-      headers: {
-        authorization: "Bearer synthetic-stale",
-        ...(mode === "bearer" ? {} : { "x-api-key": "synthetic-stale-header" }),
-      },
-      request: { tls, ...request },
-    }),
-  ).resolves.toMatchObject({ status: "ok" });
-  expect(received).toMatchObject([
-    {
-      url: "/v1/systemone",
-      authorization: mode === "header-auth" ? undefined : "Bearer synthetic-override",
-      ...(mode === "bearer" ? {} : { apiKey: "synthetic-replacement" }),
-    },
-  ]);
 });
 
 it.each(["untrusted certificate", "hostname mismatch", "insecure override"])(
@@ -300,20 +287,18 @@ it.each(["https://api.typesafe.ai/v1/systemone", "https://other.proxy.test/sink"
   },
 );
 
-it.each(["origin", "policy", "credential", "credential loss"])(
+it.each([
+  ["origin", { baseUrl: "https://other.proxy.test" }],
+  ["policy", { request: { allowPrivateNetwork: false } }],
+  ["credential", { apiKey: "synthetic-rotated" }],
+  ["credential loss", { apiKey: endpointRef }],
+] satisfies [string, Partial<ModelProviderConfig>][])(
   "rechecks provider %s after DNS",
-  async (change) => {
+  async (_change, update) => {
     let config = settings({ apiKey: "synthetic-server-key" });
     const registered = provider(() => config);
     lookup.mockImplementationOnce(async () => {
-      config = {
-        ...config,
-        ...(change === "origin"
-          ? { baseUrl: "https://other.proxy.test" }
-          : change === "policy"
-            ? { request: { allowPrivateNetwork: false } }
-            : { apiKey: change === "credential" ? "synthetic-rotated" : endpointRef }),
-      };
+      config = { ...config, ...update };
       return [{ address: pinnedAddress, family: 4 }];
     });
     await expectUnavailable(registered.evaluate(batch, context()));
@@ -328,15 +313,14 @@ it("never bypasses a managed proxy refusal", async () => {
     socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
   });
   try {
-    const url = "http://127.0.0.1:" + proxy.claim.port;
+    const url = "http://127.0.0.1:" + proxy.port;
     vi.stubEnv("HTTPS_PROXY", url);
     vi.stubEnv("https_proxy", url);
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     await expectUnavailable(evaluate({ apiKey: "synthetic-server-key" }));
     expect(connects).toEqual([new URL(baseUrl).host]);
   } finally {
-    await proxy.releaseListener();
-    await proxy.claim.release();
+    await proxy.close();
   }
 });
 
@@ -366,15 +350,11 @@ it("observes provider credential loss, rotation and recovery", async () => {
   expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
 });
 
-it.each<ModelProviderConfig>([
-  { baseUrl: "https://files.proxy.test", models: [], headers: { Authorization: endpointRef } },
-  {
-    baseUrl: "https://files.proxy.test",
-    models: [],
-    request: { auth: { mode: "authorization-bearer", token: endpointRef } },
-  },
+it.each<Partial<ModelProviderConfig>>([
+  { headers: { Authorization: endpointRef } },
+  { request: { auth: { mode: "authorization-bearer", token: endpointRef } } },
 ])("rejects unresolved headers/request auth", async (config) => {
-  await expectUnavailable(evaluate({ ...config, baseUrl }), "credentials-unavailable");
+  await expectUnavailable(evaluate(config), "credentials-unavailable");
   expect(lookup).not.toHaveBeenCalled();
 });
 
@@ -388,30 +368,31 @@ it.each(["127.0.0.1", "169.254.169.254", "0.0.0.0"])(
 
 const reflected = "synthetic-request-token";
 const reflectedHeaders = { "X-API-Key": reflected };
+const bearerRequest = { request: { tls, auth: bearer(reflected) } };
+const headerRequest = { request: { tls, auth: header(reflected) } };
 it.each([
-  { name: "bearer", config: { request: { tls, auth: bearer(reflected) } }, escaped: false },
-  { name: "header", config: { request: { tls, auth: header(reflected) } }, escaped: false },
-  { name: "escaped bearer", config: { request: { tls, auth: bearer(reflected) } }, escaped: true },
-  { name: "escaped header", config: { request: { tls, auth: header(reflected) } }, escaped: true },
-  { name: "provider headers", config: { headers: reflectedHeaders }, escaped: true },
-  {
-    name: "request headers",
-    config: { request: { tls, headers: reflectedHeaders } },
-    escaped: true,
+  ["bearer", bearerRequest, false],
+  ["header", headerRequest, false],
+  ["escaped bearer", bearerRequest, true],
+  ["escaped header", headerRequest, true],
+  ["provider headers", { headers: reflectedHeaders }, true],
+  ["request headers", { request: { tls, headers: reflectedHeaders } }, true],
+] satisfies [string, Partial<ModelProviderConfig>, boolean][])(
+  "rejects reflected %s credentials",
+  async (name, config, escaped) => {
+    responsePayload = JSON.stringify({ ...answer, model: reflected });
+    if (escaped) {
+      responsePayload = responsePayload.replaceAll("-", "\\u002d");
+    }
+    const result = await evaluate(config);
+    expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
+    expect(JSON.stringify(result)).not.toContain(reflected);
+    if (name.endsWith("headers")) {
+      expect(received).toHaveLength(1);
+      expect(received[0]?.apiKey).toBe(reflected);
+    }
   },
-])("rejects reflected $name credentials", async ({ name, config, escaped }) => {
-  responsePayload = JSON.stringify({ ...answer, model: reflected });
-  if (escaped) {
-    responsePayload = responsePayload.replaceAll("-", "\\u002d");
-  }
-  const result = await evaluate(config);
-  expect(result).toEqual({ status: "unavailable", reason: "invalid-response" });
-  expect(JSON.stringify(result)).not.toContain(reflected);
-  if (name.endsWith("headers")) {
-    expect(received).toHaveLength(1);
-    expect(received[0]?.apiKey).toBe(reflected);
-  }
-});
+);
 
 it.each(["authorization-bearer", "header"] as const)(
   "rejects empty %s auth before DNS",
