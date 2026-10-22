@@ -333,6 +333,17 @@ are treated as text-only. When `input` is absent, OpenClaw retains its existing
 family inference and recognizes exact known native OpenAI image-capable models;
 unknown model names do not inherit image support from a new GPT generation prefix.
 
+OpenAI Responses and Anthropic Messages rows also receive the model facts that
+the bundled OpenAI and Anthropic catalogs declare for the same upstream model id
+and API: the Code Mode tier (so the default `tools.codeMode: "auto"` engages for
+the same models), whether the model accepts `temperature` (GPT-6 and GPT-5.6
+requests drop it instead of failing upstream), and image size limits (for
+example 2576 px for current Claude models). This works without enabling those
+plugins. Matching is exact; unknown, renamed, or future models inherit nothing.
+Reasoning efforts still come from the ClawRouter catalog. Requests to Claude with
+extended thinking drop a trailing assistant prefill, as the native Anthropic
+provider does.
+
 Adding a model to a supported ClawRouter provider needs no OpenClaw release.
 Successful catalog responses, including an empty granted-model list, are reused
 for one hour per endpoint and resolved credential. Ordinary model-list reads

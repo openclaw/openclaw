@@ -36,8 +36,8 @@ function expectFileDownload(fileKey: string, originalFilename?: string) {
 describe("resolveFeishuMediaList post files[]", () => {
   beforeEach(() => {
     saveMessageResourceFeishu.mockReset();
-    saveMessageResourceFeishu.mockImplementation(async ({ originalFilename, fileKey, type }) => ({
-      saved: saved(
+    saveMessageResourceFeishu.mockImplementation(async ({ originalFilename, fileKey, type }) =>
+      saved(
         originalFilename ?? fileKey,
         originalFilename?.endsWith(".csv")
           ? "text/csv"
@@ -48,7 +48,7 @@ describe("resolveFeishuMediaList post files[]", () => {
               : "video/mp4",
         Buffer.byteLength(fileKey),
       ),
-    }));
+    );
   });
 
   it("downloads multiple top-level files without text", async () => {
@@ -68,11 +68,7 @@ describe("resolveFeishuMediaList post files[]", () => {
   });
 
   it("keeps unnamed top-level files as documents when download supplies the filename", async () => {
-    saveMessageResourceFeishu.mockResolvedValue({
-      saved: saved("report.pdf", "application/pdf"),
-      fileName: "report.pdf",
-      contentType: "application/pdf",
-    });
+    saveMessageResourceFeishu.mockResolvedValue(saved("report.pdf", "application/pdf"));
     expect(await download({ title: "", content: [[]], files: [{ file_key: "file_pdf" }] })).toEqual(
       [document("report.pdf", "application/pdf")],
     );

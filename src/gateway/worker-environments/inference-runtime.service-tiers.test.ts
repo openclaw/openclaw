@@ -120,14 +120,14 @@ it("uses session speed and publishes a downgrade for a direct credential", async
     transport.echo = echo;
     await complete(runtime);
     expect(transport.requests.at(-1)?.service_tier).toBe("ultrafast");
-    expect(accountCatalog.readServiceTierObservation(route)).toEqual(
-      echo === "ultrafast" ? undefined : { requestedTier: "ultrafast", responseTier: echo },
+    expect(accountCatalog.readServiceTierObservations(route)).toEqual(
+      echo === "ultrafast" ? [] : [{ requestedTier: "ultrafast", responseTier: echo }],
     );
   }
   expect(runtime.prepareModel.mock.calls[0]?.[0].profileId).toBeUndefined();
   expect(
-    accountCatalog.readServiceTierObservation({ ...route, identityKey: "profile:openai:other" }),
-  ).toBeUndefined();
+    accountCatalog.readServiceTierObservations({ ...route, identityKey: "profile:openai:other" }),
+  ).toEqual([]);
   for (const fastMode of [false, true]) {
     runtime.readPromptCacheContext.mockReturnValue({ boundaryCount: 0, fastMode });
     const inferenceRequest = request();

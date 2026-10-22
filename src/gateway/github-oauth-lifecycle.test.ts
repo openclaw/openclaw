@@ -116,6 +116,18 @@ import {
 } from "./github-oauth-lifecycle.test-support.js";
 
 type GitHubOAuthLifecycle = ReturnType<typeof createGitHubOAuthLifecycle>;
+type AuthorizedTokens = { status: "authorized"; tokens: typeof TOKENS };
+type RefreshedTokens = { status: "refreshed"; tokens: typeof TOKENS };
+
+function holdTokenExchange<T>(mock: typeof mocks.pollDeviceToken) {
+  const upstream = deferred<T>();
+  const started = deferred();
+  mock.mockImplementation(() => {
+    started.resolve();
+    return upstream.promise;
+  });
+  return { upstream, started };
+}
 
 const DEVICE_CODE = "d".repeat(40);
 
@@ -319,26 +331,18 @@ describe("GitHub OAuth authorization lifecycle", () => {
       .mockResolvedValueOnce({ status: "slow_down", intervalSeconds: 20 })
       .mockResolvedValueOnce({ status: "slow_down", intervalSeconds: 12 });
 
-    await advanceToPoll(started.requestId);
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "pending",
-      retryAfterMs: 5_000,
-    });
-    await advanceToPoll(started.requestId);
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "slow_down",
-      retryAfterMs: 10_000,
-    });
-    await advanceToPoll(started.requestId);
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "slow_down",
-      retryAfterMs: 20_000,
-    });
-    await advanceToPoll(started.requestId);
-    await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
-      status: "slow_down",
-      retryAfterMs: 25_000,
-    });
+    for (const [status, retryAfterMs] of [
+      ["pending", 5_000],
+      ["slow_down", 10_000],
+      ["slow_down", 20_000],
+      ["slow_down", 25_000],
+    ]) {
+      await advanceToPoll(started.requestId);
+      await expect(lifecycle.pollAuthorization(started.requestId)).resolves.toEqual({
+        status,
+        retryAfterMs,
+      });
+    }
     expect(await readGitHubDeviceAuthorizationRecord(started.requestId)).toMatchObject({
       pollIntervalMs: 25_000,
       nextPollAtMs: NOW + 65_000,
@@ -437,12 +441,9 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it("singleflights concurrent polls for one request", async () => {
     const lifecycle = createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
-    const upstream = deferred<{ status: "authorization_pending" }>();
-    const pollStarted = deferred();
-    mocks.pollDeviceToken.mockImplementation(() => {
-      pollStarted.resolve();
-      return upstream.promise;
-    });
+    const { upstream, started: pollStarted } = holdTokenExchange<{
+      status: "authorization_pending";
+    }>(mocks.pollDeviceToken);
     await advanceToPoll(started.requestId);
 
     const first = lifecycle.pollAuthorization(started.requestId);
@@ -461,12 +462,9 @@ describe("GitHub OAuth authorization lifecycle", () => {
   it("fences an in-flight token exchange after the operator cancels", async () => {
     const lifecycle = createLifecycle();
     const started = await startAuthorization(lifecycle, "system");
-    const upstream = deferred<{ status: "authorized"; tokens: typeof TOKENS }>();
-    const pollStarted = deferred();
-    mocks.pollDeviceToken.mockImplementation(() => {
-      pollStarted.resolve();
-      return upstream.promise;
-    });
+    const { upstream, started: pollStarted } = holdTokenExchange<AuthorizedTokens>(
+      mocks.pollDeviceToken,
+    );
     await advanceToPoll(started.requestId);
 
     const result = lifecycle.pollAuthorization(started.requestId);
@@ -837,12 +835,9 @@ describe("GitHub OAuth refresh and maintenance", () => {
 
   it("finishes an accepted refresh for already-admitted runs after config changes", async () => {
     await selectRefreshIdentity();
-    const upstream = deferred<{ status: "refreshed"; tokens: typeof TOKENS }>();
-    const refreshStarted = deferred();
-    mocks.refreshToken.mockImplementation(() => {
-      refreshStarted.resolve();
-      return upstream.promise;
-    });
+    const { upstream, started: refreshStarted } = holdTokenExchange<RefreshedTokens>(
+      mocks.refreshToken,
+    );
     const lifecycle = createLifecycle();
 
     const refresh = lifecycle.refreshEffectiveIdentity("main");
@@ -902,12 +897,10 @@ describe("GitHub OAuth refresh and maintenance", () => {
 
   it("singleflights refresh and ignores calls after the active lifecycle disconnects", async () => {
     await selectRefreshIdentity(false);
-    const upstream = deferred<{ status: "error"; code: "bad_refresh_token" }>();
-    const refreshStarted = deferred();
-    mocks.refreshToken.mockImplementation(() => {
-      refreshStarted.resolve();
-      return upstream.promise;
-    });
+    const { upstream, started: refreshStarted } = holdTokenExchange<{
+      status: "error";
+      code: "bad_refresh_token";
+    }>(mocks.refreshToken);
     const lifecycle = createLifecycle();
     const uninstall = installActiveGitHubOAuthLifecycle(lifecycle);
 
@@ -980,12 +973,9 @@ describe("GitHub OAuth refresh and maintenance", () => {
 
   it("drains a non-idempotent refresh before shutdown completes", async () => {
     const configured = await selectRefreshIdentity();
-    const upstream = deferred<{ status: "refreshed"; tokens: typeof TOKENS }>();
-    const refreshStarted = deferred();
-    mocks.refreshToken.mockImplementation(() => {
-      refreshStarted.resolve();
-      return upstream.promise;
-    });
+    const { upstream, started: refreshStarted } = holdTokenExchange<RefreshedTokens>(
+      mocks.refreshToken,
+    );
     const lifecycle = createLifecycle();
 
     const refresh = lifecycle.refreshEffectiveIdentity("main");

@@ -81,7 +81,7 @@ function senderClient(get = vi.fn().mockResolvedValue({ data: { user: { name: "S
 }
 
 function savedMedia(id: string, contentType: string, size: number, path = `/tmp/${id}`) {
-  return { saved: { id, path, size, contentType } };
+  return { id, path, size, contentType };
 }
 
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {

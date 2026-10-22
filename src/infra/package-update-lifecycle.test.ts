@@ -318,7 +318,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         lockBytes = await readText(packageRoot, lockName);
         if (state === "completed") {
           lifecycle.finish();
-          expect(await owner).toBe(true);
+          expect(await owner).toBeUndefined();
         }
       });
       expect(lifecycleCalls).toEqual([]);
@@ -519,7 +519,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
 
   it("reverifies the candidate after another lifecycle owner completes", async () => {
     const lifecycle = createLifecycleOwner();
-    let owner: Promise<boolean> | undefined;
+    let owner: Promise<void> | undefined;
     let waitedForOwner = false;
     const isPidAlive = pidAlive.isPidAlive;
     const safetyRelease = setTimeout(() => lifecycle.finish(), 5000);
@@ -537,7 +537,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         });
       });
       expect(waitedForOwner).toBe(true);
-      expect(await owner).toBe(true);
+      await owner;
       expect(lifecycleCalls).toEqual([]);
       expect(result.failedStep).toMatchObject({ name: "package-verify", exitCode: 1 });
       expect(result.failedStep?.stderrTail).toContain("3.0.0");
