@@ -204,10 +204,10 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         receipt.state === scope.state &&
         receipt.epoch === scope.epoch,
     );
-    // Route data is already awaited; explicit refreshes observe their admitted completion.
+    // The route has already awaited its snapshot; only admitted reads suspend.
     return receipts.length
       ? Promise.all(receipts.map((receipt) => receipt.result)).then(() => undefined)
-      : Promise.resolve();
+      : undefined;
   });
   onSettled(() => {
     syncConfigCustody();
