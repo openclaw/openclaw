@@ -103,9 +103,7 @@ type InternalReplySessionOptions = {
   resolveReplyDelivery?: ReplyDeliveryObserver;
   /** Distinguishes committed source-tool custody from ordinary transcript presentation. */
   resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
-  /** Heartbeat-owner policy: only an admitted current source permits implicit message replies. */
-  requireExplicitMessageTarget?: boolean;
-  /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs (isolated heartbeats) whose session ID is never reused. */
+  /** Retire the run's bundle MCP runtime at settlement. Set by one-shot isolated runs whose session ID is never reused. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Defers child completion until the waiting status or explicit silent handoff settles. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;

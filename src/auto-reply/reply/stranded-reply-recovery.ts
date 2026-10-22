@@ -27,14 +27,16 @@ export function resolveStrandedReplyRecovery(params: {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   sendPolicyDenied: boolean;
   successfulSourceReplyDelivery: boolean;
-  isHeartbeat: boolean;
   isRoomEvent: boolean;
 }): StrandedReplyRecovery {
   // Host-owned payloads can still be awaiting transport when completion bookkeeping runs.
   if (
     !isStrandedPrivateMessageToolFinal({
       ...params,
-      replyExpectation: resolveReplyExpectation(params.base.run),
+      replyExpectation: resolveReplyExpectation({
+        ...params.base.run,
+        scheduledAutomation: params.base.run.scheduledAutomation !== undefined,
+      }),
     }) ||
     params.payloads.some(
       (payload) =>

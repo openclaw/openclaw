@@ -9,7 +9,11 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { buildMcpOAuthAuthorizationFetch, buildMcpOAuthHttpFetch } from "./mcp-http-fetch.js";
-import { requesterMcpOAuthStoreKeyPrefix, type McpOAuthIdentity } from "./mcp-oauth-identity.js";
+import {
+  mcpOAuthSignInHint,
+  requesterMcpOAuthStoreKeyPrefix,
+  type McpOAuthIdentity,
+} from "./mcp-oauth-identity.js";
 import {
   createMcpOAuthClientProvider,
   type McpOAuthConfig,
@@ -73,9 +77,9 @@ async function withMcpOAuthLease<T>(
   );
 }
 
-function mcpOAuthAdditionalAuthorizationError(serverName: string): Error {
+function mcpOAuthAdditionalAuthorizationError(identity: McpOAuthIdentity): Error {
   return new Error(
-    `MCP server "${serverName}" requires additional OAuth authorization. Run openclaw mcp login ${serverName}.`,
+    `MCP server "${identity.serverName}" requires additional OAuth authorization. ${mcpOAuthSignInHint(identity)}`,
   );
 }
 
@@ -144,10 +148,10 @@ export async function resolveMcpOAuthAccessToken(
         params.interactiveAuthorizationRequired === true &&
         challengeAppliesToCurrentState
       ) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity.serverName);
+        throw mcpOAuthAdditionalAuthorizationError(params.identity);
       }
       if (store.pendingAuthorizationChallenge?.requiresAuthorization === true) {
-        throw mcpOAuthAdditionalAuthorizationError(params.identity.serverName);
+        throw mcpOAuthAdditionalAuthorizationError(params.identity);
       }
       if (store.refreshClaim) {
         throw new Error("MCP OAuth refresh outcome is uncertain; sign in again.");
@@ -157,7 +161,7 @@ export async function resolveMcpOAuthAccessToken(
           return undefined;
         }
         throw new Error(
-          `MCP server "${params.identity.serverName}" requires OAuth authorization. Run openclaw mcp login ${params.identity.serverName}.`,
+          `MCP server "${params.identity.serverName}" requires OAuth authorization. ${mcpOAuthSignInHint(params.identity)}`,
         );
       }
 
@@ -174,7 +178,7 @@ export async function resolveMcpOAuthAccessToken(
       }
       if (!tokens.refresh_token) {
         throw new Error(
-          `MCP server "${params.identity.serverName}" has expired OAuth credentials. Run openclaw mcp login ${params.identity.serverName}.`,
+          `MCP server "${params.identity.serverName}" has expired OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
         );
       }
 
@@ -212,7 +216,7 @@ export async function resolveMcpOAuthAccessToken(
       const refreshedTokens = await provider.tokens();
       if (result !== "AUTHORIZED" || !refreshedTokens?.access_token) {
         throw new Error(
-          `MCP server "${params.identity.serverName}" could not refresh OAuth credentials. Run openclaw mcp login ${params.identity.serverName}.`,
+          `MCP server "${params.identity.serverName}" could not refresh OAuth credentials. ${mcpOAuthSignInHint(params.identity)}`,
         );
       }
       return refreshedTokens.access_token;

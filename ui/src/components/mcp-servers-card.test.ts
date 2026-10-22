@@ -305,7 +305,7 @@ describe("openclaw-mcp-servers-card", () => {
     {
       name: "requester-owned",
       server: { ...oauthServer, oauth: { identity: "per-requester" } },
-      text: "Each person signs in through this connector in chat.",
+      text: "Each person signs in through this MCP server in chat.",
     },
     {
       name: "mapped profile",

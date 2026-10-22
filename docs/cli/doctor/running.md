@@ -21,6 +21,9 @@ must still check the process exit status: `Doctor complete.` records completion
 of the checks, but a subsequent crash remains a failed candidate-Doctor step
 during an update.
 
+Doctor checks every configured agent. Plugin metadata retained between workspace
+checks is bounded, so adding agents does not retain a full plugin inventory per agent.
+
 SIGINT and SIGTERM cancel Doctor's preparation before it stops a Gateway or
 starts repairs. If repair already owns state, Doctor settles its admitted work
 and restores any service it stopped before exiting.

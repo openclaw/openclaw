@@ -107,6 +107,11 @@ async function setup(page: Page) {
     .frameLocator(".board-widget iframe")
     .getByText("Ready for review", { exact: true })
     .waitFor();
+  await page
+    .locator(".chat-pane-cache__pane--visible .chat-group.assistant .chat-text", {
+      hasText: "The project notes and release checklist are ready for review.",
+    })
+    .waitFor();
 }
 
 async function expectBesidePanel(page: Page, details: Locator) {

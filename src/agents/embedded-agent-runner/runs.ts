@@ -26,10 +26,7 @@ import {
   type ReplyOperation,
   waitForReplyOperationOwnerSettlement,
 } from "../../sessions/session-controller.js";
-import {
-  waitForCapturedSessionNativeAttemptEnd,
-  waitForSessionNativeAttemptEnd,
-} from "../../sessions/session-controller.native-runtime.js";
+import { waitForCapturedSessionNativeAttemptEnd } from "../../sessions/session-controller.native-runtime.js";
 import {
   assertSessionControllerOperation,
   getAttachedBackend,
@@ -378,29 +375,6 @@ export function abortEmbeddedAgentRun(
     }
   }
   return replyAborted || aborted;
-}
-
-type EmbeddedHeartbeatPreemptionResult = "not-heartbeat" | "drained" | "timed-out";
-
-export async function preemptAndDrainEmbeddedHeartbeatRun(
-  sessionId: string,
-  timeoutMs: number,
-): Promise<EmbeddedHeartbeatPreemptionResult> {
-  const handle = getActiveNativeAttempt(sessionId);
-  if (!handle?.preemptByVisibleTurn) {
-    return "not-heartbeat";
-  }
-  const drainPromise = waitForSessionNativeAttemptEnd(sessionId, timeoutMs, handle);
-  try {
-    if (!handle.preemptByVisibleTurn()) {
-      return "not-heartbeat";
-    }
-  } catch (err) {
-    diag.warn(`heartbeat preemption failed: sessionId=${sessionId} err=${String(err)}`);
-  } finally {
-    notifyGatewayWorkMetricsChanged();
-  }
-  return (await drainPromise) ? "drained" : "timed-out";
 }
 
 export function prepareEmbeddedAgentRunCompletionClaim(

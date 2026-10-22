@@ -10,11 +10,10 @@ import {
 } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
-  ChatComposerPersistence,
   loadChatComposerState as load,
-  restoreChatComposerState as restore,
   persistChatComposerState as persist,
-} from "./composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import * as durableComposer from "./durable-composer-persistence.ts";
 
 type ReadResult = Awaited<ReturnType<typeof draftStore.readDurableComposerDraft>>;
@@ -369,7 +368,7 @@ it("persists empty goal selection and versions cancellation", () => {
   persistence.persistNow();
   const revision = load(state, state.sessionKey).revisions.latestAttempt;
   const restored = createState({ client: null, connected: false });
-  expect(restore(restored)).toBe(true);
+  expect(new ChatComposerPersistence(() => restored).restore()).toBe(true);
   expect(restored).toMatchObject({
     chatGoalDraftMode: state.chatGoalDraftMode,
     chatReplyTarget: state.chatReplyTarget,

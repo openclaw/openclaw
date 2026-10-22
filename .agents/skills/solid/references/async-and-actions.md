@@ -357,7 +357,12 @@ a rejection consumer for work whose view is replaced or disposed. Preserve the
 owner's cancellation and error-precedence contract. Each new completion replaces
 the previous read, so an older failed refresh cannot overwrite a newer success.
 Re-arm this narrow error slot on retry to clear the previous error immediately;
-keep the controls outside it. A local error string written by each completion
+keep the controls outside it. Always consume the completion inside that boundary,
+even while an optimistic saving flag is true. Guarding its only read with
+`!saving()` prevents `Loading` from observing the new pending completion and can
+leave the previous `Errored` fallback visible throughout retry. Search test and
+Workboard delete feedback keep the read live; their held-retry tests verify that
+the old alert clears before the replacement operation settles. A local error string written by each completion
 would lose that ordering and require a second request-generation guard.
 
 ## Key a projection over an owner snapshot

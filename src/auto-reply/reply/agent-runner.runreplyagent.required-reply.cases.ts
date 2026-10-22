@@ -1,6 +1,6 @@
 import { expect, it, vi, type Mock } from "vitest";
 import type { RunEmbeddedAgentInternalParams as AgentRunParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { mockAcceptedWaitingStatusRun } from "./agent-runner.runreplyagent.waiting-status.cases.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -44,7 +44,7 @@ export function registerRequiredReplyCompletionCases({
     });
 
     const { run } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+      opts: { onPartialReply, onBlockReply, onReasoningStream },
       blockStreamingEnabled: true,
       runOverrides: { silentExpected: true, terminalReplyExpectation: "required" },
     });
@@ -75,7 +75,7 @@ export function registerRequiredReplyCompletionCases({
       });
 
       const { run } = createMinimalRun({
-        opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
+        opts: { onPartialReply, onBlockReply, onReasoningStream },
         blockStreamingEnabled: true,
         runOverrides: { silentExpected: true, terminalReplyExpectation },
       });
@@ -201,20 +201,19 @@ export function registerRequiredReplyCompletionCases({
   it.each([
     {
       label: "room event",
-      params: { currentInboundEventKind: "room_event" as const, opts: { isHeartbeat: false } },
+      params: { currentInboundEventKind: "room_event" as const, opts: {} },
       expectedStatus: "ok",
     },
     {
       label: "internal handoff",
       params: {
-        opts: { isHeartbeat: false },
+        opts: {},
         runOverrides: {
           inputProvenance: { kind: "internal_system" as const, sourceTool: "restart-sentinel" },
         },
       },
       expectedStatus: "ok",
     },
-    { label: "heartbeat", params: { opts: { isHeartbeat: true } }, expectedStatus: "failed" },
   ])(
     "settles optional empty $label turns without a chat notice",
     async ({ params, expectedStatus }) => {
@@ -233,33 +232,4 @@ export function registerRequiredReplyCompletionCases({
       expect(resolveReplyOperationAgentTurn(runState)).toBe(expectedStatus);
     },
   );
-
-  it("retains a failed heartbeat result without lifting its missing-answer notice", async () => {
-    const onAgentRunTerminalOutcome = vi.fn();
-    const runState: ReplyOperationRunState = {};
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [
-        setReplyPayloadMetadata(
-          {
-            text: "No answer was returned. Ask again if you still need one.",
-            isError: true,
-            isStatusNotice: true,
-          },
-          { assistantTranscriptOwned: true },
-        ),
-      ],
-      meta: {
-        error: {
-          kind: "incomplete_turn",
-          message: "No answer was returned. Ask again if you still need one.",
-        },
-      },
-    });
-    const { run } = createMinimalRun({
-      opts: { isHeartbeat: true, onAgentRunTerminalOutcome, [REPLY_OPERATION_RUN_STATE]: runState },
-    });
-    await expect(run()).resolves.toBeUndefined();
-    expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
-  });
 }

@@ -1,4 +1,4 @@
-import { hasCronFormErrors } from "../../lib/cron/index.ts";
+import { hasCronFormErrors } from "../../lib/cron/form.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import type { createCronPage } from "./cron-page-state.ts";
 import { validateCronEventSelection } from "./event-source.ts";

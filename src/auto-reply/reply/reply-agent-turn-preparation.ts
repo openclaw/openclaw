@@ -176,7 +176,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
     const resolveRunSessionFile = (source: FollowupRun["run"]) =>
       normalizeOptionalString(replySessionKey) ?? source.sessionFile;
     const kind = params.kind ?? "queued_followup";
-    const isHeartbeat = kind !== "queued_followup" && params.defaults.opts?.isHeartbeat === true;
     const sourceSignal = resolveFollowupAbortSignal(params.queued);
     const admission = params.providedReplyOperation
       ? {
@@ -398,9 +397,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
             source.originatingChatType ?? source.run.chatType ?? entry?.chatType,
           ),
         });
-      const currentInboundContext = isHeartbeat
-        ? queued.currentInboundContext
-        : refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
+      const currentInboundContext = refreshActiveGoalContext(
+        queued.currentInboundContext,
+        activeEntry,
+      );
       // Preallocate the one lifecycle identity passed as opts.runId; canonical
       // execution owns registration and cleanup under this same id.
       const turn: AdmittedFollowupTurn = {
@@ -444,9 +444,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
             },
           };
         }
-        const refreshedInboundContext = isHeartbeat
-          ? params.queued.currentInboundContext
-          : refreshActiveGoalContext(params.queued.currentInboundContext, entry);
+        const refreshedInboundContext = refreshActiveGoalContext(
+          params.queued.currentInboundContext,
+          entry,
+        );
         turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
         turn.queued = { ...turn.queued, currentInboundContext: refreshedInboundContext };
         return generationRotated;
@@ -500,7 +501,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
           sessionStore,
           sessionKey: replySessionKey,
           storePath: params.defaults.storePath,
-          isHeartbeat,
           opts: { ...params.defaults.opts, runId: turn.runId },
           resolvedVerboseLevel:
             normalizeVerboseLevel(

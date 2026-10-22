@@ -380,7 +380,8 @@ it("preserves compensation provenance for later native scroll listeners", async 
   const readerIdle = new Promise<void>((resolve) => {
     let sawScrolling = false;
     const unsubscribe = subscribeTranscriptScroll(thread, (observation) => {
-      if (observation.type !== "offset") {
+      // Startup scrolling cannot establish that the later resize clamp is idle.
+      if (observation.type !== "offset" || thread.clientHeight !== 600 || distance() !== 0) {
         return;
       }
       // The clamp receipt can consume the delta before the native observation.

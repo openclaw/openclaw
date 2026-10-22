@@ -240,7 +240,7 @@ suite.define(() => {
             expect.stringContaining("Photo"),
             expect.stringContaining("File"),
             expect.stringContaining("Skills"),
-            expect.stringContaining("Connectors"),
+            expect.stringContaining("Plugins"),
             expect.stringContaining("Manage plugins"),
           ]),
         );
@@ -297,7 +297,7 @@ suite.define(() => {
       await expect.poll(() => latestToolOverrides(gateway)).toEqual({});
 
       await menu.getByRole("menuitem", { name: "Back" }).click();
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
       const github = menu.getByRole("menuitemcheckbox", { name: /^github/ });
       await github.click();
@@ -377,7 +377,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).first().click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
       await expect.poll(() => menu.getByText("2 of 3 tools on").isVisible()).toBe(true);
@@ -448,7 +448,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).click();
 
       await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:constructor");
@@ -476,7 +476,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).first().click();
 
       await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
@@ -488,7 +488,7 @@ suite.define(() => {
         )
         .toBe(true);
       await expect
-        .poll(() => menu.getByText("No tools available for this connector.").count())
+        .poll(() => menu.getByText("No tools available for this MCP server.").count())
         .toBe(0);
       await expect.poll(() => menu.getByText("0 of 0 tools on").count()).toBe(0);
 
@@ -501,7 +501,7 @@ suite.define(() => {
         )
         .toBe(0);
       await expect
-        .poll(() => menu.getByText("No tools available for this connector.").isVisible())
+        .poll(() => menu.getByText("No tools available for this MCP server.").isVisible())
         .toBe(true);
       await expect.poll(() => menu.getByText("0 of 0 tools on").count()).toBe(0);
     });
@@ -528,7 +528,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.list");
       const composer = await openMenu(page);
       const menu = composer.locator(".agent-chat__capability-menu");
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).click();
       await gateway.waitForRequest("tools.effective");
       await expect.poll(() => menu.getByText("Loading tools…").isVisible()).toBe(true);
@@ -616,7 +616,7 @@ suite.define(() => {
         await composer.locator("textarea").hover();
         await menu.getByRole("menuitem", { name: "Back" }).click();
         await composer.locator("textarea").hover();
-        await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+        await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
         await expect
           .poll(() => menu.getByRole("menuitemcheckbox", { name: /^github/ }).isDisabled())
           .toBe(true);
@@ -773,7 +773,7 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getByText("No skills available.").isVisible()).toBe(true);
       await menu.getByRole("menuitem", { name: "Back" }).click();
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect.poll(() => menu.getByText("No MCP servers configured.").isVisible()).toBe(true);
     });
   });
@@ -795,7 +795,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       let composer = await openMenu(page);
       let menu = composer.locator(".agent-chat__capability-menu");
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await menu.getByRole("menuitem", { name: /Add MCP server/ }).click();
 
       const dialog = page.getByRole("dialog", { name: "Add MCP server" });
@@ -854,7 +854,7 @@ suite.define(() => {
 
       composer = await openMenu(page);
       menu = composer.locator(".agent-chat__capability-menu");
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect
         .poll(() =>
           menu.getByRole("menuitemcheckbox", { name: /session-docs.*session/ }).isVisible(),
@@ -904,7 +904,7 @@ suite.define(() => {
 
       composer = await openMenu(page);
       menu = composer.locator(".agent-chat__capability-menu");
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect
         .poll(() =>
           menu.getByRole("menuitemcheckbox", { name: /^global-docs.*Enabled/ }).isVisible(),

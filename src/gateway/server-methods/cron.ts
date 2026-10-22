@@ -20,7 +20,7 @@ import type { CronUpdateOptions } from "../../cron/service/state.js";
 import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js";
 import { CronStreamApprovalEndedError } from "../../cron/stream-approval-outcome.js";
 import { cronUpdateRequiresStreamExecAuthority } from "../../cron/stream-exec-authority.js";
-import type { CronDeliveryPreview, CronJob, CronJobPatch } from "../../cron/types.js";
+import type { CronDeliveryPreview, CronJobPatch, CronStoredJob } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -193,7 +193,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const touchesToolRuntime = patch.payload !== undefined || Object.hasOwn(patch, "trigger");
     let deliveryPreview: CronDeliveryPreview | undefined;
-    const validateUpdate = async (jobToUpdate: CronJob) => {
+    const validateUpdate = async (jobToUpdate: CronStoredJob) => {
       assertCronModelJobAllowed(client, cfg, jobToUpdate, patch);
       const nextJob = await assertValidCronUpdatePatch({
         cfg,
@@ -205,7 +205,8 @@ export const cronHandlers: GatewayRequestHandlers = {
         callerScope?.manageAll &&
         creatorScope &&
         patch.payload?.toolsAllow?.length &&
-        (!capture ||
+        // Without a fresh capture, only a job holding app authority would lose it.
+        ((!capture && jobToUpdate.runtimeAuthority !== undefined) ||
           jobToUpdate.owner?.sessionKey !== creatorScope.sessionKey ||
           !cronJobMatchesCallerScope({ job: jobToUpdate, callerScope: creatorScope }) ||
           !cronCreateMatchesCallerScope({ job: nextJob, callerScope: creatorScope }))

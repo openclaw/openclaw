@@ -53,8 +53,8 @@ import { requestSessionInvolvement } from "../../lib/sessions/session-requests.t
 import { formatPreservedWorktreesNotice } from "../../lib/sessions/worktree-preservation.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import {
-  ensureSessionAgentIdentities,
   sessionAgentId,
+  sessionAgentIds,
   sessionAgentIdentityById,
   sessionPathAgentId,
 } from "./agent-scope.ts";
@@ -448,7 +448,7 @@ export function createSessionsPage(
     if (result !== appliedListResult) {
       appliedListResult = result;
       state.result = filterSessionRows(result, { archivedFilter: state.statusFilter });
-      ensureSessionAgentIdentities(application.agentIdentity, state.result);
+      void application.agentIdentity.ensure(sessionAgentIds(state.result));
     }
     if (!snapshot.loading && !snapshot.error && state.result && state.selectedSessions.size > 0) {
       state.selectedSessions = reconcileSelectedSessions(

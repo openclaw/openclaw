@@ -68,8 +68,8 @@ import { getChatComposerState, resetChatComposerState } from "./components/chat-
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation-view.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
+import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-draft-storage.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
-import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";

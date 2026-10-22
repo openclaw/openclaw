@@ -318,7 +318,7 @@ export class ChatComposerCapabilityHost {
     try {
       await patchMcpServers(context.runtimeConfig, {
         buildPatch: (servers) => buildAddMcpServerPatch(servers, name, globalConfig),
-        note: `composer connectors: add MCP server ${name}`,
+        note: `composer plugins: add MCP server ${name}`,
       });
       if (scope === "session") {
         stage = "session";

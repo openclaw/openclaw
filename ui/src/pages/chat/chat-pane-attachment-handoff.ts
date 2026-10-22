@@ -1,6 +1,7 @@
 import type { ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store-scope.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
@@ -12,15 +13,14 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import {
+  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
+  loadChatComposerState,
+} from "./composer-draft-storage.ts";
+import {
   isIncognitoComposerScope,
   isChatComposerOwnerCurrent,
   type captureChatComposerOwner,
 } from "./composer-persistence-state.ts";
-import {
-  CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
-  loadChatComposerState,
-  storedChatOutboxScopeKey,
-} from "./composer-persistence.ts";
 import { publishQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { visiblePanesOf } from "./split-layout.ts";
