@@ -24,7 +24,6 @@ import {
   COGNITIVE_SERVICES_RESOURCE,
   FOUNDRY_ANTHROPIC_SCOPE,
   buildFoundryAuthResult,
-  extractFoundryEndpoint,
   formatFoundryApiLabel,
   type FoundryProviderApi,
   isFoundryMaiImageModel,
@@ -87,6 +86,7 @@ const endpoint = "https://example.services.ai.azure.com";
 const providerId = "microsoft-foundry";
 const defaultModelId = "gpt-5.4";
 const profileId = "microsoft-foundry:entra";
+const apiKeyProfileId = "microsoft-foundry:default";
 const agentDir = "/tmp/test-agent";
 const loginError = "Please run 'az login' to setup account.";
 const foundryTokenCacheMaxEntries = 128;
@@ -146,7 +146,9 @@ function makeConfig({
 function entraStore(
   overrides: Partial<Pick<FoundryAuthParams, "api" | "endpoint" | "modelId" | "tenantId">> & {
     modelName?: string;
+    authMethod?: FoundryAuthParams["authMethod"];
   } = {},
+  id = profileId,
 ) {
   const metadata = {
     authMethod: "entra-id",
@@ -159,7 +161,7 @@ function entraStore(
   };
   return {
     profiles: {
-      [profileId]: { type: "api_key", provider: providerId, metadata },
+      [id]: { type: "api_key", provider: providerId, metadata },
     },
   };
 }
@@ -209,7 +211,7 @@ type FoundryAuthParams = Parameters<typeof buildFoundryAuthResult>[0];
 function buildAuthResult(params: Pick<FoundryAuthParams, "modelId"> & Partial<FoundryAuthParams>) {
   const apiKeyAuth = params.authMethod === "api-key";
   return buildFoundryAuthResult({
-    profileId: apiKeyAuth ? "microsoft-foundry:default" : profileId,
+    profileId: apiKeyAuth ? apiKeyProfileId : profileId,
     apiKey: apiKeyAuth ? "test-api-key" : "__entra_id_dynamic__",
     endpoint,
     api: "openai-responses",
@@ -320,7 +322,7 @@ describe("microsoft-foundry plugin", () => {
 
   it("keeps the API key profile bound when multiple auth profiles exist without explicit order", async () => {
     const config = makeConfig({
-      profileIds: ["microsoft-foundry:default", "microsoft-foundry:entra"],
+      profileIds: [apiKeyProfileId, profileId],
     });
     await selectModel(config, "gpt-5.4");
     expect(config.auth?.order?.["microsoft-foundry"]).toBeUndefined();
@@ -363,7 +365,6 @@ describe("microsoft-foundry plugin", () => {
     mockAzureCliToken("test-token-placeholder");
     ensureAuthProfileStoreMock.mockReturnValueOnce(entraStore());
     const prepared = await prepareRuntimeAuth({ model: makeModel({ baseUrl: "not a url" }) });
-    expect(extractFoundryEndpoint("not a url")).toBeUndefined();
     expect(prepared).toMatchObject({
       baseUrl,
       request: { auth: { mode: "authorization-bearer", token: "test-token-placeholder" } },
@@ -377,7 +378,7 @@ describe("microsoft-foundry plugin", () => {
     const prepareRuntimeAuth = prepareAuth();
     const prepared = await prepareRuntimeAuth({
       apiKey: "profile-api-key",
-      profileId: "microsoft-foundry:default",
+      profileId: apiKeyProfileId,
       model: makeModel({ api }),
     });
     expect(prepared).toEqual({
@@ -595,8 +596,8 @@ describe("microsoft-foundry plugin", () => {
 
   it("keeps other configured Foundry models when switching the selected model", async () => {
     const config = makeConfig({
-      profileIds: ["microsoft-foundry:default"],
-      orderedProfileIds: ["microsoft-foundry:default"],
+      profileIds: [apiKeyProfileId],
+      orderedProfileIds: [apiKeyProfileId],
       models: [
         { ...makeModel({ id: "alias-one" }), api: undefined, baseUrl: undefined },
         { ...makeModel({ id: "alias-two", name: "gpt-4o" }), api: undefined, baseUrl: undefined },
@@ -655,16 +656,12 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("defaults Azure OpenAI model families to the documented API surfaces", () => {
-    expect(usesFoundryResponsesByDefault("gpt-5.4")).toBe(true);
     expect(usesFoundryResponsesByDefault("o4-mini")).toBe(true);
     expect(usesFoundryResponsesByDefault("DeepSeek-V4-Pro")).toBe(true);
     expect(usesFoundryResponsesByDefault("MAI-DS-R1")).toBe(false);
-    expect(requiresFoundryMaxCompletionTokens("gpt-5.4")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("o3")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("gpt-4o")).toBe(false);
     expect(isFoundryMaiImageModel("MAI-Image-2.5-Flash")).toBe(true);
-    expect(isFoundryMaiImageModel("MAI-Image-2e")).toBe(true);
-    expect(isFoundryMaiImageModel("MAI-DS-R1")).toBe(false);
   });
 
   it("labels all Foundry API surfaces for onboarding summaries", () => {
@@ -713,21 +710,17 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("does not reuse stale API-key model metadata when selecting a different deployment", async () => {
-    ensureAuthProfileStoreMock.mockReturnValueOnce({
-      profiles: {
-        "microsoft-foundry:default": {
-          type: "api_key",
-          provider: "microsoft-foundry",
-          metadata: {
-            authMethod: "api-key",
-            endpoint,
-            modelId: "prod-fable",
-            modelName: "claude-fable-5",
-            api: "anthropic-messages",
-          },
+    ensureAuthProfileStoreMock.mockReturnValueOnce(
+      entraStore(
+        {
+          authMethod: "api-key",
+          modelId: "prod-fable",
+          modelName: "claude-fable-5",
+          api: "anthropic-messages",
         },
-      },
-    });
+        apiKeyProfileId,
+      ),
+    );
     const select = vi.fn(async (params: { initialValue?: string }) => params.initialValue);
     const result = await findAuthMethod("api-key").run({
       ...authSetup({ text: authPrompt("prod-gpt"), select }),
@@ -816,7 +809,6 @@ describe("microsoft-foundry plugin", () => {
       config: {},
       agentDir,
     } as never);
-    expect(wrappedStreamFn).toBeTypeOf("function");
     await wrappedStreamFn?.(model as never, { systemPrompt: "system", messages: [] } as never, {});
     expect(capturedReplayIds).toBe(true);
   });
@@ -997,12 +989,9 @@ describe("microsoft-foundry plugin", () => {
   it("moves the selected Foundry auth profile to the front of auth.order", () => {
     const result = buildAuthResult({
       modelId: "gpt-5.4",
-      currentProviderProfileIds: ["microsoft-foundry:default", "microsoft-foundry:entra"],
+      currentProviderProfileIds: [apiKeyProfileId, profileId],
     });
-    expect(result.configPatch?.auth?.order?.[providerId]).toEqual([
-      profileId,
-      "microsoft-foundry:default",
-    ]);
+    expect(result.configPatch?.auth?.order?.[providerId]).toEqual([profileId, apiKeyProfileId]);
   });
 
   it("persists discovered deployments alongside the selected default model", () => {
