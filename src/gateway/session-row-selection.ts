@@ -16,6 +16,7 @@ import {
 } from "./session-row-projection-record.js";
 import type { prepareSessionRowScopes } from "./session-row-scope.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
 type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
@@ -32,7 +33,14 @@ export function createSessionRowSelection(
   const groups = new Map<string, Map<string, IndexedTarget>>();
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
-  const orders = new Map<NonNullable<SessionsListParams["sortBy"]>, SessionEntryPair[]>();
+  const orders = new Map<
+    string,
+    {
+      sortBy: NonNullable<SessionsListParams["sortBy"]>;
+      archived: SessionsListParams["archived"];
+      entries: SessionEntryPair[];
+    }
+  >();
   // Fixed partitions bound refiltering after exact publications without retaining old rosters.
   let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
   const partitionFor = (key: string) => {
@@ -237,7 +245,7 @@ export function createSessionRowSelection(
         changedInvolvements.delete(key);
       }
     }
-    for (const [sortBy, entries] of orders) {
+    for (const { sortBy, archived, entries } of orders.values()) {
       const locate = (pair: SessionEntryPair) => {
         let lo = 0,
           hi = entries.length;
@@ -251,10 +259,10 @@ export function createSessionRowSelection(
         }
         return lo;
       };
-      if (oldWinner) {
+      if (oldWinner && matchesSessionArchiveFilter(oldWinner.row.entry, archived)) {
         entries.splice(locate(oldWinner.pair), 1);
       }
-      if (winner) {
+      if (winner && matchesSessionArchiveFilter(winner.row.entry, archived)) {
         entries.splice(locate(winner.pair), 0, winner.pair);
       }
     }
@@ -312,14 +320,17 @@ export function createSessionRowSelection(
       return {
         configuredAgentIds,
         partitions: candidates ? undefined : partitions,
-        entries(this: void) {
-          let entries = !candidates && sortBy && orders.get(sortBy);
+        entries(this: void, archived: SessionsListParams["archived"]) {
+          const orderKey = `${sortBy}:${archived ?? false}`;
+          let entries = !candidates && sortBy && orders.get(orderKey)?.entries;
           if (!entries) {
-            const targets = candidates
-              ? [...new Set(Array.from(candidates, keyFor))].flatMap(
-                  (key) => winners.get(key) ?? [],
-                )
-              : [...winners.values()];
+            const targets = (
+              candidates
+                ? [...new Set(Array.from(candidates, keyFor))].flatMap(
+                    (key) => winners.get(key) ?? [],
+                  )
+                : [...winners.values()]
+            ).filter((target) => matchesSessionArchiveFilter(target.row.entry, archived));
             if (!sortBy) {
               targets.sort((a, b) => a.position - b.position);
             }
@@ -327,7 +338,7 @@ export function createSessionRowSelection(
             if (sortBy) {
               entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
               if (!candidates) {
-                orders.set(sortBy, entries);
+                orders.set(orderKey, { sortBy, archived, entries });
               }
             }
           }

@@ -48,7 +48,11 @@ import type {
   SessionListRowContext,
   SessionListRowContextProvider,
 } from "./session-utils-contracts.js";
-import { isFinitePositiveTimestamp, resolveSessionChildOwners } from "./session-utils-core.js";
+import {
+  isFinitePositiveTimestamp,
+  matchesSessionArchiveFilter,
+  resolveSessionChildOwners,
+} from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
   resolveGatewaySessionKind,
@@ -84,7 +88,7 @@ export type SessionEntrySelection = Omit<SessionListFilteredEntries, "ownerEntri
 
 export type SessionListFilterParams = {
   cfg: OpenClawConfig;
-  entries: () => Iterable<SessionEntryPair>;
+  entries: (archived: SessionsListParams["archived"]) => Iterable<SessionEntryPair>;
   entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
@@ -177,7 +181,6 @@ export function* filterSessionEntries(
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
   const search = normalizeLowercaseStringOrEmpty(opts.search);
-  const archived = opts.archived === "all" ? undefined : opts.archived === true;
   const activeMinutes =
     typeof opts.activeMinutes === "number" && Number.isFinite(opts.activeMinutes)
       ? Math.max(1, Math.floor(opts.activeMinutes))
@@ -216,7 +219,7 @@ export function* filterSessionEntries(
   // Person references resolve before candidate filters; ordinary reads need no roster copy.
   const visibleEntries: SessionEntryPair[] = [];
   if (opts.involvingProfileId) {
-    for (const pair of params.entries()) {
+    for (const pair of params.entries("all")) {
       if (
         params.entryFilter?.(
           pair[0],
@@ -259,7 +262,9 @@ export function* filterSessionEntries(
   }
   const selectedProfileId = profileReference?.value;
 
-  const candidateEntries = opts.involvingProfileId ? visibleEntries : params.entries();
+  const candidateEntries = opts.involvingProfileId
+    ? visibleEntries.filter(([, entry]) => matchesSessionArchiveFilter(entry, opts.archived))
+    : params.entries(opts.archived);
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
@@ -378,9 +383,6 @@ export function* filterSessionEntries(
     }
     const key = pair[0];
     const entry = pair[1];
-    if (archived !== undefined && (entry.archivedAt !== undefined) !== archived) {
-      continue;
-    }
     if (
       opts.requireLastInteraction === true &&
       (!isFinitePositiveTimestamp(entry.lastInteractionAt) ||

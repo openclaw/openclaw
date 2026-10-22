@@ -2365,13 +2365,6 @@ byte-for-byte between revisions; it contains complete 25-row filter results and
 full-roster facets. Run at least five alternating baseline/candidate processes on
 the benchmark host. This is an owner probe, not Gateway or transport evidence.
 
-Add `--archive-filters --iterations 480` to exercise `selectSessionEntries` with
-all four archive modes, people facets on/off, person selection, offset paging,
-and three viewer scopes (48 complete golden results). Ordinary requests include
-partition recomputation; each call uses a fresh partition-result map to model
-dirty roster reads. Person/facet requests consume the ordered roster. Both modes
-warm the resident selection before sampling and include collected allocations.
-
 For long RPC allocation windows, use `--warmup-operations` to warm fewer requests
 than the measured `--operations` count. For example, `--scenario sessions.list
 --warmup-operations 25000 --operations 100000 --rounds 1 --allocations --trace-gc

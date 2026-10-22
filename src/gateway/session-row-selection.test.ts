@@ -598,12 +598,12 @@ it.each([false, true])(
           includeGlobal: true,
           includeUnknown: true,
         });
-        expect(prepared.entries().map(([, entry]) => entry.sessionId)).toEqual(
+        expect(prepared.entries("all").map(([, entry]) => entry.sessionId)).toEqual(
           activeOnly
             ? ["ordinary", "main-global", "ops-global", "unknown-winner", "unknown-shadow"]
             : ["ordinary", "main-global", "unknown-winner"],
         );
-        for (const [key, entry] of prepared.entries()) {
+        for (const [key, entry] of prepared.entries("all")) {
           const target = prepared.getTarget(key)!;
           const original = rows.find((row) => row.entry === entry)!;
           expect(target.entry).toBe(entry);
