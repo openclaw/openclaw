@@ -167,13 +167,35 @@ it.each(["desktop", undefined] as const)(
     for (const error of ["Artifacts unavailable", "Workspace refresh unavailable"]) {
       mounted.update({ ...workspace, error });
       await waitForSolid(() => expect(mounted.getByRole("alert").textContent).toBe(error));
-      mounted.getByRole("button", { name: "notes.md", exact: true }).click();
+      mounted.getByRole("button", { name: /^notes\.md$/ }).click();
       expect(onOpenFile).toHaveBeenLastCalledWith(
         "notes.md",
         "session",
         ...(presentation ? ["preview"] : []),
       );
     }
+  },
+);
+
+it.each(["desktop", undefined] as const)(
+  "shows loading when a ready %s workspace changes to a pending session",
+  async (presentation) => {
+    setupDesktopLayout();
+    const mounted = await mountWorkspace(
+      createWorkspace({
+        presentation,
+        list: { root: "/synthetic/workspace", files: [file("old.md")] },
+      }),
+    );
+    onTestFinished(mounted.unmount);
+    expect(mounted.container.textContent).toContain("old.md");
+    mounted.update(
+      createWorkspace({ presentation, sessionKey: "agent:main:other", loading: true }),
+    );
+    await waitForSolid(() =>
+      expect(mounted.container.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull(),
+    );
+    expect(mounted.container.textContent).not.toContain("old.md");
   },
 );
 

@@ -87,6 +87,49 @@ function nextWorkspaceUpdate(state: SessionWorkspaceHost) {
 beforeEach(installResizeObserverStub);
 afterEach(() => document.body.replaceChildren());
 describe("workspace file tabs", () => {
+  it("opens a file while the catalog refresh is pending", async () => {
+    const state = host();
+    const workspace = getSessionWorkspace(state);
+    workspace.list = {
+      sessionKey: state.sessionKey,
+      root: "/workspace",
+      files: [],
+      browser: { path: "", entries: [{ name: "reports", path: "reports", kind: "directory" }] },
+    };
+    const pending = createDeferred<NonNullable<typeof workspace.list>>();
+    state.sessions.listFiles = vi.fn().mockReturnValue(pending.promise);
+    state.sessions.getFile = vi
+      .fn()
+      .mockResolvedValue(textResponse(state, "inventory.csv", "notebooks"));
+    const panel = document.createElement("openclaw-chat-files-panel");
+    panel.tabsInHeader = false;
+    panel.presentation = "desktop";
+    panel.renderDetail = ({ content }) =>
+      content.kind === "file" ? content.content : content.kind;
+    const sync = () => {
+      panel.workspace = createSessionWorkspaceProps(state, { presentation: "desktop" });
+      panel.previews = workspace.previews;
+      panel.activeId = workspace.activePreviewId;
+    };
+    const stop = sessionWorkspaceForHost(state).subscribe(sync);
+    onTestFinished(() => {
+      stop();
+      pending.resolve(workspace.list!);
+    });
+    sync();
+    document.body.append(panel);
+    await waitForSolid(() => expect(panel.textContent).toContain("reports"));
+    loadSessionWorkspace(state, workspace);
+    await waitForSolid(() => expect(state.sessions.listFiles).toHaveBeenCalledOnce());
+    await openSessionWorkspaceFile(state, { path: "inventory.csv" });
+    await waitForSolid(() => expect(panel.textContent).toContain("notebooks"));
+    expect(
+      panel.querySelector(".chat-files-panel__page:not(.chat-files-panel__catalog):not([hidden])")
+        ?.textContent,
+    ).toContain("notebooks");
+    expect(panel.querySelector('button[aria-label="reports"]')).not.toBeNull();
+  });
+
   it("revalidates a clean file on explicit reopen without replacing its tab", async () => {
     const state = host();
     const getFile = vi

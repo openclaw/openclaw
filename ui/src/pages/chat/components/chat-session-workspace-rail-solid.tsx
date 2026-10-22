@@ -1,16 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import {
-  createMemo,
-  Errored,
-  For,
-  isPending,
-  latest,
-  Loading,
-  Match,
-  Show,
-  Switch,
-} from "solid-js";
+import { createMemo, Errored, For, isPending, Loading, Match, Show, Switch } from "solid-js";
 import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -499,8 +489,15 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
             <PanelLoadingSkeleton variant="files" label={t("chat.workspaceFiles.loading")} />
           }
         >
-          {latest(read)}
-          <Contents pending={isPending(read)} />
+          {read()}
+          <Show
+            when={props.workspace.list || !isPending(read)}
+            fallback={
+              <PanelLoadingSkeleton variant="files" label={t("chat.workspaceFiles.loading")} />
+            }
+          >
+            <Contents pending={isPending(read)} />
+          </Show>
         </Loading>
       </Errored>
     </aside>

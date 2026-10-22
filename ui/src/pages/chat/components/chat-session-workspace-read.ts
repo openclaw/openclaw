@@ -1,3 +1,4 @@
+import { createDeferred } from "@solidjs/signals";
 import { createMemo } from "solid-js";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
@@ -18,7 +19,8 @@ export function createSessionWorkspaceRead(workspace: () => SessionWorkspaceProp
     ]),
   );
   const scope = createMemo(() => ({ owner: owner(), location: location() }));
-  const read = createMemo(async () => {
+  // Retain the catalog during refresh without holding independently usable file previews.
+  const read = createDeferred(async () => {
     const state = owner();
     const pending = result().pending;
     const previousError = error();

@@ -438,174 +438,173 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
     tree: navigation()?.treeScroll,
     session: navigation()?.sessionScroll,
   }));
-  createScrollPosition(() => ({
-    restore: {
-      identity: [savedScroll(), treeScroll()],
-      target: treeScroll(),
-      top: savedScroll().tree ?? 0,
-    },
-  }));
-  createScrollPosition(() => ({
-    restore: {
-      identity: [savedScroll(), sessionScroll()],
-      target: sessionScroll(),
-      top: savedScroll().session ?? 0,
-    },
-  }));
   const closeSearch = () => {
     restoreSearchFocus = true;
     props.workspace.onSearchOpenChange?.(false);
   };
-  const Contents = (content: { pending: boolean }) => (
-    <>
-      <div
-        class="workspace-desktop__results"
-        hidden={!navigation()?.searchOpen}
-        role="list"
-        aria-label={t("chat.workspaceFiles.searchResults")}
-      >
-        <For each={searchResults()} keyed={(file) => file.key}>
-          {(file) => <RailRow file={file()} workspace={props.workspace} searching />}
-        </For>
-        <Show
-          when={
-            navigation()?.treeVisible !== false &&
-            navigation()?.searchOpen &&
-            Boolean(props.workspace.browserSearch.trim()) &&
-            props.workspace.transcriptAttachments
-          }
+  const Contents = (content: { pending: boolean }) => {
+    createScrollPosition(() => ({
+      restore: {
+        identity: [savedScroll(), treeScroll()],
+        target: treeScroll(),
+        top: savedScroll().tree ?? 0,
+      },
+    }));
+    createScrollPosition(() => ({
+      restore: {
+        identity: [savedScroll(), sessionScroll()],
+        target: sessionScroll(),
+        top: savedScroll().session ?? 0,
+      },
+    }));
+    return (
+      <>
+        <div
+          class="workspace-desktop__results"
+          hidden={!navigation()?.searchOpen}
+          role="list"
+          aria-label={t("chat.workspaceFiles.searchResults")}
         >
-          {(source) => (
-            <WorkspaceTranscriptAttachments
-              source={source()}
-              query={props.workspace.browserSearch}
-              presentation="desktop"
-              renderName={(name) => <WorkspaceFilename name={name} />}
-            />
-          )}
-        </Show>
-        <Show when={searchTruncated()}>
-          <div class="workspace-desktop__notice" role="status">
-            {t("chat.workspaceFiles.truncated")}
-          </div>
-        </Show>
-        <Show
-          when={
-            Boolean(props.workspace.browserSearch.trim()) &&
-            !content.pending &&
-            !searchTruncated() &&
-            !searchResults().length &&
-            !attachmentSearchVisible()
-          }
-        >
-          <div class="workspace-desktop__notice" role="status">
-            {t("chat.workspaceFiles.noSearchResults")}
-          </div>
-        </Show>
-      </div>
-      <div class="workspace-desktop__catalog" hidden={navigation()?.searchOpen}>
-        <Show when={sessionFiles().length > 0 || attachmentsVisible()}>
-          <WorkspaceGroup
-            label={t("chat.workspaceFiles.desktop.sessionFiles")}
-            expanded={navigation()?.sessionExpanded !== false}
-            onToggle={() =>
-              props.workspace.onSessionExpandedChange?.(navigation()?.sessionExpanded === false)
+          <For each={searchResults()} keyed={(file) => file.key}>
+            {(file) => <RailRow file={file()} workspace={props.workspace} searching />}
+          </For>
+          <Show
+            when={
+              navigation()?.treeVisible !== false &&
+              navigation()?.searchOpen &&
+              Boolean(props.workspace.browserSearch.trim()) &&
+              props.workspace.transcriptAttachments
             }
-            class="workspace-desktop__session"
           >
-            <div
-              class="workspace-desktop__session-scroll"
-              role="list"
-              ref={(element) => {
-                setSessionScroll(element);
-                element.scrollTop = navigation()?.sessionScroll ?? 0;
-              }}
-              onScroll={(event) =>
-                props.workspace.onNavigationScroll?.("session", event.currentTarget.scrollTop)
+            {(source) => (
+              <WorkspaceTranscriptAttachments
+                source={source()}
+                query={props.workspace.browserSearch}
+                presentation="desktop"
+                renderName={(name) => <WorkspaceFilename name={name} />}
+              />
+            )}
+          </Show>
+          <Show when={searchTruncated()}>
+            <div class="workspace-desktop__notice" role="status">
+              {t("chat.workspaceFiles.truncated")}
+            </div>
+          </Show>
+          <Show
+            when={
+              Boolean(props.workspace.browserSearch.trim()) &&
+              !content.pending &&
+              !searchTruncated() &&
+              !searchResults().length &&
+              !attachmentSearchVisible()
+            }
+          >
+            <div class="workspace-desktop__notice" role="status">
+              {t("chat.workspaceFiles.noSearchResults")}
+            </div>
+          </Show>
+        </div>
+        <div class="workspace-desktop__catalog" hidden={navigation()?.searchOpen}>
+          <Show when={sessionFiles().length > 0 || attachmentsVisible()}>
+            <WorkspaceGroup
+              label={t("chat.workspaceFiles.desktop.sessionFiles")}
+              expanded={navigation()?.sessionExpanded !== false}
+              onToggle={() =>
+                props.workspace.onSessionExpandedChange?.(navigation()?.sessionExpanded === false)
               }
+              class="workspace-desktop__session"
             >
-              <For each={sessionFiles()} keyed={(file) => file.key}>
-                {(file) => <RailRow file={file()} workspace={props.workspace} />}
-              </For>
-              <Show
-                when={
-                  navigation()?.treeVisible !== false &&
-                  navigation()?.sessionExpanded !== false &&
-                  !navigation()?.searchOpen &&
-                  attachmentsVisible() &&
-                  props.workspace.transcriptAttachments
+              <div
+                class="workspace-desktop__session-scroll"
+                role="list"
+                ref={setSessionScroll}
+                onScroll={(event) =>
+                  props.workspace.onNavigationScroll?.("session", event.currentTarget.scrollTop)
                 }
               >
-                {(source) => (
-                  <WorkspaceTranscriptAttachments
-                    source={source()}
-                    query=""
-                    presentation="desktop"
-                    renderName={(name) => <WorkspaceFilename name={name} />}
-                  />
-                )}
-              </Show>
-            </div>
-          </WorkspaceGroup>
-        </Show>
-        <Show when={projectVisible()}>
-          <div
-            class="workspace-desktop__project-scroll"
-            ref={(element) => {
-              setTreeScroll(element);
-              element.scrollTop = navigation()?.treeScroll ?? 0;
-            }}
-            onScroll={(event) =>
-              props.workspace.onNavigationScroll?.("tree", event.currentTarget.scrollTop)
-            }
-          >
-            <WorkspaceGroup
-              label={
-                props.workspace.folderView
-                  ? undefined
-                  : root().split("/").at(-1) || t("chat.workspaceFiles.browser")
-              }
-              animate
-              active={navigation()?.treeVisible !== false && !navigation()?.searchOpen}
-              expanded={expanded().includes(root())}
-              onToggle={() => props.workspace.onToggleDirectory?.(root())}
-            >
-              <div role="list">
-                <For each={childrenByPath().get(root()) ?? []} keyed={(row) => row.key}>
-                  {(row) => (
-                    <DirectoryBranch
-                      row={row()}
-                      workspace={props.workspace}
-                      childrenByPath={childrenByPath()}
-                      depth={0}
+                <For each={sessionFiles()} keyed={(file) => file.key}>
+                  {(file) => <RailRow file={file()} workspace={props.workspace} />}
+                </For>
+                <Show
+                  when={
+                    navigation()?.treeVisible !== false &&
+                    navigation()?.sessionExpanded !== false &&
+                    !navigation()?.searchOpen &&
+                    attachmentsVisible() &&
+                    props.workspace.transcriptAttachments
+                  }
+                >
+                  {(source) => (
+                    <WorkspaceTranscriptAttachments
+                      source={source()}
+                      query=""
+                      presentation="desktop"
+                      renderName={(name) => <WorkspaceFilename name={name} />}
                     />
                   )}
-                </For>
+                </Show>
               </div>
-              <Show when={directoryBrowser(root())?.truncated}>
-                <div class="workspace-desktop__notice" role="status">
-                  {t("chat.workspaceFiles.truncated")}
-                </div>
-              </Show>
             </WorkspaceGroup>
-          </div>
-        </Show>
-        <Show
-          when={
-            props.workspace.list &&
-            !content.pending &&
-            !sessionFiles().length &&
-            !attachmentsVisible() &&
-            !childrenByPath().get(root())?.length &&
-            expanded().includes(root())
-          }
-        >
-          <div class="workspace-desktop__notice" role="status">
-            {t("chat.workspaceFiles.noBrowserFiles")}
-          </div>
-        </Show>
-      </div>
-    </>
+          </Show>
+          <Show when={projectVisible()}>
+            <div
+              class="workspace-desktop__project-scroll"
+              ref={setTreeScroll}
+              onScroll={(event) =>
+                props.workspace.onNavigationScroll?.("tree", event.currentTarget.scrollTop)
+              }
+            >
+              <WorkspaceGroup
+                label={
+                  props.workspace.folderView
+                    ? undefined
+                    : root().split("/").at(-1) || t("chat.workspaceFiles.browser")
+                }
+                animate
+                active={navigation()?.treeVisible !== false && !navigation()?.searchOpen}
+                expanded={expanded().includes(root())}
+                onToggle={() => props.workspace.onToggleDirectory?.(root())}
+              >
+                <div role="list">
+                  <For each={childrenByPath().get(root()) ?? []} keyed={(row) => row.key}>
+                    {(row) => (
+                      <DirectoryBranch
+                        row={row()}
+                        workspace={props.workspace}
+                        childrenByPath={childrenByPath()}
+                        depth={0}
+                      />
+                    )}
+                  </For>
+                </div>
+                <Show when={directoryBrowser(root())?.truncated}>
+                  <div class="workspace-desktop__notice" role="status">
+                    {t("chat.workspaceFiles.truncated")}
+                  </div>
+                </Show>
+              </WorkspaceGroup>
+            </div>
+          </Show>
+          <Show
+            when={
+              props.workspace.list &&
+              !content.pending &&
+              !sessionFiles().length &&
+              !attachmentsVisible() &&
+              !childrenByPath().get(root())?.length &&
+              expanded().includes(root())
+            }
+          >
+            <div class="workspace-desktop__notice" role="status">
+              {t("chat.workspaceFiles.noBrowserFiles")}
+            </div>
+          </Show>
+        </div>
+      </>
+    );
+  };
+  const WorkspaceLoading = () => (
+    <PanelLoadingSkeleton variant="files" label={t("chat.workspaceFiles.loading")} />
   );
   return (
     <aside
@@ -694,14 +693,11 @@ export function DesktopWorkspaceContents(props: { workspace: SessionWorkspacePro
           </>
         )}
       >
-        <Loading
-          on={scope()}
-          fallback={
-            <PanelLoadingSkeleton variant="files" label={t("chat.workspaceFiles.loading")} />
-          }
-        >
-          {latest(read)}
-          <Contents pending={isPending(read)} />
+        <Loading on={scope()} fallback={<WorkspaceLoading />}>
+          {read()}
+          <Show when={props.workspace.list || !isPending(read)} fallback={<WorkspaceLoading />}>
+            <Contents pending={isPending(read)} />
+          </Show>
         </Loading>
       </Errored>
     </aside>

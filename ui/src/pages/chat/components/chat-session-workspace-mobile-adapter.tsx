@@ -1,4 +1,4 @@
-import { createSignal, createMemo, Errored, isPending, latest, Loading, Show } from "solid-js";
+import { createSignal, createMemo, Errored, isPending, Loading, Show } from "solid-js";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -272,7 +272,7 @@ export function MobileWorkspaceContents(props: {
       )}
     >
       <Loading on={scope()} fallback={<View status={{ kind: "loading" }} />}>
-        {latest(read)}
+        {read()}
         <View
           status={
             isPending(read)
