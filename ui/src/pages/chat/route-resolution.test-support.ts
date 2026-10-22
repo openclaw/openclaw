@@ -60,17 +60,15 @@ export function createSessionRouteContext(
     sessions.dispose();
     expect([gatewayListeners.size, eventListeners.size]).toEqual([0, 0]);
   });
-  const request = vi.fn(
-    async (method: string, _params: Record<string, unknown>): Promise<unknown> => {
-      if (method !== "sessions.resolve") {
-        throw new Error(`Unexpected gateway request: ${method}`);
-      }
-      if (resolution instanceof Error) {
-        throw resolution;
-      }
-      return resolution;
-    },
-  );
+  const request = vi.fn(async (method: string, _params: unknown): Promise<unknown> => {
+    if (method !== "sessions.resolve") {
+      throw new Error(`Unexpected gateway request: ${method}`);
+    }
+    if (resolution instanceof Error) {
+      throw resolution;
+    }
+    return resolution;
+  });
   const context = {
     basePath: "",
     chatSubmissions: createChatSubmissions(),

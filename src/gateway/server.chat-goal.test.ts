@@ -309,7 +309,7 @@ function holdGoalReceipt() {
 }
 
 describe("Goal chat admission and continuation", () => {
-  registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart);
+  registerGoalAutomaticContinuationCases(scope, runEmbeddedAgent, rpc, goalStart, userMessages);
 
   registerGoalChatRestartSettlementCase({
     scope,
