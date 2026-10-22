@@ -1,8 +1,6 @@
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createTestWizardPrompter } from "../test-utils/plugin-setup-wizard.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import { committedConfigFiles } from "./committed-config.test-support.js";
 
 const wizardTestMocks = vi.hoisted(() => {
@@ -41,12 +39,16 @@ const wizardTestMocks = vi.hoisted(() => {
     resolveGatewayPort: vi.fn(),
     createClackPrompter: vi.fn(),
     note: vi.fn(),
+    printWizardHeader: vi.fn(),
     probeGatewayReachable: vi.fn(),
     waitForGatewayReachable: vi.fn(async () => ({ ok: true })),
     resolveAdvertisedControlUiLinks: vi.fn(),
+    resolveControlUiLinks: vi.fn(),
     resolveLocalControlUiProbeLinks: vi.fn(),
+    inspectWindowsGatewayFirewall: vi.fn(),
     summarizeExistingConfig: vi.fn(),
     healthCommand: vi.fn(),
+    formatHealthCheckFailure: vi.fn<typeof import("./health-format.js").formatHealthCheckFailure>(),
     maybeInstallDaemon: vi.fn<typeof import("./configure.daemon.js").maybeInstallDaemon>(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
@@ -158,6 +160,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall: wizardTestMocks.inspectWindowsGatewayFirewall,
   formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
     params.bind === "lan"
       ? [
@@ -179,8 +182,10 @@ vi.mock("./onboard-helpers.js", () => ({
   applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
   ensureWorkspaceAndSessions: wizardTestMocks.ensureWorkspaceAndSessions,
   guardCancel: wizardTestMocks.guardCancel,
+  printWizardHeader: wizardTestMocks.printWizardHeader,
   probeGatewayReachable: wizardTestMocks.probeGatewayReachable,
   resolveAdvertisedControlUiLinks: wizardTestMocks.resolveAdvertisedControlUiLinks,
+  resolveControlUiLinks: wizardTestMocks.resolveControlUiLinks,
   resolveLocalControlUiProbeLinks: wizardTestMocks.resolveLocalControlUiProbeLinks,
   summarizeExistingConfig: wizardTestMocks.summarizeExistingConfig,
   waitForGatewayReachable: wizardTestMocks.waitForGatewayReachable,
@@ -190,6 +195,12 @@ vi.mock("./health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./health.js")>()),
   healthCommandNonExiting: wizardTestMocks.healthCommand,
 }));
+
+vi.mock("./health-format.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./health-format.js")>();
+  wizardTestMocks.formatHealthCheckFailure = vi.fn(actual.formatHealthCheckFailure);
+  return { ...actual, formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure };
+});
 
 vi.mock("./configure.gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./configure.gateway.js")>()),
@@ -282,19 +293,33 @@ export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
   wizardTestMocks.readConfigFileSnapshot.mockResolvedValue({ ...EMPTY_CONFIG_SNAPSHOT, config });
   wizardTestMocks.resolveGatewayPort.mockReturnValue(18789);
   wizardTestMocks.probeGatewayReachable.mockResolvedValue({ ok: false });
-  const links = {
+  wizardTestMocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+  wizardTestMocks.resolveLocalControlUiProbeLinks.mockReturnValue({
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
-  };
-  wizardTestMocks.resolveLocalControlUiProbeLinks.mockReturnValue(links);
-  wizardTestMocks.resolveAdvertisedControlUiLinks.mockResolvedValue(links);
+  });
+  wizardTestMocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  });
+  wizardTestMocks.inspectWindowsGatewayFirewall.mockResolvedValue({
+    applies: false,
+    severity: "info",
+    code: "windows_firewall_not_applicable",
+    message: "Windows LAN firewall diagnostics do not apply.",
+    details: [],
+  });
   wizardTestMocks.summarizeExistingConfig.mockReturnValue("");
-  wizardTestMocks.createClackPrompter.mockReturnValue(
-    createTestWizardPrompter({
-      select: vi.fn<WizardPrompter["select"]>().mockResolvedValue("firecrawl"),
-      confirm: vi.fn(async () => true),
-    }),
-  );
+  wizardTestMocks.createClackPrompter.mockReturnValue({
+    intro: vi.fn(async () => {}),
+    outro: vi.fn(async () => {}),
+    note: vi.fn(async () => {}),
+    select: vi.fn(async () => "firecrawl"),
+    multiselect: vi.fn(async () => []),
+    text: vi.fn(async () => ""),
+    confirm: vi.fn(async () => true),
+    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+  });
 }
 
 export function queueWizardTestPrompts(params: {

@@ -226,15 +226,17 @@ describe("readBoundedSessionCatalogHistory", () => {
       nextCursor,
     }));
     let requests = 0;
-    const read = vi.fn(async ({ cursor }: CatalogItem) => {
-      const index = requests++;
-      const page = pages[index];
-      if (!page) {
-        throw new Error("read past the repeated cursor");
-      }
-      expect(cursor).toBe(index === 0 ? undefined : cursors[index - 1]);
-      return page;
-    });
+    const read = vi.fn<Parameters<typeof readBoundedSessionCatalogHistory>[0]["read"]>(
+      async ({ cursor }) => {
+        const index = requests++;
+        const page = pages[index];
+        if (!page) {
+          throw new Error("read past the repeated cursor");
+        }
+        expect(cursor).toBe(index === 0 ? undefined : cursors[index - 1]);
+        return page;
+      },
+    );
 
     const history = await readBoundedSessionCatalogHistory({
       read,

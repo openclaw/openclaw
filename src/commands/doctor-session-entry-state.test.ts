@@ -93,13 +93,6 @@ function seedEntry(key: string, fields: Record<string, unknown>) {
 }
 
 it("backs up original rows and migrates pending delivery state before canonical reads", async () => {
-  const retainedMetadata = {
-    label: "preserved label",
-    pluginExtensions: { example: { draft: { text: "Saved operator draft", revisions: [2, 3] } } },
-    sessionFile: "sqlite:main:session-legacy:/synthetic/sessions.json",
-    transcriptPath: "retained-transcript-locator",
-    archivedBy: { type: "human", id: "prior-archiver" },
-  };
   const legacy = seedEntry("legacy", {
     pendingFinalDelivery: true,
     pendingFinalDeliveryText: "saved reply",
@@ -113,7 +106,11 @@ it("backs up original rows and migrates pending delivery state before canonical 
     memoryFlushCompactionCount: 0,
     memoryFlushFailureCount: 2,
     memoryFlushLastFailureError: "old failure",
-    ...retainedMetadata,
+    label: "preserved label",
+    pluginExtensions: { example: { draft: { text: "Saved operator draft", revisions: [2, 3] } } },
+    sessionFile: "sqlite:main:session-legacy:/synthetic/sessions.json",
+    transcriptPath: "retained-transcript-locator",
+    archivedBy: { type: "human", id: "prior-archiver" },
   });
   const transport = seedEntry("transport", { pendingFinalDelivery: true });
   const cleared = seedEntry("cleared", { pendingFinalDelivery: false });
@@ -307,12 +304,18 @@ it("backs up original rows and migrates pending delivery state before canonical 
     artifactHint: "preserve opaque state metadata",
   });
   expect(legacy.readRaw()).not.toContain("pendingFinalDeliveryText");
-  expect(legacy.read().pluginExtensions).toEqual(retainedMetadata.pluginExtensions);
-  expect(legacy.read()).toMatchObject(retainedMetadata);
+  expect(legacy.read().pluginExtensions).toEqual({
+    example: { draft: { text: "Saved operator draft", revisions: [2, 3] } },
+  });
+  expect(legacy.read()).toMatchObject({
+    sessionFile: "sqlite:main:session-legacy:/synthetic/sessions.json",
+    transcriptPath: "retained-transcript-locator",
+    archivedBy: { type: "human", id: "prior-archiver" },
+  });
   closeOpenClawAgentDatabasesForTest();
   expect(loadExactSessionEntryReadOnly(legacy.scope)?.entry).toMatchObject({
     updatedAt: 42,
-    ...retainedMetadata,
+    label: "preserved label",
     skillsSnapshot: snapshot,
     pendingFinalDelivery: {
       kind: "replayable",

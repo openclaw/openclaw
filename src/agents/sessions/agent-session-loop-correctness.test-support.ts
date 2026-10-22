@@ -191,7 +191,7 @@ export async function createModelSelectionSession({
   ...options
 }: Pick<TestSessionOptions, "thinkingLevel" | "sessionManager"> & {
   model: Model;
-  models: Model[];
+  models: NonNullable<Parameters<ModelRegistry["registerProvider"]>[1]["models"]>;
   onModelSelect?: (event: Extract<ExtensionEvent, { type: "model_select" }>) => Promise<void>;
   onThinkingSelect?: (event: ThinkingLevelSelectEvent) => Promise<void>;
 }) {

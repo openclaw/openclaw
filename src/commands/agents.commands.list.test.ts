@@ -10,7 +10,6 @@ import { createAccountListHelpers } from "../plugin-sdk/account-helpers.js";
 import { createScopedChannelConfigBase } from "../plugin-sdk/channel-config-helpers.js";
 import * as configuredChannelIds from "../plugins/channel-plugin-ids.js";
 import * as externalPluginRepairs from "../plugins/official-external-plugin-repair-hints.js";
-import type { OfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { defaultRuntime } from "../runtime.js";
@@ -255,7 +254,9 @@ const providerMocks = {
     typeof value === "string" && value.trim().length > 0 ? value : null,
   ),
   configuredChannels: vi.fn<() => string[]>(() => []),
-  repairs: vi.fn<() => OfficialExternalPluginRepairHint[]>(() => []),
+  repairs: vi.fn<
+    typeof externalPluginRepairs.resolveMissingOfficialExternalChannelPluginRepairHints
+  >(() => []),
 };
 async function listProviders(cfg: OpenClawConfig = {}, bindings: AgentRouteBinding[] = []) {
   mocks.config.mockResolvedValue({
@@ -296,7 +297,9 @@ const makeAccount = (accountId: string, fields: Partial<ChannelAccountSnapshot> 
   ...fields,
 });
 const repairHint = "Install the official Feishu plugin.";
-const feishuRepair: OfficialExternalPluginRepairHint = {
+const feishuRepair: ReturnType<
+  typeof externalPluginRepairs.resolveMissingOfficialExternalChannelPluginRepairHints
+>[number] = {
   channelId: "feishu",
   pluginId: "feishu",
   label: "Feishu",

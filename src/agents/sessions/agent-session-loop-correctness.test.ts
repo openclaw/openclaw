@@ -348,6 +348,30 @@ describe("AgentSession loop correctness", () => {
     expect(order).toEqual(["first:start", "first:end", "second"]);
   });
 
+  it("emits agent_settled once after a normal run", async () => {
+    const lifecycleEvents: string[] = [];
+    const handlers: ExtensionFactory = (api) => {
+      api.on("agent_end", async () => {
+        lifecycleEvents.push("agent_end");
+      });
+      api.on("agent_settled", async () => {
+        lifecycleEvents.push("agent_settled");
+      });
+    };
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }]),
+      ),
+    );
+    const { session } = await createTestSession({
+      resourceLoader: await createResourceLoader(handlers),
+    });
+
+    await session.prompt("new prompt");
+
+    expect(lifecycleEvents).toEqual(["agent_end", "agent_settled"]);
+  });
+
   it("manually compacts a completed turn smaller than the retained-token budget", async () => {
     const sessionManager = SessionManager.inMemory();
     await appendHistory(sessionManager, createAssistant(testModel, "short answer"));

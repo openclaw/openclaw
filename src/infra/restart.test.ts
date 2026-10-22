@@ -18,6 +18,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 
+// mock-isolation: Keep restart path resolution in the synthetic test state directory.
 vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: () => 18789,
   resolveStateDir: (env: NodeJS.ProcessEnv = process.env) =>

@@ -384,6 +384,18 @@ describe("WizardSession", () => {
     await expectTerminal(session);
   });
 
+  test("forwards sensitive flag to the emitted text step", async () => {
+    const session = new WizardSession(async (prompter) => {
+      await prompter.text({ message: "API key", sensitive: true });
+      await prompter.text({ message: "Username" });
+    });
+    const sensitiveStep = await nextStep(session, { type: "text", sensitive: true });
+    await session.answer(sensitiveStep.id, "fake-key-aa11");
+    const plainStep = await nextStep(session, { type: "text" });
+    expect(plainStep?.sensitive).toBeUndefined();
+    await session.answer(plainStep.id, "alice");
+  });
+
   test("bridges confirm, progress updates, and notes in order", async () => {
     const initialUpdateQueued = createDeferredCore();
     const halfway = createDeferredCore();

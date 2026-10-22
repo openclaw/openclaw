@@ -59,7 +59,7 @@ export function assertNativeWorkerDiagnosticMatches(
 export async function runNativeResourceLifecycle(
   directory: string,
   serviceUntil: (label: string, service: () => void, done: () => boolean) => void,
-  edge: "idle-broker" | "late-attachment",
+  edge?: "idle-broker" | "late-attachment",
 ) {
   const [{ isRecord }, { createDeferredCore }, { resolveRuntimeWorkerUrl }] = await Promise.all([
     import("@openclaw/normalization-core/record-coerce"),
@@ -248,7 +248,17 @@ export async function runNativeResourceLifecycle(
     observer.exec("BEGIN IMMEDIATE");
     assert.equal(observer.prepare("SELECT COUNT(*) AS count FROM proof").get()?.count, 1);
     observer.exec("ROLLBACK");
-    console.log(JSON.stringify({ ending: `resource-${edge}` }));
+    console.log(
+      JSON.stringify({
+        ending: edge ? `resource-${edge}` : "native-resource",
+        ...idleBrokerProof?.result,
+        ...(edge === "late-attachment" ? { lateSameBrokerAttached: true } : {}),
+        firstCloseRejected: true,
+        sameOwnerRetried: true,
+        childClosedBeforeStopped: true,
+        sqliteReusable: true,
+      }),
+    );
   } finally {
     permit();
     database?.close();

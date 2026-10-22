@@ -489,6 +489,34 @@ describe("MCP App standalone host", () => {
     expect(mocks.completeRetirement).toHaveBeenCalledWith(runtime);
   });
 
+  it("inherits post-catalog grant revalidation from the shared operation boundary", async () => {
+    const catalogStarted = createDeferred();
+    const releaseCatalog = createDeferred<Awaited<ReturnType<typeof runtime.getCatalog>>>();
+    runtime.getCatalog.mockImplementationOnce(async () => {
+      catalogStarted.resolve();
+      return await releaseCatalog.promise;
+    });
+    let grantActive = true;
+    view.authorizeAppInteraction = vi.fn(async () => grantActive);
+    const issued = issueTicket({ sessionKey: "agent:main:main", view, nowMs });
+
+    const pending = appRequest(issued.ticket, {
+      method: "POST",
+      body: appCall(),
+    });
+    await catalogStarted.promise;
+    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
+    grantActive = false;
+    releaseCatalog.resolve({
+      tools: [{ serverName: "demo", toolName: "app-only", uiVisibility: ["app"] }],
+    });
+
+    const denied = await pending;
+    expect(denied.res.statusCode).toBe(403);
+    expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(2);
+    expect(runtime.callTool).not.toHaveBeenCalled();
+  });
+
   it.each(["read-only", "unbound"])("denies server operations for a %s view", async (mode) => {
     Object.assign(
       view,
@@ -561,7 +589,7 @@ describe("standalone channel launch", () => {
   const materialize = () =>
     materializeMcpAppChannelPresentation({
       sessionKey: "agent:main:main",
-      view: { viewId: view.viewId, title: "do-not-emit-title" },
+      view: { viewId: view.viewId },
       nowMs,
     });
   beforeEach(() => {

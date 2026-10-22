@@ -146,7 +146,11 @@ async function post(
   return { status: res.statusCode, body: res.body ?? "", end };
 }
 
-function expectWake(response: Awaited<ReturnType<typeof post>>, status: number, body: unknown) {
+function expectWake(
+  response: Awaited<ReturnType<typeof post>>,
+  status: number,
+  body: Record<string, unknown>,
+) {
   expect(response.status).toBe(status);
   expect(JSON.parse(response.body)).toMatchObject(body);
 }
@@ -170,6 +174,14 @@ afterEach(async () => {
 });
 
 describe("authenticated immediate hook wake admission", () => {
+  it("rejects unauthenticated requests before capturing or queuing a target", async () => {
+    const response = await post(fixture().handler, "now", "wrong");
+    expect(response.status).toBe(401);
+    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+  });
+
   it.each(["failed", "cancelled"] as const)(
     "responds after acceptance and logs a later %s outcome without another handoff",
     async (status) => {

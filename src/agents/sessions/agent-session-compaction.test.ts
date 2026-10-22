@@ -167,7 +167,7 @@ function expectAbortedProjection(
       stream: "compaction",
       data: {
         phase: "end",
-        itemId: compactionEvents[0].data.itemId,
+        itemId: expectDefined(compactionEvents[0], "compaction start event").data.itemId,
         outcome: "aborted",
         completed: false,
         willRetry: false,

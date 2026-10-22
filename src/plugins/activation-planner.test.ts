@@ -4,6 +4,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { createPluginManifestRecordFixture as owner } from "./plugin-metadata.test-support.js";
 
 const loadRegistry = vi.hoisted(() => vi.fn());
+// mock-isolation: Plan synthetic manifest records without discovering installed plugins.
 vi.mock("./plugin-registry-contributions.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: loadRegistry,
 }));

@@ -383,6 +383,26 @@ it.each([
   },
 );
 
+it("prefers forwarded host over bind host for generic plugin surface URLs", async () => {
+  const handler = await connectWs({
+    host: "10.0.0.2:18789",
+    headers: {
+      "x-forwarded-for": "203.0.113.10",
+      "x-forwarded-host": "gateway.example.com",
+      "x-forwarded-proto": "https",
+    },
+    trustedProxies: ["127.0.0.1"],
+    options: {
+      gatewayHost: "10.0.0.2",
+      port: 18789,
+      pluginSurfaceScheme: "http",
+      getPluginNodeCapabilities: () => [{ surface: "canvas" }],
+    },
+  });
+
+  expect(handler.pluginSurfaceBaseUrl).toBe("https://gateway.example.com:443");
+});
+
 it("rejects late client registration after a pre-connect socket close", async () => {
   const handler = await connectWs({ clients });
 

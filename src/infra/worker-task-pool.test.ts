@@ -365,6 +365,17 @@ it("keeps queued and reused tasks in their caller context through preparation an
   expect(observed).toHaveLength(18);
 });
 
+it("rejects a clean exit before a response and recovers capacity", async () => {
+  const pool = createPool();
+  await expect(
+    pool.run({ label: "exit", exitCode: 0 }, { timeoutMs: 10_000 }),
+  ).rejects.toMatchObject({ code: "unavailable" });
+  await expect(pool.run({ label: "next" }, { timeoutMs: 10_000 })).resolves.toMatchObject({
+    label: "next",
+  });
+  expect(workers).toHaveLength(2);
+});
+
 it("rejects active and queued callers after worker exit and OOM without unhandled rejections", async () => {
   // CI's process-wide V8 heap setting overrides Worker resourceLimits.
   await exec(process.execPath, fixtureArgv(workerTaskPoolEntrypoints.failure), {
