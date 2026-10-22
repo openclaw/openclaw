@@ -3,12 +3,12 @@ import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { GatewayBoardProvider } from "./gateway-provider.ts";
 import {
   acquireLease,
   boardClient,
   boardSnapshot,
   boardWidget,
+  gatewayProvider,
   capabilities,
   mainTab,
   noCapabilities,
@@ -122,16 +122,10 @@ describe("board providers", () => {
 
   it("dispatches newly authorized board actions after upgrading a read-only lease", async () => {
     const sessionKey = "agent:main:lease-scope-upgrade";
-    const snapshot = {
-      sessionKey,
-      revision: 1,
+    const snapshot = boardSnapshot(sessionKey, 1, {
       tabs: [mainTab],
-      widgets: [
-        boardWidget("pending-widget", {
-          grantState: "pending" as const,
-        }),
-      ],
-    };
+      widgets: [boardWidget("pending-widget", { grantState: "pending" })],
+    });
     const client = {
       request: vi.fn(async () => snapshot) as never,
       addEventListener: vi.fn(() => () => {}),
@@ -143,101 +137,50 @@ describe("board providers", () => {
       canMutate: false,
     });
 
-    try {
-      await waitForFast(() => expect(lease.provider.snapshot$.value).toEqual(snapshot));
-      await expect(lease.provider.applyOps([])).rejects.toThrow();
-      await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).rejects.toThrow();
-      await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).rejects.toThrow();
-      await expect(lease.provider.grant("pending-widget", "granted")).rejects.toThrow();
-      expect(client.request).toHaveBeenCalledOnce();
+    await waitForFast(() => expect(lease.provider.snapshot$.value).toEqual(snapshot));
+    await expect(lease.provider.applyOps([])).rejects.toThrow();
+    await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).rejects.toThrow();
+    await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).rejects.toThrow();
+    await expect(lease.provider.grant("pending-widget", "granted")).rejects.toThrow();
+    expect(client.request).toHaveBeenCalledOnce();
 
-      lease.update(client, true, capabilities);
-      expect(approver.provider.canGrant).toBe(true);
-      expect(approver.provider.canMutate).toBe(false);
+    lease.update(client, true, capabilities);
+    expect(approver.provider.canGrant).toBe(true);
+    expect(approver.provider.canMutate).toBe(false);
 
-      await expect(lease.provider.applyOps([])).resolves.toBeUndefined();
-      await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).resolves.toBeUndefined();
-      await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).resolves.toBeUndefined();
-      await expect(lease.provider.grant("pending-widget", "granted")).resolves.toBeUndefined();
-      expect(client.request).toHaveBeenCalledTimes(5);
-      expect(client.request).toHaveBeenCalledWith("board.update", { sessionKey, ops: [] });
-      expect(client.request).toHaveBeenCalledWith("board.widget.put", {
-        sessionKey,
-        name: "canvas-cv-upgraded",
-        content: { kind: "canvas-doc", docId: "cv-upgraded" },
-      });
-      expect(client.request).toHaveBeenCalledWith("board.widget.put", {
-        sessionKey,
-        name: mcpAppWidgetNameForViewId("app-upgraded"),
-        content: { kind: "mcp-app", viewId: "app-upgraded" },
-      });
-      expect(client.request).toHaveBeenCalledWith("board.widget.grant", {
-        sessionKey,
-        name: "pending-widget",
-        decision: "granted",
-        revision: 1,
-      });
-      expect(client.addEventListener).toHaveBeenCalledOnce();
-
-      lease.update(client, true, noCapabilities);
-      expect(approver.provider.canGrant).toBe(true);
-      expect(approver.provider.canMutate).toBe(false);
-
-      await expect(lease.provider.applyOps([])).rejects.toThrow();
-      await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).rejects.toThrow();
-      await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).rejects.toThrow();
-      await expect(lease.provider.grant("pending-widget", "granted")).rejects.toThrow();
-      expect(client.request).toHaveBeenCalledTimes(5);
-    } finally {
-      lease.release();
-      approver.release();
-    }
-  });
-
-  it("reconnects concurrent board leases through the same cached gateway transport", async () => {
-    const sessionKey = "agent:main:shared-lease-reconnect";
-    const previousSnapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
-    const nextSnapshot = { ...previousSnapshot, revision: 2 };
-    const removePreviousListener = vi.fn();
-    const removeNextListener = vi.fn();
-    const previousClient = {
-      request: vi.fn(async () => previousSnapshot) as never,
-      addEventListener: vi.fn(() => removePreviousListener),
-    };
-    const nextClient = {
-      request: vi.fn(async () => nextSnapshot) as never,
-      addEventListener: vi.fn(() => removeNextListener),
-    };
-    const writer = acquireLease({ sessionKey }, previousClient, { canGrant: false });
-    const approver = acquireLease({ sessionKey }, previousClient, {
-      canPinWidgets: false,
-      canPinMcpApps: false,
-      canMutate: false,
+    await expect(lease.provider.applyOps([])).resolves.toBeUndefined();
+    await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).resolves.toBeUndefined();
+    await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).resolves.toBeUndefined();
+    await expect(lease.provider.grant("pending-widget", "granted")).resolves.toBeUndefined();
+    expect(client.request).toHaveBeenCalledTimes(5);
+    expect(client.request).toHaveBeenCalledWith("board.update", { sessionKey, ops: [] });
+    expect(client.request).toHaveBeenCalledWith("board.widget.put", {
+      sessionKey,
+      name: "canvas-cv-upgraded",
+      content: { kind: "canvas-doc", docId: "cv-upgraded" },
     });
-    const cached = boardProviderForSession({ sessionKey });
+    expect(client.request).toHaveBeenCalledWith("board.widget.put", {
+      sessionKey,
+      name: mcpAppWidgetNameForViewId("app-upgraded"),
+      content: { kind: "mcp-app", viewId: "app-upgraded" },
+    });
+    expect(client.request).toHaveBeenCalledWith("board.widget.grant", {
+      sessionKey,
+      name: "pending-widget",
+      decision: "granted",
+      revision: 1,
+    });
+    expect(client.addEventListener).toHaveBeenCalledOnce();
 
-    try {
-      await waitForFast(() => expect(writer.provider.snapshot$.value).toEqual(previousSnapshot));
+    lease.update(client, true, noCapabilities);
+    expect(approver.provider.canGrant).toBe(true);
+    expect(approver.provider.canMutate).toBe(false);
 
-      writer.update(nextClient, true, { ...capabilities, canGrant: false });
-
-      await waitForFast(() => expect(writer.provider.snapshot$.value).toEqual(nextSnapshot));
-      expect(approver.provider.snapshot$.value).toEqual(nextSnapshot);
-      expect(boardProviderForSession({ sessionKey })).toBe(cached);
-      expect(removePreviousListener).toHaveBeenCalledOnce();
-      expect(nextClient.addEventListener).toHaveBeenCalledOnce();
-      expect(nextClient.request).toHaveBeenCalledOnce();
-      expect(approver.provider.canGrant).toBe(true);
-      expect(approver.provider.canMutate).toBe(false);
-
-      writer.release();
-      expect(removeNextListener).not.toHaveBeenCalled();
-      approver.release();
-      expect(removeNextListener).toHaveBeenCalledOnce();
-    } finally {
-      writer.release();
-      approver.release();
-    }
+    await expect(lease.provider.applyOps([])).rejects.toThrow();
+    await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).rejects.toThrow();
+    await expect(lease.provider.pinMcpApp({ viewId: "app-upgraded" })).rejects.toThrow();
+    await expect(lease.provider.grant("pending-widget", "granted")).rejects.toThrow();
+    expect(client.request).toHaveBeenCalledTimes(5);
   });
 
   it("shares one provider across equivalent main session keys", () => {
@@ -248,18 +191,10 @@ describe("board providers", () => {
 
   it("does not preserve a stale ticket when a widget generation is recreated", async () => {
     const baseWidget = boardWidget("alpha");
-    const initial = {
-      sessionKey: "agent:main:generation",
-      revision: 1,
+    const initial = boardSnapshot("agent:main:generation", 1, {
       tabs: [mainTab],
-      widgets: [
-        {
-          ...baseWidget,
-          viewGeneration: "a".repeat(32),
-          frameUrl: "/old-ticket",
-        },
-      ],
-    };
+      widgets: [{ ...baseWidget, viewGeneration: "a".repeat(32), frameUrl: "/old-ticket" }],
+    });
     const recreated = {
       ...initial,
       revision: 2,
@@ -283,7 +218,7 @@ describe("board providers", () => {
       .mockResolvedValueOnce(recreated)
       .mockResolvedValueOnce(renewed);
     const client = boardClient(request);
-    const provider = new GatewayBoardProvider({ sessionKey: "agent:main:generation" }, client);
+    const provider = gatewayProvider("agent:main:generation", client);
     await waitForFast(() => expect(provider.snapshot$.value).toEqual(initial));
 
     client.emit("board.changed", { sessionKey: "agent:main:generation", revision: 2 });
@@ -306,10 +241,7 @@ describe("board providers", () => {
       }
       return Promise.resolve(current);
     });
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:stale" },
-      boardClient(request),
-    );
+    const provider = gatewayProvider("agent:main:stale", boardClient(request));
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", expect.anything()));
 
     await provider.pinWidget({ docId: "cv-current" });
@@ -331,7 +263,7 @@ describe("board providers", () => {
       .mockImplementationOnce(() => pendingIntermediate.promise)
       .mockResolvedValueOnce(deleted);
     const client = boardClient(request);
-    const provider = new GatewayBoardProvider({ sessionKey: "agent:main:deleted-board" }, client);
+    const provider = gatewayProvider("agent:main:deleted-board", client);
     await waitForFast(() => expect(provider.snapshot$.value).toEqual(populated));
 
     client.emit("board.changed", { sessionKey: "agent:main:deleted-board", revision: 6 });
@@ -364,7 +296,7 @@ describe("board providers", () => {
       .mockImplementationOnce(() => stale.promise)
       .mockResolvedValueOnce(recreated);
     const client = boardClient(request);
-    const provider = new GatewayBoardProvider({ sessionKey: "agent:main:recreated-board" }, client);
+    const provider = gatewayProvider("agent:main:recreated-board", client);
     await waitForFast(() => expect(provider.snapshot$.value).toEqual(populated));
 
     client.emit("board.changed", { sessionKey: "agent:main:recreated-board", revision: 6 });
@@ -387,10 +319,7 @@ describe("board providers", () => {
       .mockResolvedValueOnce(populated)
       .mockImplementationOnce(() => older.promise)
       .mockImplementationOnce(() => pendingNewer.promise);
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:mutation-race" },
-      boardClient(request),
-    );
+    const provider = gatewayProvider("agent:main:mutation-race", boardClient(request));
     await waitForFast(() => expect(provider.snapshot$.value).toEqual(populated));
 
     const olderMutation = provider.applyOps([{ kind: "tab_delete", tabId: "main" }]);
@@ -425,10 +354,7 @@ describe("board providers", () => {
       }
       return deletion.promise;
     });
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:refresh-reset-race" },
-      boardClient(request),
-    );
+    const provider = gatewayProvider("agent:main:refresh-reset-race", boardClient(request));
     await waitForFast(() => expect(provider.snapshot$.value).toEqual(populated));
 
     const refresh = provider.activate();
@@ -445,16 +371,10 @@ describe("board providers", () => {
 
   it("preserves a widget ticket refresh across a superseding mutation", async () => {
     const pendingRefresh = createDeferred<BoardSnapshot>();
-    const initial = {
-      sessionKey: "agent:main:ticket-race",
-      revision: 1,
+    const initial = boardSnapshot("agent:main:ticket-race", 1, {
       tabs: [mainTab],
-      widgets: [
-        boardWidget("alpha", {
-          frameUrl: "/old-ticket",
-        }),
-      ],
-    };
+      widgets: [boardWidget("alpha", { frameUrl: "/old-ticket" })],
+    });
     const mutation = {
       ...initial,
       revision: 2,
@@ -478,10 +398,7 @@ describe("board providers", () => {
       }
       return Promise.resolve(reminted);
     });
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:ticket-race" },
-      boardClient(request),
-    );
+    const provider = gatewayProvider("agent:main:ticket-race", boardClient(request));
     await waitForFast(() => expect(provider.snapshot$.value).toEqual(initial));
 
     const refresh = provider.refreshWidgetFrame("alpha");

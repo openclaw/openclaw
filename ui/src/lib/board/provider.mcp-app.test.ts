@@ -1,12 +1,12 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayBoardProvider } from "./gateway-provider.ts";
 import { BoardMcpAppViewCache } from "./mcp-app-view-cache.ts";
 import {
   boardClient,
   boardSnapshot,
   boardWidget,
+  gatewayProvider,
   mainTab,
 } from "./provider.lease-cases.test-support.ts";
 
@@ -47,7 +47,7 @@ describe("board provider MCP App views", () => {
         }
         throw new Error(`unexpected method: ${method}`);
       });
-      const provider = new GatewayBoardProvider(session, boardClient(request));
+      const provider = gatewayProvider(session, boardClient(request));
       await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
 
       await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
@@ -106,7 +106,7 @@ describe("board provider MCP App views", () => {
       }) as never,
       addEventListener: () => () => {},
     };
-    const provider = new GatewayBoardProvider({ sessionKey: snapshot.sessionKey }, client);
+    const provider = gatewayProvider(snapshot.sessionKey, client);
     await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(snapshot));
     await expect(provider.widgetAppView("server-app", 1)).resolves.toMatchObject({
       viewId: "view-1",
@@ -130,7 +130,7 @@ describe("board provider MCP App views", () => {
           method === "board.get" ? Promise.resolve(snapshot) : lease.promise,
         ),
       );
-      const provider = new GatewayBoardProvider({ sessionKey }, client);
+      const provider = gatewayProvider({ sessionKey }, client);
       await vi.waitFor(() => expect(provider.snapshot$.value).toEqual(snapshot));
 
       const pending = provider.widgetAppView("server-app", 1);
@@ -167,10 +167,7 @@ describe("board provider MCP App views", () => {
       }
       return { viewId: "mcp-app-restored", expiresAtMs: Date.now() + 60_000 };
     });
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:stale-app" },
-      boardClient(request),
-    );
+    const provider = gatewayProvider("agent:main:stale-app", boardClient(request));
     await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(1));
 
     await expect(provider.widgetAppView("server-app", 1)).resolves.toEqual({
