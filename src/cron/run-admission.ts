@@ -105,7 +105,6 @@ export function prepareCronRunAdmission(params: {
     : undefined;
   const deliveryAttemptFence = params.deliveryAttemptFence;
   if (scheduledMessageAuthority && !deliveryAttemptFence) {
-    params.scheduledExecution?.release();
     preparedRunAdmission.close();
     throw new Error("scheduled message authority requires its occurrence delivery fence");
   }

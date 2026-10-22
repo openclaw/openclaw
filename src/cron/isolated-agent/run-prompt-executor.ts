@@ -204,22 +204,29 @@ export function createCronPromptExecutor(
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
     const scheduledExecution = await mintCronPromptExecutionContext(params, { runId, trigger });
-    const cronAdmission = prepareCronRunAdmission({
-      scheduledExecution,
-      operatorAuthority: params.operatorAuthority,
-      admissionSource: params.admissionSource,
-      deliveryAttemptFence: params.deliveryAttemptFence,
-      cfg: params.cfgWithAgentDefaults,
-      agentId: params.agentId,
-      runId,
-      sessionId: params.cronSession.sessionEntry.sessionId,
-      sessionKey: params.runSessionKey,
-      jobId: params.job.id,
-      channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
-      toolsAllow: params.agentPayload?.toolsAllow,
-      scheduledToolPolicy,
-      executionIdentity: params.executionIdentity,
-    });
+    // Admission releases the context when it closes; a failed preparation never reaches close.
+    let cronAdmission: ReturnType<typeof prepareCronRunAdmission>;
+    try {
+      cronAdmission = prepareCronRunAdmission({
+        scheduledExecution,
+        operatorAuthority: params.operatorAuthority,
+        admissionSource: params.admissionSource,
+        deliveryAttemptFence: params.deliveryAttemptFence,
+        cfg: params.cfgWithAgentDefaults,
+        agentId: params.agentId,
+        runId,
+        sessionId: params.cronSession.sessionEntry.sessionId,
+        sessionKey: params.runSessionKey,
+        jobId: params.job.id,
+        channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
+        toolsAllow: params.agentPayload?.toolsAllow,
+        scheduledToolPolicy,
+        executionIdentity: params.executionIdentity,
+      });
+    } catch (error) {
+      scheduledExecution.release();
+      throw error;
+    }
     params.onPromptAdmission(cronAdmission);
     // Record the cron source fact at its producer for the run's lifetime so
     // exec-approval creation and standing-grant use never infer job identity
