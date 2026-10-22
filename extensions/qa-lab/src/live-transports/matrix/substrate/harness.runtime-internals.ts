@@ -54,8 +54,11 @@ export async function waitForReachableMatrixBaseUrl(params: {
   composeFile: string;
   containerBaseUrl: string | null;
   hostBaseUrl: string;
+  timeoutMs?: number;
+  pollMs?: number;
 }) {
-  const timeoutMs = 60_000;
+  const timeoutMs = params.timeoutMs ?? 60_000;
+  const pollMs = params.pollMs ?? 1_000;
   const startedAt = Date.now();
   const deadline = startedAt + timeoutMs;
   const candidateBaseUrls = params.containerBaseUrl
@@ -95,7 +98,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {
-      await sleep(Math.min(1_000, remainingSleepMs));
+      await sleep(Math.min(pollMs, remainingSleepMs));
     }
   }
 

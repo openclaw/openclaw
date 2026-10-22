@@ -31,6 +31,7 @@ export function decodeSlackQuestionAction(value: unknown): SlackQuestionAction |
 }
 
 type ResolveQuestionParams = Parameters<typeof questionGatewayRuntime.resolveOption>[0];
+type QuestionResolver = typeof questionGatewayRuntime.resolveOption;
 
 export async function resolveSlackQuestionAction(params: {
   action: SlackQuestionAction;
@@ -38,10 +39,11 @@ export async function resolveSlackQuestionAction(params: {
   accountId: string;
   userId: string;
   respond: (text: string) => Promise<void>;
+  resolveQuestion?: QuestionResolver;
 }): Promise<void> {
-  let result: Awaited<ReturnType<typeof questionGatewayRuntime.resolveOption>>;
+  let result: Awaited<ReturnType<QuestionResolver>>;
   try {
-    result = await questionGatewayRuntime.resolveOption({
+    result = await (params.resolveQuestion ?? questionGatewayRuntime.resolveOption)({
       cfg: params.cfg,
       questionId: params.action.questionId,
       optionIndex: params.action.optionIndex,

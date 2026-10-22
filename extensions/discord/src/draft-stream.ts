@@ -9,7 +9,7 @@ import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */
 const DISCORD_STREAM_MAX_CHARS = 2000;
-const THROTTLE_MS = 1200;
+const DEFAULT_THROTTLE_MS = 1200;
 const DISCORD_PREVIEW_ALLOWED_MENTIONS = { parse: [] };
 
 type DiscordDraftMessage = { channelId: string; messageId: string };
@@ -19,7 +19,8 @@ export function createDiscordDraftStream(params: {
   rest: RequestClient;
   channelId: string;
   maxChars?: number;
-  replyToMessageId?: () => string | undefined;
+  replyToMessageId?: string | (() => string | undefined);
+  throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
   suppressEmbeds?: boolean;
@@ -27,6 +28,7 @@ export function createDiscordDraftStream(params: {
   warn?: (message: string) => void;
 }) {
   const maxChars = Math.min(params.maxChars ?? DISCORD_STREAM_MAX_CHARS, DISCORD_STREAM_MAX_CHARS);
+  const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   let channelId = params.channelId;
   const rest = params.rest;
@@ -76,7 +78,11 @@ export function createDiscordDraftStream(params: {
         lastSentText = trimmed;
         return true;
       }
-      const replyToMessageId = params.replyToMessageId?.()?.trim();
+      const replyToMessageId = (
+        typeof params.replyToMessageId === "function"
+          ? params.replyToMessageId()
+          : params.replyToMessageId
+      )?.trim();
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
@@ -103,7 +109,7 @@ export function createDiscordDraftStream(params: {
   };
 
   const lifecycle = createFinalizableDraftLifecycle<DiscordDraftMessage, DiscordDraftUpdate>({
-    throttleMs: THROTTLE_MS,
+    throttleMs,
     coalesceInFlight: true,
     state: streamState,
     sendOrEditStreamMessage: (update) =>
@@ -155,7 +161,7 @@ export function createDiscordDraftStream(params: {
     }
   };
 
-  params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${THROTTLE_MS})`);
+  params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
   return {
     update,

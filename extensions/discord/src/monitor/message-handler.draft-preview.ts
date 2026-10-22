@@ -87,6 +87,7 @@ export function createDiscordDraftPreviewController(params: {
       replyToMessageId: () => params.replyReference.peek(),
       minInitialChars: discordStreamMode === "progress" ? 0 : 30,
       suppressEmbeds: params.discordConfig?.suppressEmbeds ?? true,
+      throttleMs: 1200,
       log: params.log,
       warn: params.log,
     });

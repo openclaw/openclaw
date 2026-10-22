@@ -209,8 +209,12 @@ async function writeAtomicFile(pathName: string, contents: Buffer | string) {
   });
 }
 
-async function waitForJsonFile(params: { child: ChildProcess; pathName: string }) {
-  const deadline = Date.now() + PROCESS_BOUNDARY_START_TIMEOUT_MS;
+async function waitForJsonFile(params: {
+  child: ChildProcess;
+  pathName: string;
+  timeoutMs?: number;
+}) {
+  const deadline = Date.now() + (params.timeoutMs ?? PROCESS_BOUNDARY_START_TIMEOUT_MS);
   let lastError: unknown;
   while (Date.now() <= deadline) {
     if (params.child.exitCode !== null || params.child.signalCode !== null) {

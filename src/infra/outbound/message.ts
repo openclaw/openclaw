@@ -322,6 +322,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
           replyToId: reply?.replyToId,
           threadId: params.threadId,
           silent: params.silent,
+          reconcileUnknownSend: true,
         }),
       });
       if (!support.ok) {

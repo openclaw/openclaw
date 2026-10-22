@@ -35,16 +35,18 @@ export async function writeQaDockerHarnessFiles(params: {
   repoRoot: string;
   gatewayPort?: number;
   qaLabPort?: number;
+  gatewayToken?: string;
   providerBaseUrl?: string;
+  qaBusBaseUrl?: string;
   imageName?: string;
   usePrebuiltImage?: boolean;
   bindUiDist?: boolean;
 }) {
   const gatewayPort = params.gatewayPort ?? 18789;
   const qaLabPort = params.qaLabPort ?? 43124;
-  const gatewayToken = `qa-token-${randomUUID()}`;
+  const gatewayToken = params.gatewayToken ?? `qa-token-${randomUUID()}`;
   const providerBaseUrl = params.providerBaseUrl ?? "http://qa-mock-openai:44080/v1";
-  const qaBusBaseUrl = "http://qa-lab:43123";
+  const qaBusBaseUrl = params.qaBusBaseUrl ?? "http://qa-lab:43123";
   const imageName = params.imageName ?? "openclaw:qa-local-prebaked";
   const usePrebuiltImage = params.usePrebuiltImage ?? false;
   const bindUiDist = params.bindUiDist ?? false;
@@ -212,6 +214,13 @@ kill the container by detaching a replacement child.
 
   return {
     outputDir: params.outputDir,
+    imageName,
+    files: [
+      ...files.map(([name]) => path.join(params.outputDir, name)),
+      ...["IDENTITY.md", "QA_KICKOFF_TASK.md", "QA_SCENARIO_PLAN.md", "QA_SCENARIOS.yaml"].map(
+        (name) => path.join(params.outputDir, "state", "seed-workspace", name),
+      ),
+    ],
   };
 }
 
