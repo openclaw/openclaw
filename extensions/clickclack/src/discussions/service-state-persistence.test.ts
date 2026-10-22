@@ -136,7 +136,7 @@ function pause() {
   return {
     entered,
     release,
-    track<T>(task: Promise<T>) {
+    track<T>(this: void, task: Promise<T>) {
       tasks.push(task);
       return task;
     },

@@ -61,7 +61,7 @@ export function connectCdpClient(bridge: ExtensionRelayBridge) {
     request,
     close: client.close,
     events: (method: string) => client.frames(method) as CdpFrame[],
-    async requestResult(...args: Parameters<typeof send>) {
+    async requestResult(this: void, ...args: Parameters<typeof send>) {
       const frame = await request(...args);
       expect(frame).not.toHaveProperty("error");
       return frame.result;

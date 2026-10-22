@@ -17,7 +17,9 @@ const { begin, owner, init, poll, qr, probe } = vi.hoisted(() => ({
   qr: vi.fn(),
   probe: vi.fn<() => Promise<FeishuProbeResult>>(),
 }));
+// mock-isolation: setup discovery must not probe the Feishu network.
 vi.mock("./probe.js", () => ({ probeFeishu: probe }));
+// mock-isolation: setup tests control registration and QR polling without remote account effects.
 vi.mock("./app-registration.js", () => ({
   initAppRegistration: init,
   beginAppRegistration: begin,

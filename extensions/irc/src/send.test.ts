@@ -14,7 +14,9 @@ const mocks = vi.hoisted(() => ({
   stripMarkdown: vi.fn((text: string) => text),
   buildIrcConnectOptions: vi.fn(),
 }));
+// mock-isolation: outbound tests use an owned transport instead of connecting to IRC.
 vi.mock("./client.js", () => ({ connectIrcClient: mocks.connectIrcClient }));
+// mock-isolation: transport option construction is fixed for the owned client fixture.
 vi.mock("./connect-options.js", () => ({ buildIrcConnectOptions: mocks.buildIrcConnectOptions }));
 vi.mock("node:crypto", async (original) => ({
   ...(await original<typeof import("node:crypto")>()),
