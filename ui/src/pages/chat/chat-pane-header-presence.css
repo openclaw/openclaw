@@ -1,5 +1,7 @@
 .chat-pane__presence--desktop .viewer-facepile {
+  gap: var(--space-2);
   margin-inline-start: 0;
+  padding: var(--space-1);
 }
 
 .chat-pane__presence--desktop .viewer-avatar {
@@ -11,7 +13,12 @@
 
 .chat-pane__presence--desktop .viewer-facepile > openclaw-tooltip:not(:first-child) .viewer-avatar,
 .chat-pane__presence--desktop .viewer-facepile > .viewer-avatar:not(:first-child) {
-  margin-left: calc(-1 * var(--space-2));
+  margin-left: 0;
+}
+
+.chat-pane__presence--desktop .viewer-avatar:not(.viewer-avatar--overflow) {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .chat-pane__presence--desktop .viewer-avatar--overflow {
