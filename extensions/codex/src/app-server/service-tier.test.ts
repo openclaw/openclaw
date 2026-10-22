@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { createModelFixture } from "./model-fixture.test-support.js";
 import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import { CODEX_RESPONSES_OAUTH_PROVIDER } from "./responses-oauth.js";
 import { withCodexAppServerFastModeServiceTier } from "./run-attempt-lifecycle.js";
@@ -7,14 +8,8 @@ import { resolveCodexUltrafastServiceTier } from "./service-tier.js";
 import { createClientHarness } from "./test-support.js";
 
 const supportedModel = {
+  ...createModelFixture("native-model"),
   id: "catalog-alias",
-  model: "native-model",
-  displayName: "Test model",
-  description: "Test model",
-  hidden: false,
-  isDefault: false,
-  supportedReasoningEfforts: [],
-  defaultReasoningEffort: "medium",
   serviceTiers: [{ id: "ultrafast", name: "Ultrafast", description: "Faster" }],
 };
 
