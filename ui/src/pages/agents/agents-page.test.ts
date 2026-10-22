@@ -842,7 +842,7 @@ describe("AgentsPage gateway lifecycle", () => {
     await agents.ensureList();
     const { page } = mountPage(client, "files", { gateway: currentGateway, agents });
     try {
-      page.read().agentFiles.onSelectFile("cached.md");
+      await page.read().agentFiles.onSelectFile("cached.md");
       await waitForFast(() =>
         expect(agentFileValues(page.read().readData(), "content")).toEqual({ "cached.md": "keep" }),
       );
