@@ -11,15 +11,8 @@ import { createModelAuthAvailabilityResolver } from "../model-auth-availability.
 import { configFor } from "../model-auth.fixtures.test-support.js";
 import { prepareAgentRuntimeAuth } from "./prepare-auth.js";
 
-function authStore(apiKeyProfile: string, oauthProfile: string) {
-  return createAuthProfileStoreFixture({
-    [apiKeyProfile]: createApiKeyCredential("openai", "fixture-key"),
-    [oauthProfile]: createOAuthRefreshCredential(),
-  });
-}
-
-function billingConfig(primary: string, apiProfile: string, oauthProfile: string): OpenClawConfig {
-  return {
+function billingFixture(primary: string, apiProfile: string, oauthProfile: string) {
+  const config: OpenClawConfig = {
     agents: { defaults: { model: primary, heartbeat: { model: "openai/gpt-5.4-mini" } } },
     auth: {
       profiles: {
@@ -28,6 +21,16 @@ function billingConfig(primary: string, apiProfile: string, oauthProfile: string
       },
     },
     ...configFor("openai", "https://api.openai.com/v1", { api: "openai-completions" }),
+  };
+  return {
+    provider: "openai",
+    modelId: "gpt-5.4-mini",
+    env: {},
+    config,
+    authProfileStore: createAuthProfileStoreFixture({
+      [apiProfile]: createApiKeyCredential("openai", "fixture-key"),
+      [oauthProfile]: createOAuthRefreshCredential(),
+    }),
   };
 }
 type PrepareParams = Parameters<typeof prepareAgentRuntimeAuth>[0];
@@ -54,7 +57,8 @@ it.each([
 ] as const)(
   "preserves the API route inherited from %s (runtime: %s, metadata: %s, observed: %s)",
   (primary, runtime, profileMetadata, observedResponses) => {
-    const config = billingConfig(primary, "openai:platform", "openai:chatgpt");
+    const fixture = billingFixture(primary, "openai:platform", "openai:chatgpt");
+    const { config } = fixture;
     config.agents!.entries = { assistant: {} };
     config.agents!.defaults!.models = {
       "openai/gpt-5.5": { alias: "metered", agentRuntime: { id: runtime } },
@@ -66,15 +70,11 @@ it.each([
       config.models = undefined;
     }
     const prepared = prepareAgentRuntimeAuth({
-      provider: "openai",
-      modelId: "gpt-5.4-mini",
-      env: {},
-      config,
+      ...fixture,
       agentId: "assistant",
       ...(observedResponses
         ? { modelApi: "openai-responses", modelBaseUrl: "https://api.openai.com/v1" }
         : {}),
-      authProfileStore: authStore("openai:platform", "openai:chatgpt"),
     });
     expect(prepared.plan).toMatchObject({
       forwardedAuthProfileId: "openai:platform",
@@ -91,11 +91,12 @@ it.each(["provider-profile", "auth-order", "env-fallback", "provider-auth-with-e
     const subscription = choice === "env-fallback";
     const profileId = subscription ? "openai:chatgpt-default" : "openai:default";
     const authRequirement = subscription ? "subscription" : "api-key";
-    const config = billingConfig(
+    const fixture = billingFixture(
       hasEnvironmentKey ? "openai/gpt-5.5" : "openai/gpt-5.5@openai:chatgpt-default",
       "openai:default",
       "openai:chatgpt-default",
     );
+    const { config, authProfileStore } = fixture;
     if (choice === "auth-order") {
       config.auth!.order = { openai: ["openai:default", "openai:chatgpt-default"] };
     }
@@ -104,17 +105,10 @@ it.each(["provider-profile", "auth-order", "env-fallback", "provider-auth-with-e
       choice === "provider-auth-with-env" ? { auth: "api-key" } : {},
       choice === "provider-profile" ? { apiKey: "openai:default" } : {},
     );
-    const store = authStore("openai:default", "openai:chatgpt-default");
-    const prepared = prepareAgentRuntimeAuth({
-      provider: "openai",
-      modelId: "gpt-5.4-mini",
-      config,
-      authProfileStore: store,
-      env,
-    }).plan;
+    const prepared = prepareAgentRuntimeAuth({ ...fixture, env }).plan;
     const available = createModelAuthAvailabilityResolver({
       cfg: config,
-      authStore: store,
+      authStore: authProfileStore,
       env,
     }).evaluateModelAuth("openai", { modelId: "gpt-5.4-mini" });
     expect(prepared).toMatchObject({

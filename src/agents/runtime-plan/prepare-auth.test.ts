@@ -5,7 +5,7 @@ import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.tes
 import { createOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../failover/error.js";
 import { resolveAgentHarnessPreparedAuthSupport } from "../harness/support.js";
-import { modelDefinition, providerConfig } from "../model-auth.fixtures.test-support.js";
+import { providerConfig } from "../model-auth.fixtures.test-support.js";
 import { getApiKeyForModelCore } from "../model-auth.js";
 import {
   apiKey,
@@ -437,96 +437,90 @@ it.each(["profile", "secret-ref"] as const)(
       vi.stubEnv("OPENAI_API_KEY", "");
       vi.stubEnv("OPENAI_PLATFORM_KEY", "secret-ref-platform-key");
     }
-    try {
-      const config = openAIConfig({
-        apiKey: profile
-          ? "configured-platform-key"
-          : { source: "env", provider: "default", id: "OPENAI_PLATFORM_KEY" },
-      });
-      const store = authStore(
-        profile ? oneProfile(id, apiKey("profile-platform-key")) : {},
-        profile ? { openai: [id] } : undefined,
-      );
-      const prepared = prepare({
-        ...subscription,
-        config,
-        authProfileStore: store,
-        env: profile ? {} : process.env,
-      });
-      const { plan, attempts } = prepared;
+    const config = openAIConfig({
+      apiKey: profile
+        ? "configured-platform-key"
+        : { source: "env", provider: "default", id: "OPENAI_PLATFORM_KEY" },
+    });
+    const store = authStore(
+      profile ? oneProfile(id, apiKey("profile-platform-key")) : {},
+      profile ? { openai: [id] } : undefined,
+    );
+    const prepared = prepare({
+      ...subscription,
+      config,
+      authProfileStore: store,
+      env: profile ? {} : process.env,
+    });
+    const { plan, attempts } = prepared;
+    expect(plan).toMatchObject({
+      selectedAuthMode: profile ? "api_key" : "api-key",
+      modelRoute: apiRoute,
+    });
+    if (profile) {
       expect(plan).toMatchObject({
-        selectedAuthMode: profile ? "api_key" : "api-key",
+        forwardedAuthProfileId: id,
+        forwardedAuthProfileCandidateIds: [id],
+      });
+      expect({
+        kinds: attempts.map((a) => a.kind),
+        ids: attempts.map((a) => a.profileId),
+        fallback: attempts.map((a) => a.allowAuthProfileFallback),
+        prior: attempts.map((a) => a.requiresPriorProfileAttempt),
+        forwarded: attempts.map((a) => a.plan.forwardedAuthProfileId),
+        sources: attempts.map((a) => a.plan.credentialSource),
+      }).toEqual({
+        kinds: ["profile", "direct"],
+        ids: [id, undefined],
+        fallback: [undefined, false],
+        prior: [undefined, true],
+        forwarded: [id, undefined],
+        sources: [
+          { kind: "profile" },
+          { kind: "direct", evidence: "provider-config", authorization: "declared" },
+        ],
+      });
+      expect(attempts[1]?.plan).toMatchObject({
+        selectedAuthMode: "api-key",
         modelRoute: apiRoute,
       });
-      if (profile) {
-        expect(plan).toMatchObject({
-          forwardedAuthProfileId: id,
-          forwardedAuthProfileCandidateIds: [id],
-        });
-        expect({
-          kinds: attempts.map((a) => a.kind),
-          ids: attempts.map((a) => a.profileId),
-          fallback: attempts.map((a) => a.allowAuthProfileFallback),
-          prior: attempts.map((a) => a.requiresPriorProfileAttempt),
-          forwarded: attempts.map((a) => a.plan.forwardedAuthProfileId),
-          sources: attempts.map((a) => a.plan.credentialSource),
-        }).toEqual({
-          kinds: ["profile", "direct"],
-          ids: [id, undefined],
-          fallback: [undefined, false],
-          prior: [undefined, true],
-          forwarded: [id, undefined],
-          sources: [
-            { kind: "profile" },
-            { kind: "direct", evidence: "provider-config", authorization: "declared" },
-          ],
-        });
-        expect(attempts[1]?.plan).toMatchObject({
-          selectedAuthMode: "api-key",
-          modelRoute: apiRoute,
-        });
-      } else {
-        expect(attempts).toEqual([
-          {
-            kind: "direct",
-            plan,
-            allowAuthProfileFallback: false,
-            requiresPriorProfileAttempt: false,
-          },
-        ]);
-        expect(plan).toMatchObject({
-          forwardedAuthProfileId: undefined,
-          credentialSource: { kind: "direct", evidence: "environment", authorization: "declared" },
-          modelRoute: { baseUrl: "https://api.openai.com/v1" },
-        });
-        const serialized = JSON.stringify(plan.credentialSource);
-        expect(serialized).not.toContain("secret-ref-platform-key");
-        expect(serialized).not.toContain("OPENAI_PLATFORM_KEY");
-      }
-      const resolved = await getApiKeyForModelCore({
-        model: authModel(plan),
-        cfg: config,
-        store,
-        profileId: attempts[0]?.profileId,
-        allowAuthProfileFallback: attempts[0]?.allowAuthProfileFallback,
-        ...(profile ? { lockedProfile: true } : {}),
+    } else {
+      expect(attempts).toEqual([
+        {
+          kind: "direct",
+          plan,
+          allowAuthProfileFallback: false,
+          requiresPriorProfileAttempt: false,
+        },
+      ]);
+      expect(plan).toMatchObject({
+        forwardedAuthProfileId: undefined,
+        credentialSource: { kind: "direct", evidence: "environment", authorization: "declared" },
+        modelRoute: { baseUrl: "https://api.openai.com/v1" },
       });
-      expect(resolved).toMatchObject({
-        apiKey: profile ? "profile-platform-key" : "secret-ref-platform-key",
-        source: profile
-          ? "profile:openai:platform-backup"
-          : "env: OPENAI_PLATFORM_KEY (models.json secretref)",
-        mode: "api-key",
-      });
-      if (profile) {
-        expect(resolved.profileId).toBe(id);
-      } else {
-        expect(resolved.profileId).toBeUndefined();
-      }
-    } finally {
-      if (!profile) {
-        vi.unstubAllEnvs();
-      }
+      const serialized = JSON.stringify(plan.credentialSource);
+      expect(serialized).not.toContain("secret-ref-platform-key");
+      expect(serialized).not.toContain("OPENAI_PLATFORM_KEY");
+    }
+    const resolved = await getApiKeyForModelCore({
+      model: authModel(plan),
+      cfg: config,
+      store,
+      profileId: attempts[0]?.profileId,
+      allowAuthProfileFallback: attempts[0]?.allowAuthProfileFallback,
+      ...(profile ? { lockedProfile: true } : {}),
+    });
+    expect(resolved).toMatchObject({
+      apiKey: profile ? "profile-platform-key" : "secret-ref-platform-key",
+      source: profile
+        ? "profile:openai:platform-backup"
+        : "env: OPENAI_PLATFORM_KEY (models.json secretref)",
+      mode: "api-key",
+    });
+    if (profile) {
+      expect(resolved.profileId).toBe(id);
+    } else {
+      expect(resolved.profileId).toBeUndefined();
     }
   },
 );
@@ -568,14 +562,6 @@ it("reports a local provider marker as synthetic auth", () => {
       api: "ollama",
       apiKey: "ollama-local",
       baseUrl: "http://192.168.178.122:11434",
-      models: [
-        modelDefinition("qwen3.5:27b", {
-          name: "Qwen 3.5 27B",
-          reasoning: false,
-          contextWindow: 8_192,
-          maxTokens: 4_096,
-        }),
-      ],
     }),
   });
 

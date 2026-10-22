@@ -1284,7 +1284,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/run-termination.test.ts",
   "src/agents/runtime-facts-prompt.test.ts",
   "src/agents/runtime-plan/build.test.ts",
-  "src/agents/runtime-plan/credential-scoped-model.memo.test.ts",
   "src/agents/runtime-plan/materialize-model.test.ts",
   "src/agents/runtime-plan/prepare-auth.ambient-credential.test.ts",
   "src/agents/runtime-plan/prepare-auth.setup-provider.test.ts",

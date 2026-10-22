@@ -1,5 +1,5 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, aroundEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { aroundEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
@@ -97,10 +97,6 @@ describe("resolvePreparedRuntimeModelAuth", () => {
 
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_MISSING_PREPARED_AUTH", "");
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
   });
 
   it("removes profile and selection state after a Platform key is resolved", () => {
@@ -435,84 +431,73 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     },
   );
 
-  it("forces unscoped model rematerialization for direct fallback after profile failure", async () => {
-    const store = authStore({
-      "github-copilot:first": {
-        type: "token",
-        provider: "github-copilot",
-        token: "profile-token",
-      },
-    });
-    const profilePlan = {
-      providerForAuth: "github-copilot",
-      authProfileProviderForAuth: "github-copilot",
-      forwardedAuthProfileId: "github-copilot:first",
-      forwardedAuthProfileSource: "auto" as const,
-      forwardedAuthProfileCandidateIds: ["github-copilot:first"],
-    };
-    const directPlan = {
-      providerForAuth: "github-copilot",
-      authProfileProviderForAuth: "github-copilot",
-      selectedAuthMode: "token",
-    };
-    const profileModel = { ...platformModel, contextWindow: 1_050_000 };
-    const directModel = { ...platformModel, contextWindow: 400_000 };
-    const materializeModel = vi.fn(async ({ forceResolve }: { forceResolve?: boolean }) =>
-      forceResolve ? directModel : profileModel,
-    );
-    const resolveAuth = vi.fn(
-      async ({ attempt }: { attempt: { kind: "direct" | "implicit" | "profile" } }) => {
-        if (attempt.kind === "profile") {
-          throw new Error("profile credential failed");
-        }
-        return { plan: directPlan, auth: "direct" };
-      },
-    );
-
-    const result = await resolveAttempts({
-      attempts: profileThenDirect(profilePlan, directPlan),
-      store,
-      modelId: "gpt-5.6-sol",
-      materializeModel,
-      resolveAuth,
-    });
-
-    expect(result).toMatchObject({ auth: "direct", model: { contextWindow: 400_000 } });
-    expect(materializeModel.mock.calls.map(([input]) => input.forceResolve)).toEqual([false, true]);
-  });
-
-  it("forces the first direct model when provider metadata is credential-scoped", async () => {
-    const directPlan = {
-      providerForAuth: "github-copilot",
-      authProfileProviderForAuth: "github-copilot",
-      selectedAuthMode: "api-key",
-    };
-    const directModel = { ...platformModel, contextWindow: 1_050_000 };
-    const materializeModel = vi.fn(async () => directModel);
-
-    const result = await resolveAttempts({
-      attempts: [
-        {
-          kind: "direct",
-          plan: directPlan,
-          allowAuthProfileFallback: false,
-          requiresPriorProfileAttempt: false,
+  it.each([true, false])(
+    "forces direct credential-scoped metadata (after profile failure: %s)",
+    async (afterProfileFailure) => {
+      const provider = {
+        providerForAuth: "github-copilot",
+        authProfileProviderForAuth: "github-copilot",
+      };
+      const profilePlan = makeProfilePlan("github-copilot:first", provider);
+      const directPlan = {
+        ...provider,
+        selectedAuthMode: afterProfileFailure ? "token" : "api-key",
+      };
+      const store = authStore(
+        afterProfileFailure
+          ? {
+              "github-copilot:first": {
+                type: "token",
+                provider: "github-copilot",
+                token: "profile-token",
+              },
+            }
+          : {},
+      );
+      const profileModel = { ...platformModel, contextWindow: 1_050_000 };
+      const expectedContextWindow = afterProfileFailure ? 400_000 : 1_050_000;
+      const directModel = {
+        ...platformModel,
+        contextWindow: expectedContextWindow,
+      };
+      const materializeModel = vi.fn(async ({ forceResolve }: { forceResolve?: boolean }) =>
+        forceResolve ? directModel : profileModel,
+      );
+      const result = await resolveAttempts({
+        attempts: afterProfileFailure
+          ? profileThenDirect(profilePlan, directPlan)
+          : [
+              {
+                kind: "direct",
+                plan: directPlan,
+                allowAuthProfileFallback: false,
+                requiresPriorProfileAttempt: false,
+              },
+            ],
+        store,
+        modelId: "gpt-5.6-sol",
+        materializeModel,
+        resolveAuth: async ({ attempt }) => {
+          if (attempt.kind === "profile") {
+            throw new Error("profile credential failed");
+          }
+          return { plan: directPlan, auth: "direct" };
         },
-      ],
-      store: authStore({}),
-      modelId: "gpt-5.6-sol",
-      materializeModel,
-      resolveAuth: async () => ({ plan: directPlan, auth: "direct" }),
-      forceCredentialScopedDirectModelResolve: true,
-    });
-
-    expect(result.model).toBe(directModel);
-    expect(materializeModel).toHaveBeenCalledWith({
-      plan: directPlan,
-      model: platformModel,
-      forceResolve: true,
-    });
-  });
+        forceCredentialScopedDirectModelResolve: !afterProfileFailure,
+      });
+      expect(result).toMatchObject({
+        auth: "direct",
+        model: { contextWindow: expectedContextWindow },
+      });
+      expect(result.model).toBe(directModel);
+      expect(materializeModel.mock.calls).toEqual([
+        ...(afterProfileFailure
+          ? [[{ plan: profilePlan, model: platformModel, forceResolve: false }]]
+          : []),
+        [{ plan: directPlan, model: platformModel, forceResolve: true }],
+      ]);
+    },
+  );
 
   it("keeps a user-locked profile terminal when environment auth is also present", async () => {
     vi.stubEnv("OPENAI_API_KEY", "ambient-key");

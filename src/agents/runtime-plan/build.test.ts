@@ -136,17 +136,21 @@ describe("AgentRuntimePlan", () => {
       model: apiModel,
     });
 
-    expect(plan.auth).toMatchObject({
-      providerForAuth: "openai",
-      authProfileProviderForAuth: "openai",
-      harnessAuthProvider: "openai",
-      forwardedAuthProfileId: "openai:work",
+    expect(plan).toMatchObject({
+      auth: {
+        providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
+        harnessAuthProvider: "openai",
+        forwardedAuthProfileId: "openai:work",
+      },
+      observability: { resolvedRef: "openai/gpt-5.4", harnessId: "codex" },
     });
-    const resolvedExtraParams = plan.transport.resolveExtraParams({
-      extraParamsOverride: { parallel_tool_calls: false },
-      resolvedTransport: "websocket",
-    });
-    expect(resolvedExtraParams).toMatchObject({
+    expect(
+      plan.transport.resolveExtraParams({
+        extraParamsOverride: { parallel_tool_calls: false },
+        resolvedTransport: "websocket",
+      }),
+    ).toMatchObject({
       parallel_tool_calls: false,
       text_verbosity: "low",
     });
@@ -158,16 +162,14 @@ describe("AgentRuntimePlan", () => {
       })?.stablePrefix,
     ).toContain("<persona_latch>");
     expect(plan.transcript.resolvePolicy()).toEqual(plan.transcript.policy);
-    const classify = plan.outcome.classifyRunResult;
-    expect(classify({ provider: "openai", model: "gpt-4.1", result: {} })).toBeNull();
-    expect(plan.observability).toMatchObject({ resolvedRef: "openai/gpt-5.4", harnessId: "codex" });
+    expect(
+      plan.outcome.classifyRunResult({ provider: "openai", model: "gpt-4.1", result: {} }),
+    ).toBeNull();
   });
 
   it("keeps OpenClaw-owned tool-schema normalization reachable from the plan", () => {
     const plan = buildPlan({ model: apiModel });
-
     const normalized = plan.tools.normalize([createParameterFreeTool()] as never);
-
     expect(normalized).toHaveLength(1);
     expect(normalized[0]?.name).toBe("ping");
     expect(normalized[0]?.parameters).toStrictEqual({});
@@ -181,13 +183,7 @@ describe("AgentRuntimePlan", () => {
       env: process.env,
     });
 
-    const plan = buildAgentRuntimePlan({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      config: {},
-      workspaceDir: "/tmp/openclaw-runtime-plan",
-      providerRuntimeHandle: suppliedHandle,
-    });
+    const plan = buildPlan({ providerRuntimeHandle: suppliedHandle });
 
     expect(plan.providerRuntimeHandle).toBe(suppliedHandle);
 
