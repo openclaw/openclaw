@@ -41,6 +41,7 @@ import {
 } from "../pages/debug/debug-overlay-state.ts";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
 import type { ShellOwnedElements } from "./app-shell-lazy-view.tsx";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
@@ -83,6 +84,7 @@ let nativeCommandsOwner: (() => void)[] | undefined;
 
 export interface ShellChromeHost
   extends ShellNewSessionHost, ShellPanelHost, ShellNavigationElements, ShellNavigationSurfaces {
+  readonly shellNavigation: ShellNavigationCapability;
   readonly elements: ShellOwnedElements;
   readonly element: HTMLElement;
   readonly isConnected: boolean;

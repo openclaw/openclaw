@@ -58,7 +58,10 @@ export interface ShellGatewayHost {
   desktopNavigationExpanded: boolean;
   lastLocalePrefSignature: string | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
-  readonly shellNavigation: ShellNavigationCapability;
+  readonly shellNavigation: Pick<
+    ShellNavigationCapability,
+    "recoverDeletedActiveSession" | "selectChatSession"
+  >;
   invalidate(): void;
 }
 

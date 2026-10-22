@@ -8,6 +8,7 @@ import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.t
 import type { DebugOverlayElement } from "../pages/debug/debug-overlay-state.ts";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
 import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ShellNewSessionHost } from "./app-shell-new-session.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
@@ -52,6 +53,7 @@ export interface ShellOwnedElements {
 }
 
 export interface ShellLazyOverlayHost extends DebugOverlayFrameHost, ShellNewSessionHost {
+  readonly shellNavigation: ShellNavigationCapability;
   readonly elements: ShellOwnedElements;
   readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteLoading: CommandPaletteLoadingState;

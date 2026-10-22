@@ -9,7 +9,7 @@ export interface ShellNewSessionHost extends Pick<HTMLElement, "isConnected"> {
   readonly onboardingMode: boolean;
   navDrawerElement?: HTMLElement;
   pendingNativeNewSession: boolean;
-  readonly shellNavigation: ShellNavigationCapability;
+  readonly shellNavigation: Pick<ShellNavigationCapability, "openNewSession">;
 }
 
 /** Native startup may queue navigation; a keyboard action belongs to the ready surface only. */
