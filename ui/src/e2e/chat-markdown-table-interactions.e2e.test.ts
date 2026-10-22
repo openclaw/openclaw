@@ -180,7 +180,7 @@ ${auditMarkdownTable}`,
             retainedPaneInert: state.pane?.inert ?? null,
             retainedPaneVisible: state.pane?.checkVisibility({ visibilityProperty: true }) ?? false,
             workspaceConnected: state.workspace?.isConnected ?? false,
-            workspaceHidden: state.workspace?.hidden ?? null,
+            workspaceHidden: state.workspace ? Boolean(state.workspace.hidden) : null,
             workspaceVisible:
               state.workspace?.checkVisibility({ visibilityProperty: true }) ?? false,
             tableDialogCount: document.querySelectorAll(".markdown-table-dialog").length,
