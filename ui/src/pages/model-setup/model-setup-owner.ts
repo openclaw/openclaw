@@ -249,6 +249,7 @@ export function createModelSetup(
     if (observation.kind === "pending") {
       if (!wizard.hasAdmittedSession) {
         state.pageState = { phase: "loading" };
+        setDetectionRequest(undefined);
       }
       wizard.suspend(suspendedNotice);
       return;
@@ -284,14 +285,6 @@ export function createModelSetup(
     } else {
       firstRun.connectionChanged(connection);
     }
-    resetActivity();
-    state.pageState = { phase: "loading" };
-    if (canUseSetup(connection.client)) {
-      void detect();
-    }
-  }
-
-  function resetActivity(): void {
     manualProviderRevealPending = false;
     login.reset();
     state.detectionRequest = null;
@@ -303,6 +296,10 @@ export function createModelSetup(
     iconLoader.reset();
     pendingPrepareOption = null;
     void wizard.cancel();
+    state.pageState = { phase: "loading" };
+    if (canUseSetup(connection.client)) {
+      void detect();
+    }
   }
 
   function canUseSetup(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
