@@ -13,11 +13,7 @@ import {
 } from "./grouping.ts";
 
 describe("groupSidebarSessionRows", () => {
-  it.each([
-    ["person", [["former", "current"], ["remote"], ["agent"]]],
-    ["project", [["remote", "agent", "former", "current"]]],
-    ["none", [["remote", "agent", "former", "current"]]],
-  ] as const)("groups owners with a shared checkout by %s", (grouping, expectedRows) => {
+  it("groups owners by identity even when they share a checkout", () => {
     const workContext = { name: "shared", path: "/repos/shared" };
     const sections = groupSidebarSessionRows(
       [
@@ -71,18 +67,18 @@ describe("groupSidebarSessionRows", () => {
           },
         }),
       ],
-      { grouping, selfOwnerId: "current" },
+      { grouping: "person", selfOwnerId: "current" },
     ).filter((section) => section.rows.length > 0);
-    expect(sections.map((section) => section.rows.map((item) => item.key))).toEqual(expectedRows);
-    if (grouping === "person") {
-      expect(sections[0]).toMatchObject({
-        id: "person:profile:current",
-        personOwner: { id: "current", identity: { type: "profile", id: "current" } },
-      });
-      expect(new Set(sections.map((section) => section.id)).size).toBe(3);
-    } else {
-      expect(sections[0]?.id).toBe(grouping === "project" ? "project:/repos/shared" : "ungrouped");
-    }
+    expect(sections.map((section) => section.rows.map((item) => item.key))).toEqual([
+      ["former", "current"],
+      ["remote"],
+      ["agent"],
+    ]);
+    expect(sections[0]).toMatchObject({
+      id: "person:profile:current",
+      personOwner: { id: "current", identity: { type: "profile", id: "current" } },
+    });
+    expect(new Set(sections.map((section) => section.id)).size).toBe(3);
   });
 
   it("orders pinned, categories, threads, groups, then coding while preserving row order", () => {
@@ -112,28 +108,6 @@ describe("groupSidebarSessionRows", () => {
     expect(sections[4]?.rows.map((item) => item.key)).toEqual(["g-1"]);
     expect(sections[5]?.work).toBe(true);
     expect(sections[5]?.rows.map((item) => item.key)).toEqual(["wt-1"]);
-  });
-
-  it("folds DM channel sessions into threads and group kinds into the groups zone", () => {
-    const sections = groupSidebarSessionRows([
-      { ...row({ key: "tg-dm" }), channel: "telegram", channelSession: true },
-      { ...row({ key: "dash-1" }) },
-      { ...row({ key: "wa-group", kind: "group" }), channel: "whatsapp", channelSession: true },
-      // Explicit user category beats smart group/coding classification.
-      { ...row({ key: "grouped-tg", kind: "group" }), category: "Project X" },
-      { ...row({ key: "acp-1" }), acpSession: true },
-    ]);
-
-    expect(sections.map((section) => section.id)).toEqual([
-      "category:Project X",
-      "ungrouped",
-      "groups",
-      "work",
-    ]);
-    expect(sections[0]?.rows.map((item) => item.key)).toEqual(["grouped-tg"]);
-    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["tg-dm", "dash-1"]);
-    expect(sections[2]?.rows.map((item) => item.key)).toEqual(["wa-group"]);
-    expect(sections[3]?.rows.map((item) => item.key)).toEqual(["acp-1"]);
   });
 
   it("flattens the kind-based zones into one list when grouping is none", () => {
@@ -197,21 +171,6 @@ describe("groupSidebarSessionRows", () => {
     expect(sections[4]?.rows.map((item) => item.key)).toEqual(["thread"]);
     expect(sections[5]?.rows.map((item) => item.key)).toEqual(["grp"]);
     expect(sections[6]?.rows.map((item) => item.key)).toEqual(["no-repo"]);
-  });
-
-  it("keeps project sections ahead of the stored zone order", () => {
-    const sections = groupSidebarSessionRows(
-      [
-        { ...row({ key: "oc" }), workContext: { name: "openclaw", path: "/repos/openclaw" } },
-        row({ key: "thread" }),
-      ],
-      { grouping: "project", sectionOrder: ["work", "ungrouped"] },
-    );
-    expect(sections.map((section) => section.id)).toEqual([
-      "project:/repos/openclaw",
-      "work",
-      "ungrouped",
-    ]);
   });
 
   it("orders owner sections before stored zones and leaves ownerless rows in their smart zones", () => {
@@ -321,13 +280,6 @@ describe("groupSidebarSessionRows", () => {
     expect(sections[8]?.rows.map((item) => item.key)).toEqual(["thread", "blank-owner"]);
   });
 
-  it("always emits threads and coding so the renderer can host fallbacks and catalogs", () => {
-    expect(groupSidebarSessionRows([row({ key: "a" })]).map((section) => section.id)).toEqual([
-      "ungrouped",
-      "work",
-    ]);
-  });
-
   it("keeps stored-but-empty known groups visible as sections", () => {
     const sections = groupSidebarSessionRows(
       [row({ key: "a" }), row({ key: "b", category: "Zulu" })],
@@ -343,19 +295,6 @@ describe("groupSidebarSessionRows", () => {
     ]);
     expect(sections[0]?.rows).toEqual([]);
     expect(sections[1]?.rows.map((item) => item.key)).toEqual(["b"]);
-  });
-
-  it("keeps custom groups in their persisted order", () => {
-    const sections = groupSidebarSessionRows(
-      [row({ key: "a", category: "Alpha" }), row({ key: "z", category: "Zulu" })],
-      { knownGroups: ["Zulu", "Alpha"] },
-    );
-    expect(sections.map((section) => section.id)).toEqual([
-      "category:Zulu",
-      "category:Alpha",
-      "ungrouped",
-      "work",
-    ]);
   });
 
   it("applies stored cross-section order after pinned rows", () => {
@@ -377,72 +316,12 @@ describe("groupSidebarSessionRows", () => {
     ]);
   });
 
-  it("emits catalog sections after coding by default and honors their stored positions", () => {
-    const rows = [row({ key: "thread" }), row({ key: "work", workSession: true })];
-
-    expect(
-      groupSidebarSessionRows(rows, { catalogIds: ["claude", "codex"] }).map(
-        (section) => section.id,
-      ),
-    ).toEqual(["ungrouped", "work", "catalog:claude", "catalog:codex"]);
-    expect(
-      groupSidebarSessionRows(rows, {
-        catalogIds: ["claude", "codex"],
-        sectionOrder: ["catalog:codex", "ungrouped", "work", "catalog:claude"],
-      }).map((section) => section.id),
-    ).toEqual(["catalog:codex", "ungrouped", "work", "catalog:claude"]);
-  });
-
   it("appends sections missing from stored order in default relative order", () => {
     const sections = groupSidebarSessionRows(
       [row({ key: "a", category: "Alpha" }), row({ key: "thread" })],
       { sectionOrder: ["work"] },
     );
     expect(sections.map((section) => section.id)).toEqual(["category:Alpha", "work", "ungrouped"]);
-  });
-
-  it("keeps the default order for an empty stored order", () => {
-    const rows = [row({ key: "a", category: "Alpha" }), row({ key: "thread" })];
-    expect(groupSidebarSessionRows(rows, { sectionOrder: [] })).toEqual(
-      groupSidebarSessionRows(rows),
-    );
-  });
-
-  it("collapses categories into the threads list when grouping is none", () => {
-    const sections = groupSidebarSessionRows(
-      [
-        row({ key: "p-1", pinned: true }),
-        row({ key: "a-1", category: "Alpha" }),
-        row({ key: "u-1" }),
-      ],
-      { grouping: "none", knownGroups: ["Alpha", "Apps"] },
-    );
-    expect(sections.map((section) => section.id)).toEqual(["pinned", "ungrouped", "work"]);
-    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["a-1", "u-1"]);
-  });
-
-  it("uses the normalized section order while keeping pinned rows first", () => {
-    const sections = groupSidebarSessionRows(
-      [
-        row({ key: "pin", pinned: true }),
-        row({ key: "thread" }),
-        row({ key: "group", kind: "group" }),
-        row({ key: "alpha", category: "Alpha" }),
-        row({ key: "work", workSession: true }),
-      ],
-      {
-        knownGroups: ["Alpha"],
-        sectionOrder: ["ungrouped", "groups", "category:Alpha", "work"],
-      },
-    );
-
-    expect(sections.map((section) => section.id)).toEqual([
-      "pinned",
-      "ungrouped",
-      "groups",
-      "category:Alpha",
-      "work",
-    ]);
   });
 });
 
@@ -455,61 +334,6 @@ describe("normalizeSessionSectionOrder", () => {
       "groups",
       "work",
     ]);
-  });
-
-  it("honors stored positions", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["ungrouped", "category:Alpha", "groups", "category:Beta", "work"],
-        ["Alpha", "Beta"],
-      ),
-    ).toEqual(["ungrouped", "category:Alpha", "groups", "category:Beta", "work"]);
-  });
-
-  it("inserts a new category before the first built-in section", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["category:Alpha", "ungrouped", "groups", "work"],
-        ["Alpha", "Beta"],
-      ),
-    ).toEqual(["category:Alpha", "category:Beta", "ungrouped", "groups", "work"]);
-  });
-
-  it("drops stale category tokens", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["category:Stale", "category:Alpha", "ungrouped", "groups", "work"],
-        ["Alpha"],
-      ),
-    ).toEqual(["category:Alpha", "ungrouped", "groups", "work"]);
-  });
-
-  it("appends unseen catalogs after coding and drops disappeared catalogs", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["catalog:codex", "ungrouped", "groups", "work", "catalog:removed"],
-        [],
-        ["claude", "codex"],
-      ),
-    ).toEqual(["catalog:codex", "ungrouped", "groups", "work", "catalog:claude"]);
-  });
-
-  it("drops invalid and duplicate tokens", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["category:Stale", "bogus", "category:", "ungrouped", "ungrouped", "category:Alpha"],
-        ["Alpha"],
-      ),
-    ).toEqual(["ungrouped", "groups", "work", "category:Alpha"]);
-  });
-
-  it("reinserts a missing built-in after its default predecessor", () => {
-    expect(
-      normalizeSessionSectionOrder(
-        ["category:Alpha", "ungrouped", "category:Beta", "work"],
-        ["Alpha", "Beta"],
-      ),
-    ).toEqual(["category:Alpha", "ungrouped", "groups", "category:Beta", "work"]);
   });
 });
 
@@ -689,17 +513,5 @@ describe("groupSessionRows", () => {
       UNGROUPED_ID,
     ]);
     expect(groups[2]?.rows.map((item) => item.key)).toEqual(["ownerless", "blank"]);
-  });
-
-  it("preserves row order within a group", () => {
-    const rows = [
-      row({ key: "agent:main:discord:channel:1" }),
-      row({ key: "agent:main:discord:channel:2" }),
-    ];
-    const groups = groupSessionRows({ rows, mode: "channel" });
-    expect(groups[0]?.rows.map((r) => r.key)).toEqual([
-      "agent:main:discord:channel:1",
-      "agent:main:discord:channel:2",
-    ]);
   });
 });

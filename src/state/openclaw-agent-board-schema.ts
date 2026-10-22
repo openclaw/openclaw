@@ -1,41 +1,29 @@
-import type { DatabaseSync } from "node:sqlite";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
+import { OPENCLAW_AGENT_BOARD_SCHEMA_SQL } from "./openclaw-agent-schema-history.js";
 
-const BOARD_SCHEMA_START = "CREATE TABLE IF NOT EXISTS board_tabs (";
-const BOARD_SCHEMA_END = "CREATE TABLE IF NOT EXISTS session_progress_cards (";
+export { AGENT_V14_BOARD_SCHEMA_SQL } from "./openclaw-agent-schema-history.js";
+
 const BOARD_WIDGETS_SCHEMA_START = "CREATE TABLE IF NOT EXISTS board_widgets (";
-const BOARD_WIDGETS_SCHEMA_END = "CREATE INDEX IF NOT EXISTS idx_agent_board_widgets_tab_position";
 const BOARD_WIDGETS_MIGRATION_TABLE = "board_widgets_plugin_kind_migration_new";
 const PLUGIN_CONTENT_KIND_CLAUSE_PATTERN =
   /content_kind\s+IN\s*\(\s*'html'\s*,\s*'mcp-app'\s*,\s*'plugin'\s*\)/iu;
 const PLUGIN_PAYLOAD_BRANCH_PATTERN =
   /\s+OR\s+\(content_kind\s*=\s*'plugin'\s+AND\s+html\s+IS\s+NULL\s+AND\s+descriptor_json\s+IS\s+NOT\s+NULL\s+AND\s+view_generation\s+IS\s+NULL\)/iu;
 
-function splitBoardSchema(sql: string): { board: string; withoutBoard: string } {
-  const start = sql.indexOf(BOARD_SCHEMA_START);
-  const end = sql.indexOf(BOARD_SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw agent board schema markers are missing from the canonical schema.");
-  }
-  return {
-    board: sql.slice(start, end),
-    withoutBoard: `${sql.slice(0, start)}${sql.slice(end)}`,
-  };
-}
-
-const boardSchema = splitBoardSchema(OPENCLAW_AGENT_SCHEMA_SQL);
-
-const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = boardSchema.board;
-export const AGENT_V14_BOARD_SCHEMA_SQL = OPENCLAW_AGENT_BOARD_SCHEMA_SQL;
-export const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = boardSchema.withoutBoard;
+const ensureBoardTables = createSqliteSchemaEnsurer(() => OPENCLAW_AGENT_BOARD_SCHEMA_SQL, {
+  tables: ["board_tabs", "board_widgets"],
+  indexes: ["idx_agent_board_widgets_tab_position"],
+});
 
 function canonicalBoardWidgetsCreateSql(): string {
-  const start = OPENCLAW_AGENT_BOARD_SCHEMA_SQL.indexOf(BOARD_WIDGETS_SCHEMA_START);
-  const end = OPENCLAW_AGENT_BOARD_SCHEMA_SQL.indexOf(BOARD_WIDGETS_SCHEMA_END, start);
-  if (start === -1 || end === -1) {
-    throw new Error("OpenClaw agent board widget schema markers are missing.");
-  }
-  return OPENCLAW_AGENT_BOARD_SCHEMA_SQL.slice(start, end).trim();
+  return extractSqliteTableSchema(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "board_widgets", {
+    endMarker: "CREATE INDEX IF NOT EXISTS idx_agent_board_widgets_tab_position",
+    includeEndMarker: false,
+    errorMessage: "OpenClaw agent board widget schema markers are missing.",
+  }).trim();
 }
 
 function legacyBoardWidgetsCreateSql(): string {
@@ -61,18 +49,23 @@ function normalizeBoardWidgetsCreateSql(sql: string): string {
 }
 
 /** Repair the v14 board constraint inside the caller's schema/write transaction. */
-export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): void {
+export function ensureOpenClawAgentBoardSchemaInTransaction(db: EngineConnection): void {
   if (!db.isTransaction) {
     throw new Error("board schema ensure requires an active transaction");
   }
-  db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL); // sqlite-allow-raw -- Canonical DDL bootstrap for the lazy board schema.
-  const row = db // sqlite-allow-raw -- Inspect the table DDL before the bounded same-version migration.
-    .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'board_widgets'")
-    .get() as { sql?: unknown } | undefined;
-  if (typeof row?.sql !== "string") {
+  if (isPostgresSqlConnection(db)) {
+    return;
+  }
+  ensureBoardTables(db);
+  const sql =
+    getAdmittedSqliteSchemaFacts(db)?.tableSql.get("board_widgets") ??
+    db // sqlite-allow-raw -- Unadmitted maintenance handles inspect the bounded same-version migration.
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'board_widgets'")
+      .get()?.sql;
+  if (typeof sql !== "string") {
     throw new Error("OpenClaw agent board widget schema is missing after ensure.");
   }
-  const normalizedSchema = normalizeBoardWidgetsCreateSql(row.sql);
+  const normalizedSchema = normalizeBoardWidgetsCreateSql(sql);
   if (normalizedSchema === normalizeBoardWidgetsCreateSql(canonicalBoardWidgetsCreateSql())) {
     return;
   }

@@ -1,160 +1,100 @@
-// Tests channel approval authorization and sender validation.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import type { ChannelApprovalCapability } from "../channels/plugins/types.adapters.js";
 import { createResolvedApproverActionAuthAdapter } from "../plugin-sdk/approval-auth-helpers.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
 
 const getChannelPluginMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../channels/plugins/index.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/plugins/index.js")>(
-    "../channels/plugins/index.js",
-  );
-  return {
-    ...actual,
-    getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
-  };
-});
-
+vi.mock("../channels/plugins/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../channels/plugins/index.js")>()),
+  getChannelPlugin: (...args: unknown[]) => getChannelPluginMock(...args),
+}));
 import { resolveApprovalCommandAuthorization } from "./channel-approval-auth.js";
 
-describe("resolveApprovalCommandAuthorization", () => {
-  beforeEach(() => {
-    getChannelPluginMock.mockReset();
+type AuthParams = Parameters<typeof resolveApprovalCommandAuthorization>[0];
+function authorize(overrides: Partial<AuthParams> = {}) {
+  return resolveApprovalCommandAuthorization({
+    cfg: {},
+    channel: "workspace",
+    accountId: "work",
+    senderId: "U123",
+    kind: "exec",
+    ...overrides,
   });
+}
+const availability = vi.fn(() => ({ kind: "disabled" as const }));
+const mockCapability = (approvalCapability: ChannelApprovalCapability) =>
+  getChannelPluginMock.mockReturnValue({ approvalCapability });
 
-  it("allows commands by default when the channel has no approval override", () => {
-    expect(
-      resolveApprovalCommandAuthorization({
-        cfg: {} as never,
-        channel: "workspace",
-        senderId: "U123",
-        kind: "exec",
-      }),
-    ).toEqual({ authorized: true, explicit: false });
-  });
+beforeEach(() => {
+  getChannelPluginMock.mockReset();
+  availability.mockClear();
+});
 
-  it("delegates to the channel approval override when present", () => {
-    getChannelPluginMock.mockReturnValue({
-      approvalCapability: {
-        authorizeActorAction: ({
-          approvalKind,
-        }: {
-          action: "approve";
-          approvalKind: ChannelApprovalKind;
-        }) =>
-          approvalKind === "plugin"
-            ? { authorized: false, reason: "plugin denied" }
-            : { authorized: true },
-      },
-    });
-
-    expect(
-      resolveApprovalCommandAuthorization({
-        cfg: {} as never,
-        channel: "guildchat",
+it.each([
+  ["no override", undefined, { accountId: undefined }],
+  [
+    "disabled",
+    {
+      authorizeActorAction: () => ({ authorized: true }),
+      getActionAvailabilityState: availability,
+    },
+    {},
+  ],
+  [
+    "empty approvers",
+    createResolvedApproverActionAuthAdapter({
+      channelLabel: "QuietChat",
+      resolveApprovers: () => [],
+    }),
+    { channel: "quietchat", senderId: "uuid:attacker" },
+  ],
+] satisfies [string, ChannelApprovalCapability | undefined, Partial<AuthParams>][])(
+  "keeps %s authorization implicit",
+  async (name, capability, overrides) => {
+    if (capability) {
+      mockCapability(capability);
+    }
+    expect(await authorize(overrides)).toEqual({ authorized: true, explicit: false });
+    if (name === "disabled") {
+      expect(availability).toHaveBeenCalledWith({
+        cfg: {},
         accountId: "work",
-        senderId: "123",
-        kind: "exec",
-      }),
-    ).toEqual({ authorized: true, explicit: true });
+        action: "approve",
+        approvalKind: "exec",
+      });
+    }
+  },
+);
 
-    expect(
-      resolveApprovalCommandAuthorization({
-        cfg: {} as never,
-        channel: "guildchat",
-        accountId: "work",
-        senderId: "123",
-        kind: "plugin",
-      }),
-    ).toEqual({ authorized: false, reason: "plugin denied", explicit: true });
+it("delegates exec/plugin authorization to the channel", async () => {
+  mockCapability({
+    authorizeActorAction: ({ approvalKind }) =>
+      approvalKind === "plugin"
+        ? { authorized: false, reason: "plugin denied" }
+        : { authorized: true },
   });
-
-  it("uses approvalCapability as the canonical approval auth contract", () => {
-    const getActionAvailabilityState = vi.fn(() => ({ kind: "enabled" as const }));
-    getChannelPluginMock.mockReturnValue({
-      approvalCapability: {
-        authorizeActorAction: () => ({ authorized: true }),
-        getActionAvailabilityState,
-      },
-    });
-
-    expect(
-      resolveApprovalCommandAuthorization({
-        cfg: {} as never,
-        channel: "matrix",
-        senderId: "123",
-        kind: "exec",
-      }),
-    ).toEqual({ authorized: true, explicit: true });
-    expect(getActionAvailabilityState).toHaveBeenCalledWith({
-      cfg: {} as never,
-      accountId: undefined,
-      action: "approve",
-      approvalKind: "exec",
-    });
+  const actor = { channel: "guildchat", senderId: "123" };
+  expect(await authorize(actor)).toEqual({ authorized: true, explicit: true });
+  expect(await authorize({ ...actor, kind: "plugin" })).toEqual({
+    authorized: false,
+    reason: "plugin denied",
+    explicit: true,
   });
+});
 
-  it("keeps disabled approval availability implicit even when same-chat auth returns allow", () => {
-    const getActionAvailabilityState = vi.fn(() => ({ kind: "disabled" as const }));
-    getChannelPluginMock.mockReturnValue({
-      approvalCapability: {
-        authorizeActorAction: () => ({ authorized: true }),
-        getActionAvailabilityState,
-      },
-    });
-
-    expect(
-      resolveApprovalCommandAuthorization({
-        cfg: {} as never,
-        channel: "workspace",
-        accountId: "work",
-        senderId: "U123",
-        kind: "exec",
-      }),
-    ).toEqual({ authorized: true, explicit: false });
-    expect(getActionAvailabilityState).toHaveBeenCalledWith({
-      cfg: {} as never,
-      accountId: "work",
-      action: "approve",
-      approvalKind: "exec",
-    });
-  });
-
-  it("keeps empty approver fallback implicit without bypassing channel sender auth", () => {
-    getChannelPluginMock.mockReturnValue({
-      approvalCapability: createResolvedApproverActionAuthAdapter({
-        channelLabel: "QuietChat",
-        resolveApprovers: () => [],
-      }),
-    });
-
-    expect(
-      resolveApprovalCommandAuthorization({
-        cfg: {} as never,
-        channel: "quietchat",
-        accountId: "work",
-        senderId: "uuid:attacker",
-        kind: "exec",
-      }),
-    ).toEqual({ authorized: true, explicit: false });
-  });
-
-  it("keeps configured approvers explicit when sender matches", () => {
-    getChannelPluginMock.mockReturnValue({
-      approvalCapability: createResolvedApproverActionAuthAdapter({
-        channelLabel: "QuietChat",
-        resolveApprovers: () => ["uuid:owner"],
-      }),
-    });
-
-    expect(
-      resolveApprovalCommandAuthorization({
-        cfg: {} as never,
-        channel: "quietchat",
-        accountId: "work",
-        senderId: "uuid:owner",
-        kind: "exec",
-      }),
-    ).toEqual({ authorized: true, explicit: true });
-  });
+it("rejects legacy capabilities that cannot enforce scoped reviewers", async () => {
+  const authorizeActorAction = vi.fn(() => ({ authorized: true }));
+  mockCapability({ authorizeActorAction });
+  const cfg = {
+    approvals: { plugin: { slack: { approvers: ["team:T11111111:user:U11111111"] } } },
+  };
+  expect(
+    await authorize({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      senderId: "U22222222",
+      kind: "plugin",
+    }),
+  ).toMatchObject({ authorized: false, explicit: true });
+  expect(authorizeActorAction).not.toHaveBeenCalled();
 });

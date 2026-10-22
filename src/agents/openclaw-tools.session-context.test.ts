@@ -1,7 +1,12 @@
-// Verifies that nested session tools keep execution identity without narrowing discovery policy.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { registerAcpRuntimeBackend, unregisterAcpRuntimeBackend } from "../acp/runtime/registry.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import * as inProcessGateway from "./tools/in-process-gateway.js";
 
@@ -17,16 +22,13 @@ const createEmbeddedCallGatewayMock = vi.hoisted(() =>
     if (response !== undefined) {
       return response;
     }
-    if (request.method === "sessions.list") {
-      return { sessions: [], hasMore: false };
-    }
-    if (request.method === "sessions.search") {
-      return { results: [], indexing: false, truncated: false };
-    }
-    if (request.method === "chat.history") {
-      return { messages: [] };
-    }
-    return { ok: false };
+    return (
+      new Map<string, object>([
+        ["sessions.list", { sessions: [], hasMore: false }],
+        ["sessions.search", { results: [], indexing: false, truncated: false }],
+        ["chat.history", { messages: [] }],
+      ]).get(request.method) ?? { ok: false }
+    );
   }),
 );
 
@@ -34,34 +36,95 @@ vi.mock("./tools/embedded-gateway-stub.js", () => ({
   createEmbeddedCallGateway: createEmbeddedCallGatewayMock,
 }));
 
+// This factory suite supplies authorized embedded rows. Registered producer and
+// result-owner boundaries are exercised by sessions-list-privacy.test.ts.
+vi.mock("../gateway/session-list-read-result.js", () => ({
+  withCurrentSessionListRows: async <T>(
+    rows: readonly object[],
+    consume: (visible: readonly boolean[]) => T,
+    requireOwner: boolean,
+  ) => {
+    expect(requireOwner).toBe(true);
+    return consume(rows.map(() => true));
+  },
+}));
+
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
 }));
 
-function createTools(
+function createToolCaller(
   config: OpenClawToolsOptions["config"],
-  options: { sandboxed?: boolean; sessionConfigSource?: "runtime" | "pinned" } = {},
+  options: Omit<OpenClawToolsOptions, "config"> = {},
 ) {
-  return createOpenClawTools({
+  const tools = createOpenClawTools({
     agentSessionKey: "global",
     runSessionKey: "agent:research:main",
-    sandboxed: options.sandboxed,
     config,
-    ...(options.sessionConfigSource ? { sessionConfigSource: options.sessionConfigSource } : {}),
     disablePluginTools: true,
     wrapBeforeToolCallHook: false,
+    ...options,
+  });
+  return (name: string, params: Record<string, unknown> = {}) =>
+    requireTool(tools, name).execute(name, params);
+}
+
+function expectGateway(method: string, params: Record<string, unknown>) {
+  expect(embeddedGatewayCalls).toHaveBeenCalledWith(
+    expect.objectContaining({ method, params: expect.objectContaining(params) }),
+  );
+}
+
+const agentRows = (...ids: string[]) =>
+  expect.arrayContaining(ids.map((agentId) => expect.objectContaining({ agentId })));
+
+function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string) {
+  return expectDefined(
+    tools.find((candidate) => candidate.name === name),
+    `Expected tool ${name}`,
+  );
+}
+
+async function expectForbidden(
+  call: ReturnType<typeof createToolCaller>,
+  name: string,
+  params: Record<string, unknown>,
+) {
+  await expect(call(name, params)).resolves.toMatchObject({
+    details: { status: "forbidden" },
   });
 }
 
-function requireTool(tools: ReturnType<typeof createOpenClawTools>, name: string) {
-  const tool = tools.find((candidate) => candidate.name === name);
-  if (!tool) {
-    throw new Error(`Expected tool ${name} to be registered`);
-  }
-  return tool;
+function sessionPolicyConfig(visibility: "all" | "self" = "all") {
+  return {
+    agents: { entries: { main: {}, research: {} } },
+    tools: {
+      sessions: { visibility },
+      agentToAgent: visibility === "all" ? { enabled: true, allow: ["*"] } : { enabled: false },
+    },
+  };
+}
+
+function mockSessionDiscovery(response?: (request: GatewayRequest) => unknown) {
+  embeddedGatewayResponseMock.mockImplementation((request: GatewayRequest) => {
+    if (request.method === "sessions.list") {
+      return {
+        sessions: [
+          { key: "agent:main:main", agentId: "main", kind: "main" },
+          { key: "agent:research:main", agentId: "research", kind: "main" },
+        ],
+        hasMore: false,
+      };
+    }
+    return response?.(request);
+  });
+  setEmbeddedMode(true);
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  unregisterAcpRuntimeBackend("session-context-test");
+  resetPluginRuntimeStateForTest();
   clearRuntimeConfigSnapshot();
   setEmbeddedMode(false);
   embeddedGatewayCalls.mockClear();
@@ -70,106 +133,131 @@ afterEach(() => {
 });
 
 describe("openclaw session lookup context", () => {
+  let matrixPlugin: ChannelPlugin;
+
+  beforeAll(async () => {
+    ({ matrixPlugin } = await loadBundledPluginFacade<{ matrixPlugin: ChannelPlugin }>({
+      pluginId: "matrix",
+      artifactBasename: "channel-plugin-api.js",
+    }));
+  });
+
   it.each([
-    { scope: "global", mainKey: "main", runSessionKey: "global" },
-    {
-      scope: "global",
-      mainKey: "conversation",
-      runSessionKey: "global",
+    ["runtime", true],
+    ["pinned", false],
+  ] as const)(
+    "uses %s spawn capabilities over a conflicting pinned config",
+    async (source, available) => {
+      setActivePluginRegistry(
+        createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
+      );
+      registerAcpRuntimeBackend({
+        id: "session-context-test",
+        runtime: {
+          async ensureSession() {
+            throw new Error("Capability discovery must not create an ACP session");
+          },
+          async *runTurn() {},
+          async cancel() {},
+          async close() {},
+        },
+      });
+      const capabilityConfig = (enabled: boolean) => ({
+        acp: { enabled, backend: "session-context-test" },
+        tools: { swarm: enabled },
+        session: { threadBindings: { spawnSessions: true } },
+        channels: {
+          matrix: { accounts: { work: { threadBindings: { spawnSessions: enabled } } } },
+        },
+      });
+      setRuntimeConfigSnapshot(capabilityConfig(true));
+      const tools = createOpenClawTools({
+        agentSessionKey: "agent:main:matrix:channel:!room:example.org",
+        agentChannel: "matrix",
+        agentAccountId: "work",
+        config: capabilityConfig(false),
+        sessionConfigSource: source,
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+      });
+      const tool = requireTool(tools, "sessions_spawn");
+
+      expect(tools.some((candidate) => candidate.name === "agents_wait")).toBe(available);
+      expect(tool.parameters).toMatchObject({
+        properties: {
+          mode: { enum: available ? ["run", "session"] : ["run"] },
+          runtime: { enum: available ? ["subagent", "acp"] : ["subagent"] },
+        },
+      });
+      if (available) {
+        expect(tool.parameters).toHaveProperty("properties.thread.type", "boolean");
+        expect(tool.parameters).toHaveProperty("properties.collect.type", "boolean");
+      } else {
+        expect(tool.parameters).not.toHaveProperty("properties.thread");
+        expect(tool.parameters).not.toHaveProperty("properties.collect");
+        await expect(
+          tool.execute("disabled-acp", { runtime: "acp", task: "must not start" }),
+        ).resolves.toMatchObject({
+          details: {
+            status: "error",
+            error: expect.stringContaining("ACP is disabled by policy"),
+          },
+        });
+      }
     },
-    { scope: "per-sender", mainKey: "main", runSessionKey: "global" },
-    {
-      scope: "global",
-      mainKey: "main",
-      runSessionKey: "agent:research:dashboard:control",
-    },
-  ] as const)("routes progress cards to $runSessionKey under $scope scope", async (scenario) => {
+  );
+
+  it("routes progress cards to global under global scope", async () => {
     const gatewayCall = vi.spyOn(inProcessGateway, "callInProcessGatewayTool").mockResolvedValue({
       card: null,
     });
-    try {
-      const tools = createOpenClawTools({
-        config: {
-          agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-          session: { scope: scenario.scope, mainKey: scenario.mainKey },
-        },
+    const call = createToolCaller(
+      {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+        session: { scope: "global", mainKey: "main" },
+      },
+      {
         agentSessionKey: "agent:research:main",
-        runSessionKey: scenario.runSessionKey,
+        runSessionKey: "global",
         requesterAgentIdOverride: "research",
-        disablePluginTools: true,
         disableMessageTool: true,
-        wrapBeforeToolCallHook: false,
-      });
+      },
+    );
 
-      await requireTool(tools, "progress_card").execute("synthetic-progress", {});
+    await call("progress_card");
 
-      expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
-        sessionKey: scenario.runSessionKey,
-        agentId: "research",
-      });
-    } finally {
-      gatewayCall.mockRestore();
-    }
+    expect(gatewayCall).toHaveBeenCalledWith("progressCard.put", {
+      sessionKey: "global",
+      agentId: "research",
+    });
   });
 
   it("binds nested session lookups to the durable caller", async () => {
-    const runSessionKey = "agent:research:main";
     setEmbeddedMode(true);
-    const tools = createTools(
-      { agents: { list: [{ id: "main", default: true }, { id: "research" }] } },
+    const call = createToolCaller(
+      { agents: { entries: { main: {}, research: {} } } },
       { sandboxed: true },
     );
 
-    await requireTool(tools, "sessions_list").execute("list", {});
-    await requireTool(tools, "sessions_search").execute("search", { query: "needle" });
-    await requireTool(tools, "sessions_history").execute("history", { sessionKey: "current" });
+    await call("sessions_list");
+    await call("sessions_search", { query: "needle" });
+    await call("sessions_history", { sessionKey: "current" });
 
     expect(createEmbeddedCallGatewayMock).toHaveBeenCalledWith();
-    expect(embeddedGatewayCalls).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "sessions.list",
-        params: expect.objectContaining({ spawnedBy: runSessionKey }),
-      }),
-    );
-    expect(embeddedGatewayCalls).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "sessions.search",
-        params: expect.objectContaining({ sessionKeys: [runSessionKey] }),
-      }),
-    );
-    expect(embeddedGatewayCalls).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "chat.history",
-        params: expect.objectContaining({ sessionKey: runSessionKey }),
-      }),
-    );
+    expectGateway("sessions.list", { spawnedBy: "agent:research:main" });
+    expectGateway("sessions.search", { sessionKeys: ["agent:research:main"] });
+    expectGateway("chat.history", { sessionKey: "agent:research:main" });
   });
 
   it("preserves implicit all-agent discovery for authorized callers", async () => {
-    embeddedGatewayResponseMock.mockImplementation((request: GatewayRequest) => {
-      if (request.method === "sessions.list") {
-        return {
-          sessions: [
-            { key: "agent:main:main", agentId: "main", kind: "main" },
-            { key: "agent:research:main", agentId: "research", kind: "main" },
-          ],
-          hasMore: false,
-        };
-      }
+    mockSessionDiscovery((request) => {
       if (request.method === "sessions.search") {
-        const agentId = request.params?.agentId;
-        const sessionKeys = request.params?.sessionKeys;
+        const { agentId, sessionKeys } = request.params ?? {};
         const sessionKey = Array.isArray(sessionKeys) ? sessionKeys[0] : undefined;
         return typeof agentId === "string" && typeof sessionKey === "string"
           ? {
               results: [
-                {
-                  sessionKey,
-                  timestamp: 1,
-                  role: "user",
-                  snippet: `${agentId} hit`,
-                  score: 1,
-                },
+                { sessionKey, timestamp: 1, role: "user", snippet: `${agentId} hit`, score: 1 },
               ],
               indexing: false,
               truncated: false,
@@ -178,32 +266,18 @@ describe("openclaw session lookup context", () => {
       }
       return undefined;
     });
-    setEmbeddedMode(true);
-    const tools = createTools({
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      tools: {
-        sessions: { visibility: "all" },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-    });
+    const call = createToolCaller(sessionPolicyConfig());
 
-    const listed = await requireTool(tools, "sessions_list").execute("list", {});
-    const searched = await requireTool(tools, "sessions_search").execute("search", {
-      query: "hit",
-    });
+    const listed = await call("sessions_list");
+    const searched = await call("sessions_search", { query: "hit" });
 
-    expect((listed.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ agentId: "main" }),
-        expect.objectContaining({ agentId: "research" }),
-      ]),
-    );
-    expect((searched.details as { results: Array<{ snippet: string }> }).results).toEqual(
-      expect.arrayContaining([
+    expect(listed.details).toMatchObject({ sessions: agentRows("main", "research") });
+    expect(searched.details).toMatchObject({
+      results: expect.arrayContaining([
         expect.objectContaining({ snippet: "main hit" }),
         expect.objectContaining({ snippet: "research hit" }),
       ]),
-    );
+    });
     const discoveryRequests = embeddedGatewayCalls.mock.calls
       .map(([request]) => request as GatewayRequest)
       .filter((request) => request.method === "sessions.list");
@@ -212,111 +286,40 @@ describe("openclaw session lookup context", () => {
   });
 
   it("applies live session visibility grants and revocations to already-created lookup tools", async () => {
-    const accessibleConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      tools: {
-        sessions: { visibility: "all" as const },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-    };
-    const restrictedConfig = {
-      ...accessibleConfig,
-      tools: {
-        sessions: { visibility: "self" as const },
-        agentToAgent: { enabled: false },
-      },
-    };
-    embeddedGatewayResponseMock.mockImplementation((request: GatewayRequest) => {
-      if (request.method === "sessions.list") {
-        return {
-          sessions: [
-            { key: "agent:main:main", agentId: "main", kind: "main" },
-            { key: "agent:research:main", agentId: "research", kind: "main" },
-          ],
-          hasMore: false,
-        };
-      }
+    const accessibleConfig = sessionPolicyConfig();
+    const restrictedConfig = sessionPolicyConfig("self");
+    mockSessionDiscovery((request) => {
       if (request.method === "chat.history") {
         return { messages: [{ role: "user", content: "private history" }] };
       }
       return undefined;
     });
-    setEmbeddedMode(true);
     setRuntimeConfigSnapshot(accessibleConfig);
-    const tools = createTools(accessibleConfig, { sessionConfigSource: "runtime" });
-    const list = requireTool(tools, "sessions_list");
-    const history = requireTool(tools, "sessions_history");
-    const search = requireTool(tools, "sessions_search");
+    const call = createToolCaller(accessibleConfig, { sessionConfigSource: "runtime" });
     setEmbeddedMode(false);
-    const send = requireTool(
-      createTools(accessibleConfig, { sessionConfigSource: "runtime" }),
-      "sessions_send",
-    );
+    const send = createToolCaller(accessibleConfig, { sessionConfigSource: "runtime" });
     setEmbeddedMode(true);
 
-    const granted = await list.execute("granted", {});
-    expect((granted.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
-    );
+    const granted = await call("sessions_list");
+    expect(granted.details).toMatchObject({ sessions: agentRows("main") });
 
     setRuntimeConfigSnapshot(restrictedConfig);
-    await expect(
-      send.execute("revoked-send", {
-        agentId: "main",
-        label: "private",
-        message: "should never be delivered",
-      }),
-    ).resolves.toMatchObject({ details: { status: "forbidden" } });
-    const revoked = await list.execute("revoked", {});
-    expect((revoked.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual([
-      expect.objectContaining({ agentId: "research" }),
-    ]);
-    await expect(
-      history.execute("revoked-history", { sessionKey: "agent:main:main" }),
-    ).resolves.toMatchObject({ details: { status: "forbidden" } });
-    await expect(
-      search.execute("revoked-search", { query: "private", sessionKey: "agent:main:main" }),
-    ).resolves.toMatchObject({ details: { status: "forbidden" } });
-    setRuntimeConfigSnapshot(accessibleConfig);
-    const restored = await list.execute("restored", {});
-    expect((restored.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
-    );
-  });
-
-  it("keeps an explicitly pinned session policy even when it initially matches runtime config", async () => {
-    const pinnedConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      tools: {
-        sessions: { visibility: "all" as const },
-        agentToAgent: { enabled: true, allow: ["*"] },
-      },
-    };
-    embeddedGatewayResponseMock.mockImplementation((request: GatewayRequest) =>
-      request.method === "sessions.list"
-        ? {
-            sessions: [
-              { key: "agent:main:main", agentId: "main", kind: "main" },
-              { key: "agent:research:main", agentId: "research", kind: "main" },
-            ],
-            hasMore: false,
-          }
-        : undefined,
-    );
-    setEmbeddedMode(true);
-    setRuntimeConfigSnapshot(structuredClone(pinnedConfig));
-    const tools = createTools(pinnedConfig, { sessionConfigSource: "pinned" });
-    setRuntimeConfigSnapshot({
-      ...pinnedConfig,
-      tools: {
-        sessions: { visibility: "self" },
-        agentToAgent: { enabled: false },
-      },
+    await expectForbidden(send, "sessions_send", {
+      agentId: "main",
+      label: "private",
+      message: "should never be delivered",
     });
-
-    const result = await requireTool(tools, "sessions_list").execute("pinned", {});
-    expect((result.details as { sessions: Array<{ agentId: string }> }).sessions).toEqual(
-      expect.arrayContaining([expect.objectContaining({ agentId: "main" })]),
-    );
+    const revoked = await call("sessions_list");
+    expect(revoked.details).toMatchObject({
+      sessions: [expect.objectContaining({ agentId: "research" })],
+    });
+    await expectForbidden(call, "sessions_history", { sessionKey: "agent:main:main" });
+    await expectForbidden(call, "sessions_search", {
+      query: "private",
+      sessionKey: "agent:main:main",
+    });
+    setRuntimeConfigSnapshot(accessibleConfig);
+    const restored = await call("sessions_list");
+    expect(restored.details).toMatchObject({ sessions: agentRows("main") });
   });
 });

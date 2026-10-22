@@ -6,8 +6,8 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:f
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
-import { z } from "zod";
 import { requestIdentitySchema } from "./request-proof.ts";
+import { proofImageInspectionSchema } from "./telegram-proof-storage.mts";
 import { removeTelegramQaNetwork } from "./telegram-qa-cleanup.ts";
 import {
   telegramQaExecutionSchema,
@@ -43,15 +43,9 @@ const identity = requestIdentitySchema.parse({
 const execute = promisify(execFile);
 const podman = async (args: string[]) =>
   (await execute("podman", args, { timeout: 300_000, maxBuffer: 2 * 1024 * 1024 })).stdout;
-const info = z
-  .array(
-    z.object({
-      Id: z.string().regex(/^(?:sha256:)?[a-f0-9]{64}$/),
-      Config: z.object({ Labels: z.record(z.string(), z.string()) }),
-    }),
-  )
-  .length(1)
-  .parse(JSON.parse(await podman(["image", "inspect", image])))[0]!;
+const info = proofImageInspectionSchema.parse(
+  JSON.parse(await podman(["image", "inspect", image])),
+)[0]!;
 if (info.Config.Labels["org.openclaw.mantis.candidate-sha"] !== candidate) {
   throw new Error("Candidate runtime identity mismatch");
 }
@@ -204,22 +198,17 @@ try {
 } catch (error) {
   errors.push(error);
 } finally {
-  for (const owned of [sut, observer]) {
+  for (const cleanup of [
+    () => podman(["rm", "--force", "--ignore", sut]),
+    () => podman(["rm", "--force", "--ignore", observer]),
+    () => removeTelegramQaNetwork(podman, createdNetwork),
+    () => rm(scratch, { recursive: true, force: true }),
+  ]) {
     try {
-      await podman(["rm", "--force", "--ignore", owned]);
+      await cleanup();
     } catch (error) {
       errors.push(error);
     }
-  }
-  try {
-    await removeTelegramQaNetwork(podman, createdNetwork);
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    await rm(scratch, { recursive: true, force: true });
-  } catch (error) {
-    errors.push(error);
   }
 }
 if (errors.length) {

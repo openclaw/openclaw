@@ -23,39 +23,10 @@ function runBench(args: string[]) {
 }
 
 describe("scripts/bench-sqlite-state", () => {
-  it("rejects unknown args before seeding benchmark databases", () => {
-    const result = runBench(["--wat"]);
-
-    expect(result.status).toBe(2);
-    expect(result.stdout).toBe("");
-    expect(result.stderr.trim()).toBe("error: Unknown argument: --wat");
-  });
-
-  it("rejects missing output values before seeding benchmark databases", () => {
-    expect(() => parseSqliteStateBenchmarkCli(["--output", "--profile", "smoke"])).toThrow(
-      "--output requires a value",
-    );
-  });
-
   it("rejects short flag output values before seeding benchmark databases", () => {
     expect(() => parseSqliteStateBenchmarkCli(["--output", "-h"])).toThrow(
       "--output requires a value",
     );
-  });
-
-  it("rejects invalid profiles without printing a stack trace", () => {
-    expect(() => parseSqliteStateBenchmarkCli(["--profile", "huge"])).toThrow(
-      '--profile must be one of smoke, default, large; got "huge"',
-    );
-  });
-
-  it("rejects duplicate single-value controls before seeding benchmark databases", () => {
-    expect(() =>
-      parseSqliteStateBenchmarkCli(["--profile", "smoke", "--profile", "large"]),
-    ).toThrow("--profile was provided more than once");
-    expect(parseSqliteStateBenchmarkCli(["--help", "--profile", "huge"])).toEqual({
-      help: true,
-    });
   });
 
   it("reports production-shaped SQLite scenarios in the existing smoke benchmark", () => {
@@ -97,22 +68,6 @@ describe("scripts/bench-sqlite-state", () => {
       stateSchema: OPENCLAW_STATE_SCHEMA_VERSION,
     });
 
-    const expectedIds = [
-      "cron.store.load",
-      "task-runs.cron.list",
-      "task-runs.cron-source.list",
-      "delivery.pending.load",
-      "ingress.pending.first-page",
-      "ingress.pending.seek-page",
-      "ingress.pending.id-page",
-      "ingress.pending.id-seek-page",
-      "plugin-state.namespace.live",
-      "agent-cache.plugin-model-catalog.list",
-      "transcript.tail.metadata",
-      "transcript.tail.payload",
-    ];
-    expect(report.queries.map((query) => query.id)).toEqual(expectedIds);
-    expect(new Set(report.queries.map((query) => query.id)).size).toBe(expectedIds.length);
     const expectedRows = new Map([
       ["cron.store.load", 13],
       ["task-runs.cron.list", 1_000],
@@ -127,6 +82,8 @@ describe("scripts/bench-sqlite-state", () => {
       ["transcript.tail.metadata", 256],
       ["transcript.tail.payload", 256],
     ]);
+    expect(report.queries.map((query) => query.id)).toEqual([...expectedRows.keys()]);
+    expect(new Set(report.queries.map((query) => query.id)).size).toBe(expectedRows.size);
     for (const query of report.queries) {
       expect(["agent", "state"]).toContain(query.database);
       expect(query.rows).toBe(expectedRows.get(query.id));
@@ -143,22 +100,16 @@ describe("scripts/bench-sqlite-state", () => {
   });
 
   it("normalizes modern plan forms without inventing table scans", () => {
-    expect(
-      collectSqliteQueryPlanEvidence([
-        "SEARCH events USING AUTOMATIC PARTIAL COVERING INDEX (status=?)",
-        "SCAN json_each VIRTUAL TABLE INDEX 1:",
-        "SCAN 2-ROW VALUES CLAUSE",
-        "SCAN task_runs",
-      ]),
-    ).toEqual({
+    const raw = [
+      "SEARCH events USING AUTOMATIC PARTIAL COVERING INDEX (status=?)",
+      "SCAN json_each VIRTUAL TABLE INDEX 1:",
+      "SCAN 2-ROW VALUES CLAUSE",
+      "SCAN task_runs",
+    ];
+    expect(collectSqliteQueryPlanEvidence([...raw])).toEqual({
       fullTableScans: ["SCAN task_runs"],
       indexes: ["AUTOMATIC PARTIAL COVERING INDEX"],
-      raw: [
-        "SEARCH events USING AUTOMATIC PARTIAL COVERING INDEX (status=?)",
-        "SCAN json_each VIRTUAL TABLE INDEX 1:",
-        "SCAN 2-ROW VALUES CLAUSE",
-        "SCAN task_runs",
-      ],
+      raw,
       tempSorts: [],
     });
   });

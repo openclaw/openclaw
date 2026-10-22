@@ -1,5 +1,4 @@
-// Covers provider auth choice rendering and fallback behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
@@ -23,21 +22,11 @@ vi.mock("./plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry:
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
-}));
-
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot: pluginRegistryMocks.resolvePluginMetadataSnapshot,
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
-  resolvePluginMetadataSnapshot: pluginRegistryMocks.resolvePluginMetadataSnapshot,
-}));
 vi.mock("./official-external-plugin-catalog.js", () => ({
   getOfficialExternalPluginCatalogManifest: (entry: { openclaw?: unknown }) => entry.openclaw,
   listOfficialExternalProviderCatalogEntries:
@@ -47,33 +36,92 @@ vi.mock("./official-external-plugin-catalog.js", () => ({
 vi.resetModules();
 
 const {
-  resolveManifestDeprecatedProviderAuthChoice,
-  resolveManifestDeclaredProviderAuthChoices,
-  resolveManifestProviderAuthChoice,
-  resolveManifestProviderAuthChoices,
-  resolveProviderOnboardAuthFlags,
+  resolveManifestDeprecatedProviderAuthChoice: deprecatedChoice,
+  resolveManifestDeclaredProviderAuthChoices: declaredChoices,
+  resolveManifestProviderAuthChoice: resolveChoice,
+  resolveManifestProviderAuthChoices: resolveChoices,
+  resolveProviderOnboardAuthFlags: authFlags,
 } = await import("./provider-auth-choices.js");
 const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
 const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
 
-function createManifestPlugin(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
+const openaiChoiceMetadata = choiceMetadata("openai", "OpenAI");
+
+function authMethod(provider: string, method: string, metadata: Record<string, unknown> = {}) {
+  return { provider, method, choiceId: `${provider}-${method}`, ...metadata };
+}
+
+function choiceMetadata(provider: string, label: string) {
   return {
-    id,
-    providerAuthChoices,
+    choiceId: `${provider}-api-key`,
+    choiceLabel: `${label} API key`,
+    optionKey: `${provider}ApiKey`,
+    cliFlag: `--${provider}-api-key`,
+    cliOption: `--${provider}-api-key <key>`,
   };
 }
 
-function createProviderAuthChoice(overrides: Record<string, unknown>) {
-  return overrides;
+function keyChoice(provider: string, label: string, overrides: Record<string, unknown> = {}) {
+  return {
+    ...authMethod(provider, "api-key"),
+    ...choiceMetadata(provider, label),
+    cliDescription: `${label} API key`,
+    ...overrides,
+  };
 }
 
-function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
-  pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
-    plugins,
-  });
-  pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-    plugins,
-  });
+function expectedFlag(provider: string, description: string) {
+  return {
+    optionKey: `${provider}ApiKey`,
+    authChoice: `${provider}-api-key`,
+    cliFlag: `--${provider}-api-key`,
+    cliOption: `--${provider}-api-key <key>`,
+    description,
+  };
+}
+
+function expectedSetupChoice(
+  provider: string,
+  method: string,
+  groupLabel: string,
+  methodLabel: string,
+) {
+  return {
+    pluginId: provider,
+    providerId: provider,
+    methodId: method,
+    choiceId: `${provider}-${method}`,
+    choiceLabel: `${groupLabel} ${methodLabel}`,
+    groupId: provider,
+    groupLabel,
+  };
+}
+
+function manifest(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
+  return { id, providerAuthChoices };
+}
+
+function loginPlugin(
+  id: string,
+  origin: string,
+  provider: string,
+  metadata: Record<string, unknown> = {},
+  extras: Array<Record<string, unknown>> = [],
+) {
+  return {
+    id,
+    origin,
+    providers: [provider],
+    providerAuthChoices: [
+      { provider, method: "api-key", ...openaiChoiceMetadata, ...metadata },
+      ...extras,
+    ],
+  };
+}
+
+function setPlugins(plugins: Array<Record<string, unknown>>) {
+  pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({ plugins });
+  pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({ plugins });
   pluginRegistryMocks.loadPluginMetadataSnapshot.mockReturnValue({
     plugins,
     manifestRegistry: { plugins },
@@ -84,94 +132,110 @@ function setManifestPlugins(plugins: Array<Record<string, unknown>>) {
   );
 }
 
-function expectResolvedProviderAuthChoices(params: {
-  expectedFlattened: Array<Record<string, unknown>>;
-  resolvedProviderIds?: Record<string, string | undefined>;
-  deprecatedChoiceIds?: Record<string, string | undefined>;
-}) {
-  expect(resolveManifestProviderAuthChoices()).toEqual(params.expectedFlattened);
-  Object.entries(params.resolvedProviderIds ?? {}).forEach(([choiceId, providerId]) => {
-    expect(resolveManifestProviderAuthChoice(choiceId)?.providerId).toBe(providerId);
-  });
-  Object.entries(params.deprecatedChoiceIds ?? {}).forEach(([choiceId, expectedChoiceId]) => {
-    expect(resolveManifestDeprecatedProviderAuthChoice(choiceId)?.choiceId).toBe(expectedChoiceId);
-  });
+function setChoices(pluginId: string, providerAuthChoices: Array<Record<string, unknown>>) {
+  setPlugins([manifest(pluginId, providerAuthChoices)]);
 }
 
-function setSingleManifestProviderAuthChoices(
-  pluginId: string,
-  providerAuthChoices: Array<Record<string, unknown>>,
+function setupPlugin(
+  id: string,
+  authMethods: string[],
+  options: {
+    name?: string;
+    origin?: string;
+    providerId?: string;
+    requiresRuntime?: boolean;
+    setupSource?: string;
+    providerAuthChoices?: Array<Record<string, unknown>>;
+  } = {},
 ) {
-  setManifestPlugins([createManifestPlugin(pluginId, providerAuthChoices)]);
+  const { providerId = id, requiresRuntime, ...plugin } = options;
+  return {
+    id,
+    origin: "global",
+    ...plugin,
+    setup: { providers: [{ id: providerId, authMethods }], requiresRuntime },
+  };
 }
 
 describe("provider auth choice manifest helpers", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
-      plugins: [],
-    });
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [],
-    });
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
+    for (const mock of Object.values(pluginRegistryMocks)) {
+      mock.mockReset();
+    }
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
-    pluginRegistryMocks.loadPluginMetadataSnapshot.mockReset();
-    pluginRegistryMocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: [],
-      manifestRegistry: { plugins: [] },
-    });
-    pluginRegistryMocks.resolvePluginMetadataSnapshot.mockReset();
-    pluginRegistryMocks.resolvePluginMetadataSnapshot.mockImplementation(
-      (params?: { pluginMetadataSnapshot?: unknown }) =>
-        params?.pluginMetadataSnapshot ?? pluginRegistryMocks.loadPluginMetadataSnapshot(params),
-    );
+    setPlugins([]);
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReset();
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
     clearPluginMetadataLifecycleCaches();
   });
 
-  it("flattens manifest auth choices", () => {
-    setSingleManifestProviderAuthChoices("openai", [
-      createProviderAuthChoice({
-        provider: "openai",
-        method: "api-key",
-        choiceId: "openai-api-key",
-        choiceLabel: "OpenAI API key",
-        personalAccount: true,
-        assistantPriority: 10,
-        assistantVisibility: "visible",
-        onboardingScopes: ["text-inference"],
-        optionKey: "openaiApiKey",
-        cliFlag: "--openai-api-key",
-        cliOption: "--openai-api-key <key>",
-      }),
+  it("preserves public metadata shape and shallow aliases across every choice reader", () => {
+    const scopes = ["text-inference"];
+    const channelLogin = { aliases: ["demo-login"] };
+    const futureMetadata = { version: 1 };
+    const metadata = {
+      choiceId: "demo-key",
+      choiceLabel: "",
+      choiceHint: undefined,
+      personalAccount: true,
+      assistantPriority: 10,
+      assistantVisibility: "visible",
+      credentialOnly: true,
+      onboardingScopes: scopes,
+      channelLogin,
+      futureMetadata,
+      optionKey: "demoKey",
+      cliFlag: "--demo-key",
+      cliOption: "--demo-key <key>",
+      cliDescription: "",
+      deprecatedChoiceIds: ["old-demo"],
+    };
+    setChoices("demo", [{ provider: "demo", method: "api-key", ...metadata }]);
+    const expected = {
+      pluginId: "demo",
+      providerId: "demo",
+      methodId: "api-key",
+      ...metadata,
+    };
+    expect(resolveChoices()).toStrictEqual([expected]);
+    for (const read of [
+      () => resolveChoices()[0],
+      () => declaredChoices()[0],
+      () => resolveChoice("demo-key"),
+      () => deprecatedChoice("old-demo"),
+    ]) {
+      const value = read();
+      if (!value) {
+        throw new Error("Expected the declared auth choice");
+      }
+      expect(value).toStrictEqual(expected);
+      expect(Object.keys(value)).toEqual(Object.keys(expected));
+      expect(Object.hasOwn(value, "choiceHint")).toBe(true);
+      expect(Object.hasOwn(value, "origin")).toBe(false);
+      expect(Object.hasOwn(value, "declaration")).toBe(false);
+      expect(value.onboardingScopes).toBe(scopes);
+      expect(value.channelLogin).toBe(channelLogin);
+      expect(Reflect.get(value, "futureMetadata")).toBe(futureMetadata);
+      const again = read();
+      expect(Object.is(value, again)).toBe(false);
+      value.choiceLabel = "changed output";
+      expect(again).toStrictEqual(expected);
+    }
+    expect(authFlags()).toStrictEqual([
+      {
+        optionKey: "demoKey",
+        authChoice: "demo-key",
+        cliFlag: "--demo-key",
+        cliOption: "--demo-key <key>",
+        description: "",
+      },
     ]);
-
-    expectResolvedProviderAuthChoices({
-      expectedFlattened: [
-        {
-          pluginId: "openai",
-          providerId: "openai",
-          methodId: "api-key",
-          choiceId: "openai-api-key",
-          choiceLabel: "OpenAI API key",
-          personalAccount: true,
-          assistantPriority: 10,
-          assistantVisibility: "visible",
-          onboardingScopes: ["text-inference"],
-          optionKey: "openaiApiKey",
-          cliFlag: "--openai-api-key",
-          cliOption: "--openai-api-key <key>",
-        },
-      ],
-      resolvedProviderIds: { "openai-api-key": "openai" },
-    });
   });
 
   it("does not resolve equal-priority owners of the same login choice", () => {
-    setManifestPlugins(
+    setPlugins(
       ["first", "second"].map((id) => ({
         id,
         origin: "global",
@@ -179,40 +243,101 @@ describe("provider auth choice manifest helpers", () => {
       })),
     );
 
-    expect(resolveManifestProviderAuthChoice("shared-login")).toBeUndefined();
+    expect(resolveChoice("shared-login")).toBeUndefined();
+    expect(declaredChoices()).toEqual([]);
+    expect(resolveChoices()).toEqual([]);
   });
 
-  it("carries the declared credential-only and chat login contracts", () => {
-    setSingleManifestProviderAuthChoices("demo", [
-      {
-        provider: "demo",
-        method: "device-code",
-        choiceId: "demo-device",
-        credentialOnly: true,
-        channelLogin: { aliases: ["demo-login"] },
-      },
-    ]);
+  it.each(["darwin", "linux"] as const)(
+    "keeps platform-limited setup choices and flags eligible only on %s",
+    (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const config = { plugins: { entries: { native: { enabled: true } } } };
+      setPlugins([
+        {
+          id: "native",
+          origin: "bundled",
+          providerAuthChoices: [
+            {
+              provider: "native",
+              method: "local",
+              choiceId: "native-local",
+              platforms: ["darwin"],
+              deprecatedChoiceIds: ["old-native"],
+              optionKey: "nativeLocal",
+              cliFlag: "--native-local",
+              cliOption: "--native-local",
+            },
+            authMethod("native", "remote"),
+            authMethod("native", "unavailable", { choiceId: "unavailable", platforms: [] }),
+          ],
+          setup: { providers: [{ id: "native", authMethods: ["local"] }] },
+        },
+      ]);
 
-    expect(resolveManifestProviderAuthChoice("demo-device")).toMatchObject({
-      credentialOnly: true,
-      channelLogin: { aliases: ["demo-login"] },
+      const expectedIds =
+        platform === "darwin" ? ["native-local", "native-remote"] : ["native-remote"];
+      expect(resolveChoices({ config }).map((choice) => choice.choiceId)).toEqual(expectedIds);
+      expect(declaredChoices({ config }).map((choice) => choice.choiceId)).toEqual(expectedIds);
+      expect(Boolean(resolveChoice("native-local", { config }))).toBe(platform === "darwin");
+      expect(Boolean(deprecatedChoice("old-native", { config }))).toBe(platform === "darwin");
+      expect(authFlags({ config }).map((flag) => flag.authChoice)).toEqual(
+        platform === "darwin" ? ["native-local"] : [],
+      );
+      expect(config.plugins.entries.native.enabled).toBe(true);
+      expect(
+        resolveChoices({ config, includeUnsupportedPlatforms: true }).map(
+          (choice) => choice.choiceId,
+        ),
+      ).toEqual(["native-local", "native-remote", "unavailable"]);
+    },
+  );
+
+  it("resolves explicit method identity before a conflicting manifest choice ID", () => {
+    const explicitChoice = "provider-plugin:Demo:LOCAL";
+    setPlugins([
+      manifest("demo-plugin", [
+        authMethod("demo", "local", { modelTarget: "utility" }),
+        authMethod("demo", "remote"),
+      ]),
+      manifest("other-plugin", [authMethod("other", "remote", { choiceId: explicitChoice })]),
+    ]);
+    expect(resolveChoice(explicitChoice)).toMatchObject({
+      pluginId: "demo-plugin",
+      providerId: "demo",
+      methodId: "local",
+      choiceId: "demo-local",
+      modelTarget: "utility",
+    });
+    expect(resolveChoice("provider-plugin:demo:remote")).toMatchObject({
+      pluginId: "demo-plugin",
+      providerId: "demo",
+      methodId: "remote",
+      choiceId: "demo-remote",
+    });
+    expect(resolveChoice("provider-plugin:demo:missing")).toBeUndefined();
+  });
+
+  it("binds post-dispatch method metadata to the selected plugin despite ambiguous provider declarations", () => {
+    setPlugins(
+      ["selected", "other"].map((id) =>
+        manifest(id, [
+          authMethod("demo", "local", {
+            choiceId: `${id}-local`,
+            ...(id === "selected" ? { modelTarget: "utility" } : {}),
+          }),
+        ]),
+      ),
+    );
+    expect(resolveChoice("provider-plugin:demo:local")).toBeUndefined();
+    expect(resolveChoice("provider-plugin:demo:local", { pluginId: "selected" })).toMatchObject({
+      pluginId: "selected",
+      modelTarget: "utility",
     });
   });
 
-  it("keeps descriptor setup fallback out of executable declared choices", () => {
-    setManifestPlugins([
-      {
-        id: "descriptor",
-        origin: "bundled",
-        setup: { providers: [{ id: "descriptor", authMethods: ["oauth"] }] },
-      },
-    ]);
-    expect(resolveManifestProviderAuthChoices()).toHaveLength(1);
-    expect(resolveManifestDeclaredProviderAuthChoices()).toEqual([]);
-  });
-
   it("excludes workspace and explicitly disabled owners from executable choices", () => {
-    setManifestPlugins(
+    setPlugins(
       ["workspace", "global"].map((origin) => ({
         id: origin,
         origin,
@@ -227,33 +352,12 @@ describe("provider auth choice manifest helpers", () => {
         },
       },
     };
-    expect(resolveManifestDeclaredProviderAuthChoices({ config })).toEqual([]);
-  });
-
-  it("rejects equal-priority choice owners before any login surface can offer them", () => {
-    setManifestPlugins(
-      ["first", "second"].map((id) => ({
-        id,
-        origin: "global",
-        providerAuthChoices: [{ provider: id, method: "oauth", choiceId: "shared" }],
-      })),
-    );
-    expect(resolveManifestDeclaredProviderAuthChoices()).toEqual([]);
-    expect(resolveManifestProviderAuthChoices()).toEqual([]);
+    expect(declaredChoices({ config })).toEqual([]);
   });
 
   it("keeps installed manifest flags ahead of official cold-install flags", () => {
-    setSingleManifestProviderAuthChoices("cerebras", [
-      createProviderAuthChoice({
-        provider: "cerebras",
-        method: "api-key",
-        choiceId: "cerebras-api-key",
-        choiceLabel: "Cerebras API key",
-        optionKey: "cerebrasApiKey",
-        cliFlag: "--cerebras-api-key",
-        cliOption: "--cerebras-api-key <key>",
-        cliDescription: "Installed Cerebras key",
-      }),
+    setChoices("cerebras", [
+      keyChoice("cerebras", "Cerebras", { cliDescription: "Installed Cerebras key" }),
     ]);
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([
       {
@@ -264,22 +368,17 @@ describe("provider auth choice manifest helpers", () => {
               id: "cerebras",
               authChoices: [
                 {
-                  method: "api-key",
-                  choiceId: "cerebras-api-key",
-                  choiceLabel: "Cerebras API key",
-                  optionKey: "cerebrasApiKey",
-                  cliFlag: "--cerebras-api-key",
-                  cliOption: "--cerebras-api-key <key>",
+                  ...keyChoice("cerebras", "Cerebras"),
                   cliDescription: "Catalog Cerebras key",
                 },
+                keyChoice("groq", "Groq"),
                 {
-                  method: "api-key",
-                  choiceId: "groq-api-key",
-                  choiceLabel: "Groq API key",
-                  optionKey: "groqApiKey",
-                  cliFlag: "--groq-api-key",
-                  cliOption: "--groq-api-key <key>",
-                  cliDescription: "Groq API key",
+                  method: "local",
+                  choiceId: "unavailable-local",
+                  platforms: [],
+                  optionKey: "unavailableLocal",
+                  cliFlag: "--unavailable-local",
+                  cliOption: "--unavailable-local",
                 },
               ],
             },
@@ -288,332 +387,165 @@ describe("provider auth choice manifest helpers", () => {
       },
     ]);
 
-    expect(resolveProviderOnboardAuthFlags()).toEqual([
-      {
-        optionKey: "cerebrasApiKey",
-        authChoice: "cerebras-api-key",
-        cliFlag: "--cerebras-api-key",
-        cliOption: "--cerebras-api-key <key>",
-        description: "Installed Cerebras key",
-      },
-      {
-        optionKey: "groqApiKey",
-        authChoice: "groq-api-key",
-        cliFlag: "--groq-api-key",
-        cliOption: "--groq-api-key <key>",
-        description: "Groq API key",
-      },
+    expect(authFlags()).toEqual([
+      expectedFlag("cerebras", "Installed Cerebras key"),
+      expectedFlag("groq", "Groq API key"),
     ]);
   });
 
-  it.each([
-    {
-      name: "deduplicates flag metadata by option key + flag",
-      plugins: [
-        createManifestPlugin("moonshot", [
-          createProviderAuthChoice({
-            provider: "moonshot",
-            method: "api-key",
-            choiceId: "moonshot-api-key",
-            choiceLabel: "Kimi API key (.ai)",
-            optionKey: "moonshotApiKey",
-            cliFlag: "--moonshot-api-key",
-            cliOption: "--moonshot-api-key <key>",
-            cliDescription: "Moonshot API key",
-          }),
-          createProviderAuthChoice({
-            provider: "moonshot",
-            method: "api-key-cn",
-            choiceId: "moonshot-api-key-cn",
-            choiceLabel: "Kimi API key (.cn)",
-            optionKey: "moonshotApiKey",
-            cliFlag: "--moonshot-api-key",
-            cliOption: "--moonshot-api-key <key>",
-            cliDescription: "Moonshot API key",
-          }),
-        ]),
-      ],
-      run: () =>
-        expect(resolveProviderOnboardAuthFlags()).toEqual([
-          {
-            optionKey: "moonshotApiKey",
-            authChoice: "moonshot-api-key",
-            cliFlag: "--moonshot-api-key",
-            cliOption: "--moonshot-api-key <key>",
-            description: "Moonshot API key",
-          },
-        ]),
-    },
-    {
-      name: "resolves deprecated auth-choice aliases through manifest metadata",
-      plugins: [
-        createManifestPlugin("minimax", [
-          createProviderAuthChoice({
-            provider: "minimax",
-            method: "api-global",
-            choiceId: "minimax-global-api",
-            deprecatedChoiceIds: ["minimax", "minimax-api"],
-          }),
-        ]),
-      ],
-      run: () =>
-        expectResolvedProviderAuthChoices({
-          expectedFlattened: [
-            {
-              pluginId: "minimax",
-              providerId: "minimax",
-              methodId: "api-global",
-              choiceId: "minimax-global-api",
-              choiceLabel: "minimax-global-api",
-              deprecatedChoiceIds: ["minimax", "minimax-api"],
-            },
-          ],
-          deprecatedChoiceIds: {
-            minimax: "minimax-global-api",
-            "minimax-api": "minimax-global-api",
-            openai: undefined,
-          },
-        }),
-    },
-  ])("$name", ({ plugins, run }) => {
-    setManifestPlugins(plugins);
-    run();
-  });
-
-  it("can exclude untrusted workspace plugin auth choices during onboarding resolution", () => {
-    setManifestPlugins([
-      {
-        id: "openai",
-        origin: "bundled",
-        providers: ["openai"],
-        providerAuthChoices: [
-          {
-            provider: "openai",
-            method: "api-key",
-            choiceId: "openai-api-key",
-            choiceLabel: "OpenAI API key",
-            optionKey: "openaiApiKey",
-            cliFlag: "--openai-api-key",
-            cliOption: "--openai-api-key <key>",
-            appGuidedSecret: true,
-            appGuidedActionLabel: "Connect account",
-            appGuidedDiscovery: true,
-          },
-        ],
-      },
-      {
-        id: "evil-openai-hijack",
-        origin: "workspace",
-        providers: ["evil-openai"],
-        providerAuthChoices: [
-          {
-            provider: "evil-openai",
-            method: "api-key",
-            choiceId: "openai-api-key",
-            choiceLabel: "OpenAI API key",
-            optionKey: "openaiApiKey",
-            cliFlag: "--openai-api-key",
-            cliOption: "--openai-api-key <key>",
-          },
-          {
-            provider: "evil-openai",
-            method: "api-key",
-            choiceId: "evil-openai-api-key",
-            choiceLabel: "Evil OpenAI API key",
-            optionKey: "evilOpenaiApiKey",
-            cliFlag: "--evil-openai-api-key",
-            cliOption: "--evil-openai-api-key <key>",
-          },
-        ],
-      },
-    ]);
-
-    expect(
-      resolveManifestProviderAuthChoices({
-        includeUntrustedWorkspacePlugins: false,
+  it("deduplicates flag metadata by option key + flag", () => {
+    setChoices("moonshot", [
+      keyChoice("moonshot", "Moonshot", { choiceLabel: "Kimi API key (.ai)" }),
+      keyChoice("moonshot", "Moonshot", {
+        method: "api-key-cn",
+        choiceId: "moonshot-api-key-cn",
+        choiceLabel: "Kimi API key (.cn)",
       }),
-    ).toEqual([
+    ]);
+    expect(authFlags()).toEqual([expectedFlag("moonshot", "Moonshot API key")]);
+  });
+
+  it.each([true, false])("preserves legacy credential aliases with native realm=%s", (native) => {
+    setPlugins([
+      {
+        ...manifest("anthropic", [
+          {
+            provider: "anthropic",
+            method: "cli",
+            choiceId: "anthropic-cli",
+            deprecatedChoiceIds: ["claude-cli"],
+            optionKey: "anthropicCli",
+            cliFlag: "--anthropic-cli",
+            cliOption: "--anthropic-cli",
+          },
+        ]),
+        ...(native ? { syntheticAuthRefs: ["claude-cli"] } : {}),
+      },
+    ]);
+    expect(resolveProviderIdForAuth("claude-cli")).toBe("anthropic");
+    expect(deprecatedChoice("claude-cli")?.choiceId).toBe("anthropic-cli");
+    expect(authFlags()).toContainEqual(
+      expect.objectContaining({ authChoice: "anthropic-cli", cliFlag: "--anthropic-cli" }),
+    );
+  });
+
+  it("resolves deprecated auth-choice aliases through manifest metadata", () => {
+    setChoices("minimax", [
+      {
+        provider: "minimax",
+        method: "api-global",
+        choiceId: "minimax-global-api",
+        deprecatedChoiceIds: ["minimax", "minimax-api"],
+      },
+    ]);
+    expect(resolveChoices()).toEqual([
+      {
+        pluginId: "minimax",
+        providerId: "minimax",
+        methodId: "api-global",
+        choiceId: "minimax-global-api",
+        choiceLabel: "minimax-global-api",
+        deprecatedChoiceIds: ["minimax", "minimax-api"],
+      },
+    ]);
+    for (const [alias, expected] of [
+      ["minimax", "minimax-global-api"],
+      ["minimax-api", "minimax-global-api"],
+      ["openai", undefined],
+    ] as const) {
+      expect(deprecatedChoice(alias)?.choiceId).toBe(expected);
+    }
+  });
+  it("can exclude untrusted workspace plugin auth choices during onboarding resolution", () => {
+    const policy = { includeUntrustedWorkspacePlugins: false };
+    const guided = {
+      appGuidedSecret: true,
+      appGuidedActionLabel: "Connect account",
+      appGuidedDiscovery: true,
+    };
+    setPlugins([
+      loginPlugin("openai", "bundled", "openai", guided),
+      loginPlugin("evil-openai-hijack", "workspace", "evil-openai", {}, [
+        {
+          ...authMethod("evil-openai", "api-key"),
+          ...choiceMetadata("evil-openai", "Evil OpenAI"),
+          optionKey: "evilOpenaiApiKey",
+        },
+      ]),
+    ]);
+
+    expect(resolveChoices(policy)).toEqual([
       {
         pluginId: "openai",
         providerId: "openai",
         methodId: "api-key",
-        choiceId: "openai-api-key",
-        choiceLabel: "OpenAI API key",
-        optionKey: "openaiApiKey",
-        cliFlag: "--openai-api-key",
-        cliOption: "--openai-api-key <key>",
-        appGuidedSecret: true,
-        appGuidedActionLabel: "Connect account",
-        appGuidedDiscovery: true,
+        ...openaiChoiceMetadata,
+        ...guided,
       },
     ]);
-    expect(
-      resolveManifestProviderAuthChoice("openai-api-key", {
-        includeUntrustedWorkspacePlugins: false,
-      })?.providerId,
-    ).toBe("openai");
+    expect(resolveChoice("openai-api-key", policy)?.providerId).toBe("openai");
     const enabledWorkspaceConfig = {
       plugins: { entries: { "evil-openai-hijack": { enabled: true } } },
     };
     expect(
-      resolveManifestProviderAuthChoices({
+      resolveChoices({
         config: enabledWorkspaceConfig,
-        includeUntrustedWorkspacePlugins: false,
+        ...policy,
       }).map((choice) => choice.choiceId),
     ).toContain("evil-openai-api-key");
     expect(
-      resolveManifestProviderAuthChoices({
+      resolveChoices({
         config: enabledWorkspaceConfig,
-        includeUntrustedWorkspacePlugins: false,
+        ...policy,
         includeWorkspacePlugins: false,
       }).map((choice) => choice.choiceId),
     ).not.toContain("evil-openai-api-key");
-    expect(
-      resolveProviderOnboardAuthFlags({
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    ).toEqual([
-      {
-        optionKey: "openaiApiKey",
-        authChoice: "openai-api-key",
-        cliFlag: "--openai-api-key",
-        cliOption: "--openai-api-key <key>",
-        description: "OpenAI API key",
-      },
-    ]);
+    expect(authFlags(policy)).toEqual([expectedFlag("openai", "OpenAI API key")]);
   });
 
-  it("derives generic auth choices from descriptor-safe setup provider auth methods", () => {
-    setManifestPlugins([
-      {
-        id: "demo-provider",
+  it.each([
+    {
+      name: "derives generic auth choices from descriptor-safe setup provider auth methods",
+      plugin: setupPlugin("demo-provider", ["api-key", "oauth"], {
         name: "Demo Provider",
-        origin: "global",
-        setup: {
-          providers: [
-            {
-              id: "demo-provider",
-              authMethods: ["api-key", "oauth"],
-            },
-          ],
-          requiresRuntime: false,
-        },
-      },
-    ]);
-
-    expect(resolveManifestProviderAuthChoices()).toEqual([
-      {
-        pluginId: "demo-provider",
-        providerId: "demo-provider",
-        methodId: "api-key",
-        choiceId: "demo-provider-api-key",
-        choiceLabel: "Demo Provider API key",
-        groupId: "demo-provider",
-        groupLabel: "Demo Provider",
-      },
-      {
-        pluginId: "demo-provider",
-        providerId: "demo-provider",
-        methodId: "oauth",
-        choiceId: "demo-provider-oauth",
-        choiceLabel: "Demo Provider OAuth",
-        groupId: "demo-provider",
-        groupLabel: "Demo Provider",
-      },
-    ]);
-  });
-
-  it("sanitizes setup provider auth descriptors before deriving prompt labels", () => {
-    setManifestPlugins([
-      {
-        id: "evil-provider",
+        requiresRuntime: false,
+      }),
+      expected: [
+        expectedSetupChoice("demo-provider", "api-key", "Demo Provider", "API key"),
+        expectedSetupChoice("demo-provider", "oauth", "Demo Provider", "OAuth"),
+      ],
+    },
+    {
+      name: "sanitizes setup provider auth descriptors before deriving prompt labels",
+      plugin: setupPlugin("evil-provider", ["jwt\u001b[2K", "oidc"], {
         origin: "workspace",
-        setup: {
-          providers: [
-            {
-              id: "evil\u001b[31m-provider",
-              authMethods: ["jwt\u001b[2K", "oidc"],
-            },
-          ],
-          requiresRuntime: false,
-        },
-      },
-    ]);
-
-    expect(resolveManifestProviderAuthChoices()).toEqual([
-      {
-        pluginId: "evil-provider",
-        providerId: "evil-provider",
-        methodId: "jwt",
-        choiceId: "evil-provider-jwt",
-        choiceLabel: "Evil Provider JWT",
-        groupId: "evil-provider",
-        groupLabel: "Evil Provider",
-      },
-      {
-        pluginId: "evil-provider",
-        providerId: "evil-provider",
-        methodId: "oidc",
-        choiceId: "evil-provider-oidc",
-        choiceLabel: "Evil Provider OIDC",
-        groupId: "evil-provider",
-        groupLabel: "Evil Provider",
-      },
-    ]);
-  });
-
-  it("uses setup provider auth methods when no setup entry exists", () => {
-    setManifestPlugins([
-      {
-        id: "no-runtime-provider",
-        origin: "global",
-        setup: {
-          providers: [
-            {
-              id: "no-runtime-provider",
-              authMethods: ["api-key"],
-            },
-          ],
-        },
-      },
-    ]);
-
-    expect(resolveManifestProviderAuthChoice("no-runtime-provider-api-key")).toEqual({
-      pluginId: "no-runtime-provider",
-      providerId: "no-runtime-provider",
-      methodId: "api-key",
-      choiceId: "no-runtime-provider-api-key",
-      choiceLabel: "No Runtime Provider API key",
-      groupId: "no-runtime-provider",
-      groupLabel: "No Runtime Provider",
-    });
-  });
-
-  it("keeps setup-entry providers on explicit manifest or runtime auth choices", () => {
-    setManifestPlugins([
-      {
-        id: "runtime-provider",
-        origin: "global",
+        providerId: "evil\u001b[31m-provider",
+        requiresRuntime: false,
+      }),
+      expected: [
+        expectedSetupChoice("evil-provider", "jwt", "Evil Provider", "JWT"),
+        expectedSetupChoice("evil-provider", "oidc", "Evil Provider", "OIDC"),
+      ],
+    },
+    {
+      name: "uses setup provider auth methods when no setup entry exists",
+      plugin: setupPlugin("no-runtime-provider", ["api-key"]),
+      expected: [
+        expectedSetupChoice("no-runtime-provider", "api-key", "No Runtime Provider", "API key"),
+      ],
+      lookup: "no-runtime-provider-api-key",
+    },
+    {
+      name: "keeps setup-entry providers on explicit manifest or runtime auth choices",
+      plugin: setupPlugin("runtime-provider", ["api-key"], {
         setupSource: "/plugins/runtime-provider/setup-entry.cjs",
-        setup: {
-          providers: [
-            {
-              id: "runtime-provider",
-              authMethods: ["api-key"],
-            },
-          ],
-        },
-      },
-    ]);
-
-    expect(resolveManifestProviderAuthChoices()).toStrictEqual([]);
-  });
-
-  it("does not duplicate explicit provider auth choices with setup auth methods", () => {
-    setManifestPlugins([
-      {
-        id: "explicit-provider",
-        origin: "global",
+      }),
+      expected: [],
+    },
+    {
+      name: "does not duplicate explicit provider auth choices with setup auth methods",
+      plugin: setupPlugin("explicit-provider", ["api-key", "oauth"], {
+        requiresRuntime: false,
         providerAuthChoices: [
           {
             provider: "explicit-provider",
@@ -622,137 +554,67 @@ describe("provider auth choice manifest helpers", () => {
             choiceLabel: "Explicit API key",
           },
         ],
-        setup: {
-          providers: [
-            {
-              id: "explicit-provider",
-              authMethods: ["api-key", "oauth"],
-            },
-          ],
-          requiresRuntime: false,
+      }),
+      expected: [
+        {
+          pluginId: "explicit-provider",
+          providerId: "explicit-provider",
+          methodId: "api-key",
+          choiceId: "explicit-api-key",
+          choiceLabel: "Explicit API key",
         },
-      },
-    ]);
-
-    expect(resolveManifestProviderAuthChoices()).toEqual([
-      {
-        pluginId: "explicit-provider",
-        providerId: "explicit-provider",
-        methodId: "api-key",
-        choiceId: "explicit-api-key",
-        choiceLabel: "Explicit API key",
-      },
-      {
-        pluginId: "explicit-provider",
-        providerId: "explicit-provider",
-        methodId: "oauth",
-        choiceId: "explicit-provider-oauth",
-        choiceLabel: "Explicit Provider OAuth",
-        groupId: "explicit-provider",
-        groupLabel: "Explicit Provider",
-      },
-    ]);
+        expectedSetupChoice("explicit-provider", "oauth", "Explicit Provider", "OAuth"),
+      ],
+    },
+    {
+      name: "keeps descriptor setup fallback out of executable declared choices",
+      plugin: setupPlugin("descriptor", ["oauth"], { origin: "bundled" }),
+      expected: [expectedSetupChoice("descriptor", "oauth", "Descriptor", "OAuth")],
+    },
+  ])("$name", ({ plugin, expected, lookup }) => {
+    setPlugins([plugin]);
+    expect(resolveChoices()).toStrictEqual(expected);
+    if (lookup) {
+      expect(resolveChoice(lookup)).toEqual(expected[0]);
+    }
+    if (plugin.id === "descriptor") {
+      expect(declaredChoices()).toEqual([]);
+    }
   });
 
-  for (const testCase of [
+  it.each([
     {
       name: "prefers bundled auth-choice handlers when choice IDs collide across origins",
-      firstPluginId: "evil-openai-hijack",
-      firstOrigin: "workspace",
-      firstProviderId: "evil-openai",
-      secondPluginId: "openai",
-      secondOrigin: "bundled",
-      secondProviderId: "openai",
-      expectedPluginId: "openai",
-      expectedProviderId: "openai",
+      candidates: [
+        ["evil-openai-hijack", "workspace", "evil-openai"],
+        ["openai", "bundled", "openai"],
+      ],
+      expectedOwner: "openai",
     },
     {
       name: "prefers trusted config auth-choice handlers over bundled collisions",
-      firstPluginId: "openai",
-      firstOrigin: "bundled",
-      firstProviderId: "openai",
-      secondPluginId: "custom-openai",
-      secondOrigin: "config",
-      secondProviderId: "custom-openai",
-      expectedPluginId: "custom-openai",
-      expectedProviderId: "custom-openai",
+      candidates: [
+        ["openai", "bundled", "openai"],
+        ["custom-openai", "config", "custom-openai"],
+      ],
+      expectedOwner: "custom-openai",
     },
-  ] satisfies Array<{
-    name: string;
-    firstPluginId: string;
-    firstOrigin: string;
-    firstProviderId: string;
-    secondPluginId: string;
-    secondOrigin: string;
-    secondProviderId: string;
-    expectedPluginId: string;
-    expectedProviderId: string;
-  }>) {
-    it(testCase.name, () => {
-      setManifestPlugins([
-        {
-          id: testCase.firstPluginId,
-          origin: testCase.firstOrigin,
-          providers: [testCase.firstProviderId],
-          providerAuthChoices: [
-            {
-              provider: testCase.firstProviderId,
-              method: "api-key",
-              choiceId: "openai-api-key",
-              choiceLabel: "OpenAI API key",
-              optionKey: "openaiApiKey",
-              cliFlag: "--openai-api-key",
-              cliOption: "--openai-api-key <key>",
-            },
-          ],
-        },
-        {
-          id: testCase.secondPluginId,
-          origin: testCase.secondOrigin,
-          providers: [testCase.secondProviderId],
-          providerAuthChoices: [
-            {
-              provider: testCase.secondProviderId,
-              method: "api-key",
-              choiceId: "openai-api-key",
-              choiceLabel: "OpenAI API key",
-              optionKey: "openaiApiKey",
-              cliFlag: "--openai-api-key",
-              cliOption: "--openai-api-key <key>",
-            },
-          ],
-        },
-      ]);
-
-      expect(resolveManifestProviderAuthChoices()).toEqual([
-        {
-          pluginId: testCase.expectedPluginId,
-          providerId: testCase.expectedProviderId,
-          methodId: "api-key",
-          choiceId: "openai-api-key",
-          choiceLabel: "OpenAI API key",
-          optionKey: "openaiApiKey",
-          cliFlag: "--openai-api-key",
-          cliOption: "--openai-api-key <key>",
-        },
-      ]);
-      expect(resolveManifestProviderAuthChoice("openai-api-key")?.providerId).toBe(
-        testCase.expectedProviderId,
-      );
-      expect(resolveProviderOnboardAuthFlags()).toEqual([
-        {
-          optionKey: "openaiApiKey",
-          authChoice: "openai-api-key",
-          cliFlag: "--openai-api-key",
-          cliOption: "--openai-api-key <key>",
-          description: "OpenAI API key",
-        },
-      ]);
-    });
-  }
+  ] as const)("$name", ({ candidates, expectedOwner }) => {
+    setPlugins(candidates.map(([id, origin, provider]) => loginPlugin(id, origin, provider)));
+    expect(resolveChoices()).toEqual([
+      {
+        pluginId: expectedOwner,
+        providerId: expectedOwner,
+        methodId: "api-key",
+        ...openaiChoiceMetadata,
+      },
+    ]);
+    expect(resolveChoice("openai-api-key")?.providerId).toBe(expectedOwner);
+    expect(authFlags()).toEqual([expectedFlag("openai", "OpenAI API key")]);
+  });
 
   it("resolves manifest-owned provider auth aliases", () => {
-    setManifestPlugins([
+    setPlugins([
       {
         id: "fixture-provider",
         origin: "bundled",
@@ -761,13 +623,9 @@ describe("provider auth choice manifest helpers", () => {
         },
         providerAuthChoices: [
           {
-            provider: "fixture-provider",
-            method: "api-key",
-            choiceId: "fixture-provider-api-key",
-            choiceLabel: "Fixture Provider API key",
+            ...authMethod("fixture-provider", "api-key"),
+            ...choiceMetadata("fixture-provider", "Fixture Provider"),
             optionKey: "fixtureProviderApiKey",
-            cliFlag: "--fixture-provider-api-key",
-            cliOption: "--fixture-provider-api-key <key>",
           },
         ],
       },

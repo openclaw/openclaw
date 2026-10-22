@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler behavior.
 import type { Client } from "../internal/discord.js";
 import { createDiscordIngressMonitor } from "./ingress.js";
 import type { DiscordMessageHandler } from "./listeners.js";
@@ -14,11 +13,8 @@ export function createDiscordMessageHandler(
   params: DiscordMessageHandlerParams & { client: Client },
 ): DiscordMessageHandlerWithLifecycle {
   const dispatcher = createDiscordMessageDispatcher(params);
-  const createIngressMonitor = params.testing?.createIngressMonitor ?? createDiscordIngressMonitor;
-  const ingress = createIngressMonitor({
-    accountId: params.accountId,
-    client: params.client,
-    runtime: params.runtime,
+  const ingress = createDiscordIngressMonitor({
+    ...params,
     dispatch: (event, lifecycle) =>
       dispatcher(event, params.client, {
         abortSignal: lifecycle.abortSignal,

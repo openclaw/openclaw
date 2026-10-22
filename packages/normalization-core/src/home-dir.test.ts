@@ -4,16 +4,13 @@ import { resolveEffectiveHomeDir } from "./home-dir.js";
 
 describe("resolveEffectiveHomeDir", () => {
   it("preserves raw fallback separators until after tilde substitution", () => {
-    const env = {
-      HOME: "/home/alice/",
-      OPENCLAW_HOME: "~\\svc",
-    } as NodeJS.ProcessEnv;
+    const env = { HOME: "/home/alice/", OPENCLAW_HOME: "~\\svc" };
 
     expect(resolveEffectiveHomeDir(env, () => "/fallback")).toBe(path.resolve("/home/alice/\\svc"));
   });
 
   it("preserves terminal display fallback for unresolved tilde homes", () => {
-    const env = { OPENCLAW_HOME: "~" } as NodeJS.ProcessEnv;
+    const env = { OPENCLAW_HOME: "~" };
     const unavailableHome = () => {
       throw new Error("missing home");
     };

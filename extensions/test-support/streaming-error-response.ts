@@ -40,15 +40,6 @@ export function createStreamingResponse(params: {
   };
 }
 
-export function createStreamingErrorResponse(params: {
-  status: number;
-  chunkCount: number;
-  chunkSize: number;
-  byte: number;
-}): StreamingResponseFixture {
-  return createStreamingResponse(params);
-}
-
 // Keep the body open after its first chunk so cancellation reaches the source.
 // Provider 404 and overflow tests observe that callback.
 export function cancelTrackedTextResponse(

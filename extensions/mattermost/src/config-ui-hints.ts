@@ -6,13 +6,21 @@ export const mattermostChannelConfigUiHints = {
     label: "Mattermost",
     help: "Mattermost channel provider configuration for bot auth, access policy, slash commands, and preview streaming.",
   },
+  requireMentionInBotThreads: {
+    label: "Mention in Bot Threads",
+    help: "Require an explicit mention or configured trigger in threads rooted in this bot's own posts. Set false to accept unmentioned follow-ups; omit to preserve existing mention and participation behavior.",
+  },
+  "groups.*.requireMentionInBotThreads": {
+    label: "Mention in Bot Threads",
+    help: "Override bot-created thread mention policy for this Mattermost channel. Exact channel settings override the wildcard, then the account setting.",
+  },
   ...createChannelConfigUiHints({
     channelLabel: "Mattermost",
     dmPolicy: { channelKey: "mattermost" },
     implicitMentions: true,
     streaming: {
       "": 'Unified Mattermost stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery.',
-      mode: 'Canonical Mattermost preview mode: "off" | "partial" | "block" | "progress".',
+      mode: 'Mattermost preview mode: "off" | "partial" | "block" | "progress".',
       "block.enabled":
         'Enable chunked block-style Mattermost preview delivery when channels.mattermost.streaming.mode="block".',
       "block.coalesce": "Merge streamed Mattermost block replies before final delivery.",

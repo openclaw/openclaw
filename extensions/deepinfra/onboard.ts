@@ -1,4 +1,3 @@
-// Deepinfra setup module handles plugin onboarding behavior.
 import {
   createAliasOnlyPresetAppliers,
   type OpenClawConfig,

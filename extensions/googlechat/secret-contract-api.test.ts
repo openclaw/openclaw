@@ -63,5 +63,5 @@ try {
       result.observed,
       "Google Chat metadata must not load secret setup or resolver owners",
     ).toEqual({ entry: true, setup: false, resolver: false });
-  }, 45_000);
+  });
 });

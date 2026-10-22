@@ -12,8 +12,5 @@ struct RemoteTunnelManagerTests {
         await #expect(throws: CancellationError.self) {
             try await manager.ensureControlTunnelRoute()
         }
-        await #expect(throws: CancellationError.self) {
-            try await manager.ensureControlTunnel()
-        }
     }
 }

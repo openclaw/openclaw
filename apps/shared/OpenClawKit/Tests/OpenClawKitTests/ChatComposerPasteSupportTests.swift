@@ -7,7 +7,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct ChatComposerPasteSupportTests {
-    @Test func extractsImageDataFromPNGClipboardPayload() throws {
+    @Test func `extracts image data from PNG clipboard payload`() throws {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("test-\(UUID().uuidString)"))
         let item = NSPasteboardItem()
         let pngData = try self.samplePNGData()
@@ -24,27 +24,17 @@ struct ChatComposerPasteSupportTests {
         #expect(attachments[0].mimeType == "image/png")
     }
 
-    @Test func extractsImageDataFromFileURLClipboardPayload() throws {
+    @Test func `forwards file UR ls without reading or restricting types`() {
         let pasteboard = NSPasteboard(name: NSPasteboard.Name("test-\(UUID().uuidString)"))
-        let pngData = try self.samplePNGData()
-        let fileURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("chat-composer-paste-\(UUID().uuidString).png")
-
-        try pngData.write(to: fileURL)
-        defer { try? FileManager.default.removeItem(at: fileURL) }
+        defer { pasteboard.releaseGlobally() }
+        let urls = ["image.png", "report.pdf", "audio.mp3", "notes.txt"].map {
+            FileManager.default.temporaryDirectory.appendingPathComponent($0)
+        }
 
         pasteboard.clearContents()
-        #expect(pasteboard.writeObjects([fileURL as NSURL]))
-
-        let references = ChatComposerPasteSupport.imageFileReferences(from: pasteboard)
-        let attachments = ChatComposerPasteSupport.loadImageAttachments(from: references)
-
-        #expect(references.count == 1)
-        #expect(references[0].url == fileURL)
-        #expect(attachments.count == 1)
-        #expect(attachments[0].data == pngData)
-        #expect(attachments[0].fileName == fileURL.lastPathComponent)
-        #expect(attachments[0].mimeType == "image/png")
+        #expect(pasteboard.writeObjects(urls.map { $0 as NSURL }))
+        #expect(ChatComposerPasteSupport.fileURLs(from: pasteboard) == urls)
+        #expect(ChatComposerPasteSupport.fileURLs(from: pasteboard, matching: .png).isEmpty)
     }
 
     private func samplePNGData() throws -> Data {

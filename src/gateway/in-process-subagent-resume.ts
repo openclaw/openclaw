@@ -6,6 +6,7 @@ export type TrustedSubagentResume = Readonly<{
   caller: TrustedAgentToolCaller;
   childSessionKey: string;
   childSessionId: string;
+  childLifecycleRevision?: string;
   previousRunId: string;
   taskRunId: string;
   generation: number | undefined;

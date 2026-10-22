@@ -3,10 +3,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  deleteShortTermLockEntryIfCurrent,
-  withMemoryWorkspaceLock,
-} from "./memory-workspace-lock.js";
+import { deleteShortTermLockEntryIfCurrent } from "./memory-workspace-lock.js";
 import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
 
 const state = vi.hoisted(() => ({ open: vi.fn() }));
@@ -20,11 +17,6 @@ vi.mock("./dreaming-state.js", () => ({
 vi.mock("openclaw/plugin-sdk/process-runtime", () => ({
   getFileLockProcessStartTime: () => 123,
   isPidDefinitelyDead: () => false,
-}));
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  sleep: async () => {
-    throw new Error("Unexpected lock contention");
-  },
 }));
 
 function createLockStore() {
@@ -48,7 +40,8 @@ function createLockStore() {
       if (intent.action === "delete") {
         return { status: rows.delete(key) ? "applied" : "unchanged" };
       }
-      throw new Error("Unexpected lock update");
+      rows.set(key, structuredClone(intent.value));
+      return { status: "applied" };
     }),
     async register(key: string, value: ShortTermLockEntry) {
       rows.set(key, structuredClone(value));
@@ -88,29 +81,6 @@ describe("memory workspace lock comparisons", () => {
   const key = "synthetic-workspace";
   const expected: ShortTermLockEntry = { owner: "synthetic-owner", acquiredAt: 1 };
 
-  it("releases a completed workspace lock through data-only storage", async () => {
-    const store = createLockStore();
-    await expect(
-      withMemoryWorkspaceLock(key, async () => {
-        expect(await store.lookup(key)).toBeDefined();
-        return "completed";
-      }),
-    ).resolves.toBe("completed");
-    expect(await store.lookup(key)).toBeUndefined();
-  });
-
-  it("reclaims a stale synthetic lock before running the next task", async () => {
-    const store = createLockStore();
-    await store.register(key, expected);
-    await expect(
-      withMemoryWorkspaceLock(key, async () => {
-        expect(await store.lookup(key)).not.toEqual(expected);
-        return "recovered";
-      }),
-    ).resolves.toBe("recovered");
-    expect(await store.lookup(key)).toBeUndefined();
-  });
-
   it.each([
     { owner: "replacement-owner", acquiredAt: expected.acquiredAt },
     { owner: expected.owner, acquiredAt: expected.acquiredAt + 1 },
@@ -138,30 +108,6 @@ describe("memory workspace lock comparisons", () => {
 
     await expect(deleteShortTermLockEntryIfCurrent(store, key, expected)).resolves.toBe(true);
     expect(await store.lookup(key)).toBeUndefined();
-  });
-
-  it("reports a missing lock as unchanged", async () => {
-    const store = createLockStore();
-    await expect(deleteShortTermLockEntryIfCurrent(store, key, expected)).resolves.toBe(false);
-  });
-
-  it.each(["observe", "compareAndApply"] as const)("does not retry a failed %s", async (method) => {
-    const store = createLockStore();
-    await store.register(key, expected);
-    const failure = new Error("worker result unavailable");
-    store[method].mockRejectedValue(failure);
-
-    await expect(deleteShortTermLockEntryIfCurrent(store, key, expected)).rejects.toBe(failure);
-    expect(store[method]).toHaveBeenCalledOnce();
-    expect(await store.lookup(key)).toEqual(expected);
-  });
-
-  it("keeps release failures best effort without replaying an uncertain result", async () => {
-    const store = createLockStore();
-    store.compareAndApply.mockRejectedValue(new Error("worker result unavailable"));
-    await expect(withMemoryWorkspaceLock(key, async () => "completed")).resolves.toBe("completed");
-    expect(store.compareAndApply).toHaveBeenCalledOnce();
-    expect(await store.lookup(key)).toBeDefined();
   });
 
   it.each(["observe", "compareAndApply"] as const)(

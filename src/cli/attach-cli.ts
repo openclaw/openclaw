@@ -2,10 +2,14 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictPositiveInteger,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import { getRuntimeConfig } from "../config/io.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   callSessionTargetGateway,
   resolveSessionTarget,
@@ -20,17 +24,19 @@ type AttachGrant = {
   env: Record<string, string>;
 };
 
-export function writeClaudeMcpConfig(mcpConfig: AttachGrant["mcpConfig"]): {
-  path: string;
-  cleanup: () => void;
-} {
+export function writeClaudeMcpConfig(mcpConfig: AttachGrant["mcpConfig"]) {
   const dir = mkdtempSync(join(tmpdir(), "openclaw-attach-"));
   const path = join(dir, ".mcp.json");
-  writeFileSync(path, JSON.stringify(mcpConfig, null, 2), { encoding: "utf8", mode: 0o600 });
+  try {
+    writeFileSync(path, JSON.stringify(mcpConfig, null, 2), { encoding: "utf8", mode: 0o600 });
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
   return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-export async function registerAttachCli(program: Command, _argv: string[] = process.argv) {
+export async function registerAttachCli(program: Command) {
   program
     .command("attach")
     .description("Attach Claude Code to a gateway session with scoped MCP tools")
@@ -68,6 +74,8 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
           printConfig: boolean;
         },
       ) => {
+        const signal = getAsyncWorkSignal();
+        signal?.throwIfAborted();
         if (target && opts.session) {
           throw new Error("pass one session target: use either the positional target or --session");
         }
@@ -83,132 +91,145 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
           }
         }
 
-        const cfg = getRuntimeConfig();
-        const resolved = target
-          ? await resolveSessionTarget({
-              raw: target,
-              gateway: {
-                config: cfg,
-                url: opts.url,
-                token: opts.token,
-                password: opts.password,
-                tlsFingerprint: opts.tlsFingerprint,
-              },
-            })
-          : undefined;
-        const gateway: SessionTargetGateway = resolved?.gateway ?? {
+        const cfg = await captureRuntimeConfigAsyncReader()();
+        const requestedGateway: SessionTargetGateway = {
           config: cfg,
           url: opts.url,
           token: opts.token,
           password: opts.password,
           tlsFingerprint: opts.tlsFingerprint,
         };
-        const globalAgentId =
-          resolved?.sessionKey === "global" && resolved.parsed.kind === "url"
-            ? resolved.parsed.agentId
-            : undefined;
-        const granted = (await callSessionTargetGateway({
+        const resolved = target
+          ? await resolveSessionTarget({ raw: target, gateway: requestedGateway })
+          : undefined;
+        const gateway = resolved?.gateway ?? requestedGateway;
+        signal?.throwIfAborted();
+        const grant = (await callSessionTargetGateway({
           gateway,
           method: "attach.grant",
           request: {
             sessionKey: resolved?.sessionKey ?? opts.session,
-            ...(globalAgentId ? { agentId: globalAgentId } : {}),
+            ...(resolved ? { agentId: resolved.agentId } : {}),
             ttlMs,
           },
           requiredScope: "operator.admin",
         })) as Partial<AttachGrant> | null;
-        if (
-          !granted ||
-          typeof granted.token !== "string" ||
-          typeof granted.sessionKey !== "string" ||
-          typeof granted.expiresAtMs !== "number" ||
-          !Number.isFinite(granted.expiresAtMs) ||
-          !granted.mcpConfig?.mcpServers ||
-          typeof granted.env !== "object" ||
-          granted.env === null
-        ) {
-          defaultRuntime.error("attach.grant returned an unexpected response from the gateway.");
-          defaultRuntime.exit(1);
-          return;
-        }
-        const grant = granted as AttachGrant;
+        let keepGrant = false;
+        let cleanupConfig: (() => void) | undefined;
+        let detachChild: (() => void) | undefined;
+        const expiresAt = timestampMsToIsoString(grant?.expiresAtMs);
+        let exitCode = 0;
+        try {
+          if (
+            !grant ||
+            typeof grant.token !== "string" ||
+            typeof grant.sessionKey !== "string" ||
+            expiresAt === undefined ||
+            !grant.mcpConfig?.mcpServers ||
+            typeof grant.env !== "object" ||
+            grant.env === null
+          ) {
+            defaultRuntime.error("attach.grant returned an unexpected response from the gateway.");
+            defaultRuntime.exit(1);
+            return;
+          }
+          // A grant response can arrive after CLI cancellation. Its custody is
+          // already ours, so unwind through revocation before creating anything.
+          signal?.throwIfAborted();
+          const config = writeClaudeMcpConfig(grant.mcpConfig);
+          cleanupConfig = config.cleanup;
+          const claudeArgs = ["--strict-mcp-config", "--mcp-config", config.path];
 
-        const { path: configPath, cleanup } = writeClaudeMcpConfig(grant.mcpConfig);
-        const expiresAt = new Date(grant.expiresAtMs).toISOString();
-        const claudeArgs = ["--strict-mcp-config", "--mcp-config", configPath];
+          if (opts.printConfig) {
+            defaultRuntime.log(
+              JSON.stringify(
+                {
+                  sessionKey: grant.sessionKey,
+                  expiresAt,
+                  env: grant.env,
+                  configPath: config.path,
+                  launch: [opts.bin, ...claudeArgs],
+                },
+                null,
+                2,
+              ),
+            );
+            defaultRuntime.log(
+              `Grant is live until ${expiresAt} and auto-expires; it is not revoked here. Launch with the env above, then delete ${config.path} when done.`,
+            );
+            keepGrant = true;
+            return;
+          }
 
-        if (opts.printConfig) {
           defaultRuntime.log(
-            JSON.stringify(
-              {
-                sessionKey: grant.sessionKey,
-                expiresAt,
-                env: grant.env,
-                configPath,
-                launch: [opts.bin, ...claudeArgs],
-              },
-              null,
-              2,
-            ),
+            `Attaching Claude Code to session ${grant.sessionKey} (grant expires ${expiresAt})…`,
           );
-          defaultRuntime.log(
-            `Grant is live until ${expiresAt} and auto-expires; it is not revoked here. Launch with the env above, then delete ${configPath} when done.`,
-          );
-          return;
-        }
-
-        let revokePromise: Promise<void> | undefined;
-        const revokeOnce = () =>
-          (revokePromise ??= (async () => {
-            try {
-              await callSessionTargetGateway({
-                gateway,
-                method: "attach.revoke",
-                request: { token: grant.token },
-                requiredScope: "operator.admin",
-              });
-            } catch (error) {
-              defaultRuntime.error(
-                `Warning: failed to revoke attach grant; it remains live until ${expiresAt}. ${String(error)}`,
-              );
+          signal?.throwIfAborted();
+          const child = spawn(opts.bin, claudeArgs, {
+            stdio: "inherit",
+            env: { ...process.env, ...grant.env },
+          });
+          let childClosed = false;
+          let childError: Error | undefined;
+          const onError = (error: Error) => {
+            childError ??= error;
+          };
+          // The child shares the foreground terminal group and receives Ctrl+C
+          // itself. Keep the parent alive to revoke its grant, without sending twice.
+          const onSigint = () => {};
+          const onSigterm = () => {
+            if (!childClosed) {
+              child.kill("SIGTERM");
             }
-            cleanup();
-          })());
-
-        defaultRuntime.log(
-          `Attaching Claude Code to session ${grant.sessionKey} (grant expires ${expiresAt})…`,
-        );
-        const child = spawn(opts.bin, claudeArgs, {
-          stdio: "inherit",
-          env: { ...process.env, ...grant.env },
-        });
-
-        const onSigint = () => {};
-        const onSigterm = () => child.kill("SIGTERM");
-        const finish = (code: number) => {
-          process.off("SIGINT", onSigint);
-          process.off("SIGTERM", onSigterm);
-          defaultRuntime.exit(code);
-        };
-
-        child.on("error", (error) => {
-          void (async () => {
-            defaultRuntime.error(`Failed to launch '${opts.bin}': ${String(error)}`);
-            await revokeOnce();
-            finish(1);
-          })();
-        });
-        child.on("exit", (code, signal) => {
-          void (async () => {
-            await revokeOnce();
-            const signalCode = signal
-              ? 128 + ((osConstants.signals as Record<string, number>)[signal] ?? 0)
-              : null;
-            finish(signalCode ?? code ?? 0);
-          })();
-        });
-        process.on("SIGINT", onSigint);
-        process.on("SIGTERM", onSigterm);
+          };
+          child.on("error", onError);
+          process.on("SIGINT", onSigint);
+          process.on("SIGTERM", onSigterm);
+          detachChild = () => {
+            child.off("error", onError);
+            process.off("SIGINT", onSigint);
+            process.off("SIGTERM", onSigterm);
+          };
+          // Node emits close after exit or spawn error and after owned stdio closes.
+          const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+            (resolve) => {
+              child.once("close", (code, exitSignal) => {
+                childClosed = true;
+                resolve({ code, signal: exitSignal });
+              });
+            },
+          );
+          if (childError) {
+            defaultRuntime.error(`Failed to launch '${opts.bin}': ${String(childError)}`);
+            exitCode = 1;
+          } else {
+            exitCode = outcome.signal
+              ? 128 + ((osConstants.signals as Record<string, number>)[outcome.signal] ?? 0)
+              : (outcome.code ?? 0);
+          }
+        } finally {
+          try {
+            if (!keepGrant && typeof grant?.token === "string") {
+              try {
+                await callSessionTargetGateway({
+                  gateway,
+                  method: "attach.revoke",
+                  request: { token: grant.token },
+                  requiredScope: "operator.admin",
+                });
+              } catch (error) {
+                defaultRuntime.error(
+                  `Warning: failed to revoke attach grant; it remains live until ${expiresAt ?? String(grant.expiresAtMs)}. ${String(error)}`,
+                );
+              } finally {
+                cleanupConfig?.();
+              }
+            }
+          } finally {
+            detachChild?.();
+          }
+        }
+        defaultRuntime.exit(exitCode);
       },
     );
 }

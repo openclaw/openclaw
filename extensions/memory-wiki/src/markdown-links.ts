@@ -24,18 +24,16 @@ type MarkdownAstNode = {
   children?: MarkdownAstNode[];
 };
 
-function maskMarkdownCode(markdown: string): string {
-  const masked = markdown.split("");
+export function forEachMarkdownCodeRange(
+  markdown: string,
+  visitRange: (start: number, end: number) => void,
+): void {
   const visit = (node: MarkdownAstNode): void => {
     if (node.type === "code" || node.type === "inlineCode") {
       const start = node.position?.start?.offset;
       const end = node.position?.end?.offset;
       if (start !== undefined && end !== undefined) {
-        for (let index = start; index < end; index++) {
-          if (masked[index] !== "\n" && masked[index] !== "\r") {
-            masked[index] = " ";
-          }
-        }
+        visitRange(start, end);
       }
       return;
     }
@@ -44,6 +42,22 @@ function maskMarkdownCode(markdown: string): string {
     }
   };
   visit(fromMarkdown(markdown));
+}
+
+export function maskMarkdownCode(markdown: string, keepUnclosedFences = false): string {
+  const masked = markdown.split("");
+  // An extra heading exposes fences that would swallow a local Notes slot.
+  const source = keepUnclosedFences ? `${markdown}\n\n#` : markdown;
+  forEachMarkdownCodeRange(source, (start, end) => {
+    if (end > markdown.length) {
+      return;
+    }
+    for (let index = start; index < end; index++) {
+      if (masked[index] !== "\n" && masked[index] !== "\r") {
+        masked[index] = " ";
+      }
+    }
+  });
   return masked.join("");
 }
 

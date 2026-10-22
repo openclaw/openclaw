@@ -1,35 +1,45 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { runInNewContext } from "node:vm";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { RealtimeVoiceBridgeCreateRequest } from "../../src/talk/provider-types.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 
 const backend = vi.hoisted(() => ({ onFirstAudio: () => {} }));
-
 const browser = vi.hoisted(() => ({
   close: vi.fn(async () => {}),
   contextClose: vi.fn(async () => {}),
-  evaluate: vi.fn(async () => ({
-    answerHasAudio: true,
-    remoteDescriptionApplied: true,
-    connectionState: "failed",
-    transcriptMarker: false,
-    responseDone: false,
-    outputAudioBytes: 0,
-    outputAudioEnergy: 0,
-    outputAudioSamplesDuration: 0,
-    outputAudioSpeechDuration: 0,
-    outputAudioPeakRms: 0,
-  })),
+  googleEvaluate: vi.fn(),
+  evaluate: vi.fn(),
 }));
 
 vi.mock("playwright", () => ({
   chromium: {
     launch: async () => ({
       close: browser.close,
+      newPage: async () => ({ evaluate: browser.googleEvaluate, close: async () => {} }),
       newContext: async () => ({
         close: browser.contextClose,
         newPage: async () => ({ evaluate: browser.evaluate }),
       }),
     }),
+  },
+}));
+
+vi.mock("../../extensions/google/realtime-voice-provider.ts", () => ({
+  buildGoogleRealtimeVoiceProvider: () => ({
+    createBrowserSession: async () => ({
+      transport: "provider-websocket",
+      protocol: "google-live-bidi",
+      clientSecret: "synthetic-google-session",
+      websocketUrl: "wss://google.example.test/live",
+      initialMessage: { setup: {} },
+    }),
+  }),
+}));
+
+vi.mock("vite", () => ({
+  createServer: async () => {
+    throw new Error("Synthetic relay smoke unavailable");
   },
 }));
 
@@ -71,6 +81,23 @@ vi.mock("../../extensions/openai/speech-provider.ts", () => ({
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
 
+beforeEach(() => {
+  vi.resetModules();
+  vi.clearAllMocks();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  process.argv = [process.execPath, path.resolve("scripts/dev/realtime-talk-live-smoke.ts")];
+  process.exitCode = 0;
+});
+
+async function runSmoke(started: Promise<void>, boundary: string) {
+  const command = import("../../scripts/dev/realtime-talk-live-smoke.ts");
+  await awaitGateBeforeSettlement(started, command, `Smoke completed before ${boundary}`);
+  await vi.runAllTimersAsync();
+  await command;
+  expect(vi.getTimerCount()).toBe(0);
+  expect(browser.close).toHaveBeenCalledOnce();
+}
+
 afterEach(() => {
   vi.useRealTimers();
   backend.onFirstAudio = () => {};
@@ -83,60 +110,51 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each([
-  {
-    name: "failed browser media",
-    connectionState: "failed",
-    outputAudioEnergy: 0.002,
-    speechSeconds: 0.2,
-    transcriptMarker: true,
-    ok: false,
-  },
-  {
-    name: "silent browser audio",
-    connectionState: "connected",
-    outputAudioEnergy: 0,
-    speechSeconds: 0,
-    transcriptMarker: true,
-    ok: false,
-  },
-  {
-    name: "comfort noise despite a completed transcript",
-    connectionState: "connected",
-    outputAudioEnergy: 2.2539e-8,
-    speechSeconds: 0,
-    transcriptMarker: true,
-    ok: false,
-  },
-  {
-    name: "audio too brief to establish speech",
-    connectionState: "connected",
-    outputAudioEnergy: 0.002,
-    speechSeconds: 0.02,
-    transcriptMarker: true,
-    ok: false,
-  },
-  {
-    name: "unrelated browser audio",
-    connectionState: "connected",
-    outputAudioEnergy: 0.002,
-    speechSeconds: 0.2,
-    transcriptMarker: false,
-    ok: false,
-  },
-  {
-    name: "completed browser speech",
-    connectionState: "connected",
-    outputAudioEnergy: 0.002,
-    speechSeconds: 0.2,
-    transcriptMarker: true,
-    ok: true,
-  },
+it("reports malformed Google Live frames from the serialized browser callback", async () => {
+  vi.stubEnv("OPENAI_API_KEY", "");
+  vi.stubEnv("GEMINI_API_KEY", "synthetic-google-key");
+  const output = vi.spyOn(console, "log").mockImplementation(() => {});
+  const { promise: callbackStarted, resolve: started } = createDeferred();
+  browser.googleEvaluate.mockImplementation((callback, payload) => {
+    if (typeof callback === "string") {
+      return undefined;
+    }
+    const result = runInNewContext(`(${callback.toString()})(payload)`, {
+      payload,
+      URL,
+      __name: (value: unknown) => value,
+      window: { setTimeout, clearTimeout },
+      WebSocket: class {
+        addEventListener(event: string, listener: (message: { data: string }) => void) {
+          if (event === "message") {
+            queueMicrotask(() => listener({ data: "not-json" }));
+          }
+        }
+        close() {}
+      },
+    });
+    started();
+    return result;
+  });
+  await runSmoke(callbackStarted, "the Google browser callback");
+  expect(output).toHaveBeenCalledWith("google-live-browser-ws: failed", {
+    error: process.versions.bun
+      ? 'SyntaxError: JSON Parse error: Unexpected identifier "not"'
+      : "SyntaxError: Unexpected token 'o', \"not-json\" is not valid JSON",
+  });
+  expect(process.exitCode).toBe(1);
+});
+
+it.each<[string, string, number, number, boolean, boolean]>([
+  ["failed browser media", "failed", 0.002, 0.2, true, false],
+  ["silent browser audio", "connected", 0, 0, true, false],
+  ["comfort noise despite a completed transcript", "connected", 2.2539e-8, 0, true, false],
+  ["audio too brief to establish speech", "connected", 0.002, 0.02, true, false],
+  ["unrelated browser audio", "connected", 0.002, 0.2, false, false],
+  ["completed browser speech", "connected", 0.002, 0.2, true, true],
 ])(
-  "reports $name through the smoke command",
-  async ({ connectionState, outputAudioEnergy, speechSeconds, transcriptMarker, ok }) => {
-    vi.resetModules();
-    vi.clearAllMocks();
+  "reports %s through the smoke command",
+  async (_name, connectionState, outputAudioEnergy, speechSeconds, transcriptMarker, ok) => {
     browser.evaluate.mockResolvedValue({
       answerHasAudio: true,
       remoteDescriptionApplied: true,
@@ -156,29 +174,12 @@ it.each([
       vi.fn(async () => Response.json({ value: "test-client-secret" })),
     );
     const output = vi.spyOn(console, "log").mockImplementation(() => {});
-    process.argv = [
-      process.execPath,
-      path.resolve("scripts/dev/realtime-talk-live-smoke.ts"),
-      "--openai-only",
-    ];
-    process.exitCode = 0;
+    process.argv.push("--openai-only");
 
-    const firstAudio = new Promise<void>((resolve) => {
-      backend.onFirstAudio = () => resolve();
-    });
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const command = import("../../scripts/dev/realtime-talk-live-smoke.ts");
+    const firstAudio = createDeferred();
+    backend.onFirstAudio = () => firstAudio.resolve();
     // Let imports reach streaming before advancing the pacing and close-observation timers.
-    await Promise.race([
-      firstAudio,
-      command.then(() => {
-        throw new Error("Smoke command completed before sending backend audio");
-      }),
-    ]);
-    await vi.runAllTimersAsync();
-    await command;
-    expect(vi.getTimerCount()).toBe(0);
-
+    await runSmoke(firstAudio.promise, "sending backend audio");
     expect(output).toHaveBeenCalledWith("openai-backend-bridge: ok", expect.any(Object));
     expect(output).toHaveBeenCalledWith("openai-backend-audio-roundtrip: ok", expect.any(Object));
     expect(output).toHaveBeenCalledWith(
@@ -187,6 +188,5 @@ it.each([
     );
     expect(process.exitCode).toBe(ok ? 0 : 1);
     expect(browser.contextClose).toHaveBeenCalledOnce();
-    expect(browser.close).toHaveBeenCalledOnce();
   },
 );

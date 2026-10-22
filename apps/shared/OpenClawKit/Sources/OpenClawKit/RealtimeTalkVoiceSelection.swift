@@ -6,7 +6,17 @@ import OpenClawProtocol
 public final class RealtimeTalkVoiceSelection {
     public private(set) var selectedVoice: String?
     public var isChanging: Bool {
-        self.pendingChangeID != nil
+        self.pending != nil
+    }
+
+    private final class Change {
+        let event: TalkVoiceChangeEvent
+        var cancellation: Task<Void, Never>?
+        var timeout: Task<Void, Never>?
+
+        init(_ event: TalkVoiceChangeEvent) {
+            self.event = event
+        }
     }
 
     private let sessionKey: String
@@ -18,11 +28,7 @@ public final class RealtimeTalkVoiceSelection {
     private let onFailure: @MainActor (Error) -> Void
     private let onApplied: @MainActor (String) -> Void
     private var active = true
-    private var pendingChangeID: String?
-    private var pendingVoiceSessionID: String?
-    private var cancelledChangeID: String?
-    private var cancellationTask: Task<Void, Never>?
-    private var timeoutTask: Task<Void, Never>?
+    private var pending: Change?
 
     public init(
         sessionKey: String,
@@ -49,109 +55,82 @@ public final class RealtimeTalkVoiceSelection {
     public func handle(_ event: EventFrame) {
         guard self.active, self.isCurrent(self), event.event == "talk.voice.change",
               let payload = event.payload,
-              let data = try? JSONEncoder().encode(payload),
-              let change = try? JSONDecoder().decode(TalkVoiceChangeEvent.self, from: data),
+              let change = try? GatewayPayloadDecoding.decode(payload, as: TalkVoiceChangeEvent.self),
               change.sessionkey == self.sessionKey,
               !change.changeid.isEmpty, !change.voicesessionid.isEmpty, !change.voice.isEmpty,
               let phase = change.phase.value as? String
         else { return }
         if phase == "cancelled" {
-            self.cancelChange(change)
+            if let pending, pending.event.changeid == change.changeid,
+               pending.event.voicesessionid == change.voicesessionid
+            {
+                self.cancelChange(pending, error: CancellationError())
+            }
             return
         }
-        guard phase == "requested", self.pendingChangeID == nil,
+        guard phase == "requested", self.pending == nil,
               self.currentVoiceSessionID() == change.voicesessionid
         else { return }
-        self.pendingChangeID = change.changeid
-        self.pendingVoiceSessionID = change.voicesessionid
-        self.cancelledChangeID = nil
-        self.cancellationTask = nil
-        self.timeoutTask = Task { @MainActor [weak self] in
+        let pending = Change(change)
+        self.pending = pending
+        pending.timeout = Task { @MainActor [weak self] in
             do { try await Task.sleep(for: .seconds(60)) } catch { return }
-            self?.cancelChange(change)
+            self?.cancelChange(pending, error: CancellationError())
         }
-        Task { @MainActor [weak self] in await self?.perform(change) }
+        Task { @MainActor [weak self] in await self?.perform(pending) }
     }
 
-    private func cancelChange(_ change: TalkVoiceChangeEvent) {
-        guard self.pendingChangeID == change.changeid,
-              self.pendingVoiceSessionID == change.voicesessionid,
-              self.cancelledChangeID != change.changeid
-        else { return }
-        self.timeoutTask?.cancel()
-        self.timeoutTask = nil
-        self.cancelledChangeID = change.changeid
-        self.cancellationTask = Task { @MainActor [weak self] in
+    private func cancelChange(_ change: Change, error: Error) {
+        guard self.pending === change, change.cancellation == nil else { return }
+        change.timeout?.cancel()
+        change.cancellation = Task { @MainActor [weak self] in
             guard let self else { return }
-            defer {
-                if self.pendingChangeID == change.changeid {
-                    self.pendingChangeID = nil
-                    self.pendingVoiceSessionID = nil
-                }
-            }
+            defer { self.clear(change) }
             guard self.active, self.isCurrent(self) else { return }
             await self.cancel()
-            if self.active, self.isCurrent(self) { self.onFailure(CancellationError()) }
+            if self.active, self.isCurrent(self) { self.onFailure(error) }
         }
     }
 
     public func invalidate() {
-        self.timeoutTask?.cancel()
-        self.timeoutTask = nil
         self.active = false
-        self.pendingChangeID = nil
-        self.pendingVoiceSessionID = nil
+        if let pending { self.clear(pending) }
     }
 
-    private func owns(_ change: TalkVoiceChangeEvent) -> Bool {
-        self.active && self.isCurrent(self) && self.pendingChangeID == change.changeid &&
-            self.cancelledChangeID != change.changeid
+    private func clear(_ change: Change) {
+        change.timeout?.cancel()
+        change.timeout = nil
+        if self.pending === change { self.pending = nil }
     }
 
-    private func perform(_ change: TalkVoiceChangeEvent) async {
+    private func owns(_ change: Change) -> Bool {
+        self.active && self.isCurrent(self) && self.pending === change && change.cancellation == nil
+    }
+
+    private func perform(_ change: Change) async {
+        let event = change.event
         var replacementID: String?
         do {
             guard self.owns(change) else { throw CancellationError() }
-            let id = try await replace(change)
+            let id = try await replace(event)
             replacementID = id
-            guard self.owns(change), !id.isEmpty, id != change.voicesessionid,
+            guard self.owns(change), !id.isEmpty, id != event.voicesessionid,
                   self.currentVoiceSessionID() == id
             else { throw CancellationError() }
             try await self.complete(TalkVoiceCompleteParams(
-                changeid: change.changeid,
+                changeid: event.changeid,
                 voicesessionid: id,
                 outcome: AnyCodable("ready")))
             guard self.owns(change) else { return }
-            self.selectedVoice = change.voice
-            self.timeoutTask?.cancel()
-            self.timeoutTask = nil
-            self.pendingChangeID = nil
-            self.pendingVoiceSessionID = nil
-            self.onApplied(change.voice)
+            self.selectedVoice = event.voice
+            self.clear(change)
+            self.onApplied(event.voice)
         } catch {
-            if self.owns(change) {
-                self.timeoutTask?.cancel()
-                self.timeoutTask = nil
-                self.cancelledChangeID = change.changeid
-                await self.cancel()
-                if self.pendingChangeID == change.changeid {
-                    self.pendingChangeID = nil
-                    self.pendingVoiceSessionID = nil
-                }
-                if self.active, self.isCurrent(self) {
-                    self.onFailure(error)
-                }
-            }
-            await self.cancellationTask?.value
-            if self.pendingChangeID == change.changeid {
-                self.pendingChangeID = nil
-                self.pendingVoiceSessionID = nil
-                self.timeoutTask?.cancel()
-                self.timeoutTask = nil
-            }
+            self.cancelChange(change, error: error)
+            await change.cancellation?.value
             // Closing first keeps the Gateway's replacement classification alive during teardown.
             try? await self.complete(TalkVoiceCompleteParams(
-                changeid: change.changeid,
+                changeid: event.changeid,
                 voicesessionid: replacementID,
                 outcome: AnyCodable("failed"),
                 error: error.localizedDescription))

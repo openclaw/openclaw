@@ -33,7 +33,8 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:taskAffinity=".main">
+            android:taskAffinity=".main"
+            android:theme="@style/Theme.OpenClawWear.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

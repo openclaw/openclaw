@@ -1,10 +1,8 @@
-/**
- * Tool allow/deny policy helpers.
- * Normalizes core and plugin tool groups, expands plugin entries, and extracts
- * explicit operator allow/deny lists.
- */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeTrimmedStringList,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
@@ -22,9 +20,7 @@ export {
   normalizeToolPolicyName,
   readToolAllowlistIntersection,
   resolveToolProfilePolicy,
-  TOOL_GROUPS,
 } from "./tool-policy-shared.js";
-export type { ToolProfileId } from "./tool-policy-shared.js";
 
 /** Tool allow/deny policy shape accepted by agent and sandbox config. */
 export type ToolPolicyLike = {
@@ -89,7 +85,7 @@ export function expandShippedCoreToolPolicyNames(list: string[] | undefined): st
 
 /** Returns true when an allow policy is narrower than all/default plugin tools. */
 export function hasRestrictiveAllowPolicy(policy?: { allow?: string[] }): boolean {
-  if (!Array.isArray(policy?.allow)) {
+  if (!policy?.allow) {
     return false;
   }
   const restrictions = readToolAllowlistIntersection(policy.allow);
@@ -112,17 +108,13 @@ export function toolPolicyRestrictsTools(policy?: ToolPolicyLike): boolean {
   if (!policy) {
     return false;
   }
-  if (
-    expandToolGroups(policy.deny ?? []).some((entry) => Boolean(normalizeToolPolicyName(entry)))
-  ) {
+  if (expandToolGroups(policy.deny).length > 0) {
     return true;
   }
   const restrictions = policy.allow && readToolAllowlistIntersection(policy.allow);
   return restrictions
     ? restrictions.some((allow) => allow.length === 0 || toolPolicyRestrictsTools({ allow }))
-    : Array.isArray(policy.allow) &&
-        policy.allow.length > 0 &&
-        !expandToolGroups(policy.allow).some((entry) => normalizeToolPolicyName(entry) === "*");
+    : Boolean(policy.allow?.length) && !expandToolGroups(policy.allow).includes("*");
 }
 
 /** Replaces an allowlist with the normalized names of an effective tool array. */
@@ -131,18 +123,11 @@ export function replaceWithEffectiveToolAllowlist(
   tools: ReadonlyArray<{ name: string }>,
 ): void {
   target.length = 0;
-  const seen = new Set<string>();
-  for (const tool of tools) {
-    const normalized = normalizeToolPolicyName(tool.name);
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    target.push(normalized);
+  for (const name of uniqueStrings(normalizeToolList(tools.map((tool) => tool.name)))) {
+    target.push(name);
   }
 }
 
-/** Collects explicit allow entries from layered policies. */
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
   for (const policy of policies) {
@@ -150,9 +135,6 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
       continue;
     }
     for (const value of readToolAllowlistIntersection(policy.allow)?.flat() ?? policy.allow) {
-      if (typeof value !== "string") {
-        continue;
-      }
       const trimmed = value.trim();
       if (trimmed === "*" && policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW] === true) {
         // alsoAllow implicitly injects "*" for sandbox compatibility; do not
@@ -170,27 +152,10 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
   return uniqueStrings(entries);
 }
 
-/** Collects explicit deny entries from layered policies. */
 export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefined>): string[] {
-  const entries: string[] = [];
-  for (const policy of policies) {
-    if (!policy?.deny) {
-      continue;
-    }
-    for (const value of policy.deny) {
-      if (typeof value !== "string") {
-        continue;
-      }
-      const trimmed = value.trim();
-      if (trimmed) {
-        entries.push(trimmed);
-      }
-    }
-  }
-  return entries;
+  return policies.flatMap((policy) => normalizeTrimmedStringList(policy?.deny));
 }
 
-/** Builds plugin tool groups from tool metadata. */
 export function buildPluginToolGroups<T extends { name: string }>(params: {
   tools: T[];
   toolMeta: (tool: T) => { pluginId: string } | undefined;
@@ -226,21 +191,8 @@ function expandPluginGroups(
   }
   const expanded: string[] = [];
   for (const entry of renamed) {
-    const normalized = normalizeToolPolicyName(entry);
-    if (normalized === "group:plugins") {
-      if (groups.all.length > 0) {
-        expanded.push(...groups.all);
-      } else {
-        expanded.push(normalized);
-      }
-      continue;
-    }
-    const tools = groups.byPlugin.get(normalized) ?? [];
-    if (tools.length > 0) {
-      expanded.push(...tools);
-      continue;
-    }
-    expanded.push(normalized);
+    const tools = entry === "group:plugins" ? groups.all : groups.byPlugin.get(entry);
+    expanded.push(...(tools?.length ? tools : [entry]));
   }
   return uniqueStrings(expanded);
 }
@@ -305,7 +257,7 @@ export function analyzeAllowlistByToolType(
   if (!policy?.allow || policy.allow.length === 0) {
     return { unknownAllowlist: [] };
   }
-  const normalized = normalizeToolList(expandShippedCoreToolPolicyNames(policy.allow));
+  const normalized = expandShippedCoreToolPolicyNames(policy.allow)?.filter(Boolean) ?? [];
   if (normalized.length === 0) {
     return { unknownAllowlist: [] };
   }
@@ -345,12 +297,11 @@ export function analyzeAllowlistByToolType(
   };
 }
 
-/** Merges alsoAllow entries into an existing allow policy. */
 export function mergeAlsoAllowPolicy<TPolicy extends { allow?: string[] }>(
   policy: TPolicy | undefined,
   alsoAllow?: string[],
 ): TPolicy | undefined {
-  if (!policy?.allow || !Array.isArray(alsoAllow) || alsoAllow.length === 0) {
+  if (!policy?.allow || !alsoAllow?.length) {
     return policy;
   }
   return { ...policy, allow: uniqueStrings([...policy.allow, ...alsoAllow]) };

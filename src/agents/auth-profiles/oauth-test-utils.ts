@@ -7,9 +7,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { setTestEnvValue } from "../../test-utils/env.js";
 import type { resolveApiKeyForProfile } from "./oauth.js";
 import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { closeAuthProfileReadPool } from "./sqlite.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 /** Environment keys OAuth tests override while creating isolated state roots. */
@@ -72,7 +74,9 @@ export async function createOAuthMainAgentDir(stateDir: string): Promise<string>
 /** Remove an OAuth temp root and close test databases first. */
 export async function removeOAuthTestTempRoot(tempRoot: string): Promise<void> {
   if (tempRoot) {
+    closeAuthProfileReadPool({ kind: "root", rootPath: tempRoot });
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
 }

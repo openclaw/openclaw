@@ -5,7 +5,7 @@ import type {
   SessionsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsListResult } from "../api/types.ts";
-import { pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
+import { isSessionRouteId, pathForRoute, pluginSlugCandidate } from "../app-route-paths.ts";
 import { routeIdFromPath, type ApplicationRouter } from "../app-routes.ts";
 import { pathForSession } from "../app-session-path-builder.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
@@ -191,34 +191,24 @@ export async function resolveInitialApplicationLocation(params: {
   }
   const client = await waitForGatewayClient(params.gateway, params.signal);
   const hello = params.gateway.snapshot.hello;
-  let agentsList = params.agentsList();
-  const initialDefaults = {
-    agentsList,
-    hello: params.gateway.snapshot.hello,
-  };
-  let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
-  let defaultAgentId = resolveUiDefaultAgentId(initialDefaults);
-  let agentId =
-    parseAgentSessionKey(sessionKey)?.agentId ??
-    resolvePersistedAgentId(params.selectedAgentId, agentsList) ??
-    defaultAgentId;
-
-  agentsList = (await params.ensureAgentsList?.()) ?? agentsList;
+  const agentsList = (await params.ensureAgentsList?.()) ?? params.agentsList();
   params.signal.throwIfAborted();
   if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
     return resolveInitialApplicationLocation(params);
   }
-  defaultAgentId = resolveUiDefaultAgentId({ agentsList, hello });
+  const defaults = { agentsList, hello };
+  const mainKey = resolveUiConfiguredMainKey(defaults);
+  const defaultAgentId = resolveUiDefaultAgentId(defaults);
+  let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
+  let agentId =
+    parseAgentSessionKey(sessionKey)?.agentId ??
+    resolvePersistedAgentId(params.selectedAgentId, agentsList) ??
+    defaultAgentId;
   if (agentsList && !resolvePersistedAgentId(agentId, agentsList)) {
     agentId = resolvePersistedAgentId(params.selectedAgentId, agentsList) ?? defaultAgentId;
-    sessionKey = buildAgentMainSessionKey({
-      agentId,
-      mainKey: resolveUiConfiguredMainKey({ agentsList, hello: params.gateway.snapshot.hello }),
-    });
+    sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
   }
 
-  const defaults = { agentsList, hello: params.gateway.snapshot.hello };
-  const mainKey = resolveUiConfiguredMainKey(defaults);
   const identity = resolveUiConversationIdentity(defaults, sessionKey, agentId);
   sessionKey = identity.sessionKey;
   agentId = identity.agentId ?? agentId;
@@ -272,17 +262,15 @@ export function subscribeForegroundChatBootstrap({
   agentSelection,
   connectionBootstrap,
   initialChatRoute,
-}: Pick<ApplicationContext, "gateway" | "agents" | "agentSelection" | "connectionBootstrap"> & {
+  chatSubmissions,
+}: Pick<
+  ApplicationContext,
+  "gateway" | "agents" | "agentSelection" | "connectionBootstrap" | "chatSubmissions"
+> & {
   router: ApplicationRouter;
   initialChatRoute: boolean;
 }): () => void {
   connectionBootstrap.setForegroundRoute(initialChatRoute ? undefined : null);
-  const stopConnection = gateway.subscribe((snapshot) => {
-    connectionBootstrap.synchronize({
-      client: snapshot.client,
-      connected: snapshot.phase === "connected",
-    });
-  });
   const synchronizeRoute = (state: ReturnType<ApplicationRouter["getState"]>) => {
     const match = state.pendingMatches[0] ?? state.matches[0];
     if (!match && state.status === "idle") {
@@ -291,14 +279,18 @@ export function subscribeForegroundChatBootstrap({
     const data = asOptionalRecord(match?.data);
     const key =
       data?.kind === "session" && typeof data.sessionKey === "string" ? data.sessionKey : null;
+    // Admission previews have no transcript controller and cannot claim its
+    // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
     connectionBootstrap.setForegroundRoute(
-      match?.routeId !== "chat"
+      !isSessionRouteId(match?.routeId) || chatSubmissions.creation
         ? null
         : match.status === "pending"
           ? undefined
           : match.status === "success" && key && !parseCatalogSessionKey(key)
             ? resolveChatSnapshotKey(
                 {
+                  settings: gateway.connection,
+                  client: gateway.snapshot.client,
                   agentsList: agents.state.agentsList,
                   hello: gateway.snapshot.hello,
                   assistantAgentId: agentSelection.state.selectedId,
@@ -311,11 +303,20 @@ export function subscribeForegroundChatBootstrap({
             : null,
     );
   };
-  const stopRoute = router.subscribe(synchronizeRoute);
-  const stopSelection = agentSelection.subscribe(() => synchronizeRoute(router.getState()));
-  return () => {
-    stopConnection();
-    stopRoute();
-    stopSelection();
-  };
+  const synchronize = () => synchronizeRoute(router.getState());
+  const stopConnection = gateway.subscribe((snapshot) => {
+    connectionBootstrap.synchronize({
+      client: snapshot.client,
+      connected: snapshot.phase === "connected",
+    });
+    // Literal routes can settle before hello assigns their storage scope.
+    synchronize();
+  });
+  const stops = [
+    stopConnection,
+    router.subscribe(synchronizeRoute),
+    agentSelection.subscribe(synchronize),
+    chatSubmissions.subscribeCreate(synchronize),
+  ];
+  return () => stops.forEach((stop) => stop());
 }

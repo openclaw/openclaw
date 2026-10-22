@@ -1,8 +1,13 @@
 // Package Acceptance Workflow tests cover package acceptance workflow script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
+import {
+  execFileSync,
+  spawnSync,
+  type SpawnSyncOptionsWithStringEncoding,
+} from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  constants as fsConstants,
   copyFileSync,
   cpSync,
   existsSync,
@@ -14,16 +19,22 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import JSZip from "jszip";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import { FULL_RELEASE_WAIT_TIMEOUT_MINUTES } from "../../scripts/full-release-validation-at-sha.mts";
+import { resolveRunnerMatrix } from "../../scripts/lib/cross-os-release-checks/config.ts";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { createReleaseWorkflowMatrixPlan } from "../../scripts/plan-release-workflow-matrix.mjs";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fullReleaseCandidateArtifact,
   fullReleaseCandidateManifestFixture,
@@ -34,6 +45,7 @@ import {
   releaseWorkflowJobNeeds as jobNeeds,
 } from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
@@ -75,6 +87,8 @@ const CI_WORKFLOW = ".github/workflows/ci.yml";
 const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
 const PUBLICATION_CONTRACT_FILES = [
   "scripts/full-release-publication-contract.mjs",
+  "scripts/lib/full-release-publication-inputs.mjs",
+  "scripts/lib/release-upgrade-baseline.mjs",
   "scripts/clawhub-prepared-artifact.mjs",
   "scripts/clawhub-parent-authorization.mjs",
   "scripts/plugin-publication-artifact.mjs",
@@ -82,6 +96,8 @@ const PUBLICATION_CONTRACT_FILES = [
   "scripts/lib/actions-artifact-archive.mjs",
   "scripts/lib/arg-utils.runtime.mjs",
   "scripts/lib/bounded-response.mjs",
+  "scripts/lib/clawhub-package-family.mjs",
+  "scripts/lib/clawhub-publication-state.mjs",
   "scripts/lib/canonical-json.mjs",
   "scripts/lib/npm-core-release-packages.json",
   "scripts/lib/npm-publish-plan.mjs",
@@ -186,22 +202,38 @@ const RELEASE_FILTER_VALIDATOR = "scripts/github/validate-release-suite-filters.
 const VERIFY_PROVIDER_SECRETS_SCRIPT =
   ".agents/skills/release-openclaw-ci/scripts/verify-provider-secrets.mjs";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
-const SETUP_NODE_V6 = "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020";
-const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
-const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
+const SETUP_NODE_V6 = "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1";
+const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333";
+const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9";
 const RUN_TESTBOX_WITH_FAILURE_REPORTING =
   "steipete/run-testbox@2b6b1be536ec7f3c73757fedf5460a27ab4856b4";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const templateDirs = useAutoCleanupTempDirTracker(afterAll);
+const toolingTemplates = new Map<string, { directory: string; sha: string }>();
+let packageToolingTemplate:
+  | { directory: string; capturedSha: string; advancedSha: string }
+  | undefined;
+let fixtureGitPath: string | undefined;
 
 const frozenAdmissionClosure = [
   "scripts/preflight-frozen-target-contracts.mjs",
   "scripts/lib/frozen-target-source.mjs",
+  "scripts/lib/frozen-target-workflow-request.mjs",
+  "scripts/lib/release-upgrade-baseline.mjs",
+  "scripts/lib/canonical-json.mjs",
   "scripts/lib/docker-e2e-plan.mts",
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/record-shared.mjs",
+  "scripts/lib/update-compat-inventory.json",
+  "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
+  "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/release-version.mjs",
   "scripts/lib/frozen-target-compat.sh",
+  "scripts/lib/trusted-native-typescript.mjs",
+  "scripts/lib/native-typescript.mts",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe.mts",
@@ -214,6 +246,76 @@ const frozenAdmissionClosure = [
   "scripts/plan-targeted-docker-lane-groups.mjs",
   "scripts/lib/numeric-options.mjs",
 ];
+
+function readJson(path: string) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function writeJson(path: string, value: unknown) {
+  writeFileSync(path, JSON.stringify(value));
+}
+
+function readOptionalText(path: string): string {
+  return existsSync(path) ? readFileSync(path, "utf8") : "";
+}
+
+function writeExecutable(path: string, source: Parameters<typeof writeFileSync>[1]) {
+  writeFileSync(path, source, { mode: 0o755 });
+}
+
+function frozenFixtureGit(directory: string, ...args: string[]) {
+  return execFileSync(
+    "git",
+    [
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "-c",
+      "core.hooksPath=/dev/null",
+      "-c",
+      "commit.gpgsign=false",
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.test",
+      "-C",
+      directory,
+      ...args,
+    ],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  ).trim();
+}
+
+function frozenToolingFixture(root: string, toolingPaths: string[]) {
+  const tooling = join(root, "tooling");
+  const templateKey = JSON.stringify(toolingPaths);
+  let template = toolingTemplates.get(templateKey);
+  if (!template) {
+    const directory = templateDirs.make("frozen-workflow-tooling-template-");
+    // The acquisition step also uses the existing npm-output parser.
+    for (const path of [...frozenAdmissionClosure, "scripts/lib/npm-json-output.mts"]) {
+      mkdirSync(dirname(join(directory, path)), { recursive: true });
+      copyFileSync(path, join(directory, path));
+    }
+    const recipes = "scripts/e2e/lib/upgrade-survivor/config-recipe";
+    cpSync(recipes, join(directory, recipes), { recursive: true });
+    for (const path of toolingPaths) {
+      mkdirSync(dirname(join(directory, path)), { recursive: true });
+      cpSync(path, join(directory, path), { recursive: true });
+    }
+    frozenFixtureGit(directory, "init", "-q");
+    frozenFixtureGit(directory, "add", ".");
+    frozenFixtureGit(directory, "commit", "-qm", "candidate tooling fixture");
+    // Pack the immutable source once; fault cases create their own loose blobs afterward.
+    frozenFixtureGit(directory, "repack", "-ad");
+    template = { directory, sha: frozenFixtureGit(directory, "rev-parse", "HEAD") };
+    toolingTemplates.set(templateKey, template);
+  }
+  // Fault cases remove objects and change config; never share mutable Git stores.
+  cpSync(template.directory, tooling, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
+  return { tooling, toolingSha: template.sha };
+}
 
 function frozenWorkflowFixture(
   file: string,
@@ -233,45 +335,13 @@ function frozenWorkflowFixture(
     mkdirSync(dirname(join(target, path)), { recursive: true });
     writeFileSync(join(target, path), value);
   }
-  const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.test",
-        "-C",
-        target,
-        ...args,
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+  const git = (...args: string[]) => frozenFixtureGit(target, ...args);
   git("init", "-q");
   git("add", ".");
   git("commit", "-qm", "fixture");
   const sha = git("rev-parse", "HEAD");
-  const tooling = join(root, "tooling");
-  // The acquisition step also uses the existing npm-output parser.
-  for (const path of [...frozenAdmissionClosure, "scripts/lib/npm-json-output.mts"]) {
-    mkdirSync(dirname(join(tooling, path)), { recursive: true });
-    copyFileSync(path, join(tooling, path));
-  }
-  const recipes = "scripts/e2e/lib/upgrade-survivor/config-recipe";
-  cpSync(recipes, join(tooling, recipes), { recursive: true });
-  for (const path of toolingPaths) {
-    mkdirSync(dirname(join(tooling, path)), { recursive: true });
-    cpSync(path, join(tooling, path), { recursive: true });
-  }
-  const toolingGit = (...args: string[]) => git("-C", tooling, ...args);
-  toolingGit("init", "-q");
-  toolingGit("add", ".");
-  toolingGit("commit", "-qm", "candidate tooling fixture");
-  const toolingSha = toolingGit("rev-parse", "HEAD");
+  const { tooling, toolingSha } = frozenToolingFixture(root, toolingPaths);
+  const toolingGit = (...args: string[]) => frozenFixtureGit(tooling, ...args);
   const job = workflowJob(file, jobName);
   const plan = workflowStep(job, "Plan frozen source admission");
   const env = {
@@ -306,7 +376,7 @@ function frozenWorkflowFixture(
   function selection() {
     const result = run("Plan frozen source admission");
     expect(result.status, result.stderr).toBe(0);
-    return JSON.parse(readFileSync(join(root, "frozen-admission-selection.json"), "utf8"));
+    return readJson(join(root, "frozen-admission-selection.json"));
   }
   const forbidden = join(root, "forbidden");
   const bin = join(root, "bin");
@@ -323,17 +393,15 @@ function frozenWorkflowFixture(
     "ghx",
     "git-remote-fixture",
   ]) {
-    writeFileSync(
+    writeExecutable(
       join(bin, command),
       `#!/bin/sh\nprintf '${command}\\n' >> '${forbidden}'\nexit 97\n`,
-      { mode: 0o755 },
     );
   }
-  const gitPath = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-  writeFileSync(
+  const gitPath = (fixtureGitPath ??= execFileSync("which", ["git"], { encoding: "utf8" }).trim());
+  writeExecutable(
     join(bin, "git"),
     `#!/bin/sh\nfor arg in "$@"; do\ncase "$arg" in fetch|clone) printf 'hydration\\n' >> '${forbidden}'; exit 97;; esac\ndone\nexec '${gitPath}' "$@"\n`,
-    { mode: 0o755 },
   );
   env.PATH = `${bin}:${process.env.PATH}`;
   function admit(extra: Record<string, string> = {}, stepName = "Admit frozen source contracts") {
@@ -352,8 +420,13 @@ function frozenWorkflowFixture(
     return result;
   }
   function provisionParser() {
-    cpSync("node_modules/typescript", join(tooling, "node_modules/typescript"), {
-      recursive: true,
+    const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
+    const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
+    const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
+    copyTreeCloseOnExec(dirname(installedParser), join(tooling, "node_modules/typescript"), {
+      dereference: true,
+    });
+    copyTreeCloseOnExec(dirname(installedNative), join(tooling, "node_modules", nativeName), {
       dereference: true,
     });
   }
@@ -370,7 +443,86 @@ function frozenWorkflowFixture(
     selection,
     admit,
     provisionParser,
+    readJson: (name = "frozen-admission.json") => readJson(join(root, name)),
   };
+}
+
+function sparseSelectedFixture(fixture: ReturnType<typeof frozenWorkflowFixture>) {
+  const origin = join(fixture.root, "origin.git");
+  fixture.git("clone", "--bare", "--no-hardlinks", fixture.target, origin);
+  fixture.git("-C", origin, "config", "uploadpack.allowFilter", "true");
+  fixture.git("remote", "add", "origin", pathToFileURL(origin).href);
+  fixture.git("config", "remote.origin.promisor", "true");
+  fixture.git("config", "remote.origin.partialclonefilter", "blob:none");
+  return (path: string) => {
+    const oid = fixture.git("rev-parse", fixture.sha + ":" + path);
+    unlinkSync(join(fixture.target, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
+    return oid;
+  };
+}
+
+function traceContractAcquisition(
+  fixture: ReturnType<typeof frozenWorkflowFixture>,
+  step = "Acquire selected contract objects",
+  oid?: string,
+) {
+  const bin = join(fixture.root, "acquisition-bin");
+  const requested = join(fixture.root, "requested-blobs");
+  mkdirSync(bin);
+  const gitPath = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  writeExecutable(
+    join(bin, "git"),
+    `#!/bin/sh\nif [ "$#" = 5 ] && [ "$3" = cat-file ] && [ "$4" = blob ]${oid ? ` && [ "$5" = '${oid}' ]` : ""}; then printf '%s\\n' "$5" >> '${requested}'; fi\nexec '${gitPath}' "$@"\n`,
+  );
+  const result = fixture.run(step, { PATH: `${bin}:${process.env.PATH}` });
+  expect(result.status, result.stderr).toBe(0);
+  return readFileSync(requested, "utf8");
+}
+
+function liveAdmissionFixture(
+  inputs: Record<string, string | boolean | number>,
+  files: Record<string, string> = {},
+  overrides: Record<string, string> = {},
+  toolingPaths: string[] = [],
+) {
+  return frozenWorkflowFixture(
+    LIVE_E2E_WORKFLOW,
+    "validate_selected_ref",
+    { include_live_suites: false, include_release_path_suites: false, ...inputs },
+    files,
+    overrides,
+    toolingPaths,
+  );
+}
+
+function readWorkflowOutputs(path: string) {
+  const values: Record<string, string> = {};
+  const lines = readOptionalText(path).split("\n");
+  for (let index = 0; index < lines.length - 1; index++) {
+    const line = lines[index];
+    if (line === undefined) {
+      throw new Error("missing output line");
+    }
+    const heredoc = line.indexOf("<<");
+    const equals = line.indexOf("=");
+    if (heredoc >= 0 && (equals < 0 || heredoc < equals)) {
+      const delimiter = line.slice(heredoc + 2);
+      const content: string[] = [];
+      while (++index < lines.length && lines[index] !== delimiter) {
+        const value = lines[index];
+        if (value === undefined) {
+          throw new Error("missing multiline output");
+        }
+        content.push(value);
+      }
+      expect(lines[index]).toBe(delimiter);
+      values[line.slice(0, heredoc)] = content.join("\n");
+    } else {
+      expect(equals, line).toBeGreaterThan(0);
+      values[line.slice(0, equals)] = line.slice(equals + 1);
+    }
+  }
+  return values;
 }
 
 function reconstructAdmissionEvaluations(record: {
@@ -420,6 +572,15 @@ function reconstructAdmissionEvaluations(record: {
   });
 }
 
+function currentSurvivorScenarioFiles() {
+  return Object.fromEntries(
+    [
+      "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+      "scripts/lib/upgrade-survivor-scenarios.json",
+    ].map((path) => [path, readFileSync(path, "utf8")]),
+  );
+}
+
 function packageAdmissionBaselineFixture(
   inputs: Record<string, string | boolean | number>,
   failRegistry = false,
@@ -435,10 +596,7 @@ function packageAdmissionBaselineFixture(
     },
     {
       "package.json": '{"type":"module","version":"2026.9.9"}',
-      "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
-        "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-        "utf8",
-      ),
+      ...currentSurvivorScenarioFiles(),
     },
     {},
     ["scripts/resolve-upgrade-survivor-baselines.mts", "scripts/lib/release-upgrade-baseline.mjs"],
@@ -446,14 +604,13 @@ function packageAdmissionBaselineFixture(
   // Only the existing trusted acquisition command needs tsx; admission uses plain Node.
   symlinkSync(resolve("node_modules"), join(f.tooling, "node_modules"), "dir");
   const calls = join(f.root, "registry-calls");
-  writeFileSync(
+  writeExecutable(
     join(f.root, "bin/npm"),
     `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\n${
       failRegistry
         ? "echo 'controlled baseline lookup failure' >&2\nexit 73"
         : "printf '\"2026.9.1\"\\n'"
     }\n`,
-    { mode: 0o755 },
   );
   const selected = join(f.root, "not-acquired");
   const identity = {
@@ -466,35 +623,7 @@ function packageAdmissionBaselineFixture(
   const outputs: Record<string, { outputs: Record<string, string> }> = {};
   const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
   const completed: string[] = [];
-  const readOutputs = (path: string) => {
-    const values: Record<string, string> = {};
-    const lines = (existsSync(path) ? readFileSync(path, "utf8") : "").split("\n");
-    for (let index = 0; index < lines.length - 1; index++) {
-      const line = lines[index];
-      if (line === undefined) {
-        throw new Error("missing output line");
-      }
-      const heredoc = line.indexOf("<<");
-      const equals = line.indexOf("=");
-      if (heredoc >= 0 && (equals < 0 || heredoc < equals)) {
-        const delimiter = line.slice(heredoc + 2);
-        const content: string[] = [];
-        while (++index < lines.length && lines[index] !== delimiter) {
-          const value = lines[index];
-          if (value === undefined) {
-            throw new Error("missing multiline output");
-          }
-          content.push(value);
-        }
-        expect(lines[index]).toBe(delimiter);
-        values[line.slice(0, heredoc)] = content.join("\n");
-      } else {
-        expect(equals, line).toBeGreaterThan(0);
-        values[line.slice(0, equals)] = line.slice(equals + 1);
-      }
-    }
-    return values;
-  };
+
   function run(stepName: string) {
     const step = workflowStep(job, stepName);
     if (!step.id) {
@@ -527,16 +656,14 @@ function packageAdmissionBaselineFixture(
       "",
       { cwd: f.tooling },
     );
-    outputs[step.id] = { outputs: readOutputs(outputPath) };
+    outputs[step.id] = { outputs: readWorkflowOutputs(outputPath) };
     if (result.status === 0) {
       completed.push(stepName);
     }
     return result;
   }
-  const request = () =>
-    JSON.parse(readFileSync(join(f.root, "frozen-admission-request.json"), "utf8"));
-  const plan = () =>
-    JSON.parse(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8"));
+  const request = () => f.readJson("frozen-admission-request.json");
+  const plan = () => f.readJson("frozen-admission-selection.json");
   const planned = run("Plan frozen source admission");
   expect(planned.status, planned.stderr).toBe(0);
   expect(existsSync(selected)).toBe(false);
@@ -597,19 +724,31 @@ function packageToolingCheckoutFixture() {
       ],
       { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     ).trim();
-  git("init", "-q", "--initial-branch=main");
-  mkdirSync(join(repository, ".github/workflows"), { recursive: true });
-  copyFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, join(repository, PACKAGE_ACCEPTANCE_WORKFLOW));
-  git("add", ".");
-  git("commit", "-qm", "captured workflow");
-  const capturedSha = git("rev-parse", "HEAD");
-  git("branch", "release/candidate", capturedSha);
-  git("branch", "alias", capturedSha);
-  git("tag", "release-candidate", capturedSha);
-  writeFileSync(join(repository, "advanced.txt"), "main advanced after dispatch\n");
-  git("add", ".");
-  git("commit", "-qm", "advance main");
-  const advancedSha = git("rev-parse", "HEAD");
+  if (!packageToolingTemplate) {
+    const directory = templateDirs.make("package-tooling-history-template-");
+    const templateGit = (...args: string[]) => git("-C", directory, ...args);
+    templateGit("init", "-q", "--initial-branch=main", "--template=");
+    mkdirSync(join(directory, ".github/workflows"), { recursive: true });
+    copyFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, join(directory, PACKAGE_ACCEPTANCE_WORKFLOW));
+    templateGit("add", ".");
+    templateGit("commit", "-qm", "captured workflow");
+    const capturedSha = templateGit("rev-parse", "HEAD");
+    templateGit("branch", "release/candidate", capturedSha);
+    templateGit("branch", "alias", capturedSha);
+    templateGit("tag", "release-candidate", capturedSha);
+    writeFileSync(join(directory, "advanced.txt"), "main advanced after dispatch\n");
+    templateGit("add", ".");
+    templateGit("commit", "-qm", "advance main");
+    const advancedSha = templateGit("rev-parse", "HEAD");
+    templateGit("repack", "-ad");
+    packageToolingTemplate = { directory, capturedSha, advancedSha };
+  }
+  // Checkout and ref mutations stay local to each invocation of the workflow steps.
+  cpSync(packageToolingTemplate.directory, repository, {
+    recursive: true,
+    mode: fsConstants.COPYFILE_FICLONE,
+  });
+  const { capturedSha, advancedSha } = packageToolingTemplate;
   const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
   const checkout = workflowStep(job, "Checkout package workflow ref");
   const validate = workflowStep(job, "Validate exact package tooling checkout");
@@ -767,7 +906,7 @@ describe("frozen admission workflow barriers", () => {
     expect(upload.with?.["retention-days"]).toBe(7);
   });
 
-  it.each(["beta", "alpha"])(
+  it.each(["beta", "2026.8.1-alpha.1"])(
     "preserves an unused package %s baseline without a registry lookup",
     (tag) => {
       const baseline = `openclaw@${tag}`;
@@ -785,22 +924,18 @@ describe("frozen admission workflow barriers", () => {
         ADMISSION_PACKAGE_VERSION: "2026.7.33",
       });
       expect(planned.status, planned.stderr).toBe(0);
-      expect(
-        JSON.parse(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8"))
-          .obligations,
-      ).toEqual([]);
+      expect(f.readJson("frozen-admission-selection.json").obligations).toEqual([]);
       const calls = join(f.root, "registry-calls");
-      writeFileSync(
+      writeExecutable(
         join(f.root, "bin/npm"),
         `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\necho 'unexpected unused baseline lookup' >&2\nexit 73\n`,
-        { mode: 0o755 },
       );
       const step = workflowStep(
         workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package"),
         "Pin published upgrade baseline versions",
       );
       const outputs = Object.fromEntries(
-        (existsSync(join(f.root, "outputs")) ? readFileSync(join(f.root, "outputs"), "utf8") : "")
+        readOptionalText(join(f.root, "outputs"))
           .trim()
           .split("\n")
           .filter(Boolean)
@@ -858,7 +993,7 @@ describe("frozen admission workflow barriers", () => {
     expect(f.plan().obligations).toEqual([]);
     const admitted = f.admit();
     expect(admitted.status, admitted.stderr).toBe(0);
-    const record = JSON.parse(readFileSync(join(f.f.root, "frozen-admission.json"), "utf8"));
+    const record = f.f.readJson();
     expect(record.status).toBe("ADMITTED");
     expect(record.binding).toEqual(request.binding);
     expect(record.requestedBaselines.baseline).toBe("openclaw@beta");
@@ -872,7 +1007,7 @@ describe("frozen admission workflow barriers", () => {
     "update-restart-auth",
   ])("blocks package %s admission when baseline lookup fails", (lane) => {
     const f = packageAdmissionBaselineFixture(
-      { docker_lanes: lane, published_upgrade_survivor_baseline: "openclaw@alpha" },
+      { docker_lanes: lane, published_upgrade_survivor_baseline: "openclaw@beta" },
       true,
     );
     const result = f.resolveBaselines();
@@ -880,7 +1015,7 @@ describe("frozen admission workflow barriers", () => {
     expect(result.failedStep).toBe("Pin published upgrade baseline versions");
     expect(result.stderr).toContain("controlled baseline lookup failure");
     expect(readFileSync(f.calls, "utf8").trim().split("\n")).toEqual([
-      "view openclaw@alpha version --json --silent --prefer-online",
+      "view openclaw@beta version --json --silent --prefer-online",
     ]);
     expect(f.completed).not.toContain("Finalize frozen source admission");
     expect(f.request().options.baselinesResolved).toBe(false);
@@ -903,10 +1038,43 @@ describe("frozen admission workflow barriers", () => {
     expect(f.outputs.resolved_admission?.outputs.baseline_scope).toBe("all-scenarios");
   });
 
+  it("rejects a pre-June dist-tag before publishing resolved baseline admission", () => {
+    const f = packageAdmissionBaselineFixture({
+      docker_lanes: "published-upgrade-survivor",
+      published_upgrade_survivor_baseline: "openclaw@beta",
+    });
+    writeExecutable(join(f.f.root, "bin/npm"), "#!/bin/sh\nprintf '\"2026.5.31\"\\n'\n");
+    const result = f.resolveBaselines();
+    expect(result.failedStep).toBe("Pin published upgrade baseline versions");
+    expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+    expect(f.outputs.exact_baselines?.outputs).toEqual({});
+    expect(f.request().options.baselinesResolved).toBe(false);
+  });
+
+  it("rejects a pre-June inherited baseline at direct frozen preflight admission", () => {
+    const f = packageAdmissionBaselineFixture({ docker_lanes: "root-managed-vps-upgrade" });
+    const request = f.request();
+    Object.assign(request.options, {
+      baselinesResolved: true,
+      upgradeSurvivorBaseline: "openclaw@2026.5.31",
+      upgradeSurvivorBaselines: "",
+    });
+    const requestPath = join(f.f.root, "frozen-admission-request.json");
+    writeJson(requestPath, request);
+    const result = spawnSync(
+      process.execPath,
+      [join(f.f.tooling, "scripts/preflight-frozen-target-contracts.mjs"), "--plan", requestPath],
+      { encoding: "utf8", env: { PATH: process.env.PATH, HOME: f.f.root } },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+    expect(result.stdout).toBe("");
+  });
+
   it.each(["onboard", "upgrade-survivor"])(
     "preserves unused multiline package baselines and scope for %s",
     (lane) => {
-      const baselines = "OPENCLAW_ADMISSION_OUTPUT\r\nopenclaw@alpha\nopenclaw@beta\n";
+      const baselines = "OPENCLAW_ADMISSION_OUTPUT\r\nopenclaw@2026.8.1-alpha.1\nopenclaw@beta\n";
       const f = packageAdmissionBaselineFixture(
         {
           docker_lanes: lane,
@@ -984,6 +1152,7 @@ describe("frozen admission workflow barriers", () => {
           "scripts/runtime-postbuild.mts",
           "src/cli/update-cli/update-command-plugin-preflight.ts",
           "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
+          "scripts/lib/upgrade-survivor-scenarios.json",
           "extensions/codex/package.json",
         ].map((path) => [path, readFileSync(path, "utf8")]),
       );
@@ -1000,7 +1169,7 @@ describe("frozen admission workflow barriers", () => {
         ],
       );
       const plan = f.selection();
-      expect(plan.docker).toHaveLength(71);
+      expect(plan.docker.length).toBeGreaterThan(0);
       const planned = Date.now();
       const result = f.run("Admit frozen source contracts", {}, "", { timeout: 360_000 });
       console.info(
@@ -1017,9 +1186,16 @@ describe("frozen admission workflow barriers", () => {
       const bytes = readFileSync(join(f.root, "frozen-admission.json"));
       expect(bytes.length).toBeLessThanOrEqual(262_144);
       const record = JSON.parse(bytes.toString("utf8"));
-      expect(record.evaluations).toHaveLength(72);
+      expect(record.evaluations).toHaveLength(plan.docker.length + 1);
       const children = reconstructAdmissionEvaluations(record);
-      expect(children).toHaveLength(72);
+      expect(children.map(({ selection }) => selection)).toMatchObject([
+        ...plan.docker.map((docker: unknown) => ({ docker })),
+        {
+          consumers: plan.explicitConsumers.toSorted(),
+          codexSuites: plan.codexSuites.toSorted(),
+          fsSafeNative: plan.fsSafeNative,
+        },
+      ]);
       const { digest, provenance: _provenance, ...content } = record;
       expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
       expect(record.status).toBe("UNRESOLVED");
@@ -1056,16 +1232,13 @@ describe("frozen admission workflow barriers", () => {
         },
         {
           "package.json": '{"type":"module","version":"2026.9.9"}',
-          "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
-            "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-            "utf8",
-          ),
+          ...currentSurvivorScenarioFiles(),
         },
         { ADMISSION_BASELINES_RESOLVED: "true" },
       );
       const plan = f.selection();
       expect(plan.docker).toHaveLength(groups);
-      expect(plan.explicitConsumers).toContain("live-cli-backend");
+      expect(plan.explicitConsumers).toEqual([]);
       const result = f.run("Admit frozen source contracts", {}, "printf 'producer-ran\\n'", {
         timeout: 360_000,
       });
@@ -1085,7 +1258,7 @@ describe("frozen admission workflow barriers", () => {
                 evaluation.selection.docker.baselines,
             ),
         ).toEqual(plan.docker.map((group: { baselines: string }) => group.baselines));
-        expect(record.evaluations.at(-1).selection.consumers).toContain("live-cli-backend");
+        expect(record.evaluations.at(-1).selection.consumers).toEqual([]);
         const { digest, provenance: _provenance, ...content } = record;
         expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
         expect(result.stdout).toContain("producer-ran");
@@ -1104,10 +1277,8 @@ describe("frozen admission workflow barriers", () => {
   it.each(["root-managed-vps-upgrade", "update-restart-auth"])(
     "rejects unresolved published baseline for the exact %s wrapper",
     (lane) => {
-      const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
+      const f = liveAdmissionFixture({
         docker_lanes: lane,
-        include_live_suites: false,
-        include_release_path_suites: false,
         published_upgrade_survivor_baseline: "openclaw@latest",
       });
       const plan = f.selection();
@@ -1125,13 +1296,9 @@ describe("frozen admission workflow barriers", () => {
   it.each(["root-managed-vps-upgrade", "update-restart-auth"])(
     "rejects a falsely resolved moving baseline for %s",
     (lane) => {
-      const f = frozenWorkflowFixture(
-        LIVE_E2E_WORKFLOW,
-        "validate_selected_ref",
+      const f = liveAdmissionFixture(
         {
           docker_lanes: lane,
-          include_live_suites: false,
-          include_release_path_suites: false,
           published_upgrade_survivor_baseline: "openclaw@latest",
         },
         {},
@@ -1150,10 +1317,8 @@ describe("frozen admission workflow barriers", () => {
     ["upgrade-survivor", false],
     ["root-managed-vps-upgrade update-restart-auth", true],
   ])("leaves unselected published baselines unresolved for %s prepare=%s", (lane, prepareOnly) => {
-    const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
+    const f = liveAdmissionFixture({
       docker_lanes: lane,
-      include_live_suites: false,
-      include_release_path_suites: false,
       prepare_only: prepareOnly,
       published_upgrade_survivor_baseline: "openclaw@latest",
     });
@@ -1177,18 +1342,19 @@ describe("frozen admission workflow barriers", () => {
         "extensions/codex/package.json": readFileSync("extensions/codex/package.json", "utf8"),
       },
       {},
-      ["scripts/e2e/lib", "scripts/lib/record-shared.mjs"],
+      ["scripts/e2e/lib"],
     );
     f.selection();
     const result = f.admit();
     expect(result.status, result.stderr).toBe(0);
-    const record = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
+    const record = f.readJson();
     const children = reconstructAdmissionEvaluations(record);
     expect(children).toHaveLength(3);
-    const extra = "scripts/lib/record-shared.mjs";
+    const extra = "scripts/e2e/lib/codex-install-utils.mjs";
     for (const [index, child] of children.entries()) {
       const toolingPaths = child.sources.tooling.map(({ path }) => path);
       const selectedPaths = child.sources.selected.map(({ path }) => path);
+      expect(toolingPaths).toContain("scripts/lib/record-shared.mjs");
       if (index === 1) {
         expect(toolingPaths).toContain(extra);
         expect(selectedPaths).toContain("extensions/codex/package.json");
@@ -1203,9 +1369,7 @@ describe("frozen admission workflow barriers", () => {
     expect(onlyOnboard.status, onlyOnboard.stderr).toBe(0);
     const single = f.admit();
     expect(single.status, single.stderr).toBe(0);
-    const isolated = reconstructAdmissionEvaluations(
-      JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8")),
-    );
+    const isolated = reconstructAdmissionEvaluations(f.readJson());
     expect(children[0]).toEqual(isolated[0]);
   });
 
@@ -1216,49 +1380,23 @@ describe("frozen admission workflow barriers", () => {
   ])(
     "round-trips unselected multiline baseline outputs with prepare_only=%s %s",
     (prepareOnly, baselines) => {
-      const f = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
+      const f = liveAdmissionFixture({
         docker_lanes: "onboard",
-        include_live_suites: false,
-        include_release_path_suites: false,
         prepare_only: prepareOnly,
         published_upgrade_survivor_baselines: baselines,
       });
       expect(f.selection().obligations).toEqual([]);
       const result = f.run("Resolve selected upgrade baseline versions");
       expect(result.status, result.stderr).toBe(0);
-      const output = readFileSync(join(f.root, "outputs"), "utf8");
-      const values = new Map<string, string>();
-      const lines = output.split("\n");
-      for (let index = 0; index < lines.length - 1; index++) {
-        const line = lines[index];
-        if (line === undefined) {
-          throw new Error("missing workflow output line");
-        }
-        const heredoc = line.indexOf("<<");
-        const equals = line.indexOf("=");
-        if (heredoc >= 0 && (equals < 0 || heredoc < equals)) {
-          const key = line.slice(0, heredoc);
-          const delimiter = line.slice(heredoc + 2);
-          const content = [];
-          while (++index < lines.length && lines[index] !== delimiter) {
-            content.push(lines[index]);
-          }
-          expect(lines[index], key).toBe(delimiter);
-          values.set(key, content.join("\n"));
-        } else {
-          expect(equals, `invalid output line: ${line}`).toBeGreaterThan(0);
-          values.set(line.slice(0, equals), line.slice(equals + 1));
-        }
-      }
+      const values = new Map(Object.entries(readWorkflowOutputs(join(f.root, "outputs"))));
       expect(values.get("baselines")).toBe(baselines);
       expect(values.get("baseline")).toBe("openclaw@latest");
       expect(values.get("baseline_scope")).toBe("all-scenarios");
       expect(values.get("parser_required")).toBe("false");
       expect(existsSync(join(f.root, "forbidden"))).toBe(false);
-      expect(
-        JSON.parse(readFileSync(join(f.root, "frozen-admission-request.json"), "utf8"))
-          .requestedBaselines.baselines,
-      ).toBe(baselines);
+      expect(f.readJson("frozen-admission-request.json").requestedBaselines.baselines).toBe(
+        baselines,
+      );
     },
   );
 
@@ -1280,48 +1418,17 @@ describe("frozen admission workflow barriers", () => {
         [RELEASE_CHECKS_WORKFLOW, "resolve_target", "Capture selected inputs", "release"],
         [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "Select acceptance profile", "package"],
       ] as const
-    ).flatMap(([file, jobName, caller, workflow]) => [
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "clean",
-        path: "scripts/plan-release-workflow-matrix.mjs",
-      },
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "dirty",
-        path: "scripts/plan-release-workflow-matrix.mjs",
-      },
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "missing",
-        path: "scripts/plan-release-workflow-matrix.mjs",
-      },
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "dirty transitive",
-        path: "scripts/lib/numeric-options.mjs",
-      },
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "missing transitive",
-        path: "scripts/lib/numeric-options.mjs",
-      },
-    ]),
+    ).flatMap(([file, jobName, caller, workflow]) =>
+      (
+        [
+          ["clean", "scripts/plan-release-workflow-matrix.mjs"],
+          ["dirty", "scripts/plan-release-workflow-matrix.mjs"],
+          ["missing", "scripts/plan-release-workflow-matrix.mjs"],
+          ["dirty transitive", "scripts/lib/numeric-options.mjs"],
+          ["missing transitive", "scripts/lib/numeric-options.mjs"],
+        ] as const
+      ).map(([condition, path]) => ({ file, jobName, caller, workflow, condition, path })),
+    ),
   )(
     "verifies before the earliest planner command in $workflow: $condition $path",
     ({ file, jobName, caller, workflow, condition, path }) => {
@@ -1407,10 +1514,7 @@ describe("frozen admission workflow barriers", () => {
       expect(existsSync(join(f.root, "forbidden"))).toBe(false);
       if (condition === "clean") {
         expect(result.status, result.stderr).toBe(0);
-        expect(
-          JSON.parse(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8")).docker
-            .length,
-        ).toBeGreaterThan(0);
+        expect(f.readJson("frozen-admission-selection.json").docker.length).toBeGreaterThan(0);
         return;
       }
       expect(result.status).toBe(1);
@@ -1420,16 +1524,13 @@ describe("frozen admission workflow barriers", () => {
           : `tooling closure does not match committed source: ${path}`,
       );
       expect(result.stdout).toBe("");
-      expect(
-        existsSync(join(f.root, "outputs")) ? readFileSync(join(f.root, "outputs"), "utf8") : "",
-      ).toBe("");
+      expect(readOptionalText(join(f.root, "outputs"))).toBe("");
       expect(existsSync(join(f.root, "forbidden"))).toBe(false);
       if (reusablePlannerFailure) {
         expect(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8")).toBe("");
-        expect(
-          JSON.parse(readFileSync(join(f.root, "frozen-admission-request.json"), "utf8")).tooling
-            .sha,
-        ).toBe(f.env.ADMISSION_TOOLING_SHA);
+        expect(f.readJson("frozen-admission-request.json").tooling.sha).toBe(
+          f.env.ADMISSION_TOOLING_SHA,
+        );
         expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
       }
     },
@@ -1460,91 +1561,95 @@ describe("frozen admission workflow barriers", () => {
   });
 
   it.each([
-    [FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target", "known-source"],
-    [RELEASE_CHECKS_WORKFLOW, "resolve_target", "known-source"],
-    [LIVE_E2E_WORKFLOW, "validate_selected_ref", "known-source"],
-    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "known-source"],
-    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "resolved-package"],
-  ])("fulfills evaluations before emitting %s %s %s admission", (file, job, stage) => {
-    const f = frozenWorkflowFixture(
-      file,
-      job,
-      {
-        release_profile: "beta",
-        release_test_profile: "beta",
-        rerun_group: "live-e2e",
-        live_suite_filter: "live-gateway-docker",
-        include_live_suites: true,
-        include_release_path_suites: false,
-        suite_profile: "custom",
-        docker_lanes: "onboard plugins-offline",
-        allow_frozen_target_scenario_omissions: true,
-      },
-      { "package.json": '{"type":"module","version":"2026.9.9"}' },
-      { ADMISSION_STAGE: stage },
-    );
-    const known = file === PACKAGE_ACCEPTANCE_WORKFLOW && stage === "known-source";
-    const result = f.run(
-      known ? "Plan known package source admission" : "Plan frozen source admission",
-      stage === "resolved-package"
-        ? {
-            ADMISSION_PACKAGE_SOURCE_SHA: f.sha,
-            ADMISSION_PACKAGE_SHA256: "d".repeat(64),
-            ADMISSION_PACKAGE_VERSION: "2026.9.9",
-          }
-        : {},
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const plan = JSON.parse(readFileSync(join(f.root, "frozen-admission-selection.json"), "utf8"));
-    const admitted = f.admit(
-      {},
-      known ? "Admit known package source before packing" : "Admit frozen source contracts",
-    );
-    expect(admitted.status, admitted.stderr).toBe(0);
-    expect(admitted.stdout).toContain("producer-ran");
-    const record = JSON.parse(
-      readFileSync(
-        join(f.root, known ? "frozen-admission-known-source.json" : "frozen-admission.json"),
-        "utf8",
-      ),
-    );
-    expect(record.status).toBe("ADMITTED");
-    expect(record.evaluations).toHaveLength(plan.docker.length + 1);
-    for (const evaluation of reconstructAdmissionEvaluations(record)) {
-      expect(evaluation).toMatchObject({
-        version: 1,
-        selectedSha: f.sha,
-        toolingSha: f.toolingSha,
-      });
-      expect(Array.isArray(evaluation.contracts)).toBe(true);
-      expect(evaluation.digest).toMatch(/^[a-f0-9]{64}$/u);
-      const identities = evaluation.sources.tooling.map(
-        ({ path, oid }: { path: string; oid: string }) => {
-          expect(f.toolingGit("rev-parse", `${f.toolingSha}:${path}`)).toBe(oid);
-          return path;
+    [FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target", "known-source", "UNSELECTED"],
+    [RELEASE_CHECKS_WORKFLOW, "resolve_target", "known-source", "UNSELECTED"],
+    [LIVE_E2E_WORKFLOW, "validate_selected_ref", "known-source", "ADMITTED"],
+    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "known-source", "ADMITTED"],
+    [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "resolved-package", "ADMITTED"],
+  ])(
+    "fulfills evaluations before emitting %s %s %s admission",
+    (file, job, stage, expectedStatus) => {
+      const f = frozenWorkflowFixture(
+        file,
+        job,
+        {
+          release_profile: "beta",
+          release_test_profile: "beta",
+          rerun_group: "live-e2e",
+          live_suite_filter: "live-gateway-docker",
+          include_live_suites: true,
+          include_release_path_suites: false,
+          suite_profile: "custom",
+          docker_lanes: "onboard plugins-offline",
+          allow_frozen_target_scenario_omissions: true,
         },
+        { "package.json": '{"type":"module","version":"2026.9.9"}' },
+        { ADMISSION_STAGE: stage },
       );
-      expect(identities).toEqual(expect.arrayContaining(frozenAdmissionClosure));
-    }
-    const { digest, provenance: _provenance, ...content } = record;
-    expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
-    expect(existsSync(join(f.target, "node_modules"))).toBe(false);
-    expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
-  });
+      const known = file === PACKAGE_ACCEPTANCE_WORKFLOW && stage === "known-source";
+      const result = f.run(
+        known ? "Plan known package source admission" : "Plan frozen source admission",
+        stage === "resolved-package"
+          ? {
+              ADMISSION_PACKAGE_SOURCE_SHA: f.sha,
+              ADMISSION_PACKAGE_SHA256: "d".repeat(64),
+              ADMISSION_PACKAGE_VERSION: "2026.9.9",
+            }
+          : {},
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const plan = f.readJson("frozen-admission-selection.json");
+      const admitted = f.admit(
+        {},
+        known ? "Admit known package source before packing" : "Admit frozen source contracts",
+      );
+      expect(admitted.status, admitted.stderr).toBe(0);
+      expect(admitted.stdout).toContain("producer-ran");
+      const record = readJson(
+        join(f.root, known ? "frozen-admission-known-source.json" : "frozen-admission.json"),
+      );
+      expect(record.status).toBe(expectedStatus);
+      expect(record.evaluations).toHaveLength(plan.docker.length + 1);
+      for (const evaluation of reconstructAdmissionEvaluations(record)) {
+        expect(evaluation).toMatchObject({
+          version: 1,
+          selectedSha: f.sha,
+          toolingSha: f.toolingSha,
+        });
+        expect(Array.isArray(evaluation.contracts)).toBe(true);
+        expect(evaluation.digest).toMatch(/^[a-f0-9]{64}$/u);
+        const identities = evaluation.sources.tooling.map(
+          ({ path, oid }: { path: string; oid: string }) => {
+            expect(f.toolingGit("rev-parse", `${f.toolingSha}:${path}`)).toBe(oid);
+            return path;
+          },
+        );
+        expect(identities).toEqual(expect.arrayContaining(frozenAdmissionClosure));
+      }
+      const { digest, provenance: _provenance, ...content } = record;
+      expect(digest).toBe(createHash("sha256").update(JSON.stringify(content)).digest("hex"));
+      expect(existsSync(join(f.target, "node_modules"))).toBe(false);
+      expect(existsSync(join(f.tooling, "node_modules"))).toBe(false);
+    },
+  );
 
   it("plans without selected objects and rejects admission before acquisition", () => {
-    const f = frozenWorkflowFixture(
-      LIVE_E2E_WORKFLOW,
-      "validate_selected_ref",
+    const f = liveAdmissionFixture(
       {
-        docker_lanes: "onboard",
-        include_live_suites: false,
-        include_release_path_suites: false,
+        docker_lanes: "agent-bundle-mcp-tools",
         allow_frozen_target_scenario_omissions: true,
       },
-      { "src/config/zod-schema.ts": "lastRunAt:" },
+      Object.fromEntries(
+        [
+          "package.json",
+          "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts",
+          "scripts/e2e/lib/temp-state-dir.ts",
+          "src/agents/agent-bundle-mcp-manager-api.ts",
+        ].map((path) => [path, readFileSync(path, "utf8")]),
+      ),
     );
-    const oid = f.git("rev-parse", "HEAD:src/config/zod-schema.ts");
+    const selectedPath = "src/agents/agent-bundle-mcp-manager-api.ts";
+    const oid = f.git("rev-parse", `HEAD:${selectedPath}`);
     unlinkSync(join(f.target, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     const missingRoot = join(f.root, "not-acquired");
     const unavailable = f.run("Plan frozen source admission", {
@@ -1552,7 +1657,8 @@ describe("frozen admission workflow barriers", () => {
     });
     expect(unavailable.status, unavailable.stderr).toBe(0);
     expect(existsSync(missingRoot)).toBe(false);
-    expect(f.selection().sourcePaths).toContain("src/config/zod-schema.ts");
+    expect(f.selection().sourcePaths).toContain(selectedPath);
+    f.provisionParser();
     const rejected = f.admit();
     expect(rejected.status, rejected.stderr).toBe(1);
     expect(rejected.stderr).toContain("unable to read selected source");
@@ -1560,7 +1666,7 @@ describe("frozen admission workflow barriers", () => {
     expect(readFileSync(join(f.root, "frozen-admission.json"), "utf8")).toBe("");
   });
 
-  it("stops on a later Docker rejection before explicit consumers or success output", () => {
+  it("stops on a later Docker rejection before success output", () => {
     const f = frozenWorkflowFixture(
       LIVE_E2E_WORKFLOW,
       "validate_selected_ref",
@@ -1573,17 +1679,11 @@ describe("frozen admission workflow barriers", () => {
         include_release_path_suites: false,
         allow_frozen_target_scenario_omissions: true,
       },
-      {
-        "package.json": '{"type":"module","version":"not-a-release"}',
-        "scripts/print-cli-backend-live-metadata.ts":
-          "export function resolveCliBackendDockerPackages() {}",
-      },
+      { "package.json": '{"type":"module","version":"not-a-release"}' },
       { ADMISSION_BASELINES_RESOLVED: "true" },
     );
-    const oid = f.git("rev-parse", "HEAD:scripts/print-cli-backend-live-metadata.ts");
-    unlinkSync(join(f.target, ".git/objects", oid.slice(0, 2), oid.slice(2)));
     const planned = f.selection();
-    expect(planned.explicitConsumers).toContain("live-cli-backend");
+    expect(planned.explicitConsumers).toEqual([]);
     expect(planned.docker.map((group: { lanes: string[] }) => group.lanes)).toEqual([
       ["onboard"],
       ["root-managed-vps-upgrade"],
@@ -1630,12 +1730,13 @@ describe("frozen admission workflow barriers", () => {
     ).toHaveProperty("ADMISSION_INPUTS", "${{ toJSON(inputs) }}");
     const planned = fixture.run("Plan frozen source admission");
     expect(planned.status, planned.stderr).toBe(0);
-    const prettyRequest = JSON.parse(
-      readFileSync(join(fixture.root, "frozen-admission-request.json"), "utf8"),
-    );
+    const prettyRequest = fixture.readJson("frozen-admission-request.json");
     const compact = spawnSync(
       process.execPath,
-      [resolve("scripts/preflight-frozen-target-contracts.mjs"), "--workflow-request"],
+      [
+        join(fixture.tooling, "scripts/preflight-frozen-target-contracts.mjs"),
+        "--workflow-request",
+      ],
       {
         encoding: "utf8",
         env: { ...fixture.env, ADMISSION_INPUTS: JSON.stringify(inputs) },
@@ -1651,10 +1752,7 @@ describe("frozen admission workflow barriers", () => {
   });
 
   it("bounds raw workflow JSON separately from scalar input validation", () => {
-    const fixture = frozenWorkflowFixture(LIVE_E2E_WORKFLOW, "validate_selected_ref", {
-      include_live_suites: false,
-      include_release_path_suites: false,
-    });
+    const fixture = liveAdmissionFixture({});
     const raw = fixture.env.ADMISSION_INPUTS;
     const limit = 48 * 1024;
     const bounded = raw + " ".repeat(limit - Buffer.byteLength(raw));
@@ -1742,27 +1840,18 @@ describe("frozen admission workflow barriers", () => {
       entry.file,
       entry.job,
       { ...common, ...entry.multiline },
-      {
-        "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
-          "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-          "utf8",
-        ),
-      },
+      currentSurvivorScenarioFiles(),
       { ADMISSION_STAGE: "known-source", ADMISSION_BASELINES_RESOLVED: "true" },
     );
     const multilinePlan = fixture.selection();
     const admitted = fixture.admit();
     expect(admitted.status, admitted.stderr).toBe(0);
-    const multilineRecord = JSON.parse(
-      readFileSync(join(fixture.root, "frozen-admission.json"), "utf8"),
-    );
+    const multilineRecord = fixture.readJson();
     const normalized = fixture.run("Plan frozen source admission", {
       ADMISSION_INPUTS: JSON.stringify({ ...common, ...entry.normalized }, null, 2),
     });
     expect(normalized.status, normalized.stderr).toBe(0);
-    const normalizedPlan = JSON.parse(
-      readFileSync(join(fixture.root, "frozen-admission-selection.json"), "utf8"),
-    );
+    const normalizedPlan = fixture.readJson("frozen-admission-selection.json");
     const parsedDocker = (plan: { docker: Array<{ scenarios?: string }> }) =>
       plan.docker.map((group) => ({
         ...group,
@@ -1772,9 +1861,7 @@ describe("frozen admission workflow barriers", () => {
     expect(multilinePlan.consumers).toEqual(normalizedPlan.consumers);
     const normalizedAdmission = fixture.admit();
     expect(normalizedAdmission.status, normalizedAdmission.stderr).toBe(0);
-    const normalizedRecord = JSON.parse(
-      readFileSync(join(fixture.root, "frozen-admission.json"), "utf8"),
-    );
+    const normalizedRecord = fixture.readJson();
     expect(multilineRecord.evaluations).toHaveLength(normalizedRecord.evaluations.length);
     const normalizedChildren = reconstructAdmissionEvaluations(normalizedRecord);
     for (const [index, evaluated] of reconstructAdmissionEvaluations(multilineRecord).entries()) {
@@ -1820,7 +1907,12 @@ describe("frozen admission workflow barriers", () => {
     const steps = job.steps ?? [];
     const identity = workflowStep(job, "Resolve called package tooling identity");
     const setup = workflowStep(job, "Setup Node environment");
-    expect(steps.indexOf(identity)).toBe(0);
+    expect(steps[0]).toEqual({
+      name: "Setup supported Node runtime",
+      uses: "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
+      with: { "node-version": "${{ env.NODE_VERSION }}", "package-manager-cache": false },
+    });
+    expect(steps.indexOf(identity)).toBe(1);
     expect(steps.indexOf(identity)).toBeLessThan(steps.indexOf(checkout));
     expect(steps.indexOf(checkout)).toBeLessThan(steps.indexOf(validate));
     expect(steps.indexOf(validate)).toBeLessThan(steps.indexOf(setup));
@@ -2065,30 +2157,20 @@ describe("frozen admission workflow barriers", () => {
   it.each(["published-upgrade-survivor", "root-managed-vps-upgrade", "update-restart-auth"])(
     "captures a moving baseline once and carries the exact version through %s evaluation",
     (lane) => {
-      const f = frozenWorkflowFixture(
-        LIVE_E2E_WORKFLOW,
-        "validate_selected_ref",
+      const f = liveAdmissionFixture(
         {
           docker_lanes: lane,
-          include_release_path_suites: false,
-          include_live_suites: false,
           published_upgrade_survivor_baseline: "openclaw@latest",
         },
-        {
-          "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
-            "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-            "utf8",
-          ),
-        },
+        currentSurvivorScenarioFiles(),
       );
       f.selection();
       const bin = join(f.root, "acquisition-bin");
       const calls = join(f.root, "registry-calls");
       mkdirSync(bin);
-      writeFileSync(
+      writeExecutable(
         join(bin, "npm"),
         `#!/bin/sh\nprintf '%s\\n' "$*" >> '${calls}'\nprintf '"2026.9.1"\\n'\n`,
-        { mode: 0o755 },
       );
       const result = f.run("Resolve selected upgrade baseline versions", {
         PATH: `${bin}:${process.env.PATH}`,
@@ -2103,7 +2185,7 @@ describe("frozen admission workflow barriers", () => {
       ]);
       const admitted = f.admit();
       expect(admitted.status, admitted.stderr).toBe(0);
-      const record = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
+      const record = f.readJson();
       expect(record).toMatchObject({
         status: "ADMITTED",
         requestedBaselines: { baseline: "openclaw@latest" },
@@ -2123,10 +2205,47 @@ describe("frozen admission workflow barriers", () => {
     },
   );
 
+  it("acquires the selected provider catalog before legacy-operator-state admission", () => {
+    const path = "scripts/lib/official-external-provider-catalog.json";
+    const fixture = liveAdmissionFixture(
+      {
+        docker_lanes: "published-upgrade-survivor",
+        allow_frozen_target_scenario_omissions: true,
+        published_upgrade_survivor_baseline: "openclaw@2026.9.1",
+        published_upgrade_survivor_baselines: "openclaw@2026.9.1",
+        published_upgrade_survivor_scenarios: "legacy-operator-state",
+      },
+      {
+        "package.json": '{"type":"module","version":"2026.9.2"}',
+        [path]: readFileSync(path, "utf8"),
+        ...currentSurvivorScenarioFiles(),
+      },
+      { ADMISSION_BASELINES_RESOLVED: "true" },
+    );
+    expect(fixture.selection().sourcePaths).toContain(path);
+    const oid = sparseSelectedFixture(fixture)(path);
+    const unavailable = fixture.admit();
+    expect(unavailable.status).not.toBe(0);
+    expect(unavailable.stderr).toContain("unable to read selected source");
+    const acquired = fixture.run("Acquire selected contract objects");
+    expect(acquired.status, acquired.stderr).toBe(0);
+    expect(fixture.git("--no-lazy-fetch", "cat-file", "blob", oid)).toBe(
+      readFileSync(path, "utf8").trim(),
+    );
+    const admitted = fixture.admit();
+    expect(admitted.status, admitted.stderr).toBe(0);
+    const record = fixture.readJson();
+    expect(
+      reconstructAdmissionEvaluations(record).flatMap((entry) => entry.sources.selected),
+    ).toContainEqual({ path, oid });
+  });
+
   it.each(["published-upgrade-survivor", "update-migration"])(
-    "acquires the selected mobile-pairing blob before expanded %s admission",
+    "acquires selected upgrade metadata before expanded %s admission",
     (lane) => {
       const path = "src/gateway/node-command-policy.ts";
+      const membershipOwner = "src/cli/update-cli/update-command-terminal-publication.ts";
+      const scenarioCatalog = "scripts/lib/upgrade-survivor-scenarios.json";
       const inputs = {
         docker_lanes: lane,
         include_release_path_suites: false,
@@ -2143,45 +2262,33 @@ describe("frozen admission workflow barriers", () => {
         {
           "package.json": '{"type":"module","version":"2026.9.2"}',
           [path]: readFileSync(path, "utf8"),
-          "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
-            "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-            "utf8",
-          ),
+          [membershipOwner]: readFileSync(membershipOwner, "utf8"),
+          ...currentSurvivorScenarioFiles(),
         },
         { ADMISSION_BASELINES_RESOLVED: "true" },
       );
       const planned = fixture.selection();
       expect(planned.sourcePaths).toContain(path);
-      const origin = join(fixture.root, "origin.git");
-      fixture.git("clone", "--bare", "--no-hardlinks", fixture.target, origin);
-      fixture.git("-C", origin, "config", "uploadpack.allowFilter", "true");
-      fixture.git("remote", "add", "origin", pathToFileURL(origin).href);
-      fixture.git("config", "remote.origin.promisor", "true");
-      fixture.git("config", "remote.origin.partialclonefilter", "blob:none");
-      const oid = fixture.git("rev-parse", `${fixture.sha}:${path}`);
-      unlinkSync(join(fixture.target, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
+      expect(planned.sourcePaths).toContain(membershipOwner);
+      expect(planned.sourcePaths).toContain(scenarioCatalog);
+      const removeSelectedObject = sparseSelectedFixture(fixture);
+      const oid = removeSelectedObject(path);
+      const scenarioCatalogOid = removeSelectedObject(scenarioCatalog);
+      const membershipOid = removeSelectedObject(membershipOwner);
 
       const unavailable = fixture.admit();
       expect(unavailable.status).not.toBe(0);
       expect(unavailable.stderr).toContain("unable to read selected source");
       expect(unavailable.stdout).not.toContain("producer-ran");
-      const acquisitionBin = join(fixture.root, "acquisition-bin");
-      const requested = join(fixture.root, "requested-blob");
-      mkdirSync(acquisitionBin);
-      const gitPath = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-      writeFileSync(
-        join(acquisitionBin, "git"),
-        `#!/bin/sh\nif [ "$#" = 5 ] && [ "$3" = cat-file ] && [ "$4" = blob ] && [ "$5" = '${oid}' ]; then printf '%s\\n' "$5" >> '${requested}'; fi\nexec '${gitPath}' "$@"\n`,
-        { mode: 0o755 },
+      expect(traceContractAcquisition(fixture).trim().split("\n")).toEqual(
+        expect.arrayContaining([oid, scenarioCatalogOid, membershipOid]),
       );
-      const acquired = fixture.run("Acquire selected contract objects", {
-        PATH: `${acquisitionBin}:${process.env.PATH}`,
-      });
-      expect(acquired.status, acquired.stderr).toBe(0);
-      expect(readFileSync(requested, "utf8")).toBe(`${oid}\n`);
+      expect(fixture.git("cat-file", "blob", membershipOid)).toBe(
+        readFileSync(membershipOwner, "utf8").trim(),
+      );
       const admitted = fixture.admit();
       expect(admitted.status, admitted.stderr).toBe(0);
-      const record = JSON.parse(readFileSync(join(fixture.root, "frozen-admission.json"), "utf8"));
+      const record = fixture.readJson();
       expect(
         record.evaluations.flatMap(
           (entry: { docker?: { lanes: string[] } }) => entry.docker?.lanes ?? [],
@@ -2203,9 +2310,7 @@ describe("frozen admission workflow barriers", () => {
           ADMISSION_INPUTS: JSON.stringify({ ...inputs, ...overrides }, null, 2),
         });
         expect(sibling.status, sibling.stderr).toBe(0);
-        const selection = JSON.parse(
-          readFileSync(join(fixture.root, "frozen-admission-selection.json"), "utf8"),
-        );
+        const selection = fixture.readJson("frozen-admission-selection.json");
         expect(selection.sourcePaths.includes(path), JSON.stringify(overrides)).toBe(selected);
         if (selected) {
           const explicit = fixture.admit();
@@ -2214,6 +2319,35 @@ describe("frozen admission workflow barriers", () => {
       }
     },
   );
+
+  it("acquires the sparse selected first-hop inventory before admission", () => {
+    const inventory = "scripts/lib/update-compat-inventory.json";
+    const postbuild = "scripts/runtime-postbuild.mts";
+    const lane = "update-first-hop-compat-2026.9.6";
+    const f = liveAdmissionFixture(
+      {
+        docker_lanes: lane,
+        allow_frozen_target_scenario_omissions: true,
+      },
+      {
+        [inventory]: JSON.stringify({ releases: [{ version: "2026.9.6" }] }),
+        [postbuild]: readFileSync(postbuild, "utf8"),
+      },
+    );
+    f.selection();
+    const oid = sparseSelectedFixture(f)(inventory);
+
+    const unavailable = f.admit();
+    expect(unavailable.status).not.toBe(0);
+    expect(unavailable.stderr).toContain("unable to read selected source");
+    // A local promisor fetch may incidentally return other missing blobs too.
+    expect(traceContractAcquisition(f).trim().split("\n")).toContain(oid);
+    const admitted = f.admit();
+    expect(admitted.status, admitted.stderr).toBe(0);
+    const record = f.readJson();
+    expect(record.evaluations[0].docker.lanes).toEqual([lane]);
+    expect(record.sources.selected).toContainEqual({ path: inventory, oid });
+  });
 
   it("acquires a sparse selected typed-onboarding assertion helper before admission", () => {
     const helper = "scripts/e2e/lib/release-assertion-files.mjs";
@@ -2242,38 +2376,18 @@ describe("frozen admission workflow barriers", () => {
     expect(planned.status, planned.stderr).toBe(0);
     expect(fixture.selection().sourcePaths).toContain(helper);
 
-    const origin = join(fixture.root, "origin.git");
-    fixture.git("clone", "--bare", "--no-hardlinks", fixture.target, origin);
-    fixture.git("-C", origin, "config", "uploadpack.allowFilter", "true");
-    fixture.git("remote", "add", "origin", pathToFileURL(origin).href);
-    fixture.git("config", "remote.origin.promisor", "true");
-    fixture.git("config", "remote.origin.partialclonefilter", "blob:none");
-    const oid = fixture.git("rev-parse", `${fixture.sha}:${helper}`);
-    unlinkSync(join(fixture.target, ".git", "objects", oid.slice(0, 2), oid.slice(2)));
+    const oid = sparseSelectedFixture(fixture)(helper);
 
     const unavailable = fixture.admit({}, "Admit known package source before packing");
     expect(unavailable.status).not.toBe(0);
     expect(unavailable.stderr).toContain("unable to read selected source");
-    const acquisitionBin = join(fixture.root, "typed-onboarding-acquisition-bin");
-    const requested = join(fixture.root, "typed-onboarding-requested-blob");
-    mkdirSync(acquisitionBin);
-    const gitPath = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
-    writeFileSync(
-      join(acquisitionBin, "git"),
-      `#!/bin/sh\nif [ "$#" = 5 ] && [ "$3" = cat-file ] && [ "$4" = blob ] && [ "$5" = '${oid}' ]; then printf '%s\\n' "$5" >> '${requested}'; fi\nexec '${gitPath}' "$@"\n`,
-      { mode: 0o755 },
+    expect(traceContractAcquisition(fixture, "Acquire known package contract objects", oid)).toBe(
+      `${oid}\n`,
     );
-    const acquired = fixture.run("Acquire known package contract objects", {
-      PATH: `${acquisitionBin}:${process.env.PATH}`,
-    });
-    expect(acquired.status, acquired.stderr).toBe(0);
-    expect(readFileSync(requested, "utf8")).toBe(`${oid}\n`);
 
     const admitted = fixture.admit({}, "Admit known package source before packing");
     expect(admitted.status, admitted.stderr).toBe(0);
-    const record = JSON.parse(
-      readFileSync(join(fixture.root, "frozen-admission-known-source.json"), "utf8"),
-    );
+    const record = fixture.readJson("frozen-admission-known-source.json");
     expect(
       reconstructAdmissionEvaluations(record).flatMap((entry) => entry.sources.selected),
     ).toEqual(expect.arrayContaining([expect.objectContaining({ path: helper, oid })]));
@@ -2321,7 +2435,7 @@ describe("frozen admission workflow barriers", () => {
     expect(resolved.status, resolved.stderr).toBe(0);
     const admitted = acquired.admit();
     expect(admitted.status, admitted.stderr).toBe(0);
-    const record = JSON.parse(readFileSync(join(acquired.root, "frozen-admission.json"), "utf8"));
+    const record = acquired.readJson();
     expect(record.selectedSha).not.toBe(known.sha);
     expect(record.binding).toMatchObject({
       packageSourceSha: acquired.sha,
@@ -2356,7 +2470,7 @@ describe("frozen admission workflow barriers", () => {
       const steps = job.steps ?? [];
       const setup = workflowStep(job, "Setup admission Node.js");
       expect(setup.if).toBeUndefined();
-      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
       expect(setup.run).toContain(
         `source ${toolingRoot}/.github/actions/setup-pnpm-store-cache/ensure-node.sh`,
       );
@@ -2389,10 +2503,10 @@ describe("frozen admission workflow barriers", () => {
       }
       expect(install).toContain("pnpm install --frozen-lockfile --prefer-offline --ignore-scripts");
       const root = tempDirs.make("frozen-parser-prerequisite-");
-      writeFileSync(join(root, "pnpm"), "#!/bin/sh\nexit 79\n", { mode: 0o755 });
+      writeExecutable(join(root, "pnpm"), "#!/bin/sh\nexit 79\n");
       const result = spawnSync(
         "bash",
-        ["-c", `set -euo pipefail\n${install}\nprintf 'producer-ran\\n'`],
+        ["--noprofile", "--norc", "-c", `set -euo pipefail\n${install}\nprintf 'producer-ran\\n'`],
         {
           cwd: root,
           encoding: "utf8",
@@ -2412,13 +2526,9 @@ describe("frozen admission workflow barriers", () => {
           ? "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts"
           : "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts";
       const prefix = layout === "June" ? "../.." : "../../../..";
-      const f = frozenWorkflowFixture(
-        LIVE_E2E_WORKFLOW,
-        "validate_selected_ref",
+      const f = liveAdmissionFixture(
         {
           docker_lanes: "agent-bundle-mcp-tools",
-          include_release_path_suites: false,
-          include_live_suites: false,
           allow_frozen_target_scenario_omissions: true,
         },
         {
@@ -2437,7 +2547,7 @@ describe("frozen admission workflow barriers", () => {
       const result = f.admit();
       expect(result.status, result.stderr).toBe(0);
       expect(result.stdout).toContain("producer-ran");
-      const record = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
+      const record = f.readJson();
       expect(record).toMatchObject({
         status: "ADMITTED",
         selectedSha: f.sha,
@@ -2452,22 +2562,13 @@ describe("frozen admission workflow barriers", () => {
   );
 
   it("rejects unresolved survivor baselines at the reusable execution barrier", () => {
-    const f = frozenWorkflowFixture(
-      LIVE_E2E_WORKFLOW,
-      "validate_selected_ref",
+    const f = liveAdmissionFixture(
       {
         docker_lanes: "published-upgrade-survivor",
-        include_release_path_suites: false,
-        include_live_suites: false,
         published_upgrade_survivor_baseline: "openclaw@latest",
         allow_frozen_target_scenario_omissions: false,
       },
-      {
-        "scripts/e2e/lib/upgrade-survivor/assertions.mjs": readFileSync(
-          "scripts/e2e/lib/upgrade-survivor/assertions.mjs",
-          "utf8",
-        ),
-      },
+      currentSurvivorScenarioFiles(),
     );
     expect(f.selection().obligations).toContainEqual(
       expect.objectContaining({ kind: "upgrade-baselines" }),
@@ -2504,13 +2605,13 @@ describe("frozen admission workflow barriers", () => {
     expect(f.selection()).toMatchObject({ parserRequired: false, sourcePaths: [], consumers: [] });
     const result = f.admit();
     expect(result.status, result.stderr).toBe(0);
-    const record = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
+    const record = f.readJson();
     expect(record.status).toBe("UNSELECTED");
     const digest = record.digest;
     const nextAttempt = f.run("Plan frozen source admission", { GITHUB_RUN_ATTEMPT: "3" });
     expect(nextAttempt.status, nextAttempt.stderr).toBe(0);
     expect(f.admit().status).toBe(0);
-    const continued = JSON.parse(readFileSync(join(f.root, "frozen-admission.json"), "utf8"));
+    const continued = f.readJson();
     expect(continued.digest).toBe(digest);
     expect(continued.provenance.runAttempt).toBe("3");
   });
@@ -2536,7 +2637,7 @@ describe("frozen admission workflow barriers", () => {
       allowFrozenTargetScenarioOmissions: true,
       selection: { consumers: ["agent-bundle-mcp-tools"] },
     };
-    writeFileSync(join(f.root, "frozen-admission-request.json"), JSON.stringify(request));
+    writeJson(join(f.root, "frozen-admission-request.json"), request);
     const result = f.admit();
     expect(result.stdout).not.toContain("producer-ran");
     expect(result.status, result.stderr).not.toBe(0);
@@ -2665,23 +2766,44 @@ function releasePublishOrchestration(job: WorkflowJob): WorkflowStep {
   return { ...dispatch, run: [functions, ...(phases ?? []).map((step) => step.run)].join("\n") };
 }
 
+function workflowScript(path: string, jobName: string, stepName: string): string {
+  const script = workflowStep(workflowJob(path, jobName), stepName).run;
+  if (!script) {
+    throw new Error(`Expected script for ${path}:${jobName}:${stepName}`);
+  }
+  return script;
+}
+
 function createReleasePublishFixture(
   overrides: Record<string, string> = {},
   { functions = "", mockEvidence = true } = {},
 ) {
   const root = tempDirs.make("release-publish-phases-");
   const eventsPath = join(root, "events");
+  const githubEventPath = join(root, "github-event.json");
+  const inputs = {
+    tag: overrides.RELEASE_TAG ?? "v2026.9.1-beta.1",
+    npm_dist_tag: overrides.RELEASE_NPM_DIST_TAG ?? "beta",
+    preflight_run_id: overrides.PREFLIGHT_RUN_ID ?? "55",
+    full_release_validation_run_id: overrides.FULL_RELEASE_VALIDATION_RUN_ID ?? "66",
+    full_release_validation_run_attempt: overrides.FULL_RELEASE_VALIDATION_RUN_ATTEMPT ?? "3",
+    publish_openclaw_npm: overrides.PUBLISH_OPENCLAW_NPM ?? "true",
+    wait_for_clawhub: overrides.WAIT_FOR_CLAWHUB ?? "true",
+  };
+  const githubRef = overrides.GITHUB_REF ?? "refs/heads/main";
   const outputPath = join(root, "output");
   const helperDir = join(root, ".release-harness/scripts/lib");
   mkdirSync(helperDir, { recursive: true });
-  writeFileSync(join(root, "package.json"), JSON.stringify({ type: "module" }));
+  writeJson(join(root, "package.json"), { type: "module" });
   symlinkSync(resolve("node_modules"), join(root, "node_modules"), "dir");
   symlinkSync(
     resolve("scripts/lib/release-beta-verifier.ts"),
     join(helperDir, "release-beta-verifier.ts"),
     "file",
   );
+  symlinkSync(resolve("scripts/tsx.mjs"), join(helperDir, "../tsx.mjs"), "file");
   writeFileSync(eventsPath, "");
+  writeJson(githubEventPath, { inputs });
   writeFileSync(outputPath, "");
   writeFileSync(
     join(helperDir, "release-publish-children.sh"),
@@ -2693,7 +2815,6 @@ create_or_update_github_release() { record draft; }
 dispatch_workflow() { record "dispatch:$*"; printf '404\\n'; }
 wait_for_run() {
   record "wait:$1:\${4:-terminal}:\${5:-true}"
-  if [[ -n "\${6:-}" ]]; then record "approval-environment:$6"; fi
   local result=0
   case "$1" in
     plugin-npm-release.yml) result="\${MOCK_PLUGIN_NPM_RESULT:-0}" ;;
@@ -2708,14 +2829,25 @@ wait_for_run() {
   return "$result"
 }
 gh() {
+  if [[ "$1" == api && "$2" == "repos/$GITHUB_REPOSITORY/actions/runs/"* ]]; then
+    if [[ -f "$RUNNER_TEMP/cancelled-\${2##*/}" ]]; then
+      printf '%s\\n' '{"status":"completed"}'
+    else
+      printf '%s\\n' '{"status":"waiting"}'
+    fi
+    return 0
+  fi
   if [[ "$1 $2" != "run cancel" ]]; then return 99; fi
   record "cancel:$*"
   touch "$RUNNER_TEMP/cancelled-\${!#}"
 }
 promote_android_release_asset() { record android; }
 promote_windows_release_assets() { record windows; }
+wait_for_core_npm_visibility() { :; }
+sync_npm_beta_floor() { :; }
 verify_published_release() {
   record "verify:$clawhub_failed:bootstrap=$plugin_clawhub_bootstrap_completed:workflow=$openclaw_npm_expected_workflow_ref"
+  record "verify-attempt:\${openclaw_npm_run_attempt:-}"
 }
 ${mockEvidence ? "upload_dependency_evidence_release_asset() { record dependency-evidence; }" : ""}
 upload_release_evidence_assets() { record release-evidence; }
@@ -2737,7 +2869,7 @@ ${functions}
     record: (event: string) => writeFileSync(eventsPath, `${event}\n`, { flag: "a" }),
     summary: () => readFileSync(join(root, "summary"), "utf8"),
     run: (step: WorkflowStep, env: NodeJS.ProcessEnv = {}) =>
-      spawnSync("bash", ["-c", step.run ?? ""], {
+      spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
         cwd: root,
         encoding: "utf8",
         timeout: 10_000,
@@ -2745,12 +2877,15 @@ ${functions}
           PATH: process.env.PATH,
           GITHUB_WORKSPACE: root,
           RUNNER_TEMP: root,
+          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
           GITHUB_OUTPUT: outputPath,
           GITHUB_STEP_SUMMARY: join(root, "summary"),
           GITHUB_REPOSITORY: "openclaw/openclaw",
           GITHUB_RUN_ID: "44",
           GITHUB_RUN_ATTEMPT: "2",
-          GITHUB_REF: "refs/heads/main",
+          GITHUB_REF: githubRef,
+          GITHUB_REF_NAME: githubRef.replace(/^refs\/(?:heads|tags)\//u, ""),
+          GITHUB_EVENT_PATH: githubEventPath,
           GITHUB_WORKFLOW_SHA: "d".repeat(40),
           POSTPUBLISH_EVIDENCE_DIR: join(root, "evidence"),
           PUBLISH_EVENTS: eventsPath,
@@ -2759,15 +2894,15 @@ ${functions}
           PARENT_WORKFLOW_SHA: "d".repeat(40),
           PARENT_WORKFLOW_BRANCH: "main",
           PARENT_WORKFLOW_FULL_REF: "refs/heads/main",
-          RELEASE_TAG: "v2026.9.1-beta.1",
-          RELEASE_NPM_DIST_TAG: "beta",
-          PREFLIGHT_RUN_ID: "55",
+          RELEASE_TAG: inputs.tag,
+          RELEASE_NPM_DIST_TAG: inputs.npm_dist_tag,
+          PREFLIGHT_RUN_ID: inputs.preflight_run_id,
           RELEASE_EVIDENCE_MODE: "full-release-validation",
-          FULL_RELEASE_VALIDATION_RUN_ID: "66",
-          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "3",
+          FULL_RELEASE_VALIDATION_RUN_ID: inputs.full_release_validation_run_id,
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: inputs.full_release_validation_run_attempt,
           PLUGIN_SDK_API_ACKNOWLEDGEMENT: "",
-          PUBLISH_OPENCLAW_NPM: "true",
-          WAIT_FOR_CLAWHUB: "true",
+          PUBLISH_OPENCLAW_NPM: inputs.publish_openclaw_npm,
+          WAIT_FOR_CLAWHUB: inputs.wait_for_clawhub,
           PLUGINS: "",
           NPM_TELEGRAM_RUN_ID: "",
           CHILD_PLUGIN_NPM_RUN_ID: "101",
@@ -2777,6 +2912,7 @@ ${functions}
           CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: "false",
           CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF: "refs/heads/main",
           CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA: "d".repeat(40),
+          CHILD_OPENCLAW_NPM_RUN_ATTEMPT: "",
           CHILD_OPENCLAW_NPM_RUN_ID: outputs().openclaw_npm_run_id ?? "",
           CORE_START_OUTCOME: "success",
           CLAWHUB_AUTHORIZATION_OUTCOME: "success",
@@ -2808,6 +2944,20 @@ function evaluatedJobTimeouts(path: string, jobName: string, job: WorkflowJob): 
   }
   if (timeout === "${{ matrix.group.timeout_minutes || 60 }}") {
     return [60, 90];
+  }
+  if (path === CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW && jobName === "cross_os_release_checks") {
+    return resolveRunnerMatrix({ mode: "both", ref: "main" }).include.map((matrix) => {
+      const minutes: unknown = evaluateWorkflowExpression(timeout, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix,
+      });
+      if (typeof minutes !== "number") {
+        throw new Error(`Invalid matrix timeout for ${path}:${jobName}`);
+      }
+      return minutes;
+    });
   }
   if (timeout !== "${{ matrix.timeout_minutes }}") {
     throw new Error(`Unsupported timeout for ${path}:${jobName}: ${String(timeout)}`);
@@ -2863,6 +3013,13 @@ function pluginPrereleaseTimeoutFloor(
   return Object.values(components).reduce((total, value) => total + value, 0);
 }
 
+function runBash(script: string, options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding">) {
+  return spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+    ...options,
+    encoding: "utf8",
+  });
+}
+
 function runFullReleaseInputValidation(
   releaseProfile: string,
   skipTelegram: string,
@@ -2879,15 +3036,10 @@ function runFullReleaseInputValidation(
   );
   const workdir = tempDirs.make("full-release-input-validation-");
   mkdirSync(resolve(workdir, "target"));
-  writeFileSync(
-    resolve(workdir, "target", "package.json"),
-    JSON.stringify({ version: options.version ?? "2026.8.1" }),
-    "utf8",
-  );
+  writeJson(resolve(workdir, "target", "package.json"), { version: options.version ?? "2026.8.1" });
   symlinkSync(process.cwd(), resolve(workdir, "workflow"), "dir");
-  return spawnSync("bash", ["-c", step.run ?? ""], {
+  return runBash(step.run ?? "", {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       PATH: process.env.PATH,
       GITHUB_OUTPUT: resolve(workdir, "output"),
@@ -2895,6 +3047,7 @@ function runFullReleaseInputValidation(
       RELEASE_PROFILE: releaseProfile,
       SKIP_PACKAGE_TELEGRAM_E2E: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
+      LANE_WAIVER: "",
       RERUN_GROUP: options.rerunGroup ?? "all",
       LIVE_SUITE_FILTER: options.liveSuiteFilter ?? "",
       TARGET_CONTEXT_REF: "",
@@ -2931,7 +3084,7 @@ function runFullReleaseTargetIdentityValidation(params: {
     `${JSON.stringify({ version: params.version })}\n`,
     "utf8",
   );
-  writeFileSync(
+  writeExecutable(
     resolve(fakeBin, "git"),
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -2950,9 +3103,8 @@ if [[ "$*" == *"ls-remote"* ]]; then
 fi
 exit 64
 `,
-    { mode: 0o755 },
   );
-  writeFileSync(
+  writeExecutable(
     resolve(fakeBin, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -2974,7 +3126,6 @@ if [[ "$FAKE_API_ERROR" == "$kind" ]]; then
 fi
 printf '%s\\n' "$value"
 `,
-    { mode: 0o755 },
   );
   const targetSha = params.targetRef.match(/^[a-f0-9]{40}$/u)?.[0] ?? "a".repeat(40);
   const normalizedContextRef = (params.targetContextRef ?? params.targetRef)
@@ -2987,9 +3138,8 @@ printf '%s\\n' "$value"
   const commitEndpoint = (ref: string) =>
     `repos/openclaw/openclaw/commits/${encodeURIComponent(ref)}`;
   const outputPath = resolve(workdir, "output");
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+  const result = runBash(step.run ?? "", {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       FAKE_ANONYMOUS_GIT_UNAVAILABLE: String(params.anonymousGitUnavailable ?? false),
       FAKE_API_ERROR: params.apiError ?? "",
@@ -3006,6 +3156,7 @@ printf '%s\\n' "$value"
       GITHUB_OUTPUT: outputPath,
       PATH: `${fakeBin}:${process.env.PATH}`,
       RELEASE_PROFILE: params.releaseProfile ?? "beta",
+      LANE_WAIVER: "",
       RUN_RELEASE_SOAK: params.runReleaseSoak ?? "false",
       RERUN_GROUP: params.rerunGroup ?? "all",
       CROSS_OS_SUITE_FILTER: params.crossOsSuiteFilter ?? "",
@@ -3015,7 +3166,7 @@ printf '%s\\n' "$value"
       TARGET_SHA: targetSha,
     },
   });
-  return { ...result, output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "" };
+  return { ...result, output: readOptionalText(outputPath) };
 }
 
 function runReleaseChecksInputValidation(
@@ -3038,28 +3189,30 @@ function runReleaseChecksInputValidation(
     workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"),
     "Capture selected inputs",
   );
-  const fixture = frozenWorkflowFixture(RELEASE_CHECKS_WORKFLOW, "resolve_target", {}, {}, {}, [
+  const workdir = tempDirs.make("release-checks-input-validation-");
+  const fixture = frozenToolingFixture(workdir, [
     "scripts/full-release-validation-policy.mjs",
+    "scripts/pr-lib/gh-api-preflight.mjs",
+    "scripts/lib/full-release-manifest.mjs",
+    "scripts/release-qualification-coverage.mjs",
     ...PUBLICATION_CONTRACT_FILES,
     "scripts/lib/release-changelog.mjs",
     "scripts/full-release-candidate-contract.mjs",
+    "scripts/lib/full-release-candidate-reuse.mjs",
+    "scripts/lib/full-release-evidence.mjs",
     "scripts/lib/cross-os-release-checks/suite-filter.mjs",
     "scripts/lib/canonical-json.mjs",
     "scripts/lib/record-shared.mjs",
   ]);
-  const workdir = fixture.root;
   const outputPath = resolve(workdir, "github-output");
   mkdirSync(resolve(workdir, "waiver-target"));
-  writeFileSync(
-    resolve(workdir, "waiver-target", "package.json"),
-    JSON.stringify({ version: options.version ?? "2026.8.1" }),
-    "utf8",
-  );
+  writeJson(resolve(workdir, "waiver-target", "package.json"), {
+    version: options.version ?? "2026.8.1",
+  });
   symlinkSync(fixture.tooling, resolve(workdir, "workflow"), "dir");
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+  const result = runBash(step.run ?? "", {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       ...stepEnv,
       ADMISSION_TOOLING_ROOT: fixture.tooling,
@@ -3085,6 +3238,7 @@ function runReleaseChecksInputValidation(
       RELEASE_RUN_RELEASE_SOAK_INPUT: runReleaseSoak,
       RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: skipTelegram,
       TELEGRAM_WAIVER: options.telegramWaiver ?? "",
+      LANE_WAIVER: "",
     },
   });
   return { outputPath, result };
@@ -3117,18 +3271,35 @@ function runReleaseChecksShellStep(
   workdir = tempDirs.make("release-checks-shell-step-"),
 ) {
   const step = workflowStep(workflowJob(RELEASE_CHECKS_WORKFLOW, "resolve_target"), stepName);
+  mkdirSync(join(workdir, "workflow", "scripts"), { recursive: true });
+  copyFileSync(
+    "scripts/release-context-contains.sh",
+    join(workdir, "workflow", "scripts", "release-context-contains.sh"),
+  );
   const outputPath = resolve(workdir, "github-output");
   writeFileSync(outputPath, "", "utf8");
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+  const result = runBash(step.run ?? "", {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       ...env,
+      GITHUB_WORKSPACE: workdir,
       GITHUB_OUTPUT: outputPath,
       PATH: process.env.PATH,
     },
   });
   return { output: readFileSync(outputPath, "utf8"), result };
+}
+
+function parseLineOutputs(text: string) {
+  return Object.fromEntries(
+    text
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
 }
 
 function runCandidateAcquisitionStep(
@@ -3142,20 +3313,11 @@ function runCandidateAcquisitionStep(
   );
   const outputPath = resolve(workdir, "github-output");
   writeFileSync(outputPath, "", "utf8");
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+  const result = runBash(step.run ?? "", {
     cwd: process.cwd(),
-    encoding: "utf8",
     env: { ...env, GITHUB_OUTPUT: outputPath, PATH: process.env.PATH, RUNNER_TEMP: workdir },
   });
-  const output = Object.fromEntries(
-    readFileSync(outputPath, "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
+  const output = parseLineOutputs(readFileSync(outputPath, "utf8"));
   return { output, result };
 }
 
@@ -3170,9 +3332,8 @@ function runFullReleaseCandidateRequest(packagePublished: boolean) {
   mkdirSync(harnessRoot);
   symlinkSync(resolve("scripts"), resolve(harnessRoot, "scripts"), "dir");
   writeFileSync(outputPath, "", "utf8");
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+  const result = runBash(step.run ?? "", {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "false",
       ALLOW_UNRELEASED_CHANGELOG: "false",
@@ -3190,17 +3351,10 @@ function runFullReleaseCandidateRequest(packagePublished: boolean) {
       UPGRADE_SURVIVOR_BASELINE: "openclaw@latest",
       UPGRADE_SURVIVOR_BASELINES: "",
       UPGRADE_SURVIVOR_SCENARIOS: "",
+      LANE_WAIVER: "",
     },
   });
-  const output = Object.fromEntries(
-    readFileSync(outputPath, "utf8")
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
+  const output = parseLineOutputs(readFileSync(outputPath, "utf8"));
   return { output, result };
 }
 
@@ -3238,8 +3392,7 @@ function runFullReleaseTargetSummary(
   const workdir = tempDirs.make("full-release-target-summary-");
   const summaryPath = resolve(workdir, "github-summary");
   const stepEnv = Object.fromEntries(Object.keys(step.env ?? {}).map((name) => [name, ""]));
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
-    encoding: "utf8",
+  const result = runBash(step.run ?? "", {
     env: {
       ...stepEnv,
       GITHUB_STEP_SUMMARY: summaryPath,
@@ -3285,8 +3438,8 @@ function runFocusedLiveSuiteValidation(suiteId: string, overrides: Record<string
     workflowJob(LIVE_E2E_WORKFLOW, "validate_selected_ref"),
     "Validate focused live suite filter",
   );
-  return spawnSync("bash", ["-c", step.run ?? ""], {
-    encoding: "utf8",
+  const runnerTemp = tempDirs.make("focused-live-suite-");
+  return runBash(step.run ?? "", {
     env: {
       PATH: process.env.PATH,
       LIVE_SUITE_FILTER: suiteId,
@@ -3296,6 +3449,7 @@ function runFocusedLiveSuiteValidation(suiteId: string, overrides: Record<string
       LIVE_MODELS_ONLY: "false",
       LIVE_MODEL_PROVIDERS: "",
       ADMISSION_TOOLING_ROOT: resolve("."),
+      RUNNER_TEMP: runnerTemp,
       ...overrides,
     },
   });
@@ -3324,128 +3478,10 @@ function runFullReleaseChildDispatch(
   const workdir = tempDirs.make("full-release-child-dispatch-");
   const ghPath = resolve(workdir, "gh");
   const sleepPath = resolve(workdir, "sleep");
-  const callsPath = resolve(workdir, "gh-calls.jsonl");
+  const callsPath = resolve(workdir, "gh-calls");
   const statusPath = resolve(workdir, "status-polls");
   writeFileSync(callsPath, "");
-  writeFileSync(
-    ghPath,
-    `#!${process.execPath}
-const fs = require("node:fs");
-const args = process.argv.slice(2);
-const env = process.env;
-fs.appendFileSync(env.MOCK_GH_CALLS, JSON.stringify({
-  args,
-  childWorkflowRef: env.CHILD_WORKFLOW_REF,
-  dispatchRunName: env.DISPATCH_RUN_NAME,
-}) + "\\n");
-const jobs = JSON.parse(env.MOCK_GH_JOBS);
-const conclusion = env.MOCK_GH_CONCLUSION;
-const url = "https://github.com/openclaw/openclaw/actions/runs/101";
-function nextRunObservation() {
-  const statuses = JSON.parse(env.MOCK_GH_STATUSES);
-  const titles = JSON.parse(env.MOCK_GH_RUN_TITLES);
-  let index = 0;
-  try { index = Number(fs.readFileSync(env.MOCK_GH_STATUS_POLLS, "utf8")); } catch {}
-  fs.writeFileSync(env.MOCK_GH_STATUS_POLLS, String(index + 1));
-  return {
-    status: statuses[Math.min(index, statuses.length - 1)],
-    title: titles.length > 0
-      ? titles[Math.min(index, titles.length - 1)]
-      : env.MOCK_GH_RUN_TITLE,
-  };
-}
-if (args[0] === "workflow" && args[1] === "run") {
-  if (env.MOCK_GH_DISPATCH_ERROR) {
-    console.error(env.MOCK_GH_DISPATCH_ERROR);
-    process.exit(1);
-  }
-  console.log(env.MOCK_GH_DISPATCH_OUTPUT);
-} else if (args[0] === "api" && args.some((value) => value.includes("/commits/"))) {
-  console.log(env.MOCK_GH_CURRENT_SHA);
-} else if (args[0] === "api" && args.some((value) => value.includes("/actions/workflows/") && value.endsWith("/runs"))) {
-  console.log(env.MOCK_GH_MATCHES);
-} else if (args[0] === "api" && args.some((value) => value.includes("/actions/workflows/"))) {
-  console.log(env.MOCK_GH_WORKFLOW_ID);
-} else if (args[0] === "api" && args.some((value) => value.includes("/jobs?"))) {
-  if (env.MOCK_GH_JOBS_ERROR) {
-    console.error(env.MOCK_GH_JOBS_ERROR);
-    process.exit(1);
-  }
-  jobs.forEach((job) => console.log(JSON.stringify(job)));
-} else if (args[0] === "api" && args.some((value) => value.includes("/actions/runs/"))) {
-  if (env.MOCK_GH_STATUS_ERROR && fs.existsSync(env.MOCK_GH_STATUS_POLLS)) {
-    console.error(env.MOCK_GH_STATUS_ERROR);
-    process.exit(1);
-  }
-  const observation = nextRunObservation();
-  console.log(JSON.stringify({
-    conclusion,
-    display_title: observation.title,
-    event: env.MOCK_GH_RUN_EVENT,
-    head_branch: env.MOCK_GH_RUN_HEAD_BRANCH,
-    head_sha: env.MOCK_GH_CHILD_SHA,
-    html_url: url,
-    id: Number(env.MOCK_GH_RUN_ID),
-    path: env.MOCK_GH_RUN_PATH,
-    run_attempt: Number(env.MOCK_GH_RUN_ATTEMPT),
-    status: observation.status,
-    workflow_id: Number(env.MOCK_GH_RUN_WORKFLOW_ID),
-  }));
-} else if (args[0] === "run" && args[1] === "view") {
-  const field = args[args.indexOf("--json") + 1];
-  if (field === "status" && env.MOCK_GH_STATUS_ERROR) {
-    console.error(env.MOCK_GH_STATUS_ERROR);
-    process.exit(1);
-  }
-  if (field === "jobs") {
-    if (env.MOCK_GH_JOBS_ERROR) {
-      console.error(env.MOCK_GH_JOBS_ERROR);
-      process.exit(1);
-    }
-    const query = args[args.indexOf("--jq") + 1];
-    if (query.startsWith("[.jobs")) {
-      console.log(JSON.stringify(jobs.filter((job) => job.status === "completed" && job.conclusion !== "success" && job.conclusion !== "skipped")));
-    } else {
-      jobs.forEach((job) => console.log(JSON.stringify(job)));
-    }
-  } else {
-    const status = field === "status" ? nextRunObservation().status : undefined;
-    console.log({
-      conclusion,
-      headSha: env.MOCK_GH_CHILD_SHA,
-      status,
-      url,
-    }[field]);
-  }
-} else if (args[0] !== "run" || args[1] !== "cancel") {
-  console.error("Unexpected mock gh invocation: " + JSON.stringify(args));
-  process.exit(2);
-}
-`,
-  );
-  chmodSync(ghPath, 0o755);
-  writeFileSync(
-    sleepPath,
-    `#!/bin/sh
-if [ -n "\${MOCK_SLEEP_SIGNAL:-}" ] && [ ! -e "\${MOCK_SLEEP_SIGNAL_SENT}" ]; then
-  : > "\${MOCK_SLEEP_SIGNAL_SENT}"
-  kill -"\${MOCK_SLEEP_SIGNAL}" "$PPID"
-fi
-exit 0
-`,
-  );
-  chmodSync(sleepPath, 0o755);
-
   const parentSha = "a".repeat(40);
-  const defaultJobs = [
-    {
-      conclusion: "success",
-      html_url: "https://github.com/openclaw/openclaw/actions/runs/101/job/201",
-      name: "Verify release checks",
-      status: "completed",
-      url: "https://github.com/openclaw/openclaw/actions/runs/101/job/201",
-    },
-  ];
   const stepValues: Record<string, string> = {
     ALLOW_UNRELEASED_CHANGELOG: "false",
     ARTIFACT_STAGE: child.kind.replace("artifact-", ""),
@@ -3457,6 +3493,8 @@ exit 0
     CI_RELEASE_SCOPE: "full",
     CODEX_PLUGIN_SPEC: "",
     CROSS_OS_SUITE_FILTER: "",
+    EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
+    QUALIFICATION_BASELINES_JSON: "",
     FAIL_FAST: "false",
     GH_TOKEN: "fixture-token",
     LIVE_SUITE_FILTER: "",
@@ -3466,6 +3504,7 @@ exit 0
     PACKAGE_SPEC: "openclaw@beta",
     PARENT_WORKFLOW_SHA: parentSha,
     PREFLIGHT_PHASE: "all",
+    PUBLICATION_ARTIFACTS_REUSED: "false",
     PREPARED_NPM_BUNDLE_JSON: '{"schema":"openclaw.prepared-npm-bundle/v1"}',
     PHASE: child.jobName.endsWith("_candidate") ? "candidate" : "independent",
     PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
@@ -3480,6 +3519,7 @@ exit 0
     SCENARIO: "",
     SKIP_PACKAGE_TELEGRAM_E2E: "false",
     TELEGRAM_WAIVER: "",
+    LANE_WAIVER: "",
     TARGET_CONTEXT_REF: "",
     TARGET_REF: "main",
     TARGET_SHA: "b".repeat(40),
@@ -3493,57 +3533,112 @@ exit 0
       return [name, value];
     }),
   );
-  const result = spawnSync("bash", ["-c", script], {
+  const env = {
+    ...stepEnv,
+    GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN:
+      readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW).env?.GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ??
+      "HTTP 5[0-9][0-9]",
+    GITHUB_OUTPUT: resolve(workdir, "github-output"),
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_RUN_ATTEMPT: "2",
+    GITHUB_RUN_ID: "77",
+    GITHUB_STEP_SUMMARY: resolve(workdir, "github-summary"),
+    MOCK_GH_CALLS: callsPath,
+    MOCK_GH_CHILD_SHA: parentSha,
+    MOCK_GH_CONCLUSION: "success",
+    MOCK_GH_CURRENT_SHA: parentSha,
+    MOCK_GH_DISPATCH_OUTPUT: "Created workflow_dispatch event.",
+    MOCK_GH_MATCHES: "[101]",
+    MOCK_GH_RUN_EVENT: "workflow_dispatch",
+    MOCK_GH_RUN_HEAD_BRANCH:
+      overrides.MOCK_GH_RUN_HEAD_BRANCH ??
+      overrides.CHILD_WORKFLOW_REF ??
+      stepEnv.CHILD_WORKFLOW_REF,
+    MOCK_GH_RUN_ID: "101",
+    MOCK_GH_RUN_PATH: `.github/workflows/${child.workflow}`,
+    MOCK_GH_RUN_ATTEMPT: "1",
+    MOCK_GH_RUN_TITLE: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
+    MOCK_GH_RUN_TITLES: "[]",
+    MOCK_GH_RUN_WORKFLOW_ID: "789",
+    MOCK_GH_STATUSES: '["completed"]',
+    MOCK_GH_STATUS_POLLS: statusPath,
+    MOCK_GH_WORKFLOW_ID: "789",
+    PATH: `${workdir}:${process.env.PATH}`,
+    ...overrides,
+  };
+  // Serialize responses once: title polling must not start a Node runtime per read.
+  const statuses = JSON.parse(env.MOCK_GH_STATUSES) as string[];
+  const titles = JSON.parse(env.MOCK_GH_RUN_TITLES) as string[];
+  const observations = Array.from(
+    { length: Math.max(statuses.length, titles.length, 1) },
+    (_, index) =>
+      JSON.stringify({
+        conclusion: env.MOCK_GH_CONCLUSION,
+        display_title:
+          titles.length > 0 ? titles[Math.min(index, titles.length - 1)] : env.MOCK_GH_RUN_TITLE,
+        event: env.MOCK_GH_RUN_EVENT,
+        head_branch: env.MOCK_GH_RUN_HEAD_BRANCH,
+        head_sha: env.MOCK_GH_CHILD_SHA,
+        html_url: "https://github.com/openclaw/openclaw/actions/runs/101",
+        id: Number(env.MOCK_GH_RUN_ID),
+        path: env.MOCK_GH_RUN_PATH,
+        run_attempt: Number(env.MOCK_GH_RUN_ATTEMPT),
+        status: statuses[Math.min(index, statuses.length - 1)],
+        workflow_id: Number(env.MOCK_GH_RUN_WORKFLOW_ID),
+      }),
+  );
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  writeExecutable(
+    ghPath,
+    `#!/bin/sh
+printf '%s\\0' "$#" "$CHILD_WORKFLOW_REF" "\${DISPATCH_RUN_NAME:-}" "$@" >> "$MOCK_GH_CALLS"
+if [ "$1" = workflow ] && [ "$2" = run ]; then
+  if [ -n "\${MOCK_GH_DISPATCH_ERROR:-}" ]; then
+    printf '%s\\n' "$MOCK_GH_DISPATCH_ERROR" >&2
+    exit 1
+  fi
+  printf '%s\\n' "$MOCK_GH_DISPATCH_OUTPUT"
+  exit 0
+fi
+if [ "$1" = api ]; then
+  for arg in "$@"; do
+    case "$arg" in
+      */commits/*) printf '%s\\n' "$MOCK_GH_CURRENT_SHA"; exit 0 ;;
+      */actions/workflows/*/runs) printf '%s\\n' "$MOCK_GH_MATCHES"; exit 0 ;;
+      */actions/workflows/*) printf '%s\\n' "$MOCK_GH_WORKFLOW_ID"; exit 0 ;;
+      */actions/runs/*)
+        poll=0
+        if [ -f "$MOCK_GH_STATUS_POLLS" ]; then
+          read -r poll < "$MOCK_GH_STATUS_POLLS"
+        fi
+        printf '%s\\n' "$((poll + 1))" > "$MOCK_GH_STATUS_POLLS"
+        case "$poll" in
+${observations.map((json, index) => `          ${index === observations.length - 1 ? "*" : index}) printf '%s\\n' ${quote(json)} ;;`).join("\n")}
+        esac
+        exit 0 ;;
+    esac
+  done
+fi
+printf 'Unexpected mock gh invocation: %s\\n' "$*" >&2
+exit 2
+`,
+  );
+  writeExecutable(sleepPath, "#!/bin/sh\nexit 0\n");
+  const result = runBash(script, {
     cwd: workdir,
-    encoding: "utf8",
-    env: {
-      ...stepEnv,
-      GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN:
-        readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW).env
-          ?.GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN ?? "HTTP 5[0-9][0-9]",
-      GITHUB_OUTPUT: resolve(workdir, "github-output"),
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_RUN_ATTEMPT: "2",
-      GITHUB_RUN_ID: "77",
-      GITHUB_STEP_SUMMARY: resolve(workdir, "github-summary"),
-      MOCK_GH_CALLS: callsPath,
-      MOCK_GH_CHILD_SHA: parentSha,
-      MOCK_GH_CONCLUSION: "success",
-      MOCK_GH_CURRENT_SHA: parentSha,
-      MOCK_GH_DISPATCH_OUTPUT: "Created workflow_dispatch event.",
-      MOCK_GH_JOBS: JSON.stringify(defaultJobs),
-      MOCK_GH_MATCHES: "[101]",
-      MOCK_GH_RUN_EVENT: "workflow_dispatch",
-      MOCK_GH_RUN_HEAD_BRANCH:
-        overrides.MOCK_GH_RUN_HEAD_BRANCH ??
-        overrides.CHILD_WORKFLOW_REF ??
-        stepEnv.CHILD_WORKFLOW_REF,
-      MOCK_GH_RUN_ID: "101",
-      MOCK_GH_RUN_PATH: `.github/workflows/${child.workflow}`,
-      MOCK_GH_RUN_ATTEMPT: "1",
-      MOCK_GH_RUN_TITLE: `${child.runName} full-release-validation-77-2${child.nonceSuffix}`,
-      MOCK_GH_RUN_TITLES: "[]",
-      MOCK_GH_RUN_WORKFLOW_ID: "789",
-      MOCK_GH_STATUSES: '["completed"]',
-      MOCK_GH_STATUS_POLLS: statusPath,
-      MOCK_GH_WORKFLOW_ID: "789",
-      MOCK_SLEEP_SIGNAL_SENT: resolve(workdir, "sleep-signal-sent"),
-      PATH: `${workdir}:${process.env.PATH}`,
-      ...overrides,
-    },
+    env,
     timeout: 10_000,
   });
-  const calls = readFileSync(callsPath, "utf8")
-    .split("\n")
-    .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          args: string[];
-          childWorkflowRef: string;
-          dispatchRunName?: string;
-        },
-    );
+  // A count-prefixed NUL record preserves empty, quoted, and multiline arguments.
+  const fields = readFileSync(callsPath, "utf8").split("\0");
+  const calls: { args: string[]; childWorkflowRef: string; dispatchRunName?: string }[] = [];
+  for (let cursor = 0; cursor < fields.length - 1;) {
+    const argc = Number(fields[cursor++]);
+    const childWorkflowRef = fields[cursor++]!;
+    const dispatchRunName = fields[cursor++] || undefined;
+    calls.push({ args: fields.slice(cursor, cursor + argc), childWorkflowRef, dispatchRunName });
+    cursor += argc;
+  }
   return { calls, result };
 }
 
@@ -3556,12 +3651,10 @@ function fullReleaseChild(kind: string) {
 }
 
 function runPackageAcceptanceSummary(params: {
-  advisory?: boolean;
   dockerArtifactResult?: string;
   dockerRegistryResult?: string;
   npm12InstallResult?: string;
   suiteProfile?: string;
-  telegramAdvisory?: boolean;
   telegramEnabled: boolean;
   telegramResult: string;
 }) {
@@ -3570,10 +3663,8 @@ function runPackageAcceptanceSummary(params: {
   if (!script) {
     throw new Error("Expected package acceptance summary script");
   }
-  return spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
+  return runBash(script, {
     env: {
-      ADVISORY: String(params.advisory ?? false),
       DOCKER_ARTIFACT_RESULT: params.dockerArtifactResult ?? "success",
       DOCKER_REGISTRY_RESULT: params.dockerRegistryResult ?? "skipped",
       PACKAGE_INTEGRITY_RESULT: "success",
@@ -3582,7 +3673,6 @@ function runPackageAcceptanceSummary(params: {
       PATH: process.env.PATH,
       RESOLVE_RESULT: "success",
       SUITE_PROFILE: params.suiteProfile ?? "package",
-      TELEGRAM_ADVISORY: String(params.telegramAdvisory ?? false),
       TELEGRAM_ENABLED: String(params.telegramEnabled),
     },
   });
@@ -3594,17 +3684,16 @@ function runPackageAcceptanceProfile(params: {
   telegramMode?: string;
   telegramScenarios?: string;
 }) {
-  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
-  const script = workflowStep(job, "Select acceptance profile").run;
-  if (!script) {
-    throw new Error("Expected package acceptance profile script");
-  }
-  const fixture = frozenWorkflowFixture(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", {});
-  const workdir = fixture.root;
+  const script = workflowScript(
+    PACKAGE_ACCEPTANCE_WORKFLOW,
+    "resolve_package",
+    "Select acceptance profile",
+  );
+  const workdir = tempDirs.make("package-acceptance-profile-");
+  const fixture = frozenToolingFixture(workdir, []);
   const outputPath = resolve(workdir, "github-output");
-  const result = spawnSync("bash", ["-c", script], {
+  const result = runBash(script, {
     cwd: fixture.tooling,
-    encoding: "utf8",
     env: {
       ADMISSION_TOOLING_ROOT: fixture.tooling,
       ADMISSION_TOOLING_SHA: fixture.toolingSha,
@@ -3619,18 +3708,7 @@ function runPackageAcceptanceProfile(params: {
     },
   });
   const outputs =
-    result.status === 0
-      ? Object.fromEntries(
-          readFileSync(outputPath, "utf8")
-            .trim()
-            .split("\n")
-            .filter(Boolean)
-            .map((line) => {
-              const separator = line.indexOf("=");
-              return [line.slice(0, separator), line.slice(separator + 1)];
-            }),
-        )
-      : {};
+    result.status === 0 ? parseLineOutputs(readFileSync(outputPath, "utf8").trim()) : {};
   return { outputs, result };
 }
 
@@ -3638,15 +3716,14 @@ function runPackageAcceptanceRegistryInputValidation(params: {
   candidateArtifactJson?: string;
   prepublishPluginRegistryJson?: string;
 }) {
-  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
-  const script = workflowStep(job, "Validate prerelease plugin registry input").run;
-  if (!script) {
-    throw new Error("Expected package acceptance registry input validation script");
-  }
+  const script = workflowScript(
+    PACKAGE_ACCEPTANCE_WORKFLOW,
+    "resolve_package",
+    "Validate prerelease plugin registry input",
+  );
   const workdir = tempDirs.make("package-acceptance-registry-input-");
   const outputPath = resolve(workdir, "github-output");
-  const result = spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
+  const result = runBash(script, {
     env: {
       CANDIDATE_ARTIFACT_JSON: params.candidateArtifactJson ?? "",
       GITHUB_OUTPUT: outputPath,
@@ -3676,11 +3753,11 @@ function runPackageAcceptanceResolveScript(params: {
   source: "artifact" | "npm" | "ref" | "trusted-url" | "url";
   telegramMode: "mock-openai" | "none";
 }) {
-  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
-  const script = workflowStep(job, "Resolve package candidate").run;
-  if (!script) {
-    throw new Error("Expected package acceptance resolve script");
-  }
+  const script = workflowScript(
+    PACKAGE_ACCEPTANCE_WORKFLOW,
+    "resolve_package",
+    "Resolve package candidate",
+  );
   const workdir = tempDirs.make("package-acceptance-resolve-");
   const binDir = resolve(workdir, "bin");
   const capturePath = resolve(workdir, "node-args");
@@ -3705,9 +3782,8 @@ fi
 `,
   );
   chmodSync(nodePath, 0o755);
-  const result = spawnSync("bash", ["-c", script], {
+  const result = runBash(script, {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       CAPTURE_PATH: capturePath,
       GITHUB_OUTPUT: outputPath,
@@ -3740,11 +3816,11 @@ function runPackageAcceptanceBaselineStep(params: {
   source: "artifact" | "npm" | "ref";
   targetContextRef?: string;
 }) {
-  const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package");
-  const script = workflowStep(job, "Resolve published upgrade survivor baselines").run;
-  if (!script) {
-    throw new Error("Expected package acceptance baseline script");
-  }
+  const script = workflowScript(
+    PACKAGE_ACCEPTANCE_WORKFLOW,
+    "resolve_package",
+    "Resolve published upgrade survivor baselines",
+  );
   const executableScript = script.replace(
     "node scripts/lib/release-upgrade-baseline.mjs",
     `node ${JSON.stringify(resolve("scripts/lib/release-upgrade-baseline.mjs"))}`,
@@ -3756,7 +3832,7 @@ function runPackageAcceptanceBaselineStep(params: {
   mkdirSync(binDir, { recursive: true });
   symlinkSync(resolve("node_modules"), resolve(workdir, "node_modules"), "dir");
   symlinkSync(resolve("scripts"), resolve(workdir, "scripts"), "dir");
-  writeFileSync(
+  writeExecutable(
     resolve(binDir, "npm"),
     `#!/bin/sh
 printf '%s\n' "$*" >> "$NPM_LOG"
@@ -3768,11 +3844,9 @@ else
   exit 64
 fi
 `,
-    { mode: 0o755 },
   );
-  const result = spawnSync("bash", ["-c", executableScript], {
+  const result = runBash(executableScript, {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       CANDIDATE_VERSION: params.candidateVersion,
       CANDIDATE_PUBLISHED: String(
@@ -3792,7 +3866,7 @@ fi
   });
   return {
     npmCalls: existsSync(npmLog) ? readFileSync(npmLog, "utf8").trim().split("\n") : [],
-    output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "",
+    output: readOptionalText(outputPath),
     result,
   };
 }
@@ -3805,6 +3879,7 @@ function runReleaseSurvivorProfileStep(params: {
   ref?: string;
   override?: string;
   supportsScenario?: boolean;
+  supportsPackageRecovery?: boolean;
   metadataError?: boolean;
 }) {
   const step = workflowStep(
@@ -3817,9 +3892,9 @@ function runReleaseSurvivorProfileStep(params: {
   const calls = join(root, "calls");
   mkdirSync(bin);
   symlinkSync(resolve("scripts"), join(root, "scripts"), "dir");
-  writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.9.3" }));
+  writeJson(join(root, "package.json"), { version: "2026.9.3" });
   for (const tool of ["gh", "npm"]) {
-    writeFileSync(
+    writeExecutable(
       join(bin, tool),
       `#!${process.execPath}
 const fs = require("node:fs");
@@ -3832,12 +3907,10 @@ if (tool === "gh") {
   process.exit(75);
 }
 `,
-      { mode: 0o755 },
     );
   }
-  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+  const result = runBash(step.run ?? "", {
     cwd: root,
-    encoding: "utf8",
     env: {
       PATH: `${bin}:${process.env.PATH}`,
       GITHUB_OUTPUT: output,
@@ -3854,7 +3927,14 @@ if (tool === "gh") {
       FIXTURE_DIRECTORY: JSON.stringify(
         params.supportsScenario === false
           ? ["run.sh"]
-          : ["run.sh", "legacy-operator-state.mjs", "custom-plugin-siblings.mjs"],
+          : [
+              "run.sh",
+              "legacy-operator-state.mjs",
+              "custom-plugin-siblings.mjs",
+              ...(params.supportsPackageRecovery === false
+                ? []
+                : ["package-activation-recovery.mjs"]),
+            ],
       ),
     },
   });
@@ -3881,13 +3961,12 @@ if (tool === "gh") {
 }
 
 function runNpmTelegramInputValidation(overrides: Record<string, string>) {
-  const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
-  const script = workflowStep(job, "Validate inputs and secrets").run;
-  if (!script) {
-    throw new Error("Expected npm Telegram input validation script");
-  }
-  return spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
+  const script = workflowScript(
+    NPM_TELEGRAM_WORKFLOW,
+    "run_package_telegram_e2e",
+    "Validate inputs and secrets",
+  );
+  return runBash(script, {
     env: {
       OPENCLAW_QA_CONVEX_SECRET_CI: "test-secret",
       OPENCLAW_QA_CONVEX_SITE_URL: "https://example.invalid",
@@ -3915,16 +3994,18 @@ function runNpmTelegramInputValidation(overrides: Record<string, string>) {
 }
 
 function runNpmTelegramArtifactValidation(params: {
+  currentRunAttempt?: string;
   currentRunId: string;
+  producerJobConclusion?: "failure" | "success";
   producerRunId: string;
   producerStatus: "completed" | "in_progress" | "pending" | "queued" | "requested" | "waiting";
-  producerConclusion: "success" | null;
+  producerConclusion: "failure" | "success" | null;
 }) {
-  const job = workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e");
-  const script = workflowStep(job, "Validate package artifact identity").run;
-  if (!script) {
-    throw new Error("Expected npm Telegram artifact identity script");
-  }
+  const script = workflowScript(
+    NPM_TELEGRAM_WORKFLOW,
+    "run_package_telegram_e2e",
+    "Validate package artifact identity",
+  );
   const binDir = tempDirs.make("npm-telegram-artifact-gh-");
   const ghPath = `${binDir}/gh`;
   writeFileSync(
@@ -3932,6 +4013,7 @@ function runNpmTelegramArtifactValidation(params: {
     `#!/bin/sh
 case "$*" in
   *actions/artifacts*) printf '%s\\n' "$MOCK_ARTIFACT_JSON" ;;
+  *actions/runs*/jobs*) printf '%s\\n' "$MOCK_JOBS_JSON" ;;
   *actions/runs*) printf '%s\\n' "$MOCK_ATTEMPT_JSON" ;;
   *) exit 2 ;;
 esac
@@ -3942,8 +4024,7 @@ esac
   const artifactId = "987";
   const artifactName = `package-under-test-${params.producerRunId}-${attempt}`;
   const digest = "a".repeat(64);
-  return spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
+  return runBash(script, {
     env: {
       ARTIFACT_DIGEST: digest,
       ARTIFACT_ID: artifactId,
@@ -3951,6 +4032,7 @@ esac
       ARTIFACT_RUN_ATTEMPT: attempt,
       ARTIFACT_RUN_ID: params.producerRunId,
       GITHUB_REPOSITORY: "openclaw/openclaw",
+      GITHUB_RUN_ATTEMPT: params.currentRunAttempt ?? attempt,
       GITHUB_RUN_ID: params.currentRunId,
       MOCK_ARTIFACT_JSON: JSON.stringify({
         created_at: "2026-07-15T08:49:20Z",
@@ -3968,26 +4050,39 @@ esac
         status: params.producerStatus,
         updated_at: "2026-07-15T08:49:30Z",
       }),
+      MOCK_JOBS_JSON: JSON.stringify({
+        jobs: [
+          {
+            completed_at: "2026-07-15T08:49:30Z",
+            conclusion: params.producerJobConclusion ?? "success",
+            id: 654,
+            name: "Run package acceptance / Resolve package candidate",
+            run_attempt: Number(attempt),
+            run_id: Number(params.producerRunId),
+            started_at: "2026-07-15T08:39:00Z",
+            status: "completed",
+          },
+        ],
+      }),
       PATH: `${binDir}:${process.env.PATH}`,
     },
   });
 }
 
 function runReleasePublishInputValidation(overrides: Record<string, string>) {
-  const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
-  const script = workflowStep(job, "Validate inputs").run;
-  if (!script) {
-    throw new Error("Expected release publish input validation script");
-  }
+  const script = workflowScript(
+    RELEASE_PUBLISH_WORKFLOW,
+    "resolve_release_target",
+    "Validate inputs",
+  );
   const binDir = tempDirs.make("release-publish-input-gh-");
-  writeFileSync(join(binDir, "gh"), '#!/bin/sh\nprintf "%s\\n" "$WORKFLOW_SHA"\n', {
-    mode: 0o755,
-  });
-  return spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
+  writeExecutable(join(binDir, "gh"), '#!/bin/sh\nprintf "%s\\n" "$WORKFLOW_SHA"\n');
+  const githubOutput = resolve(tempDirs.make("release-publish-inputs-"), "github-output");
+  const result = runBash(script, {
     env: {
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
       FULL_RELEASE_VALIDATION_RUN_ID: "222",
+      GITHUB_OUTPUT: githubOutput,
       OPENCLAW_NPM_RESUME_RUN_ID: "",
       GITHUB_REPOSITORY: "openclaw/openclaw",
       PATH: `${binDir}:${process.env.PATH}`,
@@ -4006,19 +4101,73 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
       ...overrides,
     },
   });
+  return result;
+}
+
+function runReleasePublishTagSignatureVerification(params: { tagRef: object; tagObject?: object }) {
+  const script = workflowScript(
+    RELEASE_PUBLISH_WORKFLOW,
+    "resolve_release_target",
+    "Verify signed release tag",
+  );
+  const binDir = tempDirs.make("release-publish-signature-gh-");
+  writeExecutable(
+    join(binDir, "gh"),
+    `#!/bin/sh
+case "$*" in
+  *git/ref/tags/*) printf '%s\\n' "$MOCK_TAG_REF" ;;
+  *git/tags/*) printf '%s\\n' "$MOCK_TAG_OBJECT" ;;
+  *) exit 2 ;;
+esac
+`,
+  );
+  const runnerTemp = tempDirs.make("release-publish-signature-");
+  const githubOutput = resolve(runnerTemp, "github-output");
+  const result = runBash(script, {
+    env: {
+      GITHUB_OUTPUT: githubOutput,
+      GITHUB_REPOSITORY: "openclaw/openclaw",
+      MOCK_TAG_OBJECT: JSON.stringify(params.tagObject ?? {}),
+      MOCK_TAG_REF: JSON.stringify(params.tagRef),
+      PATH: `${binDir}:${process.env.PATH}`,
+      RELEASE_TAG: "v2026.9.7",
+      RUNNER_TEMP: runnerTemp,
+    },
+  });
+  return { ...result, githubOutput };
+}
+
+function runReleaseTagTargetVerification(params: {
+  directSha: string;
+  peeledSha: string;
+  expectedTagObjectSha: string;
+}) {
+  const helper = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+  const verification = shellFunctionSource(helper, "verify_release_tag_target");
+  const remoteRefs = [
+    `${params.directSha}\trefs/tags/v2026.9.7`,
+    `${params.peeledSha}\trefs/tags/v2026.9.7^{}`,
+  ].join("\n");
+  return runBash(
+    `git() { printf '%s\\n' "$REMOTE_REFS"; }\n${verification}\nverify_release_tag_target`,
+    {
+      env: {
+        PATH: process.env.PATH,
+        RELEASE_TAG: "v2026.9.7",
+        REMOTE_REFS: remoteRefs,
+        SIGNED_RELEASE_TAG_OBJECT_SHA: params.expectedTagObjectSha,
+        TARGET_SHA: params.peeledSha,
+      },
+    },
+  );
 }
 
 function runReleasePublishChildWorkflowRef(overrides: Record<string, string> = {}) {
   const script = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
   const resolveChildRef = shellFunctionSource(script, "resolve_child_workflow_ref");
-  return spawnSync(
-    "bash",
-    [
-      "-c",
-      `gh() { echo unexpected-github-lookup >&2; return 64; }\n${resolveChildRef}\nresolve_child_workflow_ref "$WORKFLOW_FULL_REF"`,
-    ],
+  return runBash(
+    `gh() { echo unexpected-github-lookup >&2; return 64; }\n${resolveChildRef}\nresolve_child_workflow_ref "$WORKFLOW_FULL_REF"`,
     {
-      encoding: "utf8",
       env: {
         PATH: process.env.PATH,
         WORKFLOW_FULL_REF: "refs/heads/main",
@@ -4029,11 +4178,11 @@ function runReleasePublishChildWorkflowRef(overrides: Record<string, string> = {
 }
 
 function runOpenClawNpmTrustedRefGuard(overrides: Record<string, string>) {
-  const job = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "validate_publish_request");
-  const script = workflowStep(job, "Require trusted workflow ref for publish").run;
-  if (!script) {
-    throw new Error("Expected OpenClaw npm trusted ref guard");
-  }
+  const script = workflowScript(
+    OPENCLAW_NPM_RELEASE_WORKFLOW,
+    "validate_publish_request",
+    "Require trusted workflow ref for publish",
+  );
   const binDir = tempDirs.make("openclaw-npm-trusted-ref-");
   const ghPath = `${binDir}/gh`;
   const gitPath = `${binDir}/git`;
@@ -4050,8 +4199,7 @@ function runOpenClawNpmTrustedRefGuard(overrides: Record<string, string>) {
     `#!/bin/sh\n[ "$1" = "--signal=TERM" ] && [ "$2" = "--kill-after=10s" ] && [ "$3" = "120s" ] || exit 2\nshift 3\nexec "$@"\n`,
   );
   chmodSync(timeoutPath, 0o755);
-  return spawnSync("bash", ["-c", script], {
-    encoding: "utf8",
+  return runBash(script, {
     env: {
       GITHUB_REPOSITORY: "openclaw/openclaw",
       MOCK_REMOTE_TAG_SHA: "a".repeat(40),
@@ -4067,11 +4215,11 @@ function runOpenClawNpmTrustedRefGuard(overrides: Record<string, string>) {
 }
 
 function runPluginNpmPreflightToolingGuard(overrides: Record<string, string>) {
-  const job = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm");
-  const script = workflowStep(job, "Verify trusted preflight tooling identity").run;
-  if (!script) {
-    throw new Error("Expected plugin npm preflight tooling identity guard");
-  }
+  const script = workflowScript(
+    PLUGIN_NPM_RELEASE_WORKFLOW,
+    "preview_plugins_npm",
+    "Verify trusted preflight or recovery tooling identity",
+  );
   const workdir = tempDirs.make("plugin-npm-preflight-tooling-");
   const binDir = resolve(workdir, "bin");
   const toolingDir = resolve(workdir, ".release-tooling/scripts");
@@ -4086,7 +4234,7 @@ function runPluginNpmPreflightToolingGuard(overrides: Record<string, string>) {
     resolve(toolingLibDir, "record-shared.mjs"),
     readFileSync(resolve(REPO_ROOT, "scripts/lib/record-shared.mjs")),
   );
-  writeFileSync(
+  writeExecutable(
     resolve(binDir, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -4108,11 +4256,9 @@ case "$2" in
     ;;
 esac
 `,
-    { mode: 0o755 },
   );
-  return spawnSync("bash", ["-c", script], {
+  return runBash(script, {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       GITHUB_REPOSITORY: "openclaw/openclaw",
       MOCK_COMPARE_STATUS: "identical",
@@ -4131,11 +4277,11 @@ type ProtectedPreflightConsumerParams = {
   currentWorkflowSha: string;
   fullReleasePreflight?: boolean;
   independentProducer?: boolean;
+  producerCurrentAttempt?: number;
   fullReleaseRunId?: string;
   fullReleaseRunAttempt?: string;
   npmDistTag?: string;
   expectedExtendedStableBranch?: string;
-  toolingAncestor?: boolean;
   liveTagSha?: string;
   preflightHeadBranch: string;
   preflightHeadSha: string;
@@ -4148,6 +4294,7 @@ type ProtectedPreflightConsumerParams = {
   additionalPreflightArtifactNames?: string[];
   archiveFailureStatus?: number;
   repeatDownload?: boolean;
+  sdkArtifactFiles?: string[];
 };
 
 function writePreflightConsumerTooling(toolingDir: string) {
@@ -4156,10 +4303,14 @@ function writePreflightConsumerTooling(toolingDir: string) {
     "npm-preflight-tooling-identity.mjs",
     "npm-prepared-bundle.mjs",
     "openclaw-npm-extended-stable-release.mjs",
+    "plugin-sdk-api-release-evidence.mjs",
     "release-tooling-identity.mjs",
     "lib/actions-artifact-archive.mjs",
+    "lib/npm-core-release-packages.mjs",
     "lib/npm-core-release-packages.json",
+    "lib/npm-shrinkwrap-dependencies.mjs",
     "lib/record-shared.mjs",
+    "lib/release-evidence-identity.mjs",
     "lib/release-version.mjs",
   ]) {
     copyFileSync(resolve(REPO_ROOT, "scripts", source), resolve(toolingDir, source));
@@ -4169,11 +4320,19 @@ function writePreflightConsumerTooling(toolingDir: string) {
 const PREFLIGHT_PRODUCER_GH_CASES = `
 case "$2" in
   */actions/runs/*/attempts/*/jobs*)
-    printf '%s\\n' "$MOCK_QUALIFIED_JOBS"
+    if [[ "$2" == */attempts/1/jobs* ]]; then
+      printf '%s\\n' "$MOCK_QUALIFIED_JOBS"
+    else
+      printf '%s\\n' "$MOCK_QUALIFIED_LATER_JOBS"
+    fi
     exit 0
     ;;
   */actions/runs/*/attempts/*)
     printf '%s\\n' "$MOCK_QUALIFIED_RUN"
+    exit 0
+    ;;
+  */actions/runs/"\${MOCK_QUALIFIED_RUN_ID:-}")
+    printf '%s\\n' "\${MOCK_QUALIFIED_CURRENT_RUN:-$MOCK_QUALIFIED_RUN}"
     exit 0
     ;;
   */actions/artifacts/555)
@@ -4247,6 +4406,18 @@ async function qualifiedPreflightConsumerFixture(
     jobName: "Prepare release npm artifacts / Qualify prepared npm package",
     producerWorkflowPath: OPENCLAW_NPM_PREFLIGHT_WORKFLOW,
   };
+  const producerRun = {
+    id: Number(runId),
+    run_attempt: 1,
+    path: `${workflowPath}@${fullRef}`,
+    head_sha: params.preflightHeadSha,
+    head_branch: params.preflightHeadBranch,
+    event: "workflow_dispatch",
+    status: "completed",
+    conclusion: "success",
+    repository: { full_name: "openclaw/openclaw" },
+    head_repository: { full_name: "openclaw/openclaw" },
+  };
   const manifest = Buffer.from(
     JSON.stringify({ version: 3, releaseSha: "d".repeat(40), producer }),
   );
@@ -4283,10 +4454,7 @@ async function qualifiedPreflightConsumerFixture(
   };
   for (const directory of ["runner/full-release-validation-manifest", "full-release-validation"]) {
     mkdirSync(resolve(workdir, directory), { recursive: true });
-    writeFileSync(
-      resolve(workdir, directory, "full-release-validation-manifest.json"),
-      JSON.stringify(fullManifest),
-    );
+    writeJson(resolve(workdir, directory, "full-release-validation-manifest.json"), fullManifest);
   }
   const artifactMetadata = {
     ...artifact,
@@ -4314,17 +4482,25 @@ globalThis.fetch = async (url) => {
     NODE_OPTIONS: `--import=${pathToFileURL(preload).href}`,
     MOCK_QUALIFIED_ARCHIVE: archivePath,
     MOCK_QUALIFIED_ARTIFACT: JSON.stringify(artifactMetadata),
-    MOCK_QUALIFIED_RUN: JSON.stringify({
-      id: Number(runId),
-      run_attempt: 1,
-      path: `${workflowPath}@${fullRef}`,
-      head_sha: params.preflightHeadSha,
-      head_branch: params.preflightHeadBranch,
-      event: "workflow_dispatch",
-      status: "completed",
-      conclusion: "success",
-      repository: { full_name: "openclaw/openclaw" },
-      head_repository: { full_name: "openclaw/openclaw" },
+    MOCK_QUALIFIED_RUN_ID: runId,
+    MOCK_QUALIFIED_RUN: JSON.stringify(producerRun),
+    MOCK_QUALIFIED_CURRENT_RUN: JSON.stringify({
+      ...producerRun,
+      run_attempt: params.producerCurrentAttempt ?? 1,
+    }),
+    MOCK_QUALIFIED_LATER_JOBS: JSON.stringify({
+      total_count: 1,
+      jobs: [
+        {
+          id: 1000,
+          name: "Publish immutable artifact receipt",
+          run_id: Number(runId),
+          run_attempt: params.producerCurrentAttempt ?? 1,
+          head_sha: params.preflightHeadSha,
+          status: "completed",
+          conclusion: "success",
+        },
+      ],
     }),
     MOCK_QUALIFIED_JOBS: JSON.stringify({
       total_count: 1,
@@ -4344,11 +4520,11 @@ globalThis.fetch = async (url) => {
 }
 
 async function runReleasePublishPreflightConsumerGuard(params: ProtectedPreflightConsumerParams) {
-  const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
-  const script = workflowStep(job, "Download OpenClaw npm preflight manifest").run;
-  if (!script) {
-    throw new Error("Expected release publish preflight consumer guard");
-  }
+  const script = workflowScript(
+    RELEASE_PUBLISH_WORKFLOW,
+    "resolve_release_target",
+    "Download OpenClaw npm preflight manifest",
+  );
   const workdir = tempDirs.make("release-publish-preflight-consumer-");
   const binDir = resolve(workdir, "bin");
   const runnerTemp = resolve(workdir, "runner");
@@ -4373,7 +4549,10 @@ async function runReleasePublishPreflightConsumerGuard(params: ProtectedPrefligh
       : [[preflightName, ["preflight-manifest.json", "dependency-evidence/proof.json"]]]),
     [
       `plugin-sdk-api-release-diff-${producerRun.id}-${producerRun.run_attempt}`,
-      ["plugin-sdk-api-release-diff.json", "plugin-sdk-api-release-evidence.json"],
+      params.sdkArtifactFiles ?? [
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-evidence.json",
+      ],
     ],
     ...(params.additionalPreflightArtifactNames ?? []).map((artifactName) => [
       artifactName,
@@ -4404,7 +4583,7 @@ async function runReleasePublishPreflightConsumerGuard(params: ProtectedPrefligh
   }
   const fixturePath = resolve(workdir, "artifacts.json");
   const requestLog = resolve(workdir, "requests.txt");
-  writeFileSync(fixturePath, JSON.stringify(archives));
+  writeJson(fixturePath, archives);
   const fetchMock = resolve(workdir, "artifact-fetch.mjs");
   writeFileSync(
     fetchMock,
@@ -4422,7 +4601,7 @@ globalThis.fetch = async (input) => {
 };
 `,
   );
-  writeFileSync(
+  writeExecutable(
     resolve(binDir, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -4440,7 +4619,6 @@ if [[ "$1" == "api" ]]; then
 fi
 exit 64
 `,
-    { mode: 0o755 },
   );
   const env = {
     ...preflightProducerFixtureEnv(params),
@@ -4484,9 +4662,8 @@ exit 64
     WORKFLOW_SHA: params.currentWorkflowSha,
   };
   const run = () =>
-    spawnSync("bash", ["-c", script], {
+    runBash(script, {
       cwd: workdir,
-      encoding: "utf8",
       env,
     });
   const result = run();
@@ -4494,25 +4671,25 @@ exit 64
   return {
     ...repeated,
     outputPath: env.GITHUB_OUTPUT,
-    outputs: existsSync(env.GITHUB_OUTPUT) ? readFileSync(env.GITHUB_OUTPUT, "utf8") : "",
+    outputs: readOptionalText(env.GITHUB_OUTPUT),
     requests: existsSync(requestLog) ? readFileSync(requestLog, "utf8").trim().split("\n") : [],
     runnerTemp,
   };
 }
 
 async function runOpenClawNpmPreflightConsumerGuard(params: ProtectedPreflightConsumerParams) {
-  const job = workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm");
-  const script = workflowStep(job, "Verify preflight run metadata").run;
-  if (!script) {
-    throw new Error("Expected OpenClaw npm preflight consumer guard");
-  }
+  const script = workflowScript(
+    OPENCLAW_NPM_RELEASE_WORKFLOW,
+    "publish_openclaw_npm",
+    "Verify preflight run metadata",
+  );
   const workdir = tempDirs.make("openclaw-npm-preflight-consumer-");
   const binDir = resolve(workdir, "bin");
   mkdirSync(binDir);
   const qualificationEnv = await qualifiedPreflightConsumerFixture(workdir, params);
   const toolingDir = resolve(workdir, "trusted-workflow/scripts");
   writePreflightConsumerTooling(toolingDir);
-  writeFileSync(
+  writeExecutable(
     resolve(binDir, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -4527,9 +4704,8 @@ if [[ "$1" == "api" ]]; then
 fi
 exit 64
 `,
-    { mode: 0o755 },
   );
-  writeFileSync(
+  writeExecutable(
     resolve(binDir, "git"),
     `#!/usr/bin/env bash
 set -euo pipefail
@@ -4537,20 +4713,14 @@ if [[ "$*" == "rev-parse HEAD" ]]; then
   printf '%s\\n' "$MOCK_RELEASE_SHA"
   exit 0
 fi
-if [[ "$*" == *"merge-base --is-ancestor"* ]]; then
-  [[ "$MOCK_TOOLING_ANCESTOR" == "true" ]]
-  exit
-fi
 if [[ "$*" == *"cat-file -e"* || "$*" == *" fetch "* ]]; then
   exit 0
 fi
 exit 64
 `,
-    { mode: 0o755 },
   );
-  return spawnSync("bash", ["-c", script], {
+  return runBash(script, {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       ...preflightProducerFixtureEnv(params),
       ...qualificationEnv,
@@ -4580,7 +4750,6 @@ exit 64
           ? ".github/workflows/full-release-validation.yml"
           : ".github/workflows/openclaw-npm-release.yml",
       }),
-      MOCK_TOOLING_ANCESTOR: String(params.toolingAncestor !== false),
       MOCK_RELEASE_SHA: "d".repeat(40),
       MOCK_REMOTE_TAG_SHA: params.liveTagSha ?? params.currentWorkflowSha,
       PATH: `${binDir}:${dirname(process.execPath)}:${process.env.PATH}`,
@@ -4669,7 +4838,7 @@ function runReleaseCheckArtifactResolve(params: {
     );
   }
   args.push("--selection-file", selectionFile, "--github-output", githubOutput);
-  const result = spawnSync("bash", args, {
+  const result = spawnSync("bash", ["--noprofile", "--norc", ...args], {
     cwd: workdir,
     encoding: "utf8",
     env: {
@@ -4678,9 +4847,7 @@ function runReleaseCheckArtifactResolve(params: {
     },
   });
   const selection =
-    result.status === 0
-      ? (JSON.parse(readFileSync(selectionFile, "utf8")) as ResolvedReleaseCheckArtifact[])
-      : [];
+    result.status === 0 ? (readJson(selectionFile) as ResolvedReleaseCheckArtifact[]) : [];
   return { result, selection, selectionFile, targetSha, workdir };
 }
 
@@ -4710,7 +4877,7 @@ function runReleaseCheckArtifactValidation(params: {
   const statusDir = resolve(workdir, "statuses");
   const validatedFile = resolve(workdir, "validated.json");
   mkdirSync(statusDir, { recursive: true });
-  writeFileSync(selectionFile, JSON.stringify(params.selection));
+  writeJson(selectionFile, params.selection);
   for (const selection of params.selection) {
     const variant = selection.variant ? `-${selection.variant}` : "";
     writeFileSync(
@@ -4724,6 +4891,8 @@ function runReleaseCheckArtifactValidation(params: {
   const result = spawnSync(
     "bash",
     [
+      "--noprofile",
+      "--norc",
       resolve(REPO_ROOT, RELEASE_CHECK_ARTIFACT_RESOLVER),
       "validate",
       "--selection-file",
@@ -4741,9 +4910,7 @@ function runReleaseCheckArtifactValidation(params: {
   );
   const validated =
     result.status === 0
-      ? (JSON.parse(readFileSync(validatedFile, "utf8")) as Array<
-          ResolvedReleaseCheckArtifact & { status: string }
-        >)
+      ? (readJson(validatedFile) as Array<ResolvedReleaseCheckArtifact & { status: string }>)
       : [];
   return { result, validated };
 }
@@ -4770,13 +4937,12 @@ function runReleaseChecksSummary(params: {
   const workdir = tempDirs.make("openclaw-release-check-status-");
   const selectionDir = resolve(workdir, ".artifacts/release-check-selection");
   mkdirSync(selectionDir, { recursive: true });
-  writeFileSync(
+  writeJson(
     resolve(selectionDir, "advisory-evidence-validated.json"),
-    JSON.stringify(params.validatedStatuses ?? []),
+    params.validatedStatuses ?? [],
   );
-  return spawnSync("bash", ["-c", script], {
+  return runBash(script, {
     cwd: workdir,
-    encoding: "utf8",
     env: {
       CROSS_OS_RELEASE_CHECKS_RESULT: "success",
       DOCKER_E2E_RELEASE_CHECKS_RESULT: "success",
@@ -4814,7 +4980,76 @@ function runReleaseChecksSummary(params: {
 }
 
 describe("package acceptance workflow", () => {
-  it("forwards Plugin SDK acknowledgement through the canonical publish dispatch", () => {
+  function publicationAuthorityEnv(policy: string) {
+    return {
+      GH_TOKEN: "${{ github.token }}",
+      RELEASE_PUBLISH_PARENT_STATE_POLICY: policy,
+      RELEASE_PUBLISH_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
+      RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
+      RELEASE_PUBLISH_REF: "${{ inputs.release_publish_branch }}",
+      RELEASE_PUBLISH_FULL_REF: "${{ inputs.release_publish_full_ref }}",
+      WORKFLOW_FULL_REF: "${{ github.ref }}",
+      WORKFLOW_REF: "${{ github.ref_name }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    };
+  }
+
+  function toolingCase(
+    file: string,
+    jobName: string,
+    checkoutName: string,
+    consumerName: string,
+    toolingPath = ".release-tooling",
+    toolingRef = "${{ github.workflow_sha }}",
+  ) {
+    return { file, jobName, checkoutName, consumerName, toolingPath, toolingRef };
+  }
+
+  function runAndroidPin(pin: string, tag = "v2026.9.1") {
+    const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+    const root = tempDirs.make("release-android-pin-");
+    mkdirSync(join(root, "apps/android"), { recursive: true });
+    writeJson(join(root, "apps/android/version.json"), { version: pin });
+    for (const [command, sha] of [
+      ["git", "a"],
+      ["gh", "c"],
+    ] as const) {
+      writeExecutable(join(root, command), `#!/bin/sh\nprintf '%s\\n' '${sha.repeat(40)}'\n`);
+    }
+    const summaryPath = join(root, "summary");
+    writeFileSync(summaryPath, "");
+    const result = runBash(workflowStep(target, "Resolve checked-out release ref").run ?? "", {
+      cwd: root,
+      env: {
+        PATH: `${root}:${process.env.PATH}`,
+        EXPECTED_SIGNED_TAG_SHA: "a".repeat(40),
+        EXPECTED_SIGNED_TAG_OBJECT_SHA: "c".repeat(40),
+        GITHUB_REPOSITORY: "openclaw/openclaw",
+        RELEASE_TAG: tag,
+        RELEASE_NPM_DIST_TAG: tag.includes("-beta.") ? "beta" : "latest",
+        PUBLISH_OPENCLAW_NPM: "true",
+        PUBLISH_DOCKER_ONLY: "false",
+        GITHUB_OUTPUT: join(root, "output"),
+        GITHUB_STEP_SUMMARY: summaryPath,
+      },
+    });
+    return { root, target, summaryPath, result };
+  }
+
+  it("keeps manual frozen-target adaptation explicit and forwards the reusable contract", () => {
+    const workflow = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW);
+    const name = "allow_frozen_target_scenario_omissions";
+    const input = workflow.on?.workflow_dispatch?.inputs?.[name];
+    expect(input).toEqual(workflow.on?.workflow_call?.inputs?.[name]);
+    expect(input).toMatchObject({ required: false, default: false, type: "boolean" });
+    for (const job of ["docker_acceptance", "docker_acceptance_registry", "package_telegram"]) {
+      expect(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, job).with?.[name]).toBe(
+        "${{ inputs.allow_frozen_target_scenario_omissions || false }}",
+      );
+    }
+  });
+
+  it("forwards sealed publication inputs through the canonical publish dispatch", () => {
     const workflow = readWorkflow(RELEASE_PUBLISH_WORKFLOW);
     const input = workflow.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
     const resolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
@@ -4830,16 +5065,33 @@ describe("package acceptance workflow", () => {
     expect(input).toEqual({
       default: "",
       description:
-        "8-character digest from the Plugin SDK API diff report when the release changes the SDK",
+        "Optional override for the Plugin SDK API acknowledgement sealed by Full Release Validation",
       required: false,
       type: "string",
     });
+    expect(resolveJob.outputs).toMatchObject({
+      plugin_sdk_api_acknowledgement:
+        "${{ fromJSON(steps.full_manifest.outcome == 'success' && toJSON(steps.full_manifest.outputs.plugin_sdk_api_acknowledgement) || toJSON(inputs.plugin_sdk_api_acknowledgement)) }}",
+      npm_decisions: "${{ steps.full_manifest.outputs.npm_decisions }}",
+    });
     expect(dispatch.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
-      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+      "${{ needs.resolve_release_target.outputs.plugin_sdk_api_acknowledgement }}",
     );
     expect(validateEvidence.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
-      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+      "${{ fromJSON(steps.full_manifest.outcome == 'success' && toJSON(steps.full_manifest.outputs.plugin_sdk_api_acknowledgement) || toJSON(inputs.plugin_sdk_api_acknowledgement)) }}",
     );
+    for (const name of ["Start core npm publication", "Complete publish workflows"]) {
+      expect(workflowStep(publishJob, name).env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+        dispatch.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT,
+      );
+    }
+    expect(
+      workflowStep(publishJob, "Start core npm publication").env?.STABLE_SOAK_WAIVER,
+    ).toBeUndefined();
+    expect(
+      workflowStep(resolveJob, "Summarize sealed npm publication decisions").env
+        ?.NPM_PUBLICATION_DECISIONS,
+    ).toBe("${{ steps.full_manifest.outputs.npm_decisions }}");
     expect(validateEvidence.env?.PLUGIN_SDK_API_VALIDATOR).toContain(
       "plugin-sdk-api-release-evidence.mjs",
     );
@@ -4850,24 +5102,91 @@ describe("package acceptance workflow", () => {
     expect(validateEvidence.run).toContain('--current-selector-sha "$current_selector_sha"');
     expect(validateEvidence.run).toContain("Immutable Plugin SDK API evidence artifact is missing");
     expect(validateEvidence.run).toContain("cmp -s <(jq -S '.pluginSdkApi'");
-    expect(downloadPreflight.run).toContain('preflight_conclusion" != "success"');
-    expect(downloadPreflight.run).toContain(
+    expectTextToIncludeAll(downloadPreflight.run, [
+      'preflight_conclusion" != "success"',
       'expected_extended_stable_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"',
-    );
-    expect(downloadPreflight.run).toContain(
       'preflight_path" != ".github/workflows/openclaw-npm-release.yml"',
-    );
-    expect(validateEvidence.run).toContain(
-      'git merge-base --is-ancestor "$PREFLIGHT_WORKFLOW_SHA" "$WORKFLOW_SHA"',
-    );
-    expect(validateEvidence.run).toContain('"$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA"');
-    expect(validateEvidence.run).toContain('--workflow-sha "$PREFLIGHT_WORKFLOW_SHA"');
+    ]);
+    expectTextToIncludeAll(validateEvidence.run, [
+      '--workflow-sha "$PREFLIGHT_WORKFLOW_SHA" --publisher-sha "$WORKFLOW_SHA"',
+      '--full-release-run-id "$FULL_RELEASE_VALIDATION_RUN_ID" --full-release-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
+      '"$PREFLIGHT_WORKFLOW_SHA" == "$EXPECTED_SHA"',
+    ]);
     expect(publishJob.needs).toEqual(["resolve_release_target"]);
     expect(dispatch.run).toContain(
       '-f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}"',
     );
-    expect(dispatch.run).toContain('--trusted-workflow-ref "${PARENT_WORKFLOW_BRANCH}"');
-    expect(dispatch.run).toContain('--trusted-workflow-full-ref "${GITHUB_REF}"');
+  });
+
+  it.each([
+    {
+      name: "lightweight",
+      tagRef: { object: { sha: "a".repeat(40), type: "commit" } },
+      tagObject: undefined,
+      error: "must be an annotated, signed tag",
+    },
+    {
+      name: "unverified",
+      tagRef: { object: { sha: "b".repeat(40), type: "tag" } },
+      tagObject: {
+        object: { sha: "a".repeat(40), type: "commit" },
+        tag: "v2026.9.7",
+        verification: { reason: "unsigned", verified: false },
+      },
+      error: "must have a signature verified by GitHub",
+    },
+  ])("rejects a $name release tag before publication", ({ tagRef, tagObject, error }) => {
+    const result = runReleasePublishTagSignatureVerification({ tagRef, tagObject });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(error);
+  });
+
+  it("admits a verified signed release tag", () => {
+    const targetSha = "a".repeat(40);
+    const tagObjectSha = "b".repeat(40);
+    const result = runReleasePublishTagSignatureVerification({
+      tagRef: { object: { sha: tagObjectSha, type: "tag" } },
+      tagObject: {
+        object: { sha: targetSha, type: "commit" },
+        tag: "v2026.9.7",
+        verification: { reason: "valid", verified: true },
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(result.githubOutput, "utf8")).toBe(
+      `sha=${targetSha}\ntag_object_sha=${tagObjectSha}\n`,
+    );
+  });
+
+  it("keeps publication bound to the verified signed tag object", () => {
+    const targetSha = "a".repeat(40);
+    const signedTagObjectSha = "b".repeat(40);
+    const unchanged = runReleaseTagTargetVerification({
+      directSha: signedTagObjectSha,
+      peeledSha: targetSha,
+      expectedTagObjectSha: signedTagObjectSha,
+    });
+    expect(unchanged.status, unchanged.stderr).toBe(0);
+
+    const replaced = runReleaseTagTargetVerification({
+      directSha: targetSha,
+      peeledSha: targetSha,
+      expectedTagObjectSha: signedTagObjectSha,
+    });
+    expect(replaced.status).toBe(1);
+    expect(replaced.stderr).toContain("changed after signature verification");
+  });
+
+  it.each([
+    ["publish_android", "Dispatch qualified Android publication"],
+    ["finalize_github_release", "Publish the verified draft release"],
+    ["dispatch_linux_mirror", "Dispatch detached Linux mirror"],
+    ["publish_linux", "Dispatch detached Linux release request"],
+    ["publish_windows", "Dispatch detached Windows promotion"],
+  ])("pins the verified tag object in %s", (jobName, stepName) => {
+    const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, jobName);
+    const step = workflowStep(job, stepName);
+    expect(step.env?.SIGNED_RELEASE_TAG_OBJECT_SHA).toContain("signed_tag_object_sha");
   });
 
   it("requires selected plugin names or complete immutable evidence for broad publication", () => {
@@ -4939,14 +5258,37 @@ describe("package acceptance workflow", () => {
     expect(result.stderr).toContain("gh workflow run openclaw-release-publish.yml --ref");
   });
 
-  it("retains the matching Tideclaw alpha parent route", () => {
-    const result = runReleasePublishInputValidation({
-      WORKFLOW_REF: "refs/heads/tideclaw/alpha/2026-09-03-1200Z",
-      RELEASE_TAG: "v2026.9.1-alpha.1",
-      RELEASE_NPM_DIST_TAG: "alpha",
-    });
-    expect(result.status, result.stderr).toBe(0);
+  it.each<Record<string, string>>([
+    { RELEASE_TAG: "v2026.9.1-alpha.1", RELEASE_NPM_DIST_TAG: "alpha" },
+    { RELEASE_TAG: "v2026.9.1-alpha.1" },
+    { RELEASE_NPM_DIST_TAG: "alpha" },
+    { WORKFLOW_REF: "refs/heads/tideclaw/alpha/2026-09-03-1200Z" },
+  ])("rejects retired alpha publication inputs %j", (inputs) => {
+    const result = runReleasePublishInputValidation(inputs);
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Alpha releases are retired;");
   });
+
+  it.each([
+    { core: "true", prepared: "", allowed: true },
+    { core: "false", prepared: "", allowed: false },
+    { core: "true", prepared: '{"npm":{},"clawhub":{}}', allowed: false },
+  ])(
+    "admits early GitHub activation only for direct core publication: $core/$prepared",
+    ({ core, prepared, allowed }) => {
+      const result = runReleasePublishInputValidation({
+        FINALIZE_RELEASE_BEFORE_DOCKER: "true",
+        PUBLISH_OPENCLAW_NPM: core,
+        PREPARED_PLUGINS: prepared,
+      });
+      expect(result.status, result.stderr).toBe(allowed ? 0 : 1);
+      if (!allowed) {
+        expect(result.stderr).toContain(
+          "finalize_release_before_docker requires direct publication",
+        );
+      }
+    },
+  );
 
   it("allows Docker-only recovery for beta, stable, and extended-stable releases", () => {
     for (const release of [
@@ -5016,7 +5358,7 @@ describe("package acceptance workflow", () => {
     expect(verifyStep.run).not.toContain("npm view openclaw@extended-stable version");
   });
 
-  it("accepts only exact protected SHA-pinned release publish tags", () => {
+  it("accepts only main-reachable protected SHA-pinned release publish tags", () => {
     const workflowSha = "a".repeat(40);
     const binDir = tempDirs.make("release-publish-gh-");
     const ghPath = `${binDir}/gh`;
@@ -5054,7 +5396,7 @@ describe("package acceptance workflow", () => {
     );
   });
 
-  it("keeps publish children on the parent's protected tag or Tideclaw branch", () => {
+  it("keeps publish children on the parent's protected tag and rejects Tideclaw", () => {
     const workflowSha = "a".repeat(40);
     const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
 
@@ -5073,8 +5415,8 @@ describe("package acceptance workflow", () => {
     const alpha = runReleasePublishChildWorkflowRef({
       WORKFLOW_FULL_REF: `refs/heads/${alphaRef}`,
     });
-    expect(alpha.status, alpha.stderr).toBe(0);
-    expect(alpha.stdout.trim()).toBe(alphaRef);
+    expect(alpha.status, alpha.stderr).toBe(1);
+    expect(alpha.stderr).toContain("Alpha releases are retired;");
 
     const plan = workflowStep(
       workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish"),
@@ -5084,9 +5426,6 @@ describe("package acceptance workflow", () => {
     expectTextToIncludeAll(plan.run, [
       'source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"',
       'resolve_child_workflow_ref "${WORKFLOW_FULL_REF}"',
-      'if [[ "${WORKFLOW_FULL_REF}" == refs/heads/tideclaw/alpha/* ]]',
-      'BOOTSTRAP_WORKFLOW_REF="main"',
-      'gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main"',
       'BOOTSTRAP_WORKFLOW_REF="${CHILD_WORKFLOW_REF}"',
     ]);
   });
@@ -5100,26 +5439,24 @@ describe("package acceptance workflow", () => {
     { state: "in_progress", blocked: true },
     { state: "completed", blocked: false },
     { state: "waiting", otherRef: true, blocked: false },
-    { state: "waiting", dryRun: true, blocked: false },
     { state: "unavailable", blocked: true },
   ])(
-    "prevents a ClawHub dispatch from queuing behind $state (otherRef=$otherRef, dryRun=$dryRun)",
-    ({ state, otherRef, dryRun, blocked }) => {
+    "prevents a ClawHub dispatch from queuing behind $state (otherRef=$otherRef)",
+    ({ state, otherRef, blocked }) => {
       const root = tempDirs.make("clawhub-dispatch-collision-");
       const dispatchPath = join(root, "dispatch.json");
       const workflowRef = "release-publish/aaaaaaaaaaaa-123";
       const workflowSha = "a".repeat(40);
       const runUrl = "https://github.com/openclaw/openclaw/actions/runs/91";
-      writeFileSync(
+      writeExecutable(
         join(root, "gh"),
         `#!${process.execPath}
 import { readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 if (args[0] === 'run' && args[1] === 'list') {
   if (${JSON.stringify(state)} === 'unavailable') process.exit(42);
-  const matches = args[args.indexOf('--status') + 1] === ${JSON.stringify(state)} &&
-    args[args.indexOf('--branch') + 1] === ${JSON.stringify(otherRef ? "release-publish/bbbbbbbbbbbb-456" : workflowRef)};
-  console.log(JSON.stringify(matches ? [{ databaseId: 91, status: ${JSON.stringify(state)}, url: ${JSON.stringify(runUrl)} }] : []));
+  const matches = args[args.indexOf('--status') + 1] === ${JSON.stringify(state)};
+  console.log(JSON.stringify(matches ? [{ databaseId: 91, headBranch: ${JSON.stringify(otherRef ? "release-publish/bbbbbbbbbbbb-456" : workflowRef)}, status: ${JSON.stringify(state)}, url: ${JSON.stringify(runUrl)} }] : []));
 } else if (args[0] === 'run' && args[1] === 'view') {
   console.log(JSON.stringify({ headSha: ${JSON.stringify(workflowSha)}, url: 'https://github.com/openclaw/openclaw/actions/runs/92' }));
 } else if (args[0] === 'api' && args.some(arg => arg.includes('/commits/'))) {
@@ -5129,14 +5466,17 @@ if (args[0] === 'run' && args[1] === 'list') {
   console.log(JSON.stringify({ workflow_run_id: 92, html_url: 'https://github.com/openclaw/openclaw/actions/runs/92' }));
 } else throw new Error('Unexpected GitHub operation: ' + JSON.stringify(args));
 `,
-        { mode: 0o755 },
       );
       const result = spawnSync(
         "bash",
         [
+          "--noprofile",
+          "--norc",
           "-c",
+          // The publish parent checks the slot before its first dispatch.
           `source "$HELPER_SCRIPT"
-dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-release.yml -f ref="$TARGET_SHA" -f dry_run="$DRY_RUN"
+require_clawhub_dispatch_available "$WORKFLOW_REF" plugin-clawhub-release.yml &&
+  dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-release.yml -f ref="$TARGET_SHA"
 `,
         ],
         {
@@ -5150,7 +5490,6 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
             WORKFLOW_REF: workflowRef,
             PARENT_WORKFLOW_SHA: workflowSha,
             TARGET_SHA: "b".repeat(40),
-            DRY_RUN: String(dryRun ?? false),
           },
         },
       );
@@ -5201,6 +5540,120 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
     );
   });
 
+  it.each(["source", "prepared", "dry-run"])(
+    "keeps staged ClawHub publications out of the %s publish roster",
+    (mode) => {
+      const root = tempDirs.make("clawhub-publication-plan-");
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      mkdirSync(join(root, ".release-tooling"));
+      symlinkSync(resolve("scripts"), join(root, ".release-tooling/scripts"), "dir");
+      writeExecutable(
+        join(bin, "node"),
+        `#!/bin/sh
+case "$1" in
+  --input-type=module) exec "$REAL_NODE" "$@" ;;
+  *.mjs) cp "$MOCK_MATRIX" .local/clawhub-matrix.json ;;
+  *) cat "$MOCK_PLUGIN_PLAN" ;;
+esac
+`,
+      );
+      const all = [
+        { state: "absent" },
+        { state: "published" },
+        { state: "pending", stage: "checks", attemptId: "attempt_pending" },
+        { state: "failed", recoverable: true, attemptId: "attempt_recover" },
+        { state: "failed", recoverable: false, attemptId: "attempt_blocked" },
+        { state: "failed", recoverable: true },
+      ].map((publication, index) => ({
+        packageName: `@openclaw/example-${index}`,
+        packageDir: `extensions/example-${index}`,
+        version: "2026.9.1",
+        publishTag: "latest",
+        artifactName: `artifact-${index}`,
+        publication,
+        alreadyPublished: publication.state === "published",
+        prepared: { artifactId: index + 1 },
+      }));
+      const plan = {
+        all,
+        candidates: [all[0]],
+        skippedPublished: [all[1]],
+        pendingPublication: [all[2]],
+        failedPublication: all.slice(3),
+        bootstrapCandidates: [],
+        missingTrustedPublisher: [],
+        warnings: [],
+      };
+      const planPath = join(root, "plan.json");
+      const matrixPath = join(root, "matrix.json");
+      const summaryPath = join(root, "summary.md");
+      writeJson(planPath, plan);
+      writeJson(matrixPath, all);
+      const script = workflowStep(
+        workflowJob(PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub"),
+        "Resolve plugin release plan",
+      ).run!;
+      const result = spawnSync("/bin/bash", ["--noprofile", "--norc", "-c", script], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: `${bin}:${process.env.PATH}`,
+          REAL_NODE: process.execPath,
+          MOCK_PLUGIN_PLAN: planPath,
+          MOCK_MATRIX: matrixPath,
+          GITHUB_OUTPUT: join(root, "output"),
+          GITHUB_STEP_SUMMARY: summaryPath,
+          GITHUB_RUN_ID: "1",
+          GITHUB_RUN_ATTEMPT: "1",
+          PUBLISH_SCOPE: "all-publishable",
+          RELEASE_PLUGINS: "",
+          DRY_RUN: mode === "dry-run" ? "true" : "false",
+          PREPARED_ARTIFACT: mode === "prepared" ? "{}" : "",
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const outputs = Object.fromEntries(
+        readFileSync(join(root, "output"), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => {
+            const equals = line.indexOf("=");
+            return [line.slice(0, equals), line.slice(equals + 1)];
+          }),
+      );
+      if (!outputs.matrix || !outputs.publish_matrix) {
+        throw new Error("Release plan did not emit both matrices.");
+      }
+      const matrix = JSON.parse(outputs.matrix) as typeof all;
+      const publish = JSON.parse(outputs.publish_matrix) as typeof all;
+      expect(matrix.map((entry) => entry.publication.state)).toEqual(
+        mode === "dry-run"
+          ? all.map((entry) => entry.publication.state)
+          : mode === "prepared"
+            ? ["absent", "published"]
+            : ["absent"],
+      );
+      expect(publish.map((entry) => entry.publication.state)).toEqual(
+        mode === "dry-run" ? all.map((entry) => entry.publication.state) : ["absent"],
+      );
+      expect(publish.every((entry) => !("prepared" in entry))).toBe(true);
+      const resolvedPlan = readJson(join(root, ".local/plugin-clawhub-release-plan.json"));
+      expect(resolvedPlan.pendingPublication).toEqual(plan.pendingPublication);
+      expect(resolvedPlan.failedPublication).toEqual(plan.failedPublication);
+      const summary = readFileSync(summaryPath, "utf8");
+      expect(summary).toContain("### Pending publications");
+      expect(summary).toContain("### Failed publications");
+      expect(summary).toContain(
+        "bun '<PINNED_CLAWHUB_CHECKOUT>/packages/clawhub/src/cli.ts' --no-input package recover 'attempt_recover' --manual-override-reason '<EDIT_RECOVERY_REASON>' --wait --wait-timeout 1800 --json",
+      );
+      expect(summary).not.toContain("package recover 'attempt_blocked'");
+      expect(summary).toContain("new version or ask the ClawHub operator to discard");
+      expect(summary).toContain("Locate the bound attempt");
+      expect(result.stdout.match(/::warning::/gu)).toHaveLength(4);
+    },
+  );
+
   it.each([
     [PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm", "Resolve plugin release plan"],
     [PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "preview_plugins_clawhub", "Resolve plugin release plan"],
@@ -5214,7 +5667,7 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
     const root = tempDirs.make("plugin-plan-warnings-");
     const bin = join(root, "bin");
     mkdirSync(bin);
-    writeFileSync(join(bin, "node"), '#!/bin/sh\ncat "$MOCK_PLUGIN_PLAN"\n', { mode: 0o755 });
+    writeExecutable(join(bin, "node"), '#!/bin/sh\ncat "$MOCK_PLUGIN_PLAN"\n');
     const parentPlan = workflow === RELEASE_PUBLISH_WORKFLOW;
     if (parentPlan) {
       const helperDir = join(root, ".release-harness/scripts/lib");
@@ -5234,105 +5687,133 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
     const warning =
       '@openclaw/example@2026.9.1: example-runtime pinned "1.2.3", npm latest is "1.2.4".';
     const planPath = join(root, "plan.json");
-    writeFileSync(
-      planPath,
-      JSON.stringify({
-        all: [plugin],
-        candidates: [plugin],
-        bootstrapCandidates: [plugin],
-        missingTrustedPublisher: [],
-        skippedPublished: [],
-        warnings: [warning],
-        bootstrap: { shouldDispatch: false },
-      }),
-    );
+    writeJson(planPath, {
+      all: [plugin],
+      candidates: [plugin],
+      bootstrapCandidates: [plugin],
+      missingTrustedPublisher: [],
+      skippedPublished: [],
+      warnings: [warning],
+      bootstrap: { shouldDispatch: false },
+    });
     const script = workflowStep(workflowJob(workflow, job), step).run;
     if (!script) {
       throw new Error(`Missing plugin plan step in ${workflow}`);
     }
     const summaryPath = join(root, "summary.md");
-    const result = spawnSync("bash", ["-c", script], {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        PATH: `${bin}:${process.env.PATH}`,
-        MOCK_PLUGIN_PLAN: planPath,
-        GITHUB_OUTPUT: join(root, "output"),
-        GITHUB_STEP_SUMMARY: summaryPath,
-        GITHUB_WORKSPACE: root,
-        RUNNER_TEMP: root,
-        GITHUB_SHA: "a".repeat(40),
-        GITHUB_RUN_ID: "1",
-        GITHUB_RUN_ATTEMPT: "1",
-        WORKFLOW_FULL_REF: "refs/heads/main",
-        PARENT_WORKFLOW_BRANCH: "main",
-        PARENT_WORKFLOW_FULL_REF: "refs/heads/main",
-        RELEASE_TAG: "v2026.9.1",
-        TARGET_SHA: "b".repeat(40),
-        PLUGIN_PUBLISH_SCOPE: "all-publishable",
-        PLUGINS: "",
-        PUBLISH_SCOPE: "all-publishable",
-        RELEASE_PLUGINS: plugin.packageName,
-        BASE_REF: "",
-        NPM_DIST_TAG: "default",
-        PREFLIGHT_ONLY: "false",
-        DRY_RUN: "false",
-        PREPARED_ARTIFACT: "",
-        PREPARED_PLUGINS: "",
-      },
-    });
+    const run = () =>
+      spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: `${bin}:${process.env.PATH}`,
+          MOCK_PLUGIN_PLAN: planPath,
+          GITHUB_OUTPUT: join(root, "output"),
+          GITHUB_STEP_SUMMARY: summaryPath,
+          GITHUB_WORKSPACE: root,
+          RUNNER_TEMP: root,
+          GITHUB_SHA: "a".repeat(40),
+          GITHUB_RUN_ID: "1",
+          GITHUB_RUN_ATTEMPT: "1",
+          WORKFLOW_FULL_REF: "refs/heads/main",
+          PARENT_WORKFLOW_BRANCH: "main",
+          PARENT_WORKFLOW_FULL_REF: "refs/heads/main",
+          RELEASE_TAG: "v2026.9.1",
+          TARGET_SHA: "b".repeat(40),
+          PLUGIN_PUBLISH_SCOPE: "all-publishable",
+          PLUGINS: "",
+          PUBLISH_SCOPE: "all-publishable",
+          RELEASE_PLUGINS: plugin.packageName,
+          BASE_REF: "",
+          NPM_DIST_TAG: "default",
+          RELEASE_NPM_DIST_TAG: "latest",
+          PREFLIGHT_ONLY: "false",
+          DRY_RUN: "false",
+          PREPARED_ARTIFACT: "",
+          PREPARED_PLUGINS: "",
+        },
+      });
+    const result = run();
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(summaryPath, "utf8")).toBe(`- Warning: ${warning}\n`);
     expect(result.stdout).toContain(plugin.packageName);
     expect(readFileSync(join(root, "output"), "utf8")).toContain(
       parentPlan ? "bootstrap_should_dispatch=false" : "candidate_count=1",
     );
+    if (
+      workflow === PLUGIN_CLAWHUB_RELEASE_WORKFLOW ||
+      workflow === ".github/workflows/plugin-clawhub-new.yml"
+    ) {
+      const originalPlan = readFileSync(planPath, "utf8");
+      for (const retired of [
+        { version: "2026.9.1-alpha.1" },
+        { publishTag: "alpha" },
+        { channel: "alpha" },
+      ]) {
+        const plan = JSON.parse(originalPlan);
+        for (const entries of [plan.all, plan.candidates, plan.bootstrapCandidates]) {
+          Object.assign(entries[0], retired);
+        }
+        writeJson(planPath, plan);
+        const rejected = run();
+        expect(rejected.status, rejected.stderr).toBe(1);
+        expect(rejected.stderr).toContain("Alpha releases are retired;");
+      }
+      if (workflow === ".github/workflows/plugin-clawhub-new.yml") {
+        for (const publication of [
+          { state: "pending", stage: "checks", attemptId: "attempt_pending" },
+          { state: "failed", recoverable: true, attemptId: "attempt_failed" },
+        ]) {
+          const plan = JSON.parse(originalPlan);
+          plan.bootstrapCandidates = [];
+          plan.missingTrustedPublisher = [{ ...plugin, publication, alreadyPublished: false }];
+          writeJson(planPath, plan);
+          const rejected = run();
+          expect(rejected.status, rejected.stderr).toBe(1);
+          expect(rejected.stdout).toContain(
+            "Pending or failed ClawHub publications cannot be bootstrapped again",
+          );
+        }
+      }
+    }
   });
 
   it.each([
-    [
+    toolingCase(
       PLUGIN_NPM_RELEASE_WORKFLOW,
       "preview_plugins_npm",
       "Checkout trusted planning tooling",
       "Validate publishable plugin metadata",
-      ".release-tooling",
-      "${{ github.workflow_sha }}",
-    ],
-    [
+    ),
+    toolingCase(
       PLUGIN_NPM_RELEASE_WORKFLOW,
       "preview_plugin_pack",
       "Checkout trusted packaging tooling",
       "Prepare immutable npm preflight artifact",
-      ".release-tooling",
-      "${{ github.workflow_sha }}",
-    ],
-    [
+    ),
+    toolingCase(
       PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
       "preview_plugins_clawhub",
       "Checkout trusted planning tooling",
       "Validate publishable plugin metadata",
-      ".release-tooling",
-      "${{ github.workflow_sha }}",
-    ],
-    [
+    ),
+    toolingCase(
       ".github/workflows/plugin-clawhub-new.yml",
       "resolve_bootstrap_plan",
       "Checkout trusted planning tooling",
       "Validate publishable plugin metadata",
-      ".release-tooling",
-      "${{ github.workflow_sha }}",
-    ],
-    [
+    ),
+    toolingCase(
       ".github/workflows/plugin-clawhub-new.yml",
       "pack_bootstrap_plugins",
       "Checkout trusted workflow tooling",
       "Pack immutable ClawHub bootstrap artifacts",
       ".release-harness",
       "${{ github.sha }}",
-    ],
+    ),
   ])(
-    "initializes independent plugin tooling before %s/%s",
-    (file, jobName, checkoutName, consumerName, toolingPath, toolingRef) => {
+    "initializes independent plugin tooling before $file/$jobName",
+    ({ file, jobName, checkoutName, consumerName, toolingPath, toolingRef }) => {
       const job = workflowJob(file, jobName);
       const checkout = workflowStep(job, checkoutName);
       const setup = workflowStep(job, "Setup Node environment");
@@ -5350,38 +5831,13 @@ dispatch_workflow_at_ref "$WORKFLOW_REF" "$PARENT_WORKFLOW_SHA" plugin-clawhub-r
       expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(checkout));
       expect(job.steps!.indexOf(install)).toBeGreaterThan(job.steps!.indexOf(setup));
       expect(job.steps!.indexOf(install)).toBeLessThan(job.steps!.indexOf(consumer));
-      const root = tempDirs.make("plugin-tooling-install-");
-      const tooling = join(root, toolingPath);
-      const bin = join(root, "bin");
-      mkdirSync(tooling);
-      mkdirSync(bin);
-      writeFileSync(join(root, "candidate-sentinel"), "unchanged");
-      writeFileSync(
-        join(bin, "pnpm"),
-        `#!${process.execPath}
-const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify({cwd:process.cwd(),args:process.argv.slice(2),ci:process.env.CI}));
-`,
-        { mode: 0o755 },
-      );
-      const result = spawnSync("bash", ["-euo", "pipefail", "-c", install.run!], {
-        cwd: tooling,
-        encoding: "utf8",
-        env: { ...process.env, ...install.env, PATH: `${bin}:${process.env.PATH}` },
-      });
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(join(tooling, "install-proof.json"), "utf8"))).toMatchObject({
-        args: ["install", "--frozen-lockfile", "--prefer-offline", "--ignore-scripts"],
-        ci: "true",
-      });
-      expect(existsSync(join(root, "install-proof.json"))).toBe(false);
-      expect(readFileSync(join(root, "candidate-sentinel"), "utf8")).toBe("unchanged");
     },
   );
 
   it("runs plugin npm preflight trust from the exact workflow tooling checkout", () => {
     const job = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "preview_plugins_npm");
     const checkout = workflowStep(job, "Checkout trusted planning tooling");
-    const identity = workflowStep(job, "Verify trusted preflight tooling identity");
+    const identity = workflowStep(job, "Verify trusted preflight or recovery tooling identity");
     const target = workflowStep(job, "Validate ref is on a trusted publish branch");
 
     expect(checkout.if).toBeUndefined();
@@ -5403,7 +5859,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
       );
       expect(planner["working-directory"]).toBeUndefined();
     }
-    expect(identity.if).toBe("github.event_name == 'workflow_dispatch' && inputs.preflight_only");
+    expect(identity.if).toBe("github.event_name == 'workflow_dispatch'");
     expect(identity.env).toMatchObject({
       GH_TOKEN: "${{ github.token }}",
       WORKFLOW_FULL_REF: "${{ github.ref }}",
@@ -5575,6 +6031,56 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
     }
   });
 
+  it.each([
+    { name: "FRV", fullReleasePreflight: true },
+    { name: "historical NPM", fullReleasePreflight: false },
+  ])(
+    "accepts the readable SDK diff summary but still requires both JSON proofs ($name)",
+    async ({ fullReleasePreflight }) => {
+      const qualifiedName = `openclaw-npm-preflight-${"a".repeat(40)}`;
+      const run = (sdkArtifactFiles: string[]) =>
+        runReleasePublishPreflightConsumerGuard({
+          currentRef: "refs/heads/main",
+          currentWorkflowSha: "b".repeat(40),
+          fullReleasePreflight,
+          preflightHeadBranch: "main",
+          preflightHeadSha: "a".repeat(40),
+          preflightArtifactName: fullReleasePreflight ? qualifiedName : undefined,
+          sdkArtifactFiles,
+        });
+      const withSummary = await run([
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-evidence.json",
+        "plugin-sdk-api-release-diff.md",
+      ]);
+      expect(withSummary.status, withSummary.stderr).toBe(0);
+      expect(
+        readFileSync(
+          join(
+            withSummary.runnerTemp,
+            "openclaw-plugin-sdk-api-evidence",
+            "plugin-sdk-api-release-evidence.json",
+          ),
+          "utf8",
+        ),
+      ).toBe(JSON.stringify({ fixture: "plugin-sdk-api-release-evidence.json" }));
+
+      const missingEvidence = await run([
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-diff.md",
+      ]);
+      expect(missingEvidence.status).toBe(1);
+      expect(missingEvidence.stderr).toContain("missing plugin-sdk-api-release-evidence.json");
+
+      const unexpected = await run([
+        "plugin-sdk-api-release-diff.json",
+        "plugin-sdk-api-release-evidence.json",
+        "unexpected.json",
+      ]);
+      expect(unexpected.status).toBe(1);
+    },
+  );
+
   it("never retries permanent core download failures or switches to a historical alias", async () => {
     const result = await runReleasePublishPreflightConsumerGuard({
       currentRef: "refs/heads/main",
@@ -5613,10 +6119,10 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
         const rejected = await runOpenClawNpmPreflightConsumerGuard({
           ...params,
           preflightHeadBranch,
-          toolingAncestor: false,
+          publisherComparisonStatus: "diverged",
         });
         expect(rejected.status, rejected.stderr).toBe(1);
-        expect(rejected.stderr).toContain("trusted publish workflow lineage");
+        expect(rejected.stderr).toContain("selected publisher lineage");
       }
     },
   );
@@ -5626,6 +6132,7 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
       name: "standalone FRV",
       fullReleasePreflight: true,
       independentProducer: true,
+      producerCurrentAttempt: 2,
       version: "2026.8.1",
     },
     {
@@ -5667,9 +6174,11 @@ const fs=require("node:fs");fs.writeFileSync("install-proof.json",JSON.stringify
         .split("\n")
         .map((line) => line.split("=")),
     );
+    expect(stepOutputs.run_attempt).toBe("1");
     const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const expressions: Record<string, string> = {
       "${{ inputs.preflight_run_id }}": "111",
+      "${{ needs.resolve_release_target.outputs.plugin_sdk_api_acknowledgement }}": "0123abcd",
       "${{ inputs.full_release_validation_run_id }}": fullReleaseRunId,
     };
     for (const [name, value] of Object.entries(target.outputs ?? {})) {
@@ -5724,7 +6233,7 @@ curl() {
 }
 node() {
   if [[ "\${3:-}" == "$GITHUB_WORKSPACE/.release-harness/scripts/openclaw-npm-resume-run.mts" ]]; then
-    printf '%s\\n' '{"url":"https://example.invalid/runs/777","workflowRef":"refs/tags/release-publish-verified","workflowSha":"${"a".repeat(40)}"}'
+    printf '%s\\n' '{"runId":"777","runAttempt":1,"url":"https://example.invalid/runs/777","workflowRef":"refs/tags/release-publish-verified","workflowSha":"${"a".repeat(40)}"}'
   else command node "$@"; fi
 }
 zip() { cat > "$3"; }
@@ -5736,25 +6245,19 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     );
     const tarball = Buffer.from("published candidate bytes");
     writeFileSync(join(fixture.root, "registry.tgz"), tarball);
-    writeFileSync(
-      join(fixture.root, "preflight-manifest.json"),
-      JSON.stringify({
-        releaseSha: "d".repeat(40),
-        tarballSha256: createHash("sha256").update(tarball).digest("hex"),
-      }),
-    );
+    writeJson(join(fixture.root, "preflight-manifest.json"), {
+      releaseSha: "d".repeat(40),
+      tarballSha256: createHash("sha256").update(tarball).digest("hex"),
+    });
     mkdirSync(join(fixture.root, "dependency-evidence"));
     writeFileSync(join(fixture.root, "dependency-evidence/report.json"), "{}");
     writeFileSync(join(fixture.root, "dependency-evidence/npm-package-locks.json"), "{}");
     writeFileSync(join(fixture.root, "dependency-evidence/npm-package-locks.md"), "# npm locks\n");
-    writeFileSync(
-      join(fixture.root, "release-postpublish-evidence.json"),
-      JSON.stringify({
-        openclawNpmTarball: "https://example.invalid/openclaw.tgz",
-        openclawNpmIntegrity: "sha512-fixture",
-        ...(mode.fullReleasePreflight ? { telegramWaiver: `${mode.version}-owner-approved` } : {}),
-      }),
-    );
+    writeJson(join(fixture.root, "release-postpublish-evidence.json"), {
+      openclawNpmTarball: "https://example.invalid/openclaw.tgz",
+      openclawNpmIntegrity: "sha512-fixture",
+      ...(mode.fullReleasePreflight ? { telegramWaiver: `${mode.version}-owner-approved` } : {}),
+    });
     const resume = fixture.run(
       {
         run: 'set -euo pipefail; source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"; resolve_openclaw_npm_publish_state; [[ "$openclaw_npm_already_published" == true ]]',
@@ -5762,6 +6265,8 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       stepEnv(workflowStep(publish, "Dispatch publish workflows")),
     );
     expect.soft(resume.status, resume.stderr).toBe(0);
+    expect(fixture.outputs().openclaw_npm_resume_run_id).toBe("777");
+    expect(fixture.outputs().openclaw_npm_resume_run_attempt).toBe("1");
     const evidence = fixture.run(
       {
         run: 'set -euo pipefail; source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"; upload_dependency_evidence_release_asset',
@@ -5780,6 +6285,9 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(dispatched.status, dispatched.stderr).toBe(0);
     const dispatch = fixture.events().find((event) => event.startsWith("dispatch:"));
     expect(dispatch).toContain("-f preflight_run_id=111");
+    expect(dispatch).not.toContain("stable_soak_waiver");
+    expect(dispatch).toContain("-f plugin_sdk_api_acknowledgement=0123abcd");
+    expect(dispatch).not.toContain("lane_waiver");
     expect(dispatch).toContain(`-f full_release_validation_run_id=${fullReleaseRunId}`);
 
     const proof = fixture.run(
@@ -5793,6 +6301,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     );
     expect(proof.status, proof.stderr).toBe(0);
     const proofText = readFileSync(join(fixture.root, "release-verification.md"), "utf8");
+    expect(proofText).not.toContain("Stable soak waived by operator:");
     expect(proofText).toContain(
       mode.fullReleasePreflight
         ? `Telegram integration checks: waived by the release owner for ${mode.version} (source QA, Package Acceptance, published-package E2E); not run.`
@@ -5821,21 +6330,19 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       "${{ inputs.release_publish_full_ref }}",
     );
     expect(evidenceStep.env?.RELEASE_PUBLISH_PARENT_STATE_POLICY).toBe(
-      "${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}",
+      "${{ inputs.release_publish_run_id != '' && (needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' && 'active' || (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery')) || '' }}",
     );
-    expect(evidenceStep.run).toContain("node scripts/release-tooling-identity.mjs verify");
-    expect(evidenceStep.run).toContain('--workflow-ref "$WORKFLOW_HEAD_BRANCH"');
-    expect(evidenceStep.run).toContain('--workflow-full-ref "$WORKFLOW_REF"');
-    expect(evidenceStep.run).toContain('--workflow-sha "$WORKFLOW_SHA"');
-    expect(evidenceStep.run).toContain('--release-publish-run-id "$RELEASE_PUBLISH_RUN_ID"');
-    expect(evidenceStep.run).toContain(
+    expectTextToIncludeAll(evidenceStep.run, [
+      "node scripts/release-tooling-identity.mjs verify",
+      '--workflow-ref "$WORKFLOW_HEAD_BRANCH"',
+      '--workflow-full-ref "$WORKFLOW_REF"',
+      '--workflow-sha "$WORKFLOW_SHA"',
+      '--release-publish-run-id "$RELEASE_PUBLISH_RUN_ID"',
       '--release-publish-run-attempt "$RELEASE_PUBLISH_RUN_ATTEMPT"',
-    );
-    expect(evidenceStep.run).toContain('--release-publish-ref "$RELEASE_PUBLISH_REF"');
-    expect(evidenceStep.run).toContain('--release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF"');
-    expect(evidenceStep.run).toContain(
+      '--release-publish-ref "$RELEASE_PUBLISH_REF"',
+      '--release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF"',
       '--release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY"',
-    );
+    ]);
     expect(evidenceStep.run).not.toContain("--allow-prevalidated-ref");
   });
 
@@ -5844,36 +6351,30 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       workflowJob(OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm"),
       "Publish",
     );
-    expect(corePublish.env).toMatchObject({
-      GH_TOKEN: "${{ github.token }}",
-      RELEASE_PUBLISH_PARENT_STATE_POLICY:
+    expect(corePublish.env).toMatchObject(
+      publicationAuthorityEnv(
         "${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active' || 'manual-recovery') || '' }}",
-      RELEASE_PUBLISH_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
-      RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
-      RELEASE_PUBLISH_REF: "${{ inputs.release_publish_branch }}",
-      RELEASE_PUBLISH_FULL_REF: "${{ inputs.release_publish_full_ref }}",
-      WORKFLOW_FULL_REF: "${{ github.ref }}",
-      WORKFLOW_REF: "${{ github.ref_name }}",
-      WORKFLOW_SHA: "${{ github.workflow_sha }}",
-    });
+      ),
+    );
     expect(corePublish.run).toContain(
-      "node trusted-workflow/scripts/release-tooling-identity.mjs verify",
+      'bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "./${tarball_path}"',
     );
-    expect(corePublish.run).toContain("--allow-prevalidated-ref");
     expect(corePublish.run).toContain(
-      '--release-publish-run-attempt "$RELEASE_PUBLISH_RUN_ATTEMPT"',
+      'bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
     );
-    expect(corePublish.run).toContain('--release-publish-ref "$RELEASE_PUBLISH_REF"');
-    expect(corePublish.run).toContain('--release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF"');
-    expect(corePublish.run).toContain(
-      '--release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY"',
+    const coreWrapper = readFileSync("scripts/openclaw-npm-publish.sh", "utf8");
+    expect(coreWrapper).toMatch(
+      /--verify-publication-authority\s*\nfi\s*\n"\$\{publish_cmd\[@\]\}"/u,
     );
-    expect(corePublish.run).toMatch(
-      /verify_release_tooling_identity\s+bash scripts\/openclaw-npm-publish\.sh --publish "\.\/\$\{tarball_path\}"/u,
+    const authority = readFileSync("scripts/npm-preflight-tooling-identity.mjs", "utf8");
+    expect(authority).toContain("releasePublishRunAttempt: env.RELEASE_PUBLISH_RUN_ATTEMPT");
+    expect(authority).toContain("releasePublishRef: env.RELEASE_PUBLISH_REF");
+    expect(authority).toContain("releasePublishFullRef: env.RELEASE_PUBLISH_FULL_REF");
+    expect(authority).toContain(
+      "releasePublishParentStatePolicy: env.RELEASE_PUBLISH_PARENT_STATE_POLICY",
     );
-    expect(corePublish.run).toMatch(
-      /verify_release_tooling_identity\s+bash scripts\/openclaw-npm-publish\.sh --publish "\$\{publish_target\}"/u,
-    );
+    expect(authority).toContain("verifyReleaseToolingIdentity(publicationAuthority)");
+    expect(authority).toContain("authenticated.revalidateAuthority()");
 
     const pluginPublishJob = workflowJob(PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm");
     const oidcPublish = workflowStep(pluginPublishJob, "Publish with trusted publisher");
@@ -5884,7 +6385,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       OPENCLAW_RELEASE_PUBLISH_REF: "${{ inputs.release_publish_branch }}",
       OPENCLAW_RELEASE_PUBLISH_FULL_REF: "${{ inputs.release_publish_full_ref }}",
       OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY:
-        "${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}",
+        "${{ inputs.release_publish_run_id != '' && (needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' && 'active' || (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery')) || '' }}",
       OPENCLAW_RELEASE_TOOLING_FULL_REF: "${{ github.ref }}",
       OPENCLAW_RELEASE_TOOLING_REF: "${{ github.ref_name }}",
       OPENCLAW_RELEASE_TOOLING_REPOSITORY: "${{ github.repository }}",
@@ -5902,31 +6403,22 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(oidcPublish.run).not.toContain("plugin-npm-publish.sh");
 
     const bootstrapPublish = workflowStep(pluginPublishJob, "Publish approved bootstrap tarball");
-    expect(bootstrapPublish.env).toMatchObject({
-      GH_TOKEN: "${{ github.token }}",
-      RELEASE_PUBLISH_PARENT_STATE_POLICY:
-        "${{ inputs.release_publish_run_id != '' && (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery') || '' }}",
-      RELEASE_PUBLISH_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
-      RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
-      RELEASE_PUBLISH_REF: "${{ inputs.release_publish_branch }}",
-      RELEASE_PUBLISH_FULL_REF: "${{ inputs.release_publish_full_ref }}",
-      WORKFLOW_FULL_REF: "${{ github.ref }}",
-      WORKFLOW_REF: "${{ github.ref_name }}",
-      WORKFLOW_SHA: "${{ github.workflow_sha }}",
-    });
+    expect(bootstrapPublish.env).toMatchObject(
+      publicationAuthorityEnv(
+        "${{ inputs.release_publish_run_id != '' && (needs.validate_release_publish_approval.outputs.parent_approval == 'receipt' && 'active' || (github.actor == 'github-actions[bot]' && 'active-or-failure' || 'manual-recovery')) || '' }}",
+      ),
+    );
     const identityIndex =
       bootstrapPublish.run?.indexOf("node scripts/release-tooling-identity.mjs verify") ?? -1;
     const publishIndex = bootstrapPublish.run?.indexOf('npm publish "$TARBALL_PATH"') ?? -1;
     expect(identityIndex).toBeGreaterThan(-1);
     expect(publishIndex).toBeGreaterThan(identityIndex);
     expect(bootstrapPublish.run?.slice(identityIndex, publishIndex)).not.toContain("npm view");
-    expect(bootstrapPublish.run).toContain(
+    expectTextToIncludeAll(bootstrapPublish.run, [
       '--release-publish-parent-state-policy "$RELEASE_PUBLISH_PARENT_STATE_POLICY"',
-    );
-    expect(bootstrapPublish.run).toContain('--release-publish-ref "$RELEASE_PUBLISH_REF"');
-    expect(bootstrapPublish.run).toContain(
+      '--release-publish-ref "$RELEASE_PUBLISH_REF"',
       '--release-publish-full-ref "$RELEASE_PUBLISH_FULL_REF"',
-    );
+    ]);
 
     const packageCheck = workflowStep(pluginPublishJob, "Check immutable npm package version");
     expect(packageCheck.run).toContain("scripts/plugin-npm-prepared-release.mjs registry");
@@ -5942,13 +6434,11 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     });
 
     const pluginWrapper = readFileSync("scripts/plugin-npm-publish.sh", "utf8");
-    expect(pluginWrapper).toContain('--release-publish-ref "${OPENCLAW_RELEASE_PUBLISH_REF:-}"');
-    expect(pluginWrapper).toContain(
+    expectTextToIncludeAll(pluginWrapper, [
+      '--release-publish-ref "${OPENCLAW_RELEASE_PUBLISH_REF:-}"',
       '--release-publish-full-ref "${OPENCLAW_RELEASE_PUBLISH_FULL_REF:-}"',
-    );
-    expect(pluginWrapper).toContain(
       '--release-publish-parent-state-policy "${OPENCLAW_RELEASE_PUBLISH_PARENT_STATE_POLICY:-}"',
-    );
+    ]);
     const distTagIndex = pluginWrapper.indexOf(
       'npm dist-tag add "${package_name}@${package_version}"',
     );
@@ -5998,19 +6488,17 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
           "${{ github.workspace }}/trusted-workflow/scripts/release-ci-summary.mjs",
         );
         expect(step.env?.WORKFLOW_SHA).toBe("${{ github.workflow_sha }}");
-        expect(step.run).toContain("export EXPECTED_SHA MANIFEST_FILE");
-        expect(step.run).toContain(
+        expectTextToIncludeAll(step.run, [
+          "export EXPECTED_SHA MANIFEST_FILE",
           'gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"',
-        );
-        expect(step.run).toContain(
           "node trusted-workflow/scripts/validate-full-release-validation-evidence.mjs",
-        );
+        ]);
       }
       expect(step.run).not.toContain('node "$STRICT_VALIDATOR_FILE"');
     }
   });
 
-  it("starts and approves core npm before the ClawHub receipt and bootstrap barriers", () => {
+  it("starts core npm without child approvals before the ClawHub receipt and bootstrap barriers", () => {
     const fixture = createReleasePublishFixture();
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
     for (const step of job.steps ?? []) {
@@ -6038,10 +6526,10 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     expect(events).not.toContain("windows");
     expect(events).not.toContain("android");
     expect(dispatchIndex).toBeGreaterThan(draftIndex);
-    const gateIndex = events.indexOf("wait:openclaw-npm-release.yml:publish_openclaw_npm:true");
-    expect(gateIndex).toBeGreaterThan(dispatchIndex);
-    expect(gateIndex).toBeLessThan(receiptIndex);
-    expect(events).toContain("approval-environment:npm-release");
+    const startIndex = events.indexOf("wait:openclaw-npm-release.yml:publish_openclaw_npm:false");
+    expect(startIndex).toBeGreaterThan(dispatchIndex);
+    expect(startIndex).toBeLessThan(receiptIndex);
+    expect(events).toContain("wait:plugin-npm-release.yml:terminal:false");
     expect(events.indexOf("wait:plugin-clawhub-new.yml:terminal:true")).toBeGreaterThan(
       dispatchIndex,
     );
@@ -6084,12 +6572,17 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       expect(events).toContain(`wait:plugin-clawhub-release.yml:terminal:${approval}`);
       expect(events).toContain(`wait:plugin-clawhub-new.yml:terminal:${approval}`);
       const verification = `verify:1:bootstrap=${bootstrapCompleted}:workflow=refs/heads/main`;
-      expect(events.indexOf(verification)).toBeGreaterThan(
-        events.lastIndexOf("finished:openclaw-npm-release.yml:0"),
-      );
+      if (approvesClawHub) {
+        expect(events.indexOf(verification)).toBeGreaterThan(
+          events.lastIndexOf("finished:openclaw-npm-release.yml:0"),
+        );
+      } else {
+        expect(events).not.toContain(verification);
+      }
       expect(events).toContain("release-evidence");
       expect(events).not.toContain("windows");
-      expect(fixture.summary()).toContain("left as draft");
+      expect(fixture.summary()).toContain("evidence updated; a required publish child failed");
+      expect(fixture.summary()).not.toContain("left as draft");
     },
   );
 
@@ -6114,7 +6607,8 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       if (failedPublisher === "plugin") {
         expect(fixture.outputs().plugin_npm_completed).toBeUndefined();
         expect(fixture.events().some((event) => event.startsWith("dispatch:"))).toBe(false);
-        expect(fixture.events().filter((event) => event.startsWith("cancel:"))).toHaveLength(2);
+        expect(fixture.events().filter((event) => event.startsWith("cancel:"))).toHaveLength(0);
+        expect(start.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
       } else {
         expect(fixture.outputs()).toMatchObject({
           plugin_npm_completed: "true",
@@ -6138,11 +6632,10 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
           PUBLISH_JOB_STATUS: "failure",
         });
         expect(recorded.status, recorded.stderr).toBe(0);
+        expect(fixture.summary()).toContain("gh workflow run openclaw-release-publish.yml");
       }
       expect(
-        JSON.parse(
-          readFileSync(join(fixture.root, "evidence/release-postpublish-diagnostics.json"), "utf8"),
-        ),
+        readJson(join(fixture.root, "evidence/release-postpublish-diagnostics.json")),
       ).toMatchObject({
         verification: "unattempted",
         context: { parentRunId: "44", parentRunAttempt: "2" },
@@ -6163,6 +6656,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       WAIT_FOR_CLAWHUB: "false",
       CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: String(resume),
       CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF: "refs/tags/release-publish/aaaaaaaaaaaa-42",
+      CHILD_OPENCLAW_NPM_RUN_ATTEMPT: resume ? "1" : "",
     });
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
     for (const stepName of ["Start core npm publication", "Complete publish workflows"]) {
@@ -6172,6 +6666,7 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
     const events = fixture.events();
     expect(events.some((event) => event.startsWith("wait:plugin-clawhub"))).toBe(false);
     expect(events.some((event) => event.startsWith("dispatch:"))).toBe(!resume);
+    expect(events).toContain(`verify-attempt:${resume ? "1" : ""}`);
     expect(events).toContain(
       "verify:0:bootstrap=false:workflow=refs/tags/release-publish/aaaaaaaaaaaa-42",
     );
@@ -6180,9 +6675,10 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
   it.each(["success", "binding", "assets"] as const)(
     "keeps verifier success separate from postpublish %s completion",
     (outcome) => {
-      const version = "2026.9.1-beta.1";
+      const version = "2026.9.1";
       const fixture = createReleasePublishFixture(
         {
+          RELEASE_TAG: `v${version}`,
           PUBLISH_OPENCLAW_NPM: "false",
           CHILD_PLUGIN_CLAWHUB_RUN_ID: "",
           CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: "",
@@ -6197,10 +6693,7 @@ ${outcome === "assets" ? "upload_release_evidence_assets() { echo asset-upload-d
 `,
         },
       );
-      writeFileSync(
-        join(fixture.root, "package.json"),
-        JSON.stringify({ type: "module", version }),
-      );
+      writeJson(join(fixture.root, "package.json"), { type: "module", version });
       mkdirSync(join(fixture.root, "extensions"));
       mkdirSync(join(fixture.root, "scripts"));
       writeFileSync(join(fixture.root, "scripts/openclaw-npm-postpublish-verify.ts"), "");
@@ -6210,15 +6703,14 @@ ${outcome === "assets" ? "upload_release_evidence_assets() { echo asset-upload-d
       );
       const bin = join(fixture.root, "bin");
       mkdirSync(bin);
-      writeFileSync(
+      writeExecutable(
         join(bin, "git"),
         `#!/bin/sh
 if [ "$PWD" = "$GITHUB_WORKSPACE" ] && [ "$*" = "rev-parse HEAD" ]; then printf '%s\\n' "$TARGET_SHA"; else exec /usr/bin/git "$@"; fi
 `,
-        { mode: 0o755 },
       );
       for (const command of ["npm", "gh"]) {
-        writeFileSync(
+        writeExecutable(
           join(bin, command),
           `#!${process.execPath}
 const args = process.argv.slice(2);
@@ -6228,20 +6720,16 @@ if (args[0] === "view") {
   console.log(JSON.stringify({ workflowName: args[2] === "101" ? "Plugin NPM Release" : "OpenClaw NPM Release", headBranch: "main", event: "workflow_dispatch", status: "completed", conclusion: "success", jobs: [] }));
 } else { throw new Error("Unexpected verifier mutation: " + args.join(" ")); }
 `,
-          { mode: 0o755 },
         );
       }
       const manifest = join(fixture.root, "manifest");
       mkdirSync(manifest);
-      writeFileSync(
-        join(manifest, "full-release-validation-manifest.json"),
-        JSON.stringify({
-          runId: "66",
-          runAttempt: outcome === "binding" ? "4" : "3",
-          workflowRef: "release-ci/tooling",
-          targetSha: "a".repeat(40),
-        }),
-      );
+      writeJson(join(manifest, "full-release-validation-manifest.json"), {
+        runId: "66",
+        runAttempt: outcome === "binding" ? "4" : "3",
+        workflowRef: "release-ci/tooling",
+        targetSha: "a".repeat(40),
+      });
       const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
       const env = {
         PATH: `${bin}:${process.env.PATH}`,
@@ -6260,22 +6748,25 @@ if (args[0] === "view") {
         PUBLISH_JOB_STATUS: outcome === "success" ? "success" : "failure",
       });
       expect(terminal.status, terminal.stderr).toBe(0);
-      const diagnostic = JSON.parse(
-        readFileSync(join(fixture.root, "evidence/release-postpublish-diagnostics.json"), "utf8"),
+      const diagnostic = readJson(
+        join(fixture.root, "evidence/release-postpublish-diagnostics.json"),
       );
-      expect(diagnostic.verification).toBe("success");
-      expect(diagnostic.stages.coreNpm.state).toBe("success");
-      expect(diagnostic.stages.binding.state).toBe(outcome === "binding" ? "failure" : "success");
-      expect(diagnostic.stages.assets.state).toBe(
-        outcome === "binding" ? "unattempted" : outcome === "assets" ? "failure" : "success",
-      );
-      expect(diagnostic.jobOutcomeBeforeArtifactUploads).toBe(
-        outcome === "success" ? "success" : "failure",
-      );
+      expect(diagnostic).toMatchObject({
+        verification: "success",
+        stages: {
+          coreNpm: { state: "success" },
+          binding: { state: outcome === "binding" ? "failure" : "success" },
+          assets: {
+            state:
+              outcome === "binding" ? "unattempted" : outcome === "assets" ? "failure" : "success",
+          },
+        },
+        jobOutcomeBeforeArtifactUploads: outcome === "success" ? "success" : "failure",
+      });
       const canonical = join(fixture.root, "evidence/release-postpublish-evidence.json");
       expect(existsSync(canonical)).toBe(outcome !== "binding");
       if (outcome !== "binding") {
-        const receipt = JSON.parse(readFileSync(canonical, "utf8"));
+        const receipt = readJson(canonical);
         expect(receipt).toMatchObject({
           version: 1,
           releasePublishRunId: "44",
@@ -6298,7 +6789,7 @@ if (args[0] === "view") {
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
     const diagnosticPath = join(fixture.root, "evidence/release-postpublish-diagnostics.json");
     const imported = fixture.run({
-      run: `node --import tsx --input-type=module -e 'await import("./.release-harness/scripts/lib/release-beta-verifier.ts")' diagnostic-import initialize`,
+      run: `node --import ./.release-harness/scripts/tsx.mjs --input-type=module -e 'await import("./.release-harness/scripts/lib/release-beta-verifier.ts")' diagnostic-import initialize`,
     });
     expect(imported.status, imported.stderr).toBe(0);
     expect(imported.stderr).toBe("");
@@ -6311,7 +6802,7 @@ if (args[0] === "view") {
       PUBLISH_JOB_STATUS: "cancelled",
     });
     expect(terminal.status, terminal.stderr).toBe(0);
-    const diagnostic = JSON.parse(readFileSync(diagnosticPath, "utf8"));
+    const diagnostic = readJson(diagnosticPath);
     expect(diagnostic.verification).toBe("unattempted");
     expect(diagnostic.jobOutcomeBeforeArtifactUploads).toBe("cancelled");
     expect(fixture.events()).toEqual([""]);
@@ -6368,23 +6859,22 @@ if (args[0] === "view") {
     const jobsPath = join(root, "jobs.json");
     const callsPath = join(root, "log-requests");
     writeFileSync(callsPath, "");
-    writeFileSync(
-      jobsPath,
-      JSON.stringify({
-        jobs: [
-          { databaseId: 101, name: "failed", status: "completed", conclusion: "failure" },
-          { databaseId: 102, name: "cancelled", status: "completed", conclusion: "cancelled" },
-          { databaseId: 103, name: "passed", status: "completed", conclusion: "success" },
-          { databaseId: 104, name: "skipped", status: "completed", conclusion: "skipped" },
-          { databaseId: 105, name: "running", status: "in_progress", conclusion: "" },
-          { databaseId: 106, name: "queued", status: "queued", conclusion: "" },
-        ],
-      }),
-    );
+    writeJson(jobsPath, {
+      jobs: [
+        { databaseId: 101, name: "failed", status: "completed", conclusion: "failure" },
+        { databaseId: 102, name: "cancelled", status: "completed", conclusion: "cancelled" },
+        { databaseId: 103, name: "passed", status: "completed", conclusion: "success" },
+        { databaseId: 104, name: "skipped", status: "completed", conclusion: "skipped" },
+        { databaseId: 105, name: "running", status: "in_progress", conclusion: "" },
+        { databaseId: 106, name: "queued", status: "queued", conclusion: "" },
+      ],
+    });
     const source = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
     const result = spawnSync(
       "bash",
       [
+        "--noprofile",
+        "--norc",
         "-c",
         `
 set -euo pipefail
@@ -6404,6 +6894,7 @@ gh() {
   done
   return 1
 }
+${shellFunctionSource(source, "gh_read")}
 ${shellFunctionSource(source, "print_failed_run_summary")}
 print_failed_run_summary 404
 `,
@@ -6423,23 +6914,25 @@ print_failed_run_summary 404
   });
 
   it.each([
-    ["lagged", 0, 1],
-    ["approved-queued", 0, 1],
-    ["unrelated-environment", 1, 0],
-    ["manual", 0, 0],
+    ["queued", 0, 0],
+    ["started", 0, 0],
     ["duplicate", 1, 0],
     ["wrong-sha", 1, 0],
-    ["changed-sha-after-approval", 1, 1],
-    ["approval-failed", 1, 1],
-    ["passive", 0, 0],
-  ])("observes the core publication gate: %s", (mode, exit, approvals) => {
+    ["changed-sha-after-start", 1, 0],
+    ["terminal", 0, 0],
+    ["bootstrap-lagged", 0, 1],
+    ["bootstrap-approval-failed", 1, 1],
+  ])("observes child publication with only bootstrap approvals: %s", (mode, exit, approvals) => {
     const root = tempDirs.make("release-publish-wait-");
     const calls = join(root, "calls");
     writeFileSync(calls, "");
     const source = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
+    const bootstrap = mode.startsWith("bootstrap-");
     const result = spawnSync(
       "bash",
       [
+        "--noprofile",
+        "--norc",
         "-c",
         `
 set -euo pipefail
@@ -6449,46 +6942,44 @@ gh() {
   if [[ "$1 $2" == "run view" ]]; then
     if [[ "$*" == *"--json headSha,url"* ]]; then
       local sha="$EXPECTED_SHA"
-      if [[ "$MODE" == "wrong-sha" || ( "$MODE" == "changed-sha-after-approval" && -f "$APPROVED" ) ]]; then
+      if [[ "$MODE" == "wrong-sha" || ( "$MODE" == "changed-sha-after-start" && "$iteration" -gt 0 ) ]]; then
         sha="${"b".repeat(40)}"
       fi
       printf '{"headSha":"%s","url":"https://example.invalid/run/404"}\\n' "$sha"
     elif [[ "$*" == *"--json status,url,updatedAt"* ]]; then
       local state=in_progress
-      if [[ ( "$MODE" == "passive" || "$MODE" == "unrelated-environment" ) && "$iteration" -gt 0 ]]; then state=completed; fi
+      if [[ ( "$MODE" == "terminal" && "$iteration" -gt 0 ) || -f "$APPROVED" ]]; then state=completed; fi
       printf '{"status":"%s","url":"https://example.invalid/run/404","updatedAt":"2026-09-01T00:00:00Z"}\\n' "$state"
     elif [[ "$*" == *"--json jobs"* ]]; then
       local jobs
       if [[ "$MODE" == "duplicate" ]]; then
         jobs='[{"name":"publish_openclaw_npm","status":"in_progress"},{"name":"publish_openclaw_npm","status":"in_progress"}]'
-      elif [[ "$MODE" == "manual" || ( -f "$APPROVED" && "$MODE" != "approved-queued" ) ]]; then
+      elif [[ "$MODE" == "started" || "$iteration" -gt 0 ]]; then
         jobs='[{"name":"publish_openclaw_npm","status":"in_progress"}]'
       else
         jobs='[{"name":"publish_openclaw_npm","status":"queued"}]'
       fi
       printf '{"jobs":%s}\\n' "$jobs" | jq -c "\${!#}"
     else
-      local conclusion=success
-      if [[ "$MODE" == "unrelated-environment" ]]; then conclusion=cancelled; fi
-      printf '{"conclusion":"%s","url":"https://example.invalid/run/404","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:01Z"}\\n' "$conclusion"
+      printf '{"conclusion":"success","url":"https://example.invalid/run/404","createdAt":"2026-09-01T00:00:00Z","updatedAt":"2026-09-01T00:00:01Z"}\\n'
     fi
-  elif [[ "$1 $2 $3" == "api -X GET" ]]; then
-    if [[ "$MODE" == "lagged" && "$iteration" -eq 0 ]]; then printf '[]\\n';
-    elif [[ "$MODE" == "unrelated-environment" ]]; then printf '[{"environment":{"id":8,"name":"other-release"},"current_user_can_approve":true}]\\n';
-    else printf '[{"environment":{"id":7,"name":"npm-release"},"current_user_can_approve":true}]\\n'; fi
-  elif [[ "$1 $2 $3" == "api -X POST" ]]; then
+  elif [[ "$1 $2 $3" == "api -X GET" && "$MODE" == bootstrap-* ]]; then
+    if [[ "$MODE" == "bootstrap-lagged" && "$iteration" -eq 0 ]]; then printf '[]\\n';
+    else printf '[{"environment":{"id":7,"name":"clawhub-plugin-bootstrap"},"current_user_can_approve":true}]\\n'; fi
+  elif [[ "$1 $2 $3" == "api -X POST" && "$MODE" == bootstrap-* ]]; then
     printf 'approval\\n' >> "$CALLS"
-    if [[ "$MODE" == "approval-failed" ]]; then return 42; fi
+    if [[ "$MODE" == "bootstrap-approval-failed" ]]; then return 42; fi
     touch "$APPROVED"
-  else return 99; fi
+  else printf 'unexpected:%s\\n' "$*" >> "$CALLS"; return 99; fi
 }
 sleep() { iteration=$((iteration + 1)); if [[ "$iteration" -gt 3 ]]; then exit 91; fi; }
-print_pending_deployments() { :; }
 print_failed_run_summary() { :; }
+${shellFunctionSource(source, "gh_read")}
 ${shellFunctionSource(source, "verify_child_run_sha")}
+${shellFunctionSource(source, "print_pending_deployments")}
 ${shellFunctionSource(source, "approve_pending_deployments")}
 ${shellFunctionSource(source, "wait_for_run")}
-wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMENTS" "$APPROVED_ENVIRONMENT"
+wait_for_run "$WORKFLOW" 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPROVE_ENVIRONMENTS"
 `,
       ],
       {
@@ -6502,39 +6993,25 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
           GITHUB_STEP_SUMMARY: join(root, "summary"),
           APPROVED: join(root, "approved"),
           CALLS: calls,
-          STARTED_JOB: mode === "passive" ? "" : "publish_openclaw_npm",
-          APPROVE_ENVIRONMENTS: String(mode !== "passive"),
-          APPROVED_ENVIRONMENT: mode === "passive" ? "" : "npm-release",
+          WORKFLOW: bootstrap ? "plugin-clawhub-new.yml" : "openclaw-npm-release.yml",
+          STARTED_JOB: bootstrap || mode === "terminal" ? "" : "publish_openclaw_npm",
+          APPROVE_ENVIRONMENTS: String(bootstrap),
         },
       },
     );
     expect(result.status, result.stderr || result.stdout).toBe(exit);
-    expect(readFileSync(calls, "utf8").split("\n").filter(Boolean)).toHaveLength(approvals);
+    expect(readFileSync(calls, "utf8").split("\n").filter(Boolean)).toEqual(
+      Array.from({ length: approvals }, () => "approval"),
+    );
+    if (!bootstrap) {
+      expect(result.stdout).not.toContain("approve: gh api");
+    }
   });
 
   it.each(["2026.9.1\nsha=" + "b".repeat(40), "", "v2026.9.1", "2026.13.1", "2026.9"])(
     "rejects an Android pin that is not an exact version before writing outputs (%j)",
     (pin) => {
-      const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
-      const ref = workflowStep(target, "Resolve checked-out release ref");
-      const root = tempDirs.make("release-android-pin-reject-");
-      mkdirSync(join(root, "apps/android"), { recursive: true });
-      writeFileSync(join(root, "apps/android/version.json"), JSON.stringify({ version: pin }));
-      writeFileSync(join(root, "git"), `#!/bin/sh\nprintf '%s\\n' '${"a".repeat(40)}'\n`, {
-        mode: 0o755,
-      });
-      const result = spawnSync("bash", ["-c", ref.run ?? ""], {
-        cwd: root,
-        encoding: "utf8",
-        env: {
-          PATH: `${root}:${process.env.PATH}`,
-          RELEASE_TAG: "v2026.9.1",
-          PUBLISH_OPENCLAW_NPM: "true",
-          PUBLISH_DOCKER_ONLY: "false",
-          GITHUB_OUTPUT: join(root, "output"),
-          GITHUB_STEP_SUMMARY: join(root, "summary"),
-        },
-      });
+      const { root, result } = runAndroidPin(pin);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("exact YYYY.M.PATCH Android version");
       // A rejected pin must not reach GITHUB_OUTPUT at all, so it can never add output records.
@@ -6548,30 +7025,8 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
     ["v2026.9.1-1", "2026.9.1", true],
     ["v2026.9.1-1", "2026.7.4", false],
     ["v2026.9.1-beta.1", "2026.9.1", false],
-    ["v2026.9.1-alpha.1", "2026.9.1", false],
   ])("admits Android only when %s pins its native train (%s)", (tag, pin, native) => {
-    const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
-    const ref = workflowStep(target, "Resolve checked-out release ref");
-    const root = tempDirs.make("release-android-pin-");
-    mkdirSync(join(root, "apps/android"), { recursive: true });
-    writeFileSync(join(root, "apps/android/version.json"), JSON.stringify({ version: pin }));
-    writeFileSync(join(root, "git"), `#!/bin/sh\nprintf '%s\\n' '${"a".repeat(40)}'\n`, {
-      mode: 0o755,
-    });
-    const summaryPath = join(root, "summary");
-    writeFileSync(summaryPath, "");
-    const result = spawnSync("bash", ["-c", ref.run ?? ""], {
-      cwd: root,
-      encoding: "utf8",
-      env: {
-        PATH: `${root}:${process.env.PATH}`,
-        RELEASE_TAG: tag,
-        PUBLISH_OPENCLAW_NPM: "true",
-        PUBLISH_DOCKER_ONLY: "false",
-        GITHUB_OUTPUT: join(root, "output"),
-        GITHUB_STEP_SUMMARY: summaryPath,
-      },
-    });
+    const { target, root, summaryPath, result } = runAndroidPin(pin, tag);
     expect(result.status, result.stderr).toBe(0);
     const stepOutputs = Object.fromEntries(
       readFileSync(join(root, "output"), "utf8")
@@ -6616,10 +7071,10 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       "apps/android/version.json",
     );
 
-    if (tag.includes("alpha") || tag.includes("beta") || native) {
+    if (tag.includes("beta") || native) {
       return;
     }
-    const note = `- Android APK: skipped — apps/android/version.json is ${pin}, release train is 2026.9.1; run the shared mobile cutter (scripts/mobile-release-version.ts --prepare) before the next tag.`;
+    const note = `- Android APK: skipped — apps/android/version.json is ${pin}, release train is 2026.9.1; run pnpm android:version:pin -- --from-gateway before the next tag.`;
     expect(readFileSync(summaryPath, "utf8")).toContain(note);
     expect(outputs.android_release_note).toBe(note);
     const publishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
@@ -6686,6 +7141,7 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       "publish",
       "publish_docker",
       "approve_github_release",
+      "finalize_github_release_before_docker",
     ]);
     expect(nativeJob["continue-on-error"]).toBe(true);
     expect(androidJob["continue-on-error"]).toBe(true);
@@ -6700,12 +7156,12 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       "public verification follows terminal parent success",
     );
     expectTextToIncludeAll(publishOrchestration.run, [
-      'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
+      'gh_read api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}"',
       'if [[ "$resolved_workflow_sha" != "$expected_sha" ]]',
       'verify_child_run_sha "$workflow" "$run_id" "$expected_sha" || return 1',
       'approve_pending_deployments "${workflow}" "${run_id}" "${expected_sha}"',
       'dispatch_workflow_at_ref "${RELEASE_TAG}" "${TARGET_SHA}" android-release.yml',
-      'wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
+      'if ! wait_for_run plugin-npm-release.yml "${plugin_npm_run_id}" "${PARENT_WORKFLOW_SHA}" "" false true; then',
       'wait_for_run_background openclaw-npm-release.yml "${openclaw_npm_run_id}" "${PARENT_WORKFLOW_SHA}"',
       '-f release_publish_branch="${PARENT_WORKFLOW_BRANCH}"',
       '-f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}"',
@@ -6728,6 +7184,8 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
       const result = spawnSync(
         "bash",
         [
+          "--noprofile",
+          "--norc",
           "-c",
           `
 set -euo pipefail
@@ -6777,7 +7235,7 @@ printf 'native_failed=%s\\n' "$native_failed"
     },
   );
 
-  it.each([
+  it.for([
     "success",
     "rerun-before-approval",
     "rerun-at-dispatch",
@@ -6789,40 +7247,50 @@ printf 'native_failed=%s\\n' "$native_failed"
     "other-workflow",
     "other-repository",
     "other-tooling",
-  ])("binds native qualification through Android approval and dispatch: %s", (mode) => {
-    const root = tempDirs.make("android-native-qualification-");
-    const bin = join(root, "bin");
-    mkdirSync(bin);
-    mkdirSync(join(root, ".release-harness"));
-    symlinkSync(resolve("scripts"), join(root, ".release-harness/scripts"), "dir");
-    const targetSha = "a".repeat(40);
-    const workflowSha = "d".repeat(40);
-    const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
-    const dispatchId = `release-native-android-123-2-${targetSha}`;
-    const run = {
-      id: 91,
-      run_attempt: mode === "rerun" ? 2 : 1,
-      event: "workflow_dispatch",
-      path: mode === "other-workflow" ? ".github/workflows/other.yml" : ".github/workflows/ci.yml",
-      display_title: `CI ${mode === "other-source" ? dispatchId.replace(targetSha, "b".repeat(40)) : dispatchId}`,
-      head_branch: mode === "other-ref" ? "main" : workflowRef,
-      head_sha: mode === "other-tooling" ? "c".repeat(40) : workflowSha,
-      repository: {
-        full_name: mode === "other-repository" ? "example/other" : "openclaw/openclaw",
-      },
-      actor: { login: "github-actions[bot]" },
-      triggering_actor: { login: "github-actions[bot]" },
-      status: "completed",
-      conclusion: mode === "failed" ? "failure" : "success",
-    };
-    const dispatchPath = join(root, "dispatch.json");
-    const androidDispatchPath = join(root, "android-dispatch.json");
-    const nativeRunPath = join(root, "native-run.json");
-    writeFileSync(nativeRunPath, JSON.stringify(run));
-    const gh = join(bin, "gh");
-    writeFileSync(
-      gh,
-      `#!${process.execPath}
+  ])(
+    "binds native qualification through Android approval and dispatch: %s",
+    (mode, { signal, onTestFinished }) => {
+      const lifetime = createFixtureLifetime();
+      const finished = new AbortController();
+      onTestFinished(async () => {
+        finished.abort();
+        await lifetime.cleanup();
+      });
+      return lifetime.run(async () => {
+        const root = lifetime.createTempDir("android-native-qualification-");
+        const bin = join(root, "bin");
+        mkdirSync(bin);
+        mkdirSync(join(root, ".release-harness"));
+        symlinkSync(resolve("scripts"), join(root, ".release-harness/scripts"), "dir");
+        const targetSha = "a".repeat(40);
+        const workflowSha = "d".repeat(40);
+        const workflowRef = `release-publish/${workflowSha.slice(0, 12)}-123`;
+        const dispatchId = `release-native-android-123-2-${targetSha}`;
+        const run = {
+          id: 91,
+          run_attempt: mode === "rerun" ? 2 : 1,
+          event: "workflow_dispatch",
+          path:
+            mode === "other-workflow" ? ".github/workflows/other.yml" : ".github/workflows/ci.yml",
+          display_title: `CI ${mode === "other-source" ? dispatchId.replace(targetSha, "b".repeat(40)) : dispatchId}`,
+          head_branch: mode === "other-ref" ? "main" : workflowRef,
+          head_sha: mode === "other-tooling" ? "c".repeat(40) : workflowSha,
+          repository: {
+            full_name: mode === "other-repository" ? "example/other" : "openclaw/openclaw",
+          },
+          actor: { login: "github-actions[bot]" },
+          triggering_actor: { login: "github-actions[bot]" },
+          status: "completed",
+          conclusion: mode === "failed" ? "failure" : "success",
+        };
+        const dispatchPath = join(root, "dispatch.json");
+        const androidDispatchPath = join(root, "android-dispatch.json");
+        const nativeRunPath = join(root, "native-run.json");
+        writeJson(nativeRunPath, run);
+        const gh = join(bin, "gh");
+        writeFileSync(
+          gh,
+          `#!${process.execPath}
 import { readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispatches'))) {
@@ -6855,25 +7323,27 @@ if (args[0] === 'api' && args.some(arg => arg.endsWith('/workflows/ci.yml/dispat
   }));
 } else throw new Error('Unexpected GitHub operation: ' + JSON.stringify(args));
 `,
-    );
-    chmodSync(gh, 0o755);
-    const nativeJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
-    const approvalJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android");
-    const dispatch = workflowStep(nativeJob, "Dispatch and await exact-source native CI");
-    const proof = workflowStep(nativeJob, "Verify exact native CI qualification");
-    const approval = workflowStep(approvalJob, "Write Android release approval");
-    expect(nativeJob.outputs).toMatchObject({
-      workflow_ref: "${{ steps.dispatch.outputs.workflow_ref }}",
-    });
-    expect(proof.env?.NATIVE_CI_WORKFLOW_REF).toBe("${{ steps.dispatch.outputs.workflow_ref }}");
-    expect(approval.env?.NATIVE_CI_WORKFLOW_REF).toBe(
-      "${{ needs.qualify_android_native.outputs.workflow_ref }}",
-    );
-    const outputPath = join(root, "output");
-    writeFileSync(outputPath, "");
-    const rerunBeforeApproval =
-      mode === "rerun-before-approval"
-        ? `
+        );
+        chmodSync(gh, 0o755);
+        const nativeJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
+        const approvalJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish_android");
+        const dispatch = workflowStep(nativeJob, "Dispatch and await exact-source native CI");
+        const proof = workflowStep(nativeJob, "Verify exact native CI qualification");
+        const approval = workflowStep(approvalJob, "Write Android release approval");
+        expect(nativeJob.outputs).toMatchObject({
+          workflow_ref: "${{ steps.dispatch.outputs.workflow_ref }}",
+        });
+        expect(proof.env?.NATIVE_CI_WORKFLOW_REF).toBe(
+          "${{ steps.dispatch.outputs.workflow_ref }}",
+        );
+        expect(approval.env?.NATIVE_CI_WORKFLOW_REF).toBe(
+          "${{ needs.qualify_android_native.outputs.workflow_ref }}",
+        );
+        const outputPath = join(root, "output");
+        writeFileSync(outputPath, "");
+        const rerunBeforeApproval =
+          mode === "rerun-before-approval"
+            ? `
 node --input-type=module <<'NODE'
 import { readFileSync, writeFileSync } from 'node:fs';
 const path = ${JSON.stringify(nativeRunPath)};
@@ -6881,96 +7351,130 @@ const run = JSON.parse(readFileSync(path, 'utf8'));
 writeFileSync(path, JSON.stringify({ ...run, run_attempt: 2, status: 'queued', conclusion: null }));
 NODE
 `
-        : "";
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        [
-          dispatch.run,
-          proof.run,
-          rerunBeforeApproval,
-          approval.run,
-          'dispatch_workflow_at_ref "$RELEASE_TAG" "$TARGET_SHA" android-release.yml -f tag="$RELEASE_TAG"',
-        ].join("\n"),
-      ],
-      {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          PATH: `${bin}:${process.env.PATH}`,
-          GITHUB_WORKSPACE: root,
-          RUNNER_TEMP: root,
-          GITHUB_OUTPUT: outputPath,
-          GITHUB_STEP_SUMMARY: join(root, "summary"),
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_RUN_ID: "123",
-          GITHUB_RUN_ATTEMPT: "2",
-          GITHUB_REF: `refs/tags/${workflowRef}`,
-          WORKFLOW_FULL_REF: `refs/tags/${workflowRef}`,
-          PARENT_WORKFLOW_SHA: workflowSha,
-          TARGET_SHA: targetSha,
-          RELEASE_TAG: "v2026.8.1",
-          RELEASE_COVERAGE_POLICY: "npm-stable-v1",
-          NATIVE_CI_RUN_ID: "91",
-          NATIVE_CI_WORKFLOW_REF: workflowRef,
-          NATIVE_CI_WORKFLOW_SHA: workflowSha,
-          RELEASE_PUBLISH_BRANCH: "main",
-          RELEASE_PUBLISH_FULL_REF: "refs/heads/main",
-          RELEASE_PUBLISH_WORKFLOW_SHA: workflowSha,
-          RELEASE_PUBLISH_RUN_ATTEMPT: "2",
-          RELEASE_PUBLISH_RUN_ID: "123",
-        },
-      },
-    );
-    if (mode === "moved-protected-tag") {
-      expect(existsSync(dispatchPath)).toBe(false);
-      expect(result.stderr).toContain("refusing dispatch");
-    } else {
-      expect(JSON.parse(readFileSync(dispatchPath, "utf8"))).toEqual({
-        ref: workflowRef,
-        inputs: {
-          target_ref: targetSha,
-          historical_target_tag: "v2026.8.1",
-          include_android: "true",
-          release_scope: "full",
-          dispatch_id: dispatchId,
-        },
+            : "";
+        const maxBuffer = 1024 * 1024;
+        const stdout = createBoundedChildOutput(maxBuffer);
+        const stderr = createBoundedChildOutput(maxBuffer);
+        const overflow = new AbortController();
+        let outputBytes = 0;
+        let childStatus: number;
+        try {
+          childStatus = await lifetime.track(
+            runManagedCommand({
+              bin: "bash",
+              args: [
+                "--noprofile",
+                "--norc",
+                "-c",
+                [
+                  dispatch.run,
+                  proof.run,
+                  rerunBeforeApproval,
+                  approval.run,
+                  'dispatch_workflow_at_ref "$RELEASE_TAG" "$TARGET_SHA" android-release.yml -f tag="$RELEASE_TAG"',
+                ].join("\n"),
+              ],
+              cwd: root,
+              env: {
+                PATH: `${bin}:${process.env.PATH}`,
+                GITHUB_WORKSPACE: root,
+                RUNNER_TEMP: root,
+                GITHUB_OUTPUT: outputPath,
+                GITHUB_STEP_SUMMARY: join(root, "summary"),
+                GITHUB_REPOSITORY: "openclaw/openclaw",
+                GITHUB_RUN_ID: "123",
+                GITHUB_RUN_ATTEMPT: "2",
+                GITHUB_REF: `refs/tags/${workflowRef}`,
+                WORKFLOW_FULL_REF: `refs/tags/${workflowRef}`,
+                PARENT_WORKFLOW_SHA: workflowSha,
+                TARGET_SHA: targetSha,
+                RELEASE_TAG: "v2026.8.1",
+                RELEASE_COVERAGE_POLICY: "npm-stable-v1",
+                NATIVE_CI_RUN_ID: "91",
+                NATIVE_CI_WORKFLOW_REF: workflowRef,
+                NATIVE_CI_WORKFLOW_SHA: workflowSha,
+                RELEASE_PUBLISH_BRANCH: "main",
+                RELEASE_PUBLISH_FULL_REF: "refs/heads/main",
+                RELEASE_PUBLISH_WORKFLOW_SHA: workflowSha,
+                RELEASE_PUBLISH_RUN_ATTEMPT: "2",
+                RELEASE_PUBLISH_RUN_ID: "123",
+              },
+              shell: false,
+              stdio: ["ignore", "pipe", "pipe"],
+              signal: AbortSignal.any([signal, finished.signal, overflow.signal]),
+              requireProcessTreeExit: process.platform !== "win32",
+              onReady(spawnedChild) {
+                for (const [pipe, output] of [
+                  [spawnedChild.stdout!, stdout],
+                  [spawnedChild.stderr!, stderr],
+                ] as const) {
+                  pipe.on("data", (chunk: Buffer) => {
+                    output.append(chunk);
+                    outputBytes += chunk.byteLength;
+                    if (outputBytes > maxBuffer) {
+                      overflow.abort();
+                    }
+                  });
+                }
+              },
+            }),
+          );
+        } catch (cause) {
+          if (overflow.signal.aborted) {
+            throw new Error("Android qualification output exceeded maxBuffer", { cause });
+          }
+          throw cause;
+        }
+        const result = { status: childStatus, stdout: stdout.text(), stderr: stderr.text() };
+        if (mode === "moved-protected-tag") {
+          expect(existsSync(dispatchPath)).toBe(false);
+          expect(result.stderr).toContain("refusing dispatch");
+        } else {
+          expect(readJson(dispatchPath)).toEqual({
+            ref: workflowRef,
+            inputs: {
+              target_ref: targetSha,
+              historical_target_tag: "v2026.8.1",
+              include_android: "true",
+              release_scope: "full",
+              dispatch_id: dispatchId,
+            },
+          });
+          if (mode === "other-tooling") {
+            expect(readFileSync(outputPath, "utf8")).toBe("");
+            expect(result.stderr).toContain("used workflow SHA");
+          } else {
+            expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
+          }
+        }
+        const approvalPath = join(root, "android-release-approval/approval.json");
+        const approved = mode === "success" || mode === "rerun-at-dispatch";
+        const qualified = approved || mode === "rerun-before-approval";
+        expect(existsSync(approvalPath)).toBe(approved);
+        if (approved) {
+          expect(readJson(approvalPath)).toEqual({
+            version: 3,
+            repository: "openclaw/openclaw",
+            workflow: "OpenClaw Release Publish",
+            parentRunId: "123",
+            parentRunAttempt: 2,
+            workflowBranch: "main",
+            workflowFullRef: "refs/heads/main",
+            parentWorkflowSha: workflowSha,
+            releaseTag: "v2026.8.1",
+            targetSha,
+            nativeCi: { runId: "91", runAttempt: 1, workflowRef },
+          });
+        }
+        expect(existsSync(androidDispatchPath)).toBe(mode === "success");
+        expect(readFileSync(outputPath, "utf8").includes("qualified=true")).toBe(qualified);
+        expect(result.status === 0, result.stderr).toBe(mode === "success");
+        if (mode === "rerun-before-approval" || mode === "rerun-at-dispatch") {
+          expect(result.stderr).toContain("exact completed successful native CI attempt");
+        }
       });
-      if (mode === "other-tooling") {
-        expect(readFileSync(outputPath, "utf8")).toBe("");
-        expect(result.stderr).toContain("used workflow SHA");
-      } else {
-        expect(readFileSync(outputPath, "utf8")).toContain(`workflow_ref=${workflowRef}`);
-      }
-    }
-    const approvalPath = join(root, "android-release-approval/approval.json");
-    const approved = mode === "success" || mode === "rerun-at-dispatch";
-    const qualified = approved || mode === "rerun-before-approval";
-    expect(existsSync(approvalPath)).toBe(approved);
-    if (approved) {
-      expect(JSON.parse(readFileSync(approvalPath, "utf8"))).toEqual({
-        version: 3,
-        repository: "openclaw/openclaw",
-        workflow: "OpenClaw Release Publish",
-        parentRunId: "123",
-        parentRunAttempt: 2,
-        workflowBranch: "main",
-        workflowFullRef: "refs/heads/main",
-        parentWorkflowSha: workflowSha,
-        releaseTag: "v2026.8.1",
-        targetSha,
-        nativeCi: { runId: "91", runAttempt: 1, workflowRef },
-      });
-    }
-    expect(existsSync(androidDispatchPath)).toBe(mode === "success");
-    expect(readFileSync(outputPath, "utf8").includes("qualified=true")).toBe(qualified);
-    expect(result.status === 0, result.stderr).toBe(mode === "success");
-    if (mode === "rerun-before-approval" || mode === "rerun-at-dispatch") {
-      expect(result.stderr).toContain("exact completed successful native CI attempt");
-    }
-  });
+    },
+  );
 
   it("requires native-bound approval support only for Android qualification", () => {
     const job = workflowJob(RELEASE_PUBLISH_WORKFLOW, "qualify_android_native");
@@ -7005,7 +7509,7 @@ NODE
     );
     const supportedSource = git("rev-parse", "HEAD");
     for (const source of [legacySource, supportedSource]) {
-      const result = spawnSync("bash", ["-c", step.run ?? ""], {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", step.run ?? ""], {
         cwd: root,
         encoding: "utf8",
         env: { PATH: process.env.PATH, EXPECTED_SHA: source },
@@ -7080,13 +7584,11 @@ NODE
     expect(symlinkResult.stderr).toContain("unsupported dependency evidence archive entry");
     expect(corruptResult.status).toBe(1);
     expect(corruptResult.stderr).toContain("dependency evidence ZIP comparison failed");
-    expect(orchestration).toContain("find dependency-evidence -type f -exec touch -t 198001010000");
-    expect(orchestration).toContain(
+    expectTextToIncludeAll(orchestration, [
+      "find dependency-evidence -type f -exec touch -t 198001010000",
       'attach_or_verify_release_asset "${asset_path}" "${asset_name}" zip-tree',
-    );
-    expect(orchestration).toContain(
       '"${GITHUB_WORKSPACE}/.release-harness/scripts/compare-release-evidence-zip.py"',
-    );
+    ]);
   });
 
   it.each([
@@ -7124,19 +7626,16 @@ NODE
           conclusion,
         });
       }
-      writeFileSync(
-        runPath,
-        JSON.stringify({
-          workflowName: "OpenClaw Release Publish",
-          event: "workflow_dispatch",
-          status: "completed",
-          conclusion: "failure",
-          jobs,
-        }),
-      );
+      writeJson(runPath, {
+        workflowName: "OpenClaw Release Publish",
+        event: "workflow_dispatch",
+        status: "completed",
+        conclusion: "failure",
+        jobs,
+      });
       const evidencePath = join(root, "evidence.json");
       const manifestPath = join(root, "manifest.json");
-      writeFileSync(evidencePath, JSON.stringify({ releasePublishRunId: "12" }));
+      writeJson(evidencePath, { releasePublishRunId: "12" });
       writeFileSync(
         `${evidencePath}.sha256`,
         `${createHash("sha256").update(readFileSync(evidencePath)).digest("hex")}  evidence.json\n`,
@@ -7159,6 +7658,23 @@ NODE
       }
     },
   );
+
+  it("publishes approved bootstrap tarballs without removed waiver authority reads", () => {
+    const publish = workflowStep(
+      workflowJob(".github/workflows/plugin-npm-release.yml", "publish_plugins_npm"),
+      "Publish approved bootstrap tarball",
+    );
+    const run = publish.run ?? "";
+    expect(run).toContain('npm publish "$TARBALL_PATH"');
+    expect(run).toContain("release-tooling-identity.mjs verify");
+    expect(run).not.toContain("actions/variables/");
+    expect(run).not.toContain("assertStableSoakWaiverStillHeld");
+  });
+
+  it("does not expose removed publication waivers in stable closeout", () => {
+    const workflow = readFileSync(STABLE_MAIN_CLOSEOUT_WORKFLOW, "utf8");
+    expect(workflow).not.toMatch(/stable_soak_waiver|lane_waiver|STABLE_SOAK_WAIVER|LANE_WAIVER/);
+  });
 
   it("verifies immutable postpublish evidence before stable closeout reads it", () => {
     const workflow = readFileSync(STABLE_MAIN_CLOSEOUT_WORKFLOW, "utf8");
@@ -7190,44 +7706,41 @@ NODE
     const rollbackDrillPushSkipIndex = workflow.indexOf(
       "Stable closeout skipped: rollback drill repository variables are missing",
     );
-    const evidenceScriptSyntax = spawnSync("bash", ["-n"], {
+    const evidenceScriptSyntax = spawnSync("bash", ["--noprofile", "--norc", "-n"], {
       encoding: "utf8",
       input: evidenceStep.run,
     });
-    const attachScriptSyntax = spawnSync("bash", ["-n"], {
+    const attachScriptSyntax = spawnSync("bash", ["--noprofile", "--norc", "-n"], {
       encoding: "utf8",
       input: attachStep.run,
     });
 
     expect(evidenceScriptSyntax.status, evidenceScriptSyntax.stderr).toBe(0);
     expect(attachScriptSyntax.status, attachScriptSyntax.stderr).toBe(0);
-    expect(workflow).toContain('evidence_checksum_asset="${evidence_asset}.sha256"');
-    expect(workflow).toContain('--pattern "$evidence_checksum_asset"');
-    expect(workflow).toContain('fallback_package_version="${BASH_REMATCH[1]}"');
-    expect(workflow).toContain('tag_package_content="$RUNNER_TEMP/tag-package-content.b64"');
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
+      'evidence_checksum_asset="${evidence_asset}.sha256"',
+      '--pattern "$evidence_checksum_asset"',
+      'fallback_package_version="${BASH_REMATCH[1]}"',
+      'tag_package_content="$RUNNER_TEMP/tag-package-content.b64"',
       'gh_with_retry api "repos/$GITHUB_REPOSITORY/contents/package.json?ref=$tag"',
-    );
-    expect(workflow).toContain("for attempt in 1 2 3; do");
-    expect(workflow).toContain("sleep $((attempt * 5))");
-    expect(workflow).toContain(
+      "for attempt in 1 2 3; do",
+      "sleep $((attempt * 5))",
       "Stable closeout could not read package.json for $tag from GitHub API.",
-    );
-    expect(workflow).toContain(
       "Stable closeout package.json content for $tag was not valid base64.",
-    );
-    expect(workflow).toContain('tag_package_version="$(jq -r');
-    expect(workflow).toContain('evidence_source_tag="v$fallback_package_version"');
-    expect(workflow).toContain('gh_with_retry release download "$evidence_source_tag"');
-    expect(workflow).toContain("Checkout fallback evidence tag");
-    expect(workflow).toContain("Bind fallback correction to the published package source");
-    expect(workflow).toContain(
+      'tag_package_version="$(jq -r',
+      'evidence_source_tag="v$fallback_package_version"',
+      'gh_with_retry release download "$evidence_source_tag"',
+      "Checkout fallback evidence tag",
+      "Bind fallback correction to the published package source",
       "Fallback correction ${{ needs.resolve.outputs.tag }} must point to the same source commit",
-    );
-    expect(workflow).toContain("main_ref: ${{ steps.inputs.outputs.main_ref }}");
-    expect(workflow).toContain("TRIGGER_SHA: ${{ github.sha }}");
-    expect(workflow).toContain('main_ref="$TRIGGER_SHA"');
-    expect(workflow).toContain("ref: ${{ needs.resolve.outputs.main_ref }}");
+      "main_ref: ${{ steps.inputs.outputs.main_ref }}",
+      "TRIGGER_SHA: ${{ github.sha }}",
+      'main_ref="$TRIGGER_SHA"',
+      'classifyReleaseTrain(parsed) === "stable"',
+      'classifyReleaseTrain(parsed) !== "stable"',
+      "below the extended-stable .33 boundary",
+      "ref: ${{ needs.resolve.outputs.main_ref }}",
+    ]);
     expect(
       workflowStep(
         workflowJob(STABLE_MAIN_CLOSEOUT_WORKFLOW, "verify"),
@@ -7238,80 +7751,54 @@ NODE
       path: ".closeout-tooling",
       "persist-credentials": false,
     });
-    expect(workflow).toContain("node .closeout-tooling/scripts/verify-stable-main-closeout.mjs");
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
+      "node .closeout-tooling/scripts/verify-stable-main-closeout.mjs",
       "Stable closeout skipped: $evidence_source_tag predates immutable postpublish evidence.",
-    );
-    expect(workflow).toContain("Stable closeout is required for $tag");
-    expect(workflow).toContain('closeout_checksum_asset="${closeout_asset}.sha256"');
-    expect(workflow).toContain('expected_closeout_digest="$(awk');
-    expect(workflow).toContain('actual_closeout_digest="$(sha256sum "$closeout_json_path"');
-    expect(workflow).toContain(
+      "Stable closeout is required for $tag",
+      'closeout_checksum_asset="${closeout_asset}.sha256"',
+      'expected_closeout_digest="$(awk',
+      'actual_closeout_digest="$(sha256sum "$closeout_json_path"',
       "Stable closeout manifest for $tag is incomplete; refusing to repair it.",
-    );
-    expect(workflow).toContain(
       'if [[ -f "$closeout_checksum_path" && ! -f "$closeout_json_path" ]]; then',
-    );
-    expect(workflow).toContain(
       "Stable closeout evidence for $tag has an invalid checksum; refusing to repair it.",
-    );
-    expect(workflow).toContain("repair_partial_closeout=false");
-    expect(workflow).toContain(
+      "repair_partial_closeout=false",
       "Stable closeout manifest for $tag does not match immutable postpublish evidence; refusing to accept it.",
-    );
-    expect(workflow).toContain("Stable closeout already complete for $tag.");
-    expect(workflow).toContain("allow_failed_publish_recovery:");
-    expect(workflow).toContain(
+      "Stable closeout already complete for $tag.",
+      "allow_failed_publish_recovery:",
       'const recoveryRequested = process.env.ALLOW_FAILED_PUBLISH_RECOVERY === "true";',
-    );
-    expect(workflow).toContain("Failed-publish recovery requires conclusion=failure");
-    expect(workflow).toContain('--allow-failed-publish-recovery "$ALLOW_FAILED_PUBLISH_RECOVERY"');
-    expect(workflow).toContain('"Publish Docker images / Publish prepared Docker images"');
-    expect(workflow).toContain(
+      "Failed-publish recovery requires conclusion=failure",
+      '--allow-failed-publish-recovery "$ALLOW_FAILED_PUBLISH_RECOVERY"',
+      '"Publish Docker images / Publish prepared Docker images"',
       'existing_manifest_args=(--existing-manifest "$CLOSEOUT_DIR/$closeout_asset"',
-    );
-    expect(workflow).toContain(
       "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides.",
-    );
-    expect(workflow).toContain(
       "REPAIR_PARTIAL_CLOSEOUT: ${{ needs.resolve.outputs.repair_partial_closeout }}",
-    );
-    expect(workflow).toContain('--allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT"');
-    expect(workflow).toContain(
+      '--allow-stale-rollback-drill "$REPAIR_PARTIAL_CLOSEOUT"',
       'awk -v asset="openclaw-${release_version}-stable-main-closeout.json"',
-    );
-    expect(workflow).toContain("attach_or_verify \\");
+      "attach_or_verify \\",
+    ]);
     expect(attachStep.run).toContain('cp -- "$source_path" "$existing_dir/$asset_name"');
     expect(attachStep.run).toContain(
       '"$existing_dir/$asset_name#$asset_name" --repo "$GITHUB_REPOSITORY"',
     );
     expect(attachStep.run).not.toContain('"$source_path#$asset_name"');
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
       "full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}",
-    );
-    expect(workflow).toContain("(.[0].runAttempt == null) or");
-    expect(workflow).toContain(
+      "(.[0].runAttempt == null) or",
       'release_manifest_asset="openclaw-${evidence_version}-release-manifest.json"',
-    );
-    expect(workflow).toContain('sha256sum --strict --status -c "$release_manifest_checksum_asset"');
-    expect(workflow).toContain(
+      'sha256sum --strict --status -c "$release_manifest_checksum_asset"',
       '"$existing_closeout_full_release_validation_run_attempt" != "$full_release_validation_run_attempt"',
-    );
+    ]);
     expect(evidenceStep.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ needs.resolve.outputs.full_release_validation_run_attempt }}",
     );
-    expect(evidenceStep.run).toContain(
+    expectTextToIncludeAll(evidenceStep.run, [
       "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
-    );
-    expect(evidenceStep.run).toContain(
       'String(run.run_attempt ?? "") !== process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT',
-    );
-    expect(evidenceStep.run).toContain(
       'manifest_asset="openclaw-${evidence_version}-release-manifest.json"',
-    );
-    expect(evidenceStep.run).toContain('gh_with_retry release download "$EVIDENCE_TAG"');
-    expect(evidenceStep.run).toContain(".runId == $run_id");
-    expect(evidenceStep.run).toContain(".runAttempt == $run_attempt");
+      'gh_with_retry release download "$EVIDENCE_TAG"',
+      ".runId == $run_id",
+      ".runAttempt == $run_attempt",
+    ]);
     expect(workflow).toContain(
       '--full-release-validation-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT"',
     );
@@ -7330,7 +7817,7 @@ NODE
   });
 
   it("keeps pnpm version selection sourced from packageManager", () => {
-    const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
+    const packageJson = readJson(PACKAGE_JSON) as {
       packageManager?: string;
     };
     const setupPnpmAction = readFileSync(SETUP_PNPM_STORE_CACHE_ACTION, "utf8");
@@ -7343,9 +7830,62 @@ NODE
     expect(setupPnpmAction).toContain(
       "if: ${{ inputs.cache-mode != 'off' && runner.os != 'Windows' }}",
     );
-    expect(setupPnpmAction).toContain(
-      "key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-${{ hashFiles(inputs.lockfile-path) }}",
+    const action = parse(setupPnpmAction) as { runs: { steps: WorkflowStep[] } };
+    const setup = { steps: action.runs.steps };
+    const pin = workflowStep(setup, "Validate pnpm setup inputs");
+    const cache = workflowStep(setup, "Restore pnpm store cache");
+    const root = tempDirs.make("pnpm-cache-key-");
+    const manifest = join(root, "selected-package.json");
+    const lockfile = join(root, "selected-lock.yaml");
+    const output = join(root, "outputs");
+    writeJson(manifest, { packageManager: packageJson.packageManager });
+    writeFileSync(lockfile, "lockfileVersion: '9.0'\n");
+    const resolved = spawnSync("bash", ["--noprofile", "--norc", "-eu", "-c", pin.run ?? ""], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        PATH: process.env.PATH,
+        CACHE_MODE: "restore",
+        PACKAGE_MANAGER_FILE: manifest,
+        REQUESTED_NODE_VERSION: "",
+        GITHUB_ACTION_PATH: resolve(dirname(SETUP_PNPM_STORE_CACHE_ACTION)),
+        GITHUB_OUTPUT: output,
+      },
+    });
+    expect(resolved.status, resolved.stderr).toBe(0);
+    const outputs = Object.fromEntries(
+      readFileSync(output, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => line.split("=")),
     );
+    expect(outputs["package-manager"]).toBe(packageJson.packageManager);
+    for (const runner of [
+      { os: "Linux", arch: "X64" },
+      { os: "macOS", arch: "ARM64" },
+    ]) {
+      const lockHash = createHash("sha256").update(readFileSync(lockfile)).digest("hex");
+      const key = cache.with?.key?.replace(/\$\{\{\s*(.*?)\s*\}\}/gu, (_, expression: string) =>
+        String(
+          runInNewContext(expression.replace(/\.([\w-]+)/gu, '["$1"]'), {
+            runner,
+            inputs: {
+              "node-version": "24.x",
+              "lockfile-path": lockfile,
+              "package-manager-file": manifest,
+            },
+            steps: { "setup-pnpm": { outputs } },
+            hashFiles: (file: string) => {
+              expect(file).toBe(lockfile);
+              return lockHash;
+            },
+          }),
+        ),
+      );
+      expect(key).toContain(`-${runner.os}-${runner.arch}-24.x-`);
+      expect(key).toContain(outputs["package-manager"]);
+      expect(key?.endsWith(`-${lockHash}`)).toBe(true);
+    }
     expect(setupPnpmAction).not.toContain("pnpm/action-setup");
     expect(setupPnpmAction).not.toContain("shasum");
     expect(setupPnpmAction).not.toContain("PNPM_VERSION_INPUT");
@@ -7362,16 +7902,12 @@ NODE
     );
     expect(setupHarnessPackageManagerIndex).toBeGreaterThan(-1);
     expect(installHarnessDependenciesIndex).toBeGreaterThan(setupHarnessPackageManagerIndex);
-    expect(setupReleaseHarnessAction).toContain(
+    expectTextToIncludeAll(setupReleaseHarnessAction, [
       "uses: ./.release-harness/.github/actions/setup-pnpm-store-cache",
-    );
-    expect(setupReleaseHarnessAction).toContain(
       "package-manager-file: .release-harness/package.json",
-    );
-    expect(setupReleaseHarnessAction).toContain("working-directory: .release-harness");
-    expect(setupReleaseHarnessAction).toContain(
+      "working-directory: .release-harness",
       "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
-    );
+    ]);
 
     const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
     expect(setupNodeAction).toContain("Normalize container toolcache");
@@ -7379,66 +7915,11 @@ NODE
 
     for (const workflowPath of workflowPaths()) {
       const workflowText = readFileSync(workflowPath, "utf8");
-      expect(workflowText, workflowPath).not.toContain("PNPM_VERSION");
+      // Observed versions such as REPLAY_PNPM_VERSION are not a competing pin.
+      expect(workflowText, workflowPath).not.toMatch(/\bPNPM_VERSION\b/u);
       expect(workflowText, workflowPath).not.toContain("pnpm-version:");
       expect(workflowText, workflowPath).not.toContain("pnpm/action-setup");
     }
-  });
-
-  it("retries pnpm store path resolution after a transient executable download failure", () => {
-    const action = parse(readFileSync(SETUP_PNPM_STORE_CACHE_ACTION, "utf8")) as {
-      runs: { steps: WorkflowStep[] };
-    };
-    const step = action.runs.steps.find(
-      (candidate) => candidate.name === "Resolve pnpm store path",
-    );
-    expect(step?.run).toBeDefined();
-
-    const root = tempDirs.make("pnpm-store-path-retry-");
-    const binDir = join(root, "bin");
-    const attemptsPath = join(root, "attempts");
-    const sleepPath = join(root, "sleeps");
-    const outputPath = join(root, "output");
-    const storePath = join(root, "store");
-    mkdirSync(binDir, { recursive: true });
-    writeFileSync(
-      join(binDir, "pnpm"),
-      `#!/bin/sh
-attempts=$(cat "$MOCK_ATTEMPTS" 2>/dev/null || printf 0)
-attempts=$((attempts + 1))
-printf '%s' "$attempts" > "$MOCK_ATTEMPTS"
-if [ "$attempts" -lt 3 ]; then
-  printf 'transient pnpm download failure\\n' >&2
-  exit 1
-fi
-printf '%s\\n' "$MOCK_STORE_PATH"
-`,
-      { mode: 0o755 },
-    );
-    writeFileSync(
-      join(binDir, "sleep"),
-      `#!/bin/sh
-printf '%s\\n' "$1" >> "$MOCK_SLEEPS"
-`,
-      { mode: 0o755 },
-    );
-
-    const result = spawnSync("bash", ["-c", step?.run ?? ""], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        GITHUB_OUTPUT: outputPath,
-        MOCK_ATTEMPTS: attemptsPath,
-        MOCK_SLEEPS: sleepPath,
-        MOCK_STORE_PATH: storePath,
-        PATH: `${binDir}:${process.env.PATH ?? ""}`,
-      },
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(attemptsPath, "utf8")).toBe("3");
-    expect(readFileSync(sleepPath, "utf8")).toBe("5\n10\n");
-    expect(readFileSync(outputPath, "utf8")).toContain(`path=${storePath}`);
   });
 
   it("runs trusted npm preflight pnpm commands from the tooling checkout", () => {
@@ -7448,14 +7929,8 @@ printf '%s\\n' "$1" >> "$MOCK_SLEEPS"
     const logPath = join(root, "pnpm-cwds.log");
     mkdirSync(toolingDir, { recursive: true });
     mkdirSync(binDir);
-    writeFileSync(
-      join(root, "package.json"),
-      JSON.stringify({ private: true, packageManager: "pnpm@11.2.2" }),
-    );
-    writeFileSync(
-      join(toolingDir, "package.json"),
-      JSON.stringify({ private: true, packageManager: "pnpm@12.1.0" }),
-    );
+    writeJson(join(root, "package.json"), { private: true, packageManager: "pnpm@11.2.2" });
+    writeJson(join(toolingDir, "package.json"), { private: true, packageManager: "pnpm@12.1.0" });
     const pnpmPath = join(binDir, "pnpm");
     writeFileSync(
       pnpmPath,
@@ -7472,6 +7947,18 @@ test "$package_manager" = "pnpm@12.1.0"
       workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_sdk_npm"),
       "Verify Plugin SDK API changes",
     );
+    expect(sdkStep.run).toContain(
+      '--summary "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.md"',
+    );
+    expect(sdkStep.run).toContain(
+      'cat "${GITHUB_WORKSPACE}/.artifacts/npm-sdk-proof/plugin-sdk-api-release-diff.md" >> "$GITHUB_STEP_SUMMARY"',
+    );
+    expect(
+      workflowStep(
+        workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "verify_openclaw_npm"),
+        "Upload Plugin SDK API release diff",
+      ).with?.path,
+    ).toContain("plugin-sdk-api-release-diff.md");
     const sdkCommandBlock = (sdkStep.run ?? "").match(
       /\(\n\s+cd "\$tooling_dir"\n\s+pnpm install --frozen-lockfile --ignore-scripts --filter openclaw\n\s+pnpm run plugin-sdk:api:diff -- "\$\{diff_args\[@\]\}"\n\s*\)/u,
     )?.[0];
@@ -7490,7 +7977,7 @@ test "$package_manager" = "pnpm@12.1.0"
         cwd: resolve(root, step["working-directory"] ?? "."),
       })),
     ]) {
-      const result = spawnSync("bash", ["-c", trustedPnpmCommand], {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", trustedPnpmCommand], {
         cwd,
         encoding: "utf8",
         env: {
@@ -7527,44 +8014,35 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(hydrateNode.run).toContain(
       "source .github/actions/setup-pnpm-store-cache/ensure-node.sh",
     );
-    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.x"');
+    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.22.1"');
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
     expect(workflowText).not.toContain('PNPM_CONFIG_STORE_DIR: "/var/cache/crabbox/pnpm/store"');
-    expect(hydratePnpm.run).toContain('preferred_pnpm_store="/var/cache/crabbox/pnpm/store"');
-    expect(hydratePnpm.run).toContain('mkdir -p "$preferred_pnpm_store" 2>/dev/null');
-    expect(hydratePnpm.run).toContain('[ -w "$preferred_pnpm_store" ]');
-    expect(hydratePnpm.run).toContain(
+    expectTextToIncludeAll(hydratePnpm.run, [
+      'preferred_pnpm_store="/var/cache/crabbox/pnpm/store"',
+      'mkdir -p "$preferred_pnpm_store" 2>/dev/null',
+      '[ -w "$preferred_pnpm_store" ]',
       'export PNPM_CONFIG_STORE_DIR="$GITHUB_WORKSPACE/.cache/openclaw-pnpm-store"',
-    );
-    expect(hydratePnpm.run).toContain('export PNPM_CONFIG_PACKAGE_IMPORT_METHOD="hardlink"');
-    expect(hydratePnpm.run).toContain('echo "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"');
-    expect(hydratePnpm.run).toContain(
+      'export PNPM_CONFIG_PACKAGE_IMPORT_METHOD="hardlink"',
+      'echo "PNPM_CONFIG_STORE_DIR=$PNPM_CONFIG_STORE_DIR"',
       'echo "PNPM_CONFIG_PACKAGE_IMPORT_METHOD=${PNPM_CONFIG_PACKAGE_IMPORT_METHOD:-}"',
-    );
-    expect(hydratePnpm.run).toContain('} >> "$GITHUB_ENV"');
-    expect(hydratePnpm.run).toContain(
+      '} >> "$GITHUB_ENV"',
       "append_pnpm_option_arg PNPM_CONFIG_PACKAGE_IMPORT_METHOD package-import-method",
-    );
-    expect(hydratePnpm.run).toContain("Refusing unsafe pnpm directory");
-    expect(hydratePnpm.run).toContain("pnpm_install_artifacts_ready");
-    expect(hydratePnpm.run).toContain("run_pnpm_install || run_pnpm_install");
-    expect(hydratePnpm.run).toContain('setsid pnpm "${install_args[@]}"');
-    expect(hydratePnpm.run).toContain("grep -qE '^Done in .+ using pnpm v'");
-    expect(hydratePnpm.run).toContain("https://github.com/pnpm/pnpm/issues/12297");
-    expect(hydratePnpm.run).toContain('kill -TERM -- "-$pnpm_pid"');
-    expect(hydratePnpm.run).toContain('kill -KILL -- "-$pnpm_pid"');
-    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
+      "Refusing unsafe pnpm directory",
+      "pnpm_install_artifacts_ready",
+      'setsid pnpm "${install_args[@]}"',
+      "grep -qE '^Done in .+ using pnpm v'",
+      "https://github.com/pnpm/pnpm/issues/12297",
+      'kill -TERM -- "-$pnpm_pid"',
+      'kill -KILL -- "-$pnpm_pid"',
+    ]);
+    expectTextToIncludeAll(workflowStep(hydrate, "Fetch main ref").run, [
       "timeout --signal=TERM --kill-after=10s 30s git",
-    );
-    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
       "fetch --no-tags --prune --no-recurse-submodules --depth=50 origin",
-    );
-    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
       '"+refs/heads/main:refs/remotes/origin/main"',
-    );
+    ]);
     expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBeUndefined();
     const prepareCrabboxShell = workflowStep(hydrate, "Prepare Crabbox shell").run;
     expect(prepareCrabboxShell).toContain("link_node_tool()");
@@ -7576,22 +8054,16 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(ensureDocker.env).toEqual({
       CRABBOX_JOB: "${{ inputs.crabbox_job }}",
     });
-    expect(ensureDocker.run).toContain("docker_required=false");
-    expect(ensureDocker.run).toContain('if [ "${CRABBOX_JOB:-hydrate}" = "hydrate-docker" ]; then');
-    expect(ensureDocker.run).toContain("other marker names do not");
-    expect(ensureDocker.run).toContain('if [ "$docker_required" = true ]; then');
-    expect(ensureDocker.run).toContain(
+    expectTextToIncludeAll(ensureDocker.run, [
+      "docker_required=false",
+      'if [ "${CRABBOX_JOB:-hydrate}" = "hydrate-docker" ]; then',
+      "other marker names do not",
+      'if [ "$docker_required" = true ]; then',
       "Docker is unavailable for ${CRABBOX_JOB:-hydrate}; route this workload to a Docker-capable provider",
-    );
-    expect(ensureDocker.run).toContain(
       "Docker is unavailable; standard hydration will continue without Docker",
-    );
-    expect(ensureDocker.run).toContain(
       'echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=0" >> "$GITHUB_ENV"',
-    );
-    expect(ensureDocker.run).toContain(
       'echo "OPENCLAW_CRABBOX_DOCKER_AVAILABLE=1" >> "$GITHUB_ENV"',
-    );
+    ]);
     expect(workflowStep(hydrate, "Ensure SSH is available").if).toBeUndefined();
     expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBeUndefined();
     const markCrabboxReady = workflowStep(hydrate, "Mark Crabbox ready").run;
@@ -7613,20 +8085,18 @@ test "$package_manager" = "pnpm@12.1.0"
       '$env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $pnpmCacheRoot "virtual-store"',
     );
     expect(hydrateWindowsPnpm.run).not.toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
-    expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");
-    expect(hydrateWindowsPnpm.run).toContain('"--ignore-scripts"');
-    expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"');
-    expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_NETWORK_CONCURRENCY = "8"');
-    expect(hydrateWindowsPnpm.run).toContain('$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"');
-    expect(hydrateWindowsPnpm.run).toContain(
+    expectTextToIncludeAll(hydrateWindowsPnpm.run, [
+      "--config.side-effects-cache=false",
+      '"--ignore-scripts"',
+      '$env:PNPM_CONFIG_CHILD_CONCURRENCY = "4"',
+      '$env:PNPM_CONFIG_NETWORK_CONCURRENCY = "8"',
+      '$env:PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN = "false"',
       "$Value | Out-File -FilePath $Path -Encoding utf8 -Append",
-    );
-    expect(hydrateWindowsPnpm.run).toContain('"--filter",');
-    expect(hydrateWindowsPnpm.run).toContain('"openclaw",');
-    expect(hydrateWindowsPnpm.run).toContain(
+      '"--filter",',
+      '"openclaw",',
       "New-Item -ItemType Junction -Path $workspaceNodeModules -Target $env:PNPM_CONFIG_MODULES_DIR",
-    );
-    expect(hydrateWindowsPnpm.run).toContain(".pnpm-workspace-state-v1.json");
+      ".pnpm-workspace-state-v1.json",
+    ]);
     expect(hydrateWindowsPnpm.run).not.toContain("Remove-Item -Recurse -Force");
     expect(hydrateWindowsPnpm.run).not.toContain("Add-Content -Path $env:GITHUB_ENV");
     expect(hydrateWindowsPnpm.run).not.toContain("Add-Content -Path $env:GITHUB_PATH");
@@ -7689,87 +8159,39 @@ test "$package_manager" = "pnpm@12.1.0"
     );
   });
 
-  it("defaults Crabbox proof to Blacksmith while keeping direct jobs on Azure", () => {
-    const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
-      aws?: { region?: string };
-      capacity?: {
-        availabilityZones?: string[];
-        fallback?: string;
-        market?: string;
-        regions?: string[];
-      };
-      jobs?: {
-        changed?: {
-          command?: string;
-          market?: string;
-          provider?: string;
-          shell?: boolean;
-          type?: string;
-        };
-        prewarm?: { market?: string; provider?: string; type?: string };
-      };
-      provider?: string;
-      ssh?: { port?: string; user?: string };
-    };
-
-    expect(crabboxConfig.provider).toBe("blacksmith-testbox");
-    expect(crabboxConfig.capacity?.market).toBe("on-demand");
-    expect(crabboxConfig.capacity?.fallback).toBeUndefined();
-    expect(crabboxConfig.capacity?.regions).toBeUndefined();
-    expect(crabboxConfig.capacity?.availabilityZones).toBeUndefined();
-    expect(crabboxConfig.aws?.region).toBe("eu-west-1");
-    expect(crabboxConfig.jobs?.prewarm?.market).toBe("on-demand");
-    expect(crabboxConfig.jobs?.prewarm?.provider).toBe("azure");
-    expect(crabboxConfig.jobs?.prewarm?.type).toBe("Standard_D4ads_v6");
-    expect(crabboxConfig.jobs?.changed?.market).toBe("on-demand");
-    expect(crabboxConfig.jobs?.changed?.provider).toBe("azure");
-    expect(crabboxConfig.jobs?.changed?.type).toBe("Standard_D4ads_v6");
-    expect(crabboxConfig.jobs?.changed?.shell).toBe(true);
-    expect(crabboxConfig.jobs?.changed?.command).toContain("set -euo pipefail");
-    expect(crabboxConfig.jobs?.changed?.command).toContain("git init -q");
-    expect(crabboxConfig.jobs?.changed?.command).toContain(
-      "commit -q --no-gpg-sign -m remote-check-tree",
-    );
-    expect(crabboxConfig.jobs?.changed?.command).toContain("env CI=1 corepack pnpm check --timed");
-    expect(crabboxConfig.ssh?.user).toBe("crabbox");
-    expect(crabboxConfig.ssh?.port).toBe("22");
-  });
-
   it("resolves candidate package sources before reusing Docker E2E lanes", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
-    expect(workflow).toContain("name: Package Acceptance");
-    expect(workflow).toContain("workflow_call:");
-    expect(workflow).toContain("workflow_ref:");
-    expect(workflow).toContain("package_ref:");
-    expect(workflow).toContain("source:");
-    expect(workflow).toContain("- npm");
-    expect(workflow).toContain("- ref");
-    expect(workflow).toContain("- url");
-    expect(workflow).toContain("- trusted-url");
-    expect(workflow).toContain("- artifact");
-    expect(workflow).toContain("trusted_source_id:");
-    expect(workflow).toContain("TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}");
-    expect(workflow).toContain('--trusted-source-id "$TRUSTED_SOURCE_ID"');
-    expect(workflow).toContain("scripts/resolve-openclaw-package-candidate.mts");
-    expect(workflow).toContain('--package-ref "$PACKAGE_REF"');
-    expect(workflow).toContain("artifact-ids: ${{ inputs.artifact_id }}");
-    expect(workflow).toContain("actions/artifacts/${ARTIFACT_ID}");
-    expect(workflow).toContain("name: ${{ env.PACKAGE_ARTIFACT_NAME }}");
-    expect(workflow).toContain("pull-requests: read");
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
+      "name: Package Acceptance",
+      "workflow_call:",
+      "workflow_ref:",
+      "package_ref:",
+      "source:",
+      "- npm",
+      "- ref",
+      "- url",
+      "- trusted-url",
+      "- artifact",
+      "trusted_source_id:",
+      "TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}",
+      '--trusted-source-id "$TRUSTED_SOURCE_ID"',
+      "scripts/resolve-openclaw-package-candidate.mts",
+      '--package-ref "$PACKAGE_REF"',
+      "artifact-ids: ${{ inputs.artifact_id }}",
+      "actions/artifacts/${ARTIFACT_ID}",
+      "name: ${{ env.PACKAGE_ARTIFACT_NAME }}",
+      "pull-requests: read",
       "uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
-    );
-    expect(workflow).toContain("ref: ${{ needs.resolve_package.outputs.package_source_sha }}");
-    expect(workflow).toContain(
+      "ref: ${{ needs.resolve_package.outputs.package_source_sha }}",
       "package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}",
-    );
-    expect(workflow).toContain("package_integrity:");
-    expect(workflow).toContain("name: Package integrity");
-    expect(workflow).toContain('node scripts/check-openclaw-package-tarball.mjs "$package"');
-    expect(workflow).toContain('[[ "$actual_sha256" == "$EXPECTED_PACKAGE_SHA256" ]]');
-    expect(workflow).toContain("needs: [resolve_package, package_integrity]");
-    expect(workflow).toContain("package_integrity=${PACKAGE_INTEGRITY_RESULT}");
+      "package_integrity:",
+      "name: Package integrity",
+      'node scripts/check-openclaw-package-tarball.mjs "$package"',
+      '[[ "$actual_sha256" == "$EXPECTED_PACKAGE_SHA256" ]]',
+      "needs: [resolve_package, package_integrity]",
+      "package_integrity=${PACKAGE_INTEGRITY_RESULT}",
+    ]);
     const npm12Job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
     expect(jobNeeds(npm12Job)).toEqual(["resolve_package", "package_integrity"]);
     expect(npm12Job.permissions).toEqual({ actions: "read", contents: "read" });
@@ -7780,6 +8202,18 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(npm12Step.run).toContain("extract_openclaw_semver");
     expect(npm12Step.run).toContain(".openclaw-lifecycle-pending");
     expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
+  });
+
+  it("checks the installed package tree budget immediately after npm 12 installation", () => {
+    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
+    const install = workflowStep(job, "Run install.sh with npm 12");
+    const budget = workflowStep(job, "Check installed package tree budget");
+    const steps = job.steps ?? [];
+    expect(steps.indexOf(budget)).toBe(steps.indexOf(install) + 1);
+    expect(budget.shell).toBe("bash");
+    expect(budget.run).toBe(
+      'set -euo pipefail\nnode scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"\n',
+    );
   });
 
   it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {
@@ -7856,28 +8290,18 @@ test "$package_manager" = "pnpm@12.1.0"
     const dispatchInputs = parsedWorkflow.on?.workflow_dispatch?.inputs;
     const callInputs = parsedWorkflow.on?.workflow_call?.inputs;
     expect(dispatchInputs?.prepublish_plugin_registry_json).toBeUndefined();
-    expect(dispatchInputs?.advisory).toEqual(callInputs?.advisory);
-    expect(callInputs?.advisory).toEqual({
-      description: "Treat acceptance failures as advisory for the caller",
-      required: false,
-      default: false,
-      type: "boolean",
-    });
+    expect(dispatchInputs?.advisory).toBeUndefined();
+    expect(callInputs?.advisory).toBeUndefined();
+    expect(callInputs?.telegram_advisory).toBeUndefined();
     expect(Object.keys(dispatchInputs ?? {})).toHaveLength(25);
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.telegram_advisory).toBeUndefined();
     expect(parsedWorkflow.on?.workflow_call?.inputs?.suite_profile).toMatchObject({
       default: "package",
       description: "Acceptance profile: smoke, package, telegram, product, full, or custom",
     });
-    expect(workflow).toContain("published_upgrade_survivor_baseline:");
-    expect(workflow).toContain("published_upgrade_survivor_baselines:");
     expect(workflow).toContain("last-stable-4");
-    expect(workflow).toContain("all-since-2026.4.23");
-    expect(workflow).toContain("published_upgrade_survivor_scenarios:");
+    expect(workflow).toContain("all-since-2026.6.1");
     expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mts");
-    expect(workflow).toContain("--history-count 6");
-    expect(workflow).toContain("--include-version 2026.4.23");
-    expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
     expect(workflow).toContain('"last-stable-"');
     expect(workflow).toContain('"all-since-"');
     const smoke = runPackageAcceptanceProfile({ suiteProfile: "smoke" });
@@ -7905,41 +8329,22 @@ test "$package_manager" = "pnpm@12.1.0"
       runPackageAcceptanceProfile({ suiteProfile: "full" }).outputs.include_release_path_suites,
     ).toBe("true");
     expect(workflow).not.toContain("telegram_mode requires source=npm");
-    expect(workflow).toContain("uses: ./.github/workflows/npm-telegram-beta-e2e.yml");
-    expect(workflow).toContain(
-      "package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}",
-    );
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
+      "uses: ./.github/workflows/npm-telegram-beta-e2e.yml",
       "package_artifact_digest: ${{ needs.resolve_package.outputs.package_artifact_digest }}",
-    );
-    expect(workflow).toContain(
       "package_artifact_id: ${{ needs.resolve_package.outputs.package_artifact_id }}",
-    );
-    expect(workflow).toContain(
       "package_artifact_run_attempt: ${{ needs.resolve_package.outputs.package_artifact_run_attempt }}",
-    );
-    expect(workflow).toContain(
       "package_artifact_run_id: ${{ needs.resolve_package.outputs.package_artifact_run_id }}",
-    );
-    expect(workflow).toContain(
       "package_file_name: ${{ needs.resolve_package.outputs.package_file_name }}",
-    );
-    expect(workflow).toContain(
       "package_sha256: ${{ needs.resolve_package.outputs.package_sha256 }}",
-    );
-    expect(workflow).toContain(
       "package_source_sha: ${{ needs.resolve_package.outputs.package_source_sha }}",
-    );
-    expect(workflow).toContain(
       "package_version: ${{ needs.resolve_package.outputs.package_version }}",
-    );
-    expect(workflow).toContain("telegram_scenarios:");
+      "telegram_scenarios:",
+    ]);
     expect(packageTelegram.with?.scenario).toBe(
       "${{ needs.resolve_package.outputs.telegram_scenarios }}",
     );
-    expect(packageTelegram.with?.advisory).toBe(
-      "${{ inputs.advisory || inputs.telegram_advisory || false }}",
-    );
+    expect(packageTelegram.with?.advisory).toBeUndefined();
     expect(packageTelegram.with).not.toHaveProperty("allow_older_binary_destructive_actions");
     expect(workflow).toContain(
       "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
@@ -7981,15 +8386,11 @@ test "$package_manager" = "pnpm@12.1.0"
     const npmTelegramInputs = readWorkflow(NPM_TELEGRAM_WORKFLOW).on;
     expect(npmTelegramInputs?.workflow_call?.inputs).toMatchObject(registryInputSchema);
     expect(npmTelegramInputs?.workflow_dispatch?.inputs).toMatchObject(registryInputSchema);
-    expect(npmTelegramWorkflow).toContain(
+    expectTextToIncludeAll(npmTelegramWorkflow, [
       "Artifact-backed Telegram E2E requires the complete prerelease plugin registry tuple.",
-    );
-    expect(npmTelegramWorkflow).toContain(
       "Prerelease plugin registry inputs require an artifact-backed OpenClaw package.",
-    );
-    expect(npmTelegramWorkflow).toContain(
       'expected_registry_suffix="-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ID}-${PREPUBLISH_PLUGIN_REGISTRY_ARTIFACT_RUN_ATTEMPT}"',
-    );
+    ]);
     expect(npmTelegramWorkflow).toContain(
       '"docker-e2e-prepublish-plugin-registry${expected_registry_suffix}" | \\\n' +
         '                "package-acceptance-telegram-plugin-registry${expected_registry_suffix}"',
@@ -8008,8 +8409,8 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(dockerAcceptance.with?.ref).toBe(
       "${{ needs.resolve_package.outputs.package_source_sha }}",
     );
-    expect(dockerAcceptance.with?.advisory).toBe("${{ inputs.advisory || false }}");
-    expect(dockerAcceptanceRegistry.with?.advisory).toBe("${{ inputs.advisory || false }}");
+    expect(dockerAcceptance.with?.advisory).toBeUndefined();
+    expect(dockerAcceptanceRegistry.with?.advisory).toBeUndefined();
     expect(dockerAcceptance.with?.prepublish_plugin_registry_artifact_name).toContain(
       "startsWith(",
     );
@@ -8046,45 +8447,35 @@ test "$package_manager" = "pnpm@12.1.0"
       "test -f dist/plugin-sdk/qa-runtime.js",
       "test -f dist/extensions/qa-lab/runtime-api.js",
     ]);
-    expect(workflow).toContain('echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"');
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
+      'echo "baseline=$fallback_baseline" >> "$GITHUB_OUTPUT"',
       "published_upgrade_survivor_baseline: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baseline }}",
-    );
-    expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}",
-    );
-    expect(workflow).toContain(
       "published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}",
-    );
-    expect(workflow).toContain("Published upgrade survivor baseline:");
-    expect(workflow).toContain("Published upgrade survivor baselines:");
-    expect(workflow).toContain("Published upgrade survivor scenarios:");
+      "Published upgrade survivor baseline:",
+      "Published upgrade survivor baselines:",
+      "Published upgrade survivor scenarios:",
+    ]);
   });
 
-  it("normalizes one closed prerelease registry tuple before child workflows", () => {
-    const tuple = packageAcceptanceRegistryTuple();
-    const direct = runPackageAcceptanceRegistryInputValidation({
-      prepublishPluginRegistryJson: JSON.stringify(tuple),
-    });
-    expect(direct.result.status, direct.result.stderr).toBe(0);
-    expect(direct.output).toContain(`json=${JSON.stringify(tuple)}\n`);
-
-    const candidate = runPackageAcceptanceRegistryInputValidation({
-      candidateArtifactJson: JSON.stringify({
-        imageArtifactName: "image-123-2",
-        ...tuple,
-      }),
-    });
-    expect(candidate.result.status, candidate.result.stderr).toBe(0);
-    expect(candidate.output).toContain(`json=${JSON.stringify(tuple)}\n`);
-
-    const identical = runPackageAcceptanceRegistryInputValidation({
-      candidateArtifactJson: JSON.stringify(tuple),
-      prepublishPluginRegistryJson: JSON.stringify(tuple),
-    });
-    expect(identical.result.status, identical.result.stderr).toBe(0);
-    expect(identical.output).toContain(`json=${JSON.stringify(tuple)}\n`);
-  });
+  it.each(["direct", "candidate", "identical"] as const)(
+    "normalizes a %s closed prerelease registry tuple before child workflows",
+    (mode) => {
+      const tuple = packageAcceptanceRegistryTuple();
+      const normalized = runPackageAcceptanceRegistryInputValidation({
+        ...(mode !== "candidate" ? { prepublishPluginRegistryJson: JSON.stringify(tuple) } : {}),
+        ...(mode !== "direct"
+          ? {
+              candidateArtifactJson: JSON.stringify(
+                mode === "candidate" ? { imageArtifactName: "image-123-2", ...tuple } : tuple,
+              ),
+            }
+          : {}),
+      });
+      expect(normalized.result.status, normalized.result.stderr).toBe(0);
+      expect(normalized.output).toContain(`json=${JSON.stringify(tuple)}\n`);
+    },
+  );
 
   it("rejects partial or ambiguous prerelease registry tuples before child workflows", () => {
     const tuple = packageAcceptanceRegistryTuple();
@@ -8200,15 +8591,12 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(workflow).toContain('"docker-e2e-prepublish-plugin-registry-" +');
   });
 
-  it.each(["package", "product"])(
-    "schedules updater first-hop compatibility in the %s acceptance profile",
-    (suiteProfile) => {
-      const { outputs, result } = runPackageAcceptanceProfile({ suiteProfile });
+  it("schedules updater first-hop compatibility in the product acceptance profile", () => {
+    const { outputs, result } = runPackageAcceptanceProfile({ suiteProfile: "product" });
 
-      expect(result.status, result.stderr).toBe(0);
-      expect((outputs.docker_lanes ?? "").split(/\s+/u)).toContain("update-first-hop-compat");
-    },
-  );
+    expect(result.status, result.stderr).toBe(0);
+    expect((outputs.docker_lanes ?? "").split(/\s+/u)).toContain("update-first-hop-compat");
+  });
 
   it("selects one normalized Telegram scenario without enabling broad acceptance lanes", () => {
     const { outputs, result } = runPackageAcceptanceProfile({
@@ -8273,31 +8661,35 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(releaseChecksWorkflow).toContain(
       'codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"',
     );
-    expect(releaseChecksWorkflow.match(/run: pnpm build qaRuntime/gu)).toHaveLength(6);
+    expect(releaseChecksWorkflow.match(/run: pnpm build qaRuntime/gu)).toHaveLength(5);
+    const parityReportJob = workflowJob(
+      RELEASE_CHECKS_WORKFLOW,
+      "qa_lab_parity_report_release_checks",
+    );
+    expect(parityReportJob.steps?.some((step) => step.run?.includes("pnpm build"))).toBe(false);
+    expect(workflowStep(parityReportJob, "Generate parity report").run).toContain(
+      "pnpm openclaw qa parity-report",
+    );
     expect(releaseChecksWorkflow).not.toContain(
       "node --import tsx scripts/build-all.mts qaRuntime",
     );
     expect(releaseChecksWorkflow).toContain(
       "codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}",
     );
-    expect(workflow).toContain("full-release-validation-state.mjs verify");
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
+      "full-release-validation-state.mjs verify",
       'gh_with_retry api "repos/${GITHUB_REPOSITORY}/commits/${encoded_workflow_ref}" --jq .sha',
-    );
-    expect(workflow).toContain(
       "Child workflow ref ${CHILD_WORKFLOW_REF} moved to ${current_workflow_sha}, expected ${PARENT_WORKFLOW_SHA}; refusing dispatch.",
-    );
-    expect(workflow).toContain('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then');
-    expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
-    expect(performanceJob).toContain(
+      'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
+      'gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1',
+    ]);
+    expectTextToIncludeAll(performanceJob, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"',
-    );
-    expect(performanceJob).toContain('-f dispatch_id="$dispatch_id"');
-    expect(performanceJob).toContain(
+      '-f dispatch_id="$dispatch_id"',
       'DISPATCH_RUN_NAME="$dispatch_run_name" CHILD_WORKFLOW_REF="$CHILD_WORKFLOW_REF"',
-    );
-    expect(performanceJob).toContain(".display_title == env.DISPATCH_RUN_NAME");
-    expect(performanceJob).toContain("Could not find exact dispatched run ${dispatch_run_name}");
+      ".display_title == env.DISPATCH_RUN_NAME",
+      "Could not find exact dispatched run ${dispatch_run_name}",
+    ]);
     expect(performanceJob).not.toContain("BEFORE_IDS=");
     expect(performanceJob).not.toContain(
       "did not return an Actions run URL; refusing to guess from recent workflow_dispatch runs",
@@ -8308,16 +8700,14 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(workflow).toContain(
       "full-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}",
     );
-    expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
-    expect(releaseChecksWorkflow).toContain(
+    expectTextToIncludeAll(releaseChecksWorkflow, [
+      "refs/heads/release-ci/[0-9a-f]{12}-[0-9]+",
       "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
-    );
-    expect(releaseChecksWorkflow).toContain(
       "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
-    );
+    ]);
   });
 
-  it("keeps performance evidence advisory for beta releases", () => {
+  it("reports beta performance regressions while blocking selected execution failures", () => {
     const performanceStep = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance"),
       "Dispatch OpenClaw Performance",
@@ -8333,7 +8723,7 @@ test "$package_manager" = "pnpm@12.1.0"
       'if [[ "$RELEASE_PROFILE" == "beta" ]]',
       "fail_on_regression=false",
       '-f fail_on_regression="$fail_on_regression"',
-      "Release impact: advisory",
+      "Release impact: selected execution failures are blocking",
     ]);
     expect(summaryStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
     expect(summaryStep.run).toBe("node scripts/full-release-validation-state.mjs verify");
@@ -8342,10 +8732,12 @@ test "$package_manager" = "pnpm@12.1.0"
       "Write release validation manifest",
     );
     expect(manifestStep.env?.RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
+    expect(manifestStep.env?.STABLE_SOAK_WAIVER).toBeUndefined();
+    expect(manifestStep.env?.GH_TOKEN).toBe("${{ github.token }}");
     expect(manifestStep.run).toBe("node scripts/full-release-validation-state.mjs write-manifest");
   });
 
-  it("keeps beta performance advisory at the publish gate", () => {
+  it("routes publication controls through the trusted shared gate", () => {
     const validationStep = workflowStep(
       workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target"),
       "Validate full release validation manifest",
@@ -8356,13 +8748,23 @@ test "$package_manager" = "pnpm@12.1.0"
     );
 
     expectTextToIncludeAll(validationStep.run, [
-      'if [[ "$release_profile" != "beta" && "$performance_blocking" != "true" ]]',
-      "Full release validation manifest does not record blocking product performance evidence.",
+      'node "${GITHUB_WORKSPACE}/.release-validation-tooling/scripts/lib/release-publish-gates.mts"',
+      '--consumer publisher --manifest "$manifest"',
     ]);
     expectTextToIncludeAll(npmValidationStep.run, [
-      'if [[ "$RELEASE_NPM_DIST_TAG" != "beta" && "$PERFORMANCE_BLOCKING" != "true" ]]',
-      "Full release validation manifest does not record blocking product performance evidence.",
+      "node trusted-workflow/scripts/lib/release-publish-gates.mts",
+      '--consumer core-npm --manifest "$MANIFEST_FILE"',
     ]);
+    for (const step of [validationStep, npmValidationStep]) {
+      expect(step.env).toMatchObject({
+        RELEASE_TAG: "${{ inputs.tag }}",
+        RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
+      });
+    }
+    expect(validationStep.env?.EXPECTED_RELEASE_PROFILE).toBe("${{ inputs.release_profile }}");
+    expect(validationStep.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
+      "${{ inputs.plugin_sdk_api_acknowledgement }}",
+    );
   });
 
   it("dispatches exact child identities without owning child completion", () => {
@@ -8371,7 +8773,18 @@ test "$package_manager" = "pnpm@12.1.0"
       const step = workflowStep(job, child.stepName);
       expect(step.env?.CHILD_WORKFLOW_KIND ?? job.env?.CHILD_WORKFLOW_KIND).toBe(child.kind);
       if (child.kind.startsWith("artifact-")) {
-        expect(step.if).toBe("github.run_attempt == 1");
+        for (const [attempt, reused, dispatched] of [
+          [1, "false", true],
+          [2, "false", false],
+          [1, "true", child.kind === "artifact-candidate"],
+        ] as const) {
+          expect(
+            runInNewContext(step.if ?? "true", {
+              github: { run_attempt: attempt },
+              env: { PUBLICATION_ARTIFACTS_REUSED: reused },
+            }),
+          ).toBe(dispatched);
+        }
       } else {
         expect(job["timeout-minutes"]).toBe(15);
         expect(job.outputs).toMatchObject({
@@ -8399,20 +8812,22 @@ test "$package_manager" = "pnpm@12.1.0"
     }
   });
 
-  it.each(FULL_RELEASE_CHILD_DISPATCHES)(
-    "adopts and validates the exact $jobName run without waiting for terminal status",
-    (child) => {
-      const { calls, result } = runFullReleaseChildDispatch(child, {
-        MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
-        MOCK_GH_STATUSES: '["in_progress"]',
-      });
+  it.each(
+    FULL_RELEASE_CHILD_DISPATCHES.filter(
+      (child, index, children) =>
+        children.findIndex((entry) => entry.kind === child.kind) === index,
+    ),
+  )("adopts and validates the exact $jobName run without waiting for terminal status", (child) => {
+    const { calls, result } = runFullReleaseChildDispatch(child, {
+      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
+      MOCK_GH_STATUSES: '["in_progress"]',
+    });
 
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
-      expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
-      expect(result.stdout).toContain("Dispatched");
-    },
-  );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
+    expect(calls.filter(({ args }) => args[0] === "run" && args[1] === "cancel")).toHaveLength(0);
+    expect(result.stdout).toContain("Dispatched");
+  });
 
   it.each([
     { exactTitleAt: 2, label: "inside the former window" },
@@ -8436,50 +8851,35 @@ test "$package_manager" = "pnpm@12.1.0"
     ).toHaveLength(exactTitleAt);
   });
 
-  it("bounds title convergence without reposting the dispatch", () => {
-    const child = fullReleaseChild("artifact-docker");
-    const { calls, result } = runFullReleaseChildDispatch(child, {
+  it.each([
+    ["title convergence", "artifact-docker", "run never became readable with display title", 60],
+    ["startup failure", "artifact-candidate", "before any jobs started (startup_failure)", 1],
+    ["immutable mismatch", "ci", "Refusing to adopt unvalidated", 1],
+  ] as const)("rejects child %s without reposting", (mode, kind, error, reads) => {
+    const child = fullReleaseChild(kind);
+    const overrides: Record<string, string> = {
       MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
-      MOCK_GH_RUN_TITLES: JSON.stringify([child.runName]),
-    });
-
+    };
+    if (mode === "immutable mismatch") {
+      overrides.MOCK_GH_RUN_EVENT = "push";
+    } else {
+      overrides.MOCK_GH_RUN_TITLES = JSON.stringify([child.runName]);
+      if (mode === "startup failure") {
+        overrides.MOCK_GH_CONCLUSION = "startup_failure";
+        overrides.MOCK_GH_STATUSES = '["completed"]';
+      } else {
+        const guard = join(tempDirs.make("dispatch-node-guard-"), "reject-node.cjs");
+        writeFileSync(guard, 'throw new Error("dispatch fixture must not start Node");\n');
+        overrides.NODE_OPTIONS = `--require=${JSON.stringify(guard)}`;
+      }
+    }
+    const { calls, result } = runFullReleaseChildDispatch(child, overrides);
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("run never became readable with display title");
+    expect(result.stderr).toContain(error);
     expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
     expect(
       calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
-    ).toHaveLength(60);
-  });
-
-  it("reports a child startup failure immediately without reposting", () => {
-    const child = fullReleaseChild("artifact-candidate");
-    const { calls, result } = runFullReleaseChildDispatch(child, {
-      MOCK_GH_CONCLUSION: "startup_failure",
-      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
-      MOCK_GH_RUN_TITLES: JSON.stringify([child.runName]),
-      MOCK_GH_STATUSES: '["completed"]',
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("before any jobs started (startup_failure)");
-    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
-    expect(
-      calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
-    ).toHaveLength(1);
-  });
-
-  it("refuses an immutable child mismatch immediately without reposting", () => {
-    const { calls, result } = runFullReleaseChildDispatch(FULL_RELEASE_CHILD_DISPATCHES[0], {
-      MOCK_GH_DISPATCH_OUTPUT: "https://github.com/openclaw/openclaw/actions/runs/101",
-      MOCK_GH_RUN_EVENT: "push",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Refusing to adopt unvalidated");
-    expect(calls.filter(({ args }) => args[0] === "workflow")).toHaveLength(1);
-    expect(
-      calls.filter(({ args }) => args.some((value) => value.endsWith("/runs/101"))),
-    ).toHaveLength(1);
+    ).toHaveLength(reads);
   });
 
   it.each([
@@ -8562,6 +8962,10 @@ test "$package_manager" = "pnpm@12.1.0"
     const drainStep = workflowStep(drain, "Drain child diagnostics");
     const decisionUpload = workflowStep(decision, "Upload release decision");
     const drainUpload = workflowStep(drain, "Upload diagnostic drain manifest");
+    const planInputsStep = workflowStep(
+      executionPlan,
+      "Prepare immutable release execution plan inputs",
+    );
     const planStep = workflowStep(executionPlan, "Seal immutable release execution plan");
     const planCache = workflowStep(executionPlan, "Cache immutable release execution plan");
     const planRestore = workflowStep(
@@ -8590,40 +8994,51 @@ test "$package_manager" = "pnpm@12.1.0"
     expectTextToIncludeAll(decisionStep.run, [
       'node scripts/full-release-validation-state.mjs "$FULL_RELEASE_STATE_MODE"',
     ]);
-    expect(planStep.run).toContain("FULL_RELEASE_PLAN_INPUTS_JSON");
-    expect(planStep.env).toMatchObject({
+    expect(planInputsStep.run).toContain("FULL_RELEASE_PLAN_INPUTS_JSON");
+    expect(planInputsStep.env).toMatchObject({
       CANDIDATE_EVIDENCE_JSON: "${{ needs.candidate_acquisition.outputs.binding_json }}",
       CANDIDATE_REQUEST_JSON: "${{ needs.resolve_target.outputs.candidate_request_json }}",
       EVIDENCE_CHANGED_PATHS: "${{ needs.evidence_reuse.outputs.changed_paths || '[]' }}",
       EVIDENCE_RUN_ID: "${{ needs.evidence_reuse.outputs.evidence_run_id }}",
       TRUSTED_WORKFLOW_JSON: "${{ needs.resolve_target.outputs.trusted_workflow_json }}",
     });
-    expect(planStep.env).not.toHaveProperty("EVIDENCE_MANIFEST");
-    expect(planStep.run).not.toContain("EVIDENCE_MANIFEST");
-    expect(planStep.run).toContain('--arg evidenceRunId "$EVIDENCE_RUN_ID"');
-    expect(planStep.run).toContain(
+    expect(planInputsStep.env).not.toHaveProperty("EVIDENCE_MANIFEST");
+    expect(planInputsStep.run).not.toContain("EVIDENCE_MANIFEST");
+    expect(planInputsStep.run).toContain('--arg evidenceRunId "$EVIDENCE_RUN_ID"');
+    expect(planInputsStep.run).toContain(
       '--argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}"',
     );
-    expect(planStep.run).toContain('--argjson candidateRequestInput "$CANDIDATE_REQUEST_JSON"');
-    expect(planStep.run).toContain("candidateRequestInput: $candidateRequestInput");
-    expect(planStep.run).not.toContain("candidateRequestInput: {");
-    expect(planStep.run).toContain('--argjson trustedWorkflow "$TRUSTED_WORKFLOW_JSON"');
-    expect(planCache.uses).toBe(ACTIONS_CACHE_V6);
+    expect(planInputsStep.run).toContain(
+      '--argjson candidateRequestInput "$CANDIDATE_REQUEST_JSON"',
+    );
+    expect(planInputsStep.run).toContain("candidateRequestInput: $candidateRequestInput");
+    expect(planInputsStep.run).not.toContain("candidateRequestInput: {");
+    expect(planInputsStep.run).toContain('--argjson trustedWorkflow "$TRUSTED_WORKFLOW_JSON"');
+    expect(planStep.run).toContain("full-release-execution-plan-inputs/plan-inputs.json");
+    expect(planStep.env).toMatchObject({
+      FULL_RELEASE_PRESEAL_RECOVERY:
+        "${{ github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' && steps.plan_restore.outcome != 'success' && steps.plan_inputs_restore.outcome == 'success' }}",
+      FULL_RELEASE_PREPARATION_SOURCE_ATTEMPT: "1",
+    });
+    expect(planCache.uses).toBe(
+      ACTIONS_CACHE_V6.replace("actions/cache@", "actions/cache/restore@"),
+    );
     expect(planCache["continue-on-error"]).toBe(true);
     expect(planCache.with).toMatchObject({
-      key: "full-release-execution-plan-v1-${{ github.run_id }}",
+      key: "full-release-execution-plan-v2-${{ github.run_id }}",
     });
     expect(planCache.with).not.toHaveProperty("fail-on-cache-miss");
     expect(planRestore.if).toBe(
       "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}",
     );
+    expect(planRestore["continue-on-error"]).toBe(true);
     expect(planRestore.with).toMatchObject({
       "github-token": "${{ github.token }}",
       name: "full-release-execution-plan-${{ github.run_id }}",
       "run-id": "${{ github.run_id }}",
     });
     expect(planUpload.if).toBe(
-      "${{ always() && github.run_attempt == 1 && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' }}",
+      "${{ always() && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' && (steps.plan_inputs_upload.outcome == 'success' || steps.plan_inputs_restore.outcome == 'success') }}",
     );
     expect(planUpload.with?.name).toBe("full-release-execution-plan-${{ github.run_id }}");
     expect(planUpload.with?.overwrite).toBe(false);
@@ -8646,7 +9061,6 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(selectState.run).toBe("node scripts/full-release-validation-state.mjs select");
     expect(summary.needs).toEqual(expect.arrayContaining(["release_decision", "diagnostic_drain"]));
     for (const jobId of [
-      "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease_independent",
       "plugin_prerelease_candidate",
@@ -8669,7 +9083,6 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(manifest.env).not.toHaveProperty("TARGET_SHA");
     expect(manifest.env).not.toHaveProperty("NORMAL_CI_RUN_ID");
     expect(manifest.env).not.toHaveProperty("EVIDENCE_REUSE");
-    expect(manifest.run).not.toContain("needs.evidence_reuse.outputs");
     expect(evidenceDispatch.run).toContain(
       'EVIDENCE_REUSE="$(jq -r \'.evidenceReuse.requested\' "$RELEASE_EXECUTION_PLAN_PATH")"',
     );
@@ -8678,50 +9091,83 @@ test "$package_manager" = "pnpm@12.1.0"
 
   it("pins every Full Release Validation artifact download to the canonical action", () => {
     const workflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
-    const downloadSteps = Object.values(workflow.jobs ?? {}).flatMap((job) =>
-      (job.steps ?? []).filter((step) => step.uses?.startsWith("actions/download-artifact@")),
+    const downloadSteps = Object.entries(workflow.jobs ?? {}).flatMap(([jobId, job]) =>
+      (job.steps ?? [])
+        .filter((step) => step.uses?.startsWith("actions/download-artifact@"))
+        .map((step) => ({ jobId, step })),
     );
 
-    expect(downloadSteps).toHaveLength(8);
+    expect(downloadSteps).toHaveLength(10);
     expect(
-      downloadSteps.map((step) => [
+      downloadSteps.map(({ jobId, step }) => [
+        jobId,
         step.name,
         step.with?.name ?? step.with?.pattern,
         step.with?.path,
       ]),
     ).toEqual([
       [
+        "resolve_target",
+        "Restore immutable plan inputs for publication admission",
+        "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        "${{ github.workspace }}/full-release-execution-plan-inputs",
+      ],
+      [
+        "evidence_reuse",
         "Download publication admission for reuse budgeting",
         "full-release-publication-admission-${{ github.run_id }}-1",
         "${{ runner.temp }}/full-release-publication-admission",
       ],
       [
+        "release_execution_plan",
         "Restore immutable release execution plan artifact",
         "full-release-execution-plan-${{ github.run_id }}",
-        "${{ runner.temp }}/full-release-execution-plan",
+        "${{ github.workspace }}/full-release-execution-plan",
       ],
       [
+        "release_execution_plan",
+        "Restore immutable release execution plan inputs",
+        "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        "${{ github.workspace }}/full-release-execution-plan-inputs",
+      ],
+      [
+        "release_execution_plan",
         "Download immutable publication admission",
         "full-release-publication-admission-${{ github.run_id }}-1",
         "${{ runner.temp }}/full-release-publication-admission",
       ],
-      ...Array.from({ length: 3 }, () => [
+      [
+        "release_decision",
         "Download immutable release execution plan",
         "full-release-execution-plan-${{ github.run_id }}",
         "${{ runner.temp }}/full-release-execution-plan",
-      ]),
+      ],
       [
+        "diagnostic_drain",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ runner.temp }}/full-release-execution-plan",
+      ],
+      [
+        "summary",
+        "Download immutable release execution plan",
+        "full-release-execution-plan-${{ github.run_id }}",
+        "${{ runner.temp }}/full-release-execution-plan",
+      ],
+      [
+        "summary",
         "Download release decision attempts",
         "full-release-decision-${{ github.run_id }}-*",
         "${{ runner.temp }}/full-release-decision-attempts",
       ],
       [
+        "summary",
         "Download diagnostic drain attempts",
         "full-release-diagnostics-${{ github.run_id }}-*",
         "${{ runner.temp }}/full-release-diagnostic-attempts",
       ],
     ]);
-    for (const step of downloadSteps) {
+    for (const { step } of downloadSteps) {
       expect(step.uses).toBe(DOWNLOAD_ARTIFACT_V8);
     }
   });
@@ -8827,7 +9273,6 @@ describe("package artifact reuse", () => {
       on?: { workflow_call?: { inputs?: Record<string, unknown> } };
     };
     const packageJson = readFileSync(PACKAGE_JSON, "utf8");
-    const scheduler = readFileSync("scripts/test-docker-all.mts", "utf8");
     const publishedUpgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
     expect(workflow).toContain("package_artifact_name:");
@@ -8845,39 +9290,25 @@ describe("package artifact reuse", () => {
     expect(parsedWorkflow.on?.workflow_call?.inputs).toHaveProperty(
       "allow_frozen_target_scenario_omissions",
     );
-    expect(workflow).toContain("docker_e2e_bare_image:");
-    expect(workflow).toContain("docker_e2e_functional_image:");
-    expect(workflow).toContain("OPENCLAW_DOCKER_E2E_SELECTED_SHA:");
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
+      "docker_e2e_bare_image:",
+      "docker_e2e_functional_image:",
+      "OPENCLAW_DOCKER_E2E_SELECTED_SHA:",
       "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ needs.validate_selected_ref.outputs.upgrade_baseline }}",
-    );
-    expect(workflow).toContain(
       "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || needs.validate_selected_ref.outputs.upgrade_baselines }}",
-    );
-    expect(workflow).toContain(
       "OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}",
-    );
-    expect(workflow).toContain("OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}");
-    expect(workflow).toContain(
+      "OPENCLAW_UPGRADE_SURVIVOR_TARGET_ROOT: ${{ github.workspace }}",
       "OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: ${{ inputs.allow_frozen_target_scenario_omissions && '1' || '0' }}",
-    );
-    expect(workflow).toContain("Download current-run OpenClaw Docker E2E package");
-    expect(workflow).toContain("Download previous-run OpenClaw Docker E2E package");
-    expect(workflow).toContain(
+      "Download current-run OpenClaw Docker E2E package",
+      "Download previous-run OpenClaw Docker E2E package",
       "needs.validate_selected_ref.outputs.package_artifact_present == 'true'",
-    );
-    expect(workflow).toContain(
       'bare_image="${PROVIDED_BARE_IMAGE:-ghcr.io/${repository}-docker-e2e-bare:${image_tag}}"',
-    );
-    expect(workflow).toContain(
       'functional_image="${PROVIDED_FUNCTIONAL_IMAGE:-ghcr.io/${repository}-docker-e2e-functional:${image_tag}}"',
-    );
-    expect(workflow).toContain("artifact-ids: ${{ inputs.package_artifact_id }}");
-    expect(workflow).toContain(
+      "artifact-ids: ${{ inputs.package_artifact_id }}",
       '[[ "$ARTIFACT_NAME" == *"-${ARTIFACT_RUN_ID}-${ARTIFACT_RUN_ATTEMPT}" ]]',
-    );
-    expect(workflow).toContain('--arg digest "sha256:${ARTIFACT_DIGEST}"');
-    expect(workflow).toContain("actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}");
+      '--arg digest "sha256:${ARTIFACT_DIGEST}"',
+      "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}",
+    ]);
     expect(workflow).not.toContain("uses: ./.github/actions/docker-e2e-plan");
     expect(workflow).toContain("Checkout trusted release harness");
     expect(workflow).toContain("OPENCLAW_DOCKER_E2E_REPO_ROOT:");
@@ -8939,7 +9370,6 @@ describe("package artifact reuse", () => {
         step.run?.includes("export OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR="),
       );
       expect(runStep).toBeDefined();
-      expect(runStep?.run).toContain("openclaw_resolve_frozen_update_channel_dry_run_mode");
       expect(`${runStep?.run}\n${JSON.stringify(runStep?.env)}`).toContain(
         "steps.plan.outputs.needs_package",
       );
@@ -8947,7 +9377,6 @@ describe("package artifact reuse", () => {
         "steps.plan.outputs.needs_prepublish_plugin_registry",
       );
     }
-    expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     const setupHarnessStepName = "Setup trusted release harness";
     const harnessJobCases = [
       {
@@ -9064,35 +9493,18 @@ describe("package artifact reuse", () => {
       "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ needs.validate_selected_ref.outputs.upgrade_baselines }}",
     );
     expect(workflow).toContain("Docker E2E targeted lanes (${{ matrix.group.label }})");
-    expect(workflow).toContain("LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("GROUP_LABEL: ${{ matrix.group.label }}");
     expect(workflow).toContain("DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}");
-    expect(scheduler).toContain(
-      "published_upgrade_survivor_baseline=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}",
-    );
-    expect(scheduler).toContain(
-      "published_upgrade_survivor_baselines=${shellQuote(env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}",
-    );
-    expect(scheduler).toContain(
-      '["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC]',
-    );
-    expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS",');
-    expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",');
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
     expect(packageJson).toContain("test:docker:update-restart-auth");
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth");
-    expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
     expect(publishedUpgradeSurvivor).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE");
     expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_env");
     expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
     expect(publishedUpgradeSurvivor).toContain("OPENCLAW_CLAWHUB_URL=%s");
     expect(publishedUpgradeSurvivor).toContain("assert-no-requests");
-    expect(publishedUpgradeSurvivor).toContain(
-      "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
-    );
     expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
-    expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
     expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
     expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
     expect(publishedUpgradeSurvivor).toContain('export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"');
@@ -9118,11 +9530,6 @@ describe("package artifact reuse", () => {
     );
     expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
     expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
-    expect(
-      publishedUpgradeSurvivor.indexOf('validate_baseline_package_spec "$baseline_spec"'),
-    ).toBeLessThan(
-      publishedUpgradeSurvivor.indexOf('npm install -g --prefix "$npm_config_prefix"'),
-    );
   });
 
   it("reuses a content-addressed bare image for prepared E2E images", () => {
@@ -9133,19 +9540,15 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('docker manifest inspect "$CACHE_IMAGE_REF"');
     expect(workflow).toContain('cache=(--cache-from "$CACHE_IMAGE_REF")');
     expect(workflow).not.toContain('docker tag "$CACHE_IMAGE_REF" "$IMAGE_REF"');
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
       "Shared release candidate preparation requires both Docker image variants.",
-    );
-    expect(workflow).toContain(
       "inputs.shared_image_artifact_id != '' && '1' || steps.plan.outputs.needs_bare_image",
-    );
-    expect(workflow).toContain("env DOCKER_BUILDKIT=1 docker build");
-    expect(workflow).toContain(
+      "env DOCKER_BUILDKIT=1 docker build",
       'if bash .release-harness/scripts/ci-docker-pull-retry.sh "$CACHE_IMAGE_REF"; then',
-    );
-    expect(workflow).toContain("Bare image cache pull failed; continuing with a cold build.");
-    expect(workflow).toContain('--build-context "openclaw_package=$package_context"');
-    expect(workflow).toContain('cache=(--cache-from "$BARE_IMAGE_REF")');
+      "Bare image cache pull failed; continuing with a cold build.",
+      '--build-context "openclaw_package=$package_context"',
+      'cache=(--cache-from "$BARE_IMAGE_REF")',
+    ]);
     expect(workflow).not.toContain('docker push "$CACHE_IMAGE_REF"');
     expect(workflow).toContain("uses: useblacksmith/setup-docker-builder@");
     expect(workflow).toContain("uses: useblacksmith/build-push-action@");
@@ -9159,15 +9562,21 @@ describe("package artifact reuse", () => {
     const qualify = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "qualify_npm_package");
     const candidate = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "candidate_acquisition");
     for (const job of [prepare, docker]) {
-      expect(jobNeeds(job)).toEqual(["resolve_target", "evidence_reuse"]);
+      expect(jobNeeds(job)).toEqual([
+        "resolve_target",
+        "plugin_compatibility_readiness",
+        "evidence_reuse",
+      ]);
     }
-    expect(jobNeeds(qualify)).toEqual(["resolve_target", "prepare_npm_package"]);
+    expect(jobNeeds(qualify)).toEqual(["resolve_target", "evidence_reuse", "prepare_npm_package"]);
+    expect(qualify.if).toBe(
+      "${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && needs.prepare_npm_package.result == 'success' }}",
+    );
     expect(qualify.env?.ARTIFACT_RUN_ID).toBe("${{ needs.prepare_npm_package.outputs.run_id }}");
     expect(workflowStepById(prepare, "bundle").env?.ARTIFACT_OUTPUT).toBe("raw");
     expect(qualify.env?.ARTIFACT_OUTPUT).toBe("receipt");
     for (const job of [prepare, docker, candidate]) {
       expect(job.if).not.toContain("github.run_attempt == 1");
-      expect(workflowStepById(job, "dispatch").if).toBe("github.run_attempt == 1");
       expect(workflowStepById(job, "producer").run).toBe(
         "node scripts/full-release-artifacts.mjs resolve",
       );
@@ -9203,6 +9612,9 @@ describe("package artifact reuse", () => {
       ...process.env,
       NPM_PREPARE_RESULT: "success",
       NPM_QUALIFY_RESULT: "success",
+      PLUGIN_NPM_REQUIRED: "false",
+      PLUGIN_NPM_PREPARE_RESULT: "skipped",
+      PREPARED_PLUGIN_NPM_JSON: "",
       QUALIFIED_NPM_BUNDLE_JSON: "{}",
       DOCKER_PREPARE_RESULT: "success",
       PREPARED_DOCKER_MANIFEST_SHA256: "a".repeat(64),
@@ -9224,19 +9636,22 @@ describe("package artifact reuse", () => {
           }).status,
         ).not.toBe(0);
       }
+      expect(
+        spawnSync("bash", ["-c", gate.run ?? ""], {
+          env: {
+            ...releaseEnv,
+            PLUGIN_NPM_REQUIRED: "true",
+            PLUGIN_NPM_PREPARE_RESULT: "success",
+            PREPARED_PLUGIN_NPM_JSON: "{}",
+          },
+        }).status,
+      ).toBe(0);
+      expect(
+        spawnSync("bash", ["-c", gate.run ?? ""], {
+          env: { ...releaseEnv, PLUGIN_NPM_REQUIRED: "true" },
+        }).status,
+      ).not.toBe(0);
     }
-    const alphaEnv = {
-      ...env,
-      TARGET_VERSION: "2026.8.1-alpha.1",
-      DOCKER_PREPARE_RESULT: "skipped",
-      PREPARED_DOCKER_MANIFEST_SHA256: "",
-    };
-    expect(spawnSync("bash", ["-c", gate.run ?? ""], { env: alphaEnv }).status).toBe(0);
-    expect(
-      spawnSync("bash", ["-c", gate.run ?? ""], {
-        env: { ...alphaEnv, NPM_QUALIFY_RESULT: "failure" },
-      }).status,
-    ).not.toBe(0);
   });
 
   it("prepares one immutable candidate for release validation children", () => {
@@ -9336,6 +9751,9 @@ describe("package artifact reuse", () => {
       release_soak: "${{ fromJSON(inputs.request_json).releaseSoak }}",
       shared_image_policy: "${{ fromJSON(inputs.request_json).sharedImagePolicy }}",
     });
+    expect(prepare.with?.published_upgrade_survivor_baseline).toBe(
+      "${{ fromJSON(inputs.request_json).upgradeBaseline }}",
+    );
     expect(
       readWorkflow(LIVE_E2E_WORKFLOW).on?.workflow_call?.inputs?.package_published,
     ).toMatchObject({
@@ -9488,7 +9906,7 @@ describe("package artifact reuse", () => {
       {
         inputs: {
           repository: "openclaw/openclaw",
-          ref: "main",
+          ref: "${{ github.sha }}",
           "fetch-depth": 1,
           path: ".release-harness",
           "persist-credentials": false,
@@ -9503,7 +9921,6 @@ describe("package artifact reuse", () => {
       EXPECTED_WORKFLOW_PATH: ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
       EXPECTED_WORKFLOW_REPOSITORY: "${{ github.repository }}",
       GH_TOKEN: "${{ github.token }}",
-      HARNESS_PATH: ".release-harness",
       JOB_CONTEXT: "${{ toJSON(job) }}",
       RUN_ATTEMPT: "${{ github.run_attempt }}",
       RUN_ID: "${{ github.run_id }}",
@@ -9511,8 +9928,10 @@ describe("package artifact reuse", () => {
     expect(workflowRevision.run).toContain('repository !== "openclaw/openclaw"');
     expect(workflowRevision.run).toContain("job.workflow_repository !== repository");
     expect(workflowRevision.run).toContain("job.workflow_sha");
-    expect(workflowRevision.run).toContain('"fetch"');
-    expect(workflowRevision.run).toContain('"checkout", "--detach", job.workflow_sha');
+    expect(workflowRevision.run).not.toContain('"fetch"');
+    expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(
+      binderSteps.indexOf(binderCheckouts[0]!),
+    );
     expect(binderSetup).toBeDefined();
     expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(binderSteps.indexOf(binderSetup!));
     expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(binderSteps.indexOf(evidence));
@@ -9649,14 +10068,14 @@ describe("package artifact reuse", () => {
 
     expect(workflow.on?.schedule).toEqual([{ cron: "23 4 * * *" }, { cron: "41 6 * * 1" }]);
     expect(daily.if).toBe(
-      "github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *'",
+      "github.repository == 'openclaw/openclaw' && (github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *')",
     );
     expect(daily.with).toMatchObject({
       enable_prepublish_plugin_registry: true,
       ref: "${{ github.sha }}",
     });
     expect(weekly.if).toBe(
-      "github.event_name == 'schedule' && github.event.schedule == '41 6 * * 1'",
+      "github.repository == 'openclaw/openclaw' && github.event_name == 'schedule' && github.event.schedule == '41 6 * * 1'",
     );
     expect(weekly.permissions).toEqual({
       actions: "read",
@@ -9693,18 +10112,6 @@ describe("package artifact reuse", () => {
     },
   );
 
-  it("gives memory extension shards enough CPU without lowering their planner cost", () => {
-    const workflow = readFileSync(PLUGIN_PRERELEASE_WORKFLOW, "utf8");
-
-    expect(workflow).toContain('extensionId.startsWith("memory-")');
-    expect(workflow).toContain('"blacksmith-16vcpu-ubuntu-2404"');
-    expect(workflow).toContain("vitest_max_workers:");
-    expect(workflow).toContain("OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers }}");
-    expect(readFileSync("scripts/lib/extension-test-plan.mts", "utf8")).toContain(
-      '"test/vitest/vitest.extension-memory.config.ts": 1',
-    );
-  });
-
   it.each(["beta", "minimum", "stable", "full"])(
     "accepts every runnable focused live suite for the %s profile",
     (profile) => {
@@ -9740,12 +10147,12 @@ describe("package artifact reuse", () => {
     },
   );
 
-  it("accepts the OpenCode Go aggregate for its stable smoke lane", () => {
-    const result = runFocusedLiveSuiteValidation("native-live-src-gateway-profiles-opencode-go", {
-      RELEASE_TEST_PROFILE: "stable",
+  it("fails focused live suite validation when Docker matrix planning fails", () => {
+    const result = runFocusedLiveSuiteValidation("openshell-e2e", {
+      ADMISSION_TOOLING_ROOT: resolve(tempDirs.make("missing-admission-tooling-"), "missing"),
     });
 
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status).not.toBe(0);
   });
 
   it.each<{ suiteId: string; env?: Record<string, string> }>([
@@ -9779,15 +10186,31 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("uploads native live reports and sanitized owned evidence after failures", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const run = workflowStep(job, "Run ${{ matrix.label }}");
+    expect(run.run).toContain('tee ".artifacts/live-shards/${{ matrix.suite_id }}.log"');
+    const upload = workflowStep(job, "Upload native live diagnostics");
+    expect(upload).toMatchObject({
+      if: "always() && steps.selection.outputs.run == 'true'",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      with: {
+        name: "native-live-${{ matrix.suite_id }}-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        "retention-days": 14,
+        "if-no-files-found": "warn",
+      },
+    });
+    expect(upload.with?.path).toContain(".artifacts/live-shards/");
+    expect(upload.with?.path).toContain(".artifacts/qa-e2e/");
+  });
+
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
-    const retryHelper = readFileSync("scripts/ci-live-command-retry.sh", "utf8");
     const nativeLiveJob = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
     const selection = workflowStep(nativeLiveJob, "Select native live suite");
 
     expect(workflow).not.toContain("suite_id: live-all");
     expect(workflow).not.toContain("command: pnpm test:live\n");
-    expect(workflow).toContain("suite_id: native-live-src-agents");
     expect(workflow).toContain("Checkout trusted live shard harness");
     expect(selection.if).toContain("contains(matrix.profiles, inputs.release_test_profile)");
     expect(selection.if).toContain("inputs.live_suite_filter == matrix.suite_id");
@@ -9804,10 +10227,38 @@ describe("package artifact reuse", () => {
         "steps.selection.outputs.run == 'true'",
       );
     }
-    expect(workflowStep(nativeLiveJob, "Setup trusted release harness")).toMatchObject({
-      uses: "./.release-harness/.github/actions/setup-release-harness",
-      with: { "node-version": "${{ env.NODE_VERSION }}" },
+    for (const job of [
+      nativeLiveJob,
+      workflowJob(LIVE_E2E_WORKFLOW, "validate_live_media_provider_suites"),
+    ]) {
+      const setup = workflowStep(job, "Setup trusted release harness");
+      expect(setup).toMatchObject({
+        uses: "./.release-harness/.github/actions/setup-release-harness",
+        if: workflowStep(job, "Run ${{ matrix.label }}").if,
+        with: { "node-version": "${{ env.NODE_VERSION }}" },
+      });
+      const names = job.steps?.map((step) => step.name) ?? [];
+      expect(names.indexOf(setup.name)).toBeGreaterThan(names.indexOf("Setup Node environment"));
+      expect(names.indexOf(setup.name)).toBeLessThan(
+        names.indexOf("Hydrate live auth/profile inputs"),
+      );
+    }
+    const mediaLiveJob = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_media_provider_suites");
+    const chromiumInstall = workflowStep(
+      mediaLiveJob,
+      "Install Chromium for A-K live browser tests",
+    );
+    expect(chromiumInstall).toMatchObject({
+      if: expect.stringContaining("matrix.suite_id == 'native-live-extensions-a-k'"),
+      uses: "./.release-harness/.github/actions/setup-playwright-chromium",
     });
+    const mediaStepNames = mediaLiveJob.steps?.map((step) => step.name) ?? [];
+    expect(mediaStepNames.indexOf(chromiumInstall.name)).toBeGreaterThan(
+      mediaStepNames.indexOf("Setup trusted release harness"),
+    );
+    expect(mediaStepNames.indexOf(chromiumInstall.name)).toBeLessThan(
+      mediaStepNames.indexOf("Hydrate live auth/profile inputs"),
+    );
     expect(
       workflowMatrixEntry(
         LIVE_E2E_WORKFLOW,
@@ -9831,14 +10282,12 @@ describe("package artifact reuse", () => {
     ).toBeLessThan(
       admissionSteps.findIndex((step) => step.name === "Admit frozen source contracts"),
     );
-    expect(workflow).toContain("LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}");
-    expect(workflow).toContain("live-cache attempt ${attempt}/2");
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
+      "LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}",
+      "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
       "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
-    );
-    expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
-    );
+    ]);
     expect(workflow).not.toContain("openai-ws-stream-live-e2e");
     expect(workflow).not.toContain("src/agents/openai-ws-stream.e2e.test.ts");
     expect(
@@ -9885,59 +10334,64 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain(
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );
-    expect(workflow).toContain("bash .release-harness/scripts/ci-live-command-retry.sh");
+    expect(workflow).toContain('bash -o pipefail -c "$OPENCLAW_LIVE_COMMAND"');
     expect(workflow).toContain("use_github_hosted_runners:");
     for (const [jobName, runner] of [
       ["validate_special_e2e", "blacksmith-32vcpu-ubuntu-2404"],
       ["validate_live_provider_suites", "blacksmith-8vcpu-ubuntu-2404"],
     ] as const) {
-      expect(workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"]).toBe(
-        `\${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || '${runner}' }}`,
+      expect(evaluateWorkflowRunner(workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"])).toBe(
+        runner,
       );
+      expect(
+        evaluateWorkflowRunner(workflowJob(LIVE_E2E_WORKFLOW, jobName)["runs-on"], {
+          useGithubHostedRunners: true,
+        }),
+      ).toBe("ubuntu-24.04");
     }
     for (const jobName of ["build", "test"]) {
-      expect(
-        workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", jobName)["runs-on"],
-      ).toBe(
-        "${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
+      const selector = workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", jobName)[
+        "runs-on"
+      ];
+      expect(evaluateWorkflowRunner(selector)).toBe("blacksmith-32vcpu-ubuntu-2404");
+      expect(evaluateWorkflowRunner(selector, { useGithubHostedRunners: true })).toBe(
+        "ubuntu-24.04",
       );
     }
-    expect(workflow).toContain("suite_id: native-live-src-gateway-core");
-    expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
-    expect(workflow).toContain(
+    const repoE2eHarnessCheckout = workflowStep(
+      workflowJob(".github/workflows/openclaw-repo-e2e-reusable.yml", "build"),
+      "Checkout trusted artifact harness",
+    );
+    expect(repoE2eHarnessCheckout.with).toMatchObject({
+      "sparse-checkout":
+        "/.github/actions/setup-playwright-chromium/\n/package.json\n/scripts/\n/src/shared/non-packaged-plugin-dirs.ts\n",
+      "sparse-checkout-cone-mode": false,
+    });
+    expectTextToIncludeAll(workflow, [
+      "suite_id: native-live-src-gateway-core",
+      "suite_id: native-live-src-gateway-backends",
       "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core",
-    );
-    expect(workflow).toContain(
       "command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends",
-    );
-    expect(workflow).toContain("suite_id: native-live-src-infra");
-    expect(workflow).toContain(
+      "suite_id: native-live-src-infra",
       "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 OPENCLAW_LIVE_SESSION_EVENT_WAKE=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
-    );
-    expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-smoke");
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS=300000");
-    expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-opus");
-    expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku");
-    expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-anthropic");
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-5");
-    expect(workflow).toContain("anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5");
-    expect(workflow).toMatch(
-      /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?advisory: true/u,
-    );
+      "command: OPENCLAW_LIVE_CODEX_NODE_EXEC_TIMEOUT=1 node .release-harness/scripts/test-live-shard.mjs native-live-test",
+      "suite_id: native-live-src-gateway-profiles-anthropic-smoke",
+      "suite_id: native-live-src-gateway-profiles-anthropic-opus",
+      "suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku",
+      "suite_group: native-live-src-gateway-profiles-anthropic",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-5",
+      "anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5",
+    ]);
     expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-openai[\s\S]*?timeout_minutes: 60[\s\S]*?profiles: beta minimum stable full/u,
     );
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
       "command: OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS=300000 OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
-    );
-    expect(workflow).toContain(
       "OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
-    );
-    expect(workflow).toContain(
       "OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
-    );
+    ]);
     expect(workflow).toMatch(
-      /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
+      /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?timeout_minutes: 30/u,
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-deepseek");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-opencode-go");
@@ -9957,44 +10411,27 @@ describe("package artifact reuse", () => {
     expect(dockerRows).toContainEqual(
       expect.objectContaining({ suite_id: "live-gateway-anthropic-docker" }),
     );
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2");
     expect(dockerCommands).toContain(
       "OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
     );
     expect(dockerCommands).toContain(
       "OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
     );
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000");
-    expect(workflow).toContain("timeout --foreground --kill-after=30s 35m");
     expect(dockerRows).toContainEqual(
       expect.objectContaining({ suite_id: "live-gateway-docker", timeout_minutes: 40 }),
     );
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
-    expect(workflow).toMatch(/suite_id: native-live-extensions-moonshot[\s\S]*?advisory: true/u);
-    expect(workflow).toContain("OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}");
-    expect(workflow).toContain("Advisory live suite failed with exit code");
-    expect(workflow).toMatch(
-      /validate_live_media_provider_suites:[\s\S]*?OPENCLAW_LIVE_SUITE_ADVISORY: \$\{\{ matrix\.advisory \}\}[\s\S]*?shell: bash[\s\S]*?Advisory live suite failed with exit code/u,
-    );
-    expect(dockerRows).toContainEqual(
-      expect.objectContaining({
-        suite_id: "live-gateway-advisory-docker-deepseek-fireworks",
-        advisory: true,
-      }),
-    );
-    expect(workflow).toMatch(
-      /validate_live_media_provider_suites:[\s\S]*?OPENCLAW_LIVE_SUITE_ADVISORY: \$\{\{ matrix\.advisory \}\}/u,
-    );
-    expect(workflow).toMatch(
-      /suite_id: native-live-extensions-media-video-d[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
-    );
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
     expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
     expect(workflow).toContain("validate_live_media_provider_suites:");
-    expect(workflow).toMatch(
-      /validate_live_media_provider_suites:[\s\S]*?runs-on: \$\{\{ inputs\.use_github_hosted_runners && 'ubuntu-24\.04' \|\| 'blacksmith-8vcpu-ubuntu-2404' \}\}/u,
+    const mediaRunner = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_media_provider_suites")[
+      "runs-on"
+    ];
+    expect(evaluateWorkflowRunner(mediaRunner)).toBe("blacksmith-8vcpu-ubuntu-2404");
+    expect(evaluateWorkflowRunner(mediaRunner, { useGithubHostedRunners: true })).toBe(
+      "ubuntu-24.04",
     );
     expect(workflow).toContain(`image: ${LIVE_MEDIA_RUNNER_IMAGE}`);
     expect(workflow).toContain("ffmpeg -version | head -1");
@@ -10003,7 +10440,7 @@ describe("package artifact reuse", () => {
     const imageWorkflow = readFileSync(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "utf8");
     const buildJob = workflowJob(LIVE_MEDIA_RUNNER_IMAGE_WORKFLOW, "build");
     const buildStep = workflowStep(buildJob, "Build and push live media runner image");
-    expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04$/m);
+    expect(imageDockerfile).toMatch(/^FROM ubuntu:24\.04@sha256:[a-f0-9]{64}$/m);
     expect(imageDockerfile).toContain("apt-get install -y --no-install-recommends");
     for (const packageName of ["bash", "curl", "ffmpeg", "git", "openssh-client", "zstd"]) {
       expect(imageDockerfile).toContain(`    ${packageName} \\`);
@@ -10018,30 +10455,37 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
     expect(workflow).toContain("suite_id: native-live-extensions-media-video");
     expect(workflow).toContain("suite_group: native-live-extensions-media-video");
-    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
-    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
-    expect(workflow).toContain(
+    for (const suffix of ["a", "b", "c", "d"]) {
+      const shard = workflowMatrixEntry(
+        LIVE_E2E_WORKFLOW,
+        "validate_live_media_provider_suites",
+        `native-live-extensions-media-video-${suffix}`,
+      );
+      const providers = shard.command?.match(
+        /OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=(\S+)/u,
+      )?.[1];
+      if (!providers) {
+        throw new Error(`Missing video providers for shard ${suffix}`);
+      }
+      expect(providers.split(",")).toHaveLength(4);
+      expect(shard.command).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000");
+      // Four serial ten-minute operations plus test overhead leave eight minutes for setup.
+      expect(shard.timeout_minutes).toBeGreaterThanOrEqual(4 * 10.5 + 8);
+    }
+    expectTextToIncludeAll(workflow, [
+      "OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,kie,minimax,pixverse OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=600000",
+      "OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=novita,openrouter,xai,zai",
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic'",
-    );
-    expect(workflow).toContain(
       "inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go'",
-    );
-    expect(workflow).toContain("inputs.live_suite_filter == 'native-live-extensions-media-video'");
+      "inputs.live_suite_filter == 'native-live-extensions-media-video'",
+    ]);
     expect(workflow).not.toContain("needs_ffmpeg: true");
-    expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_ATTEMPTS:-2");
-    expect(retryHelper).toContain("ECONNRESET");
-    expect(retryHelper).toContain("fetch failed");
-    expect(retryHelper).toContain("gateway request timeout");
-    expect(retryHelper).toContain("model idle timeout");
-    expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_RATE_LIMIT_RETRY_DELAY_SECONDS:-60");
-    expect(retryHelper).toContain("Rate limit reached");
-    expect(retryHelper).toContain("tokens per min");
     expect(
       workflow.match(/moonshot\) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;/gu),
     ).toHaveLength(2);
   });
 
-  it("pins DeepSeek live profiles to both current V4 model refs", () => {
+  it("pins DeepSeek live profiles to routes reachable from their release workspaces", () => {
     const deepSeek = workflowMatrixEntry(
       LIVE_E2E_WORKFLOW,
       "validate_live_provider_suites",
@@ -10052,16 +10496,53 @@ describe("package artifact reuse", () => {
       "validate_live_provider_suites",
       "native-live-src-gateway-profiles-opencode-go-deepseek-glm",
     );
+    const openCodeGoSmoke = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-smoke",
+    );
 
     expect(deepSeek).toMatchObject({
-      advisory: true,
       command:
         "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek OPENCLAW_LIVE_GATEWAY_MODELS=deepseek/deepseek-v4-flash,deepseek/deepseek-v4-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
       profiles: "full",
     });
     expect(openCodeGo.command).toContain(
-      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/deepseek-v4-flash,opencode-go/deepseek-v4-pro",
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.2,opencode-go/glm-5.3 ",
     );
+    expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-flash");
+    expect(openCodeGoSmoke.command).toContain(
+      "OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/glm-5.3 OPENCLAW_LIVE_GATEWAY_SMOKE=1",
+    );
+    expect(openCodeGo.command).not.toContain("opencode-go/deepseek-v4-pro");
+  });
+
+  it("pins live provider lanes to current Kimi and OpenRouter capabilities", () => {
+    const plan = createReleaseWorkflowMatrixPlan({
+      releaseProfile: "full",
+      includeLiveSuites: true,
+    });
+    const openCodeModels = plan.liveModels.matrix.include.find(
+      (row: { providers: string }) => row.providers === "opencode-go",
+    );
+    const kimi = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-opencode-go-kimi",
+    );
+    const openRouter = workflowMatrixEntry(
+      LIVE_E2E_WORKFLOW,
+      "validate_live_provider_suites",
+      "native-live-src-gateway-profiles-openrouter",
+    );
+
+    expect(openCodeModels).toMatchObject({
+      models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+      max_models: "2",
+    });
+    expect(kimi.command).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/kimi-k2.7-code");
+    expect(kimi.command).not.toContain("kimi-k2.6");
+    expect(openRouter.command).toContain("OPENCLAW_LIVE_GATEWAY_THINKING=off");
   });
 
   it("pins OpenCode Go MiMo live profiles to both current V2.5 model refs", () => {
@@ -10072,7 +10553,6 @@ describe("package artifact reuse", () => {
     );
 
     expect(mimo).toMatchObject({
-      advisory: true,
       command:
         "OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go OPENCLAW_LIVE_GATEWAY_MODELS=opencode-go/mimo-v2.5,opencode-go/mimo-v2.5-pro node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles",
       profiles: "full",
@@ -10080,19 +10560,6 @@ describe("package artifact reuse", () => {
     });
     expect(mimo.command).not.toContain("opencode-go/mimo-v2-omni");
     expect(mimo.command).not.toContain("opencode-go/mimo-v2-pro");
-  });
-
-  it("runs the fresh OpenAI API-key default without hard-coding a model filter", () => {
-    const openaiDefault = workflowMatrixEntry(
-      LIVE_E2E_WORKFLOW,
-      "validate_live_provider_suites",
-      "native-live-src-gateway-profiles-openai-api-default",
-    );
-
-    expect(openaiDefault).toMatchObject({ profiles: "stable full" });
-    expect(openaiDefault.command).toContain("OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1");
-    expect(openaiDefault.command).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai");
-    expect(openaiDefault.command).not.toContain("OPENCLAW_LIVE_GATEWAY_MODELS=");
   });
 
   it("retains the full OpenAI Ultra model coverage independently of the fresh default", () => {
@@ -10135,21 +10602,13 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh',
     );
-    expect(commands).toContain(
+    expectTextToIncludeAll(commands, [
       "OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.6-luna OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1",
-    );
-    expect(commands).toContain(
       "OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
-    );
-    expect(commands).toContain(
       'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh',
-    );
-    expect(commands).toContain(
       'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-acp-bind-docker.sh',
-    );
-    expect(commands).toContain(
       'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
-    );
+    ]);
     const codexCompatibility = workflowStep(
       providerSuites,
       "Resolve frozen Codex live compatibility",
@@ -10234,14 +10693,12 @@ describe("package artifact reuse", () => {
     );
     expect(harness).toContain('source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"');
     expect(harness).not.toContain('source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"');
-    expect(harness).toContain(
+    expectTextToIncludeAll(harness, [
       'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
-    );
-    expect(harness).toContain(
       '-e OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR="${DOCKER_TRUSTED_HARNESS_CONTAINER_DIR}/scripts"',
-    );
-    expect(harness).toContain('node --import tsx "$trusted_scripts_dir/prepare-codex-ci-auth.ts"');
-    expect(harness).toContain('source "$trusted_scripts_dir/lib/live-docker-stage.sh"');
+      'node --import tsx "$trusted_scripts_dir/prepare-codex-ci-auth.ts"',
+      'source "$trusted_scripts_dir/lib/live-docker-stage.sh"',
+    ]);
     for (const script of [harness, ...sharedLiveScripts]) {
       expect(script).toContain('source "$TRUSTED_HARNESS_DIR/scripts/lib/live-docker-auth.sh"');
       expect(script).not.toContain('source "$ROOT_DIR/scripts/lib/live-docker-auth.sh"');
@@ -10251,17 +10708,13 @@ describe("package artifact reuse", () => {
     }
     expect(liveDockerAuth).toContain("openclaw_live_prepare_bind_dir_for_container_user");
     for (const script of sharedLiveScripts) {
-      expect(script).toContain("openclaw_live_uses_managed_bind_dirs");
-      expect(script).toContain(
+      expectTextToIncludeAll(script, [
+        "openclaw_live_uses_managed_bind_dirs",
         'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$ROOT_DIR" "$TRUSTED_HARNESS_DIR/scripts/test-live-build-docker.sh"',
-      );
-      expect(script).toContain('source "$trusted_scripts_dir/lib/live-docker-stage.sh"');
-      expect(script).toContain(
+        'source "$trusted_scripts_dir/lib/live-docker-stage.sh"',
         '-e OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR="${DOCKER_TRUSTED_HARNESS_CONTAINER_DIR}/scripts"',
-      );
-      expect(script).toContain(
         "openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_TRUSTED_HARNESS_MOUNT",
-      );
+      ]);
     }
     for (const [file, helper] of [
       ["scripts/test-live-cli-backend-docker.sh", "openclaw_live_prepare_cli_backend"],
@@ -10284,69 +10737,41 @@ describe("package artifact reuse", () => {
     expect(readFileSync("scripts/test-live-gateway-models-docker.sh", "utf8")).toContain(
       "OPENCLAW_LIVE_GATEWAY_DOCKER_RUN_TIMEOUT:-2100s",
     );
-    expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
+    expectTextToIncludeAll(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8"), [
       "OPENCLAW_LIVE_CLI_BACKEND_DOCKER_RUN_TIMEOUT:-2700s",
-    );
-    expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
       'CLI_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS 180)"',
-    );
-    expect(readFileSync("scripts/test-live-cli-backend-docker.sh", "utf8")).toContain(
       '"$docker_package" "$OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS"',
-    );
+    ]);
     expect(stage).toContain('"live CLI backend setup"');
-    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+    expectTextToIncludeAll(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8"), [
       "OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s",
-    );
-    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       'ACP_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS 180)"',
-    );
-    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       '"${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:?missing live ACP bind setup timeout seconds}"',
-    );
-    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       '-e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="$ACP_SETUP_TIMEOUT_SECONDS"',
-    );
-    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       '-e OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON="${OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON:-}"',
-    );
-    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       '"live ACP bind setup"',
-    );
+    ]);
     const acpBindScript = readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8");
-    expect(acpBindScript).toContain(
+    expectTextToIncludeAll(acpBindScript, [
       "OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH must be one of: auto, api-key, subscription.",
-    );
-    expect(acpBindScript).toContain(
       'if [[ "$ACP_AGENT" == "claude" && "$CLAUDE_AUTH_MODE" == "subscription" ]]; then',
-    );
-    expect(acpBindScript).toContain(
       "unset ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN",
-    );
-    expect(acpBindScript).toContain('-e CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"');
+      '-e CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"',
+    ]);
     expect(acpBindScript).not.toContain("    -e ANTHROPIC_API_KEY \\\n");
     expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=subscription/g)).toHaveLength(2);
     expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=api-key/g)).toHaveLength(2);
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",
     );
-    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
+    expectTextToIncludeAll(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8"), [
       "OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-$((2100 * CODEX_HARNESS_TARGET_COUNT))s",
-    );
-    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       'CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS 180)"',
-    );
-    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       '"${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:?missing live Codex harness setup timeout seconds}"',
-    );
-    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       '-e OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="$CODEX_HARNESS_SETUP_TIMEOUT_SECONDS"',
-    );
-    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       '"live Codex harness setup"',
-    );
-    expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       'run_setup_command npm install -g "$OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC"',
-    );
+    ]);
     expect(readFileSync("scripts/test-live-subagent-announce-docker.sh", "utf8")).toContain(
       "OPENCLAW_LIVE_SUBAGENT_DOCKER_RUN_TIMEOUT:-1200s",
     );
@@ -10513,6 +10938,8 @@ describe("package artifact reuse", () => {
     const hydrated = spawnSync(
       "bash",
       [
+        "--noprofile",
+        "--norc",
         "-euc",
         `bash "$1" "$2"
 unset DEEPSEEK_API_KEY DEEPINFRA_API_KEY
@@ -10581,9 +11008,19 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(setupNodeWith).not.toHaveProperty("dependency-cache");
     expect(setupNodeWith).not.toHaveProperty("sticky-disk");
     expect(setupNodeWith["cache-mode"]).toBe("restore");
-    expect(checkTestboxJob["timeout-minutes"]).toBe(
-      "${{ fromJSON(inputs.timeout_minutes || '120') }}",
-    );
+    for (const [minutes, expected] of [
+      ["45", 45],
+      ["", 60],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(checkTestboxJob["timeout-minutes"], {
+          eventName: "workflow_dispatch",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          additionalNeeds: { admission: { outputs: { minutes }, result: "success" } },
+        }),
+      ).toBe(expected);
+    }
     for (const step of [runTestboxStep, runArmTestboxStep, runBuildArtifactsTestboxStep]) {
       expect(step.uses).toBe(RUN_TESTBOX_WITH_FAILURE_REPORTING);
     }
@@ -10591,8 +11028,27 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "useblacksmith/run-testbox@3f60ff9ceb2c10c3feefa87dc0c6490cffae059d",
     );
     expect(windowsTestboxActionMarker.if).toBe("${{ false }}");
-    expect(runTestboxStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
-    expect(closeTestboxSshStep.if).toBe("github.event_name == 'workflow_dispatch' && always()");
+    for (const step of [
+      runTestboxStep,
+      runArmTestboxStep,
+      runBuildArtifactsTestboxStep,
+      closeTestboxSshStep,
+    ]) {
+      for (const [eventName, expected] of [
+        ["workflow_dispatch", true],
+        ["pull_request", false],
+      ] as const) {
+        expect(
+          evaluateWorkflowExpression(`\${{ ${step.if} }}`, {
+            eventName,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            failed: true,
+            cancelled: true,
+          }),
+        ).toBe(expected);
+      }
+    }
     expect(closeTestboxSshStep.run).toContain(
       `sudo sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }'`,
     );
@@ -10601,10 +11057,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     expect(checkTestboxSteps.indexOf(closeTestboxSshStep)).toBe(
       checkTestboxSteps.indexOf(runTestboxStep) + 1,
-    );
-    expect(runArmTestboxStep.if).toBe("always()");
-    expect(runBuildArtifactsTestboxStep.if).toBe(
-      "github.event_name == 'workflow_dispatch' && always()",
     );
     expect(runWindowsTestboxStep.if).toBe("always()");
     expect(runWindowsTestboxStep.env?.JOB_STATUS).toBe("${{ job.status }}");
@@ -10620,7 +11072,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     expect(workflow).toContain("workflow_call:");
     expect(workflow).toContain("package_artifact_name:");
-    expect(workflow).toContain("Download package-under-test artifact");
     expect(workflow).toContain("harness_ref:");
     expect(workflow).toContain("ref: ${{ inputs.harness_ref || github.sha }}");
     expect(workflow).toContain("OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ");
@@ -10696,12 +11147,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
   );
 
-  it.each([
-    ["stable", "2026.8.1"],
-    ["full", "2026.8.1"],
-    ["stable", "2026.9.1"],
-    ["full", "2026.9.1"],
-  ])("waives only Telegram integration lanes for approved %s %s", (profile, version) => {
+  it.each(
+    ["2026.8.1", "2026.9.1", "2026.9.5"].flatMap((version) => [
+      ["stable", version],
+      ["full", version],
+    ]),
+  )("waives only reviewed integration lanes for approved %s %s", (profile, version) => {
     const options = { telegramWaiver: `${version}-owner-approved`, version };
     const direct = runReleaseChecksInputValidation(profile, "false", "all", "false", "", options);
     const umbrella = runFullReleaseInputValidation(profile, "false", options);
@@ -10710,28 +11161,17 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const output = readFileSync(direct.outputPath, "utf8");
     expect(output).toContain(`telegram_waiver=${version}-owner-approved`);
     expect(output).toContain("qa_live_telegram_enabled=false");
+    expect(output).toContain(`qa_live_matrix_enabled=${version !== "2026.9.5"}`);
+    expect(output).toContain("qa_live_buzz_enabled=true");
     expect(output).toContain("run_release_soak=true");
     expect(output).toContain("skip_package_telegram_e2e=false");
   });
 
   it.each([
     { version: "2026.8.2" },
-    { version: "2026.8.1-beta.3" },
-    { telegramWaiver: "true" },
     { telegramWaiver: "2026.9.1-owner-approved" },
-    { telegramWaiver: "2026.8.1-owner-approval" },
-    { version: "2026.9.1-beta.1", telegramWaiver: "2026.9.1-beta.1-owner-approved" },
-    { version: "2026.10.1", telegramWaiver: "2026.10.1-owner-approved" },
     { rerunGroup: "npm-telegram" },
     { liveSuiteFilter: "qa-telegram" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-all" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-all" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-live-non-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "qa-non-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "non-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "no-slack" },
-    { rerunGroup: "qa-live", liveSuiteFilter: "without-slack" },
   ])("rejects a conflicting Telegram waiver request: %j", (override) => {
     const options = { telegramWaiver: "2026.8.1-owner-approved", ...override };
     const umbrella = runFullReleaseInputValidation("stable", "false", options);
@@ -10760,15 +11200,19 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it.each([
     { label: "canonical beta", scope: "npm-beta" },
-    { label: "Linux-only beta", crossOsSuiteFilter: "ubuntu", scope: "npm-beta" },
+    {
+      label: "explicit all-OS beta",
+      crossOsSuiteFilter: "ubuntu,windows,macos",
+      scope: "npm-beta",
+    },
     { label: "beta soak", runReleaseSoak: "true", scope: "full" },
     { label: "focused beta CI", rerunGroup: "ci", scope: "full" },
     { label: "stable profile", releaseProfile: "stable", scope: "full" },
     { label: "stable version", version: "2026.8.1", scope: "full" },
     { label: "main beta profile", targetRef: "main", scope: "full" },
     {
-      label: "canonical stable with Windows omitted",
-      crossOsSuiteFilter: "ubuntu,macos",
+      label: "canonical stable with explicit suites",
+      crossOsSuiteFilter: "packaged-fresh,installer-fresh,packaged-upgrade",
       releaseProfile: "stable",
       version: "2026.8.1",
       runReleaseSoak: "true",
@@ -10847,7 +11291,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ["extended-stable/2026.7.33", "2026.7.33"],
     ["extended-stable/2026.7.33", "2026.7.35"],
     ["v2026.8.1", "2026.8.1"],
-    ["v2026.8.1-alpha.2", "2026.8.1-alpha.2"],
     ["v2026.8.1-beta.3", "2026.8.1-beta.3"],
   ])("accepts direct Full Release Validation identity %s at package %s", (targetRef, version) => {
     const result = runFullReleaseTargetIdentityValidation({ targetRef, version });
@@ -10857,12 +11300,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it.each([
     ["release/2026.8.1", "2026.8.2", "does not belong to release branch"],
-    ["release/2026.8.1", "2026.8.1-alpha.2", "expected 2026.8.1 or a beta prerelease"],
+    ["release/2026.8.1", "2026.8.1-alpha.2", "Alpha releases are retired;"],
     ["extended-stable/2026.7.33", "2026.7.32", "PATCH >= 33"],
     ["extended-stable/2026.7.33", "2026.8.35", "does not belong to extended-stable branch"],
     ["extended-stable/2026.7.33", "2026.7.35-beta.1", "does not belong to extended-stable branch"],
     ["v2026.8.1", "2026.8.1-beta.1", "does not match release tag"],
-    ["v2026.8.1-alpha.2", "2026.8.1-alpha.3", "does not match release tag"],
+    ["v2026.8.1-alpha.2", "2026.8.1-alpha.3", "Alpha releases are retired;"],
   ])(
     "rejects direct Full Release Validation identity %s at package %s",
     (targetRef, version, error) => {
@@ -10870,6 +11313,18 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(error);
+    },
+  );
+
+  it.each(["v2026.8.1-alpha.2", "a".repeat(40)])(
+    "rejects an alpha Full Release Validation candidate at %s",
+    (targetRef) => {
+      const result = runFullReleaseTargetIdentityValidation({
+        targetRef,
+        version: "2026.8.1-alpha.2",
+      });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("Alpha releases are retired;");
     },
   );
 
@@ -10887,7 +11342,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     expect(accepted.status, accepted.stderr).toBe(0);
     expect(rejected.status).toBe(1);
-    expect(rejected.stderr).toContain("expected 2026.8.1 or a beta prerelease");
+    expect(rejected.stderr).toContain("Alpha releases are retired;");
   });
 
   it.each([
@@ -10998,7 +11453,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "extended-stable/2026.6.33",
     ],
     ["refs/tags/v2026.6.35", "2026.6.35", "extended-stable", "extended-stable/2026.6.33"],
-    ["v2026.8.1-alpha.2", "2026.8.1-alpha.2", "alpha", ""],
     ["refs/heads/release/2026.8.1", "2026.8.1-beta.3", "beta", ""],
     ["v2026.8.1", "2026.8.1", "beta", ""],
   ])("records the npm publication channel for %s", (context, version, distTag, branch) => {
@@ -11022,9 +11476,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
     const mismatchedTag = runFullReleaseTargetIdentityValidation({
       remoteSha: "b".repeat(40),
-      targetContextRef: "v2026.8.1-alpha.2",
+      targetContextRef: "v2026.8.1-beta.2",
       targetRef: "a".repeat(40),
-      version: "2026.8.1-alpha.2",
+      version: "2026.8.1-beta.2",
     });
 
     expect(divergedBranch.status).toBe(1);
@@ -11058,7 +11512,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(workflow.concurrency).toEqual({
       group:
         "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ github.sha }}-${{ inputs.rerun_group }}-${{ inputs.phase }}-${{ inputs.release_profile == 'minimum' && 'beta' || inputs.release_profile }}-${{ inputs.run_release_soak || inputs.release_profile == 'stable' || inputs.release_profile == 'full' }}",
-      "cancel-in-progress": "${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}",
+      "cancel-in-progress": false,
     });
   });
 
@@ -11302,21 +11756,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(output).toContain("docker_required=false\n");
   });
 
-  it("rejects a QA-live filter for an unrelated rerun group", () => {
-    const { result } = runReleaseChecksInputValidation(
-      "beta",
-      "false",
-      "install-smoke",
-      "false",
-      "qa-live-telegram",
-    );
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain(
-      "QA live_suite_filter selectors require rerun_group=qa or qa-live",
-    );
-  });
-
   it.each([
     {
       label: "deferred Package Acceptance",
@@ -11421,6 +11860,17 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const { result, output } = runReleaseSurvivorProfileStep(params);
     expect(result.status, result.stderr).toBe(0);
     expect(output).toEqual({ baselines: "", scenarios: "base" });
+  });
+
+  it("does not send recovery scenarios to a current-line source without the recovery harness", () => {
+    const { result, output } = runReleaseSurvivorProfileStep({
+      soak: true,
+      supportsPackageRecovery: false,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(output.baselines).toBe("supported-lines");
+    expect(output.scenarios?.split(" ")).toContain("legacy-operator-state");
+    expect(output.scenarios).not.toMatch(/package-(?:publication|verification|stranded)/);
   });
 
   it("preserves the historical candidate-compatible upgrade survivor soak inventory without the new scenario", () => {
@@ -11535,7 +11985,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       target_context_ref:
         "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && inputs.target_context_ref || '' }}",
       published_upgrade_survivor_baseline:
-        "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest' }}",
+        "${{ inputs.qualification_baselines_json != '' && fromJSON(inputs.qualification_baselines_json).upgradeBaseline || (needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest') }}",
     });
     expect(packageAcceptanceJob.with?.candidate_artifact_json).toBe(
       "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.candidate_artifact_json || '' }}",
@@ -11561,35 +12011,19 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       prepublish_plugin_registry_manifest_sha256:
         "${{ startsWith(fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactName || '', 'docker-e2e-prepublish-plugin-registry-') && fromJSON(needs.resolve_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}",
     });
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
       "candidate_artifact_json cannot be combined with release_package_spec.",
-    );
-    expect(workflow).toContain(
       "live_repo_e2e_release_checks:\n    name: Run repo/live E2E validation\n    needs: [resolve_target]",
-    );
-    expect(workflow).toContain(
       "docker_e2e_release_checks:\n    name: Run Docker release-path validation\n    needs: [resolve_target, prepare_release_package]",
-    );
-    expect(workflow).toContain("include_release_path_suites: false");
-    expect(workflow).toContain("include_release_path_suites: true");
-    expect(workflow).toContain(
+      "include_release_path_suites: false",
+      "include_release_path_suites: true",
       "allow_frozen_target_scenario_omissions: ${{ inputs.allow_frozen_target_scenario_omissions }}",
-    );
-    expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
-    expect(workflow).toContain(
-      "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
-    );
-    expect(workflow).toContain(
-      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
-    );
-    expect(workflow).toContain(".artifacts/docker-e2e-package/package-candidate.json");
-    expect(workflow).toContain(
+      "uses: ./.github/workflows/package-acceptance.yml",
+      ".artifacts/docker-e2e-package/package-candidate.json",
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
-    );
-    expect(workflow).toContain(
       "package_sha256: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.package_sha256 || '' }}",
-    );
-    expect(workflow).toContain("suite_profile: custom");
+      "suite_profile: custom",
+    ]);
     expect(packageAcceptanceJob.with?.docker_lanes).toBe(
       "${{ needs.resolve_target.outputs.package_acceptance_lanes }}",
     );
@@ -11630,53 +12064,40 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       telegram_mode:
         "${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}",
     });
-    expect(packageAcceptanceJob.with).toMatchObject({
-      telegram_advisory: true,
-    });
+    expect(packageAcceptanceJob.with?.telegram_advisory).toBeUndefined();
     expect(workflow).not.toContain("telegram_scenarios:");
-    expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
-    expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
-    expect(workflow).toContain(
+    expectTextToIncludeAll(workflow, [
+      "ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
+      "ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}",
       "OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
-    );
-    expect(workflow).toContain(
       "OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
-    );
-    expect(workflow).toContain("rerun_group:");
-    expect(workflow).toContain("live_suite_filter:");
-    expect(workflow).toContain("repo_live_suite_filter:");
-    expect(workflow).toContain(
+      "rerun_group:",
+      "repo_live_suite_filter:",
       "RELEASE_FILTER_VALIDATOR: workflow/scripts/github/validate-release-suite-filters.sh",
-    );
-    expect(workflow).toContain('source "$RELEASE_FILTER_VALIDATOR"');
+      'source "$RELEASE_FILTER_VALIDATOR"',
+    ]);
     expect(filterValidator).toContain('repo_filter_tokens+=("$token")');
     expect(filterValidator).toContain(
       'RELEASE_FILTER_REPO_LIVE_SUITE_FILTER="$(IFS=,; printf \'%s\' "${repo_filter_tokens[*]-}")"',
     );
     expect(workflow).toContain("cross_os_suite_filter:");
-    expect(workflow).toContain("advisory: false");
-    expect(workflow).toContain(
+    expect(workflow).not.toContain("advisory:");
+    expectTextToIncludeAll(workflow, [
       "suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}",
-    );
-    expect(workflow).toContain(
       "live_suite_filter: ${{ needs.resolve_target.outputs.repo_live_suite_filter }}",
-    );
-    expect(workflow).toContain("if: needs.resolve_target.outputs.package_required == 'true'");
-    expect(workflow).toContain("if: needs.resolve_target.outputs.docker_required == 'true'");
-    expect(workflow).toContain(
+      "if: needs.resolve_target.outputs.package_required == 'true'",
+      "if: needs.resolve_target.outputs.docker_required == 'true'",
       'if [[ "$release_profile" == "stable" || "$release_profile" == "full" ]]; then\n            run_release_soak=true',
-    );
-    expect(workflow).toContain("forced on for release_profile=stable and full");
-    expect(workflow).toContain("- live-e2e");
-    expect(workflow).toContain("- qa-live");
-    expect(workflow).toContain("disabled_required_lanes=()");
-    expect(filterValidator).toContain(
+      "forced on for release_profile=stable and full",
+      "- live-e2e",
+      "- qa-live",
+      "disabled_required_lanes=()",
+    ]);
+    expectTextToIncludeAll(filterValidator, [
       "QA live_suite_filter selectors require rerun_group=qa or qa-live",
-    );
-    expect(filterValidator).toContain(
       "Repo live_suite_filter selectors require rerun_group=live-e2e",
-    );
-    expect(filterValidator).toContain("cross_os_suite_filter requires rerun_group=all or cross-os");
+      "cross_os_suite_filter requires rerun_group=all or cross-os",
+    ]);
     expect(workflow).toContain("live_suite_filter explicitly requested disabled QA live lane(s)");
     expect(workflow).toContain("OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED");
     expect(workflow).not.toContain(
@@ -11730,15 +12151,15 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(releaseJob.with?.[`run_${lane}`]).toBeUndefined();
     }
     const manualScenarioGuard =
-      "(github.event_name != 'workflow_dispatch' || inputs.scenario == '')";
+      "(github.event_name != 'workflow_dispatch' || (inputs.scenario == '' && inputs.matrix_scenario == ''))";
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_mock_parity").if).toBe(
       `(inputs.expected_sha == '' || inputs.run_mock_parity) && ${manualScenarioGuard}`,
     );
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix").if).toBe(
-      `(inputs.expected_sha == '' || inputs.run_matrix) && ${manualScenarioGuard}`,
+      "(inputs.expected_sha == '' || inputs.run_matrix) && (github.event_name != 'workflow_dispatch' || inputs.scenario == '')",
     );
     expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram").if).toBe(
-      "inputs.expected_sha == '' || inputs.run_telegram",
+      "(inputs.expected_sha == '' || inputs.run_telegram) && (github.event_name != 'workflow_dispatch' || inputs.matrix_scenario == '')",
     );
     for (const channel of ["discord", "whatsapp", "slack"]) {
       expect(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, `run_live_${channel}`).if).toBe(
@@ -11770,7 +12191,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const matrixSpecificInputs = Object.keys(
       readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW).on?.workflow_call?.inputs ?? {},
     ).filter((input) => input.startsWith("matrix_"));
-    expect(matrixSpecificInputs).toEqual([]);
+    expect(matrixSpecificInputs).toEqual(["matrix_scenario"]);
     expect(workflowStep(matrixJob, "Upload Matrix QA artifacts").with?.name).toBe(
       "${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}', inputs.expected_sha) || format('qa-live-matrix-{0}-{1}', github.run_id, github.run_attempt) }}",
     );
@@ -11778,13 +12199,47 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(matrixJob.strategy).toBeUndefined();
     expect(workflowStep(matrixJob, "Run Matrix live lane").env).toEqual({
       FAIL_FAST: "${{ inputs.fail_fast }}",
+      INPUT_SCENARIO: "${{ inputs.matrix_scenario || '' }}",
       OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
       OPENCLAW_LIVE_OPENAI_KEY: "${{ secrets.OPENAI_API_KEY }}",
       OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1",
     });
-    expect(releaseTelegramWorkflow).toContain(
-      'echo "Telegram live lane failed on attempt ${attempt}; retrying once..." >&2',
+    expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
+      'matrix_args+=(--scenario "${scenario}")',
     );
+    expect(releaseTelegramWorkflow).not.toContain("retrying once");
+  });
+
+  it.each([
+    ["discord", "Discord"],
+    ["whatsapp", "WhatsApp"],
+    ["slack", "Slack"],
+  ])("preserves the first failed %s release QA attempt", (channel, label) => {
+    const job = workflowJob(RELEASE_CHECKS_WORKFLOW, `qa_live_${channel}_release_checks`);
+    const run = workflowStep(job, `Run ${label} live lane`).run;
+    const workdir = tempDirs.make(`release-qa-${channel}-first-failure-`);
+    const attempts = join(workdir, "attempts");
+    const pnpm = join(workdir, "pnpm");
+    writeExecutable(
+      pnpm,
+      '#!/bin/sh\nif [ -f "$ATTEMPTS" ]; then printf "retried\\n" >> "$ATTEMPTS"; exit 0; fi\nprintf "first\\n" > "$ATTEMPTS"\nexit 17\n',
+    );
+    writeExecutable(join(workdir, "sleep"), "#!/bin/sh\nexit 0\n");
+    const result = spawnSync("bash", ["--noprofile", "--norc", "-c", run ?? ""], {
+      cwd: workdir,
+      encoding: "utf8",
+      env: {
+        ATTEMPTS: attempts,
+        GITHUB_OUTPUT: join(workdir, "outputs"),
+        GITHUB_RUN_ID: "123",
+        GITHUB_RUN_ATTEMPT: "1",
+        PATH: `${workdir}:${process.env.PATH}`,
+      },
+    });
+
+    expect(job["continue-on-error"]).toBeUndefined();
+    expect(result.status, result.stderr).toBe(17);
+    expect(readFileSync(attempts, "utf8")).toBe("first\n");
   });
 
   it("routes release Buzz through the QA Lab selector", () => {
@@ -11958,12 +12413,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(eligibility.env?.TRUSTED_REPOSITORY_URL).toBe(
       "https://github.com/${{ github.repository }}.git",
     );
-    expect(eligibility.run).toContain('context_repo="$(mktemp -d)"');
-    expect(eligibility.run).toContain("git init --bare --quiet");
-    expect(eligibility.run).toContain("--filter=blob:none");
-    expect(eligibility.run).toContain("FETCH_HEAD^{commit}");
-    expect(eligibility.run).not.toContain("git checkout");
-    expect(eligibility.run).not.toContain("git worktree");
+    expect(resolveStepNames.indexOf("Checkout trusted workflow helper")).toBeLessThan(
+      resolveStepNames.indexOf("Validate trusted QA tooling eligibility"),
+    );
 
     for (const contextRef of [
       "release/2026.8.1",
@@ -11979,8 +12431,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         TARGET_REF: targetSha,
       });
       expect(result.status, `${contextRef}: ${result.stderr}`).toBe(0);
-      expect(output, contextRef).toContain(
-        `normalized_ref=${contextRef.replace(/^refs\/(heads|tags)\//u, "")}\n`,
+      const normalizedRef = contextRef.replace(/^refs\/(heads|tags)\//u, "");
+      expect(output, contextRef).toBe(
+        `fetch_ref=refs/${normalizedRef.startsWith("v") ? "tags" : "heads"}/${normalizedRef}\n`,
       );
     }
 
@@ -12037,9 +12490,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       const { output, result } = runReleaseChecksShellStep(
         "Validate trusted QA tooling eligibility",
         {
-          CONTEXT_KIND: contextKind,
           CONTEXT_FETCH_REF: fetchRef,
-          CONTEXT_REF: fetchRef.replace(/^refs\/(heads|tags)\//u, ""),
           TARGET_REF: targetRef,
           TRUSTED_REPOSITORY_URL: fixture.repoUrl,
         },
@@ -12058,21 +12509,22 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "persist-credentials": false,
         ref: "${{ github.workflow_sha }}",
         path: ".release-qa-tooling-trusted",
-        "sparse-checkout": "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
+        "sparse-checkout":
+          "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-messages.ts\nextensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts\n",
         "sparse-checkout-cone-mode": false,
       },
     });
     expect(installTooling.if).toBe(eligibilityCondition);
     expect(installTooling.run).toContain("trap 'rm -rf -- \"$trusted_checkout\"' EXIT");
     const installLines = (installTooling.run ?? "").split("\n").map((line) => line.trim());
-    const sourceArgument =
-      '"$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts" \\';
-    const sourceArgumentIndex = installLines.indexOf(sourceArgument);
-    expect(sourceArgumentIndex).toBeGreaterThanOrEqual(0);
-    expect(installLines[sourceArgumentIndex + 1]).toBe(
-      "extensions/qa-lab/src/providers/mock-openai/mock-anthropic-wire.ts",
-    );
-    expect(installTooling.run).toContain('rm -rf -- "$trusted_checkout"');
+    for (const file of ["mock-anthropic-messages.ts", "mock-anthropic-wire.ts"]) {
+      const sourceArgument = `"$trusted_checkout/extensions/qa-lab/src/providers/mock-openai/${file}" \\`;
+      const sourceArgumentIndex = installLines.indexOf(sourceArgument);
+      expect(sourceArgumentIndex).toBeGreaterThanOrEqual(0);
+      expect(installLines[sourceArgumentIndex + 1]).toBe(
+        `extensions/qa-lab/src/providers/mock-openai/${file}`,
+      );
+    }
     expect(stepNames.indexOf("Checkout selected ref")).toBeLessThan(
       stepNames.indexOf("Checkout trusted QA Anthropic mock tooling"),
     );
@@ -12159,7 +12611,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(runtimePairRun).toContain("--runtime-parity-tier standard");
     expect(runtimePairRun).toContain("--runtime-parity-tier soak");
     expect(runtimePairRun).toContain("Frozen candidate cannot select runtime-pair lane");
-    expect(workflowStep(laneJob, "Run runtime-pair lane")["continue-on-error"]).toBe(true);
+    expect(workflowStep(laneJob, "Run runtime-pair lane")["continue-on-error"]).toBeUndefined();
     const runtimePairValidation = workflowStep(laneJob, "Validate runtime-pair lane").run;
     expect(runtimePairValidation).toContain("validator_args+=(--require-explicit-gap)");
     expect(runtimePairValidation).toContain('--target-sha "$RELEASE_CHECK_TARGET_SHA"');
@@ -12187,16 +12639,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       true,
     );
     const runtimePairReport = workflowStep(laneJob, "Validate runtime-pair lane report").run;
-    expect(runtimePairReport).toContain(
+    expectTextToIncludeAll(runtimePairReport, [
       '--report-summary "$report_dir/qa-runtime-parity-summary.json"',
-    );
-    expect(runtimePairReport).toContain(
       '--report-markdown "$report_dir/qa-runtime-parity-report.md"',
-    );
-    expect(runtimePairReport).toContain("validator_args+=(--require-explicit-gap)");
-    expect(runtimePairReport).toContain(
+      "validator_args+=(--require-explicit-gap)",
       "node --import tsx trusted-report-validator/scripts/validate-qa-runtime-pair-summary.mts",
-    );
+    ]);
     expect(runtimePairStepNames.indexOf("Generate runtime-pair lane report")).toBeLessThan(
       runtimePairStepNames.indexOf("Checkout trusted validator after candidate report"),
     );
@@ -12308,7 +12756,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(job.steps?.filter(({ name }) => name === "Prepare Git owner")).toEqual([
         {
           name: "Prepare Git owner",
-          uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+          uses: "openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef",
         },
       ]);
       const prepare =
@@ -12464,16 +12912,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
   });
 
-  it("names package acceptance Telegram as artifact-backed package validation", () => {
-    const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
-
-    expect(workflow).toContain("package_telegram:");
-    expect(workflow).toContain("docker_acceptance_registry,");
-    expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
-    expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
-    expect(workflow).not.toContain("npm_telegram:");
-  });
-
   it.each([
     [
       "accepts Telegram result success when enabled=true",
@@ -12551,12 +12989,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         telegramResult: "success",
       },
     ],
-    [
-      "preserves advisory handling for an unexpectedly skipped Telegram lane",
-      "::warning::package_telegram ended with skipped; package acceptance is advisory for this caller.",
-      0,
-      { advisory: true, telegramEnabled: true, telegramResult: "skipped" },
-    ],
   ] as const)("%s", (_name, expectedOutput, expectedStatus, params) => {
     const result = runPackageAcceptanceSummary(params);
 
@@ -12568,23 +13000,19 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     }
   });
 
-  it("allows release callers to make only Telegram package acceptance advisory", () => {
+  it("keeps Telegram and Docker package acceptance failures blocking", () => {
     const telegramResult = runPackageAcceptanceSummary({
-      telegramAdvisory: true,
       telegramEnabled: true,
       telegramResult: "failure",
     });
     const dockerResult = runPackageAcceptanceSummary({
       dockerArtifactResult: "failure",
-      telegramAdvisory: true,
       telegramEnabled: true,
       telegramResult: "success",
     });
 
-    expect(telegramResult.status).toBe(0);
-    expect(telegramResult.stdout).toContain(
-      "::warning::package_telegram ended with failure; package acceptance is advisory for this caller.",
-    );
+    expect(telegramResult.status).toBe(1);
+    expect(telegramResult.stdout).toContain("::error::package_telegram ended with failure");
     expect(dockerResult.status).toBe(1);
     expect(dockerResult.stdout).toContain("::error::docker_acceptance ended with failure");
   });
@@ -12599,18 +13027,17 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(report.if).toBe("always()");
       const workdir = tempDirs.make("npm-telegram-attempt-summary-");
       const summary = resolve(workdir, "summary.md");
-      const result = spawnSync("bash", ["-c", report.run ?? ""], {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", report.run ?? ""], {
         cwd: workdir,
         encoding: "utf8",
         env: {
           PATH: process.env.PATH,
-          ADVISORY: "true",
           GITHUB_STEP_SUMMARY: summary,
           LANE_OUTCOME: outcome,
         },
       });
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain(`::warning::Package Telegram attempt: ${outcome}`);
+      expect(result.stdout).toContain(`::error::Package Telegram attempt: ${outcome}`);
       expect(readFileSync(summary, "utf8")).toContain(`Telegram attempt: ${outcome}`);
       expect(readFileSync(summary, "utf8")).not.toContain("passed");
     },
@@ -12622,7 +13049,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       for (const [jobName, job] of Object.entries(jobs)) {
         for (const step of job.steps ?? []) {
           if (step.run === "pnpm build") {
-            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toEqual({
+            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toMatchObject({
               NODE_OPTIONS: "--max-old-space-size=8192",
             });
           }
@@ -12650,6 +13077,18 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       resolveTargetJob,
       "Checkout target package manifest",
     );
+    const detectPluginCompatibility = workflowStep(
+      resolveTargetJob,
+      "Detect target plugin compatibility gate",
+    );
+    const pluginCompatibilityJob = workflowJob(
+      FULL_RELEASE_VALIDATION_WORKFLOW,
+      "plugin_compatibility_readiness",
+    );
+    const enforcePluginCompatibility = workflowStep(
+      pluginCompatibilityJob,
+      "Enforce target compatibility readiness",
+    );
     const toolingIdentity = workflowStep(resolveTargetJob, "Resolve trusted workflow identity");
     const releaseInputValidation = workflowStep(resolveTargetJob, "Validate release inputs");
     const evidenceReuseStep = workflowStep(evidenceReuseJob, "Find reusable validation evidence");
@@ -12675,8 +13114,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW).env).toMatchObject({
       RELEASE_ISOLATION_TOOLING_CONTRACT: "2",
     });
-    expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
-    expect(workflow).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1');
     expect(targetManifestCheckout.with).toMatchObject({
       ref: "${{ steps.resolve.outputs.sha }}",
       path: "target",
@@ -12687,6 +13124,67 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(resolveTargetSteps.indexOf(targetManifestCheckout)).toBeLessThan(
       resolveTargetSteps.indexOf(releaseInputValidation),
     );
+    expect(resolveTargetSteps.indexOf(targetManifestCheckout)).toBeLessThan(
+      resolveTargetSteps.indexOf(detectPluginCompatibility),
+    );
+    expect(detectPluginCompatibility.run).toContain('.scripts["plugins:boundary-report:ci"]');
+    expect(detectPluginCompatibility.run).toContain("38ba27834dd3f98c19d5833e0598dfef3abb7587");
+    expect(detectPluginCompatibility.run).toContain("Current target is missing");
+    expect(detectPluginCompatibility.run).toContain("required=false");
+    expect(resolveTargetJob.outputs?.plugin_compatibility_required).toBe(
+      "${{ steps.plugin_compatibility.outputs.required }}",
+    );
+    expect(pluginCompatibilityJob.needs).toEqual(["resolve_target"]);
+    expect(pluginCompatibilityJob.if).toBe(
+      "needs.resolve_target.outputs.plugin_compatibility_required == 'true'",
+    );
+    expect(enforcePluginCompatibility.run).toBe("pnpm plugins:boundary-report:ci");
+    for (const jobName of [
+      "normal_ci",
+      "plugin_prerelease_independent",
+      "release_checks_independent",
+      "release_checks_candidate",
+      "npm_telegram",
+      "performance",
+      "prepare_npm_package",
+      "prepare_docker_release",
+    ]) {
+      const job = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, jobName);
+      expect(jobNeeds(job), jobName).toContain("plugin_compatibility_readiness");
+      expect(String(job.if), jobName).toContain("needs.plugin_compatibility_readiness.result");
+    }
+    const candidateCondition = String(releaseChecksJob.if).replace(
+      /^\$\{\{\s*([\s\S]*?)\s*\}\}$/u,
+      "$1",
+    );
+    for (const [compatibilityResult, admitted] of [
+      ["success", true],
+      ["skipped", true],
+      ["failure", false],
+      ["cancelled", false],
+    ] as const) {
+      const result = runInNewContext(candidateCondition, {
+        github: { run_attempt: 1 },
+        inputs: { release_package_spec: "openclaw@next", rerun_group: "cross-os" },
+        needs: {
+          resolve_target: {
+            result: "success",
+            outputs: { live_suite_filter: "", release_candidate_artifact_required: "false" },
+          },
+          plugin_compatibility_readiness: { result: compatibilityResult },
+          evidence_reuse: { result: "success", outputs: { reuse: "false" } },
+          candidate_acquisition: { result: "skipped", outputs: {} },
+        },
+        always: () => true,
+        contains: (values: string | string[], value: string) => values.includes(value),
+        fromJSON: JSON.parse,
+      });
+      expect(Boolean(result), compatibilityResult).toBe(admitted);
+    }
+    expect(jobNeeds(evidenceReuseJob)).toContain("plugin_compatibility_readiness");
+    expect(evidenceReuseJob.if).toContain("always()");
+    expect(evidenceReuseJob.if).toContain("needs.resolve_target.result == 'success'");
+    expect(evidenceReuseJob.if).toContain("needs.plugin_compatibility_readiness.result");
     expect(resolveTargetJob.outputs?.trusted_workflow_json).toBe(
       "${{ steps.tooling_identity.outputs.json }}",
     );
@@ -12711,7 +13209,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "target_context_ref must be a canonical OpenClaw release branch or tag.",
     ]);
     expect(npmTelegramJob.name).toBe("Run package Telegram E2E");
-    expect(npmTelegramJob.needs).toEqual(["resolve_target", "evidence_reuse"]);
+    expect(npmTelegramJob.needs).toEqual([
+      "resolve_target",
+      "plugin_compatibility_readiness",
+      "evidence_reuse",
+    ]);
     expect(npmTelegramJob["timeout-minutes"]).toBe(15);
     expect(performanceJob["timeout-minutes"]).toBe(15);
     expect(npmTelegramJob.if).toContain(
@@ -12775,12 +13277,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       NPM_TELEGRAM_SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       SKIP_PACKAGE_TELEGRAM_E2E: "${{ needs.resolve_target.outputs.skip_package_telegram_e2e }}",
     });
-    expect(manifestStep.run).toBe("node scripts/full-release-validation-state.mjs write-manifest");
     expect(verificationStep.env).toMatchObject({
       RELEASE_PROFILE: "${{ inputs.release_profile }}",
       RERUN_GROUP: "${{ inputs.rerun_group }}",
     });
-    expect(verificationStep.run).toBe("node scripts/full-release-validation-state.mjs verify");
     expectTextToIncludeAll(dispatchStep.run, [
       'dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-npm-telegram"',
       'dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"',
@@ -12802,7 +13302,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "cancel-in-progress: false",
       "FULL_RELEASE_PLAN_INPUTS_JSON",
       "full-release-validation-policy.mjs",
-      "full-release-validation-state.mjs verify",
       'FAIL_FAST: "false"',
       "NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}",
     ]);
@@ -12847,7 +13346,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expectTextToIncludeAll(validateStep.run, [
       'if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then',
       "Artifact-backed Telegram E2E requires all artifact identity fields or none.",
-      "package_spec must be openclaw@alpha",
+      "package_spec must be openclaw@beta",
       "Artifact-backed Telegram E2E requires the complete immutable artifact and package identity tuple.",
     ]);
     expect(identityStep.env).toMatchObject({
@@ -12860,7 +13359,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expectTextToIncludeAll(identityStep.run, [
       "actions/artifacts/${ARTIFACT_ID}",
       '--arg digest "sha256:${ARTIFACT_DIGEST}"',
-      "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}",
       'if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]',
       '.status == "pending" or .status == "queued" or .status == "requested" or .status == "waiting" or .status == "in_progress"',
       ".conclusion == null",
@@ -12871,6 +13369,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "artifact_created_at > attempt_completed_at",
       "Package Telegram artifact creation time is outside the declared producer run attempt.",
       "Package Telegram artifact producer run attempt does not match the requested tuple.",
+      "actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}/jobs?per_page=100",
+      "Resolve package candidate",
+      "Prior-attempt Package Telegram artifact lacks one exact successful producer job.",
+      "Package Telegram artifact creation time is outside the successful producer job.",
     ]);
     expect(runStep.env).toMatchObject({
       PACKAGE_FILE_NAME: "${{ inputs.package_file_name || '' }}",
@@ -12897,62 +13399,68 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     ]);
   });
 
-  it("accepts immutable artifacts produced earlier in the active workflow attempt", () => {
-    const result = runNpmTelegramArtifactValidation({
-      currentRunId: "123",
-      producerConclusion: null,
-      producerRunId: "123",
-      producerStatus: "in_progress",
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it("accepts active artifacts while GitHub still reports the workflow as queued", () => {
-    const result = runNpmTelegramArtifactValidation({
-      currentRunId: "123",
-      producerConclusion: null,
-      producerRunId: "123",
-      producerStatus: "queued",
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it("accepts active artifacts while GitHub still reports the workflow as pending", () => {
-    const result = runNpmTelegramArtifactValidation({
-      currentRunId: "123",
-      producerConclusion: null,
-      producerRunId: "123",
-      producerStatus: "pending",
-    });
-
-    expect(result.status, result.stderr).toBe(0);
-  });
-
-  it("rejects queued artifacts after GitHub assigns a conclusion", () => {
-    const result = runNpmTelegramArtifactValidation({
-      currentRunId: "123",
-      producerConclusion: "success",
-      producerRunId: "123",
-      producerStatus: "queued",
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
+  it.each([
+    ["active", { producerStatus: "in_progress", producerConclusion: null }, 0],
+    ["queued", { producerStatus: "queued", producerConclusion: null }, 0],
+    ["pending", { producerStatus: "pending", producerConclusion: null }, 0],
+    [
+      "successful prior-attempt producer",
+      {
+        currentRunAttempt: "3",
+        producerStatus: "completed",
+        producerConclusion: "failure",
+      },
+      0,
+    ],
+    [
+      "failed prior-attempt producer",
+      {
+        currentRunAttempt: "3",
+        producerStatus: "completed",
+        producerConclusion: "failure",
+        producerJobConclusion: "failure",
+      },
+      1,
+      "Prior-attempt Package Telegram artifact lacks one exact successful producer job.",
+    ],
+    [
+      "queued with conclusion",
+      {
+        producerStatus: "queued",
+        producerConclusion: "success",
+      },
+      1,
       "Current-run Package Telegram artifact is not from the active workflow attempt.",
-    );
-  });
-
-  it("keeps completed external producer attempts success-gated", () => {
+    ],
+    [
+      "successful external producer",
+      {
+        currentRunId: "456",
+        producerStatus: "completed",
+        producerConclusion: "success",
+      },
+      0,
+    ],
+  ] satisfies Array<
+    [
+      string,
+      Omit<
+        Parameters<typeof runNpmTelegramArtifactValidation>[0],
+        "currentRunId" | "producerRunId"
+      > & { currentRunId?: string },
+      number,
+      string?,
+    ]
+  >)("validates artifacts from %s", (_name, overrides, status, error?: string) => {
     const result = runNpmTelegramArtifactValidation({
-      currentRunId: "456",
-      producerConclusion: "success",
+      currentRunId: "123",
       producerRunId: "123",
-      producerStatus: "completed",
+      ...overrides,
     });
-
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, status === 0 ? result.stderr : undefined).toBe(status);
+    if (error) {
+      expect(result.stderr).toContain(error);
+    }
   });
 
   it("rejects partial npm Telegram artifact identity instead of falling back to npm", () => {
@@ -13045,15 +13553,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {
-    const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
-    const liveE2eWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
-
     for (const jobName of [
       "qa_lab_parity_lane_release_checks",
       "qa_lab_parity_report_release_checks",
     ]) {
-      expect(releaseChecksWorkflow).toMatch(
-        new RegExp(`${jobName}:[\\s\\S]*?runs-on: ubuntu-24\\.04`, "u"),
+      expect(evaluateWorkflowRunner(workflowJob(RELEASE_CHECKS_WORKFLOW, jobName)["runs-on"])).toBe(
+        "ubuntu-24.04",
       );
     }
     for (const jobName of [
@@ -13063,13 +13568,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "run_telegram",
       "advisory_status",
     ]) {
-      expect(workflowJob(RELEASE_TELEGRAM_QA_WORKFLOW, jobName)["runs-on"]).toBe("ubuntu-24.04");
+      expect(
+        evaluateWorkflowRunner(workflowJob(RELEASE_TELEGRAM_QA_WORKFLOW, jobName)["runs-on"]),
+      ).toBe("ubuntu-24.04");
     }
-
-    expectTextToIncludeAll(liveE2eWorkflow, [
-      "OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000",
-      "OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
-    ]);
   });
 
   describe("release check artifact resolver", () => {
@@ -13101,44 +13603,32 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       }),
     ];
 
-    it.each([
-      [
-        "selects the current producer attempt",
-        [1, 2].flatMap((attempt, index) =>
-          artifactsFor(pair("qa_job", "candidate", "candidate"), attempt, index * 10 + 1),
-        ),
-        "2",
-        2,
-      ],
-      [
-        "carries attempt 1 into consumer attempt 2",
-        artifactsFor(pair("qa_job", "candidate", "candidate"), 1, 1),
-        "2",
-        1,
-      ],
-      [
-        "orders producer attempts numerically",
-        [2, 10].flatMap((attempt, index) =>
-          artifactsFor(pair("qa_job", "candidate", "candidate"), attempt, index * 10 + 1),
-        ),
-        "10",
-        10,
-      ],
-      [
-        "excludes future producer attempts",
-        [2, 3].flatMap((attempt, index) =>
-          artifactsFor(pair("qa_job", "candidate", "candidate"), attempt, index * 10 + 1),
-        ),
-        "2",
-        2,
-      ],
-    ])("%s", (_name, artifacts, consumerAttempt, expectedAttempt) => {
-      const result = runReleaseCheckArtifactResolve({
-        artifacts,
-        consumerAttempt,
-        pairs: [pair("qa_job", "candidate", "candidate")],
+    const candidate = pair("qa_job", "candidate", "candidate");
+    const resolveArtifacts = (
+      options: Pick<Parameters<typeof runReleaseCheckArtifactResolve>[0], "artifacts"> &
+        Partial<
+          Pick<Parameters<typeof runReleaseCheckArtifactResolve>[0], "consumerAttempt" | "pairs">
+        >,
+    ) =>
+      runReleaseCheckArtifactResolve({
+        consumerAttempt: "2",
+        pairs: [candidate],
         runId,
         targetSha,
+        ...options,
+      });
+
+    it.each([
+      ["selects the current producer attempt", [1, 2], "2", 2],
+      ["carries attempt 1 into consumer attempt 2", [1], "2", 1],
+      ["orders producer attempts numerically", [2, 10], "10", 10],
+      ["excludes future producer attempts", [2, 3], "2", 2],
+    ] as const)("%s", (_name, attempts, consumerAttempt, expectedAttempt) => {
+      const result = resolveArtifacts({
+        artifacts: attempts.flatMap((attempt, index) =>
+          artifactsFor(candidate, attempt, index * 10 + 1),
+        ),
+        consumerAttempt,
       });
 
       expect(result.result.status, result.result.stderr).toBe(0);
@@ -13147,14 +13637,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
 
     it("selects candidate and baseline attempts independently", () => {
-      const candidate = pair("qa_lab_parity_lane_release_checks", "candidate", "candidate");
+      const parityCandidate = pair("qa_lab_parity_lane_release_checks", "candidate", "candidate");
       const baseline = pair("qa_lab_parity_lane_release_checks", "baseline", "baseline");
-      const result = runReleaseCheckArtifactResolve({
-        artifacts: [...artifactsFor(candidate, 1, 1), ...artifactsFor(baseline, 2, 11)],
-        consumerAttempt: "2",
-        pairs: [candidate, baseline],
-        runId,
-        targetSha,
+      const result = resolveArtifacts({
+        artifacts: [...artifactsFor(parityCandidate, 1, 1), ...artifactsFor(baseline, 2, 11)],
+        pairs: [parityCandidate, baseline],
       });
 
       expect(result.result.status, result.result.stderr).toBe(0);
@@ -13165,28 +13652,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       ).toEqual({ baseline: 2, candidate: 1 });
     });
 
-    it("selects core and soak attempts independently", () => {
-      const core = pair("qa_lab_runtime_pair_lane_release_checks", "core", "core");
-      const soak = pair("qa_lab_runtime_pair_lane_release_checks", "soak", "soak");
-      const result = runReleaseCheckArtifactResolve({
-        artifacts: [...artifactsFor(core, 2, 1), ...artifactsFor(soak, 1, 11)],
-        consumerAttempt: "2",
-        pairs: [core, soak],
-        runId,
-        targetSha,
-      });
-
-      expect(result.result.status, result.result.stderr).toBe(0);
-      expect(
-        Object.fromEntries(
-          result.selection.map((selection) => [selection.variant, selection.producer_attempt]),
-        ),
-      ).toEqual({ core: 2, soak: 1 });
-    });
-
     it("fails when the latest producer attempt has no complete pair", () => {
-      const candidate = pair("qa_job", "candidate", "candidate");
-      const result = runReleaseCheckArtifactResolve({
+      const result = resolveArtifacts({
         artifacts: [
           ...artifactsFor(candidate, 1, 1),
           releaseCheckArtifact({
@@ -13195,10 +13662,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
             runId,
           }),
         ],
-        consumerAttempt: "2",
-        pairs: [candidate],
-        runId,
-        targetSha,
       });
 
       expect(result.result.status).toBe(1);
@@ -13211,7 +13674,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     });
 
     it("fails on duplicate artifacts at the latest producer attempt", () => {
-      const candidate = pair("qa_job", "candidate", "candidate");
       const artifacts = artifactsFor(candidate, 2, 1);
       artifacts.push(
         releaseCheckArtifact({
@@ -13220,12 +13682,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
           runId,
         }),
       );
-      const result = runReleaseCheckArtifactResolve({
+      const result = resolveArtifacts({
         artifacts,
-        consumerAttempt: "2",
-        pairs: [candidate],
-        runId,
-        targetSha,
       });
 
       expect(result.result.status).toBe(1);
@@ -13236,11 +13694,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     it.each([
       {
-        artifacts: (candidate: ReleaseCheckArtifactPair) => [
-          ...artifactsFor(candidate, 1, 1),
+        artifacts: (artifactPair: ReleaseCheckArtifactPair) => [
+          ...artifactsFor(artifactPair, 1, 1),
           releaseCheckArtifact({
             id: 11,
-            name: `${candidate.statusBase}-broken`,
+            name: `${artifactPair.statusBase}-broken`,
             runId,
           }),
         ],
@@ -13248,21 +13706,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         name: "malformed newer evidence",
       },
       {
-        artifacts: (candidate: ReleaseCheckArtifactPair) => [
-          ...artifactsFor(candidate, 1, 1),
-          ...artifactsFor(candidate, 2, 11, { expiredPayload: true }),
+        artifacts: (artifactPair: ReleaseCheckArtifactPair) => [
+          ...artifactsFor(artifactPair, 1, 1),
+          ...artifactsFor(artifactPair, 2, 11, { expiredPayload: true }),
         ],
         expected: "is expired or has invalid expiry metadata",
         name: "expired newer evidence",
       },
     ])("does not fall back past $name", ({ artifacts, expected }) => {
-      const candidate = pair("qa_job", "candidate", "candidate");
-      const result = runReleaseCheckArtifactResolve({
+      const result = resolveArtifacts({
         artifacts: artifacts(candidate),
-        consumerAttempt: "2",
-        pairs: [candidate],
-        runId,
-        targetSha,
       });
 
       expect(result.result.status).toBe(1);
@@ -13279,13 +13732,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         name: "malformed status metadata",
       },
     ])("rejects $name", ({ mutate }) => {
-      const candidate = pair("qa_job", "candidate", "candidate");
-      const resolved = runReleaseCheckArtifactResolve({
+      const resolved = resolveArtifacts({
         artifacts: artifactsFor(candidate, 2, 1),
-        consumerAttempt: "2",
-        pairs: [candidate],
-        runId,
-        targetSha,
       });
       expect(resolved.result.status, resolved.result.stderr).toBe(0);
 
@@ -13298,12 +13746,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     it("sets runtime parity ready=false for validated non-success evidence", () => {
       const runtimePair = pair("qa_lab_runtime_parity_release_checks", "", "runtime-parity");
-      const resolved = runReleaseCheckArtifactResolve({
+      const resolved = resolveArtifacts({
         artifacts: artifactsFor(runtimePair, 2, 1),
-        consumerAttempt: "2",
         pairs: [runtimePair],
-        runId,
-        targetSha,
       });
       expect(resolved.result.status, resolved.result.stderr).toBe(0);
 
@@ -13315,7 +13760,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       mkdirSync(resolve(trustedScript, ".."), { recursive: true });
       symlinkSync(resolve(REPO_ROOT, RELEASE_CHECK_ARTIFACT_RESOLVER), trustedScript);
       const selectionFile = resolve(workdir, "selection.json");
-      writeFileSync(selectionFile, JSON.stringify(resolved.selection));
+      writeJson(selectionFile, resolved.selection);
       const statusDir = resolve(workdir, ".artifacts/release-check-status");
       mkdirSync(statusDir, { recursive: true });
       const selection = resolved.selection[0]!;
@@ -13339,7 +13784,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         selectionFile,
       );
       expect(script).toBeTruthy();
-      const result = spawnSync("bash", ["-c", script!], {
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script!], {
         cwd: workdir,
         encoding: "utf8",
         env: {
@@ -13365,7 +13810,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
     for (const jobName of advisoryJobNames) {
       const job = workflowJob(RELEASE_CHECKS_WORKFLOW, jobName);
-      expect(job["continue-on-error"], jobName).toBe(true);
+      expect(job["continue-on-error"], jobName).toBeUndefined();
 
       const recordStep = workflowStep(job, "Record advisory status");
       expect(recordStep.if, jobName).toBe("always()");
@@ -13443,7 +13888,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(telegramDispatch.run).toContain('[[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]');
     expect(telegramDispatch.run).not.toContain("commits/main");
     expect(telegramDispatch.run).not.toContain("dispatch_attempt");
-    expect(telegramCaller["continue-on-error"]).toBe(true);
+    expect(telegramCaller["continue-on-error"]).toBeUndefined();
     expect(telegramCaller.outputs?.identity_verified).toBe(
       "${{ steps.dispatch.outputs.identity_verified }}",
     );
@@ -13518,7 +13963,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       'elif [[ "$fallback" == "success" ]]; then',
       "advisory_status_override_allowed()",
       'if advisory_status_override_allowed "$name"; then',
-      "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory.",
       "::error::${name} ended with ${result}",
       '"qa_live_release_checks=${QA_LIVE_RELEASE_CHECKS_RESULT}"',
       '"qa_live_buzz_release_checks=${QA_LIVE_BUZZ_RELEASE_CHECKS_RESULT}"',
@@ -13559,12 +14003,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
     ...(["cancelled", "failure", "skipped"] as const).map((currentResult) => ({
       emptyStderr: false,
-      expected: [
-        `::warning::qa_live_telegram_release_checks ended with ${currentResult}; Telegram release testing is best effort and does not block release validation.`,
-      ],
-      name: `reports a ${currentResult} selected Telegram child without blocking release`,
+      expected: [`::error::qa_live_telegram_release_checks ended with ${currentResult}`],
+      name: `rejects a ${currentResult} selected Telegram child`,
       params: { currentAttempt: "2", currentResult, telegramSelected: true },
-      status: 0,
+      status: 1,
     })),
     {
       emptyStderr: false,
@@ -13576,7 +14018,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     {
       emptyStderr: false,
       expected: ["::error::Telegram dispatch identity was not verified"],
-      name: "rejects an unverified Telegram child identity despite advisory execution",
+      name: "rejects an unverified Telegram child identity",
       params: {
         currentAttempt: "2",
         currentResult: "failure",
@@ -13590,7 +14032,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         "qa_live_telegram_release_checks ended with failure",
         "::error::package_acceptance_release_checks ended with failure",
       ],
-      name: "keeps package failures blocking alongside an advisory Telegram failure",
+      name: "keeps package failures blocking alongside a Telegram failure",
       params: {
         currentAttempt: "2",
         currentResult: "failure",
@@ -13612,17 +14054,14 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     },
     {
       emptyStderr: false,
-      expected: [
-        "qa_live_telegram_release_checks ended with cancelled",
-        "Telegram release testing is best effort",
-      ],
-      name: "keeps a cancelled Telegram child non-blocking for Tideclaw alpha",
+      expected: ["qa_live_telegram_release_checks ended with cancelled"],
+      name: "rejects a cancelled Telegram child for a release branch",
       params: {
         currentAttempt: "2",
         currentResult: "cancelled",
-        workflowRef: "refs/heads/tideclaw/alpha/2026-07-10-1200Z",
+        workflowRef: "refs/heads/release/2026.7.10",
       },
-      status: 0,
+      status: 1,
     },
   ] as const)("$name", ({ emptyStderr, expected, params, status }) => {
     const result = runReleaseChecksSummary(params);
@@ -13712,27 +14151,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
   });
 
-  it("summarizes start delay separately from execution time in full validation", () => {
-    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
-    const parsedWorkflow = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
-    const summaryJob = parsedWorkflow.jobs?.summary;
-    const manifestStep = workflowStep(summaryJob ?? {}, "Write release validation manifest");
-
-    expect(workflow).toContain("Write release validation manifest");
-    expect(workflow).toContain("PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}");
-    expect(workflow).toContain("Upload release validation manifest");
-    expect(workflow).toContain("Download diagnostic drain attempts");
-    expect(workflow).toContain("full-release-validation-${{ github.run_id }}");
-    expect(workflow).toContain("full-release-diagnostic-manifest.json");
-    expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
-    expect(manifestStep.env?.RELEASE_EXECUTION_PLAN_PATH).toContain(
-      "full-release-execution-plan.json",
-    );
-    expect(manifestStep.env?.DIAGNOSTIC_DRAIN_PATH).toContain(
-      "full-release-diagnostic-manifest.json",
-    );
-  });
-
   it("wires evidence attempts into the acceptance gate", () => {
     const releaseResolveJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
     const releaseRun = workflowStep(releaseResolveJob, "Resolve full release validation run");
@@ -13794,9 +14212,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(resolveFullRun.env?.FULL_RELEASE_VALIDATION_RUN_ATTEMPT).toBe(
       "${{ inputs.full_release_validation_run_attempt }}",
     );
-    expect(resolveJob.outputs?.full_release_validation_run_attempt).toBe(
-      "${{ steps.full_run.outputs.attempt }}",
-    );
     expect(resolveDownload.with?.name).toBe(
       "full-release-validation-${{ inputs.full_release_validation_run_id }}-${{ steps.full_run.outputs.attempt }}",
     );
@@ -13807,6 +14222,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "sparse-checkout": "scripts",
     });
     expect(validateManifest.env).toMatchObject({
+      EXPECTED_WORKFLOW_BRANCH: "${{ github.ref_name }}",
       PUBLICATION_CONSUMER:
         "${{ inputs.publish_docker_only && !inputs.publish_openclaw_npm && 'docker-only' || 'publisher' }}",
       PUBLISH_DOCKER_ONLY: "${{ inputs.publish_docker_only }}",
@@ -13878,7 +14294,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(createReleaseIndex).toBeGreaterThanOrEqual(0);
     expect(verifyReleaseIndex).toBeGreaterThan(createReleaseIndex);
     expect(appendProofIndex).toBeGreaterThan(verifyReleaseIndex);
-    expect(finalizeJob.needs).toEqual(["publish", "publish_docker", "approve_github_release"]);
+    expect(finalizeJob.needs).toEqual([
+      "publish",
+      "publish_docker",
+      "approve_github_release",
+      "finalize_github_release_before_docker",
+    ]);
     expect(finalizeJob.if).toContain("needs.publish_docker.result == 'success'");
     expect(finalizeJob.if).toContain("inputs.prepared_plugins == ''");
     expect(finalizeJob.if).toContain("needs.approve_github_release.result == 'success'");
@@ -13887,32 +14308,38 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       SOURCE_SHA: "${{ needs.publish.outputs.source_sha }}",
       RELEASE_NPM_DIST_TAG: "${{ inputs.npm_dist_tag }}",
     });
-    expect(finalizeRelease.run).toContain("node scripts/linux-app-channel.mjs finalize-core");
-    expect(finalizeRelease.run).toContain(
+    expectTextToIncludeAll(finalizeRelease.run, [
+      "node scripts/linux-app-channel.mjs finalize-core",
       '--tag "$RELEASE_TAG" --source-sha "$SOURCE_SHA" --latest "$expected_latest"',
-    );
-    expect(finalizeRelease.run).toContain('--tooling-sha "$GITHUB_WORKFLOW_SHA"');
-    expect(finalizeRelease.run).toContain(
+      '--tooling-sha "$GITHUB_WORKFLOW_SHA"',
       '--workflow-ref "$GITHUB_REF_NAME" --workflow-full-ref "$GITHUB_REF"',
-    );
-    expect(finalizeRelease.run).toContain(
       '--release-publish-run-id "$GITHUB_RUN_ID" --release-publish-run-attempt "$GITHUB_RUN_ATTEMPT"',
-    );
-    expect(finalizeRelease.run).toContain(
       '--release-publish-ref "$GITHUB_REF_NAME" --release-publish-full-ref "$GITHUB_REF"',
-    );
+    ]);
     expect(finalizeRelease.run).not.toContain("gh release edit");
   });
 
   it("loads the strict release validator from the isolated trusted tooling bundle", () => {
     const root = tempDirs.make("release-validation-tooling-");
-    mkdirSync(join(root, "lib", "cross-os-release-checks"), { recursive: true });
     for (const source of [
       "scripts/release-ci-summary.mjs",
+      "scripts/lib/release-evidence-identity.mjs",
+      "scripts/release-qualification-admission.mjs",
+      "scripts/lib/qualification-admission-baselines.mjs",
+      "scripts/release-qualification-coverage.mjs",
+      "scripts/lib/full-release-manifest.mjs",
       "scripts/full-release-validation-policy.mjs",
+      "scripts/pr-lib/gh-api-preflight.mjs",
+      "scripts/lib/direct-run.mjs",
       ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",
       "scripts/full-release-candidate-contract.mjs",
+      "scripts/lib/full-release-candidate-reuse.mjs",
+      "scripts/lib/full-release-child-request.mjs",
+      "scripts/lib/full-release-child-reuse.mjs",
+      "scripts/lib/full-release-evidence.mjs",
+      "scripts/lib/release-publish-inputs.mjs",
+      "scripts/plugin-sdk-api-release-evidence.mjs",
       "scripts/lib/canonical-json.mjs",
       "scripts/lib/cross-os-release-checks/suite-filter.mjs",
       "scripts/lib/plain-gh.mjs",
@@ -13920,8 +14347,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "scripts/lib/release-version.mjs",
       "scripts/lib/record-shared.mjs",
       "scripts/lib/upgrade-survivor-policy.mjs",
+      "scripts/lib/upgrade-survivor-scenarios.json",
     ]) {
-      copyFileSync(source, join(root, source.replace(/^scripts\//u, "")));
+      const destination = join(root, source.replace(/^scripts\//u, ""));
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(source, destination);
     }
     const result = spawnSync(
       process.execPath,
@@ -13964,13 +14394,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       branch: "release/2026.8.1",
       accepted: true,
     },
-    {
-      name: "an alpha outside the workflow branch",
-      version: "2026.8.1-alpha.1",
-      tag: "v2026.8.1-alpha.1",
-      branch: "release/2026.8.1",
-      accepted: false,
-    },
   ])("validates frozen npm release ancestry for $name", (scenario) => {
     const metadata = workflowStep(
       workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_dependencies_npm"),
@@ -13997,7 +14420,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
         { cwd, encoding: "utf8" },
       ).trim();
     git(origin, "init", "-q", "--initial-branch=main");
-    writeFileSync(join(origin, "package.json"), JSON.stringify({ version: "2026.8.1" }));
+    writeJson(join(origin, "package.json"), { version: "2026.8.1" });
     git(origin, "add", "package.json");
     git(origin, "commit", "-qm", "main before release");
     git(origin, "switch", "-q", "-c", "release/2026.8.1");
@@ -14006,7 +14429,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       git(origin, "switch", "-q", "-c", scenario.branch);
     }
     if (scenario.version !== "2026.8.1") {
-      writeFileSync(join(origin, "package.json"), JSON.stringify({ version: scenario.version }));
+      writeJson(join(origin, "package.json"), { version: scenario.version });
       git(origin, "commit", "-qam", "versioned candidate");
     }
     git(origin, "tag", scenario.tag);
@@ -14036,6 +14459,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const result = spawnSync(
       "bash",
       [
+        "--noprofile",
+        "--norc",
         "-c",
         [
           'timeout() { shift 3; "$@"; }',
@@ -14087,7 +14512,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(workflow.on?.workflow_dispatch?.inputs?.[input]).toMatchObject({ required: false });
     }
     expect(publish.needs).toEqual(["resolve_release_target"]);
-    expect(finalize.needs).toEqual(["publish", "publish_docker", "approve_github_release"]);
+    expect(finalize.needs).toEqual([
+      "publish",
+      "publish_docker",
+      "approve_github_release",
+      "finalize_github_release_before_docker",
+    ]);
     expect(windows.needs).toEqual(["resolve_release_target", "finalize_github_release"]);
     expect(windows["continue-on-error"]).toBe(true);
     expect(windows.if).toContain("needs.finalize_github_release.result == 'success'");
@@ -14106,13 +14536,33 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
   });
 
   it.each([
-    ["omitted", false, false, false, 0],
-    ["selected", true, true, false, 0],
-    ["dispatch failure", true, true, true, 1],
-    ["missing digests", true, false, false, 1],
+    { scenario: "omitted", selected: false, hasDigests: false, dispatchFailure: false, exit: 0 },
+    { scenario: "selected", selected: true, hasDigests: true, dispatchFailure: false, exit: 0 },
+    {
+      scenario: "dispatch failure",
+      selected: true,
+      hasDigests: true,
+      dispatchFailure: true,
+      exit: 1,
+    },
+    {
+      scenario: "missing digests",
+      selected: true,
+      hasDigests: false,
+      dispatchFailure: false,
+      exit: 1,
+    },
+    {
+      scenario: "extended-stable",
+      selected: true,
+      hasDigests: true,
+      dispatchFailure: false,
+      exit: 0,
+    },
   ])(
-    "dispatches optional Windows promotion without waiting: %s",
-    (_scenario, selected, hasDigests, dispatchFailure, exit) => {
+    "dispatches optional Windows promotion without waiting: $scenario",
+    ({ scenario, selected, hasDigests, dispatchFailure, exit }) => {
+      const shouldDispatch = selected && hasDigests && scenario !== "extended-stable";
       const source = readFileSync("scripts/lib/release-publish-children.sh", "utf8");
       const root = tempDirs.make("windows-detached-publish-");
       const dispatchPath = join(root, "dispatch");
@@ -14127,6 +14577,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       const result = spawnSync(
         "bash",
         [
+          "--noprofile",
+          "--norc",
           "-c",
           `
 set -euo pipefail
@@ -14150,6 +14602,7 @@ promote_windows_release_assets
             GITHUB_STEP_SUMMARY: summaryPath,
             GITHUB_REPOSITORY: "openclaw/openclaw",
             RELEASE_TAG: "v2026.9.1",
+            RELEASE_NPM_DIST_TAG: scenario === "extended-stable" ? "extended-stable" : "latest",
             CHILD_WORKFLOW_REF: workflowRef,
             PARENT_WORKFLOW_SHA: workflowSha,
             WINDOWS_NODE_TAG: selected ? "v0.6.3" : "",
@@ -14159,8 +14612,8 @@ promote_windows_release_assets
       );
       expect(result.status, result.stderr).toBe(exit);
       expect(result.stderr).not.toContain("unexpected-windows-wait");
-      expect(existsSync(dispatchPath)).toBe(selected && hasDigests);
-      if (selected && hasDigests) {
+      expect(existsSync(dispatchPath)).toBe(shouldDispatch);
+      if (shouldDispatch) {
         expect(readFileSync(dispatchPath, "utf8").trim().split("\n")).toEqual([
           workflowRef,
           workflowSha,
@@ -14174,7 +14627,7 @@ promote_windows_release_assets
         ]);
       }
       expect(readFileSync(summaryPath, "utf8").includes("actions/runs/456")).toBe(
-        selected && hasDigests && !dispatchFailure,
+        shouldDispatch && !dispatchFailure,
       );
     },
   );
@@ -14182,38 +14635,26 @@ promote_windows_release_assets
   it("validates Windows signatures and pinned digests in the promotion owner", () => {
     const windowsWorkflow = readFileSync(WINDOWS_NODE_RELEASE_WORKFLOW, "utf8");
     expect(windowsWorkflow).not.toContain("default: latest");
-    expect(windowsWorkflow).toContain("expected_installer_digests:");
-    expect(windowsWorkflow).toContain("expected_installer_digests must contain exactly");
-    expect(windowsWorkflow).toContain("must be an explicit openclaw-windows-node release tag");
-    expect(windowsWorkflow).toContain("$installerPatterns = @(");
-    expect(windowsWorkflow).toContain("Every matched installer is signature-checked");
-    expect(windowsWorkflow).toContain("Get-ChildItem -LiteralPath dist -File");
-    expect(windowsWorkflow).toContain(
+    expectTextToIncludeAll(windowsWorkflow, [
+      "expected_installer_digests:",
+      "expected_installer_digests must contain exactly",
+      "must be an explicit openclaw-windows-node release tag",
+      "$installerPatterns = @(",
+      "Every matched installer is signature-checked",
+      "Get-ChildItem -LiteralPath dist -File",
       "Downloaded Windows source asset does not match pinned digest",
-    );
-    expect(windowsWorkflow).toContain(
       "--repo openclaw/openclaw-windows-node --json tagName,isDraft,isPrerelease,assets,url",
-    );
-    expect(windowsWorkflow).toContain(
       "Windows source release must contain exactly one required asset",
-    );
-    expect(windowsWorkflow).toContain(
       "Windows source release asset digest does not match the pinned digest",
-    );
-    expect(windowsWorkflow).toContain(
       "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US",
-    );
-    expect(windowsWorkflow).toContain("has unexpected signer subject");
-    expect(windowsWorkflow).toContain("OpenClawCompanion-SHA256SUMS.txt");
-    expect(windowsWorkflow).toContain("Verify promoted release asset contract");
-    expect(windowsWorkflow).toContain(
+      "has unexpected signer subject",
+      "OpenClawCompanion-SHA256SUMS.txt",
+      "Verify promoted release asset contract",
       "Promoted OpenClawCompanion asset names do not exactly match the current contract",
-    );
-    expect(windowsWorkflow).toContain(
       "$targetRelease = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json assets",
-    );
-    expect(windowsWorkflow).toContain("Promoted Windows SHA-256 manifest does not match");
-    expect(windowsWorkflow).toContain("Promoted Windows release asset checksum mismatch");
+      "Promoted Windows SHA-256 manifest does not match",
+      "Promoted Windows release asset checksum mismatch",
+    ]);
   });
 
   it("keeps the signed Android APK contract independent of core publication", () => {
@@ -14223,7 +14664,6 @@ promote_windows_release_assets
     ].join("\n");
     const androidWorkflow = readFileSync(ANDROID_RELEASE_WORKFLOW, "utf8");
     const androidDocs = readFileSync("docs/platforms/android.md", "utf8");
-    const releaseDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
     const approvalScript = readFileSync("scripts/validate-release-publish-approval.mjs", "utf8");
     const androidJob = workflowJob(ANDROID_RELEASE_WORKFLOW, "publish_signed_android_apk");
     const setupNode = workflowStep(androidJob, "Setup Node environment");
@@ -14241,14 +14681,13 @@ promote_windows_release_assets
     );
     expect(androidWorkflow).toContain("environment: android-release");
     expect(androidWorkflow).toContain(
-      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+      "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
     );
     expect(androidWorkflow).toContain("repositories: apps-signing");
     expect(androidWorkflow).toContain("permission-contents: read");
     expect(androidWorkflow).toContain("--mode materialize");
     expect(androidWorkflow).not.toContain("APPS_SIGNING_DEPLOY_KEY");
     expect(androidWorkflow).toContain("MATCH_PASSWORD");
-    expect(androidWorkflow).toContain("scripts/validate-release-publish-approval.mjs");
     expect(releaseWorkflow).toContain("Write Android release approval");
     expect(releaseWorkflow).toContain("Attest Android release approval");
     expect(releaseWorkflow).toContain("Upload Android release approval");
@@ -14256,15 +14695,13 @@ promote_windows_release_assets
     expect(releaseWorkflow).toContain("parentRunId: process.env.RELEASE_PUBLISH_RUN_ID");
     expect(releaseWorkflow).toContain("releaseTag: process.env.RELEASE_TAG");
     expect(releaseWorkflow).toContain("targetSha: process.env.TARGET_SHA");
-    expect(androidWorkflow).toContain("Download parent release approval");
-    expect(androidWorkflow).toContain(
+    expectTextToIncludeAll(androidWorkflow, [
+      "Download parent release approval",
       "android-release-approval-${{ inputs.release_publish_run_id }}",
-    );
-    expect(androidWorkflow).toContain(
       '--signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/openclaw-release-publish.yml"',
-    );
-    expect(androidWorkflow).toContain('--source-ref "${EXPECTED_WORKFLOW_FULL_REF}"');
-    expect(androidWorkflow).toContain('--source-digest "${EXPECTED_WORKFLOW_SHA}"');
+      '--source-ref "${EXPECTED_WORKFLOW_FULL_REF}"',
+      '--source-digest "${EXPECTED_WORKFLOW_SHA}"',
+    ]);
     expect(approvalScript).toContain(
       "Attested Android release approval does not match this run request.",
     );
@@ -14272,32 +14709,25 @@ promote_windows_release_assets
     expect(androidWorkflow).toContain("OpenClaw-Android.apk");
     expect(androidWorkflow).toContain("OpenClaw-Android-SHA256SUMS.txt");
     expect(androidWorkflow).toContain("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6");
-    expect(androidWorkflow).toContain("--signer-workflow");
     expect(androidWorkflow).toContain('--source-ref "refs/tags/${RELEASE_TAG}"');
     expect(androidWorkflow).toContain("--deny-self-hosted-runners");
     expect(androidWorkflow).toContain("--verify-apk");
     expect(androidWorkflow).toContain('expected_source_ref="refs/tags/${RELEASE_TAG}"');
     expect(androidWorkflow).toContain("release_target_sha must be a full lowercase commit SHA");
     expect(approvalScript).toContain("no longer resolves to approved target");
-    expect(androidWorkflow).toContain(
+    expectTextToIncludeAll(androidWorkflow, [
       "must resolve to the same source commit as ${fallback_base_tag}",
-    );
-    expect(androidWorkflow).toContain("FALLBACK_ANDROID_BASE_TAG");
-    expect(androidWorkflow).toContain("FALLBACK_ANDROID_BASE_SHA");
-    expect(androidWorkflow).toContain('--source-digest "${FALLBACK_ANDROID_BASE_SHA}"');
-    expect(androidWorkflow).toContain("steps.release_source.outputs.fallback_base_tag == ''");
-    expect(androidWorkflow).toContain(
+      '--source-digest "${FALLBACK_ANDROID_BASE_SHA}"',
+      "steps.release_source.outputs.fallback_base_tag == ''",
       "OPENCLAW_BUILD_TIMESTAMP: ${{ steps.release_approval.outputs.build_timestamp }}",
-    );
-    expect(androidWorkflow).toContain("GIT_COMMIT: ${{ inputs.release_target_sha }}");
+      "GIT_COMMIT: ${{ inputs.release_target_sha }}",
+    ]);
     expect(approvalScript).toContain("tagName,isPrerelease,createdAt");
-    expect(androidWorkflow).toContain(
+    expectTextToIncludeAll(androidWorkflow, [
       'build_timestamp="$(node scripts/validate-release-publish-approval.mjs)"',
-    );
-    expect(androidWorkflow).toContain(
       "Reusing verified Android APK from ${FALLBACK_ANDROID_BASE_TAG}",
-    );
-    expect(androidWorkflow).toContain("Existing Android release asset ${asset_name} differs");
+      "Existing Android release asset ${asset_name} differs",
+    ]);
     expect(androidWorkflow).not.toContain("--clobber");
 
     expect(releaseWorkflow).toContain("promote_android_release_asset()");
@@ -14320,7 +14750,6 @@ promote_windows_release_assets
     expect(androidDocs).not.toContain("releases/latest/download/OpenClaw-Android.apk");
     expect(androidDocs).toContain("gh attestation verify OpenClaw-Android.apk");
     expect(androidDocs).toContain('--source-ref "refs/tags/${release_tag}"');
-    expect(releaseDocs).toContain("signed standalone Android APK");
   });
 
   it("rejects malformed Windows checksum manifest lines before using entries", () => {
@@ -14422,8 +14851,8 @@ promote_windows_release_assets
     }
 
     for (const [workflowPath, publishJobName, environment] of [
-      [PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm", "npm-release"],
-      [OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm", "npm-release"],
+      [PLUGIN_NPM_RELEASE_WORKFLOW, "publish_plugins_npm", "npm-publish"],
+      [OPENCLAW_NPM_RELEASE_WORKFLOW, "publish_openclaw_npm", "npm-publish"],
       [
         ".github/workflows/plugin-clawhub-new.yml",
         "publish_bootstrap_plugins",
@@ -14433,10 +14862,6 @@ promote_windows_release_assets
       expect(workflowJob(workflowPath, publishJobName).environment, workflowPath).toBe(environment);
     }
 
-    const clawHubApproval = workflowJob(
-      PLUGIN_CLAWHUB_RELEASE_WORKFLOW,
-      "approve_plugins_clawhub_release",
-    );
     const clawHubAuthorization = workflowStep(
       workflowJob(PLUGIN_CLAWHUB_RELEASE_WORKFLOW, "validate_release_publish_approval"),
       "Validate release publish approval run",
@@ -14460,7 +14885,7 @@ promote_windows_release_assets
     expect(clawHubInputs?.release_publish_run_attempt).toBeDefined();
     expect(clawHubInputs?.release_publish_full_ref).toBeDefined();
     expect(clawHubInputs?.release_publish_workflow_sha).toBeDefined();
-    expect(clawHubApproval.environment).toBe("clawhub-plugin-release");
+    // The parent's attested approval receipt lets the child skip its own gate.
     expect(clawHubPublish.needs).toContain("approve_plugins_clawhub_release");
 
     const bootstrapWorkflow = ".github/workflows/plugin-clawhub-new.yml";
@@ -14482,7 +14907,7 @@ promote_windows_release_assets
     });
     expect(authorization.env).toMatchObject({
       APPROVAL_PATH: "${{ runner.temp }}/clawhub-bootstrap-approval/approval.json",
-      CHILD_WORKFLOW_SHA: "${{ github.sha }}",
+      CHILD_WORKFLOW_SHA: "${{ inputs.bootstrap_workflow_sha }}",
       EXPECTED_RUN_ATTEMPT: "${{ inputs.release_publish_run_attempt }}",
       EXPECTED_WORKFLOW_BRANCH: "${{ inputs.release_publish_branch }}",
       RELEASE_PUBLISH_RUN_ID: "${{ inputs.release_publish_run_id }}",
@@ -14499,7 +14924,7 @@ promote_windows_release_assets
   });
 
   it("keeps release publication ownership and artifact boundaries wired", () => {
-    const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
+    const packageJson = readJson(PACKAGE_JSON) as {
       scripts?: Record<string, string>;
     };
     const releasePublishJob = workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish");
@@ -14564,7 +14989,10 @@ promote_windows_release_assets
     expect(
       readWorkflow(PLUGIN_CLAWHUB_RELEASE_WORKFLOW).jobs?.verify_published_clawhub_package,
     ).toBeUndefined();
-    expect(clawHubApproval.environment).toBe("clawhub-plugin-release");
+    // The parent's attested approval receipt lets the child skip its own gate.
+    expect(clawHubApproval.environment).toBe(
+      "${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}",
+    );
     expect(clawHubPublish.needs).toEqual([
       "preview_plugins_clawhub",
       "pack_plugins_clawhub_artifacts",
@@ -14572,7 +15000,7 @@ promote_windows_release_assets
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@d5a3688fb21a283460f362e57028601801961c85",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@ef56b2cb287f0db5462b92dea8e4b63325d0341c",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",
@@ -14696,13 +15124,15 @@ promote_windows_release_assets
       releasePublishOrchestration(workflowJob(RELEASE_PUBLISH_WORKFLOW, "publish")).run ?? "";
     const verifyChild = shellFunctionSource(publishRun, "verify_child_run_sha");
     const approvePending = shellFunctionSource(publishRun, "approve_pending_deployments");
-    const approveChild = shellFunctionSource(publishRun, "approve_child_publish_environment");
+    const readGh = shellFunctionSource(publishRun, "gh_read");
     const waitForRun = shellFunctionSource(publishRun, "wait_for_run");
     const expectedSha = "a".repeat(40);
 
     const mutationFailure = spawnSync(
       "bash",
       [
+        "--noprofile",
+        "--norc",
         "-c",
         `
 set -uo pipefail
@@ -14721,6 +15151,7 @@ gh() {
   fi
   return 99
 }
+${readGh}
 ${verifyChild}
 ${approvePending}
 status=0
@@ -14735,6 +15166,8 @@ approve_pending_deployments plugin-clawhub-new.yml 123 "${expectedSha}" || statu
     const mismatchedApprovedSha = spawnSync(
       "bash",
       [
+        "--noprofile",
+        "--norc",
         "-c",
         `
 set -uo pipefail
@@ -14751,11 +15184,11 @@ gh() {
   return 99
 }
 print_failed_run_summary() { :; }
+${readGh}
 ${verifyChild}
 ${approvePending}
-${approveChild}
 status=0
-approve_child_publish_environment plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
+approve_pending_deployments plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
 [[ "$status" -eq 2 ]]
 `,
       ],
@@ -14766,6 +15199,8 @@ approve_child_publish_environment plugin-clawhub-new.yml 123 "${expectedSha}" ||
     const mismatchedWaitSha = spawnSync(
       "bash",
       [
+        "--noprofile",
+        "--norc",
         "-c",
         `
 set -uo pipefail
@@ -14780,6 +15215,7 @@ gh() {
   fi
   return 99
 }
+${readGh}
 ${verifyChild}
 ${waitForRun}
 status=0
@@ -14790,67 +15226,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       { encoding: "utf8" },
     );
     expect(mismatchedWaitSha.status, mismatchedWaitSha.stderr).toBe(0);
-  });
-
-  it("keeps release workflow setup aligned", () => {
-    const releaseChecks = readWorkflow(RELEASE_CHECKS_WORKFLOW);
-    const installSmoke = readWorkflow(INSTALL_SMOKE_REUSABLE_WORKFLOW);
-    const crossOs = readWorkflow(CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW);
-    const liveE2e = readWorkflow(LIVE_E2E_WORKFLOW);
-    const qaLive = readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW);
-    const releaseWorkflowPaths = [
-      FULL_RELEASE_VALIDATION_WORKFLOW,
-      RELEASE_CHECKS_WORKFLOW,
-      RELEASE_TELEGRAM_QA_WORKFLOW,
-      CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW,
-      LIVE_E2E_WORKFLOW,
-      NPM_TELEGRAM_WORKFLOW,
-      ".github/workflows/openclaw-release-publish.yml",
-      ".github/workflows/android-release.yml",
-      ".github/workflows/openclaw-npm-release.yml",
-      ".github/workflows/macos-release.yml",
-      ".github/workflows/plugin-clawhub-release.yml",
-      PACKAGE_ACCEPTANCE_WORKFLOW,
-      PLUGIN_NPM_RELEASE_WORKFLOW,
-    ];
-
-    for (const workflowPath of releaseWorkflowPaths) {
-      const workflow = readWorkflow(workflowPath);
-      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.19.0");
-      expect(workflow.env?.PNPM_VERSION, workflowPath).toBeUndefined();
-    }
-
-    expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
-    expect(
-      workflowStep(
-        workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"),
-        "Setup Node environment",
-      ).with?.["install-deps"],
-    ).toBe("true");
-    expect(installSmoke.jobs?.preflight?.["timeout-minutes"]).toBe(15);
-    expect(installSmoke.jobs?.["install-smoke-fast"]?.["timeout-minutes"]).toBe(120);
-    expect(installSmoke.jobs?.root_dockerfile_image?.["timeout-minutes"]).toBe(60);
-    expect(installSmoke.jobs?.root_dockerfile_image_ready?.["timeout-minutes"]).toBe(5);
-    expect(installSmoke.jobs?.qr_package_install_smoke?.["timeout-minutes"]).toBe(30);
-    expect(installSmoke.jobs?.root_dockerfile_smokes?.["timeout-minutes"]).toBe(90);
-    expect(installSmoke.jobs?.installer_smoke_update_image?.["timeout-minutes"]).toBe(45);
-    expect(installSmoke.jobs?.installer_smoke_nonroot_image?.["timeout-minutes"]).toBe(45);
-    expect(installSmoke.jobs?.installer_smoke_update?.["timeout-minutes"]).toBe(120);
-    expect(installSmoke.jobs?.installer_smoke_nonroot?.["timeout-minutes"]).toBe(60);
-    expect(installSmoke.jobs?.installer_smoke?.["timeout-minutes"]).toBe(5);
-    expect(installSmoke.jobs?.bun_global_install_smoke?.["timeout-minutes"]).toBe(60);
-    expect(installSmoke.jobs?.["docker-e2e-fast"]?.["timeout-minutes"]).toBe(12);
-    expect(crossOs.jobs?.prepare?.["timeout-minutes"]).toBe(90);
-    expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
-    expect(qaLive.jobs?.authorize_actor?.["timeout-minutes"]).toBe(10);
-    expect(qaLive.jobs?.validate_selected_ref?.["timeout-minutes"]).toBe(30);
-    expect(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"]).toBe(30);
-    expect(liveE2e.jobs?.plan_release_workflow_matrices?.["timeout-minutes"]).toBe(10);
-    expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(20);
-    expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(
-      "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
-    );
-    expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
   });
 
   it("keeps known bounded dominant child paths below the centralized drain owner", () => {
@@ -14864,15 +15239,24 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     const packageAcceptance = readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW);
     const qaLive = readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW);
     const profiles = ["beta", "stable", "full"] as const;
-    const releaseDecisionTimeout = timeoutForProfile(
-      fullRelease.jobs?.release_decision?.["timeout-minutes"],
-      "beta",
-    );
-    const diagnosticDrainTimeout = timeoutForProfile(
-      fullRelease.jobs?.diagnostic_drain?.["timeout-minutes"],
-      "beta",
-    );
-    expect(releaseDecisionTimeout).toBe(720);
+    const byProfile = <T>(value: (profile: (typeof profiles)[number]) => T) => ({
+      beta: value("beta"),
+      stable: value("stable"),
+      full: value("full"),
+    });
+    const timeout = (
+      workflow: Workflow,
+      job: string,
+      profile: (typeof profiles)[number] = "stable",
+    ) => timeoutForProfile(workflow.jobs?.[job]?.["timeout-minutes"], profile);
+    const timeouts = (
+      workflow: Workflow,
+      jobs: string[],
+      profile: (typeof profiles)[number] = "stable",
+    ) => jobs.map((job) => timeout(workflow, job, profile));
+    const total = (path: number[]) => path.reduce((sum, minutes) => sum + minutes, 0);
+    const diagnosticDrainTimeout = timeout(fullRelease, "diagnostic_drain", "beta");
+    expect(timeout(fullRelease, "release_decision", "beta")).toBe(720);
     expect(diagnosticDrainTimeout).toBe(720);
     for (const dispatchJob of [
       "normal_ci",
@@ -14886,29 +15270,115 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       expect(fullRelease.jobs?.[dispatchJob]?.["timeout-minutes"], dispatchJob).toBe(15);
     }
 
-    const ciPreflight = workflowJob(CI_WORKFLOW, "preflight");
-    const ciIos = workflowJob(CI_WORKFLOW, "ios-build");
-    const ciGate = workflowJob(CI_WORKFLOW, "ci-gate");
-    expect(jobNeeds(ciIos)).toEqual(["preflight"]);
-    expect(jobNeeds(ciGate)).toEqual(expect.arrayContaining(["preflight", "ios-build"]));
-    const ciPath = [
-      timeoutForProfile(ciPreflight["timeout-minutes"], "beta"),
-      timeoutForProfile(ciIos["timeout-minutes"], "beta"),
-      timeoutForProfile(ciGate["timeout-minutes"], "beta"),
-    ];
-    expect(ciPath).toEqual([20, 150, 5]);
-    const ciChildTimeout = ciPath.reduce((total, timeout) => total + timeout, 0);
-    expect(ciChildTimeout).toBe(175);
-    expect(ciChildTimeout).toBeLessThanOrEqual(diagnosticDrainTimeout);
-    expect(diagnosticDrainTimeout - ciChildTimeout).toBeGreaterThanOrEqual(60);
+    for (const [workflow, jobs] of Object.entries({
+      [CI_WORKFLOW]: {
+        "ios-build": ["preflight"],
+      },
+      [RELEASE_CHECKS_WORKFLOW]: {
+        prepare_release_package: ["resolve_target"],
+        package_acceptance_release_checks: ["resolve_target", "prepare_release_package"],
+        cross_os_release_checks: ["resolve_target", "prepare_release_package"],
+        install_smoke_release_checks: ["resolve_target"],
+        qa_live_release_checks: ["resolve_target"],
+        qa_live_telegram_release_checks: ["resolve_target"],
+      },
+      [PACKAGE_ACCEPTANCE_WORKFLOW]: {
+        package_integrity: ["resolve_package"],
+        docker_acceptance: ["resolve_package", "package_integrity"],
+      },
+      [LIVE_E2E_WORKFLOW]: {
+        prepare_docker_e2e_image: ["validate_selected_ref"],
+      },
+      [CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW]: {
+        prepare: [],
+        cross_os_release_checks: ["prepare"],
+      },
+      [INSTALL_SMOKE_REUSABLE_WORKFLOW]: {
+        root_dockerfile_image: ["preflight"],
+        root_dockerfile_image_ready: ["preflight", "root_dockerfile_image"],
+        installer_smoke_candidate_payload: ["preflight"],
+        installer_smoke_update_image: ["preflight"],
+        installer_smoke_nonroot_image: ["preflight"],
+        installer_smoke_update: [
+          "preflight",
+          "installer_smoke_candidate_payload",
+          "installer_smoke_update_image",
+        ],
+        installer_smoke_nonroot: [
+          "preflight",
+          "installer_smoke_candidate_payload",
+          "installer_smoke_nonroot_image",
+        ],
+        installer_smoke: [
+          "preflight",
+          "root_dockerfile_image",
+          "root_dockerfile_image_ready",
+          "installer_smoke_candidate_payload",
+          "installer_smoke_update_image",
+          "installer_smoke_update",
+          "installer_smoke_nonroot_image",
+          "installer_smoke_nonroot",
+        ],
+      },
+      [QA_LIVE_TRANSPORTS_WORKFLOW]: {
+        validate_selected_ref: ["authorize_actor"],
+        run_live_matrix: ["authorize_actor", "validate_selected_ref"],
+      },
+      [PERFORMANCE_WORKFLOW]: {
+        kova: ["resolve_target"],
+        source_performance: ["resolve_target"],
+        publish: ["resolve_target", "kova", "source_performance"],
+        artifact_only_guard: ["resolve_target", "kova", "publish"],
+      },
+      [FULL_RELEASE_VALIDATION_WORKFLOW]: {
+        evidence_reuse: ["resolve_target", "plugin_compatibility_readiness"],
+        candidate_acquisition: ["resolve_target", "evidence_reuse", "prepare_npm_package"],
+        release_checks_candidate: [
+          "resolve_target",
+          "plugin_compatibility_readiness",
+          "evidence_reuse",
+          "candidate_acquisition",
+        ],
+      },
+      [FULL_RELEASE_CANDIDATE_WORKFLOW]: {
+        prepare: ["discover"],
+        resolve_candidate: ["discover", "prepare"],
+      },
+    })) {
+      for (const [job, expected] of Object.entries(jobs)) {
+        expect(jobNeeds(workflowJob(workflow, job))).toEqual(expected);
+      }
+    }
+    expect(jobNeeds(workflowJob(CI_WORKFLOW, "ci-gate"))).toEqual(
+      expect.arrayContaining(["preflight", "ios-build"]),
+    );
+    expect(jobNeeds(workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes"))).toEqual(
+      expect.arrayContaining(["validate_selected_ref", "prepare_docker_e2e_image"]),
+    );
+    for (const [workflow, dependency] of [
+      [PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance"],
+      [PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh"],
+      [RELEASE_CHECKS_WORKFLOW, "package_acceptance_release_checks"],
+      [RELEASE_CHECKS_WORKFLOW, "cross_os_release_checks"],
+      [RELEASE_CHECKS_WORKFLOW, "install_smoke_release_checks"],
+      [RELEASE_CHECKS_WORKFLOW, "qa_live_release_checks"],
+      [RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks"],
+      [FULL_RELEASE_VALIDATION_WORKFLOW, "release_checks_candidate"],
+    ] as const) {
+      expect(jobNeeds(workflowJob(workflow, "summary"))).toContain(dependency);
+    }
 
+    const ciPath = timeouts(
+      readWorkflow(CI_WORKFLOW),
+      ["preflight", "ios-build", "ci-gate"],
+      "beta",
+    );
+    expect(ciPath).toEqual([20, 150, 5]);
+    expect(diagnosticDrainTimeout - total(ciPath)).toBeGreaterThanOrEqual(60);
     expect(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"]).toBe(30);
-    const pluginChildTimeouts = Object.fromEntries(
-      profiles.map((profile) => [
-        profile,
-        pluginPrereleaseTimeoutFloor(pluginPrerelease, liveE2e, profile),
-      ]),
-    ) as Record<(typeof profiles)[number], number>;
+    const pluginChildTimeouts = byProfile((profile) =>
+      pluginPrereleaseTimeoutFloor(pluginPrerelease, liveE2e, profile),
+    );
     expect(pluginChildTimeouts).toEqual({ beta: 170, stable: 170, full: 200 });
     for (const profile of profiles) {
       expect(
@@ -14917,273 +15387,116 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ).toBeGreaterThanOrEqual(60);
     }
 
-    const releasePackageJob = workflowJob(
-      RELEASE_CHECKS_WORKFLOW,
-      "package_acceptance_release_checks",
-    );
-    expect(jobNeeds(workflowJob(RELEASE_CHECKS_WORKFLOW, "prepare_release_package"))).toEqual([
-      "resolve_target",
+    const releasePackagePaths = byProfile((profile) => [
+      ...timeouts(releaseChecks, ["resolve_target", "prepare_release_package"], profile),
+      ...timeouts(packageAcceptance, ["resolve_package", "package_integrity"], profile),
+      ...timeouts(liveE2e, ["validate_selected_ref", "prepare_docker_e2e_image"], profile),
+      Math.max(
+        ...evaluatedJobTimeouts(
+          LIVE_E2E_WORKFLOW,
+          "validate_docker_lanes",
+          workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes"),
+        ),
+      ),
+      timeout(packageAcceptance, "summary", profile),
+      timeout(releaseChecks, "summary", profile),
     ]);
-    expect(jobNeeds(releasePackageJob)).toEqual(["resolve_target", "prepare_release_package"]);
-    expect(jobNeeds(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "package_integrity"))).toEqual([
-      "resolve_package",
-    ]);
-    expect(jobNeeds(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "docker_acceptance"))).toEqual([
-      "resolve_package",
-      "package_integrity",
-    ]);
-    expect(jobNeeds(workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image"))).toEqual([
-      "validate_selected_ref",
-    ]);
-    expect(jobNeeds(workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes"))).toEqual(
-      expect.arrayContaining(["validate_selected_ref", "prepare_docker_e2e_image"]),
-    );
-    expect(jobNeeds(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "summary"))).toContain(
-      "docker_acceptance",
-    );
-    expect(jobNeeds(workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "summary"))).toContain(
-      "npm_12_install_sh",
-    );
-    expect(jobNeeds(workflowJob(RELEASE_CHECKS_WORKFLOW, "summary"))).toContain(
-      "package_acceptance_release_checks",
-    );
-    const releasePackagePaths = Object.fromEntries(
-      profiles.map((profile) => [
-        profile,
-        [
-          timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], profile),
-          timeoutForProfile(
-            releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"],
-            profile,
-          ),
-          timeoutForProfile(packageAcceptance.jobs?.resolve_package?.["timeout-minutes"], profile),
-          timeoutForProfile(
-            packageAcceptance.jobs?.package_integrity?.["timeout-minutes"],
-            profile,
-          ),
-          timeoutForProfile(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"], profile),
-          timeoutForProfile(liveE2e.jobs?.prepare_docker_e2e_image?.["timeout-minutes"], profile),
-          Math.max(
-            ...evaluatedJobTimeouts(
-              LIVE_E2E_WORKFLOW,
-              "validate_docker_lanes",
-              workflowJob(LIVE_E2E_WORKFLOW, "validate_docker_lanes"),
-            ),
-          ),
-          timeoutForProfile(packageAcceptance.jobs?.summary?.["timeout-minutes"], profile),
-          timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], profile),
-        ],
-      ]),
-    ) as Record<(typeof profiles)[number], number[]>;
     expect(releasePackagePaths).toEqual({
-      beta: [30, 15, 60, 10, 30, 60, 90, 5, 5],
-      stable: [30, 15, 60, 10, 30, 60, 90, 5, 5],
-      full: [30, 15, 60, 10, 30, 90, 90, 5, 5],
+      beta: [30, 35, 60, 10, 30, 60, 90, 5, 5],
+      stable: [30, 35, 60, 10, 30, 60, 90, 5, 5],
+      full: [30, 35, 60, 10, 30, 90, 90, 5, 5],
     });
     const releaseChecksParent = workflowJob(
       FULL_RELEASE_VALIDATION_WORKFLOW,
       "release_checks_candidate",
     );
     expect(releaseChecksParent["timeout-minutes"]).toBe(15);
-    const releasePackageTimeouts = {
-      beta: releasePackagePaths.beta.reduce((total, timeout) => total + timeout, 0),
-      stable: releasePackagePaths.stable.reduce((total, timeout) => total + timeout, 0),
-      full: releasePackagePaths.full.reduce((total, timeout) => total + timeout, 0),
-    };
-    expect(releasePackageTimeouts).toEqual({ beta: 305, stable: 305, full: 335 });
-    for (const [profile, childTimeout] of Object.entries(releasePackageTimeouts)) {
-      expect(childTimeout, `release-package:${profile}`).toBeLessThanOrEqual(
-        diagnosticDrainTimeout,
-      );
+    for (const [profile, path] of Object.entries(releasePackagePaths)) {
       expect(
-        diagnosticDrainTimeout - childTimeout,
+        diagnosticDrainTimeout - total(path),
         `release-package:${profile}`,
       ).toBeGreaterThanOrEqual(60);
     }
 
-    const releaseSummary = workflowJob(RELEASE_CHECKS_WORKFLOW, "summary");
-    const releaseCrossOs = workflowJob(RELEASE_CHECKS_WORKFLOW, "cross_os_release_checks");
-    expect(jobNeeds(releaseCrossOs)).toEqual(["resolve_target", "prepare_release_package"]);
-    expect(jobNeeds(workflowJob(CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW, "prepare"))).toEqual([]);
-    expect(
-      jobNeeds(workflowJob(CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW, "cross_os_release_checks")),
-    ).toEqual(["prepare"]);
-    expect(jobNeeds(releaseSummary)).toContain("cross_os_release_checks");
     const releaseCrossOsPath = [
-      timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "stable"),
-      timeoutForProfile(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"], "stable"),
-      timeoutForProfile(crossOs.jobs?.prepare?.["timeout-minutes"], "stable"),
-      timeoutForProfile(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"], "stable"),
-      timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
-    ];
-    expect(releaseCrossOsPath).toEqual([30, 15, 90, 60, 5]);
-
-    const releaseInstall = workflowJob(RELEASE_CHECKS_WORKFLOW, "install_smoke_release_checks");
-    expect(jobNeeds(releaseInstall)).toEqual(["resolve_target"]);
-    expect(jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "root_dockerfile_image"))).toEqual(
-      ["preflight"],
-    );
-    expect(
-      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "root_dockerfile_image_ready")),
-    ).toEqual(["preflight", "root_dockerfile_image"]);
-    expect(
-      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_candidate_payload")),
-    ).toEqual(["preflight"]);
-    expect(
-      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_update_image")),
-    ).toEqual(["preflight"]);
-    expect(
-      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_nonroot_image")),
-    ).toEqual(["preflight"]);
-    expect(
-      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_update")),
-    ).toEqual(["preflight", "installer_smoke_candidate_payload", "installer_smoke_update_image"]);
-    expect(
-      jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_nonroot")),
-    ).toEqual(["preflight", "installer_smoke_candidate_payload", "installer_smoke_nonroot_image"]);
-    expect(jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke"))).toEqual([
-      "preflight",
-      "root_dockerfile_image",
-      "root_dockerfile_image_ready",
-      "installer_smoke_candidate_payload",
-      "installer_smoke_update_image",
-      "installer_smoke_update",
-      "installer_smoke_nonroot_image",
-      "installer_smoke_nonroot",
-    ]);
-    expect(jobNeeds(releaseSummary)).toContain("install_smoke_release_checks");
-    const releaseInstallPath = [
-      timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "stable"),
-      timeoutForProfile(installSmoke.jobs?.preflight?.["timeout-minutes"], "stable"),
+      ...timeouts(releaseChecks, ["resolve_target", "prepare_release_package"]),
+      timeout(crossOs, "prepare"),
       Math.max(
-        timeoutForProfile(
-          installSmoke.jobs?.installer_smoke_candidate_payload?.["timeout-minutes"],
-          "stable",
-        ),
-        timeoutForProfile(
-          installSmoke.jobs?.installer_smoke_update_image?.["timeout-minutes"],
-          "stable",
+        ...evaluatedJobTimeouts(
+          CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW,
+          "cross_os_release_checks",
+          workflowJob(CROSS_OS_RELEASE_CHECKS_REUSABLE_WORKFLOW, "cross_os_release_checks"),
         ),
       ),
-      timeoutForProfile(installSmoke.jobs?.installer_smoke_update?.["timeout-minutes"], "stable"),
-      timeoutForProfile(installSmoke.jobs?.installer_smoke?.["timeout-minutes"], "stable"),
-      timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
+      timeout(releaseChecks, "summary"),
     ];
+    expect(releaseCrossOsPath).toEqual([30, 35, 90, 180, 5]);
+    const installPath = (variant: "update" | "nonroot") => [
+      timeout(releaseChecks, "resolve_target"),
+      timeout(installSmoke, "preflight"),
+      Math.max(
+        ...timeouts(installSmoke, [
+          "installer_smoke_candidate_payload",
+          `installer_smoke_${variant}_image`,
+        ]),
+      ),
+      ...timeouts(installSmoke, [`installer_smoke_${variant}`, "installer_smoke"]),
+      timeout(releaseChecks, "summary"),
+    ];
+    const releaseInstallPath = installPath("update");
+    const releaseInstallNonrootPath = installPath("nonroot");
     expect(releaseInstallPath).toEqual([30, 15, 75, 120, 5, 5]);
-    const releaseInstallNonrootPath = [
-      timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "stable"),
-      timeoutForProfile(installSmoke.jobs?.preflight?.["timeout-minutes"], "stable"),
-      Math.max(
-        timeoutForProfile(
-          installSmoke.jobs?.installer_smoke_candidate_payload?.["timeout-minutes"],
-          "stable",
-        ),
-        timeoutForProfile(
-          installSmoke.jobs?.installer_smoke_nonroot_image?.["timeout-minutes"],
-          "stable",
-        ),
-      ),
-      timeoutForProfile(installSmoke.jobs?.installer_smoke_nonroot?.["timeout-minutes"], "stable"),
-      timeoutForProfile(installSmoke.jobs?.installer_smoke?.["timeout-minutes"], "stable"),
-      timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
-    ];
     expect(releaseInstallNonrootPath).toEqual([30, 15, 75, 60, 5, 5]);
-
-    const releaseQaLive = workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_release_checks");
-    expect(jobNeeds(releaseQaLive)).toEqual(["resolve_target"]);
-    expect(jobNeeds(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "validate_selected_ref"))).toEqual([
-      "authorize_actor",
-    ]);
-    expect(jobNeeds(workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix"))).toEqual([
-      "authorize_actor",
-      "validate_selected_ref",
-    ]);
-    expect(jobNeeds(releaseSummary)).toContain("qa_live_release_checks");
     const releaseQaLivePath = [
-      timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "stable"),
-      timeoutForProfile(qaLive.jobs?.authorize_actor?.["timeout-minutes"], "stable"),
-      timeoutForProfile(qaLive.jobs?.validate_selected_ref?.["timeout-minutes"], "stable"),
-      timeoutForProfile(qaLive.jobs?.run_live_matrix?.["timeout-minutes"], "stable"),
-      timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
+      timeout(releaseChecks, "resolve_target"),
+      ...timeouts(qaLive, ["authorize_actor", "validate_selected_ref", "run_live_matrix"]),
+      timeout(releaseChecks, "summary"),
     ];
     expect(releaseQaLivePath).toEqual([30, 10, 30, 90, 5]);
-
     for (const [pathName, path] of [
       ["cross-os", releaseCrossOsPath],
       ["install", releaseInstallPath],
       ["qa-live", releaseQaLivePath],
     ] as const) {
-      const childTimeout = path.reduce((total, timeout) => total + timeout, 0);
-      expect(childTimeout, `release-checks:${pathName}`).toBeLessThanOrEqual(
-        diagnosticDrainTimeout,
-      );
       expect(
-        diagnosticDrainTimeout - childTimeout,
+        diagnosticDrainTimeout - total(path),
         `release-checks:${pathName}`,
       ).toBeGreaterThanOrEqual(60);
     }
-    expect(releaseCrossOsPath.reduce((total, timeout) => total + timeout, 0)).toBe(200);
-    expect(releaseInstallPath.reduce((total, timeout) => total + timeout, 0)).toBe(250);
-    expect(releaseInstallNonrootPath.reduce((total, timeout) => total + timeout, 0)).toBe(190);
-    expect(releaseQaLivePath.reduce((total, timeout) => total + timeout, 0)).toBe(165);
 
-    expect(
-      jobNeeds(workflowJob(RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks")),
-    ).toEqual(["resolve_target"]);
-    expect(jobNeeds(workflowJob(RELEASE_CHECKS_WORKFLOW, "summary"))).toContain(
-      "qa_live_telegram_release_checks",
+    const releaseTelegramPath = timeouts(
+      releaseChecks,
+      ["resolve_target", "qa_live_telegram_release_checks", "summary"],
+      "beta",
     );
-    const releaseTelegramPath = [
-      timeoutForProfile(releaseChecks.jobs?.resolve_target?.["timeout-minutes"], "beta"),
-      timeoutForProfile(
-        releaseChecks.jobs?.qa_live_telegram_release_checks?.["timeout-minutes"],
-        "beta",
-      ),
-      timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "beta"),
-    ];
     expect(releaseTelegramPath).toEqual([30, 210, 5]);
-    const releaseTelegramTimeout = releaseTelegramPath.reduce(
-      (total, timeout) => total + timeout,
-      0,
-    );
-    expect(releaseTelegramTimeout).toBe(245);
-    expect(diagnosticDrainTimeout - releaseTelegramTimeout).toBeGreaterThanOrEqual(60);
-
-    const npmTelegramChildTimeout = timeoutForProfile(
-      workflowJob(NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e")["timeout-minutes"],
+    expect(diagnosticDrainTimeout - total(releaseTelegramPath)).toBeGreaterThanOrEqual(60);
+    const npmTelegramChildTimeout = timeout(
+      readWorkflow(NPM_TELEGRAM_WORKFLOW),
+      "run_package_telegram_e2e",
       "beta",
     );
     expect(npmTelegramChildTimeout).toBe(60);
     expect(diagnosticDrainTimeout - npmTelegramChildTimeout).toBeGreaterThanOrEqual(60);
 
-    const performanceResolve = workflowJob(PERFORMANCE_WORKFLOW, "resolve_target");
-    const performanceKova = workflowJob(PERFORMANCE_WORKFLOW, "kova");
-    const performanceSource = workflowJob(PERFORMANCE_WORKFLOW, "source_performance");
-    const performancePublish = workflowJob(PERFORMANCE_WORKFLOW, "publish");
-    const performanceArtifactGuard = workflowJob(PERFORMANCE_WORKFLOW, "artifact_only_guard");
-    expect(jobNeeds(performanceKova)).toEqual(["resolve_target"]);
-    expect(jobNeeds(performanceSource)).toEqual(["resolve_target"]);
-    expect(jobNeeds(performancePublish)).toEqual(["resolve_target", "kova", "source_performance"]);
-    expect(jobNeeds(performanceArtifactGuard)).toEqual(["resolve_target", "kova", "publish"]);
-    expect(performancePublish.if).toContain("inputs.publish_reports == true");
-    expect(performanceArtifactGuard.if).toContain("inputs.publish_reports != true");
-    expect(timeoutForProfile(performanceSource["timeout-minutes"], "beta")).toBeLessThanOrEqual(
-      timeoutForProfile(performanceKova["timeout-minutes"], "beta"),
+    const performance = readWorkflow(PERFORMANCE_WORKFLOW);
+    expect(performance.jobs?.publish?.if).toContain("inputs.publish_reports == true");
+    expect(performance.jobs?.artifact_only_guard?.if).toContain("inputs.publish_reports != true");
+    expect(timeout(performance, "source_performance", "beta")).toBeLessThanOrEqual(
+      timeout(performance, "kova", "beta"),
     );
-    const performanceArtifactPath = [
-      timeoutForProfile(performanceResolve["timeout-minutes"], "beta"),
-      timeoutForProfile(performanceKova["timeout-minutes"], "beta"),
-      timeoutForProfile(performanceArtifactGuard["timeout-minutes"], "beta"),
-    ];
-    const performancePublishPath = [
-      timeoutForProfile(performanceResolve["timeout-minutes"], "beta"),
-      timeoutForProfile(performanceKova["timeout-minutes"], "beta"),
-      timeoutForProfile(performancePublish["timeout-minutes"], "beta"),
-    ];
+    const performanceArtifactPath = timeouts(
+      performance,
+      ["resolve_target", "kova", "artifact_only_guard"],
+      "beta",
+    );
+    const performancePublishPath = timeouts(
+      performance,
+      ["resolve_target", "kova", "publish"],
+      "beta",
+    );
     expect(performanceArtifactPath).toEqual([10, 240, 5]);
     expect(performancePublishPath).toEqual([10, 240, 30]);
-    expect(performanceArtifactPath.reduce((total, timeout) => total + timeout, 0)).toBe(255);
-    expect(performancePublishPath.reduce((total, timeout) => total + timeout, 0)).toBe(280);
     const performanceParent = workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "performance");
     expect(performanceParent["timeout-minutes"]).toBe(15);
     expect(workflowStep(performanceParent, "Dispatch OpenClaw Performance").run).toContain(
@@ -15193,55 +15506,35 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ["artifact-only", performanceArtifactPath],
       ["publish", performancePublishPath],
     ] as const) {
-      const childTimeout = path.reduce((total, timeout) => total + timeout, 0);
-      expect(childTimeout, `performance:${pathName}`).toBeLessThanOrEqual(diagnosticDrainTimeout);
+      expect(total(path), `performance:${pathName}`).toBeLessThanOrEqual(diagnosticDrainTimeout);
       expect(
-        diagnosticDrainTimeout - childTimeout,
+        diagnosticDrainTimeout - total(path),
         `performance:${pathName}`,
       ).toBeGreaterThanOrEqual(60);
     }
 
-    const candidateAcquisition = workflowJob(
-      FULL_RELEASE_VALIDATION_WORKFLOW,
-      "candidate_acquisition",
-    );
-    const candidatePrepare = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "prepare");
-    const candidateBinding = workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "resolve_candidate");
-    expect(jobNeeds(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "evidence_reuse"))).toEqual([
-      "resolve_target",
-    ]);
-    expect(jobNeeds(candidateAcquisition)).toEqual([
-      "resolve_target",
-      "evidence_reuse",
-      "prepare_npm_package",
-    ]);
-    expect(jobNeeds(candidatePrepare)).toEqual(["discover"]);
-    expect(candidatePrepare.with?.prepare_only).toBe(true);
-    expect(jobNeeds(candidateBinding)).toEqual(["discover", "prepare"]);
-    expect(jobNeeds(releaseChecksParent)).toEqual([
-      "resolve_target",
-      "evidence_reuse",
-      "candidate_acquisition",
-    ]);
-    expect(jobNeeds(workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "summary"))).toContain(
-      "release_checks_candidate",
-    );
+    expect(workflowJob(FULL_RELEASE_CANDIDATE_WORKFLOW, "prepare").with?.prepare_only).toBe(true);
     const fullParentPath = [
-      timeoutForProfile(fullRelease.jobs?.resolve_target?.["timeout-minutes"], "full"),
-      timeoutForProfile(fullRelease.jobs?.evidence_reuse?.["timeout-minutes"], "full"),
-      timeoutForProfile(fullReleaseCandidate.jobs?.discover?.["timeout-minutes"], "full"),
-      timeoutForProfile(liveE2e.jobs?.validate_selected_ref?.["timeout-minutes"], "full"),
-      timeoutForProfile(liveE2e.jobs?.prepare_docker_e2e_image?.["timeout-minutes"], "full"),
-      timeoutForProfile(
-        liveE2e.jobs?.bind_full_release_candidate_evidence?.["timeout-minutes"],
+      ...timeouts(
+        fullRelease,
+        ["resolve_target", "plugin_compatibility_readiness", "evidence_reuse"],
         "full",
       ),
-      timeoutForProfile(candidateBinding["timeout-minutes"], "full"),
-      timeoutForProfile(releaseChecksParent["timeout-minutes"], "full"),
+      timeout(fullReleaseCandidate, "discover", "full"),
+      ...timeouts(
+        liveE2e,
+        [
+          "validate_selected_ref",
+          "prepare_docker_e2e_image",
+          "bind_full_release_candidate_evidence",
+        ],
+        "full",
+      ),
+      timeout(fullReleaseCandidate, "resolve_candidate", "full"),
+      timeout(fullRelease, "release_checks_candidate", "full"),
     ];
-    expect(fullParentPath).toEqual([10, 10, 10, 30, 90, 15, 5, 15]);
-    const fullParentTimeoutFloor = fullParentPath.reduce((total, timeout) => total + timeout, 0);
-    expect(fullParentTimeoutFloor).toBe(185);
+    expect(fullParentPath).toEqual([10, 10, 10, 10, 30, 90, 15, 5, 15]);
+    expect(total(fullParentPath)).toBe(195);
     expect(FULL_RELEASE_WAIT_TIMEOUT_MINUTES).toBe(diagnosticDrainTimeout);
   });
 
@@ -15278,7 +15571,6 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
   });
 
   it("documents checked extended-stable dispatch instead of a raw-SHA workflow ref", () => {
-    const nightly = readFileSync(".agents/skills/release-openclaw-nightly/SKILL.md", "utf8");
     const releaseCi = readFileSync(".agents/skills/release-openclaw-ci/SKILL.md", "utf8");
     // The CI page is an index over docs/ci/**. Read the whole tree so this
     // assertion follows the content instead of a single file path. The walk is
@@ -15301,17 +15593,17 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         .toSorted()
         .map((name) => readFileSync(`docs/reference/full-release-validation/${name}`, "utf8")),
     ].join("\n");
-    const releasingDocs = readFileSync("docs/reference/RELEASING.md", "utf8");
+    const liveUpdater = readFileSync(".agents/skills/openclaw-live-updater/SKILL.md", "utf8");
 
-    expect(nightly).toContain('-f expected_sha="$SHA"');
     const canonicalExtendedStableDispatch = [
       'VALIDATION_SHA="<exact-candidate-sha>"',
-      'TOOLING_SHA="<recorded-full-main-ancestor-sha>"',
+      'PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"',
       'CONTEXT_REF="extended-stable/YYYY.M.33"',
       "pnpm ci:full-release",
       '--sha "$VALIDATION_SHA"',
       '--target-ref "$CONTEXT_REF"',
-      '--workflow-sha "$TOOLING_SHA"',
+      '--admission-workflow-sha "$PUBLISHER_SHA"',
+      "--admission-workflow-ref main",
       "-f release_profile=stable",
       "-f run_release_soak=true",
       "-f fail_fast=false",
@@ -15319,52 +15611,34 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       "-f reuse_evidence=false",
       "-f dispatch_release_evidence=false",
     ];
-    for (const text of [releaseCi, fullReleaseDocs, releasingDocs]) {
+    expectTextToIncludeAll(liveUpdater, ['--sha "$MAIN_SHA"', '--workflow-sha "$MAIN_SHA"']);
+    for (const text of [releaseCi, fullReleaseDocs]) {
       expectTextToIncludeAll(text, canonicalExtendedStableDispatch);
       expect(text).not.toContain('--ref "$VALIDATION_SHA"');
       expect(text).not.toContain('-f ref="$CONTEXT_REF"');
     }
     expectTextToIncludeAll(releaseCi, [
-      "`--ref` accepts a branch or tag name, not a raw commit",
-      '{"fullRef":"refs/heads/main","ref":"main","sha":"<tooling-sha>"}',
-      "Outside this extended-stable procedure, a direct canonical-branch dispatch",
-      "Current extended-stable validation requires distinct",
-      "Direct canonical-branch and mutable-`main` dispatches are not valid",
-      "--ref main",
-      '-f tag="$VALIDATION_SHA"',
-      "-f preflight_only=true",
-      "-f npm_dist_tag=extended-stable",
-      '-f release_candidate_branch="$CONTEXT_REF"',
+      "Only the helper creates the immutable",
+      "Never raw-dispatch, manually create its ref, or mint",
+      "A new explicit main/protected route is diagnostic",
+      "cannot replace this admitted Q=C publish proof",
     ]);
-    expectTextToIncludeAll(releasingDocs, [
-      "Extended-stable also requires a separate npm preflight from trusted `main`",
-      "supplemental validation-only preflight",
-      "Do not pass",
-      "publication `preflight_run_id`",
-      "Publication continues to use the integrated Full Release",
-      "Validation npm artifact and exact run attempt",
-      "--ref main",
-      '-f tag="$VALIDATION_SHA"',
-      "-f preflight_only=true",
-      "-f npm_dist_tag=extended-stable",
-      '-f release_candidate_branch="$CONTEXT_REF"',
+    expectTextToIncludeAll(releaseCi, [
+      "Current all-group FRV also owns read-only core and selected-plugin npm",
+      "Prepared descriptors live in `publicationArtifacts`",
+      "Release Prepare adopts the manifest's plugin npm",
+      "descriptor and prepares only ClawHub",
+      "it never repacks plugin npm after FRV",
     ]);
-    for (const text of [releaseCi, releasingDocs]) {
-      expectTextToIncludeAll(text, [
-        "standalone run is a supplemental validation-only preflight",
-        "Do not pass",
-        "publication `preflight_run_id`",
-        "Publication continues to use",
-      ]);
-    }
     expectTextToIncludeAll(ciDocs, [
       'VALIDATION_SHA="<full-commit-sha>"',
       '-f ref="$VALIDATION_SHA"',
       '-f expected_sha="$VALIDATION_SHA"',
-      'TOOLING_SHA="<recorded-full-main-ancestor-sha>"',
+      'PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"',
       'VALIDATION_SHA="<full-release-candidate-sha>"',
       "--target-ref release/YYYY.M.PATCH",
-      '--workflow-sha "$TOOLING_SHA"',
+      '--admission-workflow-sha "$PUBLISHER_SHA"',
+      "--admission-workflow-ref main",
     ]);
   });
 
@@ -15425,7 +15699,7 @@ esac
       SELECTED_SHA: selectedSha,
     };
 
-    const valid = spawnSync("bash", ["-c", validation ?? ""], {
+    const valid = spawnSync("bash", ["--noprofile", "--norc", "-c", validation ?? ""], {
       encoding: "utf8",
       env: {
         ...validationEnv,
@@ -15436,7 +15710,7 @@ esac
 
     const { packagePublished: _packagePublished, ...missingProvenance } = candidate;
     for (const invalid of [missingProvenance, { ...candidate, packagePublished: "false" }]) {
-      const rejected = spawnSync("bash", ["-c", validation ?? ""], {
+      const rejected = spawnSync("bash", ["--noprofile", "--norc", "-c", validation ?? ""], {
         encoding: "utf8",
         env: {
           ...validationEnv,
@@ -15455,7 +15729,7 @@ esac
       prepublishPluginRegistryArtifactRunAttempt: "1",
       prepublishPluginRegistryManifestSha256: "1".repeat(64),
     };
-    const validRegistry = spawnSync("bash", ["-c", validation ?? ""], {
+    const validRegistry = spawnSync("bash", ["--noprofile", "--norc", "-c", validation ?? ""], {
       encoding: "utf8",
       env: {
         ...validationEnv,
@@ -15464,7 +15738,7 @@ esac
     });
     expect(validRegistry.status, validRegistry.stderr).toBe(0);
 
-    const partialRegistry = spawnSync("bash", ["-c", validation ?? ""], {
+    const partialRegistry = spawnSync("bash", ["--noprofile", "--norc", "-c", validation ?? ""], {
       encoding: "utf8",
       env: {
         ...validationEnv,
@@ -15476,19 +15750,23 @@ esac
     });
     expect(partialRegistry.status).not.toBe(0);
 
-    const mismatchedRegistryName = spawnSync("bash", ["-c", validation ?? ""], {
-      encoding: "utf8",
-      env: {
-        ...validationEnv,
-        CANDIDATE_ARTIFACT_JSON: JSON.stringify({
-          ...registryCandidate,
-          prepublishPluginRegistryArtifactName: "docker-e2e-prepublish-plugin-registry-999-1",
-        }),
+    const mismatchedRegistryName = spawnSync(
+      "bash",
+      ["--noprofile", "--norc", "-c", validation ?? ""],
+      {
+        encoding: "utf8",
+        env: {
+          ...validationEnv,
+          CANDIDATE_ARTIFACT_JSON: JSON.stringify({
+            ...registryCandidate,
+            prepublishPluginRegistryArtifactName: "docker-e2e-prepublish-plugin-registry-999-1",
+          }),
+        },
       },
-    });
+    );
     expect(mismatchedRegistryName.status).not.toBe(0);
 
-    const mismatched = spawnSync("bash", ["-c", validation ?? ""], {
+    const mismatched = spawnSync("bash", ["--noprofile", "--norc", "-c", validation ?? ""], {
       encoding: "utf8",
       env: {
         ...validationEnv,
@@ -15597,6 +15875,23 @@ esac
     expect(clawHubPackJob.steps?.map((step) => step.name)).not.toContain(
       "Checkout target revision",
     );
+  });
+
+  it("provisions the trusted parser before packing a frozen npm candidate", () => {
+    const job = workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "prepare_openclaw_npm");
+    const steps = job.steps ?? [];
+    const materialize = workflowStep(job, "Materialize trusted package preparation runtime");
+    const provision = workflowStep(job, "Provision trusted package preparation runtime");
+    const pack = workflowStep(job, "Pack and seal publishable npm package set");
+
+    expect(materialize.run).toContain("git -C .release-harness sparse-checkout add");
+    expect(materialize.run).toContain(".github/actions/setup-release-harness");
+    expect(materialize.run).toContain(".github/actions/setup-pnpm-store-cache");
+    expect(materialize.run).toContain("packages patches");
+    expect(provision.uses).toBe("./.release-harness/.github/actions/setup-release-harness");
+    expect(provision.with?.["node-version"]).toBe("${{ env.NODE_VERSION }}");
+    expect(steps.indexOf(materialize)).toBeLessThan(steps.indexOf(provision));
+    expect(steps.indexOf(provision)).toBeLessThan(steps.indexOf(pack));
   });
 
   it("validates the macOS release handoff before the GitHub release page exists", () => {

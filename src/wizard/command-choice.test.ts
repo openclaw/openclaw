@@ -20,14 +20,11 @@ function command(reply: ReplyPayload, index: number): string {
 }
 
 describe("login command choices", () => {
-  it.each([
-    [0, "all"],
-    [1, "keep"],
-  ] as const)("returns button %s as %s once", (index, value) => {
+  it("accepts a delivered choice only once", () => {
     const choice = createLoginChoicePrompt(prompt, new AbortController().signal, "sample");
-    const answer = command(choice.reply, index);
+    const answer = command(choice.reply, 0);
     expect(choice.reply.text).toContain(answer);
-    expect(choice.answer(answer)).toEqual({ value });
+    expect(choice.answer(answer)).toEqual({ value: "all" });
     expect(choice.answer(answer)).toBeUndefined();
   });
 

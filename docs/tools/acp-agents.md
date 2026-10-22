@@ -14,8 +14,7 @@ sidebarTitle: "ACP agents"
 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions let
 OpenClaw run external coding harnesses (Claude Code, Cursor, Copilot, Droid,
 OpenClaw ACP, OpenCode, Gemini CLI, and other supported acpx harnesses)
-through an ACP backend plugin. Each spawn is tracked as a
-[background task](/automation/tasks).
+through an ACP backend plugin. The ACP runtime owns each session and its cancellation.
 
 <Note>
 **ACP is the external-harness path, not the default Codex path.** The native
@@ -35,7 +34,7 @@ existing OpenClaw channel conversations, use
 | Bind or control Codex in the current conversation                                               | `/codex bind`, `/codex threads`       | Native Codex app-server path when the `codex` plugin is enabled: bound chat replies, image forwarding, model/fast/permissions, stop, and steer. ACP is an explicit fallback |
 | Run Claude Code, Gemini CLI, explicit Codex ACP, or another external harness _through_ OpenClaw | This page                             | Chat-bound sessions, `/acp spawn`, `sessions_spawn({ runtime: "acp" })`, background tasks, runtime controls                                                                 |
 | Expose an OpenClaw Gateway session _as_ an ACP server for an editor or client                   | [`openclaw acp`](/cli/acp)            | Bridge mode: an IDE/client speaks ACP to OpenClaw over stdio/WebSocket                                                                                                      |
-| Reuse a local AI CLI as a text-only fallback model                                              | [CLI Backends](/gateway/cli-backends) | Not ACP: no OpenClaw tools, no ACP controls, no harness runtime                                                                                                             |
+| Use a local AI CLI such as Claude Code as an agent's model runtime                              | [CLI Backends](/gateway/cli-backends) | Not ACP: Gateway tools only through the MCP bridge, no ACP controls, no harness runtime                                                                                     |
 
 ## ACP agents documentation pages
 
@@ -79,13 +78,13 @@ For Claude Code through ACP, the stack is:
 ACP Claude is a **harness session** with ACP controls, session resume,
 background-task tracking, and optional conversation/thread binding.
 
-CLI backends are separate text-only local fallback runtimes - see
-[CLI Backends](/gateway/cli-backends).
+CLI backends are a separate path: the local CLI runs normal agent turns as the
+model runtime, without ACP controls. See [CLI Backends](/gateway/cli-backends).
 
 For operators, the practical rule is:
 
 - **Want `/acp spawn`, bindable sessions, runtime controls, or persistent harness work?** Use ACP.
-- **Want simple local text fallback through the raw CLI?** Use CLI backends.
+- **Want normal agent turns to run through a local CLI such as Claude Code?** Use CLI backends.
 
 ## acpx harness, plugin setup, and permissions
 
@@ -174,4 +173,4 @@ still resolves. Each entry points at the page that now holds the content.
 - [Multi-agent sandbox tools](/tools/multi-agent-sandbox-tools)
 - [`openclaw acp` (bridge mode)](/cli/acp)
 - [Sub-agents](/tools/subagents)
-- [Steer](/tools/steer) — redirect a running agent mid-task
+- [Steer](/tools/steer) — active-run steering and queued ACP follow-ups

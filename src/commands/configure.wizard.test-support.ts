@@ -4,8 +4,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { committedConfigFiles } from "./committed-config.test-support.js";
 
 const wizardTestMocks = vi.hoisted(() => {
-  const writeConfigFile = vi.fn();
+  const writeConfigFile = vi.fn<(config: OpenClawConfig) => Promise<void>>();
   return {
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    isTerminalInteractive: vi.fn(),
     clackIntro: vi.fn(),
     clackOutro: vi.fn(),
     clackSelect: vi.fn(),
@@ -15,12 +17,18 @@ const wizardTestMocks = vi.hoisted(() => {
     resolveSearchProviderOptions: vi.fn(),
     resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
+    runMemorySetupFlow: vi.fn<typeof import("../flows/memory-setup.js").runMemorySetupFlow>(),
+    setupPluginConfig:
+      vi.fn<typeof import("../wizard/setup.plugin-config.js").configurePluginConfig>(),
+    setupSkills: vi.fn<typeof import("./onboard-skills.js").setupSkills>(),
+    ensureWorkspaceAndSessions: vi.fn(),
     assertConfigPathForWrite: vi.fn(),
     readConfigFileSnapshot: vi.fn(),
     writeConfigFile,
     replaceConfigFile: vi.fn(
       async (params: {
-        nextConfig: unknown;
+        nextConfig: OpenClawConfig;
+        baseHash?: string;
         writeOptions?: { assertConfigPathForWrite?: () => void };
       }) => {
         params.writeOptions?.assertConfigPathForWrite?.();
@@ -51,10 +59,25 @@ const wizardTestMocks = vi.hoisted(() => {
     isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
       Boolean(config.auth?.profiles?.["openai:default"]),
     ),
-    setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
+    setupChannels: vi.fn<typeof import("../flows/channel-setup.js").setupChannels>(
+      async (cfg) => cfg,
+    ),
     guardCancel: vi.fn((value: unknown, _runtime: RuntimeEnv, _exitCode?: number) => value),
   };
 });
+
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, ...wizardTestMocks.runtime },
+  };
+});
+
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
+  isTerminalInteractive: wizardTestMocks.isTerminalInteractive,
+}));
 
 vi.mock("@clack/prompts", () => ({
   intro: wizardTestMocks.clackIntro,
@@ -63,6 +86,11 @@ vi.mock("@clack/prompts", () => ({
   text: wizardTestMocks.clackText,
   confirm: wizardTestMocks.clackConfirm,
   password: wizardTestMocks.clackPassword,
+}));
+
+vi.mock("../flows/memory-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/memory-setup.js")>()),
+  runMemorySetupFlow: wizardTestMocks.runMemorySetupFlow,
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -152,7 +180,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
   applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
-  ensureWorkspaceAndSessions: vi.fn(),
+  ensureWorkspaceAndSessions: wizardTestMocks.ensureWorkspaceAndSessions,
   guardCancel: wizardTestMocks.guardCancel,
   printWizardHeader: wizardTestMocks.printWizardHeader,
   probeGatewayReachable: wizardTestMocks.probeGatewayReachable,
@@ -163,15 +191,19 @@ vi.mock("./onboard-helpers.js", () => ({
   waitForGatewayReachable: wizardTestMocks.waitForGatewayReachable,
 }));
 
-vi.mock("./health.js", () => ({
+vi.mock("./health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./health.js")>()),
   healthCommandNonExiting: wizardTestMocks.healthCommand,
 }));
 
-vi.mock("./health-format.js", () => ({
-  formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure,
-}));
+vi.mock("./health-format.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./health-format.js")>();
+  wizardTestMocks.formatHealthCheckFailure = vi.fn(actual.formatHealthCheckFailure);
+  return { ...actual, formatHealthCheckFailure: wizardTestMocks.formatHealthCheckFailure };
+});
 
-vi.mock("./configure.gateway.js", () => ({
+vi.mock("./configure.gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./configure.gateway.js")>()),
   promptGatewayConfig: wizardTestMocks.promptGatewayConfig,
 }));
 
@@ -179,23 +211,25 @@ vi.mock("./configure.gateway-auth.js", () => ({
   promptAuthConfig: wizardTestMocks.promptAuthConfig,
 }));
 
-vi.mock("./configure.channels.js", () => ({
-  removeChannelConfigWizard: vi.fn(),
-}));
-
 vi.mock("./configure.daemon.js", () => ({
   maybeInstallDaemon: wizardTestMocks.maybeInstallDaemon,
 }));
 
-vi.mock("./onboard-remote.js", () => ({
+vi.mock("./onboard-remote.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-remote.js")>()),
   promptRemoteGatewayConfig: wizardTestMocks.promptRemoteGatewayConfig,
 }));
 
 vi.mock("./onboard-skills.js", () => ({
-  setupSkills: vi.fn(),
+  setupSkills: wizardTestMocks.setupSkills,
 }));
 
-vi.mock("./onboard-channels.js", () => ({
+vi.mock("../wizard/setup.plugin-config.js", () => ({
+  configurePluginConfig: wizardTestMocks.setupPluginConfig,
+}));
+
+vi.mock("../flows/channel-setup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../flows/channel-setup.js")>()),
   setupChannels: wizardTestMocks.setupChannels,
 }));
 
@@ -217,6 +251,7 @@ const { runConfigureWizard } = await import("./configure.wizard.js");
 export { runConfigureWizard, wizardTestMocks };
 
 export function setupWizardTestDefaults() {
+  wizardTestMocks.isTerminalInteractive.mockReturnValue(true);
   committedConfigFiles.clear();
   wizardTestMocks.assertConfigPathForWrite.mockImplementation(() => {});
   wizardTestMocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
@@ -242,6 +277,8 @@ export function setupWizardTestDefaults() {
     port: 18789,
   }));
   wizardTestMocks.guardCancel.mockImplementation((value: unknown) => value);
+  wizardTestMocks.setupPluginConfig.mockImplementation(async ({ config }) => config);
+  wizardTestMocks.setupSkills.mockImplementation(async (config) => config);
 }
 
 export const EMPTY_CONFIG_SNAPSHOT = {
@@ -251,15 +288,8 @@ export const EMPTY_CONFIG_SNAPSHOT = {
   issues: [],
 };
 
-export function createWizardTestRuntime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  };
-}
-
 export function setupBaseWizardTestState(config: OpenClawConfig = {}) {
+  wizardTestMocks.runMemorySetupFlow.mockImplementation(async (candidate) => candidate);
   wizardTestMocks.readConfigFileSnapshot.mockResolvedValue({ ...EMPTY_CONFIG_SNAPSHOT, config });
   wizardTestMocks.resolveGatewayPort.mockReturnValue(18789);
   wizardTestMocks.probeGatewayReachable.mockResolvedValue({ ok: false });
@@ -304,30 +334,4 @@ export function queueWizardTestPrompts(params: {
   wizardTestMocks.clackText.mockResolvedValue(params.text ?? "");
   wizardTestMocks.clackIntro.mockResolvedValue(undefined);
   wizardTestMocks.clackOutro.mockResolvedValue(undefined);
-}
-
-export function createEnabledWebSearchConfig(
-  provider: string,
-  pluginEntry: Record<string, unknown>,
-) {
-  return (cfg: OpenClawConfig) => ({
-    ...cfg,
-    tools: {
-      ...cfg.tools,
-      web: {
-        ...cfg.tools?.web,
-        search: {
-          provider,
-          enabled: true,
-        },
-      },
-    },
-    plugins: {
-      ...cfg.plugins,
-      entries: {
-        ...cfg.plugins?.entries,
-        [provider]: pluginEntry,
-      },
-    },
-  });
 }

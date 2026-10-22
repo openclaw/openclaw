@@ -1,6 +1,24 @@
 import type { CaptureViewModel } from "./ui-render-capture-model.js";
 import { esc } from "./ui-render-utils.js";
-import type { CaptureQueryPreset } from "./ui-types.js";
+
+function renderCaptureSelect(
+  label: string,
+  id: string,
+  selected: string | number,
+  options: ReadonlyArray<string | readonly [value: string | number, label: string]>,
+  disabled = false,
+): string {
+  return `<label>${label}
+      <select id="capture-${id}"${disabled ? " disabled" : ""}>
+        ${options
+          .map((option) => {
+            const [value, text] = typeof option === "string" ? [option, option] : option;
+            return `<option value="${esc(String(value))}"${selected === value ? " selected" : ""}>${esc(text)}</option>`;
+          })
+          .join("\n        ")}
+      </select>
+    </label>`;
+}
 
 function renderCaptureFilter(
   label: string,
@@ -130,9 +148,12 @@ export function renderCaptureControls(model: CaptureViewModel): string {
                           class="capture-selected-session-chip"
                           data-capture-session-remove="${esc(session.id)}"
                           title="Remove ${esc(new Date(session.startedAt).toLocaleString())}"
+                          aria-label="Remove ${esc(new Date(session.startedAt).toLocaleString())}"
                         >
                           <span class="capture-selected-session-chip-label">${esc(new Date(session.startedAt).toLocaleString())}</span>
-                          <span class="capture-selected-session-chip-x">×</span>
+                          <svg class="capture-selected-session-chip-x" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                            <path d="m6 6 12 12M6 18 18 6" />
+                          </svg>
                         </button>`,
                       )
                       .join("")}
@@ -154,55 +175,29 @@ export function renderCaptureControls(model: CaptureViewModel): string {
         type="button"${sessions.length === 0 ? " disabled" : ""}
       >Purge all data</button>
     </div>
-    <label>Analysis
-      <select id="capture-preset">
-        ${(
-          [
-            "none",
-            "double-sends",
-            "retry-storms",
-            "cache-busting",
-            "ws-duplicate-frames",
-            "missing-ack",
-            "error-bursts",
-          ] as CaptureQueryPreset[]
-        )
-          .map(
-            (preset) =>
-              `<option value="${preset}"${
-                preset === state.captureQueryPreset ? " selected" : ""
-              }>${preset === "none" ? "none (show raw events only)" : preset}</option>`,
-          )
-          .join("")}
-      </select>
-    </label>
+    ${renderCaptureSelect("Analysis", "preset", state.captureQueryPreset, [
+      ["none", "none (show raw events only)"],
+      "double-sends",
+      "retry-storms",
+      "cache-busting",
+      "ws-duplicate-frames",
+      "missing-ack",
+      "error-bursts",
+    ])}
     ${renderCaptureFilter("Kind", "kind", availableKinds, state.captureKindFilter)}
     ${renderCaptureFilter("Provider", "provider", availableProviders, state.captureProviderFilter)}
     ${renderCaptureFilter("Host", "host", availableHosts, state.captureHostFilter)}
-    <label>View
-      <select id="capture-view-mode">
-        <option value="list"${state.captureViewMode === "list" ? " selected" : ""}>list</option>
-        <option value="timeline"${state.captureViewMode === "timeline" ? " selected" : ""}>timeline</option>
-      </select>
-    </label>
+    ${renderCaptureSelect("View", "view-mode", state.captureViewMode, ["list", "timeline"])}
     ${
       state.captureViewMode === "timeline"
         ? `
-    <label>Timeline Lanes
-      <select id="capture-timeline-lane-mode">
-        <option value="domain"${state.captureTimelineLaneMode === "domain" ? " selected" : ""}>domain</option>
-        <option value="provider"${state.captureTimelineLaneMode === "provider" ? " selected" : ""}>provider</option>
-        <option value="flow"${state.captureTimelineLaneMode === "flow" ? " selected" : ""}>flow</option>
-      </select>
-    </label>
-    <label>Lane Sort
-      <select id="capture-timeline-lane-sort">
-        <option value="most-events"${state.captureTimelineLaneSort === "most-events" ? " selected" : ""}>most events</option>
-        <option value="most-errors"${state.captureTimelineLaneSort === "most-errors" ? " selected" : ""}>most errors</option>
-        <option value="severity"${state.captureTimelineLaneSort === "severity" ? " selected" : ""}>severity</option>
-        <option value="alphabetical"${state.captureTimelineLaneSort === "alphabetical" ? " selected" : ""}>alphabetical</option>
-      </select>
-    </label>
+    ${renderCaptureSelect("Timeline Lanes", "timeline-lane-mode", state.captureTimelineLaneMode, ["domain", "provider", "flow"])}
+    ${renderCaptureSelect("Lane Sort", "timeline-lane-sort", state.captureTimelineLaneSort, [
+      ["most-events", "most events"],
+      ["most-errors", "most errors"],
+      "severity",
+      "alphabetical",
+    ])}
     <label class="capture-search-field">Lane Search
       <input
         id="capture-timeline-lane-search"
@@ -212,21 +207,13 @@ export function renderCaptureControls(model: CaptureViewModel): string {
         spellcheck="false"
       />
     </label>
-    <label>Timeline Zoom
-      <select id="capture-timeline-zoom">
-        <option value="75"${state.captureTimelineZoom === 75 ? " selected" : ""}>75%</option>
-        <option value="100"${state.captureTimelineZoom === 100 ? " selected" : ""}>100%</option>
-        <option value="150"${state.captureTimelineZoom === 150 ? " selected" : ""}>150%</option>
-        <option value="200"${state.captureTimelineZoom === 200 ? " selected" : ""}>200%</option>
-        <option value="300"${state.captureTimelineZoom === 300 ? " selected" : ""}>300%</option>
-      </select>
-    </label>
-    <label>Sparkline
-      <select id="capture-timeline-sparkline-mode">
-        <option value="session-relative"${state.captureTimelineSparklineMode === "session-relative" ? " selected" : ""}>session-relative</option>
-        <option value="lane-relative"${state.captureTimelineSparklineMode === "lane-relative" ? " selected" : ""}>lane-relative</option>
-      </select>
-    </label>
+    ${renderCaptureSelect(
+      "Timeline Zoom",
+      "timeline-zoom",
+      state.captureTimelineZoom,
+      [75, 100, 150, 200, 300].map((zoom) => [zoom, `${zoom}%`] as const),
+    )}
+    ${renderCaptureSelect("Sparkline", "timeline-sparkline-mode", state.captureTimelineSparklineMode, ["session-relative", "lane-relative"])}
     <button
       id="capture-timeline-clear-window"
       class="secondary-button capture-clear-filters"
@@ -241,44 +228,39 @@ export function renderCaptureControls(model: CaptureViewModel): string {
       />
       <span>focus selected flow</span>
     </label>
-    <label>Focused Lanes
-      <select id="capture-timeline-focused-lane-mode"${state.captureTimelineFocusSelectedFlow && selectedEvent?.flowId ? "" : " disabled"}>
-        <option value="all"${state.captureTimelineFocusedLaneMode === "all" ? " selected" : ""}>show all</option>
-        <option value="only-matching"${state.captureTimelineFocusedLaneMode === "only-matching" ? " selected" : ""}>only matching</option>
-        <option value="collapse-background"${state.captureTimelineFocusedLaneMode === "collapse-background" ? " selected" : ""}>collapse background</option>
-      </select>
-    </label>
-    <label>Focus Threshold
-      <select id="capture-timeline-focused-lane-threshold"${state.captureTimelineFocusSelectedFlow && selectedEvent?.flowId ? "" : " disabled"}>
-        <option value="any"${state.captureTimelineFocusedLaneThreshold === "any" ? " selected" : ""}>any presence</option>
-        <option value="events-2"${state.captureTimelineFocusedLaneThreshold === "events-2" ? " selected" : ""}>2+ events</option>
-        <option value="percent-10"${state.captureTimelineFocusedLaneThreshold === "percent-10" ? " selected" : ""}>10%+ of lane</option>
-        <option value="percent-25"${state.captureTimelineFocusedLaneThreshold === "percent-25" ? " selected" : ""}>25%+ of lane</option>
-      </select>
-    </label>`
+    ${renderCaptureSelect(
+      "Focused Lanes",
+      "timeline-focused-lane-mode",
+      state.captureTimelineFocusedLaneMode,
+      [
+        ["all", "show all"],
+        ["only-matching", "only matching"],
+        ["collapse-background", "collapse background"],
+      ],
+      !(state.captureTimelineFocusSelectedFlow && selectedEvent?.flowId),
+    )}
+    ${renderCaptureSelect(
+      "Focus Threshold",
+      "timeline-focused-lane-threshold",
+      state.captureTimelineFocusedLaneThreshold,
+      [
+        ["any", "any presence"],
+        ["events-2", "2+ events"],
+        ["percent-10", "10%+ of lane"],
+        ["percent-25", "25%+ of lane"],
+      ],
+      !(state.captureTimelineFocusSelectedFlow && selectedEvent?.flowId),
+    )}`
         : `
-    <label>Group
-      <select id="capture-group-mode">
-        <option value="none"${state.captureGroupMode === "none" ? " selected" : ""}>flat stream</option>
-        <option value="burst"${state.captureGroupMode === "burst" ? " selected" : ""}>burst clusters</option>
-        <option value="flow"${state.captureGroupMode === "flow" ? " selected" : ""}>flow id</option>
-        <option value="host-path"${state.captureGroupMode === "host-path" ? " selected" : ""}>host + path</option>
-      </select>
-    </label>`
+    ${renderCaptureSelect("Group", "group-mode", state.captureGroupMode, [
+      ["none", "flat stream"],
+      ["burst", "burst clusters"],
+      ["flow", "flow id"],
+      ["host-path", "host + path"],
+    ])}`
     }
-    <label>Detail Pane
-      <select id="capture-detail-placement">
-        <option value="right"${state.captureDetailPlacement === "right" ? " selected" : ""}>right</option>
-        <option value="bottom"${state.captureDetailPlacement === "bottom" ? " selected" : ""}>bottom</option>
-      </select>
-    </label>
-    <label>Headers
-      <select id="capture-header-mode">
-        <option value="key"${state.captureHeaderMode === "key" ? " selected" : ""}>key only</option>
-        <option value="all"${state.captureHeaderMode === "all" ? " selected" : ""}>all</option>
-        <option value="hidden"${state.captureHeaderMode === "hidden" ? " selected" : ""}>hidden</option>
-      </select>
-    </label>
+    ${renderCaptureSelect("Detail Pane", "detail-placement", state.captureDetailPlacement, ["right", "bottom"])}
+    ${renderCaptureSelect("Headers", "header-mode", state.captureHeaderMode, [["key", "key only"], "all", "hidden"])}
     <label class="capture-search-field">Search
       <input
         id="capture-search-filter"

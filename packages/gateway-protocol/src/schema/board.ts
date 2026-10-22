@@ -1,5 +1,6 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "./canvas.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -185,7 +186,7 @@ export type BoardMcpAppDescriptor = Static<typeof BoardMcpAppDescriptorSchema>;
 
 export const BoardWidgetHtmlContentSchema = closedObject({
   kind: Type.Literal("html"),
-  html: Type.String({ maxLength: 262_144 }),
+  html: Type.String({ maxLength: WIDGET_HTML_MAX_UTF8_BYTES }),
 });
 export const BoardWidgetMcpAppContentSchema = closedObject({
   kind: Type.Literal("mcp-app"),

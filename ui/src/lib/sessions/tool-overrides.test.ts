@@ -1,14 +1,23 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import type { SessionToolOverrides } from "./patch.ts";
 import {
   countSessionToolOverrides,
   nextBooleanToolOverrides,
   nextMcpToolsDenyOverrides,
   nextWebSearchToolOverrides,
-  readOwnEntry,
   resolveToolOverrideState,
   resolveWebSearchToolOverrideState,
 } from "./tool-overrides.ts";
+
+const siblings = {
+  skills: { docs: true },
+  mcpServers: { github: false },
+  mcpToolsDeny: { notion: ["delete_page"] },
+};
+const withDenials = (github: string[], notion = true): SessionToolOverrides => ({
+  mcpToolsDeny: { github, ...(notion ? { notion: ["delete_page"] } : {}) },
+});
 
 describe("session tool overrides", () => {
   it("resolves sparse booleans against their base state", () => {
@@ -27,30 +36,22 @@ describe("session tool overrides", () => {
     expect(resolveWebSearchToolOverrideState(false, true)).toBe(false);
   });
 
-  it("reads only own dynamic-key entries", () => {
-    expect(readOwnEntry({ github: false }, "constructor")).toBeUndefined();
-    expect(readOwnEntry({ constructor: false }, "constructor")).toBe(false);
-  });
-
   it("adds and removes named overrides without disturbing sibling groups", () => {
     const current = {
-      mcpServers: { github: false },
-      mcpToolsDeny: { notion: ["delete_page"] },
+      mcpServers: siblings.mcpServers,
+      mcpToolsDeny: siblings.mcpToolsDeny,
       webSearch: false,
     };
+    const original = structuredClone(current);
     expect(nextBooleanToolOverrides(current, "skills", "release", false, true)).toEqual({
       ...current,
       skills: { release: false },
     });
     expect(nextBooleanToolOverrides(current, "mcpServers", "github", true, true)).toEqual({
-      mcpToolsDeny: { notion: ["delete_page"] },
+      mcpToolsDeny: siblings.mcpToolsDeny,
       webSearch: false,
     });
-    expect(current).toEqual({
-      mcpServers: { github: false },
-      mcpToolsDeny: { notion: ["delete_page"] },
-      webSearch: false,
-    });
+    expect(current).toEqual(original);
   });
 
   it("restores default-on web search by removing the key", () => {
@@ -66,11 +67,6 @@ describe("session tool overrides", () => {
   ])(
     "preserves $name intent and sibling overrides while global web search is off",
     ({ current, expected }) => {
-      const siblings = {
-        skills: { docs: true },
-        mcpServers: { github: false },
-        mcpToolsDeny: { notion: ["delete_page"] },
-      };
       const overrides = { ...siblings, ...current };
       const original = structuredClone(overrides);
       for (const nextEnabled of [false, true]) {
@@ -84,66 +80,48 @@ describe("session tool overrides", () => {
     },
   );
 
-  it("adds sorted MCP tool denials without mutating sibling overrides", () => {
-    const current = {
-      mcpToolsDeny: { github: ["zebra"], notion: ["delete_page"] },
-      webSearch: false,
-    };
-    expect(nextMcpToolsDenyOverrides(current, "github", "alpha", true)).toEqual({
-      mcpToolsDeny: { github: ["alpha", "zebra"], notion: ["delete_page"] },
-      webSearch: false,
-    });
-    expect(current.mcpToolsDeny.github).toEqual(["zebra"]);
-  });
+  it.each([
+    [
+      { ...withDenials(["zebra"]), webSearch: false },
+      "alpha",
+      true,
+      { ...withDenials(["alpha", "zebra"]), webSearch: false },
+    ],
+    [withDenials(["read", "write"]), "read", false, withDenials(["write"])],
+    [withDenials(["write"]), "write", false, { mcpToolsDeny: siblings.mcpToolsDeny }],
+    [withDenials(["write"], false), "write", false, {}],
+  ] as const)(
+    "updates MCP denials %j / %s / %s without mutation",
+    (input, tool, denied, expected) => {
+      const original = structuredClone(input);
+      expect(nextMcpToolsDenyOverrides(input, "github", tool, denied)).toEqual(expected);
+      expect(input).toEqual(original);
+    },
+  );
 
-  it("removes MCP tool denials and keeps the map sparse", () => {
-    expect(
-      nextMcpToolsDenyOverrides(
-        { mcpToolsDeny: { github: ["read", "write"], notion: ["delete_page"] } },
-        "github",
-        "read",
-        false,
-      ),
-    ).toEqual({ mcpToolsDeny: { github: ["write"], notion: ["delete_page"] } });
-    expect(
-      nextMcpToolsDenyOverrides(
-        { mcpToolsDeny: { github: ["write"], notion: ["delete_page"] } },
-        "github",
-        "write",
-        false,
-      ),
-    ).toEqual({ mcpToolsDeny: { notion: ["delete_page"] } });
-    expect(
-      nextMcpToolsDenyOverrides({ mcpToolsDeny: { github: ["write"] } }, "github", "write", false),
-    ).toEqual({});
-  });
-
-  it("treats constructor as an own MCP server key", () => {
-    expect(
-      nextMcpToolsDenyOverrides(
-        { mcpToolsDeny: { github: ["read"] } },
-        "constructor",
-        "inspect",
-        true,
-      ),
-    ).toEqual({
-      mcpToolsDeny: { constructor: ["inspect"], github: ["read"] },
-    });
-  });
-
-  it.each(["mcpServers", "skills"] as const)("treats hasOwnProperty as an own %s key", (group) => {
-    expect(nextBooleanToolOverrides({}, group, "hasOwnProperty", false, true)).toEqual({
-      [group]: { hasOwnProperty: false },
-    });
-  });
+  it.each(["constructor", "__proto__", "hasOwnProperty"])(
+    "treats %s as an own override key",
+    (name) => {
+      expect(
+        nextMcpToolsDenyOverrides({ mcpToolsDeny: { github: ["read"] } }, name, "inspect", true),
+      ).toEqual({
+        mcpToolsDeny: { [name]: ["inspect"], github: ["read"] },
+      });
+      for (const group of ["mcpServers", "skills"] as const) {
+        expect(nextBooleanToolOverrides({}, group, name, false, true)).toEqual({
+          [group]: { [name]: false },
+        });
+      }
+    },
+  );
 
   it("counts override categories", () => {
-    const overrides = {
-      mcpServers: { zeta: false, alpha: true },
-      mcpToolsDeny: { tools: ["danger"] },
-      skills: { beta: false },
-      webSearch: false,
-    };
-    expect(countSessionToolOverrides(overrides)).toBe(5);
+    expect(
+      countSessionToolOverrides({
+        ...siblings,
+        mcpServers: { ...siblings.mcpServers, alpha: true },
+        webSearch: false,
+      }),
+    ).toBe(5);
   });
 });

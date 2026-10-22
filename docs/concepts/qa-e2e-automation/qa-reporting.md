@@ -41,6 +41,27 @@ producer `qa-evidence.json`. When `qa suite` is reached through `qa run
 --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 
+Runtime-axis parity reports preserve each runtime's recorded `pass`, `fail`, or
+`skip` outcome. Runtime and transport failures override passing or skipped
+outcomes; controlled tool errors remain passable. A tracked `known-harness-gap`
+skip can leave the scenario passing when its paired runtime passes, but the
+skipped cell stays labeled `skip`. Unexpected skips and pairs with both runtimes
+skipped still fail the parity gate. Missing captures are labeled `missing`.
+
+Unexpected exits of a ready QA Gateway child report its exit code and signal
+alongside the recent Gateway logs. Intentional shutdown and replacement remain
+separate from runtime failures.
+
+When a flow scenario fails, the failed step's details also list the Gateway log
+sentinel findings recorded during that scenario, such as a channel
+`final reply failed` line behind a wait timeout. Scenario-level details stay
+unchanged, so parity classification never depends on that log text.
+
+Explicit tool-result error flags take precedence over keywords in returned text;
+error result blocks remain failures. Results without an error flag retain text-based
+error detection. A successful file read can therefore contain words such as
+"failed" without losing its successful tool-coverage receipt.
+
 ### Scheduled instances and retained observations
 
 Schema v3 evidence gives each scheduled scenario instance its own identity.
@@ -90,6 +111,36 @@ product failure. Advisory requirements remain diagnostic. Profiles without
 explicit declarations keep their existing behavior: primary coverage alone does
 not create a release requirement.
 
+### Scorecard gap report
+
+Inspect an existing artifact without starting QA:
+
+```bash
+pnpm openclaw qa coverage --evidence path/to/qa-evidence.json
+pnpm openclaw qa coverage --evidence path/to/qa-evidence.json --json --output gaps.json
+```
+
+The report lists every active taxonomy coverage ID, including unmapped and
+secondary-only catalog entries. JSON keeps catalog mappings, selected and excluded
+scenarios, missing execution cells, recorded outcomes, attempt source identities,
+and explicit proof checks separate. It does not treat a catalog mapping as a run.
+The supplied artifact is read without modification. `--evidence` cannot be
+combined with `--tools`, `--summary`, or `--match`.
+
+Qualification is report-only. It requires an explicit required declaration,
+matching taxonomy identity, the declaration's existing receipt and retry checks,
+and complete passing assertions in one terminal passing attempt. An enclosing
+attempt must also pass. Passing rows from different attempts cannot fill each
+other's gaps. Containment caps still limit child claims. Absent, empty, or
+advisory-only declarations leave qualification `UNKNOWN`; advisory results remain
+visible. Historical v2 evidence keeps its observations without invented bindings.
+
+The generated maturity scorecard shows the same report for its selected current
+taxonomy evidence: `all` before `release`, then the latest run within that profile.
+Gap and `UNKNOWN` results do not change scores, release requirements, exit status,
+or the renderer's existing input gates. JSON retains detailed diagnostics that
+the Markdown table summarizes.
+
 ### Evidence previews
 
 The QA Lab evidence gallery uses recognized file suffixes to select image,
@@ -100,6 +151,8 @@ extensionless files and unknown suffixes; the complete kind label is preserved.
 `qa confidence-report` keeps `productImpact` and `qaImpact` annotations in their
 own Markdown table cells, collapsing whitespace for display. The JSON summary
 preserves the annotation values, including internal line breaks.
+
+For JSONL replay lanes, every transcript must report a nonnegative integer user-turn count, with matching numbers of drift entries and results for both runtimes. Missing or mismatched evidence is classified as `unknown`, so both strict confidence modes reject it. Zero-turn transcripts are allowed alongside complete replayed turns; a report with no replayed user turns remains unknown.
 
 Treat coverage output as a discovery aid, not a gate replacement; the
 selected scenario still needs the right provider mode, live transport,

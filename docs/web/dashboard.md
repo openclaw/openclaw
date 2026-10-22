@@ -88,13 +88,16 @@ the host declines the request, the existing login instructions remain available.
 
 ## Open in Telegram
 
-Telegram bots can open the dashboard as a Telegram Mini App with `/dashboard`.
+Telegram bots can open the Control UI as a Telegram Mini App with `/controlui`.
+The separate `/dashboard` chat command creates or updates a session dashboard.
+If you used `/dashboard` for the Mini App in an earlier release, see the
+[migration guidance](/channels/telegram/mini-app#upgrading-from-dashboard).
 
 Requirements:
 
 - `gateway.tailscale.mode: "serve"` or `"funnel"` so Telegram gets an HTTPS Mini App URL.
 - The Telegram sender must be the bot owner: a numeric Telegram user ID in `commands.ownerAllowFrom` or the selected account's effective `channels.telegram.allowFrom`.
-- Run `/dashboard` in a DM with the bot. Group invocations only tell you to open the command in DM and do not include a button.
+- Run `/controlui` in a DM with the bot. Group invocations only tell you to open the command in DM and do not include a button.
 - Docker installs: Serve/Funnel modes require the gateway to bind loopback next to `tailscaled`, which bridge networking with published ports cannot satisfy. Run the gateway container with `network_mode: host` and mount the host `tailscaled` socket (`/var/run/tailscale`) plus the `tailscale` CLI into the container.
 
 The Mini App performs a bounded one-time dashboard handoff and redirects to Control UI with a

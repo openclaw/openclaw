@@ -6,21 +6,27 @@ import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.
 import { runGatewayTlsPinningProducer } from "./gateway-tls-pinning.js";
 
 const tempDirs: string[] = [];
+let pendingProducer: ReturnType<typeof runGatewayTlsPinningProducer> | undefined;
 
 afterEach(async () => {
+  // A timed-out body can leave the producer closing its Gateway and writing evidence.
+  await pendingProducer?.catch(() => undefined);
+  pendingProducer = undefined;
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })));
 });
 
 describe("Gateway TLS pinning evidence", () => {
-  it("proves the live listener fingerprint and public client pin policy", async () => {
+  it("proves the live listener fingerprint and public client pin policy", async ({ signal }) => {
     const artifactBase = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-tls-pinning-evidence-"));
     tempDirs.push(artifactBase);
     const gatewayStartupEnv = snapshotGatewayStartupEnv();
 
-    const evidence = await runGatewayTlsPinningProducer({
+    pendingProducer = runGatewayTlsPinningProducer({
       artifactBase,
       repoRoot: process.cwd(),
+      signal,
     });
+    const evidence = await pendingProducer;
 
     expect(snapshotGatewayStartupEnv()).toEqual(gatewayStartupEnv);
     expect(

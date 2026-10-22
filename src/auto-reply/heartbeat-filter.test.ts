@@ -1,10 +1,7 @@
 /** Tests heartbeat filtering and skip behavior for empty heartbeat context. */
 import { describe, expect, it } from "vitest";
-import {
-  filterHeartbeatTranscriptArtifacts,
-  isHeartbeatOkResponse,
-  isHeartbeatUserMessage,
-} from "./heartbeat-filter.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
+import { filterHeartbeatTranscriptArtifacts, isHeartbeatUserMessage } from "./heartbeat-filter.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
@@ -12,7 +9,69 @@ import {
   INTERNAL_WAKE_TRANSCRIPT_PROMPTS,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
-import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
+
+function user(content: unknown) {
+  return { role: "user", content };
+}
+
+function assistant(content: unknown) {
+  return { role: "assistant", content };
+}
+
+const wake = user(INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat);
+const followup = user("what changed while I was away?");
+const modelQuestion = user("what model are you");
+const filter = (messages: Parameters<typeof filterHeartbeatTranscriptArtifacts>[0]) =>
+  filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT);
+
+function expectFiltered(
+  messages: Parameters<typeof filter>[0],
+  expected: Parameters<typeof filter>[0] = [followup],
+) {
+  expect(filter(messages)).toEqual(expected);
+}
+
+function functionCall(call_id: string, name: string, args: string, id?: string) {
+  return assistant([
+    { type: "function_call", ...(id ? { id } : {}), call_id, name, arguments: args },
+  ]);
+}
+
+function functionResult(call_id: string, output: string) {
+  return user([{ type: "function_call_output", call_id, output }]);
+}
+
+function toolResult(toolCallId: string, text: string, isError?: boolean) {
+  return {
+    role: "toolResult",
+    toolCallId,
+    ...(isError ? { isError } : {}),
+    content: [{ type: "text", text }],
+  };
+}
+
+function anthropicResult(
+  type: "tool_result" | "tool_result_error",
+  content: string,
+  is_error?: boolean,
+) {
+  return { type, tool_use_id: "toolu_heartbeat", content, ...(is_error ? { is_error } : {}) };
+}
+
+function heartbeatCall(type: "toolCall" | "tool_use", attention = true) {
+  const outcome = attention
+    ? createHeartbeatAttentionOutcome()
+    : {
+        outcome: "no_change",
+        notify: false,
+        summary: "No visible update.",
+      };
+  return assistant([
+    type === "tool_use"
+      ? { type, id: "toolu_heartbeat", name: "heartbeat_respond", input: outcome }
+      : { type, id: "call_heartbeat", name: "heartbeat_respond", arguments: outcome },
+  ]);
+}
 
 function createHeartbeatAttentionOutcome() {
   return {
@@ -20,24 +79,6 @@ function createHeartbeatAttentionOutcome() {
     notify: true,
     summary: "Build is blocked.",
     notificationText: "Build is blocked on missing credentials.",
-  };
-}
-
-function createHeartbeatNoChangeMessage() {
-  return {
-    role: "assistant",
-    content: [
-      {
-        type: "toolCall",
-        id: "call_heartbeat",
-        name: "heartbeat_respond",
-        arguments: {
-          outcome: "no_change",
-          notify: false,
-          summary: "No visible update.",
-        },
-      },
-    ],
   };
 }
 
@@ -49,469 +90,142 @@ const HIDDEN_REASONING_BLOCKS = [
 
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
-    expect(
-      isHeartbeatUserMessage(
-        {
-          role: "user",
-          content: `${HEARTBEAT_PROMPT}\nUse the provided monitor scratch when deciding what needs attention.`,
-        },
-        HEARTBEAT_PROMPT,
-      ),
-    ).toBe(true);
-
+    const expectPrompt = (text: string, prompt?: string) =>
+      expect(isHeartbeatUserMessage(user(text), prompt)).toBe(true);
+    const taskPrefix =
+      "Run the following periodic tasks (only those due based on their intervals):";
+    expectPrompt(`${HEARTBEAT_PROMPT}\nUse monitor scratch.`, HEARTBEAT_PROMPT);
     for (const acknowledgement of ["HEARTBEAT_OK", "NO_REPLY"]) {
-      expect(
-        isHeartbeatUserMessage({
-          role: "user",
-          content: `Run the following periodic tasks (only those due based on their intervals):\n\n- email-check: Check for urgent unread emails\n\nAfter completing all due tasks, reply ${acknowledgement}.`,
-        }),
-      ).toBe(true);
+      expectPrompt(
+        `${taskPrefix}\n\n- email-check\n\nAfter completing all due tasks, reply ${acknowledgement}.`,
+      );
     }
 
     for (const completion of [
       "After completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention.",
       `After completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`,
     ]) {
-      expect(
-        isHeartbeatUserMessage({
-          role: "user",
-          content: `Run the following periodic tasks (only those due based on their intervals):\n\n- deployment: Check deployment status\n\n${completion}\n\nHeartbeat monitor scratch:\nReview the deployment queue.`,
-        }),
-      ).toBe(true);
+      expectPrompt(
+        `${taskPrefix}\n\n- deployment\n\n${completion}\n\nHeartbeat monitor scratch:\nReview queue.`,
+      );
     }
 
-    expect(
-      isHeartbeatUserMessage({
-        role: "user",
-        content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat,
-      }),
-    ).toBe(true);
-
-    expect(
-      isHeartbeatUserMessage({
-        role: "user",
-        content: HEARTBEAT_RESPONSE_TOOL_PROMPT,
-      }),
-    ).toBe(true);
-
+    expectPrompt(INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat);
+    expectPrompt(HEARTBEAT_RESPONSE_TOOL_PROMPT);
     const customHeartbeatPrompt = "Check the handoff queue.";
-    expect(
-      isHeartbeatUserMessage(
-        {
-          role: "user",
-          content: `${resolveHeartbeatPromptForResponseTool(customHeartbeatPrompt)}\n\nUse workspace notes only.`,
-        },
-        customHeartbeatPrompt,
-      ),
-    ).toBe(true);
-  });
-
-  it("ignores quoted or non-user token mentions", () => {
-    expect(
-      isHeartbeatUserMessage({
-        role: "user",
-        content: "Please reply HEARTBEAT_OK so I can test something.",
-      }),
-    ).toBe(false);
-
-    expect(
-      isHeartbeatUserMessage({
-        role: "assistant",
-        content: "HEARTBEAT_OK",
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("isHeartbeatOkResponse", () => {
-  it("matches no-op heartbeat acknowledgements", () => {
-    expect(
-      isHeartbeatOkResponse({
-        role: "assistant",
-        content: "NO_REPLY",
-      }),
-    ).toBe(true);
-
-    expect(
-      isHeartbeatOkResponse({
-        role: "assistant",
-        content: "**HEARTBEAT_OK**",
-      }),
-    ).toBe(true);
-
-    expect(
-      isHeartbeatOkResponse({
-        role: "assistant",
-        content: "You have 3 unread urgent emails. HEARTBEAT_OK",
-      }),
-    ).toBe(true);
-  });
-
-  it.each(HIDDEN_REASONING_BLOCKS)(
-    "matches acknowledgements with hidden %s blocks",
-    (_label, reasoningBlock) => {
-      expect(
-        isHeartbeatOkResponse({
-          role: "assistant",
-          content: [reasoningBlock, { type: "text", text: "HEARTBEAT_OK" }],
-        }),
-      ).toBe(true);
-    },
-  );
-
-  it("preserves meaningful or non-text responses", () => {
-    expect(
-      isHeartbeatOkResponse({
-        role: "assistant",
-        content: "Status HEARTBEAT_OK due to watchdog failure",
-      }),
-    ).toBe(false);
-
-    expect(
-      isHeartbeatOkResponse({
-        role: "assistant",
-        content: [{ type: "tool_use", id: "tool-1", name: "search", input: {} }],
-      }),
-    ).toBe(false);
-
-    const toolCallOnlyMessage = {
-      role: "assistant",
-      content: null,
-      tool_calls: [
-        {
-          id: "call_heartbeat",
-          function: {
-            name: "heartbeat_respond",
-            arguments: '{"notify":true}',
-          },
-        },
-      ],
-    } as { role: string; content?: unknown };
-    expect(isHeartbeatOkResponse(toolCallOnlyMessage)).toBe(false);
-  });
-
-  it("respects ackMaxChars overrides", () => {
-    expect(
-      isHeartbeatOkResponse(
-        {
-          role: "assistant",
-          content: "HEARTBEAT_OK all good",
-        },
-        0,
-      ),
-    ).toBe(false);
+    expectPrompt(
+      `${resolveHeartbeatPromptForResponseTool(customHeartbeatPrompt)}\n\nUse workspace notes only.`,
+      customHeartbeatPrompt,
+    );
   });
 });
 
 describe("filterHeartbeatTranscriptArtifacts", () => {
+  it.each(Object.entries(INTERNAL_WAKE_TRANSCRIPT_PROMPTS))(
+    "limits truncated silence to heartbeat context: %s",
+    (kind, marker) => {
+      for (const prompt of [marker, `${MESSAGE_TOOL_DELIVERY_HINTS[0]} ${marker}`]) {
+        const messages = [user(prompt), assistant("no_r"), user("Continue")];
+        expect(filterHeartbeatTranscriptArtifacts(messages)).toEqual(
+          kind === "heartbeat" ? [user("Continue")] : messages,
+        );
+      }
+    },
+  );
+
   it.each([
     "[OpenClaw heartbeat poll]",
     "[OpenClaw exec completion]",
+    "[OpenClaw exec completion]\nDisable automatic completion turns with tools.exec.notifyOnExit=false; check per-agent overrides. Background exec and process poll remain available.",
     "[OpenClaw cron wake]",
     "[OpenClaw session event]",
   ])("removes no-op wake pairs for %s", (marker) => {
-    const messages = [
-      { role: "user", content: "Hello" },
-      { role: "assistant", content: "Hi there!" },
-      { role: "user", content: HEARTBEAT_PROMPT },
-      { role: "assistant", content: "NO_REPLY" },
-      { role: "user", content: marker },
-      { role: "assistant", content: "HEARTBEAT_OK" },
-      { role: "user", content: "What time is it?" },
-      { role: "assistant", content: "It is 3pm." },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "Hello" },
-      { role: "assistant", content: "Hi there!" },
-      { role: "user", content: "What time is it?" },
-      { role: "assistant", content: "It is 3pm." },
-    ]);
+    expectFiltered(
+      [
+        user("Hello"),
+        assistant("Hi there!"),
+        user(HEARTBEAT_PROMPT),
+        assistant("NO_REPLY"),
+        user(marker),
+        assistant("HEARTBEAT_OK"),
+        user("What time is it?"),
+        assistant("It is 3pm."),
+      ],
+      [user("Hello"), assistant("Hi there!"), user("What time is it?"), assistant("It is 3pm.")],
+    );
   });
 
   it.each(HIDDEN_REASONING_BLOCKS)(
     "removes no-op heartbeat pairs with hidden %s blocks",
     (_label, reasoningBlock) => {
-      const nextUserMessage = { role: "user", content: "What time is it?" };
-      const messages = [
-        { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-        {
-          role: "assistant",
-          content: [reasoningBlock, { type: "text", text: "HEARTBEAT_OK" }],
-        },
-        nextUserMessage,
-      ];
+      const nextUserMessage = user("What time is it?");
 
-      expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-        nextUserMessage,
-      ]);
+      expectFiltered(
+        [
+          wake,
+          assistant([reasoningBlock, { type: "text", text: "HEARTBEAT_OK" }]),
+          nextUserMessage,
+        ],
+        [nextUserMessage],
+      );
     },
   );
 
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
     for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
-      const messages = [
-        {
-          role: "user",
-          content: [
+      expectFiltered(
+        [
+          user([
             {
               type: "input_text",
               text: `${deliveryHint} ${INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat}`,
             },
-          ],
-        },
-        {
-          role: "assistant",
-          content: [{ type: "output_text", text: "HEARTBEAT_OK" }],
-        },
-        {
-          role: "user",
-          content: [{ type: "input_text", text: "what model are you" }],
-        },
-      ];
-
-      expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-        {
-          role: "user",
-          content: [{ type: "input_text", text: "what model are you" }],
-        },
-      ]);
+          ]),
+          assistant([{ type: "output_text", text: "HEARTBEAT_OK" }]),
+          user([{ type: "input_text", text: "what model are you" }]),
+        ],
+        [user([{ type: "input_text", text: "what model are you" }])],
+      );
     }
   });
 
-  it("removes prompt-only interrupted heartbeat spans", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      { role: "user", content: "what model are you" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what model are you" },
-    ]);
-  });
-
-  it("removes interrupted helper-only heartbeat spans", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_bash",
-            name: "bash",
-            arguments: { command: "inspect monitor scratch" },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked monitor scratch" }],
-      },
-      { role: "user", content: "what model are you" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what model are you" },
-    ]);
-  });
-
-  it("removes heartbeat response-tool spans and preserves the next real user message", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_bash", name: "bash", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked monitor scratch" }],
-      },
-      createHeartbeatNoChangeMessage(),
-      {
-        role: "toolResult",
-        toolCallId: "call_heartbeat",
-        content: [{ type: "text", text: "HEARTBEAT_OK" }],
-      },
-      { role: "user", content: "what model are you" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what model are you" },
-    ]);
-  });
-
-  it.each([
-    ["default", HEARTBEAT_RESPONSE_TOOL_PROMPT],
-    [
-      "scheduled task",
-      `Run the following periodic tasks (only those due based on their intervals):\n\n- deployment: Check deployment status\n\nAfter completing all due tasks:\n${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}\n\nHeartbeat monitor scratch:\nReview the deployment queue.`,
-    ],
-    [
-      "previous scheduled task",
-      "Run the following periodic tasks (only those due based on their intervals):\n\n- deployment: Check deployment status\n\nAfter completing all due tasks, use heartbeat_respond to report the outcome. Set notify=false when nothing needs the user's attention.",
-    ],
-  ])("removes %s response-tool prompt spans", (_label, prompt) => {
-    const messages = [
-      { role: "user", content: prompt },
-      createHeartbeatNoChangeMessage(),
-      {
-        role: "toolResult",
-        toolCallId: "call_heartbeat",
-        content: [{ type: "text", text: "HEARTBEAT_OK" }],
-      },
-      { role: "user", content: "what model are you" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what model are you" },
-    ]);
-  });
-
   it("removes native OpenAI Responses heartbeat function-call spans", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "function_call",
-            call_id: "call_bash",
-            name: "bash",
-            arguments: '{"command":"inspect monitor scratch"}',
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "function_call_output",
-            call_id: "call_bash",
-            output: "checked monitor scratch",
-          },
-        ],
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "function_call",
-            call_id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: '{"notify":false}',
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "function_call_output",
-            call_id: "call_heartbeat",
-            output: '{"notify":false}',
-          },
-        ],
-      },
-      { role: "user", content: "what model are you" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what model are you" },
-    ]);
-  });
-
-  it("removes assistant continuations after heartbeat response-tool results", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      createHeartbeatNoChangeMessage(),
-      {
-        role: "toolResult",
-        toolCallId: "call_heartbeat",
-        content: [{ type: "text", text: "HEARTBEAT_OK" }],
-      },
-      { role: "assistant", content: "No visible update. notify=false" },
-      { role: "user", content: "what model are you" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what model are you" },
-    ]);
-  });
-
-  it("removes pre-terminal assistant text once a heartbeat ack arrives", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      { role: "assistant", content: "Checking heartbeat status..." },
-      { role: "assistant", content: "HEARTBEAT_OK" },
-      { role: "user", content: "what model are you" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what model are you" },
-    ]);
-  });
-
-  it("preserves structured notify=true heartbeat response-tool alerts", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: createHeartbeatAttentionOutcome(),
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_heartbeat",
-        content: [{ type: "text", text: '{"notify":true}' }],
-      },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
-      messages,
+    expectFiltered(
+      [
+        wake,
+        functionCall("call_bash", "bash", '{"command":"inspect monitor scratch"}'),
+        functionResult("call_bash", "checked monitor scratch"),
+        functionCall("call_heartbeat", "heartbeat_respond", '{"notify":false}'),
+        functionResult("call_heartbeat", '{"notify":false}'),
+        modelQuestion,
+      ],
+      [modelQuestion],
     );
   });
 
-  it("preserves notify=true heartbeat response-tool alerts followed by a final ack", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: createHeartbeatAttentionOutcome(),
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_heartbeat",
-        content: [{ type: "text", text: '{"notify":true}' }],
-      },
-      { role: "assistant", content: "HEARTBEAT_OK" },
-      { role: "user", content: "what changed while I was away?" },
-    ];
+  it("removes assistant continuations after heartbeat response-tool results", () => {
+    expectFiltered(
+      [
+        wake,
+        heartbeatCall("toolCall", false),
+        toolResult("call_heartbeat", "HEARTBEAT_OK"),
+        assistant("No visible update. notify=false"),
+        modelQuestion,
+      ],
+      [modelQuestion],
+    );
+  });
 
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
-      messages,
+  it("removes pre-terminal assistant text once a heartbeat ack arrives", () => {
+    expectFiltered(
+      [wake, assistant("Checking heartbeat status..."), assistant("HEARTBEAT_OK"), modelQuestion],
+      [modelQuestion],
     );
   });
 
   it("preserves top-level notify=true heartbeat response-tool calls followed by a final ack", () => {
     const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
+      wake,
       {
         role: "assistant",
         content: null,
@@ -530,452 +244,108 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         toolCallId: "call_heartbeat",
         content: [{ type: "text", text: '{"notify":true}' }],
       },
-      { role: "assistant", content: "HEARTBEAT_OK" },
-      { role: "user", content: "what changed while I was away?" },
+      assistant("HEARTBEAT_OK"),
+      followup,
     ];
 
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
-      messages,
-    );
+    expect(filter(messages)).toEqual(messages);
   });
 
   it("preserves OpenAI Responses notify=true heartbeat calls keyed by call_id", () => {
     const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "function_call",
-            id: "fc_item_123",
-            call_id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: JSON.stringify(createHeartbeatAttentionOutcome()),
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "function_call_output",
-            call_id: "call_heartbeat",
-            output: '{"notify":true}',
-          },
-        ],
-      },
-      { role: "user", content: "what changed while I was away?" },
+      wake,
+      functionCall(
+        "call_heartbeat",
+        "heartbeat_respond",
+        JSON.stringify(createHeartbeatAttentionOutcome()),
+        "fc_item_123",
+      ),
+      functionResult("call_heartbeat", '{"notify":true}'),
+      followup,
     ];
 
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
-      messages,
-    );
-  });
-
-  it("preserves Anthropic-style notify=true heartbeat calls keyed by tool_use_id", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_heartbeat",
-            name: "heartbeat_respond",
-            input: createHeartbeatAttentionOutcome(),
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_heartbeat",
-            content: "recorded",
-          },
-        ],
-      },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
-      messages,
-    );
+    expect(filter(messages)).toEqual(messages);
   });
 
   it("preserves Anthropic-style notify=true heartbeat calls completed by mixed user turns", () => {
     const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_heartbeat",
-            name: "heartbeat_respond",
-            input: createHeartbeatAttentionOutcome(),
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_heartbeat",
-            content: "recorded",
-          },
-          { type: "text", text: "heartbeat delivery recorded" },
-        ],
-      },
-      { role: "user", content: "what changed while I was away?" },
+      wake,
+      heartbeatCall("tool_use"),
+      user([
+        anthropicResult("tool_result", "recorded"),
+        { type: "text", text: "heartbeat delivery recorded" },
+      ]),
+      followup,
     ];
 
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
-      messages,
-    );
-  });
-
-  it("removes pending notify=true heartbeat response-tool calls without tool results", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: createHeartbeatAttentionOutcome(),
-          },
-        ],
-      },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what changed while I was away?" },
-    ]);
+    expect(filter(messages)).toEqual(messages);
   });
 
   it("removes failed notify=true heartbeat response-tool calls", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: createHeartbeatAttentionOutcome(),
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_heartbeat",
-        isError: true,
-        content: [{ type: "text", text: "heartbeat response rejected" }],
-      },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what changed while I was away?" },
+    expectFiltered([
+      wake,
+      heartbeatCall("toolCall"),
+      toolResult("call_heartbeat", "heartbeat response rejected", true),
+      followup,
     ]);
   });
 
   it("removes Anthropic-style failed notify=true heartbeat calls keyed by tool_use_id", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_heartbeat",
-            name: "heartbeat_respond",
-            input: createHeartbeatAttentionOutcome(),
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_heartbeat",
-            is_error: true,
-            content: "heartbeat response rejected",
-          },
-        ],
-      },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what changed while I was away?" },
+    expectFiltered([
+      wake,
+      heartbeatCall("tool_use"),
+      user([anthropicResult("tool_result", "heartbeat response rejected", true)]),
+      followup,
     ]);
   });
 
   it("removes Anthropic-style error result heartbeat calls keyed by tool_use_id", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_heartbeat",
-            name: "heartbeat_respond",
-            input: createHeartbeatAttentionOutcome(),
-          },
-        ],
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "tool_result_error",
-            tool_use_id: "toolu_heartbeat",
-            content: "heartbeat response rejected",
-          },
-        ],
-      },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what changed while I was away?" },
+    expectFiltered([
+      wake,
+      heartbeatCall("tool_use"),
+      user([anthropicResult("tool_result_error", "heartbeat response rejected")]),
+      followup,
     ]);
   });
 
   it("does not treat unrelated helper tool results as completed notify=true responses", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_bash",
-            name: "bash",
-            arguments: { command: "inspect monitor scratch" },
-          },
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: createHeartbeatAttentionOutcome(),
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked monitor scratch" }],
-      },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what changed while I was away?" },
-    ]);
-  });
-
-  it("removes heartbeat response-tool spans with notify=false even when alert fields are present", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "call_heartbeat",
-            name: "heartbeat_respond",
-            arguments: {
-              outcome: "needs_attention",
-              notify: false,
-              summary: "Build is blocked.",
-              notificationText: "Build is blocked on missing credentials.",
-            },
-          },
-        ],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_heartbeat",
-        content: [{ type: "text", text: '{"notify":false}' }],
-      },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what changed while I was away?" },
+    expectFiltered([
+      wake,
+      assistant([
+        {
+          type: "toolCall",
+          id: "call_bash",
+          name: "bash",
+          arguments: { command: "inspect monitor scratch" },
+        },
+        {
+          type: "toolCall",
+          id: "call_heartbeat",
+          name: "heartbeat_respond",
+          arguments: createHeartbeatAttentionOutcome(),
+        },
+      ]),
+      toolResult("call_bash", "checked monitor scratch"),
+      followup,
     ]);
   });
 
   it("preserves mixed user text after silent heartbeat response-tool spans", () => {
-    const mixedUserMessage = {
-      role: "user",
-      content: [
-        {
-          type: "tool_result",
-          tool_use_id: "toolu_heartbeat",
-          content: "recorded",
-        },
-        { type: "text", text: "what model are you" },
-      ],
-    };
-    const assistantMessage = { role: "assistant", content: "I am OpenClaw." };
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_heartbeat",
-            name: "heartbeat_respond",
-            input: {
-              outcome: "no_change",
-              notify: false,
-              summary: "No visible update.",
-            },
-          },
-        ],
-      },
-      mixedUserMessage,
-      assistantMessage,
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      mixedUserMessage,
-      assistantMessage,
+    const mixedUserMessage = user([
+      anthropicResult("tool_result", "recorded"),
+      { type: "text", text: "what model are you" },
     ]);
-  });
-
-  it("stops a no-op span before a later visible heartbeat alert", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      { role: "assistant", content: "HEARTBEAT_OK" },
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      { role: "assistant", content: "Build is blocked on a failing release check." },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      { role: "assistant", content: "Build is blocked on a failing release check." },
-      { role: "user", content: "what changed while I was away?" },
-    ]);
+    const assistantMessage = assistant("I am OpenClaw.");
+    expectFiltered(
+      [wake, heartbeatCall("tool_use", false), mixedUserMessage, assistantMessage],
+      [mixedUserMessage, assistantMessage],
+    );
   });
 
   it("stops a prompt-only span before a later visible heartbeat alert", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      { role: "assistant", content: "Build is blocked on a failing release check." },
-      { role: "user", content: "what changed while I was away?" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      { role: "assistant", content: "Build is blocked on a failing release check." },
-      { role: "user", content: "what changed while I was away?" },
-    ]);
-  });
-
-  it("does not remove across a real user message", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      createHeartbeatNoChangeMessage(),
-      {
-        role: "toolResult",
-        toolCallId: "call_heartbeat",
-        content: [{ type: "text", text: "HEARTBEAT_OK" }],
-      },
-      { role: "user", content: "what model are you" },
-      { role: "assistant", content: "notify=false" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      { role: "user", content: "what model are you" },
-      { role: "assistant", content: "notify=false" },
-    ]);
-  });
-
-  it("preserves meaningful heartbeat output without terminal artifacts", () => {
-    const meaningfulMessages = [
-      { role: "user", content: HEARTBEAT_PROMPT },
-      { role: "assistant", content: "Status HEARTBEAT_OK due to watchdog failure" },
-    ];
-    expect(
-      filterHeartbeatTranscriptArtifacts(meaningfulMessages, undefined, HEARTBEAT_PROMPT),
-    ).toEqual(meaningfulMessages);
-  });
-
-  it("preserves helper tool turns when the heartbeat produces a visible alert", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call_bash", name: "bash", arguments: {} }],
-      },
-      {
-        role: "toolResult",
-        toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked monitor scratch" }],
-      },
-      { role: "assistant", content: "Build is blocked on a failing release check." },
-      { role: "user", content: "what model are you" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
-      messages,
-    );
-  });
-
-  it("preserves top-level helper tool turns when the heartbeat produces a visible alert", () => {
-    const messages = [
-      { role: "user", content: INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat },
-      {
-        role: "assistant",
-        content: null,
-        tool_calls: [
-          {
-            id: "call_bash",
-            function: {
-              name: "bash",
-              arguments: '{"command":"inspect monitor scratch"}',
-            },
-          },
-        ],
-      },
-      {
-        role: "tool",
-        toolCallId: "call_bash",
-        content: [{ type: "text", text: "checked monitor scratch" }],
-      },
-      { role: "assistant", content: "Build is blocked on a failing release check." },
-      { role: "user", content: "what model are you" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
-      messages,
-    );
-  });
-
-  it("keeps ordinary chats that mention the token", () => {
-    const messages = [
-      { role: "user", content: "Please reply HEARTBEAT_OK so I can test something." },
-      { role: "assistant", content: "HEARTBEAT_OK" },
-    ];
-
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual(
-      messages,
+    expectFiltered(
+      [wake, wake, assistant("Build is blocked on a failing release check."), followup],
+      [wake, assistant("Build is blocked on a failing release check."), followup],
     );
   });
 });

@@ -1,5 +1,3 @@
-/** Shared fail-closed parser for the system-profile cookie import domain filter. */
-
 /**
  * Normalize the optional `domains` filter for system-profile cookie import.
  *

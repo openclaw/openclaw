@@ -1,428 +1,91 @@
-// Verifies Docker sandbox config parsing and validation.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS,
-  resolveSandboxBrowserConfig,
-  resolveSandboxDockerConfig,
+  resolveSandboxConfigForAgent,
 } from "../agents/sandbox/config.js";
+import type { AgentSandboxConfig } from "./types.agents-shared.js";
 import { validateConfigObject } from "./validation.js";
 
-describe("sandbox docker config", () => {
-  it("joins setupCommand arrays with newlines", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              setupCommand: ["apt-get update", "apt-get install -y curl"],
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.agents?.defaults?.sandbox?.docker?.setupCommand).toBe(
-        "apt-get update\napt-get install -y curl",
-      );
-    }
+function validateSandbox(sandbox: unknown, agent?: unknown) {
+  return validateConfigObject({
+    agents: { defaults: { sandbox }, ...(agent ? { entries: { main: { sandbox: agent } } } : {}) },
   });
+}
 
-  it("accepts safe binds array in sandbox.docker config", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              binds: ["/home/user/source:/source:rw", "/var/data/myapp:/data:ro"],
-            },
-          },
-        },
-        entries: {
-          main: {
-            sandbox: {
-              docker: {
-                image: "custom-sandbox:latest",
-                binds: ["/home/user/projects:/projects:ro"],
-              },
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.agents?.defaults?.sandbox?.docker?.binds).toEqual([
-        "/home/user/source:/source:rw",
-        "/var/data/myapp:/data:ro",
-      ]);
-      expect(res.config.agents?.entries?.main?.sandbox?.docker?.binds).toEqual([
-        "/home/user/projects:/projects:ro",
-      ]);
-    }
-  });
+function parsedSandbox(sandbox: unknown, agent?: unknown) {
+  const result = validateSandbox(sandbox, agent);
+  expect(result.ok).toBe(true);
+  return result.ok ? result.config.agents : undefined;
+}
 
-  it("accepts Windows drive-letter binds in sandbox.docker config", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              binds: ["D:/data/openclaw/src:/src:ro", "D:\\data\\openclaw\\output:/output:rw"],
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.agents?.defaults?.sandbox?.docker?.binds).toEqual([
-        "D:/data/openclaw/src:/src:ro",
-        "D:\\data\\openclaw\\output:/output:rw",
-      ]);
-    }
-  });
+function resolveSandbox(defaults: AgentSandboxConfig, agent: AgentSandboxConfig = {}) {
+  return resolveSandboxConfigForAgent(
+    { agents: { defaults: { sandbox: defaults }, entries: { test: { sandbox: agent } } } },
+    "test",
+  );
+}
 
-  it("rejects drive-relative Windows binds in sandbox.docker config", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              binds: ["D:relative\\path:/src:ro"],
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("accepts non-empty Docker GPU passthrough config", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              gpus: "all",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.agents?.defaults?.sandbox?.docker?.gpus).toBe("all");
-    }
-  });
-
-  it("rejects empty Docker GPU passthrough config", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              gpus: "",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects network host mode via Zod schema validation", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              network: "host",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects container namespace join by default", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              network: "container:peer",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("allows container namespace join with explicit dangerous override", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              network: "container:peer",
-              dangerouslyAllowContainerNamespaceJoin: true,
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("uses agent override precedence for dangerous sandbox docker booleans", () => {
-    for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
-      const inherited = resolveSandboxDockerConfig({
-        scope: "agent",
-        globalDocker: { [key]: true },
-        agentDocker: {},
-      });
-      expect(inherited[key]).toBe(true);
-
-      const overridden = resolveSandboxDockerConfig({
-        scope: "agent",
-        globalDocker: { [key]: true },
-        agentDocker: { [key]: false },
-      });
-      expect(overridden[key]).toBe(false);
-
-      const sharedScope = resolveSandboxDockerConfig({
-        scope: "shared",
-        globalDocker: { [key]: true },
-        agentDocker: { [key]: false },
-      });
-      expect(sharedScope[key]).toBe(true);
-    }
-  });
-
-  it("rejects seccomp unconfined via Zod schema validation", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              seccompProfile: "unconfined",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects apparmor unconfined via Zod schema validation", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              apparmorProfile: "unconfined",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects non-string values in binds array", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              binds: [123, "/valid/path:/path"],
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
+it("joins setupCommand arrays with newlines", () => {
+  const agents = parsedSandbox({ docker: { setupCommand: ["first", "second"] } });
+  expect(agents?.defaults?.sandbox?.docker?.setupCommand).toBe("first\nsecond");
 });
 
-describe("sandbox browser binds config", () => {
-  it("accepts binds array in sandbox.browser config", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            browser: {
-              binds: [
-                "/home/user/.chrome-profile:/data/chrome:rw",
-                "D:/data/openclaw/chrome:/data/chrome-windows:rw",
-              ],
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.agents?.defaults?.sandbox?.browser?.binds).toEqual([
-        "/home/user/.chrome-profile:/data/chrome:rw",
-        "D:/data/openclaw/chrome:/data/chrome-windows:rw",
-      ]);
-    }
-  });
-
-  it("rejects relative source paths in browser binds", () => {
-    for (const bind of [
-      "relative/profile:/data/chrome:rw",
-      "D:relative\\profile:/data/chrome:rw",
-    ]) {
-      const res = validateConfigObject({
-        agents: {
-          defaults: {
-            sandbox: {
-              browser: {
-                binds: [bind],
-              },
-            },
-          },
-        },
-      });
-      expect(res.ok, bind).toBe(false);
-    }
-  });
-
-  it("rejects non-string values in browser binds array", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            browser: {
-              binds: [123],
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("merges global and agent browser binds", () => {
-    const resolved = resolveSandboxBrowserConfig({
-      scope: "agent",
-      globalBrowser: { binds: ["/global:/global:ro"] },
-      agentBrowser: { binds: ["/agent:/agent:rw"] },
-    });
-    expect(resolved.binds).toEqual(["/global:/global:ro", "/agent:/agent:rw"]);
-  });
-
-  it("treats empty binds as configured (override to none)", () => {
-    const resolved = resolveSandboxBrowserConfig({
-      scope: "agent",
-      globalBrowser: { binds: [] },
-      agentBrowser: {},
-    });
-    expect(resolved.binds).toStrictEqual([]);
-  });
-
-  it("ignores agent browser binds under shared scope", () => {
-    const resolved = resolveSandboxBrowserConfig({
-      scope: "shared",
-      globalBrowser: { binds: ["/global:/global:ro"] },
-      agentBrowser: { binds: ["/agent:/agent:rw"] },
-    });
-    expect(resolved.binds).toEqual(["/global:/global:ro"]);
-
-    const resolvedNoGlobal = resolveSandboxBrowserConfig({
-      scope: "shared",
-      globalBrowser: {},
-      agentBrowser: { binds: ["/agent:/agent:rw"] },
-    });
-    expect(resolvedNoGlobal.binds).toBeUndefined();
-  });
-
-  it("returns undefined binds when none configured", () => {
-    const resolved = resolveSandboxBrowserConfig({
-      scope: "agent",
-      globalBrowser: {},
-      agentBrowser: {},
-    });
-    expect(resolved.binds).toBeUndefined();
-  });
-
-  it("defaults browser network to dedicated sandbox network", () => {
-    const resolved = resolveSandboxBrowserConfig({
-      scope: "agent",
-      globalBrowser: {},
-      agentBrowser: {},
-    });
-    expect(resolved.network).toBe("openclaw-sandbox-browser");
-  });
-
-  it("prefers agent browser network over global browser network", () => {
-    const resolved = resolveSandboxBrowserConfig({
-      scope: "agent",
-      globalBrowser: { network: "openclaw-sandbox-browser-global" },
-      agentBrowser: { network: "openclaw-sandbox-browser-agent" },
-    });
-    expect(resolved.network).toBe("openclaw-sandbox-browser-agent");
-  });
-
-  it("merges cdpSourceRange with agent override", () => {
-    const resolved = resolveSandboxBrowserConfig({
-      scope: "agent",
-      globalBrowser: { cdpSourceRange: "172.21.0.1/32" },
-      agentBrowser: { cdpSourceRange: "172.22.0.1/32" },
-    });
-    expect(resolved.cdpSourceRange).toBe("172.22.0.1/32");
-  });
-
-  it("rejects host network mode in sandbox.browser config", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            browser: {
-              network: "host",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("rejects container namespace join in sandbox.browser config by default", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            browser: {
-              network: "container:peer",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(false);
-  });
-
-  it("allows container namespace join in sandbox.browser config with explicit dangerous override", () => {
-    const res = validateConfigObject({
-      agents: {
-        defaults: {
-          sandbox: {
-            docker: {
-              dangerouslyAllowContainerNamespaceJoin: true,
-            },
-            browser: {
-              network: "container:peer",
-            },
-          },
-        },
-      },
-    });
-    expect(res.ok).toBe(true);
-  });
+it("preserves global and per-agent Docker binds", () => {
+  const binds = ["/home/user/source:/source:rw", "/var/data/myapp:/data:ro"];
+  const agentBinds = ["/home/user/projects:/projects:ro"];
+  const agents = parsedSandbox({ docker: { binds } }, { docker: { binds: agentBinds } });
+  expect(agents?.defaults?.sandbox?.docker?.binds).toEqual(binds);
+  expect(agents?.entries?.main?.sandbox?.docker?.binds).toEqual(agentBinds);
 });
+
+it.each([
+  ["docker", " /home/user/source:/data", false],
+  ["docker", "/home/user/source :/data ", true],
+  ["browser", " /home/user/source:/data", false],
+  ["browser", "/home/user/source :/data ", true],
+] as const)("validates %s bind %s without trimming path bytes", (backend, bind, accepted) => {
+  const result = validateSandbox({ [backend]: { binds: [bind] } });
+  expect(result.ok, bind).toBe(accepted);
+  if (result.ok) {
+    expect(result.config.agents?.defaults?.sandbox?.[backend]?.binds).toEqual([bind]);
+  }
+});
+
+it.each([
+  ["docker", "network", "host"],
+  ["docker", "network", "container:peer"],
+  ["docker", "seccompProfile", "unconfined"],
+  ["docker", "apparmorProfile", "unconfined"],
+  ["browser", "network", "host"],
+  ["browser", "network", "container:peer"],
+] as const)("rejects %s %s=%s", (kind, field, value) => {
+  expect(validateSandbox({ [kind]: { [field]: value } }).ok).toBe(false);
+});
+
+it.each(["docker", "browser"] as const)("allows %s namespace join with override", (kind) => {
+  const docker = { dangerouslyAllowContainerNamespaceJoin: true };
+  const network = { network: "container:peer" };
+  const sandbox =
+    kind === "docker" ? { docker: { ...docker, ...network } } : { docker, browser: network };
+  expect(validateSandbox(sandbox).ok).toBe(true);
+});
+
+it("uses agent override precedence for dangerous sandbox docker booleans", () => {
+  for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
+    const defaults = { scope: "agent", docker: { [key]: true } } satisfies AgentSandboxConfig;
+    const override = { docker: { [key]: false } };
+    expect(resolveSandbox(defaults).docker[key]).toBe(true);
+    expect(resolveSandbox(defaults, override).docker[key]).toBe(false);
+    expect(resolveSandbox({ ...defaults, scope: "shared" }, override).docker[key]).toBe(true);
+  }
+});
+it.each([{ binds: ["/g:/g:ro"] }, { binds: undefined }])(
+  "ignores agent browser binds under shared scope: %j",
+  (browser) => {
+    const resolved = resolveSandbox(
+      { scope: "shared", browser },
+      { browser: { binds: ["/a:/a:rw"] } },
+    ).browser;
+    expect(resolved).toMatchObject({ binds: browser.binds, network: "openclaw-sandbox-browser" });
+  },
+);

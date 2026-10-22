@@ -1,5 +1,3 @@
-// `plugins doctor` reports effective-only plugins from the metadata snapshot it already
-// built, so asking for effective ids must not re-derive plugin discovery.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +33,7 @@ vi.mock("./discovery.js", async (importOriginal) => {
   };
 });
 
-const { withPluginDiagnosticsReport } = await import("./status.js");
+const { buildPluginSnapshotReportAsync, withPluginDiagnosticsReport } = await import("./status.js");
 const { resolveEffectivePluginIds } = await import("./effective-plugin-ids.js");
 const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
 
@@ -65,32 +63,25 @@ const config: OpenClawConfig = {
   },
 } as OpenClawConfig;
 
-async function countReport(params: {
-  effectiveOnly: boolean;
-  onlyPluginIds?: readonly string[];
-}): Promise<{
-  rebuilds: number;
-  scans: number;
-  ids: string[];
-}> {
-  counters.manifestRegistryRebuilds = 0;
-  counters.discoveryScans = 0;
-  return withPluginDiagnosticsReport({ config, env: process.env, ...params }, (report) => ({
-    rebuilds: counters.manifestRegistryRebuilds,
-    scans: counters.discoveryScans,
-    ids: report.plugins.map((plugin) => plugin.id).toSorted(),
-  }));
+function counts(ids: string[]) {
+  return { rebuilds: counters.manifestRegistryRebuilds, scans: counters.discoveryScans, ids };
 }
 
-function countResolve(metadataSnapshot: PluginMetadataSnapshot): {
-  rebuilds: number;
-  scans: number;
-  ids: string[];
-} {
+function resetCounters() {
   counters.manifestRegistryRebuilds = 0;
   counters.discoveryScans = 0;
-  const ids = resolveEffectivePluginIds({ config, env: process.env, metadataSnapshot });
-  return { rebuilds: counters.manifestRegistryRebuilds, scans: counters.discoveryScans, ids };
+}
+
+async function countReport(effectiveOnly: boolean) {
+  resetCounters();
+  return withPluginDiagnosticsReport({ config, env: process.env, effectiveOnly }, (report) =>
+    counts(report.plugins.map((plugin) => plugin.id).toSorted()),
+  );
+}
+
+function countResolve(metadataSnapshot: PluginMetadataSnapshot) {
+  resetCounters();
+  return counts(resolveEffectivePluginIds({ config, env: process.env, metadataSnapshot }));
 }
 
 beforeEach(() => {
@@ -100,9 +91,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(tempRoot, "state"));
 });
 
-afterEach(() => {
-  clearPluginMetadataLifecycleCaches();
-});
+afterEach(clearPluginMetadataLifecycleCaches);
 
 afterAll(() => {
   fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -110,20 +99,34 @@ afterAll(() => {
 });
 
 it("does not re-derive discovery when reporting effective-only plugins", async () => {
-  const all = await countReport({ effectiveOnly: false });
+  const all = await countReport(false);
   clearPluginMetadataLifecycleCaches();
-  const effective = await countReport({ effectiveOnly: true });
+  const effective = await countReport(true);
 
-  // The effective-only filter still selects the configured channel owner.
   expect(effective.ids).toEqual(["cold-plugin", "other-plugin"]);
-  // ...and it reuses the snapshot the report already built instead of rediscovering.
-  expect({
-    rebuilds: effective.rebuilds,
-    scansMoreThanFullReport: effective.scans > all.scans,
-  }).toEqual({ rebuilds: 0, scansMoreThanFullReport: false });
+  expect(effective.rebuilds).toBe(0);
+  expect(effective.scans).toBeLessThanOrEqual(all.scans);
 });
 
-// A supplied snapshot is an optimization, never an input to the answer.
+it.each([
+  { onlyPluginIds: undefined, expected: ["cold-plugin", "other-plugin"] },
+  { onlyPluginIds: [" other-plugin ", "missing-plugin"], expected: ["other-plugin"] },
+  { onlyPluginIds: [], expected: [] },
+])(
+  "keeps effective snapshot reports within explicit scope $onlyPluginIds",
+  async ({ onlyPluginIds, expected }) => {
+    const metadataSnapshot = loadPluginMetadataSnapshot({ config, env: process.env });
+    const report = await buildPluginSnapshotReportAsync({
+      config,
+      env: process.env,
+      metadataSnapshot,
+      onlyPluginIds,
+    });
+
+    expect(report.plugins.map((plugin) => plugin.id).toSorted()).toEqual(expected);
+  },
+);
+
 it("only reuses a snapshot that answers for the whole config", () => {
   const env = process.env;
   const fullSnapshot = loadPluginMetadataSnapshot({ config, env });
@@ -131,24 +134,13 @@ it("only reuses a snapshot that answers for the whole config", () => {
   const full = countResolve(fullSnapshot);
   const withoutSnapshot = resolveEffectivePluginIds({ config, env });
   clearPluginMetadataLifecycleCaches();
-  // `recordPluginInstallSource` asks for one plugin's effective state, which scopes the
-  // snapshot to that plugin and truncates its manifest set to that plugin alone.
-  const scopedSnapshot = loadPluginMetadataSnapshot({
-    config,
-    env,
-    pluginIds: ["other-plugin"],
-  });
+  // A scoped install-source lookup must not truncate a whole-config answer.
+  const scopedSnapshot = loadPluginMetadataSnapshot({ config, env, pluginIds: ["other-plugin"] });
   clearPluginMetadataLifecycleCaches();
   const scoped = countResolve(scopedSnapshot);
 
-  expect({ full: full.ids, scoped: scoped.ids }).toEqual({
-    full: withoutSnapshot,
-    scoped: withoutSnapshot,
-  });
+  expect([full.ids, scoped.ids]).toEqual([withoutSnapshot, withoutSnapshot]);
   expect(full.scans).toBe(0);
-  // A whole-config snapshot is reused; a plugin-scoped one cannot stand in for it.
-  expect({ fullReused: full.rebuilds === 0, scopedReused: scoped.rebuilds === 0 }).toEqual({
-    fullReused: true,
-    scopedReused: false,
-  });
+  expect(full.rebuilds).toBe(0);
+  expect(scoped.rebuilds).not.toBe(0);
 });

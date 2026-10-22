@@ -9,10 +9,7 @@ import { isRecord } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import type { ChannelDmPolicyMetadata } from "./channel-config-metadata.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
-import {
-  type DmPolicyAllowFromViolation,
-  evaluateDmPolicyAllowFromDependency,
-} from "./zod-schema.core.js";
+import { evaluateDmPolicyAllowFromDependency } from "./zod-schema.core.js";
 
 const bundledChannelSchemaById = new Map<string, unknown>(
   GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).map(
@@ -26,59 +23,6 @@ export const bundledChannelIds = Object.freeze(
     .filter((channelId) => channelId.length > 0),
 );
 
-const bundledChannelIdSet = new Set(bundledChannelIds);
-const bundledChannelAliases = new Map<string, string>(
-  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).flatMap(
-    (entry) => {
-      const channelId = normalizeLowercaseStringOrEmpty(entry.channelId);
-      if (!channelId) {
-        return [];
-      }
-      return (entry.aliases ?? [])
-        .map((alias) => [normalizeLowercaseStringOrEmpty(alias), channelId] as const)
-        .filter(([alias]) => alias.length > 0);
-    },
-  ),
-);
-
-export function normalizeBundledChannelId(raw?: string | null): string | null {
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  if (!normalized) {
-    return null;
-  }
-  const resolved = bundledChannelAliases.get(normalized) ?? normalized;
-  return bundledChannelIdSet.has(resolved) ? resolved : null;
-}
-
-export function formatRawChannelConfigIssueMessage(message: string): string {
-  return `invalid config: ${message}`;
-}
-
-function buildDmPolicyDependencyWarning(params: {
-  channelId: string;
-  accountId?: string;
-  allowFromSource?: "explicit" | "inherited";
-  violation: DmPolicyAllowFromViolation;
-}): ConfigValidationIssue {
-  const channelBase = `channels.${params.channelId}`;
-  const scope = params.accountId ? `${channelBase}.accounts.${params.accountId}` : channelBase;
-  const allowFromPath = `${scope}.allowFrom`;
-  const inherited = params.accountId && params.allowFromSource === "inherited";
-  const allowFromSubject = inherited
-    ? `${allowFromPath} is unset and ${channelBase}.allowFrom`
-    : allowFromPath;
-  const accountInheritedTarget = inherited ? ` or ${channelBase}.allowFrom` : "";
-  const accountOverrideFix =
-    params.accountId && !inherited
-      ? `, remove ${allowFromPath} to inherit ${channelBase}.allowFrom,`
-      : "";
-  const message =
-    params.violation === "open_requires_wildcard"
-      ? `${scope}.dmPolicy="open" but ${allowFromSubject} does not include "*"; all DMs will be dropped. Add "*" to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or set ${scope}.dmPolicy to "pairing"/"allowlist".`
-      : `${scope}.dmPolicy="allowlist" but ${allowFromSubject} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or change ${scope}.dmPolicy.`;
-  return { path: allowFromPath, message };
-}
-
 // Channel map keys that are not channels and must be skipped while scanning DM policy.
 const DM_POLICY_PSEUDO_CHANNEL_KEYS = new Set(["defaults", "modelByChannel", "tools"]);
 
@@ -86,25 +30,12 @@ function hasDefinedConfigValue(record: Record<string, unknown>, key: string): bo
   return Object.hasOwn(record, key) && record[key] !== undefined;
 }
 
-function hasConfiguredDmAllowFrom(
-  record: Record<string, unknown>,
-  mode: ChannelDmAllowFromMode,
-): boolean {
+function hasConfiguredDmAllowFrom(record: Record<string, unknown>): boolean {
   const dm = isRecord(record.dm) ? record.dm : null;
-  if (mode === "nestedOnly") {
-    return (
-      (dm !== null && hasDefinedConfigValue(dm, "allowFrom")) ||
-      hasDefinedConfigValue(record, "allowFrom")
-    );
-  }
   return (
     hasDefinedConfigValue(record, "allowFrom") ||
     (dm !== null && hasDefinedConfigValue(dm, "allowFrom"))
   );
-}
-
-function isConfigRecordEnabled(record: Record<string, unknown>): boolean {
-  return record.enabled !== false;
 }
 
 export function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawConfig): boolean {
@@ -115,7 +46,7 @@ export function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawCo
     ([channelId, channelValue]) =>
       !DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) &&
       isRecord(channelValue) &&
-      isConfigRecordEnabled(channelValue),
+      channelValue.enabled !== false,
   );
 }
 
@@ -145,7 +76,7 @@ export function collectChannelDmPolicyDependencyWarnings(
     if (
       DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) ||
       !isRecord(channelValue) ||
-      !isConfigRecordEnabled(channelValue)
+      channelValue.enabled === false
     ) {
       continue;
     }
@@ -155,43 +86,51 @@ export function collectChannelDmPolicyDependencyWarnings(
     if (mode === "nestedOnly") {
       continue;
     }
-    const channelViolation = evaluateDmPolicyAllowFromDependency({
-      policy: resolveChannelDmPolicy({ account: channelValue, mode }),
-      allowFrom: resolveChannelDmAllowFrom({ account: channelValue, mode }),
-    });
-    if (
-      channelViolation &&
-      (channelViolation !== "open_requires_wildcard" || openDmRequiresAllowFromWildcard)
-    ) {
-      warnings.push(buildDmPolicyDependencyWarning({ channelId, violation: channelViolation }));
-    }
+    const appendWarning = (account: Record<string, unknown>, accountId?: string) => {
+      const parent = accountId === undefined ? undefined : channelValue;
+      const access = { account, parent, mode };
+      const violation = evaluateDmPolicyAllowFromDependency({
+        policy: resolveChannelDmPolicy(access),
+        allowFrom: resolveChannelDmAllowFrom(access),
+      });
+      if (
+        violation &&
+        (violation !== "open_requires_wildcard" || openDmRequiresAllowFromWildcard)
+      ) {
+        const allowFromSource =
+          accountId === undefined
+            ? undefined
+            : hasConfiguredDmAllowFrom(account)
+              ? "explicit"
+              : "inherited";
+        const channelBase = `channels.${channelId}`;
+        const scope = accountId ? `${channelBase}.accounts.${accountId}` : channelBase;
+        const allowFromPath = `${scope}.allowFrom`;
+        const inherited = accountId && allowFromSource === "inherited";
+        const allowFromSubject = inherited
+          ? `${allowFromPath} is unset and ${channelBase}.allowFrom`
+          : allowFromPath;
+        const accountInheritedTarget = inherited ? ` or ${channelBase}.allowFrom` : "";
+        const accountOverrideFix =
+          accountId && !inherited
+            ? `, remove ${allowFromPath} to inherit ${channelBase}.allowFrom,`
+            : "";
+        const message =
+          violation === "open_requires_wildcard"
+            ? `${scope}.dmPolicy="open" but ${allowFromSubject} does not include "*"; all DMs will be dropped. Add "*" to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or set ${scope}.dmPolicy to "pairing"/"allowlist".`
+            : `${scope}.dmPolicy="allowlist" but ${allowFromSubject} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or change ${scope}.dmPolicy.`;
+        warnings.push({ path: allowFromPath, message });
+      }
+    };
+    appendWarning(channelValue);
     if (!isRecord(channelValue.accounts)) {
       continue;
     }
     for (const [accountId, accountValue] of Object.entries(channelValue.accounts)) {
-      if (!isRecord(accountValue) || !isConfigRecordEnabled(accountValue)) {
+      if (!isRecord(accountValue) || accountValue.enabled === false) {
         continue;
       }
-      const allowFromSource = hasConfiguredDmAllowFrom(accountValue, mode)
-        ? "explicit"
-        : "inherited";
-      const accountViolation = evaluateDmPolicyAllowFromDependency({
-        policy: resolveChannelDmPolicy({ account: accountValue, parent: channelValue, mode }),
-        allowFrom: resolveChannelDmAllowFrom({ account: accountValue, parent: channelValue, mode }),
-      });
-      if (
-        accountViolation &&
-        (accountViolation !== "open_requires_wildcard" || openDmRequiresAllowFromWildcard)
-      ) {
-        warnings.push(
-          buildDmPolicyDependencyWarning({
-            channelId,
-            accountId,
-            allowFromSource,
-            violation: accountViolation,
-          }),
-        );
-      }
+      appendWarning(accountValue, accountId);
     }
   }
   return warnings;
@@ -225,7 +164,7 @@ export function collectRawBundledChannelConfigIssues(
         error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`;
       issues.push({
         path,
-        message: formatRawChannelConfigIssueMessage(message),
+        message: `invalid config: ${message}`,
         allowedValues: error.allowedValues,
         allowedValuesHiddenCount: error.allowedValuesHiddenCount,
       });

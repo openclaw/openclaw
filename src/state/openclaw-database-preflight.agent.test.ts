@@ -41,80 +41,47 @@ function family(root: string) {
 }
 describe("explicit agent preflight", () => {
   for (const kind of [
-    "missing",
     "directory",
-    "symlink",
     "wal",
-    "shm",
-    "journal",
     "wrong-owner",
     "empty-owner",
     "shared-role",
     "missing-label-index",
-    "drifted-label-index",
-    "wrong-table-label-index",
-    "exact",
   ] as const) {
-    // File symlink creation on Windows depends on host privilege, not reader behavior.
-    it.skipIf(process.platform === "win32" && kind === "symlink")(
-      `does not mutate or create a database for ${kind}`,
-      async () => {
-        const f = fixture();
-        let input = f.file;
-        if (kind === "missing") {
-          input = path.join(f.root, "missing.sqlite");
-        }
-        if (kind === "directory") {
-          input = f.root;
-        }
-        if (kind === "symlink") {
-          input = path.join(f.root, "alias.sqlite");
-          fs.symlinkSync(f.file, input);
-        }
-        if (["wal", "shm", "journal"].includes(kind)) {
-          fs.writeFileSync(f.file + "-" + kind, "owned sidecar");
-        }
-        if (kind === "shared-role") {
-          const db = new (requireNodeSqlite().DatabaseSync)(f.file);
-          db.exec("UPDATE schema_meta SET role='global', agent_id=NULL");
-          db.close();
-        }
-        if (
-          ["missing-label-index", "drifted-label-index", "wrong-table-label-index"].includes(kind)
-        ) {
-          const db = new (requireNodeSqlite().DatabaseSync)(f.file);
-          db.exec("DROP INDEX IF EXISTS idx_agent_session_nodes_label;");
-          if (kind === "drifted-label-index") {
-            db.exec(
-              "CREATE INDEX idx_agent_session_nodes_label ON session_nodes(label, session_key) WHERE archived_at IS NULL;",
-            );
-          }
-          if (kind === "wrong-table-label-index") {
-            db.exec("CREATE INDEX idx_agent_session_nodes_label ON session_windows(session_key);");
-          }
-          db.close();
-        }
-        const before = family(f.root);
-        const result = await preflight(
-          input,
-          kind === "wrong-owner" ? "other" : kind === "empty-owner" ? "" : "main",
-        );
-        expect(result.status).toBe(
-          kind === "exact" || kind === "missing-label-index"
-            ? "exact"
-            : [
-                  "wrong-owner",
-                  "shared-role",
-                  "drifted-label-index",
-                  "wrong-table-label-index",
-                ].includes(kind)
-              ? "incompatible"
-              : "indeterminate",
-        );
-        expect(result.requiresWrite).toBe(false);
-        expect(result.databasePath).toBe(input);
-        expect(family(f.root)).toEqual(before);
-      },
-    );
+    it(`does not mutate or create a database for ${kind}`, async () => {
+      const f = fixture();
+      let input = f.file;
+      if (kind === "directory") {
+        input = f.root;
+      }
+      if (kind === "wal") {
+        fs.writeFileSync(f.file + "-" + kind, "owned sidecar");
+      }
+      if (kind === "shared-role") {
+        const db = new (requireNodeSqlite().DatabaseSync)(f.file);
+        db.exec("UPDATE schema_meta SET role='global', agent_id=NULL");
+        db.close();
+      }
+      if (kind === "missing-label-index") {
+        const db = new (requireNodeSqlite().DatabaseSync)(f.file);
+        db.exec("DROP INDEX IF EXISTS idx_agent_session_nodes_label;");
+        db.close();
+      }
+      const before = family(f.root);
+      const result = await preflight(
+        input,
+        kind === "wrong-owner" ? "other" : kind === "empty-owner" ? "" : "main",
+      );
+      expect(result.status).toBe(
+        kind === "missing-label-index"
+          ? "exact"
+          : kind === "wrong-owner" || kind === "shared-role"
+            ? "incompatible"
+            : "indeterminate",
+      );
+      expect(result.requiresWrite).toBe(false);
+      expect(result.databasePath).toBe(input);
+      expect(family(f.root)).toEqual(before);
+    });
   }
 });

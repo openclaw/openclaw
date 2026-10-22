@@ -8,3 +8,4 @@ export {
   saveMediaStream,
 } from "../media/store.js";
 export type { SavedMedia } from "../media/store.js";
+export { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";

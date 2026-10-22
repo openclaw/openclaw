@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Native proof runs in a disposable FreeBSD VM; all cases use a private chroot.
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +20,7 @@ fs.chmodSync(work, 0o700);
 const root = path.join(work, "root");
 fs.mkdirSync(root, { mode: 0o755 });
 const helper = "/usr/local/libexec/openclaw-service-inspect.mjs";
+const discoveryHelper = "/usr/local/libexec/lib/freebsd-service-discovery.mjs";
 const escapedCase = "deadline closes captures held by an escaped daemon";
 const escapedOnly = process.argv[2] === "--escaped-pipe-only";
 assert.ok(process.argv.length === 2 || (escapedOnly && process.argv.length === 3));
@@ -28,6 +29,7 @@ let escapedLaunched = false;
 let mounted = false;
 let noexecMounted = false;
 let passed = 0;
+let signalFixtureActive = false;
 const fixturePath = (filename) => path.join(root, filename);
 const write = (filename, contents, mode = 0o644) => {
   fs.mkdirSync(path.dirname(fixturePath(filename)), { recursive: true });
@@ -35,28 +37,28 @@ const write = (filename, contents, mode = 0o644) => {
   fs.chmodSync(fixturePath(filename), mode);
 };
 
+function nodeArguments(args, user) {
+  return [
+    ...(user ? ["-u", user] : []),
+    root,
+    "/usr/bin/env",
+    "-i",
+    "HOME=/",
+    "PATH=/sbin:/bin:/usr/sbin:/usr/bin",
+    "LC_ALL=C",
+    "/usr/local/bin/node",
+    ...args,
+  ];
+}
+
 function runNode(args, { user, env = {} } = {}) {
-  return spawnSync(
-    "/usr/sbin/chroot",
-    [
-      ...(user ? ["-u", user] : []),
-      root,
-      "/usr/bin/env",
-      "-i",
-      "HOME=/",
-      "PATH=/sbin:/bin:/usr/sbin:/usr/bin",
-      "LC_ALL=C",
-      "/usr/local/bin/node",
-      ...args,
-    ],
-    {
-      encoding: "utf8",
-      timeout: 20_000,
-      // The inspector handles SIGTERM; the fixture deadline must stop its own child.
-      killSignal: "SIGKILL",
-      env: { PATH: "/sbin:/bin:/usr/sbin:/usr/bin", ...env },
-    },
-  );
+  return spawnSync("/usr/sbin/chroot", nodeArguments(args, user), {
+    encoding: "utf8",
+    timeout: 20_000,
+    // The fixture deadline must stop its own child even if it handles SIGTERM.
+    killSignal: "SIGKILL",
+    env: { PATH: "/sbin:/bin:/usr/sbin:/usr/bin", ...env },
+  });
 }
 
 function diagnostic(result) {
@@ -92,15 +94,122 @@ function run({ args = [], user, env = {} } = {}) {
   return output;
 }
 
-function check(name, test) {
+async function check(name, test) {
   if (escapedOnly && name !== escapedCase) {
     return;
   }
   process.stdout.write(`CASE ${name}\n`);
-  test();
+  await test();
   assert.equal(fs.existsSync(fixturePath("/service-executed")), false);
   passed++;
   process.stdout.write(`PASS ${name}\n`);
+}
+
+async function waitFor(predicate) {
+  const deadline = performance.now() + 5_000;
+  do {
+    if (predicate()) {
+      return true;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
+  } while (performance.now() < deadline);
+  return false;
+}
+
+async function checkSignalCancellation(signal, caller) {
+  const holder = `/signal-holder-${path.basename(work)}.mjs`;
+  const pidPath = fixturePath("/signal-holder.pid");
+  fs.rmSync(pidPath, { force: true });
+  write(
+    holder,
+    'import fs from "node:fs"; fs.writeFileSync("/signal-holder.pid", String(process.pid)); setTimeout(() => {}, 60_000);\n',
+  );
+  write("/etc/rc.conf", `exec /usr/local/bin/node ${holder}\n`);
+  signalFixtureActive = true;
+  const child = spawn("/usr/sbin/chroot", nodeArguments([caller]), {
+    env: { PATH: "/sbin:/bin:/usr/sbin:/usr/bin" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let closed = false;
+  let spawnError;
+  let outputBytes = 0;
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  child.once("close", () => {
+    closed = true;
+  });
+  child.stdout.on("data", (chunk) => {
+    outputBytes += chunk.length;
+  });
+  child.stderr.on("data", (chunk) => {
+    outputBytes += chunk.length;
+  });
+  let pid;
+  const queryIsLive = () => {
+    const result = spawnSync("/bin/ps", ["-ww", "-p", pid, "-o", "stat=", "-o", "command="], {
+      encoding: "utf8",
+      timeout: 2_000,
+      killSignal: "SIGKILL",
+      maxBuffer: 4096,
+    });
+    assert.ifError(result.error);
+    assert.equal(result.signal, null);
+    assert.ok(result.status === 0 || result.status === 1);
+    assert.equal(result.stderr, "");
+    const state = result.stdout.trim();
+    if (!state || state.startsWith("Z")) {
+      return false;
+    }
+    assert.equal(state.replace(/^\S+\s+/, ""), `/usr/local/bin/node ${holder}`);
+    return true;
+  };
+  try {
+    assert.ok(
+      await waitFor(
+        () =>
+          closed ||
+          (fs.existsSync(pidPath) && /^[1-9][0-9]*$/.test(fs.readFileSync(pidPath, "utf8").trim())),
+      ),
+      "signal query did not start",
+    );
+    assert.ifError(spawnError);
+    pid = fs.readFileSync(pidPath, "utf8").trim();
+    assert.match(pid, /^[1-9][0-9]*$/);
+    assert.ok(queryIsLive(), "signal query exited before interruption");
+    assert.equal(child.kill(signal), true);
+    assert.ok(await waitFor(() => closed), "caller did not settle after signal");
+    assert.equal(outputBytes, 0, "caller continued to publish a query result");
+    assert.equal(fs.existsSync(fixturePath("/query-continued")), false);
+    if (caller === helper) {
+      assert.equal(child.exitCode, null);
+      assert.equal(child.signalCode, signal);
+    } else {
+      assert.equal(child.exitCode, 73);
+      assert.equal(child.signalCode, null);
+      assert.equal(fs.readFileSync(fixturePath("/host-signal"), "utf8"), signal);
+    }
+    assert.ok(await waitFor(() => !queryIsLive()), "owned configuration query remains live");
+  } finally {
+    // Stop only this child and the recorded unique fixture, never an argv census.
+    // Retain the chroot if either identity or completion cannot be established.
+    if (!closed) {
+      child.kill("SIGKILL");
+    }
+    assert.ok(await waitFor(() => closed), "signal caller cleanup did not finish");
+    if (!pid) {
+      pid = fs.readFileSync(pidPath, "utf8").trim();
+      assert.match(pid, /^[1-9][0-9]*$/);
+    }
+    if (queryIsLive()) {
+      process.kill(Number(pid), "SIGTERM");
+    }
+    assert.ok(await waitFor(() => !queryIsLive()), "signal query cleanup did not finish");
+    signalFixtureActive = false;
+    write("/etc/rc.conf", "");
+  }
 }
 
 try {
@@ -127,6 +236,10 @@ try {
     helper,
     fs.readFileSync(fileURLToPath(new URL("./freebsd-service-inspect.mjs", import.meta.url))),
   );
+  const discoverySource = fs.readFileSync(
+    fileURLToPath(new URL("./lib/freebsd-service-discovery.mjs", import.meta.url)),
+  );
+  write(discoveryHelper, discoverySource);
   for (const filename of ["/etc/rc.subr", "/etc/defaults/rc.conf", "/etc/passwd", "/etc/group"]) {
     write(filename, fs.readFileSync(filename));
   }
@@ -146,17 +259,19 @@ try {
   assert.match(node.stdout.trim(), /^v\d+\.\d+\.\d+$/);
   process.stdout.write(`chroot-node=${node.stdout.trim()}\n`);
 
-  check("native default absence", () => assert.equal(run().status, "absent"));
+  await check("native default absence", () => assert.equal(run().status, "absent"));
   write(
     "/preload.mjs",
     'import fs from "node:fs"; fs.writeFileSync("/preloaded", "unexpected");\n',
   );
-  check("documented invocation excludes Node preloads", () => {
+  await check("documented invocation excludes Node preloads", () => {
     assert.equal(run({ env: { NODE_OPTIONS: "--import /preload.mjs" } }).status, "absent");
     assert.equal(fs.existsSync(fixturePath("/preloaded")), false);
   });
-  check("non-root refusal", () => assert.equal(run({ user: "nobody" }).reason, "root-required"));
-  check("fixed operation rejects arguments", () =>
+  await check("non-root refusal", () =>
+    assert.equal(run({ user: "nobody" }).reason, "root-required"),
+  );
+  await check("fixed operation rejects arguments", () =>
     assert.equal(run({ args: ["start"] }).reason, "no-arguments-accepted"),
   );
 
@@ -165,7 +280,7 @@ try {
   write("/second/rc.d/openclaw", definition, 0o755);
   write("/etc/rc.conf", ". /etc/root-only.conf\n");
   write("/etc/root-only.conf", 'local_startup="/custom/rc.d /second/rc.d"\n', 0o600);
-  check("root-only include and shadowed definitions", () => {
+  await check("root-only include and shadowed definitions", () => {
     const result = run();
     assert.equal(result.status, "present");
     assert.equal(result.selected, "/custom/rc.d/openclaw");
@@ -174,7 +289,7 @@ try {
       ["/custom/rc.d/openclaw", "/second/rc.d/openclaw"],
     );
   });
-  check("inherited environment cannot skip native configuration", () => {
+  await check("inherited environment cannot skip native configuration", () => {
     assert.equal(
       run({ env: { _rc_conf_loaded: "true", local_startup: "/absent", NODE_OPTIONS: "" } })
         .selected,
@@ -182,27 +297,27 @@ try {
     );
   });
   fs.chmodSync(fixturePath("/custom/rc.d/openclaw"), 0o644);
-  check("non-executable definition remains present", () => {
+  await check("non-executable definition remains present", () => {
     const result = run();
     assert.equal(result.definitions[0].executable, false);
     assert.equal(result.selected, "/second/rc.d/openclaw");
   });
   fs.chmodSync(fixturePath("/second/rc.d/openclaw"), 0o644);
-  check("no executable definition is not absence", () => {
+  await check("no executable definition is not absence", () => {
     assert.equal(run().status, "present");
     assert.equal(run().selected, null);
   });
   write("/etc/rc.conf.d/openclaw", 'local_startup="/absent"\n');
-  check("per-service overrides do not redirect global discovery", () =>
+  await check("per-service overrides do not redirect global discovery", () =>
     assert.equal(run().status, "present"),
   );
   write("/etc/rc.conf", 'rc_conf_files="/etc/second.conf"\n');
   write("/etc/second.conf", 'local_startup="/custom/rc.d"\n');
-  check("native rc_conf_files chaining", () =>
+  await check("native rc_conf_files chaining", () =>
     assert.equal(run().definitions[0].path, "/custom/rc.d/openclaw"),
   );
   write("/etc/rc.conf", 'local_startup="/cus*/rc.d"\n');
-  check("native startup glob expansion", () =>
+  await check("native startup glob expansion", () =>
     assert.equal(run().definitions[0].path, "/custom/rc.d/openclaw"),
   );
   fs.mkdirSync(fixturePath("/noexec"));
@@ -210,7 +325,7 @@ try {
   noexecMounted = true;
   write("/noexec/rc.d/openclaw", definition, 0o755);
   write("/etc/rc.conf", 'local_startup="/noexec/rc.d"\n');
-  check("executable selection matches native test on a noexec mount", () => {
+  await check("executable selection matches native test on a noexec mount", () => {
     const native = spawnSync("/usr/sbin/chroot", [
       root,
       "/bin/test",
@@ -221,7 +336,7 @@ try {
     assert.equal(run().definitions[0].executable, native.status === 0);
   });
   write("/etc/rc.conf", '[ "$HOME" = / ] && local_startup="/custom/rc.d"\n');
-  check("reported context matches native service discovery", () => {
+  await check("reported context matches native service discovery", () => {
     const result = run();
     const native = execFileSync(
       "/usr/sbin/chroot",
@@ -246,20 +361,20 @@ try {
     assert.equal(result.context.env.HOME, "/");
   });
   fs.chmodSync(fixturePath("/custom/rc.d"), 0o777);
-  check("writable startup directory is unknown", () =>
+  await check("writable startup directory is unknown", () =>
     assert.equal(run().reason, "unsafe-path-ownership"),
   );
   fs.chmodSync(fixturePath("/custom/rc.d"), 0o755);
   fs.renameSync(fixturePath("/custom/rc.d/openclaw"), fixturePath("/custom/rc.d/target"));
   fs.symlinkSync("target", fixturePath("/custom/rc.d/openclaw"));
-  check("symlink definition is unknown", () =>
+  await check("symlink definition is unknown", () =>
     assert.equal(run().reason, "symbolic-link-needs-owner-inspection"),
   );
   fs.unlinkSync(fixturePath("/custom/rc.d/openclaw"));
   fs.renameSync(fixturePath("/custom/rc.d/target"), fixturePath("/custom/rc.d/openclaw"));
   for (const redirect of ["", " >&2"]) {
     write("/etc/rc.conf", `echo private-fixture-value${redirect}\n`);
-    check(`native output is rejected and redacted ${redirect || "stdout"}`, () =>
+    await check(`native output is rejected and redacted ${redirect || "stdout"}`, () =>
       assert.equal(run().reason, "native-configuration-output-invalid"),
     );
   }
@@ -274,15 +389,15 @@ try {
     "/etc/rc.conf",
     Buffer.concat([Buffer.from('local_startup="'), bytePath, Buffer.from('"\n')]),
   );
-  check("invalid path bytes cannot become absence", () =>
+  await check("invalid path bytes cannot become absence", () =>
     assert.equal(run().reason, "native-configuration-output-invalid"),
   );
   write("/etc/rc.conf", "while :; do :; done\n");
-  check("native configuration deadline", () =>
+  await check("native configuration deadline", () =>
     assert.equal(run().reason, "native-configuration-failed"),
   );
   write("/etc/rc.conf", "/bin/sleep 60 &\necho $! > /child.pid\nwait\n");
-  check("deadline settles configuration children", () => {
+  await check("deadline settles configuration children", () => {
     assert.equal(run().reason, "native-configuration-failed");
     const pid = fs.readFileSync(fixturePath("/child.pid"), "utf8").trim();
     assert.match(pid, /^[1-9][0-9]*$/);
@@ -302,7 +417,7 @@ try {
     'import fs from "node:fs"; fs.writeFileSync("/pipe-holder.pid", String(process.pid)); setTimeout(() => {}, 60_000);\n',
   );
   write("/etc/rc.conf", `/usr/sbin/daemon /usr/local/bin/node ${escapedScript}\n`);
-  check(escapedCase, () => {
+  await check(escapedCase, () => {
     escapedLaunched = true;
     const started = performance.now();
     assert.equal(run().reason, "native-configuration-failed");
@@ -315,15 +430,90 @@ try {
     );
   });
   write("/etc/rc.conf", "");
+  await check("shared observer honors a shorter caller deadline", () => {
+    write("/etc/rc.conf", "sleep 60\n");
+    const started = performance.now();
+    const result = runNode([
+      "--input-type=module",
+      "--eval",
+      `import { discoverFreeBsdService } from ${JSON.stringify(`file://${discoveryHelper}`)};
+console.log(JSON.stringify(await discoverFreeBsdService({
+  timeoutMs: 100,
+  registerExitCleanup(cleanup) {
+    process.once("exit", cleanup);
+    return () => process.off("exit", cleanup);
+  },
+})));`,
+    ]);
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, diagnostic(result));
+    assert.equal(JSON.parse(result.stdout).reason, "native-configuration-failed");
+    assert.ok(performance.now() - started < 5_000, "short caller deadline was ignored");
+    write("/etc/rc.conf", "");
+  });
+  write(
+    "/signal-caller.mjs",
+    `
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { discoverFreeBsdService } from ${JSON.stringify(`file://${discoveryHelper}`)};
+const cleanups = new Set();
+process.once("exit", () => { for (const cleanup of cleanups) { cleanup(); } });
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.once(signal, () => {
+    fs.writeFileSync("/host-signal", signal);
+    process.exit(73);
+  });
+}
+const handlers = [process.listeners("SIGINT"), process.listeners("SIGTERM")];
+const pending = discoverFreeBsdService({
+  registerExitCleanup(cleanup) {
+    cleanups.add(cleanup);
+    return () => cleanups.delete(cleanup);
+  },
+});
+assert.deepEqual([process.listeners("SIGINT"), process.listeners("SIGTERM")], handlers);
+await pending;
+fs.writeFileSync("/query-continued", "unexpected");
+`,
+  );
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    await check(`standalone ${signal} preserves termination and cleans up its query`, () =>
+      checkSignalCancellation(signal, helper),
+    );
+    await check(`shared observer leaves ${signal} policy with its caller`, () =>
+      checkSignalCancellation(signal, "/signal-caller.mjs"),
+    );
+  }
+  await check("writable shared helper is rejected before import", () => {
+    write(
+      discoveryHelper,
+      'import fs from "node:fs"; fs.writeFileSync("/shared-helper-executed", "bad");\n',
+      0o666,
+    );
+    assert.equal(run().reason, "unsafe-path-ownership");
+    assert.equal(fs.existsSync(fixturePath("/shared-helper-executed")), false);
+    write(discoveryHelper, discoverySource);
+  });
+  await check("writable shared helper ancestor is rejected before import", () => {
+    const directory = fixturePath(path.dirname(discoveryHelper));
+    fs.chmodSync(directory, 0o777);
+    assert.equal(run().reason, "unsafe-path-ownership");
+    fs.chmodSync(directory, 0o755);
+  });
   fs.chmodSync(fixturePath(helper), 0o666);
-  check("writable helper is rejected", () => assert.equal(run().reason, "unsafe-path-ownership"));
+  await check("writable helper is rejected", () =>
+    assert.equal(run().reason, "unsafe-path-ownership"),
+  );
   process.stdout.write(`${passed} native cases passed\n`);
 } catch (error) {
   process.stderr.write(`${error.stack}\n`);
   process.exitCode = 1;
 } finally {
-  let cleanupStage = "escaped-pipe-holder";
+  let cleanupStage = "signal-query";
   try {
+    assert.equal(signalFixtureActive, false, "signal fixture cleanup is uncertain");
+    cleanupStage = "escaped-pipe-holder";
     if (escapedLaunched) {
       // This fixture owns the recorded PID and its unique script, not an argv census.
       const pid = fs.readFileSync(fixturePath("/pipe-holder.pid"), "utf8").trim();

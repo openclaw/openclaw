@@ -3,10 +3,20 @@ import type {
   CliBackendParseJsonlLifecycleEvent,
 } from "openclaw/plugin-sdk/cli-backend";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { findCodeRegions, type CodeRegion } from "openclaw/plugin-sdk/text-chunking";
+import { findCodeRegions, isInsideCode, type CodeRegion } from "openclaw/plugin-sdk/text-chunking";
 
 const CLAUDE_RAW_TOOL_OUTPUT_ERROR =
   "Claude CLI returned malformed tool output (invalid request format): raw tool protocol appeared as assistant text. OpenClaw refused to persist or deliver it.";
+
+export function classifyClaudeCliErrorCode(message: string): string | undefined {
+  // Claude Code reports refresh-lock contention as server_error, distinct from
+  // authentication_failed for a dead refresh token. Keep that recovery fact.
+  return /Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh\b/i.test(
+    message,
+  )
+    ? "refresh_contention"
+    : undefined;
+}
 
 const RAW_INVOKE_TAG_RE = /<invoke(?=[ \t>])[^<>\r\n]*>/gu;
 const RAW_PARAMETER_TAG_RE = /<parameter(?=[ \t>])[^<>\r\n]*>/gu;
@@ -46,26 +56,6 @@ function isStandaloneOpeningTagLine(text: string, index: number, tagLength: numb
   return /^[ \t]*\r?$/u.test(trailingText);
 }
 
-function isInsideCodeRegion(index: number, regions: CodeRegion[]): boolean {
-  let low = 0;
-  let high = regions.length - 1;
-  while (low <= high) {
-    const middle = Math.floor((low + high) / 2);
-    const region = regions[middle];
-    if (!region) {
-      return false;
-    }
-    if (index < region.start) {
-      high = middle - 1;
-    } else if (index >= region.end) {
-      low = middle + 1;
-    } else {
-      return true;
-    }
-  }
-  return false;
-}
-
 function hasObservedTruncatedLeakPrefix(text: string, index: number, toolName: string): boolean {
   const previousNonEmptyLine = text
     .slice(0, index)
@@ -90,7 +80,7 @@ function findNextStandaloneTag(
   for (let match = scanner.exec(text); match; match = scanner.exec(text)) {
     if (
       isStandaloneOpeningTagLine(text, match.index, match[0].length) &&
-      !isInsideCodeRegion(match.index, regions)
+      !isInsideCode(match.index, regions)
     ) {
       return match.index;
     }
@@ -112,7 +102,7 @@ export function hasClaudeRawToolInvocation(text: string): boolean {
     if (
       (!/^[A-Z]/u.test(toolName) && !toolName.startsWith("mcp__")) ||
       !isStandaloneOpeningTagLine(text, index, match[0].length) ||
-      isInsideCodeRegion(index, codeRegions)
+      isInsideCode(index, codeRegions)
     ) {
       continue;
     }
@@ -147,7 +137,7 @@ export function hasClaudeRawToolInvocation(text: string): boolean {
       if (
         readTagNameAttribute(parameterMatch[0], "parameter") &&
         isStandaloneLineTag(text, candidateIndex) &&
-        !isInsideCodeRegion(candidateIndex, codeRegions)
+        !isInsideCode(candidateIndex, codeRegions)
       ) {
         parameterIndex = candidateIndex;
         break;
@@ -161,7 +151,7 @@ export function hasClaudeRawToolInvocation(text: string): boolean {
       // misses the latter; requiring a prefix misses the complete leak reproduced in this PR.
       // Complete unfenced examples remain the accepted false positive and surface as format errors.
       completeInvokeCloseIndex !== null ||
-      (completeInvokeCloseIndex === null && hasObservedTruncatedLeakPrefix(text, index, toolName))
+      hasObservedTruncatedLeakPrefix(text, index, toolName)
     ) {
       return true;
     }
@@ -213,10 +203,8 @@ export const parseClaudeCliJsonlEvent: CliBackendParseJsonlEvent = (line) => {
     return null;
   }
   const parsed = parseClaudeJsonlRecord(line);
-  if (!parsed) {
-    return null;
-  }
   if (
+    !parsed ||
     parsed.type !== "result" ||
     typeof parsed.result !== "string" ||
     !hasClaudeRawToolInvocation(parsed.result)

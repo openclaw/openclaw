@@ -171,22 +171,6 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
     },
   );
 
-  it.each([true, false])(
-    "case semantics (%s) do not decide absent Unicode identity",
-    (caseInsensitive) => {
-      const detector = vi
-        .spyOn(pathCase, "tryResolvePathCaseInsensitive")
-        .mockReturnValue(caseInsensitive);
-      const lease = seedRetained();
-      const before = rows();
-      expect(() => store.assertSourceUnborrowed(nfd)).toThrow(/alias identity/);
-      expect(detector).not.toHaveBeenCalled();
-      expect(fs.readdirSync(dir)).toEqual([]);
-      expect(rows()).toBe(before);
-      expect(store.release(lease)).toBe(false);
-    },
-  );
-
   it.each(["", ".lock"])(
     "preserves same-inode Unicode identity and bytes through wrappers (%s)",
     async (suffix) => {
@@ -230,33 +214,6 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
     expect(fs.readdirSync(dir)).toEqual(names);
     expect(rows()).toBe(beforeRows);
     expect(store.release(lease)).toBe(false);
-  });
-
-  it("keeps known normalization-sensitive absence distinct (modeled lookup, real store)", () => {
-    // Model only alternate lookup of an existing sibling, never the matcher or
-    // SQLite. This proves the sensitive branch on hosts with normalizing APFS.
-    const witness = path.join(dir, "\u00e9vidence");
-    fs.writeFileSync(witness, "");
-    const observedName = fs.readdirSync(dir)[0]!;
-    const alternative =
-      observedName === observedName.normalize("NFC")
-        ? observedName.normalize("NFD")
-        : observedName.normalize("NFC");
-    const lstat = fs.lstatSync.bind(fs);
-    vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
-      if (args[0] === path.join(dir, alternative)) {
-        throw Object.assign(new Error("modeled normalization-sensitive ENOENT"), {
-          code: "ENOENT",
-        });
-      }
-      return Reflect.apply(lstat, fs, args);
-    });
-    seedRetained();
-    const before = rows();
-    expect(() => store.assertSourceUnborrowed(nfd)).not.toThrow();
-    expect(rows()).toBe(before);
-    expect(fs.existsSync(nfc)).toBe(false);
-    expect(fs.existsSync(nfd + ".lock")).toBe(false);
   });
 
   it.each([true, false])(

@@ -18,10 +18,9 @@ final class ChatSourcePreviewState {
 
     func refresh(transport: any OpenClawChatTransport) {
         self.invalidate()
-        let revision = self.revision
         self.task = Task { [weak self] in
             let context = await transport.loadSourceContext()
-            guard !Task.isCancelled, let self, self.revision == revision else { return }
+            guard !Task.isCancelled, let self else { return }
             self.context = context
             self.update(self.messages)
             self.task = nil
@@ -40,10 +39,6 @@ final class ChatSourcePreviewState {
 extension OpenClawChatViewModel {
     func refreshSourceContext() {
         self.sourcePreviewState.refresh(transport: self.transport)
-    }
-
-    func invalidateSourceContext() {
-        self.sourcePreviewState.invalidate()
     }
 
     func sourcePreviews(for message: OpenClawChatMessage) -> [ChatSourcePreview] {

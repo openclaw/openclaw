@@ -1,14 +1,17 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { revealChatModelOption, selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model and effort controls" });
 
 suite.define(() => {
   it.each(["chat", "new"])("keeps a large pending model catalog usable in /%s", async (route) => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+    const contextOptions = { viewport: { width: 1280, height: 900 }, hasTouch: true };
+    await suite.withPage(contextOptions, async ({ page }) => {
       const models = Array.from({ length: 1_000 }, (_, index) => ({
         id: `model-${index}`,
         name: `Model ${String(index).padStart(4, "0")}`,
@@ -25,10 +28,8 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input").first();
       const picker = composer.locator(".chat-controls__model-picker");
       const trigger = picker.locator("[data-chat-model-select]");
-      await expect
-        .poll(() => picker.locator("[data-chat-model-option]").count())
-        .toBe(models.length);
       await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
+      expect(await picker.locator("[data-chat-model-option]").count()).toBe(0);
       const textarea = composer.locator("textarea").first();
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("Performance.enable");
@@ -60,13 +61,78 @@ suite.define(() => {
         taskMs: metric("TaskDuration"),
       };
       console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
+      const openBefore: typeof before = await cdp.send("Performance.getMetrics");
+      const openStarted = performance.now();
       await trigger.click();
-      expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(1);
-      expect(await picker.locator("[data-chat-model-catalog-state]").textContent()).toContain(
-        "example: checking models…",
+      await expect
+        .poll(() => picker.locator("[data-chat-model-option]").count())
+        .toBe(models.length);
+      const openAfter: typeof before = await cdp.send("Performance.getMetrics");
+      console.log(
+        JSON.stringify({
+          proof: "model-catalog-open",
+          route,
+          models: models.length,
+          elapsedMs: performance.now() - openStarted,
+          scriptMs: metric("ScriptDuration", openBefore, openAfter),
+          taskMs: metric("TaskDuration", openBefore, openAfter),
+          layoutMs: metric("LayoutDuration", openBefore, openAfter),
+          styleMs: metric("RecalcStyleDuration", openBefore, openAfter),
+        }),
       );
+      expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      const refresh = picker.locator(".chat-controls__model-search-wrap [data-chat-model-refresh]");
+      expect(await refresh.textContent()).toContain("Refreshing models for Example…");
+      expect(await refresh.getAttribute("role")).toBe("status");
+      expect(await refresh.locator(".btn__spinner").isVisible()).toBe(true);
+      const requestsBeforeReopen = (await gateway.getRequests("models.list")).length;
+      await trigger.click();
+      await trigger.click();
+      expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeReopen);
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir(`large-model-catalog-${route}`, artifactRoot)
+        : undefined;
+      if (artifactDir) {
+        await picker.locator(".chat-controls__model-menu").screenshot({
+          path: `${artifactDir}/pending-catalog.png`,
+          animations: "disabled",
+        });
+      }
+      const refreshDetails = refresh.getByRole("button");
+      const openRefreshTooltip = refresh.locator("openclaw-tooltip[open]");
+      await refreshDetails.waitFor({ state: "visible" });
+      // The popup's opening scale animation can move this small target away
+      // from a stationary pointer before the tooltip's hover delay completes.
+      await picker.locator("[data-anchored-overlay]").evaluate(async (surface) => {
+        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
+      });
+      await refreshDetails.hover();
+      await expect
+        .poll(() => openRefreshTooltip.locator(".tooltip-content").textContent())
+        .toBe("Refreshing models for Example…");
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/refresh-details.png`,
+          animations: "disabled",
+        });
+      }
       const search = picker.locator("[data-chat-model-search]");
       await search.click();
+      await search.press("Tab");
+      expect(await refreshDetails.evaluate((button) => button === document.activeElement)).toBe(
+        true,
+      );
+      await refreshDetails.press("Enter");
+      await expect.poll(() => openRefreshTooltip.count()).toBe(1);
+      await refreshDetails.press("Escape");
+      await expect.poll(() => openRefreshTooltip.count()).toBe(0);
+      expect(await picker.getAttribute("open")).not.toBeNull();
+      await search.click();
+      await refreshDetails.tap();
+      await expect.poll(() => openRefreshTooltip.count()).toBe(1);
+      await search.click();
+      await expect.poll(() => openRefreshTooltip.count()).toBe(0);
       expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
       const searchBefore: typeof before = await cdp.send("Performance.getMetrics");
       const searchStarted = performance.now();
@@ -79,19 +145,38 @@ suite.define(() => {
         elapsedMs: performance.now() - searchStarted,
         scriptMs: metric("ScriptDuration", searchBefore, searchAfter),
         taskMs: metric("TaskDuration", searchBefore, searchAfter),
+        layoutMs: metric("LayoutDuration", searchBefore, searchAfter),
+        styleMs: metric("RecalcStyleDuration", searchBefore, searchAfter),
       };
       console.log(JSON.stringify({ proof: "model-catalog-search-typing", ...searchTimings }));
       const result = picker.locator('[data-chat-model-option="example/model-999"]');
       await expect.poll(() => result.isVisible()).toBe(true);
       expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
       expect(await result.isEnabled()).toBe(true);
+      await search.clear();
+      await trigger.focus();
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const reducedSearchStarted = performance.now();
+      await search.pressSequentially("Model 0999");
+      expect(await search.inputValue()).toBe("Model 0999");
+      await expect.poll(() => result.isVisible()).toBe(true);
+      expect(await picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
+      console.log(
+        JSON.stringify({
+          proof: "model-catalog-reduced-motion-search",
+          route,
+          models: models.length,
+          elapsedMs: performance.now() - reducedSearchStarted,
+        }),
+      );
+      expect(
+        await refresh
+          .locator(".btn__spinner")
+          .evaluate((node) => getComputedStyle(node).animationName),
+      ).toBe("none");
       for (const request of await gateway.getRequests("models.list")) {
         expect(request.params).not.toHaveProperty("refresh", true);
       }
-      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactRoot
-        ? createControlUiE2eArtifactDir(`large-model-catalog-${route}`, artifactRoot)
-        : undefined;
       if (artifactDir) {
         await writeFile(`${artifactDir}/timings.json`, `${JSON.stringify(timings, null, 2)}\n`);
         await writeFile(
@@ -103,9 +188,18 @@ suite.define(() => {
           animations: "disabled",
         });
       }
+      await refreshDetails.focus();
+      expect(await refreshDetails.evaluate((button) => button === document.activeElement)).toBe(
+        true,
+      );
       await gateway.setMethodResponse("models.list", { models });
       await gateway.emitGatewayEvent("chat.metadata.changed", {});
-      await expect.poll(() => picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
+      await expect.poll(() => refresh.count()).toBe(0);
+      expect(await search.evaluate((input) => input === document.activeElement)).toBe(true);
+      expect(await search.inputValue()).toBe("Model 0999");
+      await search.press("ArrowDown");
+      expect(await result.getAttribute("data-chat-model-highlighted")).not.toBeNull();
+      expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       expect(await picker.getAttribute("open")).not.toBeNull();
       if (artifactDir) {
         await page.screenshot({
@@ -125,12 +219,59 @@ suite.define(() => {
         taskMs: metric("TaskDuration", selectionBefore, selectionAfter),
       };
       console.log(JSON.stringify({ proof: "model-catalog-selection", ...selectionTimings }));
-      await cdp.detach();
       if (route === "chat") {
         expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+          expectedSessionId: "session:agent:main:main",
           model: "example/model-999",
         });
+        await page.emulateMedia({ reducedMotion: "no-preference" });
+        const sessions = page.locator('[data-navigation-view="sessions"]');
+        if ((await sessions.getAttribute("aria-pressed")) !== "true") {
+          await sessions.click();
+        }
+        await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe("true");
+        const toggleSidebar = async () => {
+          for (const pressed of ["false", "true"]) {
+            await sessions.click();
+            await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
+            await page.locator(".shell").evaluate(async (shell) => {
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
+              await Promise.all(shell.getAnimations().map((animation) => animation.finished));
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              });
+            });
+          }
+        };
+        await toggleSidebar();
+        const requestsBeforeToggle = (await gateway.getRequests("models.list")).length;
+        const toggleBefore: typeof before = await cdp.send("Performance.getMetrics");
+        const toggleStarted = performance.now();
+        await toggleSidebar();
+        const toggleAfter: typeof before = await cdp.send("Performance.getMetrics");
+        expect(await trigger.textContent()).toContain("Model 0999");
+        expect((await gateway.getRequests("models.list")).length).toBe(requestsBeforeToggle);
+        const toggleTimings = {
+          route,
+          models: models.length,
+          viewport: contextOptions.viewport,
+          elapsedMs: performance.now() - toggleStarted,
+          scriptMs: metric("ScriptDuration", toggleBefore, toggleAfter),
+          taskMs: metric("TaskDuration", toggleBefore, toggleAfter),
+          layoutMs: metric("LayoutDuration", toggleBefore, toggleAfter),
+          styleMs: metric("RecalcStyleDuration", toggleBefore, toggleAfter),
+        };
+        console.log(JSON.stringify({ proof: "model-catalog-sidebar-toggle", ...toggleTimings }));
+        if (artifactDir) {
+          await writeFile(
+            `${artifactDir}/sidebar-timings.json`,
+            `${JSON.stringify(toggleTimings, null, 2)}\n`,
+          );
+        }
       }
+      await cdp.detach();
     });
   });
 
@@ -239,6 +380,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input").first();
         const model = composer.locator('[data-chat-model-select="true"]');
         await expect.poll(() => model.getAttribute("aria-busy")).toBe("false");
+        await composer.locator("textarea").click();
         await model.click();
         const heading = composer.locator('[data-chat-model-provider="openai"]');
         await expect
@@ -432,6 +574,7 @@ suite.define(() => {
         await search.press("Enter");
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toEqual({
+          expectedSessionId: `session:${sessionKey}`,
           key: sessionKey,
           model: `openai/gpt-5.5@${work.authProfileId}`,
         });
@@ -470,11 +613,11 @@ suite.define(() => {
 
   it.each(
     ["chat", "new"].flatMap((route) =>
-      [false, true].map((tooltipOpen) => ({ route, tooltipOpen })),
+      [false, true].map((hoverEffort) => ({ route, hoverEffort })),
     ),
   )(
-    "keeps independent model and effort controls within the $route composer (tooltip open: $tooltipOpen)",
-    async ({ route, tooltipOpen }) => {
+    "keeps independent model and effort controls within the $route composer (hover effort: $hoverEffort)",
+    async ({ route, hoverEffort }) => {
       await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
         const longName =
           "Long catalog display name for a model with a very large context window and detailed reasoning capabilities";
@@ -538,10 +681,12 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input").first();
         const model = composer.locator('[data-chat-model-select="true"]');
         const effort = composer.locator('[data-chat-thinking-select="true"]');
-        await expect.poll(() => model.getAttribute("title")).toBe(longName);
+        await expect.poll(() => model.getAttribute("aria-label")).toContain(longName);
+        await composer.locator("textarea").click();
         await expect.poll(() => effort.isVisible()).toBe(true);
         for (const width of [320, 375, 393, 430, 560, 768, 1280]) {
           await page.setViewportSize({ width, height: 900 });
+          await composer.locator("textarea").click();
           await expect
             .poll(
               async () => {
@@ -585,10 +730,13 @@ suite.define(() => {
           await model.click();
           const menu = composer.locator(".chat-controls__model-menu");
           await expect.poll(() => menu.isVisible()).toBe(true);
-          expect(await menu.getByText(/Effort|Fast mode/).count()).toBe(0);
+          expect(await menu.getByText(/^(?:Effort|Speed)$/).count()).toBe(0);
           expect(
-            await menu.locator("[data-chat-thinking-slider], [data-chat-speed-toggle]").count(),
+            await menu.locator("[data-chat-thinking-slider], [data-chat-speed-option]").count(),
           ).toBe(0);
+          await revealChatModelOption(
+            menu.locator('[data-chat-model-option="openai/gpt-5.6-luna"]'),
+          );
           await expect
             .poll(() => menu.getByRole("option", { name: new RegExp(longName) }).count())
             .toBe(1);
@@ -602,12 +750,13 @@ suite.define(() => {
             : undefined;
           if (artifactDir && [320, 393, 560, 1280].includes(width)) {
             await page.screenshot({
-              path: `${artifactDir}/${route}-model-effort-${width}-tooltip-${tooltipOpen}.png`,
+              path: `${artifactDir}/${route}-model-effort-${width}-tooltip-${hoverEffort}.png`,
               animations: "disabled",
             });
           }
         }
         await page.setViewportSize({ width: 393, height: 852 });
+        await composer.locator("textarea").click();
         await page.emulateMedia({ reducedMotion: "no-preference" });
         const needle = effort.locator(".chat-controls__effort-gauge-needle");
         const needleAngle = () =>
@@ -643,19 +792,13 @@ suite.define(() => {
         await slider.press("End");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
         expect(await needleAngle()).toBe(120);
-        // The pointer can remain over the changing effort label during slider input.
-        // Establish whether the hover hint or the picker owns this Escape.
+        // The expanded picker suppresses its trigger hint while owning Escape.
         await slider.hover();
         const openTooltips = page.locator("openclaw-tooltip[open]");
         await expect.poll(() => openTooltips.count()).toBe(0);
         expect(await slider.evaluate((node) => node === document.activeElement)).toBe(true);
-        if (tooltipOpen) {
+        if (hoverEffort) {
           await effort.hover();
-          await expect.poll(() => openTooltips.count()).toBe(1);
-          await expect
-            .poll(() => openTooltips.locator(".tooltip-content").textContent())
-            .toBe("High");
-          await page.keyboard.press("Escape");
           await expect.poll(() => openTooltips.count()).toBe(0);
           expect(await slider.isVisible()).toBe(true);
           expect(await slider.inputValue()).toBe("1");
@@ -669,7 +812,7 @@ suite.define(() => {
           .toBe(true);
         if (route === "chat") {
           await page.setViewportSize({ width: 1180, height: 900 });
-          await page.getByRole("button", { name: "Open split view" }).click();
+          await selectChatLayoutAction(page, "Open split view");
           const panes = page.locator(".chat-split-view__pane .agent-chat__input");
           await expect.poll(() => panes.count()).toBe(2);
           await expect
@@ -705,7 +848,7 @@ suite.define(() => {
             : undefined;
           if (artifactDir) {
             await page.screenshot({
-              path: `${artifactDir}/chat-model-effort-split-tooltip-${tooltipOpen}.png`,
+              path: `${artifactDir}/chat-model-effort-split-tooltip-${hoverEffort}.png`,
               animations: "disabled",
             });
           }
@@ -719,18 +862,21 @@ suite.define(() => {
               (await gateway.getRequests("sessions.patch")).map(({ params }) => params),
             )
             .toContainEqual({
+              expectedSessionId: "session:agent:main:main",
               key: "agent:main:main",
               model: "openai/speed-only",
-              agentRuntime: null,
             });
         } else {
           await expect.poll(() => effort.count()).toBe(1);
-          await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Standard");
+          await expect.poll(() => effort.getAttribute("aria-label")).toBe("Speed: Standard");
+          await effort.click();
           await expect
-            .poll(() => composer.locator("[data-chat-speed-toggle]").getAttribute("aria-checked"))
+            .poll(() =>
+              composer.locator('[data-chat-speed-option="on"]').getAttribute("aria-checked"),
+            )
             .toBe("false");
           await model.click();
-          await composer.locator('[data-chat-model-option="example/basic"]').click();
+          await selectChatModelOption(composer.locator('[data-chat-model-option="example/basic"]'));
           await expect.poll(() => effort.count()).toBe(0);
         }
       });
@@ -799,7 +945,8 @@ suite.define(() => {
           ).toBe(false);
           return;
         }
-        await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Standard");
+        await expect.poll(() => effort.getAttribute("aria-label")).toBe("Speed: Standard");
+        await composer.locator("textarea").click();
         const [modelBox, effortBox, actionsBox] = await Promise.all([
           model.boundingBox(),
           effort.boundingBox(),
@@ -813,12 +960,12 @@ suite.define(() => {
         expect(effortBox!.width).toBeGreaterThanOrEqual(44);
         await effort.click();
         expect(await composer.locator("[data-chat-thinking-slider]").count()).toBe(0);
-        await composer.getByRole("switch", { name: /Fast responses/ }).click();
+        await composer.getByRole("radio", { name: "Fast", exact: true }).click();
         expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
           key: "agent:main:main",
           fastMode: true,
         });
-        await expect.poll(() => effort.getAttribute("aria-label")).toBe("Fast mode: Fast");
+        await expect.poll(() => effort.getAttribute("aria-label")).toBe("Speed: Fast");
         await page.keyboard.press("Escape");
         await expect
           .poll(() => effort.evaluate((node) => node === document.activeElement))
@@ -856,10 +1003,17 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input").first();
         const picker = composer.locator(".chat-controls__model-picker");
         const trigger = picker.locator('[data-chat-model-select="true"]');
-        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
         await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
         await trigger.click();
+        await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
+        await revealChatModelOption(picker.locator('[data-chat-model-option="openai/gpt-5.5"]'));
+        await revealChatModelOption(
+          picker.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]'),
+        );
         const search = picker.locator("[data-chat-model-search]");
+        // Enter search with the pointer so row tooltips do not own Escape.
+        await search.click();
+        await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
         await search.fill("anthropic");
         await expect.poll(() => picker.locator("[data-chat-model-option]:visible").count()).toBe(1);
         if (artifactDir) {

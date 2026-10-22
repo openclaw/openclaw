@@ -1,0 +1,628 @@
+.sidebar.sidebar--rail {
+  flex-direction: row;
+  overflow: visible;
+}
+
+.sidebar--rail .sidebar-shell {
+  min-width: 0;
+  overflow: hidden;
+  --sidebar-pad-x: 8px;
+}
+
+.sidebar-rail {
+  --sidebar-rail-control-size: 36px;
+  --sidebar-rail-action-size: 30px;
+  --sidebar-rail-glyph-size: 19px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 var(--shell-nav-rail-width, 52px);
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 4px;
+  gap: 8px;
+  border-inline-end: 1px solid var(--border);
+}
+
+.sidebar-rail__views,
+.sidebar-rail__bottom,
+.sidebar-rail__pins {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-rail__pins {
+  flex: 1 1 0;
+  align-self: stretch;
+  min-height: var(--sidebar-rail-control-size);
+  padding: 2px;
+  margin: -2px;
+  overflow: auto;
+  scrollbar-width: none;
+  border-radius: var(--radius-md);
+}
+
+.sidebar-rail__pins--drag-active {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
+  outline-offset: -1px;
+}
+
+.sidebar-rail__monogram {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.sidebar-rail
+  :is(
+    .sidebar-rail__button,
+    .nav-item,
+    .sidebar-brand__icon,
+    .sidebar-issues-button,
+    .sidebar-agent-card__main,
+    .sidebar-workspace-header__main,
+    .sidebar-identity-card
+  ) {
+  --sidebar-rail-control-surface: var(--sidebar-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 var(--sidebar-rail-control-size);
+  width: var(--sidebar-rail-control-size);
+  min-width: var(--sidebar-rail-control-size);
+  height: var(--sidebar-rail-control-size);
+  min-height: var(--sidebar-rail-control-size);
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 12.5px;
+  background: transparent;
+  color: var(--sidebar-rail-control-color);
+  text-decoration: none;
+  transition:
+    color 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease;
+
+  &:not(.sidebar-new-session, :disabled, [aria-disabled="true"]) {
+    &[aria-expanded="true"] {
+      --sidebar-rail-control-surface: color-mix(in srgb, var(--bg-hover) 60%, var(--sidebar-bg));
+      background: var(--sidebar-rail-control-surface);
+      color: var(--text-strong);
+    }
+
+    &:is(:hover, [aria-current="page"], [aria-pressed="true"], .nav-item--active) {
+      --sidebar-rail-control-surface: var(--bg-hover);
+      background: var(--sidebar-rail-control-surface);
+      color: var(--text-strong);
+    }
+
+    &:active {
+      --sidebar-rail-control-surface: var(--panel-hover);
+      background: var(--sidebar-rail-control-surface);
+      color: var(--text-strong);
+    }
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: -1px;
+    box-shadow: none;
+  }
+
+  &:is(:disabled, [aria-disabled="true"]) {
+    opacity: 0.4;
+  }
+
+  @supports (corner-shape: superellipse(1.5)) {
+    corner-shape: superellipse(1.5);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+
+.sidebar-rail__create {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  width: var(--sidebar-rail-control-size);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-rail__create .sidebar-new-session {
+  width: var(--sidebar-rail-action-size);
+  min-width: var(--sidebar-rail-action-size);
+  height: var(--sidebar-rail-action-size);
+  min-height: var(--sidebar-rail-action-size);
+  flex-basis: var(--sidebar-rail-action-size);
+  margin: calc((var(--sidebar-rail-control-size) - var(--sidebar-rail-action-size)) / 2);
+  background: var(--sidebar-rail-action-bg);
+  color: var(--accent-foreground);
+}
+
+.sidebar-rail__create .sidebar-new-session:hover:not(:disabled, [aria-disabled="true"]) {
+  background: var(--sidebar-rail-action-hover-bg);
+}
+
+.sidebar-rail__create .sidebar-new-session:active:not(:disabled, [aria-disabled="true"]) {
+  background: var(--sidebar-rail-action-active-bg);
+}
+
+.sidebar-rail__create .sidebar-new-session:focus-visible {
+  outline-color: var(--accent-foreground);
+}
+
+.sidebar-rail__create .sidebar-new-session:is(:disabled, [aria-disabled="true"]) {
+  cursor: not-allowed;
+}
+
+.sidebar-rail
+  :is(
+    .sidebar-rail__button > svg,
+    .sidebar-brand__icon > svg,
+    .sidebar-issues-button__icon,
+    .sidebar-issues-button__icon > svg,
+    .nav-item__icon,
+    .nav-item__icon > svg,
+    .session-glyph__content,
+    .session-glyph__icon,
+    .session-glyph__icon > svg,
+    .session-glyph__icon > img
+  ) {
+  width: var(--sidebar-rail-glyph-size);
+  height: var(--sidebar-rail-glyph-size);
+}
+
+/* Include Home's wrapper so its inherited resting ink is not dimmed twice. */
+.sidebar-rail :is(.nav-item, .sidebar-footer-bar__home) .nav-item__icon {
+  width: var(--sidebar-rail-glyph-size);
+  height: var(--sidebar-rail-glyph-size);
+  flex: 0 0 var(--sidebar-rail-glyph-size);
+  opacity: 1;
+  color: inherit;
+}
+
+.sidebar-rail
+  :is(
+    .sidebar-rail__button > svg,
+    .sidebar-brand__icon > svg,
+    .sidebar-issues-button__icon > svg,
+    .nav-item__icon > svg,
+    .session-glyph__icon > svg
+  ) {
+  stroke-width: 2px;
+}
+
+.sidebar-rail .nav-item__text,
+.sidebar-rail .sidebar-identity-card__text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.sidebar-rail .sidebar-footer-bar.sidebar-footer-bar--one-action {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  width: var(--sidebar-rail-control-size);
+  gap: 8px;
+  padding: 0;
+  border: 0;
+}
+
+.sidebar-rail .sidebar-footer-actions {
+  position: static;
+  inset: auto;
+  height: auto;
+  transform: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-rail .sidebar-identity-anchor {
+  width: var(--sidebar-rail-control-size);
+  height: var(--sidebar-rail-control-size);
+  min-height: var(--sidebar-rail-control-size);
+  flex: 0 0 var(--sidebar-rail-control-size);
+}
+
+.sidebar-rail :is(.sidebar-identity-card__avatar, .sidebar-identity-card .viewer-avatar--footer) {
+  width: 30px;
+  height: 30px;
+}
+
+.sidebar-rail .sidebar-identity-card .viewer-avatar--footer {
+  border: 0;
+}
+
+.sidebar-rail .sidebar-identity-card__status {
+  width: 12px;
+  height: 12px;
+  border-color: var(--sidebar-rail-control-surface);
+}
+
+.sidebar-rail .sidebar-issues-button__count {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.sidebar-rail .session-glyph__badge--unread {
+  width: 8px;
+  height: 8px;
+  top: -2px;
+  right: -2px;
+  box-shadow: 0 0 0 2px var(--sidebar-rail-control-surface);
+}
+
+.sidebar-rail .sidebar-agent-card__menu-unread {
+  width: 8px;
+  height: 8px;
+  top: 3px;
+  right: 3px;
+  left: auto;
+  box-shadow: 0 0 0 2px var(--sidebar-rail-control-surface);
+}
+
+.sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
+  inset: -4px;
+}
+
+.sidebar-footer-bar__home {
+  position: relative;
+}
+
+/* Home keeps its centered activity glyph; compact badges never move the rail. */
+.sidebar-footer-bar__home .session-row-badges {
+  position: absolute;
+  inset-block-end: 0;
+  inset-inline-end: 0;
+  gap: 2px;
+  padding: 1px;
+  border-radius: var(--radius-sm);
+  align-items: center;
+  background: var(--sidebar-rail-control-surface);
+}
+
+.sidebar-footer-bar__home .session-row-badge svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* The tooltip and accessible label retain the full outbox count. */
+.sidebar-footer-bar__home .session-row-badge--attention > span {
+  display: none;
+}
+
+.sidebar-rail__pin {
+  display: flex;
+  position: relative;
+  width: var(--sidebar-rail-control-size);
+  height: var(--sidebar-rail-control-size);
+  min-height: var(--sidebar-rail-control-size);
+  flex: 0 0 var(--sidebar-rail-control-size);
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+/* The entry, not its link, paints hover/current fills so the trailing pin sits
+   inside the same highlight. Inset shadows keep row heights unchanged. */
+.sidebar-pages__entry {
+  display: flex;
+  align-items: center;
+  border-radius: var(--radius-md);
+  transition:
+    background var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+/* Match the session lists' 2px rhythm so adjacent hover/current fills read as
+   separate rows instead of merging into one block. */
+.sidebar-pages__entry + .sidebar-pages__entry {
+  margin-block-start: 2px;
+}
+
+.sidebar-pages__entry:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.sidebar-pages__entry:has(.nav-item--active) {
+  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.sidebar-pages__entry:has(.sidebar-recent-session--active) {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.sidebar-pages__entry .nav-item {
+  background: transparent;
+  border-color: transparent;
+}
+
+.sidebar-pages__entry:hover
+  :is(
+    .nav-item:not(.nav-item--active),
+    .sidebar-recent-session:not(.sidebar-recent-session--active)
+  ) {
+  color: var(--text);
+}
+
+.sidebar-pages__entry:hover .nav-item__icon {
+  opacity: 1;
+}
+
+.sidebar-pages__entry
+  .sidebar-recent-session:is(:hover, .sidebar-recent-session--active):not(
+    .sidebar-recent-session--selected
+  ) {
+  --session-row-bg: var(--session-row-tint, transparent);
+  --session-row-border: transparent;
+}
+
+.sidebar-pages__entry > .sidebar-zone-entry {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-pages__pin {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.sidebar-pages__pin svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-pages__entry:hover .sidebar-pages__pin,
+.sidebar-online__row:hover .sidebar-pages__pin,
+.sidebar-pages__pin:focus-visible,
+.sidebar-pages__pin--pinned {
+  opacity: 1;
+}
+
+.sidebar-pages__pin:hover,
+.sidebar-pages__entry:hover .sidebar-pages__pin--pinned {
+  color: var(--text);
+}
+
+.sidebar-pages__pin--pinned svg {
+  fill: currentColor;
+}
+
+.sidebar-pages__heading {
+  padding: 6px 8px;
+  color: var(--muted);
+  font-size: var(--font-size-sm);
+}
+
+/* Match the 44px session toolbar centerline without changing drawer or native clearance. */
+.shell:not(.shell--mobile-nav) .sidebar-rail {
+  padding-top: calc((44px - var(--sidebar-rail-control-size)) / 2);
+}
+
+html.openclaw-native-macos,
+html.openclaw-native-desktop[data-native-platform="macos"] {
+  /* The traffic lights are wider than the rail: start its edge below the
+     titlebar row so no divider runs between the window controls. */
+  .shell:not(.shell--mobile-nav) .sidebar-rail {
+    padding-top: var(--openclaw-native-titlebar-height, 52px);
+    border-image: linear-gradient(
+        transparent var(--openclaw-native-titlebar-height, 52px),
+        var(--border) 0
+      )
+      1;
+  }
+
+  /* A collapsed rail is the only nav surface left, so the titlebar row
+     shows the shell background edge to edge. */
+  .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
+    .shell-nav {
+      border-image: linear-gradient(
+          transparent var(--openclaw-native-titlebar-height, 52px),
+          var(--resize-handle-rest-color) 0
+        )
+        1;
+    }
+
+    .sidebar {
+      background: linear-gradient(
+        transparent var(--openclaw-native-titlebar-height, 52px),
+        var(--sidebar-bg) 0
+      );
+    }
+  }
+}
+
+html.openclaw-native-web-chrome:not(.openclaw-native-macos):not([data-native-platform="macos"])
+  .shell:not(.shell--mobile-nav)
+  .sidebar-rail {
+  padding-top: calc((var(--rail-header-height) - var(--sidebar-rail-control-size)) / 2);
+}
+
+/* Installed Mac apps inject !important padding; keep Settings' clearance, but
+   let the rail-era panel own its top row even under those older injections. */
+html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-shell {
+  padding-top: 0 !important;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-rail {
+    --sidebar-rail-control-size: 44px;
+    --sidebar-rail-action-size: 44px;
+    flex-basis: 52px;
+  }
+
+  .sidebar-pages__pin {
+    opacity: 1;
+    height: 44px;
+  }
+}
+
+/* Resize the content once; reveal the fixed-width navigation on the compositor. */
+.shell--navigation-rail:not(.shell--mobile-nav) {
+  transition-property: grid-template-rows;
+
+  .shell-nav {
+    width: var(--shell-nav-expanded-width);
+    clip-path: inset(0);
+  }
+
+  &.shell--nav-collapsed {
+    --shell-controls-width: var(--shell-chrome-control-size);
+    --shell-nav-width: var(--shell-nav-rail-width);
+    grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+
+    .shell-nav {
+      clip-path: inset(0 calc(100% - var(--shell-nav-rail-width)) 0 0);
+
+      &:dir(rtl) {
+        clip-path: inset(0 0 0 calc(100% - var(--shell-nav-rail-width)));
+      }
+    }
+
+    .sidebar-shell {
+      display: none;
+    }
+  }
+
+  /* Connection controls may extend past the rail while it is collapsed. */
+  .shell-nav:has(.sidebar-connection-flag[data-open]) {
+    width: auto;
+    clip-path: none;
+  }
+}
+
+/* Legacy Mac hosts retain the expand + search cluster. */
+html.openclaw-native-macos:not(.openclaw-native-web-chrome)
+  .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
+  --shell-controls-width: 68px;
+}
+
+/* Keep identity and command access in the persistent rail. */
+.sidebar-rail .sidebar-agent-card--rail,
+.sidebar-rail .sidebar-workspace-header--rail {
+  flex: 0 0 var(--sidebar-rail-control-size);
+  width: var(--sidebar-rail-control-size);
+  height: var(--sidebar-rail-control-size);
+  min-height: var(--sidebar-rail-control-size);
+  padding: 0;
+}
+
+.sidebar-rail .sidebar-agent-card__text {
+  display: none;
+}
+
+.sidebar-rail .sidebar-agent-card__avatar,
+.sidebar-rail .sidebar-workspace-header__mark {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+}
+
+.sidebar--rail .sidebar-panel-header {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  margin: 0;
+  padding: 4px 8px;
+  gap: 6px;
+}
+
+.sidebar-session-toolbar__collapse {
+  margin-inline-start: auto;
+}
+
+.sidebar-session-toolbar .sidebar-session-toolbar__collapse {
+  margin-inline-start: 0;
+}
+
+/* A growing section toggle would cover the row's empty space, which must stay
+   non-interactive so native hosts can drag the window from it. */
+.sidebar-panel-header > .sidebar-session-group-toggle {
+  flex: 0 1 auto;
+}
+
+.sidebar--rail .sidebar-online {
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+.sidebar-session-owner-filter {
+  flex: 0 1 auto;
+  width: auto !important;
+  min-width: 0 !important;
+}
+
+.sidebar-session-owner-filter .picker-select__trigger {
+  min-height: 30px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  font-weight: 600;
+}
+
+.sidebar-session-owner-filter .picker-select__chevron {
+  margin-inline-start: 0;
+}
+
+.sidebar-session-owner-filter.picker-select--sheet .picker-select__trigger .picker-select__chevron {
+  transform: rotate(90deg);
+}
+
+.sidebar-session-owner-filter .picker-select__trigger:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar--rail .sidebar-session-toolbar__button {
+  width: 28px;
+  height: 28px;
+}
+
+html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {
+  min-height: var(--rail-header-height);
+  margin-inline: calc(-1 * var(--sidebar-pad-x));
+  padding-left: max(
+    16px,
+    calc(var(--shell-native-titlebar-controls-inset) - var(--shell-nav-rail-width))
+  );
+}
+
+.shell--mobile-nav .sidebar-session-toolbar__collapse {
+  display: none;
+}
+
+html.openclaw-native-macos:not(.openclaw-native-web-chrome) {
+  .sidebar-session-toolbar__collapse {
+    display: none;
+  }
+}

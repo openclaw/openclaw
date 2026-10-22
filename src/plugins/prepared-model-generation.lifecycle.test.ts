@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
@@ -10,7 +11,10 @@ import { withPluginMetadataSnapshotScope } from "./current-plugin-metadata-snaps
 import { loadAndActivateRootPluginRegistry } from "./loader.js";
 import { resetPluginCache, waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { getPluginSetupModuleLoader } from "./plugin-setup-module.js";
-import { verifyPreparedModelGenerationCleanup } from "./prepared-model-generation.retirement.test-support.js";
+import {
+  generationModels,
+  verifyPreparedModelGenerationCleanup,
+} from "./prepared-model-generation.retirement.test-support.js";
 import { clearActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
@@ -25,23 +29,20 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
       const event = `${id}-${path.basename(state.root)}`;
       const root = state.path("plugin");
       const disposed = state.path("disposed.txt");
+      const shared = retirement === "shared runtime projection";
+      const writeJson = (name: string, value: unknown) =>
+        fs.writeFileSync(path.join(root, name), JSON.stringify(value));
       fs.mkdirSync(root);
-      fs.writeFileSync(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: id,
-          version: "1.0.0",
-          type: "module",
-          openclaw: { extensions: ["./index.ts"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({
-          id,
-          configSchema: { type: "object", properties: {} },
-        }),
-      );
+      writeJson("package.json", {
+        name: id,
+        version: "1.0.0",
+        type: "module",
+        openclaw: { extensions: ["./index.ts"] },
+      });
+      writeJson("openclaw.plugin.json", {
+        id,
+        configSchema: { type: "object", properties: {} },
+      });
       fs.writeFileSync(
         path.join(root, "index.ts"),
         `
@@ -70,24 +71,7 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
       fs.writeFileSync(setupEntry, 'export const read = () => "captured setup";');
       const config: OpenClawConfig = {
         agents: { defaults: { workspace: state.workspaceDir, model: "fixture/local" } },
-        models: {
-          providers: {
-            fixture: {
-              api: "openai-responses",
-              baseUrl: "http://127.0.0.1:1/v1",
-              models: [
-                {
-                  id: "local",
-                  name: "Local",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          },
-        },
+        models: generationModels("fixture"),
         plugins: {
           enabled: true,
           allow: [id],
@@ -95,32 +79,33 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
           entries: { [id]: { enabled: true } },
           slots: {
             memory: "none",
-            ...(retirement === "shared runtime projection" ? { contextEngine: id } : {}),
+            ...(shared ? { contextEngine: id } : {}),
           },
         },
       };
       await state.writeConfig(config);
       const originalListeners = process.listenerCount(event);
-      if (retirement === "shared runtime projection") {
-        loadAndActivateRootPluginRegistry({
-          config,
-          env: state.env,
-          workspaceDir: state.workspaceDir,
+      const scope = { config, env: state.env, workspaceDir: state.workspaceDir };
+      const acquire = (agentId?: string) =>
+        acquireAgentRunPreparedModelRuntime({
+          ...scope,
+          agentDir: state.agentDir(agentId),
+          skipCredentials: true,
+        });
+      if (shared) {
+        await loadAndActivateRootPluginRegistry({
+          ...scope,
           cache: false,
         });
       }
       const before = process.listenerCount(event);
       let lease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>> | undefined;
-      let service: import("./types.js").OpenClawPluginService | undefined;
+      let service:
+        | Parameters<import("./types.js").OpenClawPluginApi["registerService"]>[0]
+        | undefined;
       let peer: typeof lease;
       try {
-        lease = await acquireAgentRunPreparedModelRuntime({
-          config,
-          agentDir: state.agentDir(),
-          workspaceDir: state.workspaceDir,
-          env: state.env,
-          skipCredentials: true,
-        });
+        lease = await acquire();
         const metadata = lease.snapshot.metadataSnapshot;
         const registry = lease.snapshot.pluginRegistry;
         expect(registry?.plugins, JSON.stringify(registry?.diagnostics)).toContainEqual(
@@ -130,9 +115,7 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
         expect(service?.id).toBe("retained-service");
         expect(process.listenerCount(event)).toBe(before + 1);
         const record = metadata.manifestRegistry.plugins.find((entry) => entry.id === id);
-        if (!record) {
-          throw new Error("fixture metadata missing");
-        }
+        assert.ok(record, "fixture metadata missing");
         const loadSetup = () =>
           withPluginMetadataSnapshotScope(metadata, () => {
             const load = getPluginSetupModuleLoader(record, setupEntry, root);
@@ -142,13 +125,7 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
           resetPluginCache();
           await waitForPluginCacheRetirement();
         } else {
-          peer = await acquireAgentRunPreparedModelRuntime({
-            config,
-            agentDir: state.agentDir("peer"),
-            workspaceDir: state.workspaceDir,
-            env: state.env,
-            skipCredentials: true,
-          });
+          peer = await acquire("peer");
           expect(peer.snapshot.pluginRegistry?.contextEngines.get(id)?.lifecycle).toBe("runtime");
           const peerService = peer.snapshot.pluginRegistry?.services.find(
             (entry) => entry.pluginId === id,
@@ -157,9 +134,7 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
           expect(process.listenerCount(event)).toBe(before + 2);
           await peer[Symbol.asyncDispose]();
           expect(() => peerService?.id).toThrow(/reloaded|disabled|retir/);
-          if (!registry) {
-            throw new Error("prepared registry missing");
-          }
+          assert.ok(registry, "prepared registry missing");
           await withPluginRuntimeRegistryScope(registry, async () => {
             const turn = await createContextEngineLogicalTurnLease({
               identity: { runId: "retained-run", sessionId: "retained-session" },
@@ -178,34 +153,26 @@ it.each(["standalone reset", "shared runtime projection"] as const)(
         }
         expect(service?.id).toBe("retained-service");
         expect(process.listenerCount(event)).toBe(before + 1);
-        expect(fs.existsSync(disposed)).toBe(retirement === "shared runtime projection");
-        if (retirement === "shared runtime projection") {
+        expect(fs.existsSync(disposed)).toBe(shared);
+        if (shared) {
           expect(fs.readFileSync(disposed, "utf8")).toBe("disposed\n");
         }
         const module = loadSetup();
-        if (
-          !module ||
-          typeof module !== "object" ||
-          !("read" in module) ||
-          typeof module.read !== "function"
-        ) {
-          throw new Error("fixture setup export missing");
-        }
+        assert.ok(module && typeof module === "object" && "read" in module);
+        assert.ok(typeof module.read === "function");
         expect(module.read()).toBe("captured setup");
       } finally {
         await peer?.[Symbol.asyncDispose]();
         await lease?.[Symbol.asyncDispose]();
         await closePreparedModelRuntimeSnapshots();
         await waitForPluginCacheRetirement(true);
-        if (retirement === "shared runtime projection") {
+        if (shared) {
           await clearActivePluginRegistry();
         }
       }
       expect(process.listenerCount(event)).toBe(originalListeners);
       expect(fs.readFileSync(disposed, "utf8")).toBe(
-        retirement === "shared runtime projection"
-          ? "disposed\ndisposed\ndisposed\n"
-          : "disposed\n",
+        shared ? "disposed\ndisposed\ndisposed\n" : "disposed\n",
       );
       expect(() => service?.id).toThrow(/reloaded|disabled|retir/);
     });

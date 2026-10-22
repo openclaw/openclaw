@@ -77,25 +77,26 @@ return {
   url: details?.url,
   newElements: details?.newElements,
   stats: details?.stats,
+  text: details?.text,
   changed,
 };
 ```
 
-- Code-mode calls return the tool's structured `details` directly (`targetId`, `url`, `newElements`, `stats`, `blockedByDialog`); rendered page text is not returned to code cells.
-- To read text inside code mode, run a targeted `act` evaluate (requires the evaluate capability; `browser.evaluateEnabled` can disable it) and keep the returned value bounded, because page-script output is untrusted:
+- Code-mode calls return the tool's structured `details` directly. Snapshot and text observations include bounded `text` with the same untrusted-content wrapper as direct tool output. Keep that wrapper when returning page data to the model. Existing identity, `stats`, and dialog fields remain available.
+- To read visible prose inside code mode, request `text` with a narrow selector. It does not require the evaluate capability:
 
 ```javascript
 const [browser] = await catalog.search("browser", { limit: 1 });
 const read = await browser({
-  action: "act",
-  kind: "evaluate",
-  fn: "() => document.body.innerText.slice(0, 2000)",
+  action: "text",
+  selector: "main",
+  maxChars: 2000,
   targetId: "task",
 });
-return { url: read?.url, text: read?.result };
+return { url: read?.url, text: read?.text };
 ```
 
-When evaluate is unavailable, keep the loop on structured state only.
+Use snapshot `query` and text `selector`/`maxChars` to narrow reads at the Browser owner before wrapping. A blocked dialog still needs its reported recovery step; page text does not grant permission to evaluate scripts.
 
 - Return only the fields the next step needs; never return the whole details object.
 - Completed cells share no state: re-embed the previous cell's returned `url`/`newElements` in the next cell, or keep the comparison inside one cell. Only `waiting` runs persist, resumed by `wait`.

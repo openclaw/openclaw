@@ -1,4 +1,3 @@
-// Conversation facts stay separate from execution identity and current sender context.
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -31,48 +30,27 @@ const current: TemplateContext = {
 };
 
 function metadata(ctx: TemplateContext) {
-  const text = buildInboundMetaSystemPrompt(ctx, {});
-  const json = /```json\n([\s\S]*?)\n```/.exec(text)?.[1];
-  if (!json) {
-    throw new Error("missing rendered inbound metadata");
-  }
-  return JSON.parse(json) as Record<string, unknown>;
+  const json = /```json\n([\s\S]*?)\n```/.exec(buildInboundMetaSystemPrompt(ctx, {}))?.[1];
+  expect(json, "rendered inbound metadata").toBeDefined();
+  return JSON.parse(json!) as Record<string, unknown>;
 }
 
 describe("prepared reply conversation", () => {
   it.each([
-    {
-      name: "matching heartbeat",
-      input: { ...current, InternalTurnSource: "heartbeat" },
-      inherits: true,
-    },
-    { name: "matching cron", input: { ...current, InternalTurnSource: "cron" }, inherits: true },
-    { name: "matching exec", input: current, inherits: true },
-    {
-      name: "heartbeat without a current route",
-      input: { InternalTurnSource: "heartbeat" },
-      inherits: true,
-    },
-    { name: "cron without a current route", input: { InternalTurnSource: "cron" }, inherits: true },
-    { name: "exec without a current route", input: { InternalTurnSource: "exec" }, inherits: true },
-    {
-      name: "different channel",
-      input: { ...current, OriginatingChannel: "discord" },
-      inherits: false,
-    },
-    { name: "different target", input: { ...current, OriginatingTo: "C999" }, inherits: false },
-    { name: "different account", input: { ...current, AccountId: "personal" }, inherits: false },
-    { name: "missing account", input: { ...current, AccountId: undefined }, inherits: false },
-    { name: "different thread", input: { ...current, MessageThreadId: 43 }, inherits: false },
-    { name: "missing thread", input: { ...current, MessageThreadId: undefined }, inherits: false },
-    {
-      name: "missing destination",
-      input: { ...current, OriginatingTo: undefined },
-      inherits: false,
-    },
-  ] satisfies Array<{ name: string; input: TemplateContext; inherits: boolean }>)(
-    "$name shares room context and activation only for its own conversation",
-    ({ input, inherits }) => {
+    ["matching exec", current, true],
+    ["heartbeat without a current route", { InternalTurnSource: "heartbeat" }, true],
+    ["cron without a current route", { InternalTurnSource: "cron" }, true],
+    ["exec without a current route", { InternalTurnSource: "exec" }, true],
+    ["different channel", { ...current, OriginatingChannel: "discord" }, false],
+    ["different target", { ...current, OriginatingTo: "C999" }, false],
+    ["different account", { ...current, AccountId: "personal" }, false],
+    ["missing account", { ...current, AccountId: undefined }, false],
+    ["different thread", { ...current, MessageThreadId: 43 }, false],
+    ["missing thread", { ...current, MessageThreadId: undefined }, false],
+    ["missing destination", { ...current, OriginatingTo: undefined }, false],
+  ] satisfies Array<[string, TemplateContext, boolean]>)(
+    "%s shares room context and activation only for its own conversation",
+    (_name: string, input: TemplateContext, inherits: boolean) => {
       const conversation = prepareReplyConversation({ ctx: input, sessionEntry: stored });
       const rendered = buildInboundUserContextPrefix(conversation.fields);
       expect(rendered.includes('"group_subject":"Operations"')).toBe(inherits);
@@ -98,29 +76,26 @@ describe("prepared reply conversation", () => {
   );
 
   it("keeps current room text and sender/execution facts on the current context", () => {
-    const input = {
-      ...current,
-      GroupSubject: "Live operations",
-      GroupChannel: "#live",
-      GroupSpace: "live workspace",
+    const facts = {
       Body: "current event",
       SenderId: "current-sender",
       WasMentioned: false,
       CommandAuthorized: false,
       SessionKey: "isolated-execution",
     };
+    const input = {
+      ...current,
+      ...facts,
+      GroupSubject: "Live operations",
+      GroupChannel: "#live",
+      GroupSpace: "live workspace",
+    };
     const conversation = prepareReplyConversation({ ctx: input, sessionEntry: stored });
     const prompt = { ...input, ...conversation.fields };
     const rendered = buildInboundUserContextPrefix(prompt);
     expect(rendered).toContain('"group_subject":"Live operations"');
     expect(rendered).not.toContain('"group_subject":"Operations"');
-    expect(prompt).toMatchObject({
-      Body: "current event",
-      SenderId: "current-sender",
-      WasMentioned: false,
-      CommandAuthorized: false,
-      SessionKey: "isolated-execution",
-    });
+    expect(prompt).toMatchObject(facts);
     expect(conversation.fields).not.toHaveProperty("SessionKey");
     expect(conversation.fields).not.toHaveProperty("SenderId");
   });

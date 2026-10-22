@@ -1,4 +1,3 @@
-/** Doctor checks and repair prompts for unavailable configured skills. */
 import { existsSync } from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
@@ -19,7 +18,6 @@ import {
   disableUnavailableSkillsInConfig,
 } from "./doctor-skills-core.js";
 
-/** Builds a GitHub CLI config-dir hint for eligible GitHub skill setups. */
 function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   const discoveryInput: GhConfigDiscoveryInput = {
     platform: process.platform,
@@ -27,12 +25,7 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
     fileExists: existsSync,
   };
   const githubSkill = skills.find((skill) => skill.name === "github");
-  if (
-    !githubSkill?.eligible ||
-    githubSkill.blockedByAgentFilter ||
-    githubSkill.disabled ||
-    githubSkill.blockedByAllowlist
-  ) {
+  if (!githubSkill?.eligible || githubSkill.blockedByAgentFilter) {
     return [];
   }
   const result = detectGhConfigDirMismatch(discoveryInput);
@@ -42,48 +35,7 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
   return formatGhConfigDirMismatchHint(result);
 }
 
-/** Formats doctor note lines for skills that are allowed but unavailable. */
-function formatUnavailableSkillDoctorLines(
-  skills: SkillStatusEntry[],
-  includeDisableHint = true,
-): string[] {
-  const count = skills.length;
-  const lines = [
-    `${count} allowed skill${count === 1 ? " is" : "s are"} not usable in this environment (missing binaries, env vars, or config).`,
-    `- ${skills
-      .map((skill) => skill.name)
-      .toSorted((a, b) => a.localeCompare(b))
-      .join(", ")}`,
-  ];
-  if (includeDisableHint) {
-    lines.push(`Disable unused skills: ${formatCliCommand("openclaw doctor --fix")}`);
-  }
-  lines.push(
-    `Inspect details: ${formatCliCommand("openclaw skills check --agent <id>")} or ${formatCliCommand("openclaw skills info <name> --agent <id>")}`,
-  );
-  return lines;
-}
-
-function collectFleetUnavailableSkills(
-  reports: Array<{ unavailable: SkillStatusEntry[]; skills: SkillStatusEntry[] }>,
-): SkillStatusEntry[] {
-  const healthyKeys = new Set(
-    reports.flatMap(({ skills }) =>
-      skills
-        .filter((skill) => skill.eligible && !skill.blockedByAgentFilter)
-        .map((skill) => skill.skillKey),
-    ),
-  );
-  const candidates = new Map<string, SkillStatusEntry>();
-  for (const skill of reports.flatMap(({ unavailable }) => unavailable)) {
-    if (!healthyKeys.has(skill.skillKey)) {
-      candidates.set(skill.skillKey, skill);
-    }
-  }
-  return [...candidates.values()];
-}
-
-/** Checks every agent's skill readiness and disables only fleet-wide unavailable skills. */
+/** Checks every agent's skill readiness without disabling skills for missing local binaries. */
 export async function maybeRepairSkillReadiness(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
@@ -100,25 +52,38 @@ export async function maybeRepairSkillReadiness(params: {
         config: params.cfg,
         agentId,
       });
-      return { agentId, report, unavailable: collectUnavailableAgentSkills(report) };
+      return { agentId, skills: report.skills, unavailable: collectUnavailableAgentSkills(report) };
     };
     return params.runWithPluginMetadataSnapshot
       ? params.runWithPluginMetadataSnapshot({ config: params.cfg, workspaceDir }, buildReport)
       : buildReport();
   });
-  const fleetUnavailable = collectFleetUnavailableSkills(
-    reports.map(({ report, unavailable: unavailableForAgent }) => ({
-      skills: report.skills,
-      unavailable: unavailableForAgent,
-    })),
+  // A locally missing binary may be provided by a paired node for this agent.
+  const preservedKeys = new Set(
+    reports.flatMap(({ skills }) =>
+      skills
+        .filter(
+          (skill) =>
+            !skill.blockedByAgentFilter &&
+            (skill.eligible || skill.missing.bins.length > 0 || skill.missing.anyBins.length > 0),
+        )
+        .map((skill) => skill.skillKey),
+    ),
   );
+  const candidates = new Map<string, SkillStatusEntry>();
+  for (const skill of reports.flatMap(({ unavailable }) => unavailable)) {
+    if (!preservedKeys.has(skill.skillKey)) {
+      candidates.set(skill.skillKey, skill);
+    }
+  }
+  const fleetUnavailable = [...candidates.values()];
   const globallyUnavailableKeys = new Set(fleetUnavailable.map((skill) => skill.skillKey));
   const willRepair = shouldAutoApproveDoctorFix(params.prompter.repairMode, {
     blockDuringUpdate: true,
   });
-  for (const { agentId, report, unavailable: unavailableForAgent } of reports) {
+  for (const { agentId, skills, unavailable: unavailableForAgent } of reports) {
     const prefix = agentIds.length > 1 ? `Agent "${agentId}":\n` : "";
-    const githubHint = describeGhConfigDirHint(report.skills);
+    const githubHint = describeGhConfigDirHint(skills);
     if (githubHint.length > 0) {
       note(`${prefix}${githubHint.join("\n")}`, "GitHub CLI");
     }
@@ -126,10 +91,30 @@ export async function maybeRepairSkillReadiness(params: {
       const includesGlobalCandidate = unavailableForAgent.some((skill) =>
         globallyUnavailableKeys.has(skill.skillKey),
       );
-      note(
-        `${prefix}${formatUnavailableSkillDoctorLines(unavailableForAgent, includesGlobalCandidate && !willRepair).join("\n")}`,
-        "Skills",
+      const count = unavailableForAgent.length;
+      const lines = [
+        `${count} allowed skill${count === 1 ? " is" : "s are"} not usable in this environment (missing binaries, env vars, or config).`,
+        `- ${unavailableForAgent
+          .map((skill) => skill.name)
+          .toSorted((a, b) => a.localeCompare(b))
+          .join(", ")}`,
+      ];
+      if (
+        unavailableForAgent.some(
+          (skill) => skill.missing.bins.length > 0 || skill.missing.anyBins.length > 0,
+        )
+      ) {
+        lines.push(
+          "Missing local binaries may exist on paired nodes; these skills remain enabled.",
+        );
+      }
+      if (includesGlobalCandidate && !willRepair) {
+        lines.push(`Disable unused skills: ${formatCliCommand("openclaw doctor --fix")}`);
+      }
+      lines.push(
+        `Inspect details: ${formatCliCommand("openclaw skills check --agent <id>")} or ${formatCliCommand("openclaw skills info <name> --agent <id>")}`,
       );
+      note(`${prefix}${lines.join("\n")}`, "Skills");
     }
   }
   if (fleetUnavailable.length === 0) {

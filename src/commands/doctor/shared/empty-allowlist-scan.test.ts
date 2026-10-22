@@ -1,7 +1,8 @@
-// Empty allowlist scan tests cover doctor detection of unconfigured sender allowlists.
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./empty-allowlist-scan.js";
 
+// mock-isolation: Synthetic channel capabilities keep policy scanning independent of plugin loading.
 vi.mock("../channel-capabilities.js", () => ({
   getDoctorChannelCapabilities: (channelName?: string) => ({
     dmAllowFromMode: "topOnly",
@@ -11,191 +12,112 @@ vi.mock("../channel-capabilities.js", () => ({
   }),
   resolveDoctorChannelAccountIds: (
     channelName: string,
-    cfg: {
-      channels?: Record<
-        string,
-        { accounts?: Record<string, unknown>; appId?: string; baseUrl?: string }
-      >;
-    },
+    cfg: { channels?: Record<string, { accounts?: Record<string, unknown> }> },
     configuredAccountIds: string[],
   ) => {
-    const channel = cfg.channels?.[channelName];
-    const ids = Object.keys(channel?.accounts ?? {});
     const resolveAccountId = (accountId: string) =>
       channelName === "matrix" || channelName === "signal" ? accountId.toLowerCase() : accountId;
-    const runtimeIds = [
-      ...(channelName === "qa-channel" && channel?.baseUrl ? ["default"] : []),
-      ...(channelName === "qqbot" && channel?.appId ? ["default"] : []),
-      ...ids,
-    ];
     return {
       configured: configuredAccountIds.map(resolveAccountId),
-      runtime: runtimeIds.map(resolveAccountId),
+      runtime: Object.keys(cfg.channels?.[channelName]?.accounts ?? {}).map(resolveAccountId),
     };
   },
 }));
 
-vi.mock("./channel-doctor.js", () => ({
-  shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning: () => false,
-}));
+function scan(
+  channels: OpenClawConfig["channels"],
+  hooks: Omit<Parameters<typeof scanEmptyAllowlistPolicyWarnings>[1], "doctorFixCommand"> = {},
+) {
+  return scanEmptyAllowlistPolicyWarnings(
+    { channels },
+    { doctorFixCommand: "openclaw doctor --fix", ...hooks },
+  );
+}
 
 describe("doctor empty allowlist policy scan", () => {
-  it("scans top-level and account-scoped channel warnings", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("projects malformed selected fields without falling through to inherited hook values", async () => {
+    const contexts: unknown[] = [];
+    const warnings = await scan(
       {
-        channels: {
-          signal: {
-            dmPolicy: "allowlist",
-            accounts: {
-              work: { dmPolicy: "allowlist" },
+        "legacy-channel": {
+          dmPolicy: "allowlist",
+          allowFrom: ["parent"],
+          accounts: {
+            work: {
+              dmPolicy: 42,
+              allowFrom: "not-a-list",
+              dm: { policy: "allowlist", allowFrom: ["nested"] },
             },
           },
         },
       },
-      { doctorFixCommand: "openclaw doctor --fix" },
+      {
+        extraWarningsForAccount: ({ prefix, dmPolicy, effectiveAllowFrom }) => {
+          contexts.push({ prefix, dmPolicy, effectiveAllowFrom });
+          return [];
+        },
+      },
     );
 
-    expect(warnings).toEqual([
-      '- channels.signal.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
-      '- channels.signal.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.signal.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
+    expect(warnings).toEqual([]);
+    expect(contexts).toEqual([
+      {
+        prefix: "channels.legacy-channel",
+        dmPolicy: "allowlist",
+        effectiveAllowFrom: ["parent"],
+      },
+      {
+        prefix: "channels.legacy-channel.accounts.work",
+        dmPolicy: undefined,
+        effectiveAllowFrom: undefined,
+      },
     ]);
   });
 
-  it("does not warn on empty parent groupAllowFrom when active accounts have effective group allowlists", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
-      {
-        channels: {
-          telegram: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            accounts: {
-              primary: { groupAllowFrom: ["telegram:group:primary"] },
-              backup: { allowFrom: ["telegram:group:backup"] },
-            },
+  it.each([
+    {
+      channelName: "imessage",
+      skip: false,
+      expected: [
+        '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped. Add sender IDs to channels.imessage.groupAllowFrom, or set groupPolicy to "open".',
+      ],
+    },
+    { channelName: "zalouser", skip: true, expected: [] },
+    { channelName: "discord", skip: false, expected: [] },
+  ])(
+    "retains $channelName group warnings and subsequent plugin warnings",
+    async ({ channelName, skip, expected }) => {
+      expect(
+        await scan(
+          { [channelName]: { groupPolicy: "allowlist" } },
+          {
+            shouldSkipDefaultEmptyGroupAllowlistWarning: () => skip,
+            extraWarningsForAccount: ({ prefix }) => [`extra:${prefix}`],
           },
+        ),
+      ).toStrictEqual([...expected, `extra:channels.${channelName}`]);
+    },
+  );
+
+  it("does not warn on empty parent groupAllowFrom when active accounts have effective group allowlists", async () => {
+    const warnings = await scan({
+      telegram: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: [],
+        accounts: {
+          primary: { groupAllowFrom: ["telegram:group:primary"] },
+          backup: { allowFrom: ["telegram:group:backup"] },
         },
       },
-      { doctorFixCommand: "openclaw doctor --fix" },
-    );
+    });
 
     expect(warnings).toEqual([]);
   });
 
-  it("keeps parent groupAllowFrom warning when any active account lacks an effective allowlist", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("allows provider-specific extra warnings without importing providers", async () => {
+    const warnings = await scan(
+      { telegram: { groupPolicy: "allowlist" } },
       {
-        channels: {
-          telegram: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            accounts: {
-              primary: { groupAllowFrom: ["telegram:group:primary"] },
-              backup: {},
-            },
-          },
-        },
-      },
-      { doctorFixCommand: "openclaw doctor --fix" },
-    );
-
-    expect(warnings).toContain(
-      '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
-    );
-  });
-
-  it("keeps parent groupAllowFrom warning when an implicit default account is active", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
-      {
-        channels: {
-          "qa-channel": {
-            baseUrl: "http://127.0.0.1:18789",
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            accounts: {
-              work: { groupAllowFrom: ["qa:group:work"] },
-            },
-          },
-        },
-      },
-      { doctorFixCommand: "openclaw doctor --fix" },
-    );
-
-    expect(warnings).toContain(
-      '- channels.qa-channel.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.qa-channel.groupAllowFrom or channels.qa-channel.allowFrom, or set groupPolicy to "open".',
-    );
-  });
-
-  it("matches canonical runtime account ids to mixed-case config keys", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
-      {
-        channels: {
-          matrix: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            accounts: {
-              Work: { groupAllowFrom: ["matrix:group:work"] },
-            },
-          },
-        },
-      },
-      { doctorFixCommand: "openclaw doctor --fix" },
-    );
-
-    expect(warnings).toEqual([]);
-  });
-
-  it("matches raw runtime account ids to canonical config keys", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
-      {
-        channels: {
-          signal: {
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            accounts: {
-              Work: { groupAllowFrom: ["signal:group:work"] },
-            },
-          },
-        },
-      },
-      { doctorFixCommand: "openclaw doctor --fix" },
-    );
-
-    expect(warnings).toEqual([]);
-  });
-
-  it("keeps parent warning for a distinct case-sensitive implicit default account", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
-      {
-        channels: {
-          qqbot: {
-            appId: "top-level-app",
-            groupPolicy: "allowlist",
-            groupAllowFrom: [],
-            accounts: {
-              Default: { groupAllowFrom: ["qqbot:group:named"] },
-            },
-          },
-        },
-      },
-      { doctorFixCommand: "openclaw doctor --fix" },
-    );
-
-    expect(warnings).toContain(
-      '- channels.qqbot.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.qqbot.groupAllowFrom or channels.qqbot.allowFrom, or set groupPolicy to "open".',
-    );
-  });
-
-  it("allows provider-specific extra warnings without importing providers", () => {
-    const warnings = scanEmptyAllowlistPolicyWarnings(
-      {
-        channels: {
-          telegram: {
-            groupPolicy: "allowlist",
-          },
-        },
-      },
-      {
-        doctorFixCommand: "openclaw doctor --fix",
         extraWarningsForAccount: ({ channelName, prefix }) =>
           channelName === "telegram" ? [`extra:${prefix}`] : [],
       },
@@ -207,27 +129,46 @@ describe("doctor empty allowlist policy scan", () => {
     ]);
   });
 
-  it("skips disabled channel and account entries", () => {
-    const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
-
-    const warnings = scanEmptyAllowlistPolicyWarnings(
+  it("keeps inherited top-level allowlists ahead of nested account values in warnings and hooks", async () => {
+    const accountContexts: unknown[] = [];
+    const warnings = await scan(
       {
-        channels: {
-          telegram: {
-            enabled: false,
-            dmPolicy: "allowlist",
-            accounts: {
-              default: { dmPolicy: "allowlist" },
-            },
-          },
-          signal: {
-            accounts: {
-              disabled: { enabled: false, dmPolicy: "allowlist" },
-            },
-          },
+        "legacy-channel": {
+          allowFrom: [],
+          accounts: { work: { dm: { policy: "allowlist", allowFrom: ["nested-sender"] } } },
         },
       },
-      { doctorFixCommand: "openclaw doctor --fix", extraWarningsForAccount },
+      {
+        extraWarningsForAccount: ({ dmPolicy, effectiveAllowFrom, prefix }) => {
+          accountContexts.push({ dmPolicy, effectiveAllowFrom, prefix });
+          return [];
+        },
+      },
+    );
+
+    expect(warnings).toEqual([
+      '- channels.legacy-channel.accounts.work.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to channels.legacy-channel.accounts.work.allowFrom, or run "openclaw doctor --fix" to auto-migrate from pairing store when entries exist.',
+    ]);
+    expect(accountContexts).toContainEqual({
+      dmPolicy: "allowlist",
+      effectiveAllowFrom: [],
+      prefix: "channels.legacy-channel.accounts.work",
+    });
+  });
+
+  it("skips disabled channel and account entries", async () => {
+    const extraWarningsForAccount = vi.fn(({ prefix }) => [`extra:${prefix}`]);
+
+    const warnings = await scan(
+      {
+        telegram: {
+          enabled: false,
+          dmPolicy: "allowlist",
+          accounts: { default: { dmPolicy: "allowlist" } },
+        },
+        signal: { accounts: { disabled: { enabled: false, dmPolicy: "allowlist" } } },
+      },
+      { extraWarningsForAccount },
     );
 
     expect(warnings).toEqual(["extra:channels.signal"]);

@@ -1,4 +1,5 @@
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
+import type { ChannelIngressDrainDispatchResult } from "./ingress-drain-state.js";
 import type { CreateChannelIngressDrainOptions } from "./ingress-drain.js";
 import type { ChannelIngressQueue, ChannelIngressQueueClaim } from "./ingress-queue.js";
 
@@ -13,11 +14,11 @@ export type ChannelIngressMonitorLifecycle = ChannelIngressDispatchLifecycle & {
   admission: "exclusive";
 };
 
-/** Optional explicit outcome from a channel delivery. */
-export type ChannelIngressMonitorDeliveryResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+export type ChannelIngressMonitorDeliveryResult = ChannelIngressDrainDispatchResult;
+
+export type ChannelIngressMonitorAdmissionResult<TResult> =
+  | { readonly kind: "ignored"; readonly queueResult?: undefined }
+  | { readonly kind: "durable"; readonly queueResult: TResult };
 
 type ChannelIngressMonitorInspectionContext =
   | { phase: "admission" }
@@ -79,7 +80,18 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
     raw: TRaw,
     context: ChannelIngressMonitorInspectionContext,
   ) => Promise<ChannelIngressMonitorFacts | null>;
+  /** Await a provider-validated replacement before serialization; policy errors refuse intake. */
+  prepareAdmission?: (
+    raw: TRaw,
+    context: { facts: ChannelIngressMonitorFacts; receivedAt: number; signal: AbortSignal },
+  ) => Promise<{ raw: TRaw; assertCurrent: () => void } | undefined>;
   payload: ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata>;
+  /**
+   * Reuse admission identity when this monitor appends and claims a fresh event.
+   * Payload deserialization still runs; claim inspection must not prepare delivery
+   * data or authorize effects. Replayed and previously stored events still inspect.
+   */
+  reuseAdmissionFactsForFreshClaims?: boolean;
   deliver: (
     raw: TRaw,
     lifecycle: ChannelIngressMonitorLifecycle,

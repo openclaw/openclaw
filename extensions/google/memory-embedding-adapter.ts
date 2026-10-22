@@ -1,4 +1,3 @@
-// Google plugin module implements memory embedding adapter behavior.
 import {
   hasNonTextEmbeddingParts,
   isMissingEmbeddingApiKeyError,
@@ -52,8 +51,8 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
             return null;
           }
           const byCustomId = await runGeminiEmbeddingBatches({
+            ...batch,
             gemini: client,
-            agentId: batch.agentId,
             requests: batch.chunks.map((chunk, index) => ({
               custom_id: String(index),
               request: buildGeminiEmbeddingRequest({
@@ -65,11 +64,6 @@ export const geminiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
                 outputDimensionality: client.outputDimensionality,
               }),
             })),
-            wait: batch.wait,
-            concurrency: batch.concurrency,
-            pollIntervalMs: batch.pollIntervalMs,
-            timeoutMs: batch.timeoutMs,
-            debug: batch.debug,
           });
           return mapBatchEmbeddingsByIndex(byCustomId, batch.chunks.length);
         },

@@ -16,6 +16,7 @@ describe("AppSidebar catalog reconnect", () => {
         .mockResolvedValue(catalogPage([]));
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       const hello = {
+        auth: { role: "operator", scopes: ["operator.read"] },
         features: { methods: ["sessions.catalog.list"] },
       } as ApplicationGatewaySnapshot["hello"];
       gateway.publish({ hello });
@@ -32,18 +33,20 @@ describe("AppSidebar catalog reconnect", () => {
       await sidebar.updateComplete;
       gateway.publish({ phase: "connected", hello });
       await sidebar.updateComplete;
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
 
       staleResponse.resolve(catalogPage([{ threadId: "thread-stale", name: "Stale session" }]));
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(sidebar.textContent).not.toContain("Stale session");
-      await vi.advanceTimersByTimeAsync(30_000);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(5_000);
 
       expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
     } finally {
       vi.useRealTimers();

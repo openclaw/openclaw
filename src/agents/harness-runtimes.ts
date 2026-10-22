@@ -1,6 +1,3 @@
-/**
- * Collects configured native harness runtime ids from model provider config.
- */
 import {
   listModelRefsFromConfigValue,
   type ConfiguredModelRef,
@@ -20,26 +17,10 @@ import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 
 // Harness runtime discovery feeds plugin preloading/setup. Only plugin runtimes
 // are selectable here; built-in OpenClaw/default runtime ids are excluded.
-function normalizeConfiguredRuntimeId(value: unknown): string | undefined {
-  return normalizeOptionalAgentRuntimeId(value);
-}
-
 function isSelectablePluginRuntime(runtime: string | undefined): runtime is string {
   return (
-    Boolean(runtime) &&
-    !isDefaultAgentRuntimeId(runtime) &&
-    normalizeOptionalAgentRuntimeId(runtime) !== OPENCLAW_AGENT_RUNTIME_ID
+    Boolean(runtime) && !isDefaultAgentRuntimeId(runtime) && runtime !== OPENCLAW_AGENT_RUNTIME_ID
   );
-}
-
-// Parse provider/model identity without interpreting a selector's auth profile.
-function parseConfiguredModelRef(
-  value: unknown,
-): { provider: string; modelId: string } | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  return parseModelCatalogRef(value) ?? undefined;
 }
 
 export function resolveConfiguredModelHarnessRuntime(params: {
@@ -49,13 +30,13 @@ export function resolveConfiguredModelHarnessRuntime(params: {
   modelRefKind: ConfiguredModelRef["kind"];
   agentId?: string;
 }): string | undefined {
-  const parsed = parseConfiguredModelRef(params.modelRef);
+  const parsed = parseModelCatalogRef(params.modelRef);
   if (!parsed) {
     return undefined;
   }
   const selection =
     params.modelRefKind === "selector" ? splitTrailingAuthProfile(params.modelRef) : undefined;
-  const policyModel = selection?.profile ? parseConfiguredModelRef(selection.model) : parsed;
+  const policyModel = selection?.profile ? parseModelCatalogRef(selection.model) : parsed;
   if (!policyModel) {
     return undefined;
   }
@@ -74,57 +55,27 @@ export function resolveConfiguredModelHarnessRuntime(params: {
   if (!params.includeImplicitRuntimePreferences && policy.runtimeSource === "implicit") {
     return undefined;
   }
-  const runtime = normalizeConfiguredRuntimeId(policy.runtime);
+  const runtime = normalizeOptionalAgentRuntimeId(policy.runtime);
   return isSelectablePluginRuntime(runtime) ? runtime : undefined;
 }
 
-function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<string>): void {
-  for (const providerConfig of Object.values(config.models?.providers ?? {})) {
-    const providerRuntime = normalizeConfiguredRuntimeId(providerConfig?.agentRuntime?.id);
-    if (isSelectablePluginRuntime(providerRuntime)) {
-      runtimes.add(providerRuntime);
-    }
-    for (const modelConfig of providerConfig?.models ?? []) {
-      const modelRuntime = normalizeConfiguredRuntimeId(modelConfig?.agentRuntime?.id);
-      if (isSelectablePluginRuntime(modelRuntime)) {
-        runtimes.add(modelRuntime);
-      }
-    }
-  }
-  const pushModelMapRuntimeIds = (models: unknown) => {
-    if (!isRecord(models)) {
-      return;
-    }
-    for (const entry of Object.values(models)) {
-      if (!isRecord(entry)) {
-        continue;
-      }
-      const runtime = normalizeConfiguredRuntimeId(
-        isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
-      );
-      if (isSelectablePluginRuntime(runtime)) {
-        runtimes.add(runtime);
-      }
-      for (const value of Array.isArray(entry.pickerRuntimes) ? entry.pickerRuntimes : []) {
-        const pickerRuntime = normalizeConfiguredRuntimeId(value);
-        if (isSelectablePluginRuntime(pickerRuntime)) {
-          runtimes.add(pickerRuntime);
-        }
-      }
-    }
-  };
-  pushModelMapRuntimeIds(config.agents?.defaults?.models);
-  const agents = listAgentEntries(config);
-  for (const agent of agents) {
-    pushModelMapRuntimeIds(isRecord(agent) ? agent.models : undefined);
-  }
-}
-
-function pushConfiguredAgentModelRuntimeIds(
+function pushConfiguredModelRuntimeIds(
   config: OpenClawConfig,
   runtimes: Set<string>,
   includeImplicitRuntimePreferences: boolean,
 ): void {
+  const addRuntime = (value: unknown) => {
+    const runtime = normalizeOptionalAgentRuntimeId(value);
+    if (isSelectablePluginRuntime(runtime)) {
+      runtimes.add(runtime);
+    }
+  };
+  for (const providerConfig of Object.values(config.models?.providers ?? {})) {
+    addRuntime(providerConfig?.agentRuntime?.id);
+    for (const modelConfig of providerConfig?.models ?? []) {
+      addRuntime(modelConfig?.agentRuntime?.id);
+    }
+  }
   const pushModelRefs = (
     modelRefs: string[],
     modelRefKind: ConfiguredModelRef["kind"],
@@ -143,16 +94,25 @@ function pushConfiguredAgentModelRuntimeIds(
       }
     }
   };
-  const pushModelMapRefs = (models: unknown, agentId?: string) => {
+  const pushModelMap = (models: unknown, agentId?: string) => {
     if (!isRecord(models)) {
       return;
     }
     pushModelRefs(Object.keys(models), "literal", agentId);
+    for (const entry of Object.values(models)) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+      addRuntime(isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined);
+      for (const value of Array.isArray(entry.pickerRuntimes) ? entry.pickerRuntimes : []) {
+        addRuntime(value);
+      }
+    }
   };
 
   const defaultsModel = config.agents?.defaults?.model;
   pushModelRefs(listModelRefsFromConfigValue(defaultsModel), "selector");
-  pushModelMapRefs(config.agents?.defaults?.models);
+  pushModelMap(config.agents?.defaults?.models);
 
   for (const agent of listAgentEntries(config)) {
     if (!isRecord(agent)) {
@@ -160,7 +120,7 @@ function pushConfiguredAgentModelRuntimeIds(
     }
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     pushModelRefs(listModelRefsFromConfigValue(agent.model ?? defaultsModel), "selector", agentId);
-    pushModelMapRefs(agent.models, agentId);
+    pushModelMap(agent.models, agentId);
   }
 }
 
@@ -182,8 +142,7 @@ export function collectConfiguredAgentHarnessRuntimes(
     const runtimes = new Set<string>();
     const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
 
-    pushConfiguredModelRuntimeIds(config, runtimes);
-    pushConfiguredAgentModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
+    pushConfiguredModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
 
     return [...runtimes].toSorted((left, right) => left.localeCompare(right));
   });

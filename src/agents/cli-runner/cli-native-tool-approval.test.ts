@@ -2,15 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { saveExecApprovals } from "../../infra/exec-approvals-store.test-support.js";
 import {
   makeExecutable,
   makeExecApprovalsTempDir,
 } from "../../infra/exec-approvals-test-helpers.js";
-import { loadExecApprovals, saveExecApprovals } from "../../infra/exec-approvals.js";
-import {
-  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
-  PLUGIN_APPROVAL_DETAIL_MAX_LENGTH,
-} from "../../infra/plugin-approvals.js";
+import { loadExecApprovals } from "../../infra/exec-approvals.js";
+import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../../infra/plugin-approvals.js";
 import { APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE } from "../../infra/system-run-approval-binding.js";
 import { callGatewayTool } from "../tools/gateway.js";
 import {
@@ -171,6 +169,7 @@ describe("requestCliNativeToolApproval", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", dir);
     const binary = makeExecutable(dir, "gog");
     saveExecApprovals({ version: 1, agents: { main: { allowlist: [{ pattern: binary }] } } });
+    let revoked = false;
     const outcome = await requestCliNativeToolApproval({
       toolName: "Bash",
       toolInput: { command: binary },
@@ -178,7 +177,12 @@ describe("requestCliNativeToolApproval", () => {
       agentId: "main",
       cwd: dir,
       ask: "on-miss",
-      assertActive: () => saveExecApprovals({ version: 1, agents: { main: { allowlist: [] } } }),
+      assertActive: () => {
+        if (!revoked) {
+          revoked = true;
+          saveExecApprovals({ version: 1, agents: { main: { allowlist: [] } } });
+        }
+      },
     });
     expect(outcome).toEqual({ kind: "deny", reason: "unavailable" });
     expect(loadExecApprovals().agents?.main?.allowlist).toEqual([]);
@@ -424,7 +428,7 @@ describe("requestCliNativeToolApproval", () => {
     await expect(
       requestCliNativeToolApproval({
         toolName: "Bash",
-        toolInput: { command: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) },
+        toolInput: { command: "x".repeat(16_384) },
         pluginId: "claude-cli",
         ask: "on-miss",
       }),

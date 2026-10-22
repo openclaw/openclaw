@@ -1,32 +1,22 @@
-/** Tests auth-profile backed MCP bearer projection. */
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createAuthProfileStoreFixture } from "./auth-profiles/credential-fixtures.test-support.js";
-import { resolveMcpBearerBundleConfig, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
+import { resolveMcpBearerBundleConfig } from "./mcp-auth-profile.js";
 import * as mcpHttpFetch from "./mcp-http-fetch.js";
 
+// Profile refresh/projection and origin isolation use real owners in mcp-auth-profile.integration.test.ts.
 const authMocks = vi.hoisted(() => ({
-  loadAuthProfileStoreForSecretsRuntime: vi.fn(),
-  resolveApiKeyForProfile: vi.fn(),
   resolveMcpOAuthAccessToken: vi.fn(),
-}));
-
-vi.mock("./auth-profiles/store-runtime.js", () => ({
-  loadAuthProfileStoreForSecretsRuntime: authMocks.loadAuthProfileStoreForSecretsRuntime,
-}));
-
-vi.mock("./auth-profiles/oauth.js", () => ({
-  resolveApiKeyForProfile: authMocks.resolveApiKeyForProfile,
 }));
 
 vi.mock("./mcp-oauth.js", () => ({
   resolveMcpOAuthAccessToken: authMocks.resolveMcpOAuthAccessToken,
 }));
 
+const envBearer = expect.stringMatching(/^Bearer \$\{OPENCLAW_MCP_AUTH_[A-F0-9]{12}_TOKEN}$/);
+const url = "https://mcp.example.com/mcp";
+const oauthServer = { url, type: "http", auth: "oauth" };
+
 describe("mcp auth profile bearer projection", () => {
   beforeEach(() => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
-    authMocks.resolveApiKeyForProfile.mockReset();
     authMocks.resolveMcpOAuthAccessToken.mockReset();
   });
 
@@ -35,16 +25,17 @@ describe("mcp auth profile bearer projection", () => {
   });
 
   it("projects existing MCP-native OAuth credentials without an auth profile", async () => {
-    const buildMcpHttpFetch = vi.spyOn(mcpHttpFetch, "buildMcpHttpFetch");
+    const buildMcpOAuthAuthorizationFetch = vi.spyOn(
+      mcpHttpFetch,
+      "buildMcpOAuthAuthorizationFetch",
+    );
     authMocks.resolveMcpOAuthAccessToken.mockResolvedValueOnce("native-access-token");
 
     const resolved = await resolveMcpBearerBundleConfig({
       config: {
         mcpServers: {
           docs: {
-            url: "https://mcp.example.com/mcp",
-            type: "http",
-            auth: "oauth",
+            ...oauthServer,
             oauth: { scope: "docs.read" },
             requestTimeoutMs: 25,
           },
@@ -53,25 +44,24 @@ describe("mcp auth profile bearer projection", () => {
     });
 
     expect(resolved.config.mcpServers.docs).toMatchObject({
-      url: "https://mcp.example.com/mcp",
-      headers: {
-        Authorization: expect.stringMatching(/^Bearer \$\{OPENCLAW_MCP_AUTH_[A-F0-9]{12}_TOKEN}$/),
-      },
+      url,
+      headers: { Authorization: envBearer },
     });
     expect(resolved.config.mcpServers.docs?.auth).toBeUndefined();
     expect(resolved.config.mcpServers.docs?.oauth).toBeUndefined();
     expect(Object.values(resolved.env ?? {})).toEqual(["native-access-token"]);
-    expect(buildMcpHttpFetch).toHaveBeenCalledWith(
+    expect(buildMcpOAuthAuthorizationFetch).toHaveBeenCalledWith(
       expect.objectContaining({
-        resourceUrl: "https://mcp.example.com/mcp",
-        timeoutMs: 25,
+        url,
+        requestTimeoutMs: 25,
+        headers: undefined,
       }),
     );
     expect(authMocks.resolveMcpOAuthAccessToken).toHaveBeenCalledWith(
       expect.objectContaining({
         identity: expect.objectContaining({
           serverName: "docs",
-          serverUrl: "https://mcp.example.com/mcp",
+          serverUrl: url,
         }),
         config: { scope: "docs.read" },
         fetchFn: expect.any(Function),
@@ -88,14 +78,8 @@ describe("mcp auth profile bearer projection", () => {
     const resolved = await resolveMcpBearerBundleConfig({
       config: {
         mcpServers: {
-          gbrain: {
-            url: "https://gbrain.example.com/mcp",
-            type: "http",
-            auth: "oauth",
-          },
-          localTools: {
-            command: "local-tools",
-          },
+          gbrain: { ...oauthServer, url: "https://gbrain.example.com/mcp" },
+          localTools: { command: "local-tools" },
         },
       },
       omitUnavailableOAuthServers: true,
@@ -106,204 +90,5 @@ describe("mcp auth profile bearer projection", () => {
       localTools: { command: "local-tools" },
     });
     expect(onServerUnavailable).toHaveBeenCalledWith("gbrain", expect.any(Error));
-  });
-
-  it("resolves refreshable OAuth profiles into env-backed CLI bearer headers", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
-      version: 1,
-      profiles: {
-        "ducktape:mcp": {
-          type: "oauth",
-          provider: "ducktape",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
-    });
-    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
-      apiKey: "fresh-access-token",
-      provider: "ducktape",
-      profileId: "ducktape:mcp",
-      profileType: "oauth",
-      credential: {
-        type: "oauth",
-        provider: "ducktape",
-        access: "fresh-access-token",
-        refresh: "refresh-token-must-not-project",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const resolved = await resolveMcpBearerBundleConfig({
-      config: {
-        mcpServers: {
-          ducktape: {
-            url: "https://agents.ducktape.xyz/mcp",
-            type: "http",
-            auth: "oauth",
-            oauth: { authProfileId: "ducktape:mcp" },
-            headers: {
-              Authorization: "Bearer stale-access",
-              "X-Trace": "keep",
-            },
-          },
-        },
-      },
-    });
-
-    const server = expectDefined(
-      resolved.config.mcpServers.ducktape,
-      "resolved.config.mcpServers.ducktape test invariant",
-    );
-    expect(server.auth).toBeUndefined();
-    expect(server.oauth).toBeUndefined();
-    expect(server.headers).toEqual({
-      Authorization: expect.stringMatching(/^Bearer \$\{OPENCLAW_MCP_AUTH_[A-F0-9]{12}_TOKEN}$/),
-      "X-Trace": "keep",
-    });
-    expect(JSON.stringify(resolved.config)).not.toContain("refresh-token-must-not-project");
-    expect(JSON.stringify(resolved.env)).not.toContain("refresh-token-must-not-project");
-    expect(Object.values(resolved.env ?? {})).toEqual(["fresh-access-token"]);
-    expect(authMocks.resolveApiKeyForProfile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "ducktape:mcp",
-      }),
-    );
-    expect(authMocks.resolveMcpOAuthAccessToken).not.toHaveBeenCalled();
-  });
-
-  it("rejects static token profiles instead of pretending they are refreshable", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce(
-      createAuthProfileStoreFixture({
-        "ducktape:static": {
-          type: "token",
-          provider: "ducktape",
-          token: "expired-static-token",
-          expires: 1,
-        },
-      }),
-    );
-
-    await expect(
-      resolveMcpBearerBundleConfig({
-        config: {
-          mcpServers: {
-            ducktape: {
-              url: "https://agents.ducktape.xyz/mcp",
-              auth: "oauth",
-              oauth: { authProfileId: "ducktape:static" },
-            },
-          },
-        },
-      }),
-    ).rejects.toThrow("profiles are not refreshable");
-  });
-
-  it("projects the raw OAuth access token even when provider formatting returns structured auth", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValueOnce({
-      version: 1,
-      profiles: {
-        "google:mcp": {
-          type: "oauth",
-          provider: "google",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
-    });
-    authMocks.resolveApiKeyForProfile.mockResolvedValueOnce({
-      apiKey: JSON.stringify({
-        token: "raw-google-access-token",
-        projectId: "demo-project",
-      }),
-      provider: "google",
-      profileId: "google:mcp",
-      profileType: "oauth",
-      credential: {
-        type: "oauth",
-        provider: "google",
-        access: "raw-google-access-token",
-        refresh: "refresh-token-must-not-project",
-        expires: Date.now() + 60_000,
-      },
-    });
-
-    const resolved = await resolveMcpBearerBundleConfig({
-      config: {
-        mcpServers: {
-          google: {
-            url: "https://mcp.google.test/mcp",
-            type: "http",
-            auth: "oauth",
-            oauth: { authProfileId: "google:mcp" },
-          },
-        },
-      },
-      tokenProjection: "literal",
-    });
-
-    expect(resolved.config.mcpServers.google?.headers).toEqual({
-      Authorization: "Bearer raw-google-access-token",
-    });
-    expect(resolved.env).toBeUndefined();
-    expect(JSON.stringify(resolved.config)).not.toContain("demo-project");
-    expect(JSON.stringify(resolved.config)).not.toContain('{"token"');
-  });
-
-  it("injects fresh bearer headers only for same-origin embedded MCP requests", async () => {
-    authMocks.loadAuthProfileStoreForSecretsRuntime.mockReturnValue({
-      version: 1,
-      profiles: {
-        "ducktape:mcp": {
-          type: "oauth",
-          provider: "ducktape",
-          access: "expired-access",
-          refresh: "refresh-token-must-not-project",
-          expires: 1,
-        },
-      },
-    });
-    authMocks.resolveApiKeyForProfile.mockResolvedValue({
-      apiKey: "fresh-access-token",
-      provider: "ducktape",
-      profileId: "ducktape:mcp",
-      profileType: "oauth",
-      credential: {
-        type: "oauth",
-        provider: "ducktape",
-        access: "fresh-access-token",
-        refresh: "refresh-token-must-not-project",
-        expires: Date.now() + 60_000,
-      },
-    });
-    const calls: Array<[RequestInfo | URL, RequestInit | undefined]> = [];
-    const wrapped = withMcpAuthProfileBearer({
-      fetchFn: async (url, init) => {
-        calls.push([url, init]);
-        return new Response("ok");
-      },
-      serverName: "ducktape",
-      resourceUrl: "https://agents.ducktape.xyz/mcp",
-      authProfileId: "ducktape:mcp",
-      headers: {
-        Authorization: "Bearer stale-access",
-        "X-Trace": "keep",
-      },
-    });
-
-    await wrapped("https://agents.ducktape.xyz/mcp", {
-      headers: { Accept: "application/json", Authorization: "Bearer sdk-stale" },
-    });
-    await wrapped("https://redirect.example/mcp", {
-      headers: { Authorization: "Bearer sdk-stale" },
-    });
-
-    const sameOriginHeaders = new Headers(calls[0]?.[1]?.headers);
-    expect(sameOriginHeaders.get("authorization")).toBe("Bearer fresh-access-token");
-    expect(sameOriginHeaders.get("x-trace")).toBe("keep");
-    expect(sameOriginHeaders.get("accept")).toBe("application/json");
-    expect(calls[1]?.[1]?.headers).toEqual({ Authorization: "Bearer sdk-stale" });
   });
 });

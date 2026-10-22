@@ -1,16 +1,20 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
 } from "./plugin-invocation-scope.js";
-import { markPluginRegistriesRetired } from "./registry-lifecycle.js";
+import { adoptPluginRegistryRecords, markPluginRegistriesRetired } from "./registry-lifecycle.js";
 import {
   PluginRegistrationResourceSource,
   type RegistrationDisposer,
   type RegistrationCleanup,
 } from "./registry-registration-resources.js";
 import type { PluginRegistry } from "./registry-types.js";
+import {
+  hasRetainedPluginRuntimeCloseError,
+  PluginRuntimeCloseCompletedError,
+} from "./runtime-close-error.js";
 
 // Registrars and loaders can come from different source/built module copies.
 const inspections = resolveGlobalSingleton(
@@ -24,7 +28,10 @@ export function getPluginRegistryInspectionResources(registry: PluginRegistry) {
 
 function throwDisposalFailures(failures: Error[]): void {
   if (failures.length > 0) {
-    throw new AggregateError(failures, "Plugin inspection resources could not all be disposed");
+    const Failure = failures.some(hasRetainedPluginRuntimeCloseError)
+      ? AggregateError
+      : PluginRuntimeCloseCompletedError;
+    throw new Failure(failures, "Plugin inspection resources could not all be disposed");
   }
 }
 
@@ -77,6 +84,28 @@ export class PluginRegistryInspectionResources {
     this.#source.rollback(pluginId, retire);
   }
 
+  /** Publish same-context retained instances and their registration resources together. */
+  adoptRetainedRegistrations(previous: PluginRegistry): void {
+    const source = inspections.get(previous);
+    const registry = this.#registry;
+    if (!source || !registry || source.#release || this.#release) {
+      throw new Error("Plugin inspection handoff requires live source and successor registries");
+    }
+    // A scoped catalog acquisition can reuse this same physical inspection.
+    if (source === this) {
+      return;
+    }
+    for (const record of registry.plugins) {
+      if (
+        previous.plugins.includes(record) &&
+        getPluginInstance(record)?.owner?.registry === previous
+      ) {
+        source.#source.transferRegistrationTo(record.id, this.#source);
+      }
+    }
+    adoptPluginRegistryRecords(registry);
+  }
+
   /** Copied callbacks keep their source through this inspection's final disposer. */
   retainDependency(dependency: PluginRegistryInspectionResources): void {
     if (this.#release) {
@@ -115,7 +144,10 @@ export class PluginRegistryInspectionResources {
       physical = donorSource.retain();
       this.#dependencies.add(donorSource);
     }
-    this.#adoptedInvocations = new PluginInvocationScope(registry, borrowed, { retained: true });
+    this.#adoptedInvocations = new PluginInvocationScope(registry, borrowed, {
+      retained: true,
+      kind: "custody",
+    });
   }
 
   wrapAdoptedValue<T>(value: T): T {
@@ -123,11 +155,14 @@ export class PluginRegistryInspectionResources {
   }
 
   /** Logical use owns its execution consumers separately from this inspection's physical claims. */
-  createInvocationScope(registry: PluginRegistry): PluginInvocationScope {
+  createInvocationScope(
+    registry: PluginRegistry,
+    instances: Iterable<PluginInstanceHandle> = collectRegistryInvocationInstances(registry),
+  ): PluginInvocationScope {
     if (this.#release) {
       throw new Error("Plugin inspection resources have been released");
     }
-    return new PluginInvocationScope(registry, collectRegistryInvocationInstances(registry), {
+    return new PluginInvocationScope(registry, instances, {
       retained: true,
       parent: this.#adoptedInvocations,
     });

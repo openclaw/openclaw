@@ -150,3 +150,12 @@ line_length:
   ignores_urls: true
 
 reporter: "xcode"
+
+custom_rules:
+  app_activation_owner:
+    included: 'apps/macos/Sources/.*\.swift$'
+    excluded: 'apps/macos/Sources/OpenClaw/AppActivation\.swift$'
+    name: "App activation owner"
+    regex: '(?:\bNSApp\s*\??\s*\.\s*activate\s*\(|\.\s*activate\s*\(\s*(?:ignoringOtherApps|options)\s*:|\.\s*(?:makeKeyAndOrderFront|orderFrontRegardless|deminiaturize)\s*\((?!\s*window\s*:)|\.\s*showWindow\s*\((?!\s*controller\s*:)|\.\s*(?:runModal|activateFileViewerSelecting)\s*\(|\bNSWorkspace\s*\.\s*shared\s*\.\s*open\s*\()'
+    message: "Route application activation and foreground window ordering through AppActivation."
+    severity: error

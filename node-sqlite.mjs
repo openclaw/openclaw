@@ -1,4 +1,4 @@
-import { isSupportedOpenClawNodeVersion, parseNodeReleaseVersion } from "./node-version.mjs";
+import { isSupportedOpenClawNodeVersion, SUPPORTED_NODE_VERSION_RANGE } from "./node-version.mjs";
 
 // Self-contained so a different runtime can execute exactly the same probe with -e.
 function probeSqlite(DatabaseSync) {
@@ -56,11 +56,16 @@ function isSqliteCapabilities(value) {
   );
 }
 
-async function probeCurrentSqliteInWorker() {
+async function probeCurrentSqlite() {
   let worker;
   try {
-    if (typeof process.getBuiltinModule?.("node:sqlite")?.DatabaseSync !== "function") {
+    const DatabaseSync = process.getBuiltinModule?.("node:sqlite")?.DatabaseSync;
+    if (typeof DatabaseSync !== "function") {
       return unavailableSqliteCapabilities(new Error("node:sqlite is unavailable"));
+    }
+    // Keep the real capability check when Node's permission policy forbids workers.
+    if (!process.versions.bun && process.permission?.has("worker") === false) {
+      return probeSqlite(DatabaseSync);
     }
     const env = Object.fromEntries(
       Object.entries(process.env).filter(([name]) => !/^(NODE_OPTIONS|BUN_OPTIONS)$/i.test(name)),
@@ -126,7 +131,7 @@ async function probeCurrentSqliteInWorker() {
 
 export function detectCurrentSqliteCapabilities() {
   // Publish the Promise before Worker construction can notify another startup caller.
-  globalThis[capabilityCacheKey] ??= Promise.resolve().then(probeCurrentSqliteInWorker);
+  globalThis[capabilityCacheKey] ??= Promise.resolve().then(probeCurrentSqlite);
   return Promise.resolve(globalThis[capabilityCacheKey]);
 }
 
@@ -152,29 +157,22 @@ export function isSqliteWalResetSafeVersion(value) {
 export function nodeRuntimeFailure(version, probe) {
   const label = `Node ${version ?? "unknown"}`;
   if (!probe.available) {
-    return `${label}: node:sqlite is unavailable; use 24.16+/26.1+ or a build with the fix.`;
+    return `${label}: node:sqlite is unavailable; use 24.22.1+/26.12.1+ or a build with the fix.`;
   }
   if (!probe.text && !probe.error) {
-    return `${label}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.16+/26.1+ or a build with the fix`;
+    return `${label}: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954); use 24.22.1+/26.12.1+ or a build with the fix`;
   }
   if (probe.error || !probe.text || !probe.blob || !probe.json) {
-    return `${label}: node:sqlite NUL round-trip capability probe failed; use 24.16+/26.1+ or a build with the fix.`;
+    return `${label}: node:sqlite NUL round-trip capability check failed; use 24.22.1+/26.12.1+ or a build with the fix.`;
   }
   if (!probe.version || !isSqliteWalResetSafeVersion(probe.version)) {
     return `${label}: SQLite ${probe.version ?? "unknown"} is not WAL-reset-safe; use SQLite 3.51.3+, 3.50.7+, or 3.44.6+ on its patched release line.`;
   }
-  // Node 22/23 remain excluded until their separate compatibility work is complete.
-  const release = parseNodeReleaseVersion(version);
-  if (!release || release.major < 24) {
-    return `${label}: openclaw requires Node >=24.16.0 <25, or >=26.1.0.`;
+  // SQLite capabilities cannot establish that the TLS verifier rejects compromised keys.
+  if (!isSupportedOpenClawNodeVersion(version)) {
+    return `${label}: openclaw requires Node ${SUPPORTED_NODE_VERSION_RANGE.replace(" || ", ", or ")}.`;
   }
   return null;
-}
-
-export function nodeRuntimeNote(version, probe) {
-  return !nodeRuntimeFailure(version, probe) && !isSupportedOpenClawNodeVersion(version)
-    ? `Node ${version}: unsupported version, capability probe passed. Supported releases: 24.16+/26.1+.`
-    : null;
 }
 
 export const SQLITE_CAPABILITY_PROBE = `(${probeSqlite.toString()})(require("node:sqlite").DatabaseSync)`;

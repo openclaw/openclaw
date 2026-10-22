@@ -1,3 +1,9 @@
+# shellcheck source=scripts/pr-lib/github.sh
+source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
+
+# shellcheck source=scripts/pr-lib/host-tools.sh
+source "${BASH_SOURCE[0]%/*}/host-tools.sh" || return 1
+
 # Load receipt helpers for the invocation before cleanup can delete this module's worktree.
 # shellcheck source=scripts/pr-lib/merge-outcome.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh" || return 1
@@ -29,7 +35,7 @@ validate_pr_temp_storage() {
 path_is_docsish() {
   local path="$1"
   case "$path" in
-    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|mintlify.json|docs.json)
+    CHANGELOG.md|AGENTS.md|CLAUDE.md|README*.md|docs/*|*.md|*.mdx|docs.json)
       return 0
       ;;
   esac
@@ -89,7 +95,7 @@ root_changelog_update_allowed_for_pr() {
   version="${BASH_REMATCH[1]}"
   printf '%s\n' "$record" | jq -e --arg title "chore(release): close out $version on main" \
     '.title == $title and .baseRefName == "main" and .isCrossRepository == false' >/dev/null || return 1
-  git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1 || return 1
+  pr_git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null 2>&1 || return 1
   helper_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd) || return 1
   # Compare complete sections, not just added lines: a closeout must preserve
   # every byte outside its released version, including removed historical text.
@@ -99,7 +105,7 @@ import { pathToFileURL } from "node:url";
 const [version, base, root] = process.argv.slice(2);
 const { loadReleaseChangelog, checkChangelogLayout, changelogEntryPath, isReleaseChangelogPath } =
   await import(pathToFileURL(`${root}/scripts/lib/release-changelog.mjs`));
-const git = (...args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: Infinity });
+const git = (...args) => execFileSync(process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git", args, { encoding: "utf8", maxBuffer: Infinity });
 const read = (ref) => git("show", `${ref}:CHANGELOG.md`);
 const changed = git("diff", "--name-only", "--no-renames", "-z", base, "HEAD", "--", "CHANGELOG.md", "CHANGELOG/").split("\0").filter(Boolean);
 const release = loadReleaseChangelog({ rootDir: process.cwd(), ref: "HEAD", version });
@@ -144,7 +150,6 @@ EOF_NODE
 }
 
 print_review_stdout_summary() {
-  require_artifact .local/review.md
   require_artifact .local/review.json
   require_artifact .local/pr-meta.env
 
@@ -160,7 +165,7 @@ print_review_stdout_summary() {
   echo "pr_url=${PR_URL:-}"
   echo "recommendation: $recommendation"
   echo "findings: $finding_count"
-  cat .local/review.md
+  node "$(review_artifacts_helper_path)" render .local/review.json
 }
 
 print_relevant_log_excerpt() {
@@ -235,7 +240,7 @@ read_pr_view_json() {
 
   for attempt in $(seq 1 "$max_attempts"); do
     exit_code=0
-    if gh pr view "$pr" --json "$fields" >"$stdout_file" 2>"$stderr_file"; then
+    if pr_gh pr view "$pr" --json "$fields" >"$stdout_file" 2>"$stderr_file"; then
       if [ -s "$stdout_file" ] && jq -se 'length == 1 and (.[0] | type == "object")' "$stdout_file" >/dev/null 2>&1; then
         cat "$stdout_file"
         rm -rf "$temp_dir"
@@ -249,6 +254,11 @@ read_pr_view_json() {
     else
       exit_code=$?
       reason="gh pr view exited with status $exit_code"
+      if [ "$exit_code" -eq 65 ] || [ "$exit_code" -eq 75 ] || [ "$exit_code" -eq 77 ]; then
+        cat "$stderr_file" >&2
+        rm -rf "$temp_dir"
+        return 1
+      fi
     fi
     [ "$attempt" -eq "$max_attempts" ] || sleep "$attempt"
   done
@@ -257,6 +267,36 @@ read_pr_view_json() {
   [ ! -s "$stderr_file" ] || cat "$stderr_file" >&2
   rm -rf "$temp_dir"
   return 1
+}
+
+read_pr_observation() {
+  read_pr_view_json "$1" "number,url,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository"
+}
+
+use_pr_observation() {
+  local pr="$1" observation="$2" repository_url
+  repository_url=$(printf '%s\n' "$observation" | jq -er --argjson pr "$pr" '
+    .baseRepository as $repo |
+    select(.number == $pr and
+      ($repo.id | type == "string" and length > 0) and
+      ($repo.databaseId | type == "number" and . > 0 and floor == .) and
+      ($repo.nameWithOwner | type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")) and
+      ($repo.url | type == "string" and test("^https://[A-Za-z0-9.-]+(:[0-9]+)?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo.nameWithOwner)) and
+      .url == ($repo.url + "/pull/" + ($pr | tostring))) |
+    $repo.url') || {
+      echo "Invalid base repository identity for PR #$pr." >&2
+      return 1
+    }
+  PR_OBSERVATION="$observation"
+  PR_REPOSITORY_URL="$repository_url"
+  PR_REPOSITORY_SELECTOR="${GH_REPO:-}"
+  PR_REPOSITORY_HOST="${GH_HOST:-}"
+}
+
+pr_observe() {
+  local observation
+  observation=$(read_pr_observation "$1") || return 1
+  use_pr_observation "$1" "$observation"
 }
 
 pr_view_string_field() {
@@ -283,7 +323,8 @@ wait_for_pr_head_sha() {
   local attempt
   for attempt in $(seq 1 "$max_attempts"); do
     local observed_sha
-    observed_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+    pr_observe "$pr" || return 1
+    observed_sha=$(pr_view_string_field "$PR_OBSERVATION" headRefOid "$pr") || return 1
     if [ "$observed_sha" = "$expected_sha" ]; then
       return 0
     fi
@@ -318,7 +359,7 @@ resolve_contributor_coauthor_email() {
   fi
 
   local contrib_id
-  contrib_id=$(gh api "users/$contrib" --jq .id) || return 1
+  contrib_id=$(pr_gh api "users/$contrib" --jq .id) || return 1
   printf '%s+%s@users.noreply.github.com\n' "$contrib_id" "$contrib"
 }
 
@@ -330,7 +371,7 @@ common_repo_root() {
 
   local base_dir
   base_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  git -C "$base_dir" rev-parse --show-toplevel
+  pr_git -C "$base_dir" rev-parse --show-toplevel
 }
 
 worktree_path_for_branch() (
@@ -339,7 +380,7 @@ worktree_path_for_branch() (
   local ref="refs/heads/$branch"
   local field worktree="" match="" records=0 pipeline_status
   # Drain foreground Git before the supervisor checks for leftover children.
-  git worktree list --porcelain -z | {
+  pr_git worktree list --porcelain -z | {
     while IFS= read -r -d '' field; do
       case "$field" in
         worktree\ *) worktree="${field#worktree }"; records=$((records + 1)) ;;
@@ -361,7 +402,7 @@ worktree_registration_state() (
   local path="$1"
   local field found=0 records=0 open=false pipeline_status
   # Git must finish before a successful operation can release its lock.
-  git worktree list --porcelain -z | {
+  pr_git worktree list --porcelain -z | {
     while IFS= read -r -d '' field; do
       case "$field" in
         worktree\ *)
@@ -395,13 +436,13 @@ resolve_existing_dir_path() {
 pr_worktree_state() {
   local root common_dir
   root=$(common_repo_root) || return $?
-  common_dir=$(git -C "$root" rev-parse --path-format=absolute --git-common-dir) || return $?
+  common_dir=$(pr_git -C "$root" rev-parse --path-format=absolute --git-common-dir) || return $?
   # Git omits damaged admin entries from its listing. Bind the exact backlink
   # separately, and distinguish genuine absence from an unreadable path.
-  node - "$root" "$common_dir" "$1" "${2:-}" "${3:-cleanup}" <<'EOF_NODE'
+  node - "$root" "$common_dir" "$1" "${2:-}" "${3:-cleanup}" "${4:-}" <<'EOF_NODE'
 const fs = require("node:fs");
 const path = require("node:path");
-const [root, common, requested, previousAdmin, purpose] = process.argv.slice(2);
+const [root, common, requested, previousAdmin, purpose, expectedIdentity] = process.argv.slice(2);
 function stat(file) {
   try { return fs.lstatSync(file); } catch (error) {
     if (error.code === "ENOENT") return undefined;
@@ -442,7 +483,10 @@ try {
     if (!pointer.startsWith("gitdir: ")) throw new Error("damaged worktree metadata");
     const admin = path.resolve(target, pointer.slice(8));
     if (path.dirname(admin) !== adminRoot) throw new Error("damaged worktree metadata");
-    ids = [path.basename(admin)];
+    // A copied template marker is not entry authority. Scan every registration
+    // before classifying it as an abandoned clone eligible for cleanup.
+    ids = read(path.join(admin, "gitdir")) === path.join(target, ".git")
+      ? [path.basename(admin)] : fs.readdirSync(adminRoot);
   } else {
     ids = adminStat ? fs.readdirSync(adminRoot) : [];
   }
@@ -459,11 +503,38 @@ try {
     }
     matches.push(admin);
   }
-  if (matches.length > 1 || (purpose === "entry" && targetStat && matches.length !== 1)) {
+  let failedTemplateClone = false;
+  let templateAdmin = "";
+  if (targetStat && matches.length === 0 && !stat(path.join(adminRoot, leaf)) &&
+      !stat(path.join(target, ".local")) && stat(path.join(target, ".git"))?.isFile()) {
+    const pointer = read(path.join(target, ".git"));
+    const admin = pointer.startsWith("gitdir: ") ? path.resolve(target, pointer.slice(8)) : "";
+    const id = path.basename(admin);
+    const templates = path.join(parent, ".templates");
+    const template = path.join(templates, id);
+    if (path.dirname(admin) === adminRoot && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id) &&
+        stat(admin)?.isDirectory() && stat(templates)?.isDirectory() && stat(template)?.isDirectory() &&
+        path.resolve(admin, read(path.join(admin, "gitdir"))) === path.join(template, ".git") &&
+        path.resolve(admin, read(path.join(admin, "commondir"))) === commonDir &&
+        read(path.join(template, ".git")) === pointer) {
+      failedTemplateClone = true;
+      templateAdmin = admin;
+    }
+  }
+  if (matches.length > 1 ||
+      (purpose === "entry" && targetStat && matches.length !== 1 && !failedTemplateClone)) {
     throw new Error("ambiguous worktree metadata");
+  }
+  const identity = targetStat ? `${targetStat.dev}:${targetStat.ino}` : "";
+  if (purpose === "remove-failed-template") {
+    if (!failedTemplateClone || identity !== expectedIdentity) {
+      throw new Error("failed template clone identity changed");
+    }
+    fs.rmSync(target, { recursive: true });
   }
   process.stdout.write(JSON.stringify({
     path: target, present: Boolean(targetStat), admin: matches[0] ?? "", common: commonDir,
+    failedTemplateClone, templateAdmin, identity,
     previousAdminPresent: previousAdmin ? Boolean(stat(previousAdmin)) : false,
   }) + "\n");
 } catch (error) {
@@ -495,31 +566,88 @@ require_worktree_cleanup_evidence() (
 )
 
 remove_worktree_if_present() {
-  local path="$1" state registered_path registration admin dirty
+  local path="$1" state registered_path registration admin dirty failed_template template_admin
   state=$(pr_worktree_state "$path") || return $?
   registered_path=$(printf '%s\n' "$state" | jq -r '.path') || return $?
   admin=$(printf '%s\n' "$state" | jq -r '.admin') || return $?
+  failed_template=$(printf '%s\n' "$state" | jq -r '.failedTemplateClone') || return $?
   registration=$(worktree_registration_state "$registered_path") || return $?
   require_worktree_cleanup_evidence "$path" || return $?
   if [ "$registration" = absent ] &&
     printf '%s\n' "$state" | jq -e '.present == false and .admin == ""' >/dev/null; then
     return 0
   fi
-  if [ "$registration" != registered ] || [ -z "$admin" ]; then
+  if [ "$failed_template" != true ] && { [ "$registration" != registered ] || [ -z "$admin" ]; }; then
     echo "Preserving $path: unregistered or ambiguous PR worktree; scripts/pr refuses to mutate the shared canonical checkout." >&2
     return 1
   fi
   if [ -d "$path" ]; then
-    dirty=$(git -C "$path" status --porcelain --untracked-files=all --ignore-submodules=none) || return $?
+    if [ "$failed_template" = true ]; then
+      template_admin=$(printf '%s\n' "$state" | jq -r '.templateAdmin') || return $?
+      # Templates refresh in place. Compare against this PR's retained seed,
+      # using a private index so neither template state nor ignored edits are lost.
+      if (
+        local seed scratch pr
+        local proof_git=(--git-dir "$template_admin" --work-tree "$registered_path")
+        pr="${registered_path##*/}"
+        pr="${pr#pr-}"
+        seed=$(pr_git rev-parse --verify "refs/heads/temp/pr-$pr^{commit}") || exit 1
+        scratch=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-clone.XXXXXX") || exit 1
+        trap 'rm -rf -- "$scratch"' EXIT
+        export GIT_INDEX_FILE="$scratch/index" GIT_OPTIONAL_LOCKS=0
+        pr_git "${proof_git[@]}" read-tree --no-sparse-checkout "$seed" || exit 1
+        pr_git "${proof_git[@]}" update-index --refresh >/dev/null || exit 1
+        pr_git "${proof_git[@]}" diff-files --quiet --ignore-submodules=none || exit 1
+        pr_git "${proof_git[@]}" ls-files --others -z > "$scratch/untracked" || exit 1
+        [ ! -s "$scratch/untracked" ]
+      ); then
+        dirty=""
+      else
+        dirty="unverified failed clone"
+      fi
+    else
+      dirty=$(pr_git -C "$path" status --porcelain --untracked-files=all --ignore-submodules=none) || return $?
+    fi
     if [ -n "$dirty" ] || [ -e "$admin/locked" ]; then
       echo "Preserving $path: worktree has local changes or is locked. Review its contents and ownership before cleanup." >&2
       return 1
     fi
   fi
+  # A child changing cwd does not release its parent session's working directory.
+  node - "$registered_path" <<'EOF_NODE' || return 1
+const { spawnSync } = require("node:child_process");
+const target = process.argv[2];
+const scan = spawnSync("lsof", ["-nP", "-d", "cwd", "-Fpn0"], {
+  encoding: "utf8", timeout: 30000, maxBuffer: 16 * 1024 * 1024,
+});
+if (scan.error || scan.status !== 0 || !scan.stdout) {
+  console.error(`Preserving ${target}: unable to inspect process working directories. Retry cleanup after checking lsof and session ownership.`);
+  process.exit(1);
+}
+let pid;
+for (const field of scan.stdout.split("\0")) {
+  const record = field.replace(/^\n/, "");
+  if (record.startsWith("p")) pid = record.slice(1);
+  if (!record.startsWith("n")) continue;
+  const cwd = record.slice(1);
+  if (cwd === target || cwd.startsWith(target + "/")) {
+    console.error(`Preserving ${target}: live process ${pid} has its cwd in this worktree. Defer cleanup until the owning session exits or releases its cwd.`);
+    process.exit(1);
+  }
+}
+EOF_NODE
   [ "${2:-false}" != true ] || return 0
+  if [ "$failed_template" = true ]; then
+    if [ -n "${PR_OPERATION_LOCK_REF:-}" ]; then
+      pr_operation_lock_owner_is_current "$(repo_root)" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" || return 1
+    fi
+    pr_worktree_state "$path" "" remove-failed-template "$(printf '%s\n' "$state" | jq -r '.identity')" >/dev/null || return $?
+    echo "Removed failed PR template clone $registered_path"
+    return 0
+  fi
   # One native removal owns both the path and its exact admin entry. A partial
   # deletion still fails; neither repository-wide prune nor orphan trash is safe.
-  git worktree remove -- "$registered_path" || return $?
+  pr_git worktree remove -- "$registered_path" || return $?
   state=$(pr_worktree_state "$path" "$admin") || return $?
   registration=$(worktree_registration_state "$registered_path") || return $?
   if [ "$registration" != absent ] ||
@@ -537,7 +665,7 @@ delete_local_branch_if_safe() {
   local existing status
   # for-each-ref can warn about a broken ref with status zero. Such a warning
   # is not proof of absence, so retain diagnostics in the validated result.
-  existing=$(git for-each-ref --format="%(if:equals=$ref)%(refname)%(then)%(refname)%(end)" -- "$ref" 2>&1) || {
+  existing=$(pr_git for-each-ref --format="%(if:equals=$ref)%(refname)%(then)%(refname)%(end)" -- "$ref" 2>&1) || {
     status=$?; printf '%s\n' "$existing" >&2; return "$status"
   }
   [ -n "$existing" ] || return 0
@@ -556,7 +684,7 @@ delete_local_branch_if_safe() {
   # Git still rejects advanced tips and branches checked out in another worktree.
   if [ -n "$retained" ]; then
     # merge is multi-valued: appending must not redirect an existing upstream.
-    if git config --get-all "branch.$branch.merge" >/dev/null; then
+    if pr_git config --get-all "branch.$branch.merge" >/dev/null; then
       :
     else
       status=$?
@@ -564,8 +692,8 @@ delete_local_branch_if_safe() {
       config=(-c "branch.$branch.remote=." -c "branch.$branch.merge=$retained")
     fi
   fi
-  git ${config[@]+"${config[@]}"} branch -d -- "$branch" || return $?
-  existing=$(git for-each-ref --format="%(if:equals=$ref)%(refname)%(then)%(refname)%(end)" -- "$ref" 2>&1) || {
+  pr_git ${config[@]+"${config[@]}"} branch -d -- "$branch" || return $?
+  existing=$(pr_git for-each-ref --format="%(if:equals=$ref)%(refname)%(then)%(refname)%(end)" -- "$ref" 2>&1) || {
     status=$?; printf '%s\n' "$existing" >&2; return "$status"
   }
   [ -z "$existing" ] || { printf 'Branch cleanup incomplete: %s\n' "$existing" >&2; return 1; }

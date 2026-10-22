@@ -7,6 +7,7 @@ describe("normalizeXaiModelId", () => {
     expect(normalizeXaiModelId("grok-4.3-latest")).toBe("grok-4.3");
     expect(normalizeXaiModelId("grok-latest")).toBe("grok-latest");
     expect(normalizeXaiModelId("grok-4.5-latest")).toBe("grok-4.5");
+    expect(normalizeXaiModelId("grok-4.7-latest")).toBe("grok-4.7");
   });
 
   it("normalizes the current Grok Build alias", () => {

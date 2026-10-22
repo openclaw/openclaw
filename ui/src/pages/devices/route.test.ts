@@ -37,7 +37,7 @@ it("loads Devices from the connection current after the route module yield", asy
     lastErrorCode: null,
   });
   const runtimeConfig = createRuntimeConfigCapability(harness.gateway);
-  onTestFinished(runtimeConfig.dispose);
+  onTestFinished(() => runtimeConfig.dispose());
   const refresh = vi.spyOn(runtimeConfig, "refresh").mockResolvedValue(undefined);
   const context = {
     gateway: harness.gateway,

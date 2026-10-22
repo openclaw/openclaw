@@ -1,6 +1,5 @@
 package ai.openclaw.app.node
 
-import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -200,9 +199,6 @@ private class FakeMotionDataSource(
       startISO = "2026-02-28T00:00:00Z",
       endISO = "2026-02-28T01:00:00Z",
       steps = 1234,
-      distanceMeters = null,
-      floorsAscended = null,
-      floorsDescended = null,
     ),
   private val activityError: Throwable? = null,
   private val pedometerError: Throwable? = null,
@@ -210,25 +206,19 @@ private class FakeMotionDataSource(
   var lastActivityRequest: MotionRangeRequest? = null
   var lastPedometerRequest: MotionRangeRequest? = null
 
-  override fun isActivityAvailable(context: Context): Boolean = activityAvailable
+  override fun isActivityAvailable(): Boolean = activityAvailable
 
-  override fun isPedometerAvailable(context: Context): Boolean = pedometerAvailable
+  override fun isPedometerAvailable(): Boolean = pedometerAvailable
 
-  override fun hasPermission(context: Context): Boolean = hasPermission
+  override fun hasPermission(): Boolean = hasPermission
 
-  override suspend fun activity(
-    context: Context,
-    request: MotionRangeRequest,
-  ): MotionActivityRecord {
+  override suspend fun activity(request: MotionRangeRequest): MotionActivityRecord {
     lastActivityRequest = request
     activityError?.let { throw it }
     return activityRecord
   }
 
-  override suspend fun pedometer(
-    context: Context,
-    request: MotionRangeRequest,
-  ): PedometerRecord {
+  override suspend fun pedometer(request: MotionRangeRequest): PedometerRecord {
     lastPedometerRequest = request
     pedometerError?.let { throw it }
     return pedometerRecord

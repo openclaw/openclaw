@@ -37,9 +37,6 @@ function sampleShape(value: unknown): string {
   }
   const fields: string[] = [];
   for (const key in value) {
-    if (!Object.hasOwn(value, key)) {
-      continue;
-    }
     // Values have crossed JSON normalization; these are own data properties.
     fields.push(`${JSON.stringify(previewText(key, 40))}:${kind(value[key])}`);
     if (fields.length === 6) {
@@ -65,11 +62,9 @@ function sampledValue(value: unknown, depth = 0): unknown {
   const sample: Record<string, unknown> = Object.create(null);
   let keys = 0;
   for (const key in value) {
-    if (Object.hasOwn(value, key)) {
-      sample[previewText(key, 40)] = sampledValue(value[key], depth + 1);
-      if (++keys === 6) {
-        break;
-      }
+    sample[previewText(key, 40)] = sampledValue(value[key], depth + 1);
+    if (++keys === 6) {
+      break;
     }
   }
   return sample;
@@ -82,9 +77,6 @@ function envelopeFields(value: unknown): Record<string, unknown> | undefined {
   const candidates: Array<[string, unknown]> = [];
   let examined = 0;
   for (const key in value) {
-    if (!Object.hasOwn(value, key)) {
-      continue;
-    }
     if (++examined > MAX_KEYS) {
       break;
     }
@@ -151,9 +143,6 @@ function inspectArrays(value: unknown) {
     }
     let keys = 0;
     for (const key in entry.value) {
-      if (!Object.hasOwn(entry.value, key)) {
-        continue;
-      }
       if (++keys > MAX_KEYS) {
         limited = true;
         break;

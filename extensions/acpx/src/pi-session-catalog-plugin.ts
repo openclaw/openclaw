@@ -27,10 +27,7 @@ function fullConfigCatalogEnabled(config: unknown): boolean {
     return true;
   }
   const entry = config.plugins.entries.acpx;
-  if (!isRecord(entry) || !isRecord(entry.config) || !isRecord(entry.config.piSessionCatalog)) {
-    return true;
-  }
-  return entry.config.piSessionCatalog.enabled !== false;
+  return isPiSessionCatalogEnabled(isRecord(entry) ? entry.config : undefined);
 }
 
 function isPiSessionCatalogEnabled(pluginConfig: unknown): boolean {
@@ -51,6 +48,7 @@ function createPiSessionNodeHostBindings() {
     terminalCommand: PI_TERMINAL_RESUME_COMMAND,
     sessionIdPattern: PI_SESSION_ID_PATTERN,
     executable: "pi",
+    hasActiveWork: () => false,
     args: (threadId) => ["--session", threadId],
     listAvailable: storeAvailable,
     terminalAvailable: ({ config, env }) =>

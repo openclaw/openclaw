@@ -1,4 +1,3 @@
-// Openai plugin module implements transport policy behavior.
 import type {
   ProviderResolveTransportTurnStateContext,
   ProviderTransportTurnState,
@@ -11,20 +10,16 @@ const DEFAULT_OPENAI_WS_DEGRADE_COOLDOWN_MS = 60_000;
 const AZURE_PROVIDER_IDS = new Set(["azure-openai", "azure-openai-responses"]);
 
 function isAzureOpenAIBaseUrl(baseUrl?: string): boolean {
-  const trimmed = baseUrl?.trim();
-  if (!trimmed) {
-    return false;
-  }
-  try {
-    return normalizeLowercaseStringOrEmpty(new URL(trimmed).hostname).endsWith(".openai.azure.com");
-  } catch {
-    return false;
-  }
+  return normalizeLowercaseStringOrEmpty(URL.parse(baseUrl?.trim() ?? "")?.hostname).endsWith(
+    ".openai.azure.com",
+  );
 }
 
-function normalizeIdentityValue(value: string, maxLength = 160): string {
-  const trimmed = value.trim().replace(/[\r\n]+/g, " ");
-  return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+function normalizeIdentityValue(value: string): string {
+  return value
+    .trim()
+    .replace(/[\r\n]+/g, " ")
+    .slice(0, 160);
 }
 
 function usesKnownNativeOpenAIRoute(provider: string, baseUrl?: string): boolean {

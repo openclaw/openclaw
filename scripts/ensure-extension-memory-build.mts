@@ -6,10 +6,8 @@ import { readdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolvePluginRootPublicSurfacePath } from "../src/plugins/public-surface-runtime.js";
-import {
-  collectBundledPluginBuildEntries,
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
-} from "./lib/bundled-plugin-build-entries.mjs";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../src/shared/non-packaged-plugin-dirs.js";
+import { collectBundledPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
@@ -30,10 +28,7 @@ type ExtensionMemoryBuildParams = {
   timeoutMs?: number;
 };
 
-/**
- * Resolves the extension memory build timeout from environment.
- */
-export function resolveExtensionMemoryBuildTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
+function resolveExtensionMemoryBuildTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   return readPositiveEnvInt(
     "OPENCLAW_EXTENSION_MEMORY_BUILD_TIMEOUT_MS",
     env,
@@ -91,7 +86,6 @@ export function findBuiltExtensionMemoryEntries(rootDir: string = repoRoot) {
     .toSorted((a, b) => a.dir.localeCompare(b.dir));
 }
 
-/** Reports whether all required built memory extension entries exist. */
 export function hasBuiltExtensionMemoryEntries(params: ExtensionMemoryBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const builtIds = new Set(findBuiltExtensionMemoryEntries(rootDir).map((entry) => entry.dir));
@@ -105,9 +99,6 @@ export function hasBuiltExtensionMemoryEntries(params: ExtensionMemoryBuildParam
   return requiredExtensionIds.every((id) => builtIds.has(id));
 }
 
-/**
- * Builds memory extension entries when required outputs are missing.
- */
 export function ensureExtensionMemoryBuild(params: ExtensionMemoryBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   if (hasBuiltExtensionMemoryEntries(params)) {

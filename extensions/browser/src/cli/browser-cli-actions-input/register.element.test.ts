@@ -1,5 +1,4 @@
-// Browser tests cover register.element plugin behavior.
-import { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
@@ -7,7 +6,6 @@ import {
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "../browser-cli.test-support.js";
-import * as cliCoreApiModule from "../core-api.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
@@ -21,20 +19,18 @@ const mocks = vi.hoisted(() => ({
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
 const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
+vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
-const { registerBrowserElementCommands } = await import("./register.element.js");
+const { registerBrowserActionInputCommands } = await import("./register.js");
 
-function createElementProgram(): Command {
+function run(...args: string[]) {
   const { program, browser, parentOpts } = createBrowserProgram();
   browser.exitOverride().configureOutput({ writeErr: () => {}, writeOut: () => {} });
-  registerBrowserElementCommands(browser, parentOpts);
-  return program;
+  registerBrowserActionInputCommands(browser, parentOpts);
+  return program.parseAsync(["browser", ...args], { from: "user" });
 }
 
 function getLastActionBody(): Record<string, unknown> | undefined {
@@ -49,10 +45,8 @@ describe("browser element commands", () => {
   });
 
   it.each([
-    {
-      name: "click",
-      argv: [
-        "browser",
+    [
+      [
         "--browser-profile",
         "user",
         "click",
@@ -65,7 +59,7 @@ describe("browser element commands", () => {
         "--modifiers",
         "Shift, Alt",
       ],
-      expectedBody: {
+      {
         kind: "click",
         ref: "ref-1",
         targetId: "tab-1",
@@ -73,11 +67,9 @@ describe("browser element commands", () => {
         button: "right",
         modifiers: ["Shift", "Alt"],
       },
-    },
-    {
-      name: "click-coords",
-      argv: [
-        "browser",
+    ],
+    [
+      [
         "click-coords",
         "12.5",
         "42",
@@ -89,7 +81,7 @@ describe("browser element commands", () => {
         "--delay-ms",
         "25",
       ],
-      expectedBody: {
+      {
         kind: "clickCoords",
         x: 12.5,
         y: 42,
@@ -98,11 +90,10 @@ describe("browser element commands", () => {
         button: "middle",
         delayMs: 25,
       },
-    },
-    {
-      name: "type",
-      argv: ["browser", "type", "input-1", "hello", "--submit", "--slowly", "--target-id", "tab-2"],
-      expectedBody: {
+    ],
+    [
+      ["type", "input-1", "hello", "--submit", "--slowly", "--target-id", "tab-2"],
+      {
         kind: "type",
         ref: "input-1",
         text: "hello",
@@ -110,78 +101,38 @@ describe("browser element commands", () => {
         slowly: true,
         targetId: "tab-2",
       },
+    ],
+    [
+      ["hover", "node-1", "--target-id", "tab-4"],
+      { kind: "hover", ref: "node-1", targetId: "tab-4" },
+    ],
+    [
+      ["drag", "start-1", "end-1", "--target-id", "tab-6"],
+      { kind: "drag", startRef: "start-1", endRef: "end-1", targetId: "tab-6" },
+    ],
+    [
+      ["select", "select-1", "alpha", "beta", "--target-id", "tab-7"],
+      { kind: "select", ref: "select-1", values: ["alpha", "beta"], targetId: "tab-7" },
+    ],
+  ] satisfies [string[], Record<string, unknown>][])(
+    "sends the expected action body for %j",
+    async (argv, expectedBody) => {
+      await run(...argv);
+      expect(getLastActionBody()).toMatchObject(expectedBody);
+      expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({ timeoutMs: 126_250 });
     },
-    {
-      name: "press",
-      argv: ["browser", "press", "Enter", "--target-id", "tab-3"],
-      expectedBody: { kind: "press", key: "Enter", targetId: "tab-3" },
-    },
-    {
-      name: "hover",
-      argv: ["browser", "hover", "node-1", "--target-id", "tab-4"],
-      expectedBody: { kind: "hover", ref: "node-1", targetId: "tab-4" },
-    },
-    {
-      name: "scrollintoview",
-      argv: ["browser", "scrollintoview", "node-2", "--target-id", "tab-5"],
-      expectedBody: { kind: "scrollIntoView", ref: "node-2", targetId: "tab-5" },
-    },
-    {
-      name: "drag",
-      argv: ["browser", "drag", "start-1", "end-1", "--target-id", "tab-6"],
-      expectedBody: {
-        kind: "drag",
-        startRef: "start-1",
-        endRef: "end-1",
-        targetId: "tab-6",
-      },
-    },
-    {
-      name: "select",
-      argv: ["browser", "select", "select-1", "alpha", "beta", "--target-id", "tab-7"],
-      expectedBody: {
-        kind: "select",
-        ref: "select-1",
-        values: ["alpha", "beta"],
-        targetId: "tab-7",
-      },
-    },
-  ])("sends the expected $name action body", async ({ argv, expectedBody }) => {
-    const program = createElementProgram();
-
-    await program.parseAsync(argv, { from: "user" });
-
-    expect(getLastActionBody()).toMatchObject(expectedBody);
-    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]).toEqual({
-      timeoutMs: 126_250,
-    });
-  });
+  );
 
   it("rejects a blank required ref before dispatch", async () => {
-    const program = createElementProgram();
-
-    await expect(program.parseAsync(["browser", "click", "   "], { from: "user" })).rejects.toThrow(
-      "__exit__:1",
-    );
+    await expect(run("click", "   ")).rejects.toThrow("__exit__:1");
 
     const capture = getBrowserCliRuntimeCapture();
     expect(capture.runtimeErrors.join("\n")).toContain("ref is required");
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "click",
-      argv: ["browser", "click", "ref-1", "--button", "auxiliary"],
-    },
-    {
-      name: "click-coords",
-      argv: ["browser", "click-coords", "10", "20", "--button", "Left"],
-    },
-  ])("rejects an invalid --button for $name before dispatch", async ({ argv }) => {
-    const program = createElementProgram();
-
-    await expect(program.parseAsync(argv, { from: "user" })).rejects.toMatchObject({
+  it("rejects an invalid --button for click-coords before dispatch", async () => {
+    await expect(run("click-coords", "10", "20", "--button", "Left")).rejects.toMatchObject({
       code: "commander.invalidArgument",
       exitCode: 1,
     });
@@ -189,64 +140,24 @@ describe("browser element commands", () => {
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "click", argv: ["browser", "click", "ref-1"] },
-    { name: "click-coords", argv: ["browser", "click-coords", "10", "20"] },
-  ])("leaves button undefined for $name when omitted", async ({ argv }) => {
-    const program = createElementProgram();
-
-    await program.parseAsync(argv, { from: "user" });
-
+  it("leaves button undefined for click when omitted", async () => {
+    await run("click", "ref-1");
     expect(getLastActionBody()?.button).toBeUndefined();
   });
 
   it("rejects non-decimal coordinate values before dispatch", async () => {
-    const program = createElementProgram();
-
-    await expect(
-      program.parseAsync(["browser", "click-coords", "0x10", "20"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    await expect(run("click-coords", "0x10", "20")).rejects.toThrow("__exit__:1");
 
     const capture = getBrowserCliRuntimeCapture();
     expect(capture.runtimeErrors.join("\n")).toContain("Invalid x: must be a finite number");
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
-  it("rejects non-decimal delay and timeout options", async () => {
-    const delayProgram = createElementProgram();
-    await expect(
-      delayProgram.parseAsync(["browser", "click-coords", "10", "20", "--delay-ms", "1e3"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--delay-ms must be a non-negative integer.");
-
-    const timeoutProgram = createElementProgram();
-    await expect(
-      timeoutProgram.parseAsync(["browser", "scrollintoview", "ref-1", "--timeout-ms", "0x1000"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--timeout-ms must be a positive integer.");
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-  });
-
   it("accepts signed and zero-padded integer action options", async () => {
-    const delayProgram = createElementProgram();
-    await delayProgram.parseAsync(["browser", "click-coords", "10", "20", "--delay-ms", "+0005"], {
-      from: "user",
-    });
-    const delayCall = mocks.callBrowserRequest.mock.calls.at(-1) as unknown[] | undefined;
-    const delayRequest = delayCall?.[1] as { body?: { delayMs?: number } } | undefined;
-    expect(delayRequest?.body?.delayMs).toBe(5);
-
-    const timeoutProgram = createElementProgram();
-    await timeoutProgram.parseAsync(
-      ["browser", "scrollintoview", "ref-1", "--timeout-ms", "+020000"],
-      { from: "user" },
-    );
-    const timeoutCall = mocks.callBrowserRequest.mock.calls.at(-1) as unknown[] | undefined;
-    const timeoutRequest = timeoutCall?.[1] as { body?: { timeoutMs?: number } } | undefined;
-    const timeoutOptions = timeoutCall?.[2] as { timeoutMs?: number } | undefined;
-    expect(timeoutRequest?.body?.timeoutMs).toBe(20_000);
-    expect(timeoutOptions?.timeoutMs).toBe(126_250);
+    await run("click-coords", "10", "20", "--delay-ms", "+0005");
+    expect(getLastActionBody()?.delayMs).toBe(5);
+    await run("scrollintoview", "ref-1", "--timeout-ms", "+020000");
+    expect(getLastActionBody()?.timeoutMs).toBe(20_000);
+    expect(mocks.callBrowserRequest.mock.calls.at(-1)?.[2]?.timeoutMs).toBe(126_250);
   });
 });

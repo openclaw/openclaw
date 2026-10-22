@@ -27,7 +27,7 @@
       "files": [
         "src/gateway/call.test.ts",
         "src/gateway/http-common.test.ts",
-        "src/gateway/method-scopes.test.ts",
+        "src/gateway/method-scopes.own-session.test.ts",
         "src/gateway/probe.close-drain.test.ts"
       ]
     },

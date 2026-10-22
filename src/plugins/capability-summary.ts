@@ -237,6 +237,7 @@ export type PluginCapabilityConsentReview = Omit<
   "ok" | "plugin" | "components" | "catalog"
 > & {
   pluginId: string;
+  reviewToken: string;
   name: string;
   version?: string;
   widened?: Partial<PluginAcceptedDeclaredSurface>;

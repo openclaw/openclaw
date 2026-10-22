@@ -1,14 +1,7 @@
-/**
- * Analyzes injected workspace bootstrap files and builds warnings when context
- * was truncated before an agent sees it.
- */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  buildBootstrapPromptWarning,
-  normalizeBootstrapWarningSignatures,
-} from "./bootstrap-budget-warning.js";
 import type {
   BootstrapBudgetAnalysis,
   BootstrapInjectionStat,
@@ -16,13 +9,63 @@ import type {
   BootstrapPromptWarningMode,
   BootstrapTruncationCause,
 } from "./bootstrap-budget.types.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
   USER_BOOTSTRAP_MAX_CHARS,
 } from "./embedded-agent-helpers/bootstrap.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+const DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX = 32;
+
+const BOOTSTRAP_TRUNCATION_NOTICE = [
+  "[Bootstrap truncation warning]",
+  "Some workspace bootstrap files were truncated before Project Context injection.",
+  "Treat Project Context as partial and read the relevant files directly if details seem missing.",
+].join("\n");
+
+/** Builds the compact truncation notice mirrored into run metadata. */
+export function buildBootstrapPromptWarningNotice(warningLines?: string[]): string | undefined {
+  return warningLines?.some((line) => line.trim().length > 0)
+    ? BOOTSTRAP_TRUNCATION_NOTICE
+    : undefined;
+}
+
+function appendSeenSignature(signatures: string[], signature: string): string[] {
+  if (!signature.trim() || signatures.includes(signature)) {
+    return signatures;
+  }
+  const next = [...signatures, signature];
+  return next.length <= DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX
+    ? next
+    : next.slice(-DEFAULT_BOOTSTRAP_PROMPT_WARNING_SIGNATURE_HISTORY_MAX);
+}
+
+function buildBootstrapTruncationSignature(analysis: BootstrapBudgetAnalysis): string | undefined {
+  if (!analysis.hasTruncation) {
+    return undefined;
+  }
+  const files = analysis.truncatedFiles
+    .map((file) => ({
+      path: file.path || file.name,
+      rawChars: file.rawChars,
+      injectedChars: file.injectedChars,
+      causes: file.causes.toSorted(),
+    }))
+    .toSorted(
+      (a, b) =>
+        a.path.localeCompare(b.path) ||
+        a.rawChars - b.rawChars ||
+        a.injectedChars - b.injectedChars ||
+        a.causes.join("+").localeCompare(b.causes.join("+")),
+    );
+  return JSON.stringify({
+    bootstrapMaxChars: analysis.totals.bootstrapMaxChars,
+    bootstrapTotalMaxChars: analysis.totals.bootstrapTotalMaxChars,
+    files,
+  });
+}
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
 
@@ -70,7 +113,7 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   };
 }): string[] {
   const truncation = report?.bootstrapTruncation;
-  const seenFromReport = normalizeBootstrapWarningSignatures(truncation?.warningSignaturesSeen);
+  const seenFromReport = normalizeUniqueTrimmedStringList(truncation?.warningSignaturesSeen);
   if (seenFromReport.length > 0) {
     return seenFromReport;
   }
@@ -78,10 +121,7 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   if (truncation?.warningMode === "off") {
     return [];
   }
-  const single =
-    typeof truncation?.promptWarningSignature === "string"
-      ? (normalizeOptionalString(truncation.promptWarningSignature) ?? "")
-      : "";
+  const single = normalizeOptionalString(truncation?.promptWarningSignature);
   return single ? [single] : [];
 }
 
@@ -112,11 +152,12 @@ export function buildBootstrapInjectionStats(params: {
       (normalizedPath ? path.posix.basename(normalizedPath) : "bootstrap");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
     const injected = pathValue ? injectedByPath.get(pathValue) : undefined;
-    const injectedChars = injected ? injected.length : 0;
+    const injectedChars = injected?.length ?? 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
       name,
       path: pathValue || name,
+      origin: file.origin,
       missing: file.missing,
       rawChars,
       injectedChars,
@@ -130,17 +171,10 @@ export function analyzeBootstrapBudget(params: {
   files: BootstrapInjectionStat[];
   bootstrapMaxChars: number;
   bootstrapTotalMaxChars: number;
-  nearLimitRatio?: number;
 }): BootstrapBudgetAnalysis {
   const bootstrapMaxChars = normalizePositiveLimit(params.bootstrapMaxChars);
   const bootstrapTotalMaxChars = normalizePositiveLimit(params.bootstrapTotalMaxChars);
-  const nearLimitRatio =
-    typeof params.nearLimitRatio === "number" &&
-    Number.isFinite(params.nearLimitRatio) &&
-    params.nearLimitRatio > 0 &&
-    params.nearLimitRatio < 1
-      ? params.nearLimitRatio
-      : DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO;
+  const nearLimitRatio = DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO;
   let rawChars = 0;
   let injectedChars = 0;
   let remainingTotalChars = bootstrapTotalMaxChars;
@@ -172,7 +206,6 @@ export function analyzeBootstrapBudget(params: {
   const nearLimitFiles = files.filter((file) => file.nearLimit);
 
   return {
-    files,
     truncatedFiles,
     nearLimitFiles,
     totalNearLimit: injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio),
@@ -180,10 +213,8 @@ export function analyzeBootstrapBudget(params: {
     totals: {
       rawChars,
       injectedChars,
-      truncatedChars: Math.max(0, rawChars - injectedChars),
       bootstrapMaxChars,
       bootstrapTotalMaxChars,
-      nearLimitRatio,
     },
   };
 }
@@ -203,43 +234,35 @@ export function buildBootstrapBudgetState(params: {
     bootstrapMaxChars,
     bootstrapTotalMaxChars,
   });
-  const bootstrapPromptWarningMode: BootstrapPromptWarningMode = "always";
-  const bootstrapPromptWarning = buildBootstrapPromptWarning({
-    analysis: bootstrapAnalysis,
-    mode: bootstrapPromptWarningMode,
-    seenSignatures: params.seenSignatures,
-    previousSignature: params.previousSignature,
-  });
+  const signature = buildBootstrapTruncationSignature(bootstrapAnalysis);
+  let seenSignatures = normalizeUniqueTrimmedStringList(params.seenSignatures);
+  if (params.previousSignature && !seenSignatures.includes(params.previousSignature)) {
+    seenSignatures = appendSeenSignature(seenSignatures, params.previousSignature);
+  }
+  const warningShown = Boolean(signature);
+  const bootstrapPromptWarning: BootstrapPromptWarning = {
+    signature,
+    warningShown,
+    lines: warningShown ? [BOOTSTRAP_TRUNCATION_NOTICE] : [],
+    warningSignaturesSeen: signature
+      ? appendSeenSignature(seenSignatures, signature)
+      : seenSignatures,
+  };
   return {
     bootstrapAnalysis,
     bootstrapMaxChars,
     bootstrapPromptWarning,
-    bootstrapPromptWarningMode,
     bootstrapTotalMaxChars,
   };
-}
-
-/** Builds the compact truncation notice mirrored into run metadata. */
-export function buildBootstrapPromptWarningNotice(warningLines?: string[]): string | undefined {
-  const hasWarning = (warningLines ?? []).some((line) => line.trim().length > 0);
-  if (!hasWarning) {
-    return undefined;
-  }
-  return [
-    "[Bootstrap truncation warning]",
-    "Some workspace bootstrap files were truncated before Project Context injection.",
-    "Treat Project Context as partial and read the relevant files directly if details seem missing.",
-  ].join("\n");
 }
 
 /** Serializes truncation warning state for run reports and future dedupe. */
 export function buildBootstrapTruncationReportMeta(params: {
   analysis: BootstrapBudgetAnalysis;
-  warningMode: BootstrapPromptWarningMode;
   warning: BootstrapPromptWarning;
 }): BootstrapTruncationReportMeta {
   return {
-    warningMode: params.warningMode,
+    warningMode: "always",
     warningShown: params.warning.warningShown,
     promptWarningSignature: params.warning.signature,
     ...(params.warning.warningSignaturesSeen.length > 0

@@ -11,11 +11,14 @@ import {
 } from "./provider-oauth-runtime.js";
 
 describe("provider OAuth runtime", () => {
-  it("generates OAuth state independently from the PKCE verifier", async () => {
-    const { verifier } = await generatePKCE();
+  it("generates a SHA-256 PKCE challenge and independent OAuth state", async () => {
+    const { verifier, challenge } = await generatePKCE();
     const state = generateOAuthState();
     const nextState = generateOAuthState();
 
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+    expect(verifier).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(challenge).toBe(Buffer.from(digest).toString("base64url"));
     expect(state).toHaveLength(43);
     expect(state).not.toBe(verifier);
     expect(nextState).toHaveLength(43);

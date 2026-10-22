@@ -1,6 +1,5 @@
-// Isolated run test harness builds cron run inputs, mocks, and assertions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { vi, type Mock } from "vitest";
+import { vi } from "vitest";
 import {
   type ContextTokenResolutionParams,
   resolveAuthoredModelContextTokens,
@@ -8,10 +7,15 @@ import {
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import type * as CronHelpers from "./helpers.js";
+// Isolated run test harness builds cron run inputs, mocks, and assertions.
+import { resetCronAutomationMocks } from "./run-automation.test-support.js";
 
 // Central mock harness for isolated cron agent run orchestration tests.
 type CronSessionEntry = {
@@ -38,11 +42,6 @@ type CronSession = {
 type SessionAccessorModule = typeof import("../../config/sessions/session-accessor.js");
 
 let actualReplaceSessionEntry: SessionAccessorModule["replaceSessionEntry"];
-let actualLoadSessionEntry: SessionAccessorModule["loadSessionEntry"];
-
-function createMock(): Mock {
-  return vi.fn();
-}
 
 function normalizeModelSelectionForTest(value: unknown): string | undefined {
   const direct = normalizeOptionalString(value);
@@ -59,80 +58,75 @@ function usesRealAccessorStore(storePath?: string): boolean {
   return Boolean(storePath && storePath !== "/tmp/store.json");
 }
 
-export const buildWorkspaceSkillSnapshotMock = createMock();
-export const resolveAgentConfigMock = createMock();
+export const buildWorkspaceSkillSnapshotMock = vi.fn();
+export const resolveAgentConfigMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn(
-  (cfg: { agents?: { list?: Array<{ id?: string; workspace?: string }> } }, agentId: string) =>
-    cfg.agents?.list?.find((entry) => entry.id === agentId)?.workspace ?? "/tmp/workspace",
+  (cfg: { agents?: { entries?: Record<string, { workspace?: string }> } }, agentId: string) =>
+    cfg.agents?.entries?.[agentId]?.workspace ?? "/tmp/workspace",
 );
-const resolveEffectiveModelFallbacksMock = createMock();
-const resolveSubagentModelFallbacksOverrideMock = createMock();
-export const resolveAgentModelFallbacksOverrideMock = createMock();
-export const resolveAgentSkillsFilterMock = createMock();
-const getModelRefStatusMock = createMock();
-export const isCliProviderMock = createMock();
-export const resolveAllowedModelRefMock = createMock();
-export const resolveConfiguredModelRefMock = createMock();
-const resolveHooksGmailModelMock = createMock();
-export const resolveThinkingDefaultMock = createMock();
-export const resolveEffectiveAgentRuntimeMock = createMock();
-export const runWithModelFallbackMock = createMock();
-export const runEmbeddedAgentMock = createMock();
-export const runCliAgentMock = createMock();
+const resolveEffectiveModelFallbacksMock = vi.fn();
+const resolveSubagentModelFallbacksOverrideMock = vi.fn();
+export const resolveAgentModelFallbacksOverrideMock = vi.fn();
+export const resolveAgentSkillsFilterMock = vi.fn();
+const getModelRefStatusMock = vi.fn();
+export const isCliProviderMock = vi.fn();
+export const resolveAllowedModelRefMock = vi.fn();
+export const resolveConfiguredModelRefMock = vi.fn();
+const resolveHooksGmailModelMock = vi.fn();
+export const resolveThinkingDefaultMock = vi.fn();
+export const resolveEffectiveAgentRuntimeMock = vi.fn();
+export const runWithModelFallbackMock = vi.fn();
+export const runEmbeddedAgentMock = vi.fn();
+export const runCliAgentMock = vi.fn();
 export const lookupModelContextTokensMock =
   vi.fn<(params: ContextTokenResolutionParams) => number | undefined>();
-export const getCliSessionBindingMock = createMock();
-export const loadSessionEntryMock = createMock();
-const replaceSessionEntryMock = createMock();
-export const patchSessionEntryMock = createMock();
-export const resolveCronSessionMock = createMock();
-export const logWarnMock = createMock();
-export const countActiveDescendantRunsMock = createMock();
-export const listDescendantRunsForRequesterMock = createMock();
-export const pickLastNonEmptyTextFromPayloadsMock = createMock();
-export const resolveCronPayloadOutcomeMock = createMock();
-export const resolveCronDeliveryPlanMock = createMock();
-export const resolveDeliveryTargetMock = createMock();
-export const dispatchCronDeliveryMock = createMock();
-export const queueCronMessageToolDeliveryAwarenessMock = createMock();
-export const preflightCronModelProviderMock = createMock();
-export const resolveSessionAuthSelectionMock = createMock();
-export const resolveFastModeStateMock = createMock();
-export const getChannelPluginMock = createMock();
-export const retireSessionMcpRuntimeMock = createMock();
-export const cleanupBrowserSessionsForLifecycleEndMock = createMock();
-export const removeCronRunContinuationSessionIfIdleMock = createMock();
-export const callGatewayMock = createMock();
-export const hasUsableWebSearchProviderMock = createMock();
-export const readSessionMessagesAsyncMock = createMock();
+export const getCliSessionBindingMock = vi.fn();
+export const loadSessionEntryMock = vi.fn();
+const replaceSessionEntryMock = vi.fn();
+export const patchSessionEntryMock = vi.fn();
+export const resolveCronSessionMock = vi.fn();
+export const logWarnMock = vi.fn();
+export const listDescendantRunsForRequesterMock =
+  vi.fn<typeof import("./run-subagent-registry.runtime.js").listDescendantRunsForRequester>();
+export const pickLastNonEmptyTextFromPayloadsMock = vi.fn();
+export const resolveCronPayloadOutcomeMock = vi.fn();
+export const resolveCronDeliveryPlanMock = vi.fn();
+export const resolveDeliveryTargetMock = vi.fn();
+export const dispatchCronDeliveryMock = vi.fn();
+export const preflightCronModelProviderMock = vi.fn();
+export const resolveSessionAuthSelectionMock = vi.fn();
+export const resolveFastModeStateMock = vi.fn();
+export const getChannelPluginMock = vi.fn();
+export const retireSessionMcpRuntimeMock = vi.fn();
+export const cleanupBrowserSessionsForLifecycleEndMock = vi.fn();
+export const removeCronRunContinuationSessionIfIdleMock = vi.fn();
+export const callGatewayMock = vi.fn();
+export const hasUsableWebSearchProviderMock = vi.fn();
 
-const resolveBootstrapWarningSignaturesSeenMock = createMock();
-const resolveCronStyleNowMock = createMock();
-export const resolveCronAgentLaneMock = createMock();
-const resolveAgentTimeoutMsMock = createMock();
-export const deriveSessionTotalTokensMock = createMock();
-const hasNonzeroUsageMock = createMock();
-export const ensureAgentWorkspaceMock = createMock();
-const normalizeThinkLevelMock = createMock();
-const normalizeVerboseLevelMock = createMock();
-export const isThinkingLevelSupportedMock = createMock();
-export const resolveSupportedThinkingLevelMock = createMock();
-const supportsXHighThinkingMock = createMock();
-const resolveSessionTranscriptPathMock = createMock();
-const setSessionRuntimeModelMock = createMock();
-const registerAgentRunContextMock = createMock();
-export const buildSafeExternalPromptMock = createMock();
-const detectSuspiciousPatternsMock = createMock();
-const mapHookExternalContentSourceMock = createMock();
-const isExternalHookSessionMock = createMock();
-const resolveHookExternalContentSourceMock = createMock();
-const getSkillsSnapshotVersionMock = createMock();
-export const loadModelCatalogMock = createMock();
-export const loadModelCatalogOwnerMock = createMock();
-export const preparedRunPluginRegistryMock = createMock();
-export const acquirePreparedModelRuntimeMock = createMock();
-export const loadPublishedReplyDispatchRuntimeMock = createMock();
-const getRemoteSkillEligibilityMock = createMock();
+const resolveBootstrapWarningSignaturesSeenMock = vi.fn<() => string[]>();
+const resolveCronStyleNowMock = vi.fn();
+export const resolveCronAgentLaneMock = vi.fn();
+const resolveAgentTimeoutMsMock = vi.fn();
+export const deriveSessionTotalTokensMock = vi.fn();
+export const ensureAgentWorkspaceMock = vi.fn();
+const normalizeThinkLevelMock = vi.fn();
+const normalizeVerboseLevelMock = vi.fn();
+export const isThinkingLevelSupportedMock = vi.fn();
+export const resolveSupportedThinkingLevelMock = vi.fn();
+const supportsXHighThinkingMock = vi.fn();
+const resolveSessionTranscriptPathMock = vi.fn();
+const setSessionRuntimeModelMock = vi.fn();
+export const registerAgentRunContextMock = vi.fn();
+export const buildSafeExternalPromptMock = vi.fn();
+const detectSuspiciousPatternsMock = vi.fn();
+const resolveHookExternalContentSourceMock = vi.fn();
+const getSkillsSnapshotVersionMock = vi.fn();
+export const loadModelCatalogMock = vi.fn();
+export const loadModelCatalogOwnerMock = vi.fn();
+export const preparedRunPluginRegistryMock = vi.fn();
+export const acquirePreparedModelRuntimeMock = vi.fn();
+export const loadPublishedReplyDispatchRuntimeMock = vi.fn();
+const getRemoteSkillEligibilityMock = vi.fn();
 
 vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/prepared-model-runtime.js")>()),
@@ -140,7 +134,8 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => ({
   loadPublishedGatewayReplyDispatchRuntime: loadPublishedReplyDispatchRuntimeMock,
 }));
 
-vi.mock("./run.runtime.js", async () => ({
+vi.mock("./run.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./run.runtime.js")>()),
   resolveAgentConfig: resolveAgentConfigMock,
   resolveAgentDir: vi.fn().mockReturnValue("/tmp/agent-dir"),
   resolveAgentModelFallbacksOverride: resolveAgentModelFallbacksOverrideMock,
@@ -148,30 +143,29 @@ vi.mock("./run.runtime.js", async () => ({
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
   isCliProvider: isCliProviderMock,
-  resolveThinkingDefault: resolveThinkingDefaultMock,
+  resolveThinkingSelection: (params: { level?: string }) => {
+    const requestedLevel = params.level ?? resolveThinkingDefaultMock(params);
+    const policy = { ...params, level: requestedLevel };
+    const supported = isThinkingLevelSupportedMock(policy);
+    return {
+      requestedLevel,
+      level: supported ? requestedLevel : resolveSupportedThinkingLevelMock(policy),
+      supported,
+    };
+  },
   resolveEffectiveAgentRuntime: resolveEffectiveAgentRuntimeMock,
-  resolveSessionRuntimeOverrideForProvider: (
-    await vi.importActual<typeof import("../../agents/session-runtime-compat.js")>(
-      "../../agents/session-runtime-compat.js",
-    )
-  ).resolveSessionRuntimeOverrideForProvider,
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   resolveAgentTimeoutMs: resolveAgentTimeoutMsMock,
   deriveSessionTotalTokens: deriveSessionTotalTokensMock,
-  hasNonzeroUsage: hasNonzeroUsageMock,
   DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
   ensureAgentWorkspace: ensureAgentWorkspaceMock,
   normalizeThinkLevel: normalizeThinkLevelMock,
-  isThinkingLevelSupported: isThinkingLevelSupportedMock,
-  resolveSupportedThinkingLevel: resolveSupportedThinkingLevelMock,
   supportsXHighThinking: supportsXHighThinkingMock,
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   setSessionRuntimeModel: setSessionRuntimeModelMock,
   logWarn: (...args: unknown[]) => logWarnMock(...args),
   normalizeAgentId: vi.fn((id: string) => id),
-  mapHookExternalContentSource: mapHookExternalContentSourceMock,
-  isExternalHookSession: isExternalHookSessionMock,
   resolveHookExternalContentSource: resolveHookExternalContentSourceMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
 }));
@@ -192,8 +186,9 @@ vi.mock("../../web-search/runtime.js", () => ({
   hasUsableWebSearchProvider: hasUsableWebSearchProviderMock,
 }));
 
+// mock-isolation: Cron-run fixtures own skill snapshots and exclude filesystem scans and approval storage.
 vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
-  resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
+  resolveNodeExecEligibilityAsync: vi.fn(() => ({ canExec: false })),
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   resolveEffectiveAgentSkillFilter: resolveAgentSkillsFilterMock,
   resolveReusableWorkspaceSkillSnapshot: (params: {
@@ -225,7 +220,6 @@ vi.mock("../../skills/runtime/cron-snapshot.runtime.js", () => ({
           })
         : params.existingSnapshot,
       shouldRefresh,
-      snapshotVersion,
     };
   },
 }));
@@ -280,32 +274,10 @@ vi.mock("./run-execution.runtime.js", () => ({
   getCliSessionBinding: getCliSessionBindingMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
-  resolveCandidateThinkingLevel: (params: {
-    provider: string;
-    modelId: string;
-    level?: string;
-    catalog?: unknown[];
-  }) => {
-    if (!params.level) {
-      return undefined;
-    }
-    const policy = {
-      provider: params.provider,
-      model: params.modelId,
-      level: params.level,
-      catalog: params.catalog,
-      agentRuntime: resolveEffectiveAgentRuntimeMock(params),
-    };
-    return isThinkingLevelSupportedMock(policy)
-      ? params.level
-      : resolveSupportedThinkingLevelMock(policy);
-  },
   resolveCronAgentLane: resolveCronAgentLaneMock,
   LiveSessionModelSwitchError,
   isCliProvider: isCliProviderMock,
   runEmbeddedAgent: runEmbeddedAgentMock,
-  countActiveDescendantRuns: countActiveDescendantRunsMock,
-  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
   normalizeVerboseLevel: normalizeVerboseLevelMock,
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   registerAgentRunContext: registerAgentRunContextMock,
@@ -347,8 +319,8 @@ vi.mock("./run-embedded.runtime.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
+// mock-isolation: Supply fixed descendant snapshots without opening the process-wide registry database.
 vi.mock("./run-subagent-registry.runtime.js", () => ({
-  countActiveDescendantRuns: countActiveDescendantRunsMock,
   listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
 }));
 
@@ -360,7 +332,7 @@ vi.mock("../../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: cleanupBrowserSessionsForLifecycleEndMock,
 }));
 
-vi.mock("../../tasks/cron-run-continuation-cleanup.js", () => ({
+vi.mock("../run-continuation-cleanup.js", () => ({
   removeCronRunContinuationSessionIfIdle: removeCronRunContinuationSessionIfIdleMock,
 }));
 
@@ -368,20 +340,40 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: callGatewayMock,
 }));
 
-vi.mock("../../gateway/session-transcript-readers.js", () => ({
-  readSessionMessagesAsync: readSessionMessagesAsyncMock,
-}));
-
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<SessionAccessorModule>(
     "../../config/sessions/session-accessor.js",
   );
-  actualReplaceSessionEntry = actual.replaceSessionEntry;
-  actualLoadSessionEntry = actual.loadSessionEntry;
   return {
     ...actual,
     replaceSessionEntry: replaceSessionEntryMock,
     patchSessionEntryCore: patchSessionEntryMock,
+  };
+});
+
+vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
+  actualReplaceSessionEntry = actual.replaceSessionEntry;
+  const { projectSessionEntryPatch } =
+    await import("../../config/sessions/session-entry-patch-operation.js");
+  return {
+    ...actual,
+    applySessionEntryOperation: async (
+      ...[scope, operation, options]: Parameters<typeof actual.applySessionEntryOperation>
+    ) =>
+      patchSessionEntryMock(
+        scope,
+        (writeBase: SessionEntry, context: { existingEntry: SessionEntry | undefined }) =>
+          projectSessionEntryPatch({
+            existing: context.existingEntry,
+            writeBase,
+            sessionKey: scope.sessionKey,
+            operation,
+            replaceEntry: options?.replaceEntry,
+          }) ?? null,
+        options,
+      ),
   };
 });
 
@@ -398,7 +390,6 @@ vi.mock("./run-delivery.runtime.js", async () => {
     ...actual,
     resolveDeliveryTarget: resolveDeliveryTargetMock,
     dispatchCronDelivery: dispatchCronDeliveryMock,
-    queueCronMessageToolDeliveryAwareness: queueCronMessageToolDeliveryAwarenessMock,
   };
 });
 
@@ -406,8 +397,8 @@ vi.mock("./model-preflight.runtime.js", () => ({
   preflightCronModelProvider: preflightCronModelProviderMock,
 }));
 
-vi.mock("./helpers.js", () => ({
-  pickLastNonEmptyTextFromPayloads: pickLastNonEmptyTextFromPayloadsMock,
+vi.mock("./helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof CronHelpers>()),
   pickSummaryFromOutput: vi.fn().mockReturnValue("summary"),
   resolveCronPayloadOutcome: resolveCronPayloadOutcomeMock,
 }));
@@ -415,11 +406,12 @@ vi.mock("./helpers.js", () => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   getChannelPlugin: getChannelPluginMock,
   getLoadedChannelPlugin: getChannelPluginMock,
+  normalizeChannelId: normalizeAnyChannelId,
 }));
 
 vi.mock("./session.js", () => ({
   loadCronSessionEntryLatest: loadSessionEntryMock,
-  resolveCronSession: resolveCronSessionMock,
+  prepareCronSession: resolveCronSessionMock,
 }));
 
 export function makeCronSessionEntry(overrides?: Record<string, unknown>): CronSessionEntry {
@@ -555,22 +547,6 @@ function resetRunConfigMocks(): void {
   });
   resolveAgentTimeoutMsMock.mockReturnValue(60_000);
   deriveSessionTotalTokensMock.mockReturnValue(30);
-  hasNonzeroUsageMock.mockImplementation(
-    (
-      usage:
-        | {
-            input?: unknown;
-            output?: unknown;
-            cacheRead?: unknown;
-            cacheWrite?: unknown;
-            total?: unknown;
-          }
-        | undefined,
-    ) =>
-      [usage?.input, usage?.output, usage?.cacheRead, usage?.cacheWrite, usage?.total].some(
-        (value) => typeof value === "number" && Number.isFinite(value) && value > 0,
-      ),
-  );
   ensureAgentWorkspaceMock.mockResolvedValue({ dir: "/tmp/workspace" });
   normalizeThinkLevelMock.mockImplementation((value: unknown) => value);
   isThinkingLevelSupportedMock.mockReturnValue(true);
@@ -580,8 +556,6 @@ function resetRunConfigMocks(): void {
     ({ message }: { message?: string }) => message ?? "",
   );
   detectSuspiciousPatternsMock.mockReturnValue([]);
-  mapHookExternalContentSourceMock.mockReturnValue("unknown");
-  isExternalHookSessionMock.mockReturnValue(false);
   resolveHookExternalContentSourceMock.mockReturnValue(undefined);
   getSkillsSnapshotVersionMock.mockReturnValue(42);
   loadModelCatalogMock.mockResolvedValue([]);
@@ -627,8 +601,9 @@ function resetRunConfigMocks(): void {
 }
 
 function resetRunExecutionMocks(): void {
+  resetCronAutomationMocks();
   isCliProviderMock.mockReturnValue(false);
-  resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
+  resolveBootstrapWarningSignaturesSeenMock.mockReturnValue([]);
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveCronAgentLaneMock.mockReturnValue(undefined);
   normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
@@ -640,10 +615,7 @@ function resetRunExecutionMocks(): void {
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
   getCliSessionBindingMock.mockReturnValue(undefined);
-  countActiveDescendantRunsMock.mockReset();
-  countActiveDescendantRunsMock.mockReturnValue(0);
-  listDescendantRunsForRequesterMock.mockReset();
-  listDescendantRunsForRequesterMock.mockReturnValue([]);
+  listDescendantRunsForRequesterMock.mockReset().mockResolvedValue([]);
 }
 
 function resetRunOutcomeMocks(): void {
@@ -747,7 +719,7 @@ function resetRunOutcomeMocks(): void {
       sourceDeliveryOutcome,
       resolvedDelivery,
     }) => ({
-      result: undefined,
+      disposition: undefined,
       delivered: Boolean(
         sourceDeliveryOutcome?.verifiedMessageToolDelivery ||
         (deliveryRequested &&
@@ -768,8 +740,6 @@ function resetRunOutcomeMocks(): void {
       deliveryPayloads,
     }),
   );
-  queueCronMessageToolDeliveryAwarenessMock.mockReset();
-  queueCronMessageToolDeliveryAwarenessMock.mockResolvedValue(undefined);
   preflightCronModelProviderMock.mockReset();
   preflightCronModelProviderMock.mockResolvedValue({ status: "available" });
   resolveSessionAuthSelectionMock.mockReset();
@@ -826,7 +796,7 @@ function installPatchSessionEntryStore(): void {
       const existingEntry =
         rows.get(key) ??
         (usesRealAccessorStore(scope.storePath)
-          ? actualLoadSessionEntry(scope as never)
+          ? await readSessionEntryReadOnlyInWorker(scope)
           : loadSessionEntryMock(scope.storePath, scope.sessionKey));
       const writeBase = existingEntry ?? options.fallbackEntry;
       if (!writeBase) {
@@ -875,8 +845,6 @@ export function resetRunCronIsolatedAgentTurnHarness(): void {
     (params?: { runtimeWebSearch?: { selectedProvider?: string } }) =>
       Boolean(params?.runtimeWebSearch?.selectedProvider),
   );
-  readSessionMessagesAsyncMock.mockReset();
-  readSessionMessagesAsyncMock.mockResolvedValue([]);
 }
 
 export function clearFastTestEnv(): string | undefined {

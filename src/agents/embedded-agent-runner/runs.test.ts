@@ -1,105 +1,174 @@
-// Embedded run registry tests cover active run handles, queueing, abort
-// ownership, and diagnostics.
+import assert from "node:assert/strict";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createReplyOperation,
-  isReplyRunActiveForSessionId,
-} from "../../auto-reply/reply/reply-run-registry.js";
-import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  validateAgentRunDelegatedAuthority,
+} from "../../infra/agent-run-registry.js";
 import { setDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.js";
+import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
+import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
-  getDiagnosticSessionState,
-  resetDiagnosticSessionStateForTest,
-} from "../../logging/diagnostic-session-state.js";
-import { diagnosticLogger } from "../../logging/diagnostic.js";
+  isSessionRunActive,
+  isSessionRunCompactionBlocked,
+} from "../../sessions/session-controller.queries.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
+import { supersedeReplyRunByRunId } from "../../sessions/session-controller.stop-runtime.js";
+import {
+  captureSessionControllerStop,
+  stopSession,
+} from "../../sessions/session-controller.stop.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
+import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { captureRequesterOrigin, hasSameRequesterOrigin } from "../requester-origin.js";
+import {
+  captureGatewayToolCallerAssertion,
+  withGatewayToolCallerIdentity,
+} from "../tools/gateway-caller-context.js";
 import { prepareEmbeddedRunPermissionChange } from "./run-permissions.js";
 import { createEmbeddedRunPermissionChanges } from "./run/permission-change.js";
 import {
   abortAndDrainEmbeddedAgentRun,
   abortEmbeddedAgentRun,
-  clearActiveEmbeddedRun,
-  clearEmbeddedAgentRunAbortabilityForRunId,
-  isEmbeddedAgentRunAbortableForRunId,
-  isEmbeddedAgentRunAbortableForCompaction,
+  captureEmbeddedRunDrainTarget,
   isEmbeddedAgentRunHandleActive,
-  retainEmbeddedAgentRunAbortabilityForRunId,
-  setActiveEmbeddedRun,
-  supersedeEmbeddedAgentRunByRunId,
+  markActiveEmbeddedRunAbandoned,
+  markEmbeddedRunRecoveringTimeout,
+  restoreEmbeddedRunTimeoutAbandonment,
+  prepareEmbeddedAgentRunCompletionClaim,
+  resolveActiveEmbeddedRunOwner,
+  resolveActiveEmbeddedRunOwnerByRunId,
+  resolveEmbeddedRunAbandonment,
+  attachActiveEmbeddedRun as setDetachedEmbeddedRun,
 } from "./runs.js";
-import { createEmbeddedRunHandle, testing } from "./runs.test-support.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  testing,
+} from "./runs.test-support.js";
 
-describe("embedded-agent runner run registry", () => {
-  afterEach(() => {
-    // Registry state is process-global so imported module instances can share
-    // it; every test must reset both embedded and reply-run registries.
-    testing.resetActiveEmbeddedRuns();
-    replyRunTesting.resetReplyRunRegistry();
-    resetDiagnosticSessionStateForTest();
-    setDiagnosticsEnabledForProcess(false);
-    vi.restoreAllMocks();
-  });
+const sessionId = "session";
+const sessionKey = "agent:main:test";
+const createRunHandle = createEmbeddedRunHandle;
 
-  it.each([true, false])(
-    "accepts a replacement permission acknowledgement only from the same owner: %s",
-    async (sameOwner) => {
-      const sessionId = "permission-owner";
+type Handle = ReturnType<typeof createRunHandle>;
+
+function activate(handle = createRunHandle(), key?: string, file?: string) {
+  setActiveEmbeddedRun(sessionId, handle, key, file);
+  return handle;
+}
+
+function unused(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+function expectAbandonment(expected: "timeout" | undefined, sessionFile: string) {
+  for (const identity of [{ sessionId }, { sessionKey }, { sessionFile }]) {
+    expect(resolveEmbeddedRunAbandonment(identity)).toBe(expected);
+  }
+}
+
+function startReply(
+  handle: Handle,
+  operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false }),
+) {
+  const backend = {
+    kind: "embedded" as const,
+    cancel: handle.abort,
+    isStreaming: handle.isStreaming,
+    isAbortable: handle.isAbortable,
+    isCompacting: handle.isCompacting,
+  };
+  operation.setPhase("running");
+  operation.attachBackend(backend);
+  setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, undefined, operation);
+  return { operation, backend };
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  testing.resetActiveEmbeddedRuns();
+  resetDiagnosticRunActivityForTest();
+  replyRunTesting.resetSessionControllerForTest();
+  resetDiagnosticSessionStateForTest();
+  setDiagnosticsEnabledForProcess(false);
+  vi.restoreAllMocks();
+});
+
+describe("embedded run ownership", () => {
+  it.each([
+    { sameOwner: true, successor: false },
+    { sameOwner: false, successor: false },
+    { sameOwner: true, successor: true },
+  ])(
+    "fences replacement permission acknowledgements: same owner=$sameOwner, successor=$successor",
+    async ({ sameOwner, successor }) => {
       const completed = createDeferredCore<boolean>();
-      const coordinator = createEmbeddedRunPermissionChanges({});
-      const replacementCoordinator = createEmbeddedRunPermissionChanges({});
-      const original = {
-        ...createEmbeddedRunHandle({ runId: "same-run-id" }),
-        permissionChangeOwner: coordinator.forAttempt().owner,
+      const owner = createEmbeddedRunPermissionChanges({});
+      const other = createEmbeddedRunPermissionChanges({});
+      const handle = {
+        ...createRunHandle({ runId: "run" }),
+        permissionChangeOwner: owner.forAttempt().owner,
         applyPermissionMode: () => completed.promise,
       };
-      const replacement = {
-        ...createEmbeddedRunHandle({ runId: "same-run-id" }),
-        permissionChangeOwner: sameOwner
-          ? coordinator.forAttempt().owner
-          : replacementCoordinator.forAttempt().owner,
-      };
-      setActiveEmbeddedRun(sessionId, original);
-      const change = prepareEmbeddedRunPermissionChange(sessionId);
-      if (change.kind !== "active") {
-        throw new Error("expected an active permission change");
-      }
+      const operation = setActiveEmbeddedRun(sessionId, handle);
+      const target = getSessionControllerEntryForOperation(operation).target;
+      assert(target, "expected a physical permission target");
+      const change = prepareEmbeddedRunPermissionChange(target);
+      assert(change.kind === "active", "expected an active permission change");
       const acknowledgement = change.apply("full", vi.fn());
-      setActiveEmbeddedRun(sessionId, replacement);
+      if (successor) {
+        clearActiveEmbeddedRun(sessionId, handle);
+      }
+      activate({
+        ...createRunHandle({ runId: "run" }),
+        permissionChangeOwner: (sameOwner ? owner : other).forAttempt().owner,
+      });
       completed.resolve(true);
-      await expect(acknowledgement).resolves.toBe(sameOwner);
-      coordinator.close();
-      replacementCoordinator.close();
+      await expect(acknowledgement).resolves.toBe(sameOwner && !successor);
+      owner.close();
+      other.close();
     },
   );
 
-  it("does not deliver a captured permission change to a replacement run", async () => {
-    const sessionId = "permission-stale-before-apply";
+  it("rejects permissions captured by a replaced run", async () => {
     const applyPermissionMode = vi.fn(async () => true);
-    setActiveEmbeddedRun(sessionId, { ...createEmbeddedRunHandle(), applyPermissionMode });
-    const change = prepareEmbeddedRunPermissionChange(sessionId);
-    if (change.kind !== "active") {
-      throw new Error("expected an active permission change");
-    }
-    setActiveEmbeddedRun(sessionId, createEmbeddedRunHandle());
+    const operation = setActiveEmbeddedRun(sessionId, {
+      ...createRunHandle(),
+      applyPermissionMode,
+    });
+    const target = getSessionControllerEntryForOperation(operation).target;
+    assert(target, "expected a physical permission target");
+    const change = prepareEmbeddedRunPermissionChange(target);
+    assert(change.kind === "active", "expected an active permission change");
+    activate();
     await expect(change.apply("full", vi.fn())).resolves.toBe(false);
-    expect(applyPermissionMode).not.toHaveBeenCalled();
+    unused(applyPermissionMode);
   });
 
-  it("aborts only compacting runs in compacting mode", () => {
-    const abortCompacting = vi.fn();
-    const abortNormal = vi.fn();
-
-    setActiveEmbeddedRun(
-      "session-compacting",
-      createEmbeddedRunHandle({ isCompacting: true, abort: abortCompacting }),
-    );
-
-    setActiveEmbeddedRun("session-normal", createEmbeddedRunHandle({ abort: abortNormal }));
-
-    const aborted = abortEmbeddedAgentRun(undefined, { mode: "compacting" });
-    expect(aborted).toBe(true);
-    expect(abortCompacting).toHaveBeenCalledTimes(1);
-    expect(abortNormal).not.toHaveBeenCalled();
+  it("skips failed compaction probes when aborting", () => {
+    const unknown = vi.fn(),
+      compacting = vi.fn(),
+      normal = vi.fn();
+    setActiveEmbeddedRun("unknown", {
+      ...createRunHandle({ abort: unknown }),
+      isCompacting: () => {
+        throw new Error("compaction probe unavailable");
+      },
+    });
+    setActiveEmbeddedRun("compacting", createRunHandle({ isCompacting: true, abort: compacting }));
+    setActiveEmbeddedRun("normal", createRunHandle({ abort: normal }));
+    expect(abortEmbeddedAgentRun(undefined, { mode: "compacting" })).toBe(true);
+    expect(compacting).toHaveBeenCalledOnce();
+    unused(unknown, normal);
   });
 
   it("keeps queued reply operations out of compact abort checks", () => {
@@ -109,11 +178,11 @@ describe("embedded-agent runner run registry", () => {
       resetTriggered: false,
     });
 
-    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(false);
+    expect(isSessionRunCompactionBlocked("session-reply-run")).toBe(false);
 
     operation.setPhase("running");
 
-    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(true);
+    expect(isSessionRunCompactionBlocked("session-reply-run")).toBe(true);
   });
 
   it("aborts every active run in all mode", () => {
@@ -136,257 +205,94 @@ describe("embedded-agent runner run registry", () => {
   it("keeps finalizing runs active while rejecting abort requests", () => {
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ abort, isAbortable: false });
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:finalizing",
-      sessionId: "session-finalizing",
-      resetTriggered: false,
-    });
-    const replyBackend = {
-      kind: "embedded" as const,
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-      isAbortable: handle.isAbortable,
-    };
-    operation.setPhase("running");
-    operation.attachBackend(replyBackend);
-    setActiveEmbeddedRun("session-finalizing", handle);
-
-    expect(abortEmbeddedAgentRun("session-finalizing")).toBe(false);
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all" })).toBe(false);
-    expect(isEmbeddedAgentRunAbortableForCompaction("session-finalizing")).toBe(true);
-    expect(isEmbeddedAgentRunHandleActive("session-finalizing")).toBe(true);
+    const { operation, backend } = startReply(handle);
+    expect(abortEmbeddedAgentRun(sessionId)).toBe(false);
+    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(false);
+    expect(isSessionRunCompactionBlocked(sessionId)).toBe(true);
+    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
     expect(operation.result).toBeNull();
-    expect(abort).not.toHaveBeenCalled();
-
-    clearActiveEmbeddedRun("session-finalizing", handle);
-    operation.detachBackend(replyBackend);
+    expect(isSessionRunActive(sessionId)).toBe(true);
+    unused(abort);
+    clearActiveEmbeddedRun(sessionId, handle);
+    operation.detachBackend(backend);
     expect(abortEmbeddedAgentRun(undefined, { mode: "all" })).toBe(true);
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
     operation.complete();
-    expect(isEmbeddedAgentRunHandleActive("session-finalizing")).toBe(false);
-  });
-
-  it("keeps frozen run ownership through forced in-process restart", () => {
-    const abort = vi.fn();
-    const handle = createEmbeddedRunHandle({ abort, isAbortable: false });
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:restart-finalizing",
-      sessionId: "session-restart-finalizing",
-      resetTriggered: false,
-    });
-    const replyBackend = {
-      kind: "embedded" as const,
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-      isAbortable: handle.isAbortable,
-    };
-    operation.setPhase("running");
-    operation.attachBackend(replyBackend);
-    setActiveEmbeddedRun("session-restart-finalizing", handle);
-
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(false);
-    expect(isEmbeddedAgentRunHandleActive("session-restart-finalizing")).toBe(true);
-    expect(isReplyRunActiveForSessionId("session-restart-finalizing")).toBe(true);
-    expect(operation.result).toBeNull();
-    expect(abort).not.toHaveBeenCalled();
-
-    clearActiveEmbeddedRun("session-restart-finalizing", handle);
-    operation.detachBackend(replyBackend);
-    operation.complete();
-    expect(isEmbeddedAgentRunHandleActive("session-restart-finalizing")).toBe(false);
-    expect(isReplyRunActiveForSessionId("session-restart-finalizing")).toBe(false);
-  });
-
-  it("binds abortability to the owning run id", () => {
-    const finalizing = createEmbeddedRunHandle({
-      abort: vi.fn(),
-      isAbortable: false,
-      runId: "run-finalizing",
-    });
-    setActiveEmbeddedRun("session-shared", finalizing);
-
-    expect(isEmbeddedAgentRunAbortableForRunId("run-finalizing")).toBe(false);
-    expect(isEmbeddedAgentRunAbortableForRunId("run-queued")).toBe(true);
-
-    clearActiveEmbeddedRun("session-shared", finalizing);
-    expect(isEmbeddedAgentRunAbortableForRunId("run-finalizing")).toBe(true);
-
-    retainEmbeddedAgentRunAbortabilityForRunId("run-finalizing");
-    setActiveEmbeddedRun("session-shared", finalizing);
-    clearActiveEmbeddedRun("session-shared", finalizing);
-    expect(isEmbeddedAgentRunAbortableForRunId("run-finalizing")).toBe(false);
-
-    const queued = createEmbeddedRunHandle({ runId: "run-queued" });
-    setActiveEmbeddedRun("session-shared", queued);
-
-    expect(isEmbeddedAgentRunAbortableForRunId("run-finalizing")).toBe(false);
-    expect(isEmbeddedAgentRunAbortableForRunId("run-queued")).toBe(true);
-
-    clearEmbeddedAgentRunAbortabilityForRunId("run-finalizing");
-    expect(isEmbeddedAgentRunAbortableForRunId("run-finalizing")).toBe(true);
-  });
-
-  it("supersedes an exact reply backend only after recording its terminal owner", () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:cli-writer",
-      sessionId: "session-cli-writer",
-      resetTriggered: false,
-    });
-    const order: string[] = [];
-    operation.attachBackend({
-      kind: "cli",
-      runId: "run-cli-writer",
-      cancel: (reason) => order.push(`cancel:${reason}`),
-    });
-
-    expect(supersedeEmbeddedAgentRunByRunId("run-cli-writer", () => order.push("record"))).toBe(
-      true,
-    );
-    expect(order).toEqual(["record", "cancel:superseded"]);
-    expect(supersedeEmbeddedAgentRunByRunId("missing-run", vi.fn())).toBe(false);
-  });
-
-  it.each([
-    {
-      name: "stopped",
-      configure: (handle: ReturnType<typeof createEmbeddedRunHandle>) => {
-        handle.isStopped = () => true;
-      },
-    },
-    {
-      name: "aborted",
-      configure: (handle: ReturnType<typeof createEmbeddedRunHandle>) => {
-        handle.isAborted = () => true;
-      },
-    },
-    {
-      name: "non-abortable",
-      configure: (handle: ReturnType<typeof createEmbeddedRunHandle>) => {
-        handle.isAbortable = () => false;
-      },
-    },
-  ])("does not supersede a $name exact embedded owner", ({ configure }) => {
-    const cancel = vi.fn();
-    const abort = vi.fn();
-    const beforeCancel = vi.fn();
-    const handle = createEmbeddedRunHandle({ abort, runId: "run-terminal" });
-    handle.cancel = cancel;
-    configure(handle);
-    setActiveEmbeddedRun("session-terminal", handle);
-
-    expect(supersedeEmbeddedAgentRunByRunId("run-terminal", beforeCancel)).toBe(false);
-    expect(beforeCancel).not.toHaveBeenCalled();
-    expect(cancel).not.toHaveBeenCalled();
-    expect(abort).not.toHaveBeenCalled();
-  });
-
-  it("fails closed when an exact embedded lifecycle probe throws", () => {
-    const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
-    const cancel = vi.fn();
-    const beforeCancel = vi.fn();
-    const handle = createEmbeddedRunHandle({ runId: "run-throwing" });
-    handle.cancel = cancel;
-    handle.isStopped = () => {
-      throw new Error("probe failed");
-    };
-    setActiveEmbeddedRun("session-throwing", handle);
-
-    expect(supersedeEmbeddedAgentRunByRunId("run-throwing", beforeCancel)).toBe(false);
-    expect(beforeCancel).not.toHaveBeenCalled();
-    expect(cancel).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("lifecycle_check_failed"));
-  });
-
-  it("passes restart ownership to every aborted run", () => {
-    const abort = vi.fn();
-    setActiveEmbeddedRun("session-restart", createEmbeddedRunHandle({ abort }));
-
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
-    expect(abort).toHaveBeenCalledWith("restart");
+    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
+    expect(isSessionRunActive(sessionId)).toBe(false);
   });
 
   it("expires reply-owned stuck recovery as run_stalled instead of user abort", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
     const cancel = vi.fn();
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:reply-stuck",
-      sessionId: "session-reply-stuck",
-      resetTriggered: false,
-    });
+    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
     cancel.mockImplementation(() => operation.complete());
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
+    operation.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
     operation.setPhase("running");
-
+    vi.setSystemTime(6 * 60_000);
     const result = await abortAndDrainEmbeddedAgentRun({
-      sessionId: "session-reply-stuck",
-      sessionKey: "agent:main:reply-stuck",
+      sessionId,
+      sessionKey,
       reason: "stuck_recovery",
       forceClear: true,
     });
-
     expect(result).toEqual({ aborted: true, drained: true, forceCleared: false });
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
     expect(cancel).toHaveBeenCalledWith("superseded");
   });
 
-  it("expires stuck recovery as run_stalled even with a live embedded handle", async () => {
-    // The live-handle path is the common field case: the wedged run still owns
-    // a registered handle, and its abort handler re-enters abortByUser. The
-    // expiry must win the attribution race (run_stalled, not aborted_by_user).
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:reply-stuck-live",
-      sessionId: "session-reply-stuck-live",
-      resetTriggered: false,
+  it("cancels a detached handle during stuck recovery", async () => {
+    vi.useFakeTimers();
+    const abort = vi.fn();
+    const handle = createEmbeddedRunHandle({ abort, runId: "detached-stuck" });
+    setDetachedEmbeddedRun(sessionId, handle);
+    const pending = abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      reason: "stuck_recovery",
+      settleMs: 100,
     });
+    expect(abort).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(pending).resolves.toEqual({ aborted: true, drained: false, forceCleared: false });
+  });
+
+  it("expires stuck recovery as run_stalled even with a live embedded handle", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+    // Reentrant user abort must not replace the watchdog's failure attribution.
     const handle = createEmbeddedRunHandle({
       abort: () => {
         operation.abortByUser();
       },
     });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-    });
-    operation.setPhase("running");
-    setActiveEmbeddedRun("session-reply-stuck-live", handle);
-
-    const result = await abortAndDrainEmbeddedAgentRun({
-      sessionId: "session-reply-stuck-live",
-      sessionKey: "agent:main:reply-stuck-live",
+    startReply(handle, operation);
+    vi.setSystemTime(6 * 60_000);
+    const pending = abortAndDrainEmbeddedAgentRun({
+      sessionId,
+      sessionKey,
       reason: "stuck_recovery",
       forceClear: true,
       settleMs: 50,
     });
-
-    expect(result.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect((await pending).aborted).toBe(true);
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
+    clearActiveEmbeddedRun(sessionId, handle);
+    operation.complete();
   });
 
-  it("claims shared restart ownership before invoking an attached handle", () => {
-    const abort = vi.fn();
-    const handle = createEmbeddedRunHandle({ abort });
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:restart-owned",
-      sessionId: "session-restart-owned",
-      resetTriggered: false,
+  it.each([false, true])("propagates restart cancellation (throwing backend: %s)", (throws) => {
+    const abort = vi.fn(() => {
+      if (throws) {
+        throw new Error("cancel failed");
+      }
     });
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-      isAbortable: handle.isAbortable,
-    });
-    setActiveEmbeddedRun("session-restart-owned", handle);
-
+    const { operation } = startReply(createRunHandle({ abort }));
     expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
     expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    expect(abort).toHaveBeenCalledTimes(1);
-    expect(abort).toHaveBeenCalledWith("restart");
+    expect(abort).toHaveBeenCalledExactlyOnceWith("restart");
   });
 
   it.each(["all", "compacting"] as const)(
@@ -394,87 +300,390 @@ describe("embedded-agent runner run registry", () => {
     (mode) => {
       const abort = vi.fn();
       const handle = createEmbeddedRunHandle({ abort, isCompacting: true });
-      const sessionId = `session-restart-frozen-${mode}`;
-      const operation = createReplyOperation({
-        sessionKey: `agent:main:restart-frozen-${mode}`,
-        sessionId,
-        resetTriggered: false,
-      });
-      operation.setPhase("running");
-      operation.attachBackend({
-        kind: "embedded",
-        cancel: handle.abort,
-        isStreaming: handle.isStreaming,
-        isAbortable: handle.isAbortable,
-        isCompacting: handle.isCompacting,
-      });
+      const { operation } = startReply(handle);
       operation.freezeAbort();
-      setActiveEmbeddedRun(sessionId, handle);
 
       expect(abortEmbeddedAgentRun(undefined, { mode, reason: "restart" })).toBe(false);
       expect(operation.result).toBeNull();
-      expect(abort).not.toHaveBeenCalled();
+      unused(abort);
     },
   );
-
-  it("keeps shared restart ownership when the attached cancel callback throws", () => {
-    const abort = vi.fn(() => {
-      throw new Error("cancel failed");
-    });
-    const handle = createEmbeddedRunHandle({ abort });
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:restart-throwing",
-      sessionId: "session-restart-throwing",
-      resetTriggered: false,
-    });
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-      isAbortable: handle.isAbortable,
-    });
-    setActiveEmbeddedRun("session-restart-throwing", handle);
-
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    expect(abort).toHaveBeenCalledTimes(1);
-  });
 
   it("does not bypass retained terminal ownership through compacting handle aborts", () => {
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ abort, isCompacting: true });
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:restart-failed-compacting",
-      sessionId: "session-restart-failed-compacting",
-      resetTriggered: false,
-    });
-    operation.setPhase("running");
-    operation.attachBackend({
-      kind: "embedded",
-      cancel: handle.abort,
-      isStreaming: handle.isStreaming,
-      isAbortable: handle.isAbortable,
-      isCompacting: handle.isCompacting,
-    });
-    operation.retainFailureUntilComplete();
+    const { operation } = startReply(handle);
     operation.fail("run_failed", new Error("terminal failure"));
-    setActiveEmbeddedRun("session-restart-failed-compacting", handle);
 
     expect(abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" })).toBe(false);
     expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
-    expect(abort).not.toHaveBeenCalled();
+    unused(abort);
   });
 
-  it("records active run session files in diagnostic state for heartbeat recovery", () => {
-    setDiagnosticsEnabledForProcess(true);
-    const sessionFile = "/tmp/openclaw-run-registry-session.jsonl";
-    const handle = createEmbeddedRunHandle();
-
-    setActiveEmbeddedRun("session-file-diagnostics", handle, "agent:main:visible", sessionFile);
-
-    expect(getDiagnosticSessionState({ sessionId: "session-file-diagnostics" }).sessionFile).toBe(
-      sessionFile,
+  it("fences timeout recovery across module instances", async () => {
+    const runsA = await importFreshModule<typeof import("./runs.js")>(
+      import.meta.url,
+      "./runs.js?scope=recovery-a",
     );
+    const runsB = await importFreshModule<typeof import("./runs.js")>(
+      import.meta.url,
+      "./runs.js?scope=recovery-b",
+    );
+    const first = createRunHandle({ runId: "first" }),
+      replacement = createRunHandle({ runId: "second" });
+    const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+    const timeout = { sessionId, sessionKey, reason: "timeout" } as const;
+    try {
+      runsA.attachActiveEmbeddedRun(sessionId, first, sessionKey, undefined, undefined, operation);
+      expect(runsA.markActiveEmbeddedRunAbandoned({ ...timeout, handle: first })).toBe(true);
+      expect(runsA.markEmbeddedRunRecoveringTimeout({ sessionId, runId: "other" })).toBeUndefined();
+      const stale = runsA.markEmbeddedRunRecoveringTimeout({ sessionId, runId: "first" });
+      expect(stale).toBeDefined();
+      runsB.attachActiveEmbeddedRun(
+        sessionId,
+        replacement,
+        sessionKey,
+        undefined,
+        undefined,
+        operation,
+      );
+      expect(runsA.markActiveEmbeddedRunAbandoned({ ...timeout, handle: first })).toBe(false);
+      expect(runsB.markActiveEmbeddedRunAbandoned({ ...timeout, handle: replacement })).toBe(true);
+      const current = runsB.markEmbeddedRunRecoveringTimeout({ sessionId, runId: "second" });
+      expect(current).toBeDefined();
+      expect(runsA.restoreEmbeddedRunTimeoutAbandonment(stale!)).toBe(false);
+      expect(runsB.resolveEmbeddedRunAbandonment({ sessionId })).toBe("recovering_timeout");
+      expect(runsB.restoreEmbeddedRunTimeoutAbandonment(current!)).toBe(true);
+      expect(runsB.resolveEmbeddedRunAbandonment({ sessionId })).toBe("timeout");
+    } finally {
+      runsB.detachActiveEmbeddedRun(sessionId, replacement, sessionKey);
+      operation.complete();
+    }
+  });
+
+  it("keeps timeout recovery and successor cleanup with their physical owner", async () => {
+    const makeOwner = (store: string, id = sessionId) => {
+      const target = captureSessionTarget({ storeScope: store, sessionKey, incarnation: id });
+      const operation = createReplyOperation({
+        sessionId: id,
+        sessionKey,
+        target,
+        resetTriggered: false,
+      });
+      const handle = createRunHandle({ runId: `${store}:${id}` });
+      const file = `${store}/session.jsonl`;
+      setDetachedEmbeddedRun(id, handle, sessionKey, file, undefined, operation);
+      return { target, operation, handle, file };
+    };
+    const a = makeOwner("/tmp/timeout-owner-a");
+    const b = makeOwner("/tmp/timeout-owner-b");
+    const abandon = (owner: typeof a) =>
+      markActiveEmbeddedRunAbandoned({
+        sessionId: owner.operation.sessionId,
+        sessionKey,
+        sessionFile: owner.file,
+        handle: owner.handle,
+        reason: "timeout",
+      });
+    const observation = (owner: typeof a) =>
+      resolveEmbeddedRunAbandonment({
+        sessionId: owner.operation.sessionId,
+        sessionKey,
+        target: owner.target,
+      });
+    expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
+    expect(abandon(a)).toBe(true);
+    expect(observation(a)).toBe("timeout");
+    expect(observation(b)).toBeUndefined();
+    expect(abandon(b)).toBe(true);
+    expect(resolveEmbeddedRunAbandonment({ sessionId })).toBeUndefined();
+    expect(resolveEmbeddedRunAbandonment({ sessionFile: a.file })).toBe("timeout");
+    expect(resolveEmbeddedRunAbandonment({ sessionId, sessionKey, sessionFile: a.file })).toBe(
+      "timeout",
+    );
+    expect(
+      markEmbeddedRunRecoveringTimeout({
+        sessionId: "different-incarnation",
+        runId: a.handle.runId,
+        operation: a.operation,
+      }),
+    ).toBeUndefined();
+    expect(observation(a)).toBe("timeout");
+    const marker = markEmbeddedRunRecoveringTimeout({
+      sessionId,
+      runId: a.handle.runId,
+      operation: a.operation,
+    });
+    expect(marker).toBeDefined();
+    expect(observation(a)).toBe("recovering_timeout");
+    expect(observation(b)).toBe("timeout");
+    expect(markEmbeddedRunRecoveringTimeout({ sessionId })).toBeUndefined();
+    const retiredEntry = getSessionControllerEntryForOperation(a.operation);
+    clearActiveEmbeddedRun(sessionId, a.handle, sessionKey, a.file);
+    a.operation.complete();
+    await a.operation.ownerSettlement;
+    const successor = makeOwner("/tmp/timeout-owner-a", "successor");
+    expect(getSessionControllerEntryForOperation(successor.operation)).not.toBe(retiredEntry);
+    expect(observation(successor)).toBeUndefined();
+    expect(observation(b)).toBe("timeout");
+    expect(restoreEmbeddedRunTimeoutAbandonment(marker!)).toBe(false);
+    expect(abandon(a)).toBe(false);
+    const bMarker = markEmbeddedRunRecoveringTimeout({ sessionId, runId: b.handle.runId });
+    expect(bMarker).toBeDefined();
+    expect(restoreEmbeddedRunTimeoutAbandonment(bMarker!)).toBe(true);
+    expect(observation(b)).toBe("timeout");
+  });
+
+  it("tracks timeout abandonment by session id, key, and file until a new run starts", () => {
+    const sessionFile = "/tmp/abandoned-session.jsonl";
+    const timeout = { sessionKey, reason: "timeout" } as const;
+    const handle = activate(createRunHandle(), sessionKey, sessionFile);
+    expect(markActiveEmbeddedRunAbandoned({ ...timeout, sessionId, handle, sessionFile })).toBe(
+      true,
+    );
+    expectAbandonment("timeout", sessionFile);
+    const next = createRunHandle();
+    clearActiveEmbeddedRun(sessionId, handle, sessionKey, sessionFile);
+    setActiveEmbeddedRun("next", next, sessionKey, sessionFile);
+    expectAbandonment(undefined, sessionFile);
+    expect(markActiveEmbeddedRunAbandoned({ ...timeout, sessionId: "next", handle: next })).toBe(
+      true,
+    );
+    clearActiveEmbeddedRun("next", next, sessionKey, sessionFile);
+    setActiveEmbeddedRun("third", createRunHandle(), sessionKey);
+    expect(resolveEmbeddedRunAbandonment({ sessionKey })).toBeUndefined();
+  });
+
+  it("revokes prepared claims on abort", () => {
+    const handle = createRunHandle({ runId: "run" });
+    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(sessionId, "run");
+    activate(handle);
+    expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
+    clearActiveEmbeddedRun(sessionId, handle);
+    expect(claimCompletion()).toBe(false);
+  });
+
+  it("rejects Stop captured before owner replacement", () => {
+    const firstAbort = vi.fn(),
+      secondAbort = vi.fn();
+    const first = { ...createRunHandle({ runId: "first", abort: firstAbort }), startedAtMs: 123 };
+    setActiveEmbeddedRun(sessionId, first, sessionKey);
+    const identity = resolveActiveEmbeddedRunOwnerByRunId("first");
+    const expected = { runId: "first", sessionId, sessionKey, startedAtMs: 123 };
+    expect(identity).toMatchObject(expected);
+    expect(resolveActiveEmbeddedRunOwner(sessionId)).toMatchObject(expected);
+    setActiveEmbeddedRun(
+      sessionId,
+      createRunHandle({ runId: "second", abort: secondAbort }),
+      sessionKey,
+    );
+    expect(identity?.abort()).toBe(false);
+    unused(firstAbort, secondAbort);
+  });
+
+  it.each([false, true])(
+    "joins the original producer after replacement even if the observer releases: %s",
+    async (releaseObserver) => {
+      const original = createRunHandle({ runId: "original" });
+      const replacementAbort = vi.fn();
+      const replacement = createRunHandle({ runId: "replacement", abort: replacementAbort });
+      const operation = setActiveEmbeddedRun(sessionId, original, sessionKey);
+      expect(captureEmbeddedRunDrainTarget(sessionId, { agentId: "other" })).toBeUndefined();
+      const target = captureEmbeddedRunDrainTarget(sessionId, { agentId: "main" })!;
+      try {
+        operation.complete();
+        setActiveEmbeddedRun(sessionId, replacement, sessionKey);
+        expect(target.abort()).toBe(false);
+        let settled = false;
+        const drained = target.waitForEnd(null).then((ended) => {
+          settled = true;
+          return ended;
+        });
+        if (releaseObserver) {
+          target.release();
+        }
+        await Promise.resolve();
+        expect(settled).toBe(false);
+        clearActiveEmbeddedRun(sessionId, original);
+        await expect(drained).resolves.toBe(true);
+        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+        unused(replacementAbort);
+      } finally {
+        target.release();
+        clearActiveEmbeddedRun(sessionId, original);
+        clearActiveEmbeddedRun(sessionId, replacement);
+      }
+    },
+  );
+
+  it("stops captured manual compaction without a run ID", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun(sessionId, createRunHandle({ isCompacting: true, abort }), sessionKey);
+    const target = captureEmbeddedRunDrainTarget(sessionId, { agentId: "main" });
+    expect(target?.abort()).toBe(true);
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
+  it.each(["retry", "compaction", "replacement"] as const)(
+    "keeps captured controller Stop with its logical turn across %s",
+    async (transition) => {
+      const firstAbort = vi.fn();
+      const nextAbort = vi.fn();
+      const first = createRunHandle({ runId: "first", abort: firstAbort });
+      const next = createRunHandle({ runId: "next", abort: nextAbort });
+      const operation = setActiveEmbeddedRun(sessionId, first, sessionKey);
+      const capture = captureSessionControllerStop({ operations: [operation] });
+      const nextSessionId = transition === "compaction" ? "compacted-session" : sessionId;
+      if (transition === "replacement") {
+        operation.complete();
+      } else if (transition === "compaction") {
+        operation.updateSessionId(nextSessionId);
+      }
+      const successor = setActiveEmbeddedRun(
+        nextSessionId,
+        next,
+        sessionKey,
+        undefined,
+        undefined,
+        transition === "replacement" ? undefined : operation,
+      );
+      try {
+        const stopped = await stopSession({ source: "interrupt", capture }).completed;
+        expect(stopped.aborted).toBe(transition !== "replacement");
+        unused(firstAbort);
+        expect(nextAbort).toHaveBeenCalledTimes(transition === "replacement" ? 0 : 1);
+        expect(successor.result).toEqual(
+          transition === "replacement" ? null : { kind: "aborted", code: "aborted_by_user" },
+        );
+      } finally {
+        clearActiveEmbeddedRun(sessionId, first);
+        clearActiveEmbeddedRun(nextSessionId, next);
+      }
+    },
+  );
+
+  it.each(["replaced", "released"] as const)(
+    "does not stop a native turn after the captured caller authority is %s",
+    async (retirement) => {
+      const instance = createOperationalRunInstanceRef("stop-caller");
+      const authority = claimAgentRunDelegatedAuthority(instance);
+      const authorities = [authority];
+      const abort = vi.fn();
+      const handle = createRunHandle({ runId: "target", abort });
+      const operation = setActiveEmbeddedRun(sessionId, handle, sessionKey);
+      const capture = captureSessionControllerStop({ operations: [operation] });
+      const assertCurrent = await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:stop-caller",
+          operationalRunInstance: instance,
+          receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
+        },
+        () => captureGatewayToolCallerAssertion(),
+      );
+      if (!assertCurrent) {
+        throw new Error("Expected admitted Stop caller assertion");
+      }
+      try {
+        assertCurrent();
+        releaseAgentRunDelegatedAuthority(authority);
+        if (retirement === "replaced") {
+          authorities.push(
+            claimAgentRunDelegatedAuthority(createOperationalRunInstanceRef(instance.runId)),
+          );
+        }
+        await expect(
+          stopSession({ source: "interrupt", capture, assertCurrent }).completed,
+        ).rejects.toThrow("agent tool caller authority is no longer active");
+        unused(abort);
+        expect(operation.result).toBeNull();
+        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(true);
+      } finally {
+        for (const retained of authorities) {
+          releaseAgentRunDelegatedAuthority(retained);
+        }
+        clearActiveEmbeddedRun(sessionId, handle);
+      }
+    },
+  );
+
+  it.each([
+    ["stopped", { isStopped: (): boolean => true }],
+    ["aborted", { isAborted: (): boolean => true }],
+    ["frozen", { isAbortable: (): boolean => false }],
+    [
+      "throwing",
+      {
+        isStopped: (): never => {
+          throw new Error("probe failed");
+        },
+      },
+    ],
+  ] as const)("does not supersede a %s owner", (state, probes) => {
+    const warn =
+      state === "throwing"
+        ? vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {})
+        : undefined;
+    const abort = vi.fn(),
+      cancel = vi.fn(),
+      beforeCancel = vi.fn();
+    const handle = { ...createRunHandle({ abort, runId: "terminal" }), ...probes, cancel };
+    activate(handle);
+    expect(supersedeReplyRunByRunId("terminal", beforeCancel)).toBe(false);
+    unused(beforeCancel, cancel, abort);
+    if (warn) {
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("lifecycle_check_failed"));
+    }
+  });
+
+  it("publishes completion authority and fences later turns of the same session", async () => {
+    const requesterOrigin = captureRequesterOrigin({
+      sessionKey,
+      messageProvider: "telegram",
+      senderId: "completion-requester",
+    })!;
+    const first = createRunHandle({ runId: "first" });
+    const oldClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, "first");
+    let published = false;
+    void oldClaim.registered.then(() => {
+      published = true;
+    });
+    await Promise.resolve();
+    expect(published).toBe(false);
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey,
+        embeddedRunToolAuthorityBinding: () => ({
+          source: "reply",
+          acceptsRequesterOrigin: (incoming) => hasSameRequesterOrigin(requesterOrigin, incoming),
+          project: () => "authority",
+          projectAsync: async () => "authority",
+          assertRegistrationActive: () => {},
+          assertActive: () => {},
+        }),
+      },
+      () => setActiveEmbeddedRun(sessionId, first, sessionKey),
+    );
+    await expect(oldClaim.registered).resolves.toEqual({
+      toolAuthority: expect.objectContaining({ source: "reply" }),
+    });
+    clearActiveEmbeddedRun(sessionId, first, sessionKey);
+    const intervening = createRunHandle({ runId: "intervening" });
+    setActiveEmbeddedRun(sessionId, intervening, sessionKey);
+    clearActiveEmbeddedRun(sessionId, intervening, sessionKey);
+    expect(oldClaim.claimCompletion()).toBe(false);
+    const next = createRunHandle({ runId: "next" });
+    const replacedClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, "replaced");
+    const replaced = createRunHandle({ runId: "replaced" });
+    setActiveEmbeddedRun(sessionId, replaced, sessionKey);
+    clearActiveEmbeddedRun(sessionId, replaced, sessionKey);
+    const currentClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, "next");
+    expect(replacedClaim.claimCompletion()).toBe(false);
+    setActiveEmbeddedRun(sessionId, next, sessionKey);
+    await expect(currentClaim.registered).resolves.toBeUndefined();
+    clearActiveEmbeddedRun(sessionId, next, sessionKey);
+    expect(currentClaim.claimCompletion()).toBe(true);
+    expect(currentClaim.claimCompletion()).toBe(false);
   });
 });

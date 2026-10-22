@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module implements setup surface behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {

@@ -75,4 +75,43 @@ describe("updateSlackSuggestedPrompts", () => {
 
     expect(updated).toBe(outcome);
   });
+
+  it.each([
+    [
+      "permanent authorization failure",
+      new WebAPIPlatformError({ ok: false, error: "invalid_auth" }),
+      "failed",
+    ],
+    ["ordinary error", new Error("connection reset"), "failed"],
+    [
+      "incomplete rate-limit signature",
+      new Error("Retry header did not contain a valid timeout"),
+      "failed",
+    ],
+    [
+      "extended rate-limit signature",
+      new Error(
+        "Retry header did not contain a valid timeout (url: https://slack.test/api/test, retry-after header: null) extra",
+      ),
+      "failed",
+    ],
+    [
+      "threadless capability response",
+      new WebAPIPlatformError({ ok: false, error: "internal_error" }),
+      "internal_error",
+    ],
+  ] as const)(
+    "preserves the outcome for %s during durable retries",
+    async (_name, error, outcome) => {
+      await expect(
+        updateSlackSuggestedPrompts({
+          botToken: "",
+          client: createSlackClient(vi.fn().mockRejectedValue(error)),
+          channelId: "D123",
+          retryTransientErrors: true,
+          prompts: [{ title: "Draft a reply", message: "Help me draft a reply." }],
+        }),
+      ).resolves.toBe(outcome);
+    },
+  );
 });

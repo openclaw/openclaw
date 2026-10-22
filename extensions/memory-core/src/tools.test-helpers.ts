@@ -2,6 +2,7 @@ import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry
 // Memory Core helper module supports tools helpers behavior.
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../api.js";
+import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./tools.js";
 
@@ -9,8 +10,8 @@ export function asOpenClawConfig(config: Partial<OpenClawConfig>): OpenClawConfi
   return isolateMemoryManagerTestConfig(config as OpenClawConfig);
 }
 
-export function createDefaultMemoryToolConfig(): OpenClawConfig {
-  return asOpenClawConfig({ agents: { list: [{ id: "main", default: true }] } });
+function createDefaultMemoryToolConfig(): OpenClawConfig {
+  return asOpenClawConfig({ agents: { entries: { main: {} } } });
 }
 
 export function createMemorySearchToolOrThrow(params?: {
@@ -22,6 +23,7 @@ export function createMemorySearchToolOrThrow(params?: {
   activeProjectKeys?: readonly string[];
 }) {
   const tool = createMemorySearchTool({
+    runInBackgroundContext: runInMemoryTestBackgroundContext,
     config: params?.config ? asOpenClawConfig(params.config) : createDefaultMemoryToolConfig(),
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
@@ -43,16 +45,6 @@ export function createMemoryGetToolOrThrow(
     throw new Error("tool missing");
   }
   return tool;
-}
-
-export function createAutoCitationsMemorySearchTool(agentSessionKey: string) {
-  return createMemorySearchToolOrThrow({
-    config: asOpenClawConfig({
-      memory: { citations: "auto" },
-      agents: { list: [{ id: "main", default: true }] },
-    }),
-    agentSessionKey,
-  });
 }
 
 export function expectUnavailableMemorySearchDetails(

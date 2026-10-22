@@ -7,7 +7,12 @@ import {
   formatTokenCount,
   formatUsd,
 } from "../../utils/usage-format.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import { resolveEffectiveResponseUsage } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { buildUsageContract } from "../usage-bar/contract.js";
@@ -25,22 +30,20 @@ const formatResponseUsageLine = (
   }
   const input = usage.input;
   const output = usage.output;
-  const hasSplitTokens = typeof input === "number" || typeof output === "number";
-  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
-  const outputLabel = typeof output === "number" ? formatTokenCount(output) : "?";
+  const hasSplitTokens = input !== undefined || output !== undefined;
+  const inputLabel = input !== undefined ? formatTokenCount(input) : "?";
+  const outputLabel = output !== undefined ? formatTokenCount(output) : "?";
   const totalLabel =
-    !hasSplitTokens && typeof usage.total === "number"
+    !hasSplitTokens && usage.total !== undefined
       ? `${formatTokenCount(usage.total)} total`
       : undefined;
-  const cacheRead = typeof usage.cacheRead === "number" ? usage.cacheRead : undefined;
-  const cacheWrite = typeof usage.cacheWrite === "number" ? usage.cacheWrite : undefined;
-  const canPriceUsage =
-    usage.cost !== undefined || (typeof input === "number" && typeof output === "number");
+  const cacheRead = usage.cacheRead;
+  const cacheWrite = usage.cacheWrite;
+  const canPriceUsage = usage.cost !== undefined || (input !== undefined && output !== undefined);
   const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
   const cacheSuffix =
-    (typeof cacheRead === "number" && cacheRead > 0) ||
-    (typeof cacheWrite === "number" && cacheWrite > 0)
+    (cacheRead ?? 0) > 0 || (cacheWrite ?? 0) > 0
       ? ` · cache ${formatTokenCount(cacheRead ?? 0)} cached / ${formatTokenCount(cacheWrite ?? 0)} new`
       : "";
   if (!hasSplitTokens && !totalLabel && !cacheSuffix && !costLabel) {
@@ -90,46 +93,54 @@ export const resolveResponseUsageLine = (params: {
       ? renderUsageBar(usageTemplate, buildUsageContract(params.replyUsageState, params.channel))
       : undefined;
 
-  if (rendered) {
-    return rendered;
-  }
-  return formatted ?? undefined;
+  return rendered || formatted || undefined;
 };
 
-export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
-  let index = -1;
-  for (let i = payloads.length - 1; i >= 0; i -= 1) {
-    if (payloads[i]?.text) {
-      index = i;
-      break;
-    }
+export const appendUsageLine = (
+  payloads: ReplyPayload[],
+  line: string,
+  options?: { completedSourceReply?: boolean },
+): ReplyPayload[] => {
+  const sourceReplyIndex = options?.completedSourceReply
+    ? payloads.findLastIndex((payload) => {
+        const metadata = getReplyPayloadMetadata(payload);
+        return (
+          Boolean(payload?.text) &&
+          Boolean(metadata?.sourceReplyTranscriptMirror) &&
+          metadata?.deliverDespiteSourceReplySuppression === true
+        );
+      })
+    : -1;
+  if (options?.completedSourceReply && sourceReplyIndex === -1) {
+    // The source reply is already visible; keep private final text suppressed.
+    const footer = markReplyPayloadForSourceSuppressionDelivery({
+      text: line,
+      isStatusNotice: true,
+    });
+    setReplyPayloadMetadata(footer, { responseUsageLine: line });
+    return [...payloads, footer];
   }
+  const index =
+    sourceReplyIndex >= 0 ? sourceReplyIndex : payloads.findLastIndex((payload) => payload?.text);
   if (index === -1) {
     return [...payloads, { text: line, isStatusNotice: true }];
   }
   const existing = expectDefined(payloads[index], "payloads entry at index");
   const existingText = existing.text ?? "";
   const separator = existingText.endsWith("\n") ? "" : "\n";
-  const next = {
+  const next = copyReplyPayloadMetadata(existing, {
     ...existing,
     text: `${existingText}${separator}${line}`,
-  };
-  const metadata = getReplyPayloadMetadata(existing);
+  });
+  setReplyPayloadMetadata(next, { responseUsageLine: line });
+  const mirror = getReplyPayloadMetadata(existing)?.sourceReplyTranscriptMirror;
   // Transcript mirrors must track the mutated text or source-reply delivery drifts.
-  const nextWithMetadata = metadata
-    ? setReplyPayloadMetadata(next, {
-        ...metadata,
-        ...(metadata.sourceReplyTranscriptMirror
-          ? {
-              sourceReplyTranscriptMirror: {
-                ...metadata.sourceReplyTranscriptMirror,
-                text: next.text,
-              },
-            }
-          : {}),
-      })
-    : next;
+  if (mirror) {
+    setReplyPayloadMetadata(next, {
+      sourceReplyTranscriptMirror: { ...mirror, text: next.text },
+    });
+  }
   const updated = payloads.slice();
-  updated[index] = nextWithMetadata;
+  updated[index] = next;
   return updated;
 };

@@ -135,7 +135,9 @@ export function reserveProviderLoginFlow(params: {
     },
     { once: true },
   );
-  params.flows.logins.set(params.flowKey, record);
+  if (!signal.aborted) {
+    params.flows.logins.set(params.flowKey, record);
+  }
   return { status: "reserved", record };
 }
 
@@ -524,7 +526,7 @@ export async function refreshProviderLoginAuthState(params: {
   readConfig();
   const { refreshModelAuthStateAfterMutation } = await import("../gateway/model-auth-refresh.js");
   readConfig();
-  await refreshModelAuthStateAfterMutation(readConfig, "login", params.agentId);
+  await refreshModelAuthStateAfterMutation(readConfig, params.agentId);
   readConfig();
 }
 

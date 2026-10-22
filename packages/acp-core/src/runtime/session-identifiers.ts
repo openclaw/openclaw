@@ -8,34 +8,12 @@ import { isSessionIdentityPending, resolveSessionIdentityFromMeta } from "./sess
 export const ACP_SESSION_IDENTITY_RENDERER_VERSION = "v1";
 export type AcpSessionIdentifierRenderMode = "status" | "thread";
 
-type SessionResumeHintResolver = (params: { agentSessionId: string }) => string;
-
-const ACP_AGENT_RESUME_HINT_BY_KEY = new Map<string, SessionResumeHintResolver>([
-  [
-    "codex",
-    ({ agentSessionId }) =>
-      `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
-  ],
-  [
-    "openai",
-    ({ agentSessionId }) =>
-      `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
-  ],
-  [
-    "codex-cli",
-    ({ agentSessionId }) =>
-      `resume in Codex CLI: \`codex resume ${agentSessionId}\` (continues this conversation).`,
-  ],
-  [
-    "kimi",
-    ({ agentSessionId }) =>
-      `resume in Kimi CLI: \`kimi resume ${agentSessionId}\` (continues this conversation).`,
-  ],
-  [
-    "moonshot-kimi",
-    ({ agentSessionId }) =>
-      `resume in Kimi CLI: \`kimi resume ${agentSessionId}\` (continues this conversation).`,
-  ],
+const ACP_AGENT_RESUME_COMMAND_BY_KEY = new Map<string, "codex" | "kimi">([
+  ["codex", "codex"],
+  ["openai", "codex"],
+  ["codex-cli", "codex"],
+  ["kimi", "kimi"],
+  ["moonshot-kimi", "kimi"],
 ]);
 
 function normalizeAgentHintKey(value: unknown): string | undefined {
@@ -44,19 +22,6 @@ function normalizeAgentHintKey(value: unknown): string | undefined {
     return undefined;
   }
   return normalizeLowercaseStringOrEmpty(normalized).replace(/[\s_]+/g, "-");
-}
-
-function resolveAcpAgentResumeHintLine(params: {
-  agentId?: string;
-  agentSessionId?: string;
-}): string | undefined {
-  const agentSessionId = normalizeText(params.agentSessionId);
-  const agentKey = normalizeAgentHintKey(params.agentId);
-  if (!agentSessionId || !agentKey) {
-    return undefined;
-  }
-  const resolver = ACP_AGENT_RESUME_HINT_BY_KEY.get(agentKey);
-  return resolver ? resolver({ agentSessionId }) : undefined;
 }
 
 /** Renders resolved ACP backend/agent ids, hiding pending ids from thread intros. */
@@ -95,19 +60,11 @@ export function resolveAcpSessionIdentifierLinesFromIdentity(params: {
 
 /** Resolves the runtime cwd, preferring modern runtimeOptions over legacy metadata. */
 export function resolveAcpSessionCwd(meta?: SessionAcpMeta): string | undefined {
-  const runtimeCwd = normalizeText(meta?.runtimeOptions?.cwd);
-  if (runtimeCwd) {
-    return runtimeCwd;
-  }
-  return normalizeText(meta?.cwd);
+  return normalizeText(meta?.runtimeOptions?.cwd) ?? normalizeText(meta?.cwd);
 }
 
 /** Renders thread-detail identifier lines plus a backend-specific resume hint when stable. */
-export function resolveAcpThreadSessionDetailLines(params: {
-  sessionKey: string;
-  meta?: SessionAcpMeta;
-}): string[] {
-  const meta = params.meta;
+export function resolveAcpThreadSessionDetailLines(meta?: SessionAcpMeta): string[] {
   const identity = resolveSessionIdentityFromMeta(meta);
   const backend = normalizeText(meta?.backend) ?? "backend";
   const lines = resolveAcpSessionIdentifierLinesFromIdentity({
@@ -118,12 +75,16 @@ export function resolveAcpThreadSessionDetailLines(params: {
   if (lines.length === 0) {
     return lines;
   }
-  const hint = resolveAcpAgentResumeHintLine({
-    agentId: meta?.agent,
-    agentSessionId: identity?.agentSessionId,
-  });
-  if (hint) {
-    lines.push(hint);
+  const agentId = meta?.agent;
+  const agentSessionId = normalizeText(identity?.agentSessionId);
+  const agentKey = normalizeAgentHintKey(agentId);
+  const command =
+    agentSessionId && agentKey ? ACP_AGENT_RESUME_COMMAND_BY_KEY.get(agentKey) : undefined;
+  if (command) {
+    const label = command === "codex" ? "Codex" : "Kimi";
+    lines.push(
+      `resume in ${label} CLI: \`${command} resume ${agentSessionId}\` (continues this conversation).`,
+    );
   }
   return lines;
 }

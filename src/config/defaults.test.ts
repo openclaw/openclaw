@@ -2,6 +2,7 @@ import { normalizeModelCostConfig } from "@openclaw/llm-core";
 // Verifies default config values and environment-sensitive overrides.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listAgentIds } from "../agents/agent-roster.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../plugins/provider-model-routes.js";
 import { estimateUsageCost } from "../utils/usage-format.js";
@@ -10,12 +11,22 @@ import {
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
   resolveAgentMaxConcurrent,
 } from "./agent-limits.js";
+import { attachAgentListProjection } from "./agent-list-projection.js";
 import {
   applyAgentDefaults,
   applyContextPruningDefaults,
   applyMessageDefaults,
+  applyModelDefaults,
 } from "./defaults.js";
+import { resolveConfigEnvVars, type EnvSubstitutionWarning } from "./env-substitution.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import {
+  collectEnvSecretRefIds,
+  createConfigResolutionFacts,
+  getAuthoredConfigSecretRef,
+  getResolvedConfigEnvSecretRef,
+  setConfigResolutionFacts,
+} from "./resolution-facts.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-snapshot.js";
 import type { ModelProviderConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -43,6 +54,104 @@ describe("config defaults", () => {
   afterEach(() => {
     clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
+  });
+
+  it("materializes the canonical main session key and warns only once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const source = { session: { mainKey: " custom " } };
+    const options = { env: {}, manifestRegistry: { plugins: [] } };
+    try {
+      expect(materializeRuntimeConfig(source, options).session?.mainKey).toBe("main");
+      expect(source.session.mainKey).toBe(" custom ");
+      expect(
+        materializeRuntimeConfig({ session: { mainKey: "another" } }, options).session?.mainKey,
+      ).toBe("main");
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        'session.mainKey is ignored; main session is always "main".',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("carries only surviving env provenance through materialization", () => {
+    const warnings: EnvSubstitutionWarning[] = [];
+    const pending = new Map<string, string>();
+    const resolved = new Map<string, string>();
+    const source = resolveConfigEnvVars(
+      {
+        logging: { file: "${LOG_PATH}" },
+        gateway: { auth: { token: "$PENDING_TOKEN", password: "${KEEP_PASSWORD}" } },
+      },
+      { LOG_PATH: "~/logs/openclaw.log", KEEP_PASSWORD: "fixture-password" },
+      {
+        onMissing: (warning) => warnings.push(warning),
+        onPendingEnvSecretRef: (id, path) => pending.set(path, id),
+        onResolvedEnvSecretRef: (id, path) => resolved.set(path, id),
+      },
+      // SAFETY: substitution changes only strings in this known config fixture.
+    ) as OpenClawConfig;
+    setConfigResolutionFacts(
+      source,
+      createConfigResolutionFacts(warnings, pending, "custom", resolved),
+    );
+
+    const runtime = materializeRuntimeConfig(source, {
+      env: {},
+      homedir: () => "/tmp/config-fixture",
+      manifestRegistry: { plugins: [] },
+    });
+
+    expect(runtime.logging?.file).toBe("/tmp/config-fixture/logs/openclaw.log");
+    expect(getResolvedConfigEnvSecretRef(runtime, "logging.file")).toBeNull();
+    expect(getResolvedConfigEnvSecretRef(runtime, "gateway.auth.password")).toEqual({
+      source: "env",
+      provider: "custom",
+      id: "KEEP_PASSWORD",
+    });
+    expect(getAuthoredConfigSecretRef(runtime, "gateway.auth.token")).toEqual({
+      source: "env",
+      provider: "custom",
+      id: "PENDING_TOKEN",
+    });
+    expect(collectEnvSecretRefIds(runtime)).toEqual(new Set(["PENDING_TOKEN", "KEEP_PASSWORD"]));
+  });
+
+  it("preserves the implicit main agent when materializing a pre-roster config", () => {
+    const runtime = materializeRuntimeConfig({}, { env: {}, manifestRegistry: { plugins: [] } });
+
+    expect(listAgentIds(runtime)).toEqual(["main"]);
+  });
+
+  it("rebuilds the SDK roster projection from the final materialized entries", () => {
+    const source: OpenClawConfig = {
+      agents: {
+        entries: {
+          worker: { model: "google/gemini-3-pro-preview", workspace: "~/worker" },
+          helper: { name: "Helper" },
+        },
+      },
+    };
+    attachAgentListProjection(source);
+    const runtime = materializeRuntimeConfig(source, {
+      env: {},
+      homedir: () => "/tmp/config-fixture",
+      manifestRegistry: { plugins: [] },
+    });
+    expect(Object.getOwnPropertyDescriptor(runtime.agents, "list")).toEqual({
+      configurable: true,
+      enumerable: false,
+      writable: false,
+      value: [
+        {
+          id: "worker",
+          model: "google/gemini-3.1-pro-preview",
+          workspace: "/tmp/config-fixture/worker",
+        },
+        { id: "helper", name: "Helper" },
+      ],
+    });
+    expect(structuredClone(runtime)).not.toHaveProperty("agents.list");
   });
 
   it("skips provider defaults when agent defaults are absent", () => {
@@ -149,16 +258,15 @@ describe("config defaults", () => {
   it("defaults ackReactionScope without deriving other message fields", () => {
     const next = applyMessageDefaults({
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             identity: {
               name: "Samantha",
               theme: "helpful sloth",
               emoji: "🦥",
             },
           },
-        ],
+        },
       },
       messages: {},
     } as never);
@@ -186,6 +294,45 @@ describe("config defaults", () => {
     expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(0);
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
+
+  it.each([false, true])(
+    "normalizes keyed agent models without authoring a legacy list (projection: %s)",
+    (withProjection) => {
+      const config: OpenClawConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            worker: {
+              model: {
+                primary: "google/gemini-3-pro-preview",
+                fallbacks: ["google/gemini-3-pro-preview"],
+              },
+              models: { "google/gemini-3-pro-preview": { alias: "worker-model" } },
+            },
+            helper: { model: "google/gemini-3-pro-preview" },
+          },
+        },
+      };
+      if (withProjection) {
+        attachAgentListProjection(config);
+      }
+
+      const next = applyModelDefaults(config, { manifestRegistry: { plugins: [] } });
+
+      expect(next.agents?.entries).toEqual({
+        worker: {
+          model: {
+            primary: "google/gemini-3.1-pro-preview",
+            fallbacks: ["google/gemini-3.1-pro-preview"],
+          },
+          models: { "google/gemini-3.1-pro-preview": { alias: "worker-model" } },
+        },
+        helper: { model: "google/gemini-3.1-pro-preview" },
+      });
+      expect(Object.keys(next.agents ?? {})).not.toContain("list");
+      expect(structuredClone(next)).not.toHaveProperty("agents.list");
+    },
+  );
 });
 
 describe("applyModelDefaults catalog seeding", () => {
@@ -196,6 +343,8 @@ describe("applyModelDefaults catalog seeding", () => {
         modelCatalog: {
           providers: {
             " OpenAI ": {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
               models: [
                 {
                   id: "gpt-5.6-sol",
@@ -230,7 +379,6 @@ describe("applyModelDefaults catalog seeding", () => {
   ])(
     "seeds $providerId models (normalizer supplies rows: $generatedRows)",
     async ({ providerId, generatedRows }) => {
-      const { applyModelDefaults } = await import("./defaults.js");
       const { normalizeProviderConfigForConfigDefaults } = await import("./provider-policy.js");
       // SAFETY: config schema accepts omitted model metadata before materialization.
       const models = [
@@ -273,8 +421,7 @@ describe("applyModelDefaults catalog seeding", () => {
     },
   );
 
-  it("keeps authored metadata authoritative over the catalog row", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  it("keeps authored metadata authoritative over the catalog row", () => {
     const cfg = applyModelDefaults(
       {
         models: {
@@ -307,8 +454,7 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(model.maxTokens).toBe(4_096);
   });
 
-  it("keeps catalog-seeded compatibility out of authored route overrides", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  it("keeps catalog-seeded compatibility out of authored route overrides", () => {
     const sourceConfig: OpenClawConfig = {
       models: {
         providers: {
@@ -404,8 +550,7 @@ describe("applyModelDefaults catalog seeding", () => {
       expectedCost: { ...authoredFlatCost, tieredPricing: [] },
       expectedUsd: 0.00327,
     },
-  ])("$name", async ({ authoredCost, expectedCost, expectedUsd }) => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  ])("$name", ({ authoredCost, expectedCost, expectedUsd }) => {
     const tieredRegistry = {
       plugins: [
         {
@@ -449,7 +594,7 @@ describe("applyModelDefaults catalog seeding", () => {
     ).toBeCloseTo(expectedUsd, 10);
   });
 
-  it("copies frozen catalog metadata before downstream normalization", async () => {
+  it("copies frozen catalog metadata before downstream normalization", () => {
     const supportedReasoningEfforts = Object.freeze(["low", "high"]);
     const compat = Object.freeze({ supportedReasoningEfforts });
     const frozenRegistry = {
@@ -459,6 +604,8 @@ describe("applyModelDefaults catalog seeding", () => {
           modelCatalog: {
             providers: {
               openai: {
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
                 models: [
                   Object.freeze({
                     id: "gpt-5.6-sol",
@@ -474,7 +621,6 @@ describe("applyModelDefaults catalog seeding", () => {
       ],
       // SAFETY: minimal frozen manifest record reproducing production registry ownership.
     } as never;
-    const { applyModelDefaults } = await import("./defaults.js");
     const cfg = applyModelDefaults(
       {
         models: {
@@ -499,8 +645,7 @@ describe("applyModelDefaults catalog seeding", () => {
     expect(compat.supportedReasoningEfforts).toEqual(["low", "high"]);
   });
 
-  it("falls back to generic defaults when no catalog row matches", async () => {
-    const { applyModelDefaults } = await import("./defaults.js");
+  it("falls back to generic defaults when no catalog row matches", () => {
     const cfg = applyModelDefaults(
       {
         models: {

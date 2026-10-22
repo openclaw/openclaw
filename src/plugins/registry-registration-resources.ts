@@ -9,7 +9,6 @@ type RegistrationResources = {
   runCleanup?: RegistrationCleanup;
   rolledBack?: boolean;
   disposal?: Promise<Error[]>;
-  disposalStarted?: boolean;
   retire?: () => Promise<void>;
 };
 
@@ -18,6 +17,7 @@ export class PluginRegistrationResourceSource {
   readonly #registrations = new Map<string, RegistrationResources>();
   readonly #pending = new Set<Promise<void>>();
   readonly #dependencies: Array<() => Promise<void>> = [];
+  readonly #cleanupWork = new AsyncWorkScope();
   #claims = 0;
   #closed = false;
 
@@ -34,7 +34,10 @@ export class PluginRegistrationResourceSource {
         if (!release) {
           const last = --this.#claims === 0;
           this.#closed = last;
-          release = Promise.resolve().then(async () => {
+          // Physical custody can outlive the releasing caller's captured work scope.
+          const cleanup = this.#cleanupWork.track(async () => {
+            // Cache the release promise before cleanup can synchronously reenter it.
+            await Promise.resolve();
             const entries = [...this.#registrations]
               // Construction owns rollback failures; the last claim owns successful entries.
               .filter(([, entry]) => (entry.rolledBack ? owner === "inspection" : last));
@@ -82,6 +85,15 @@ export class PluginRegistrationResourceSource {
             }
             return failures;
           });
+          release = (async () => {
+            try {
+              return await cleanup;
+            } finally {
+              if (last) {
+                await this.#cleanupWork.run(() => this.#cleanupWork.drain());
+              }
+            }
+          })();
         }
         return release;
       },
@@ -140,50 +152,45 @@ export class PluginRegistrationResourceSource {
     void this.#dispose(pluginId, entry);
   }
 
+  /** Move a completed registration together with its successor instance custody. */
+  transferRegistrationTo(pluginId: string, target: PluginRegistrationResourceSource): void {
+    const entry = this.#registrations.get(pluginId);
+    if (entry) {
+      if (this.#closed || target.#closed || target.#registrations.has(pluginId)) {
+        throw new Error(`Plugin registration custody cannot transfer: ${pluginId}`);
+      }
+      this.#registrations.delete(pluginId);
+      target.#registrations.set(pluginId, entry);
+    }
+  }
+
   async #waitForRegistrations(): Promise<void> {
     while (this.#pending.size > 0) {
       await Promise.all(this.#pending);
     }
   }
 
-  #pendingWork(): AsyncWorkScope[] {
-    return [...this.#registrations.values()]
-      .filter((entry) => !entry.disposalStarted)
-      .map((entry) => entry.work);
-  }
-
   #dispose(pluginId: string, entry: RegistrationResources): Promise<Error[]> {
     return (entry.disposal ??= Promise.resolve().then(async () => {
       const signalCleanup = async () => {
         entry.work.beginClose();
-        // Abort listeners can queue work in a sibling. Keep this cleanup admission
-        // until those descendants join, before any registration resource is disposed.
         await this.#waitForRegistrations();
-        await AsyncWorkScope.runWhenAllIdle(
-          () => this.#pendingWork(),
-          () => undefined,
-        );
       };
       await (entry.runCleanup ? entry.runCleanup(signalCleanup) : signalCleanup());
       const failures: Error[] = [];
       try {
-        await AsyncWorkScope.runWhenAllIdle(
-          () => this.#pendingWork(),
-          () =>
-            entry.work.track(async () => {
-              entry.disposalStarted = true;
-              const disposers = entry.disposers.splice(0);
-              for (const { id, dispose } of disposers) {
-                try {
-                  await dispose();
-                } catch (cause) {
-                  failures.push(
-                    new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
-                  );
-                }
-              }
-            }),
-        );
+        await entry.work.runWhenIdle(async () => {
+          const disposers = entry.disposers.splice(0);
+          for (const { id, dispose } of disposers) {
+            try {
+              await dispose();
+            } catch (cause) {
+              failures.push(
+                new Error(`Plugin inspection disposal failed: ${pluginId}:${id}`, { cause }),
+              );
+            }
+          }
+        });
         try {
           // Instance cleanup can use the same captured tracker as raw disposal.
           await entry.work.runWhenIdle(() => entry.retire?.());

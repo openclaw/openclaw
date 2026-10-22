@@ -4,32 +4,23 @@ import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { readBundleJsonObject } from "../plugins/bundle-config-shared.js";
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
-import {
-  normalizePluginsConfigWithResolver,
-  resolvePolicyPluginActivationState,
-} from "../plugins/config-policy.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
+import { resolvePluginActivationStateShared } from "../plugins/config-activation-shared.js";
+import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
-import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
-import type { SettingsManager } from "./sessions/index.js";
+import type { Settings } from "./sessions/settings-storage.js";
 
 const log = createSubsystemLogger("embedded-agent-settings");
 
-// Embedded-agent settings snapshot assembly. Global settings merge with enabled
-// bundle settings and optional project settings, with shell execution fields
-// sanitized unless the project policy is explicitly trusted.
-const DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY = "sanitize";
 const SANITIZED_PROJECT_AGENT_KEYS = ["shellPath", "shellCommandPrefix"] as const;
 
-/** Policy for whether workspace project settings can influence embedded-agent behavior. */
 type EmbeddedAgentProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
-/** Merged settings snapshot consumed by embedded agent settings managers. */
-type AgentSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]> & {
+export type AgentSettingsSnapshot = Settings & {
   mcpServers?: Record<string, BundleMcpServerConfig>;
 };
 
@@ -42,28 +33,7 @@ function sanitizeAgentSettingsSnapshot(settings: AgentSettingsSnapshot): AgentSe
   return sanitized;
 }
 
-function loadBundleSettingsFile(params: {
-  rootDir: string;
-  relativePath: string;
-}): AgentSettingsSnapshot | null {
-  const absolutePath = path.join(params.rootDir, params.relativePath);
-  const result = readBundleJsonObject({
-    rootDir: params.rootDir,
-    relativePath: params.relativePath,
-    // Unsafe paths skip the bundle rather than weaken the plugin root boundary.
-    onOpenFailure: () => ({ ok: false, error: "skipping unsafe bundle settings file" }),
-  });
-  if (!result.ok) {
-    log.warn(`${result.error}: ${absolutePath}`);
-    return null;
-  }
-  return sanitizeAgentSettingsSnapshot(result.raw as AgentSettingsSnapshot);
-}
-
-/**
- * Load and merge settings contributed by enabled bundle plugins for one
- * embedded-agent workspace.
- */
+/** Merge enabled bundle settings for one embedded-agent workspace. */
 export function loadEnabledBundleAgentSettingsSnapshot(params: {
   cwd: string;
   cfg?: OpenClawConfig;
@@ -85,23 +55,23 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
       env,
     });
   return withPluginCache(getPluginMetadataSnapshotCache(metadataSnapshot), () => {
-    const registry = metadataSnapshot.manifestRegistry;
-    if (registry.plugins.length === 0) {
+    const { plugins } = metadataSnapshot.manifestRegistry;
+    if (plugins.length === 0) {
       return {};
     }
 
-    const normalizedPlugins = normalizePluginsConfigWithResolver(
+    const normalizedPlugins = normalizePluginsConfigWithResolverCore(
       config.plugins,
       metadataSnapshot.normalizePluginId,
     );
     let snapshot: AgentSettingsSnapshot = {};
 
-    for (const record of registry.plugins) {
+    for (const record of plugins) {
       const settingsFiles = record.settingsFiles ?? [];
       if (record.format !== "bundle" || settingsFiles.length === 0) {
         continue;
       }
-      const activationState = resolvePolicyPluginActivationState({
+      const activationState = resolvePluginActivationStateShared({
         id: record.id,
         origin: record.origin,
         channelIds: record.channels,
@@ -112,29 +82,24 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
         continue;
       }
       for (const relativePath of settingsFiles) {
-        const bundleSettings = loadBundleSettingsFile({
+        const absolutePath = path.join(record.rootDir, relativePath);
+        const result = readBundleJsonObject({
           rootDir: record.rootDir,
           relativePath,
+          // Unsafe paths skip the bundle rather than weaken the plugin root boundary.
+          allowMissing: false,
         });
-        if (!bundleSettings) {
+        if (!result.ok) {
+          const message =
+            result.reason === "open" ? "skipping unsafe bundle settings file" : result.error;
+          log.warn(`${message}: ${absolutePath}`);
           continue;
         }
-        snapshot = applyMergePatch(snapshot, bundleSettings) as AgentSettingsSnapshot;
+        snapshot = applyMergePatch(
+          snapshot,
+          sanitizeAgentSettingsSnapshot(result.raw as AgentSettingsSnapshot),
+        ) as AgentSettingsSnapshot;
       }
-    }
-
-    const embeddedAgentMcp = loadEmbeddedAgentMcpConfig({
-      workspaceDir,
-      cfg: config,
-      manifestRegistry: metadataSnapshot.manifestRegistry,
-    });
-    for (const diagnostic of embeddedAgentMcp.diagnostics) {
-      log.warn(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
-    }
-    if (Object.keys(embeddedAgentMcp.mcpServers).length > 0) {
-      snapshot = applyMergePatch(snapshot, {
-        mcpServers: embeddedAgentMcp.mcpServers,
-      }) as AgentSettingsSnapshot;
     }
 
     return snapshot;
@@ -145,11 +110,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
 export function resolveEmbeddedAgentProjectSettingsPolicy(
   cfg?: OpenClawConfig,
 ): EmbeddedAgentProjectSettingsPolicy {
-  const raw = cfg?.agents?.defaults?.embeddedAgent?.projectSettingsPolicy;
-  if (raw === "trusted" || raw === "sanitize" || raw === "ignore") {
-    return raw;
-  }
-  return DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY;
+  return cfg?.agents?.defaults?.embeddedAgent?.projectSettingsPolicy ?? "sanitize";
 }
 
 /** Merges global, plugin, and project settings according to the selected trust policy. */
@@ -165,9 +126,8 @@ export function buildEmbeddedAgentSettingsSnapshot(params: {
       : params.policy === "sanitize"
         ? sanitizeAgentSettingsSnapshot(params.projectSettings)
         : params.projectSettings;
-  const withPluginSettings = applyMergePatch(
-    params.globalSettings,
-    sanitizeAgentSettingsSnapshot(params.pluginSettings ?? {}),
+  return applyMergePatch(
+    applyMergePatch(params.globalSettings, params.pluginSettings ?? {}),
+    effectiveProjectSettings,
   ) as AgentSettingsSnapshot;
-  return applyMergePatch(withPluginSettings, effectiveProjectSettings) as AgentSettingsSnapshot;
 }

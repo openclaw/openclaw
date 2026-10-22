@@ -1,9 +1,10 @@
 // Focused low-level text/runtime helpers used by bundled plugins.
 import type { BaseProbeResult } from "../channels/plugins/types.public.js";
-import { withTimeout } from "../utils/with-timeout.js";
+import { withTimeout } from "../infra/fs-safe.js";
 
 export { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 export { truncateCodePoints } from "@openclaw/normalization-core/code-points";
+export { findGraphemeChunkEnd } from "@openclaw/normalization-core/grapheme";
 
 export {
   estimateToolResultTextChars,

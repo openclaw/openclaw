@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { ActionResult } from "@trycua/cua-driver";
-import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord as record,
+  readStringField,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   ClickButton,
-  EscalationReason,
   ScrollDirection,
   type CuaDriverSession,
+  type CuaSessionState,
   type CuaToolResult,
 } from "./driver-client.js";
 
@@ -152,21 +155,17 @@ function normalizeMcpToolResult(tool: string, raw: unknown): CuaToolResult {
   );
   const structured = record(value.structuredContent);
   const errorCode =
-    typeof structured?.code === "string"
-      ? structured.code
-      : typeof record(structured?.refusal)?.code === "string"
-        ? (record(structured?.refusal)?.code as string)
-        : undefined;
+    readStringField(structured, "code") ?? readStringField(record(structured?.refusal), "code");
   const isError = value.isError === true;
   return {
     text: text.join("\n"),
     images,
-    ...(structured ? { structuredJson: JSON.stringify(structured) } : {}),
+    ...(structured ? { structuredContent: structured } : {}),
     isError,
     ...(errorCode ? { errorCode } : {}),
     ...(!isError ? { action: mcpActionResult(tool, structured) } : {}),
     degraded: structured?.degraded === true,
-    rawJson: JSON.stringify(raw),
+    rawJson: "{}",
   };
 }
 
@@ -202,21 +201,12 @@ function createClient(binaryPath: string, socketPath: string, env: NodeJS.Proces
     );
 }
 
-function sessionState(value: CuaToolResult): import("@trycua/cua-driver").SessionStateOutput {
-  if (value.isError || !value.structuredJson) {
+function sessionState(value: CuaToolResult): CuaSessionState {
+  if (value.isError || !value.structuredContent) {
     throw driverProtocolError(value.text || "CUA MCP session operation failed");
   }
-  let structured: Record<string, unknown> | undefined;
-  try {
-    structured = record(JSON.parse(value.structuredJson));
-  } catch (error) {
-    throw driverProtocolError("CUA MCP session operation returned invalid JSON", error);
-  }
-  if (!structured) {
-    throw driverProtocolError("CUA MCP session operation returned invalid state");
-  }
+  const structured = value.structuredContent;
   return {
-    session: typeof structured.session === "string" ? structured.session : "",
     captureScope: mappedEnum(
       structured.capture_scope,
       ["auto", "window", "desktop"],
@@ -227,27 +217,8 @@ function sessionState(value: CuaToolResult): import("@trycua/cua-driver").Sessio
       ["window", "desktop"],
       "effective scope",
     ),
-    desktopCaptureAuthorized: structured.desktop_capture_authorized === true,
     desktopUnlocked: structured.desktop_unlocked === true,
-    ...(typeof structured.escalation_reason === "string"
-      ? {
-          escalationReason: mappedEnum(
-            structured.escalation_reason,
-            [
-              "ax_tree_pixel_mismatch",
-              "background_delivery_failed",
-              "foreground_ineffective",
-              "no_window_target",
-              "other",
-            ],
-            "escalation reason",
-          ),
-        }
-      : {}),
-    ...(typeof structured.escalation_detail === "string"
-      ? { escalationDetail: structured.escalation_detail }
-      : {}),
-  } as import("@trycua/cua-driver").SessionStateOutput;
+  };
 }
 
 class McpCuaDriverSession implements CuaDriverSession {
@@ -281,7 +252,7 @@ class McpCuaDriverSession implements CuaDriverSession {
     return await this.sessionTool("get_cursor_position", {}, signal);
   }
 
-  async escalateScope(_reason: EscalationReason, signal?: AbortSignal) {
+  async getSessionState(signal?: AbortSignal) {
     const result = await this.sessionTool("get_session_state", {}, signal);
     return sessionState(result);
   }
@@ -441,9 +412,7 @@ class McpCuaDriverSession implements CuaDriverSession {
       try {
         await start;
       } catch (error) {
-        if (this.startPromise === start) {
-          this.startPromise = undefined;
-        }
+        this.startPromise = undefined;
         throw error;
       }
       return;

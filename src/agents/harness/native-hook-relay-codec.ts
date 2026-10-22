@@ -1,12 +1,9 @@
 import { stableStringify } from "@openclaw/normalization-core";
 import { normalizeToolPolicyName } from "../tool-policy.js";
-import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
   JsonValue,
   NativeHookRelayInvocation,
   NativeHookRelayInvocationMetadata,
-  NativeHookRelayProvider,
-  NativeHookRelayProviderAdapter,
   NativeHookRelayRegistration,
 } from "./native-hook-relay-types.js";
 import {
@@ -23,48 +20,12 @@ const CODEX_NATIVE_HOOK_TOOL_NAME_ALIASES: Record<string, string> = {
   agent: "spawn_agent",
 };
 
-const nativeHookRelayProviderAdapters: Record<
-  NativeHookRelayProvider,
-  NativeHookRelayProviderAdapter
-> = {
-  codex: {
-    normalizeMetadata: normalizeCodexHookMetadata,
-    readToolInput: readCodexToolInput,
-    readToolResponse: readCodexToolResponse,
-    ...codexNativeHookRelayResponseCodec,
-    renderBeforeAgentFinalizeReviseResponse: (reason) => ({
-      stdout: `${JSON.stringify({
-        decision: "block",
-        reason,
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-    }),
-    renderBeforeAgentFinalizeStopResponse: (reason) => ({
-      stdout: `${JSON.stringify({
-        continue: false,
-        ...(reason?.trim() ? { stopReason: reason.trim() } : {}),
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-    }),
-  },
-};
-
-export function getNativeHookRelayProviderAdapter(
-  provider: NativeHookRelayProvider,
-): NativeHookRelayProviderAdapter {
-  return nativeHookRelayProviderAdapters[provider];
-}
-
 export function normalizeNativeHookInvocation(params: {
   registration: NativeHookRelayRegistration;
   event: NativeHookRelayInvocation["event"];
   rawPayload: JsonValue;
 }): NativeHookRelayInvocation {
-  const metadata = getNativeHookRelayProviderAdapter(
-    params.registration.provider,
-  ).normalizeMetadata(params.rawPayload);
+  const metadata = normalizeCodexHookMetadata(params.rawPayload);
   return {
     provider: params.registration.provider,
     relayId: params.registration.relayId,
@@ -82,50 +43,34 @@ export function normalizeNativeHookInvocation(params: {
 function normalizeCodexHookMetadata(rawPayload: JsonValue): NativeHookRelayInvocationMetadata {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const metadata: NativeHookRelayInvocationMetadata = {};
-  const nativeEventName = readOptionalNonEmptyString(payload.hook_event_name);
-  if (nativeEventName) {
-    metadata.nativeEventName = nativeEventName;
-  }
-  const cwd = readOptionalNonEmptyString(payload.cwd);
-  if (cwd) {
-    metadata.cwd = cwd;
-  }
-  const model = readOptionalNonEmptyString(payload.model);
-  if (model) {
-    metadata.model = model;
-  }
-  const turnId = readOptionalNonEmptyString(payload.turn_id);
-  if (turnId) {
-    metadata.turnId = turnId;
-  }
-  const transcriptPath = readOptionalNonEmptyString(payload.transcript_path);
-  if (transcriptPath) {
-    metadata.transcriptPath = transcriptPath;
-  }
-  const permissionMode = readOptionalNonEmptyString(payload.permission_mode);
-  if (permissionMode) {
-    metadata.permissionMode = permissionMode;
-  }
-  const stopHookActive = readOptionalBoolean(payload.stop_hook_active);
-  if (stopHookActive !== undefined) {
-    metadata.stopHookActive = stopHookActive;
-  }
-  const lastAssistantMessage = readOptionalNonEmptyString(payload.last_assistant_message);
-  if (lastAssistantMessage) {
-    metadata.lastAssistantMessage = lastAssistantMessage;
-  }
-  const toolName = readOptionalNonEmptyString(payload.tool_name);
-  if (toolName) {
-    metadata.toolName = toolName;
-  }
-  const toolUseId = readOptionalNonEmptyString(payload.tool_use_id);
-  if (toolUseId) {
-    metadata.toolUseId = toolUseId;
+  for (const [key, source] of [
+    ["nativeEventName", "hook_event_name"],
+    ["cwd", "cwd"],
+    ["model", "model"],
+    ["turnId", "turn_id"],
+    ["transcriptPath", "transcript_path"],
+    ["permissionMode", "permission_mode"],
+    ["stopHookActive", "stop_hook_active"],
+    ["lastAssistantMessage", "last_assistant_message"],
+    ["toolName", "tool_name"],
+    ["toolUseId", "tool_use_id"],
+  ] as const) {
+    if (key === "stopHookActive") {
+      const value = readOptionalBoolean(payload[source]);
+      if (value !== undefined) {
+        metadata[key] = value;
+      }
+    } else {
+      const value = readOptionalNonEmptyString(payload[source]);
+      if (value) {
+        metadata[key] = value;
+      }
+    }
   }
   return metadata;
 }
 
-function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
+export function readCodexToolInput(rawPayload: JsonValue): Record<string, JsonValue> {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   const toolInput = payload.tool_input;
   if (isJsonObject(toolInput)) {
@@ -175,7 +120,7 @@ export function nativeHookRelayParamsWereRewritten(
   return stableStringify(candidate) !== originalFingerprint;
 }
 
-function readCodexToolResponse(rawPayload: JsonValue): unknown {
+export function readCodexToolResponse(rawPayload: JsonValue): unknown {
   const payload = isJsonObject(rawPayload) ? rawPayload : {};
   return payload.tool_response;
 }

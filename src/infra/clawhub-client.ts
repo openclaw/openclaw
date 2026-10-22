@@ -6,6 +6,7 @@ import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { isTruthyEnvValue } from "./env.js";
@@ -23,18 +24,19 @@ const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
-export type ClawHubFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
-export type ClawHubRequestParams = {
+export type ClawHubFetchOptions = {
   baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+};
+
+export type ClawHubRequestParams = ClawHubFetchOptions & {
   path?: string;
   url?: string;
   method?: "GET" | "POST";
   json?: unknown;
-  token?: string;
-  timeoutMs?: number;
+  form?: FormData;
   search?: Record<string, string | undefined>;
-  fetchImpl?: ClawHubFetch;
   skipAuth?: boolean;
   retryTransientReads?: boolean;
   headers?: Record<string, string>;
@@ -69,10 +71,14 @@ export class ClawHubRequestError extends Error {
   }
 }
 
-function normalizeBaseUrl(baseUrl?: string): string {
+/** Resolves the configured ClawHub base URL, falling back to the default public host. */
+export function resolveClawHubBaseUrl(
+  baseUrl?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const envValue =
-    normalizeOptionalString(process.env.OPENCLAW_CLAWHUB_URL) ||
-    normalizeOptionalString(process.env.CLAWHUB_URL) ||
+    normalizeOptionalString(env.OPENCLAW_CLAWHUB_URL) ||
+    normalizeOptionalString(env.CLAWHUB_URL) ||
     DEFAULT_CLAWHUB_URL;
   const value = (normalizeOptionalString(baseUrl) || envValue).replace(/\/+$/, "");
   return value || DEFAULT_CLAWHUB_URL;
@@ -84,7 +90,7 @@ export function resolveClawHubImageUrl(value: string | null | undefined, baseUrl
     return undefined;
   }
   try {
-    const registryUrl = new URL(`${normalizeBaseUrl(baseUrl)}/`);
+    const registryUrl = new URL(`${resolveClawHubBaseUrl(baseUrl)}/`);
     const url = new URL(normalized, registryUrl);
     if (
       url.origin !== registryUrl.origin ||
@@ -134,8 +140,7 @@ function resolveClawHubConfigPaths(): string[] {
   }
 
   const xdgConfigHome = normalizeOptionalString(process.env.XDG_CONFIG_HOME);
-  const configHome =
-    xdgConfigHome && xdgConfigHome.length > 0 ? xdgConfigHome : path.join(os.homedir(), ".config");
+  const configHome = xdgConfigHome ?? path.join(os.homedir(), ".config");
   const configPaths = resolveClawHubConfigPathsIn(configHome);
 
   if (process.platform === "darwin") {
@@ -167,6 +172,10 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
       return extractTokenFromClawHubConfig(JSON.parse(raw));
     } catch (error) {
       if (!isErrno(error) || error.code !== "ENOENT") {
+        // Parser errors can include token bytes; keep this warning content-free.
+        console.warn(
+          "ClawHub sign-in configuration could not be loaded; repair it or sign in again. Continuing without a saved token.",
+        );
         return undefined;
       }
     }
@@ -175,23 +184,18 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
 }
 
 function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search" | "url">): URL {
+  let url: URL;
   if (params.url) {
-    const url = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
-    for (const [key, value] of Object.entries(params.search ?? {})) {
-      if (!value) {
-        continue;
-      }
-      url.searchParams.set(key, value);
+    url = new URL(params.url, `${resolveClawHubBaseUrl(params.baseUrl)}/`);
+  } else {
+    if (!params.path) {
+      throw new Error("ClawHub request path is required");
     }
-    return url;
+    url = new URL(`${resolveClawHubBaseUrl(params.baseUrl)}/`);
+    const basePath = url.pathname.replace(/\/+$/, "");
+    const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
+    url.pathname = `${basePath}${requestPath}`;
   }
-  if (!params.path) {
-    throw new Error("ClawHub request path is required");
-  }
-  const url = new URL(`${normalizeBaseUrl(params.baseUrl)}/`);
-  const basePath = url.pathname.replace(/\/+$/, "");
-  const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
-  url.pathname = `${basePath}${requestPath}`;
   for (const [key, value] of Object.entries(params.search ?? {})) {
     if (!value) {
       continue;
@@ -201,15 +205,12 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
   return url;
 }
 
-type ClawHubResponse = {
-  response: Response;
-  url: URL;
-  hasToken: boolean;
-  /** Successful archives keep only their chunk-idle timeout while streaming. */
-  releaseDeadline: () => void;
-};
+type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
 
-async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResponse> {
+async function requestClawHub(params: ClawHubRequestParams) {
+  if (params.json !== undefined && params.form !== undefined) {
+    throw new Error("ClawHub requests cannot contain both JSON and multipart bodies");
+  }
   const url = buildUrl(params);
   const token = params.skipAuth
     ? undefined
@@ -229,13 +230,21 @@ async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResp
   }
   if (params.json !== undefined) {
     init.body = JSON.stringify(params.json);
+  } else if (params.form !== undefined) {
+    init.body = params.form;
   }
   const request = async () => {
     const controller = new AbortController();
+    // Fetch rejects with the abort reason; preserve timeout classification for read retries.
+    const timeoutError = Object.assign(
+      new Error(`ClawHub request timed out after ${timeoutMs}ms`),
+      { code: "ETIMEDOUT" },
+    );
     let timeout: ReturnType<typeof setTimeout> | undefined = setTimeout(
-      () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
+      () => controller.abort(timeoutError),
       timeoutMs,
     );
+    // Successful archives keep only their chunk-idle timeout while streaming.
     const releaseDeadline = () => {
       if (timeout !== undefined) {
         clearTimeout(timeout);
@@ -243,7 +252,7 @@ async function requestClawHub(params: ClawHubRequestParams): Promise<ClawHubResp
       }
     };
     try {
-      const response = await (params.fetchImpl ?? fetch)(url, {
+      const response = await fetch(url, {
         ...init,
         signal: controller.signal,
       });
@@ -426,6 +435,22 @@ export function readClawHubStringField(
   throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string or null.`);
 }
 
+/** Validate optional strings, omitting absent, null, and empty values. */
+export function readClawHubNonEmptyStringFields<T extends string>(
+  source: Record<string, unknown>,
+  fields: readonly T[],
+  context: string,
+): Partial<Record<T, string>> {
+  const result: Partial<Record<T, string>> = {};
+  for (const field of fields) {
+    const value = readClawHubStringField(source, field, context);
+    if (value) {
+      result[field] = value;
+    }
+  }
+  return result;
+}
+
 export function readRequiredClawHubBooleanField(
   source: Record<string, unknown>,
   field: string,
@@ -444,7 +469,7 @@ export function readRequiredClawHubStringArrayField(
   context: string,
 ): string[] {
   const value = source[field];
-  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
+  if (isStringArray(value)) {
     return value;
   }
   throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);
@@ -479,11 +504,9 @@ export function readClawHubBooleanField(
   field: string,
   context: string,
 ): boolean | undefined {
-  const value = source[field];
-  if (value === undefined || typeof value === "boolean") {
-    return value;
-  }
-  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a boolean.`);
+  return source[field] === undefined
+    ? undefined
+    : readRequiredClawHubBooleanField(source, field, context);
 }
 
 export function readClawHubStringArrayField(
@@ -491,23 +514,13 @@ export function readClawHubStringArrayField(
   field: string,
   context: string,
 ): string[] | undefined {
-  const value = source[field];
-  if (value === undefined) {
-    return undefined;
-  }
-  if (Array.isArray(value) && value.every((entry) => typeof entry === "string")) {
-    return value;
-  }
-  throw new Error(`Malformed ClawHub ${context}: expected ${field} to be a string array.`);
-}
-
-/** Resolves the configured ClawHub base URL, falling back to the default public host. */
-export function resolveClawHubBaseUrl(baseUrl?: string): string {
-  return normalizeBaseUrl(baseUrl);
+  return source[field] === undefined
+    ? undefined
+    : readRequiredClawHubStringArrayField(source, field, context);
 }
 
 export function isDefaultClawHubBaseUrl(baseUrl?: string): boolean {
-  return normalizeBaseUrl(baseUrl) === normalizeBaseUrl(DEFAULT_CLAWHUB_URL);
+  return resolveClawHubBaseUrl(baseUrl) === resolveClawHubBaseUrl(DEFAULT_CLAWHUB_URL);
 }
 
 export function isClawHubTelemetryDisabled(): boolean {

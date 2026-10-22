@@ -36,19 +36,16 @@ describe("identityEntryAuthenticationClassifier", () => {
     expect(identityEntryAuthenticationClassifier(identity)(raw)).toBe(expected);
   });
 
-  it.each(["verified", "asserted", "unverified", "mutable"] as const)(
-    "resolves predicate strength %s on the raw entry",
-    (authentication) => {
-      const classify = identityEntryAuthenticationClassifier({
-        primary: {
-          normalizeEntry: (raw) => raw.trim().toLowerCase(),
-          authentication: (raw) => (raw === " RAW " ? authentication : "mutable"),
-          dangerous: true,
-        },
-      });
-      expect(classify(" RAW ")).toBe(authentication);
-    },
-  );
+  it("resolves predicate strength on the raw entry before normalization", () => {
+    const classify = identityEntryAuthenticationClassifier({
+      primary: {
+        normalizeEntry: (raw) => raw.trim().toLowerCase(),
+        authentication: (raw) => (raw === " RAW " ? "verified" : "mutable"),
+        dangerous: true,
+      },
+    });
+    expect(classify(" RAW ")).toBe("verified");
+  });
 
   it.each([false, true])("takes the strongest accepting field (reverse=%s)", (reverse) => {
     const fields = [

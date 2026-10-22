@@ -1,6 +1,6 @@
+import { tempWorkspace } from "@openclaw/fs-safe/temp";
 // Owns private, short-lived environment transport for Docker and Podman commands.
 import { normalizeEnvVarKey } from "./host-env-security.js";
-import { tempWorkspace } from "./private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 
 type ContainerEnvFile = {
@@ -21,7 +21,10 @@ export function getContainerEnvFileEntryIssue(
   return value.includes("\0") ? "nul" : undefined;
 }
 
-function serializeContainerEnv(env: Readonly<Record<string, string>>): string {
+/** Stages engine environment values outside process arguments until the caller-owned cleanup. */
+export async function createContainerEnvFile(
+  env: Readonly<Record<string, string>>,
+): Promise<ContainerEnvFile> {
   let content = "";
   const entries = Object.entries(env).toSorted(([left], [right]) => left.localeCompare(right));
   for (const [key, value] of entries) {
@@ -41,14 +44,6 @@ function serializeContainerEnv(env: Readonly<Record<string, string>>): string {
     }
     content += `${key}=${value}\n`;
   }
-  return content;
-}
-
-/** Stages engine environment values outside process arguments until the caller-owned cleanup. */
-export async function createContainerEnvFile(
-  env: Readonly<Record<string, string>>,
-): Promise<ContainerEnvFile> {
-  const content = serializeContainerEnv(env);
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-container-env-",

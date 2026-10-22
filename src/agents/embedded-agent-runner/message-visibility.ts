@@ -1,50 +1,25 @@
-import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
+  asOptionalObjectRecord,
+  asOptionalRecord,
+} from "@openclaw/normalization-core/record-coerce";
+import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import {
+  hasReplyPayloadSpeechContent,
   isReplyPayloadTerminalContent,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import {
-  isSilentReplyPayloadText,
-  isSilentReplyText,
-  SILENT_REPLY_TOKEN,
-} from "../../auto-reply/tokens.js";
-import { resolveAssistantMessagePhase } from "../../shared/chat-message-content.js";
+  isSilentAssistantTranscriptMessage,
+  resolveAssistantMessagePhase,
+} from "../../shared/chat-message-content.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
-
-type AgentPayloadLike = {
-  text?: unknown;
-  mediaUrl?: unknown;
-  mediaUrls?: unknown;
-  presentation?: unknown;
-  interactive?: unknown;
-  channelData?: unknown;
-  attachments?: unknown;
-  isError?: unknown;
-  isReasoning?: unknown;
-  visible?: unknown;
-};
 
 type PayloadVisibilityOptions = {
   includeErrorPayloads?: boolean;
   includeReasoningPayloads?: boolean;
-  includeSilentReplyPayloads?: boolean;
   requireTerminalContent?: boolean;
 };
-
-function collectStringValues(value: unknown, output: Set<string>) {
-  if (typeof value === "string" && value.trim()) {
-    output.add(value.trim());
-    return;
-  }
-  if (!Array.isArray(value)) {
-    return;
-  }
-  for (const entry of value) {
-    if (typeof entry === "string" && entry.trim()) {
-      output.add(entry.trim());
-    }
-  }
-}
 
 export function collectMediaUrlsFromRecord(
   record: Record<string, unknown>,
@@ -57,15 +32,16 @@ export function collectMediaUrlsFromRecord(
     return;
   }
   seen.add(record);
-  collectStringValues(record.mediaUrl, output);
-  collectStringValues(record.mediaUrls, output);
-  collectStringValues(record.path, output);
-  collectStringValues(record.url, output);
-  collectStringValues(record.filePath, output);
+  for (const key of ["mediaUrl", "mediaUrls", "path", "url", "filePath"] as const) {
+    for (const value of normalizeSingleOrTrimmedStringList(record[key])) {
+      output.add(value);
+    }
+  }
   if (Array.isArray(record.attachments)) {
     for (const attachment of record.attachments) {
-      if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
-        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output, seen);
+      const nested = asOptionalRecord(attachment);
+      if (nested) {
+        collectMediaUrlsFromRecord(nested, output, seen);
       }
     }
   }
@@ -76,28 +52,10 @@ function hasVisibleAttachmentReference(value: unknown): boolean {
     return false;
   }
   const urls = new Set<string>();
-  for (const attachment of value) {
-    if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
-      collectMediaUrlsFromRecord(attachment as Record<string, unknown>, urls);
-    }
-  }
+  collectMediaUrlsFromRecord({ attachments: value }, urls);
   return urls.size > 0;
 }
 
-/** Applies the shared exact or payload-aware silent-reply contract. */
-export function isSilentAgentReplyText(
-  value: unknown,
-  mode: "exact" | "payload" = "exact",
-): boolean {
-  if (typeof value !== "string") {
-    return false;
-  }
-  return mode === "payload"
-    ? isSilentReplyPayloadText(value, SILENT_REPLY_TOKEN)
-    : isSilentReplyText(value, SILENT_REPLY_TOKEN);
-}
-
-/** Returns whether payload metadata contains user-visible content. */
 export function hasVisibleAgentPayload(
   result: { payloads?: unknown },
   options: PayloadVisibilityOptions = {},
@@ -108,25 +66,19 @@ export function hasVisibleAgentPayload(
       if (!payload || typeof payload !== "object") {
         return false;
       }
-      const record = payload as AgentPayloadLike & ReplyPayload;
+      const record = payload as ReplyPayload & { visible?: unknown };
       if (
-        options.requireTerminalContent &&
-        (record.visible === false || !isReplyPayloadTerminalContent(record))
+        (options.requireTerminalContent &&
+          (record.visible === false || !isReplyPayloadTerminalContent(record))) ||
+        (options.includeErrorPayloads === false && record.isError === true) ||
+        (options.includeReasoningPayloads === false && record.isReasoning === true)
       ) {
         return false;
       }
-      if (options.includeErrorPayloads === false && record.isError === true) {
-        return false;
-      }
-      if (options.includeReasoningPayloads === false && record.isReasoning === true) {
-        return false;
-      }
-      const visibleText =
-        hasNonEmptyString(record.text) &&
-        (options.includeSilentReplyPayloads !== false ||
-          !isSilentAgentReplyText(record.text, "payload"));
+      const visibleText = hasNonEmptyString(record.text);
       return Boolean(
         visibleText ||
+        hasReplyPayloadSpeechContent(record) ||
         hasNonEmptyString(record.mediaUrl) ||
         hasNonEmptyStringArray(record.mediaUrls) ||
         hasVisibleAttachmentReference(record.attachments) ||
@@ -139,62 +91,9 @@ export function hasVisibleAgentPayload(
   );
 }
 
-/** Honors recorded visibility before deriving it from the payload's visible content. */
-export function hasExplicitlyVisibleAgentPayload(payload: unknown): boolean {
-  if (payload && typeof payload === "object" && !Array.isArray(payload) && "visible" in payload) {
-    if (typeof payload.visible === "boolean") {
-      return payload.visible;
-    }
-  }
-  return hasVisibleAgentPayload(
-    { payloads: [payload] },
-    { includeErrorPayloads: false, includeReasoningPayloads: false },
-  );
-}
-
-/** Returns whether a payload intentionally contains only the silent-reply marker. */
-export function hasIntentionalSilentAgentPayload(result: { payloads?: unknown }): boolean {
-  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
-  return payloads.some((payload) => {
-    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-      return false;
-    }
-    const record = payload as AgentPayloadLike;
-    return (
-      isSilentAgentReplyText(record.text, "payload") &&
-      !hasVisibleAgentPayload({ payloads: [{ ...record, text: undefined }] })
-    );
-  });
-}
-
-/** Reads a transcript message role without trusting its boundary shape. */
 export function getTranscriptMessageRole(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const role = (message as { role?: unknown }).role;
+  const role = asOptionalObjectRecord(message)?.role;
   return typeof role === "string" ? role : undefined;
-}
-
-/** Reads a committed final source-reply mirror from a transcript message. */
-export function readTerminalSourceReplyDeliveryMirror(
-  message: unknown,
-): { sourceTurnId: string; toolCallId?: string } | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const marker = (message as { openclawDeliveryMirror?: unknown }).openclawDeliveryMirror;
-  if (!marker || typeof marker !== "object") {
-    return undefined;
-  }
-  const delivery = marker as Record<string, unknown>;
-  const sourceTurnId =
-    typeof delivery.sourceTurnId === "string" ? delivery.sourceTurnId.trim() : "";
-  if (delivery.kind !== "message-tool-source-reply" || delivery.final !== true || !sourceTurnId) {
-    return undefined;
-  }
-  const toolCallId = typeof delivery.toolCallId === "string" ? delivery.toolCallId.trim() : "";
-  return { sourceTurnId, ...(toolCallId ? { toolCallId } : {}) };
 }
 
 /** System and malformed records do not constitute a resumable transcript tail. */
@@ -205,70 +104,33 @@ export function isMeaningfulTranscriptMessage(message: unknown): boolean {
 
 /** Recognizes persisted progress without mistaking an ordinary assistant answer for completion. */
 export function isIntermediateAssistantTranscriptMessage(message: unknown): boolean {
-  if (
-    !message ||
-    typeof message !== "object" ||
-    getTranscriptMessageRole(message) !== "assistant"
-  ) {
+  const record = asOptionalObjectRecord(message);
+  if (record?.role !== "assistant") {
     return false;
   }
-  const record = message as Record<string, unknown>;
   if (record.stopReason !== undefined && record.stopReason !== "stop") {
     return false;
   }
-  const asyncDelivery = record.openclawAsyncDelivery;
-  if (asyncDelivery && typeof asyncDelivery === "object" && !Array.isArray(asyncDelivery)) {
-    // SAFETY: the object/non-array guard permits reading an optional itemId as unknown.
-    const itemId = (asyncDelivery as { itemId?: unknown }).itemId;
-    if (typeof itemId === "string" && itemId.trim().length > 0) {
-      return true;
-    }
+  if (hasNonEmptyString(asOptionalRecord(record.openclawAsyncDelivery)?.itemId)) {
+    return true;
   }
   const phase = resolveAssistantMessagePhase(message);
   if (phase !== undefined) {
     return phase === "commentary";
   }
-  const fallback = record.openclawStreamFallback;
-  if (!fallback || typeof fallback !== "object" || Array.isArray(fallback)) {
-    return false;
-  }
-  const { itemId, source } = fallback as { itemId?: unknown; source?: unknown };
+  const fallback = asOptionalRecord(record.openclawStreamFallback);
   // Keyed segments are durable progress items; unkeyed/current fallbacks can
   // become the final answer and must never bypass restart completion checks.
-  return source === "segment" && typeof itemId === "string" && itemId.trim().length > 0;
+  return fallback?.source === "segment" && hasNonEmptyString(fallback.itemId);
 }
 
-/** Returns whether a stopped assistant turn contains only reasoning and a silent marker. */
+/** Only a completed final assistant row can prove terminal silence. */
 export function isTerminalSilentAssistantMessage(message: unknown): boolean {
-  if (
-    !message ||
-    typeof message !== "object" ||
-    getTranscriptMessageRole(message) !== "assistant" ||
-    typeof (message as { stopReason?: unknown }).stopReason !== "string" ||
-    (message as { stopReason: string }).stopReason.trim() !== "stop"
-  ) {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  const textParts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const record = block as { type?: unknown; text?: unknown };
-    const type = typeof record.type === "string" ? record.type.trim() : undefined;
-    if (type === "thinking") {
-      continue;
-    }
-    if (type !== "text") {
-      return false;
-    }
-    if (typeof record.text === "string" && record.text.trim()) {
-      textParts.push(record.text.trim());
-    }
-  }
-  return isSilentAgentReplyText(textParts.join("\n"), "payload");
+  const record = asOptionalObjectRecord(message);
+  return (
+    record?.stopReason === "stop" &&
+    record.endTurn !== false &&
+    !isIntermediateAssistantTranscriptMessage(message) &&
+    isSilentAssistantTranscriptMessage(message)
+  );
 }

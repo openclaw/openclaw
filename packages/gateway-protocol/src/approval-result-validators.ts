@@ -6,6 +6,7 @@ import {
   type ApprovalHistoryResult,
   ApprovalHistoryResultSchema,
   type ApprovalPresentation,
+  ApprovalPresentationSchema,
   type ApprovalResolveResult,
   ApprovalResolveResultSchema,
   type ApprovalSnapshot,
@@ -23,3 +24,4 @@ export type {
 export const validateApprovalGetResult = lazyCompile(ApprovalGetResultSchema);
 export const validateApprovalHistoryResult = lazyCompile(ApprovalHistoryResultSchema);
 export const validateApprovalResolveResult = lazyCompile(ApprovalResolveResultSchema);
+export const validateApprovalPresentation = lazyCompile(ApprovalPresentationSchema);

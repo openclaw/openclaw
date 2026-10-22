@@ -5,6 +5,7 @@ import type {
   CliBackendParseJsonlLifecycleEvent,
 } from "../plugins/cli-backend.types.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import type { LiveEditDiffProgress } from "./embedded-agent-live-edit-diff.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -44,12 +45,23 @@ export type CliTerminalInterruption = {
 /** Normalized result from a CLI-backed model provider turn. */
 export type CliOutput = {
   text: string;
+  /** Completed result boundaries, retained for independent delivery and retry. */
+  textParts?: string[];
   rawText?: string;
+  /**
+   * Raw text of the model's final message when it differs from the cumulative
+   * `text` (earlier results or pre-tool narration); empty when the final message
+   * had no text. Never plugin-transformed.
+   */
+  rawFinalText?: string;
   sessionId?: string;
   /** Backend-owned assistant boundary that can safely anchor a later resumed fork. */
   resumeCheckpointId?: string;
   usage?: CliUsage;
-  /** Terminal cumulative turn usage for diagnostics; reply accounting keeps using `usage`. */
+  /**
+   * Terminal cumulative turn usage for persisted transcript accounting and turn diagnostics;
+   * live reply and context accounting keep using `usage`.
+   */
   diagnosticUsage?: CliUsage;
   toolSummary?: ToolSummaryTrace;
   errorText?: string;
@@ -77,23 +89,12 @@ export type CliOutput = {
   yieldAcknowledgment?: string;
 };
 
-export type CliStreamingDelta = {
-  text: string;
+export type CliStreamingDelta = Pick<CliOutput, "text" | "sessionId" | "usage"> & {
   delta: string;
-  sessionId?: string;
-  usage?: CliUsage;
-};
-
-export type CliStreamJsonOutputLimits = {
-  maxTurnRawChars: number;
-  maxPendingLineChars: number;
-  maxTurnLines: number;
 };
 
 /** Incremental thinking text emitted while parsing a streaming CLI response. */
-export type CliThinkingDelta = {
-  text: string;
-  delta: string;
+export type CliThinkingDelta = Pick<CliStreamingDelta, "text" | "delta"> & {
   isReasoningSnapshot?: boolean;
 };
 
@@ -112,10 +113,11 @@ export type CliToolUseStartDelta = {
   args: Record<string, unknown>;
 };
 
+/** Counts-only progress while CLI tool arguments are still being generated. */
+export type CliToolInputDelta = LiveEditDiffProgress;
+
 /** Tool-call result event reconstructed from CLI stream output. */
-export type CliToolResultDelta = {
-  toolCallId: string;
-  name: string;
+export type CliToolResultDelta = Pick<CliToolUseStartDelta, "toolCallId" | "name"> & {
   isError: boolean;
   result?: unknown;
 };
@@ -126,10 +128,12 @@ export type CliJsonlStreamingParserOptions = {
   parseJsonlEvent?: CliBackendParseJsonlEvent;
   parseJsonlLifecycleEvent?: CliBackendParseJsonlLifecycleEvent;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onCompletedReply?: (text: string, assistantMessageIndex: number) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onCompaction?: (delta: CliCompactionDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolInputDelta?: (delta: CliToolInputDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onDisplayToolResult?: (delta: CliToolResultDelta) => void;
@@ -139,4 +143,6 @@ export type CliJsonlStreamingParserOptions = {
   onNativeTools?: (tools: unknown) => void;
   onAssistantMessage?: (message: unknown) => void;
   onUsage?: (usage: CliUsage, terminal: boolean) => void;
+  /** Semantic subagent work for an active parent Agent call. Not a parent-lane event. */
+  onAttributedSubagentProgress?: (parentToolUseId: string) => void;
 };

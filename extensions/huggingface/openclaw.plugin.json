@@ -78,6 +78,14 @@
       "cliDescription": "Hugging Face API key (HF token)"
     }
   ],
+  "configGroups": [
+    {
+      "id": "model-discovery",
+      "title": "Model discovery",
+      "order": 10,
+      "properties": ["discovery"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

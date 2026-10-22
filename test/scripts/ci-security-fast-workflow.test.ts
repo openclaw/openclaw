@@ -1,19 +1,23 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  evaluateWorkflowCondition,
+  expectIncludes,
+  readWorkflowOutputs as readGitHubEnvironment,
+  requiredWorkflowStep,
+  readWorkflow,
+  writeExecutable,
+  type WorkflowStep as BaseStep,
+} from "./ci-workflow.test-support.js";
 
-type WorkflowStep = {
-  env?: Record<string, string>;
-  name?: string;
-  run?: string;
-  with?: Record<string, unknown>;
-};
+type WorkflowStep = Omit<BaseStep, "env"> & { env?: NodeJS.ProcessEnv };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const workflowPath = ".github/workflows/ci.yml";
 const scannerPath = "scripts/detect-private-keys.mts";
 const localGitEnvironment = {
   GIT_ALLOW_PROTOCOL: "file",
@@ -25,37 +29,10 @@ const localGitEnvironment = {
 const localGitCommand = "GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0";
 const neuteredScanner = "process.exit(0);\n";
 
-function securityJob() {
-  const workflow = parse(readFileSync(workflowPath, "utf8")) as {
-    jobs: Record<string, { steps: WorkflowStep[] }>;
-  };
-  const job = workflow.jobs["security-fast"];
-  if (!job) {
-    throw new Error("security-fast job is missing");
-  }
-  return job;
-}
-
-function securityStep(name: string): WorkflowStep {
-  const step = securityJob().steps.find((candidate) => candidate.name === name);
-  if (!step) {
-    throw new Error(`security-fast step is missing: ${name}`);
-  }
-  return step;
-}
-
-function securityStepIndex(name: string): number {
-  const index = securityJob().steps.findIndex((candidate) => candidate.name === name);
-  if (index < 0) {
-    throw new Error(`security-fast step is missing: ${name}`);
-  }
-  return index;
-}
-
-function writeExecutable(filePath: string, source: string): void {
-  writeFileSync(filePath, source, "utf8");
-  chmodSync(filePath, 0o755);
-}
+const securitySteps: WorkflowStep[] = readWorkflow(".github/workflows/ci.yml").jobs["security-fast"]
+  .steps;
+const securityStep = (name: string) => requiredWorkflowStep(securitySteps, name);
+const securityStepIndex = (name: string) => securitySteps.indexOf(securityStep(name));
 
 function runGit(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
@@ -65,40 +42,23 @@ function runGit(cwd: string, ...args: string[]): string {
   }).trim();
 }
 
-function runStep(
-  step: WorkflowStep,
-  cwd: string,
-  env: NodeJS.ProcessEnv,
-): { status: number | null; stderr: string; stdout: string } {
+function runStep(step: WorkflowStep, cwd: string, env: NodeJS.ProcessEnv) {
   if (!step.run) {
     throw new Error(`workflow step has no shell body: ${step.name ?? "unknown"}`);
   }
-  const result = spawnSync("bash", ["-euo", "pipefail", "-c", step.run], {
+  return spawnSync("bash", ["-euo", "pipefail", "-c", step.run], {
     cwd,
     encoding: "utf8",
     env: { ...process.env, ...step.env, ...env },
   });
-  return {
-    status: result.status,
-    stderr: result.stderr,
-    stdout: result.stdout,
-  };
 }
 
-function readGitHubEnvironment(filePath: string): Record<string, string> {
-  if (!existsSync(filePath)) {
-    return {};
+function writeTree(root: string, files: Record<string, string | Buffer>) {
+  for (const [file, contents] of Object.entries(files)) {
+    const destination = join(root, file);
+    mkdirSync(join(destination, ".."), { recursive: true });
+    writeFileSync(destination, contents);
   }
-  return Object.fromEntries(
-    readFileSync(filePath, "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
 }
 
 function createFixture() {
@@ -107,255 +67,304 @@ function createFixture() {
   const bin = join(root, "bin");
   const runnerTemp = join(root, "runner");
   const githubEnv = join(root, "github-env");
-  mkdirSync(join(repo, ".github"), { recursive: true });
-  mkdirSync(join(repo, "scripts"));
-  mkdirSync(bin);
-  mkdirSync(runnerTemp);
+  for (const dir of [join(repo, ".github"), join(repo, "scripts"), bin, runnerTemp]) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const write = (files: Record<string, string | Buffer>) => writeTree(repo, files);
+  const git = (...args: string[]) => runGit(repo, ...args);
+  const commit = (message: string) => {
+    git("add", ".");
+    git("commit", "-m", message);
+    return git("rev-parse", "HEAD");
+  };
 
-  runGit(repo, "init", "--initial-branch=main");
-  runGit(repo, "config", "user.name", "CI Fixture");
-  runGit(repo, "config", "user.email", "ci@example.invalid");
-  runGit(repo, "commit", "--allow-empty", "-m", "initial");
-  const missingPolicySha = runGit(repo, "rev-parse", "HEAD");
-  writeFileSync(join(repo, ".github", "zizmor.yml"), "rules:\n  trusted-base: {}\n");
+  git("init", "--initial-branch=main");
+  git("config", "user.name", "CI Fixture");
+  git("config", "user.email", "ci@example.invalid");
+  git("commit", "--allow-empty", "-m", "initial");
+  const missingPolicySha = git("rev-parse", "HEAD");
   const realScanner = readFileSync(resolve(scannerPath));
-  writeFileSync(join(repo, scannerPath), realScanner);
-  runGit(repo, "add", ".");
-  runGit(repo, "commit", "-m", "base policy");
-  const baseSha = runGit(repo, "rev-parse", "HEAD");
+  write({ ".github/zizmor.yml": "rules:\n  trusted-base: {}\n", [scannerPath]: realScanner });
+  const baseSha = commit("base policy");
 
-  // The candidate poisons every input it could: policy, hook config, and the
-  // scanner itself, while adding a key the neutered scanner would let through.
-  writeFileSync(join(repo, ".github", "zizmor.yml"), "rules:\n  candidate-poison: {}\n");
-  writeFileSync(
-    join(repo, ".pre-commit-config.yaml"),
-    "repos:\n  - repo: https://example.invalid/poison.git\n",
-  );
-  writeFileSync(join(repo, scannerPath), neuteredScanner);
-  writeFileSync(join(repo, "leaked.pem"), "-----BEGIN RSA PRIVATE KEY-----\nfixture only\n");
-  runGit(repo, "add", ".");
-  runGit(repo, "commit", "-m", "candidate policy");
+  // Poison every candidate-controlled input; only the trusted scanner catches the key.
+  write({
+    ".github/zizmor.yml": "rules:\n  candidate-poison: {}\n",
+    ".pre-commit-config.yaml": "repos:\n  - repo: https://example.invalid/poison.git\n",
+    [scannerPath]: neuteredScanner,
+    "leaked.pem": "-----BEGIN RSA PRIVATE KEY-----\nfixture only\n",
+  });
+  commit("candidate policy");
 
-  mkdirSync(join(repo, ".ci-harness", ".github"), { recursive: true });
-  mkdirSync(join(repo, ".ci-harness", "scripts"), { recursive: true });
-  writeFileSync(
-    join(repo, ".ci-harness", ".github", "zizmor.yml"),
-    "rules:\n  trusted-harness: {}\n",
-  );
-  writeFileSync(join(repo, ".ci-harness", scannerPath), realScanner);
+  write({
+    ".ci-harness/.github/zizmor.yml": "rules:\n  trusted-harness: {}\n",
+    [`.ci-harness/${scannerPath}`]: realScanner,
+  });
 
   const realGit = execFileSync("sh", ["-c", "command -v git"], {
     encoding: "utf8",
   }).trim();
-  writeExecutable(
-    join(bin, "git"),
-    `#!/bin/sh
-skip_value=0
-command=
-for arg in "$@"; do
-  if [ "$skip_value" = 1 ]; then
-    skip_value=0
-    continue
-  fi
-  case "$arg" in
-    -c|-C|--config-env|--exec-path|--git-dir|--namespace|--work-tree)
-      skip_value=1
-      ;;
-    -*)
-      ;;
-    *)
-      command="$arg"
-      break
-      ;;
-  esac
-done
-case "$command" in
-  clone|fetch|ls-remote)
-    echo "network Git is forbidden in security-fast" >&2
-    exit 97
-    ;;
-esac
-exec "$OPENCLAW_TEST_REAL_GIT" "$@"
+  writeExecutable(join(bin, "git"), [
+    `#!${process.execPath}`,
+    String.raw`
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+const valuedOptions = new Set(["-c", "-C", "--config-env", "--exec-path", "--git-dir", "--namespace", "--work-tree"]);
+for (let i = 0; i < args.length; i++) {
+  if (valuedOptions.has(args[i])) {
+    i++;
+    continue;
+  }
+  if (args[i].startsWith("-")) {
+    continue;
+  }
+  if (["clone", "fetch", "ls-remote"].includes(args[i])) {
+    console.error("network Git is forbidden in security-fast");
+    process.exit(97);
+  }
+  break;
+}
+const result = spawnSync(process.env.OPENCLAW_TEST_REAL_GIT, args, { stdio: "inherit" });
+process.exit(result.status ?? 1);
 `,
-  );
+  ]);
 
+  const environment = {
+    GITHUB_ENV: githubEnv,
+    OPENCLAW_TEST_REAL_GIT: realGit,
+    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+    RUNNER_TEMP: runnerTemp,
+  };
+  const run = (step: WorkflowStep | string, env: NodeJS.ProcessEnv = {}) =>
+    runStep(typeof step === "string" ? securityStep(step) : step, repo, { ...environment, ...env });
   return {
+    write,
+    git,
+    commit,
+    run,
     baseSha,
-    environment: {
-      GITHUB_ENV: githubEnv,
-      OPENCLAW_TEST_REAL_GIT: realGit,
-      PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
-      RUNNER_TEMP: runnerTemp,
-    },
-    githubEnv,
     missingPolicySha,
     realScanner,
-    repo,
     runnerTemp,
-  };
-}
-
-function prepareConfig(
-  fixture: ReturnType<typeof createFixture>,
-  eventName: "pull_request" | "push" | "workflow_dispatch",
-  baseSha = fixture.baseSha,
-) {
-  const result = runStep(securityStep("Prepare trusted scanner config"), fixture.repo, {
-    ...fixture.environment,
-    BASE_SHA: baseSha,
-    GITHUB_EVENT_NAME: eventName,
-  });
-  return {
-    githubEnvironment: readGitHubEnvironment(fixture.githubEnv),
-    result,
-  };
-}
-
-describe("security-fast workflow", () => {
-  it.each([0, 1, 2, 3, 130])(
-    "propagates audit exit %s in ordinary and scheduled CI",
-    (auditExit) => {
-      const repo = tempDirs.make("openclaw-audit-ci-");
-      mkdirSync(join(repo, "scripts", "pre-commit"), { recursive: true });
-      writeFileSync(
-        join(repo, "scripts", "pre-commit", "pnpm-audit-prod.mjs"),
-        `process.exit(${auditExit});\n`,
-      );
-      const result = runStep(securityStep("Audit production dependencies"), repo, {});
-      expect(result.status).toBe(auditExit);
-      expect(result.stdout).toBe("");
-      const scheduled = parse(readFileSync(".github/workflows/dependency-audit.yml", "utf8")) as {
-        jobs: { audit: { steps: WorkflowStep[] } };
-      };
-      const strictStep = scheduled.jobs.audit.steps.find(
-        (step) => step.name === "Audit production dependencies",
-      );
-      if (!strictStep) {
-        throw new Error("scheduled production audit step is missing");
-      }
-      const summary = join(repo, "summary.md");
-      const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
-      expect(strict.status).toBe(auditExit);
-      expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
+    read: (name: string) => readFileSync(join(runnerTemp, name), "utf8"),
+    prepare: (eventName: "pull_request" | "push" | "workflow_dispatch", sha = baseSha) => {
+      const result = run("Prepare trusted scanner config", {
+        BASE_SHA: sha,
+        GITHUB_EVENT_NAME: eventName,
+      });
+      return { result, githubEnvironment: readGitHubEnvironment(githubEnv) };
     },
-  );
+  };
+}
 
-  it("generates the exact local-only scanner contract from trusted policy", () => {
-    const job = securityJob();
-    const checkoutHarness = securityStep("Checkout trusted CI harness");
-    const prepare = securityStep("Prepare trusted scanner config");
-    const install = securityStep("Install security scanners");
-    const detect = securityStep("Detect committed private keys");
-    const zizmor = securityStep("Audit changed GitHub workflows with zizmor");
-
-    expect(checkoutHarness.with?.ref).toBe("${{ github.workflow_sha }}");
-    expect(checkoutHarness.with?.["persist-credentials"]).toBe(false);
-    expect(checkoutHarness.with?.["sparse-checkout"]).toContain(".github/zizmor.yml");
-    expect(checkoutHarness.with?.["sparse-checkout"]).toContain(scannerPath);
-    expect(job.steps.some((step) => step.name === "Resolve Python runtime")).toBe(false);
-    expect(install.run).toContain("python3 --version");
-    expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.29.0");
-    expect(install.run).not.toContain("pre-commit-hooks");
-    expect(prepare.run).not.toMatch(/origin\/|BASE_REF|PRE_COMMIT_CONFIG_PATH:-/u);
-    // The first-party key scan runs before any package install can fail or
-    // execute third-party code, and never through pre-commit.
-    expect(detect.run).toBe('node "$PRIVATE_KEY_SCANNER_PATH"');
-    expect(securityStepIndex("Setup Node.js")).toBeLessThan(securityStepIndex(detect.name!));
-    expect(securityStepIndex(detect.name!)).toBeLessThan(securityStepIndex(install.name!));
-    expect(zizmor.run).toContain(localGitCommand);
-
+it.each([false, true])(
+  "installs workflow scanners only for changed workflow files: %s",
+  (changed) => {
     const fixture = createFixture();
-    const prepared = prepareConfig(fixture, "pull_request");
-    expect(prepared.result.status, `${prepared.result.stdout}${prepared.result.stderr}`).toBe(0);
-    const configPath = prepared.githubEnvironment.PRE_COMMIT_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("scanner config path was not published");
+    if (changed) {
+      fixture.write({ ".github/workflows/example.yml": "name: fixture\n" });
+      fixture.commit("workflow input");
     }
-    const config = parse(readFileSync(configPath, "utf8")) as {
-      repos: Array<{ hooks: Array<Record<string, unknown>>; repo: string }>;
-    };
-    expect(config.repos).toEqual([
-      {
-        repo: "local",
-        hooks: [
-          {
-            id: "zizmor",
-            name: "zizmor",
-            entry: "zizmor",
-            language: "system",
-            types: ["yaml"],
-            files: String.raw`(\.github/(workflows/.*|dependabot.ya?ml))|(action\.ya?ml)$`,
-            require_serial: true,
-            args: [
-              "--config",
-              join(fixture.runnerTemp, "zizmor.yml"),
-              "--persona=regular",
-              "--min-severity=medium",
-              "--min-confidence=medium",
-            ],
-            exclude: "^(vendor/|apps/swabble/)",
-          },
-        ],
-      },
-    ]);
-    expect(readFileSync(join(fixture.runnerTemp, "zizmor.yml"), "utf8")).toBe(
-      "rules:\n  trusted-base: {}\n",
-    );
-    expect(readFileSync(configPath, "utf8")).not.toContain("example.invalid");
-
-    const trustedScanner = prepared.githubEnvironment.PRIVATE_KEY_SCANNER_PATH;
-    expect(trustedScanner).toBe(join(fixture.runnerTemp, "detect-private-keys.mts"));
-    expect(readFileSync(trustedScanner!)).toEqual(fixture.realScanner);
-
-    const scanned = runStep(detect, fixture.repo, {
-      ...fixture.environment,
-      ...prepared.githubEnvironment,
+    const output = join(fixture.runnerTemp, "output");
+    const result = fixture.run("Detect changed GitHub workflows", {
+      BASE_SHA: fixture.baseSha,
+      GITHUB_OUTPUT: output,
     });
-    expect(scanned.status).toBe(1);
-    expect(scanned.stderr).toContain("Private key found: leaked.pem (BEGIN RSA PRIVATE KEY)");
-    expect(scanned.stderr).toContain("[detect-private-keys] FAILED (exit 1)");
-  });
-
-  it("fails closed for a missing exact-base policy and trusts the harness otherwise", () => {
-    const missing = createFixture();
-    const rejected = prepareConfig(missing, "pull_request", missing.missingPolicySha);
-    expect(rejected.result.status).not.toBe(0);
-    expect(`${rejected.result.stdout}${rejected.result.stderr}`).toContain(
-      "trusted zizmor policy unavailable",
+    expect(result.status, result.stderr).toBe(0);
+    expect(readGitHubEnvironment(output).changed).toBe(changed ? "true" : undefined);
+    expect(fixture.read("security-workflow-files")).toBe(
+      changed ? ".github/workflows/example.yml\n" : "",
     );
-    expect(rejected.githubEnvironment).toEqual({});
-
-    for (const eventName of ["push", "workflow_dispatch"] as const) {
-      const fixture = createFixture();
-      const prepared = prepareConfig(fixture, eventName);
-      expect(prepared.result.status, `${prepared.result.stdout}${prepared.result.stderr}`).toBe(0);
-      expect(readFileSync(join(fixture.runnerTemp, "zizmor.yml"), "utf8")).toBe(
-        "rules:\n  trusted-harness: {}\n",
-      );
-      expect(readFileSync(join(fixture.runnerTemp, "detect-private-keys.mts"))).toEqual(
-        fixture.realScanner,
+    for (const name of [
+      "Install security scanners",
+      "Audit changed GitHub workflows with zizmor",
+    ]) {
+      expect(
+        evaluateWorkflowCondition(expectDefined(securityStep(name).if, "scanner condition"), {
+          eventName: "pull_request",
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          failed: true,
+          steps: {
+            workflow_scope: { outputs: { changed: String(changed) } },
+            security_scanners: { outputs: {}, outcome: "success" },
+            scanner_config: { outputs: {}, outcome: "success" },
+          },
+        }),
+      ).toBe(changed);
+      expect(securityStepIndex("Detect changed GitHub workflows")).toBeLessThan(
+        securityStepIndex(name),
       );
     }
-  });
+  },
+);
 
-  it("fails closed when the exact base has no scanner instead of running the candidate copy", () => {
-    const fixture = createFixture();
-    // A base with the policy but not the scanner: the bootstrap gap a
-    // candidate could otherwise exploit with a neutered scanner.
-    writeFileSync(join(fixture.repo, ".github", "zizmor.yml"), "rules:\n  trusted-base: {}\n");
-    runGit(fixture.repo, "rm", "-q", "--cached", scannerPath);
-    runGit(fixture.repo, "add", ".github/zizmor.yml");
-    runGit(fixture.repo, "commit", "-m", "base without scanner");
-    const rejected = prepareConfig(
-      fixture,
-      "pull_request",
-      runGit(fixture.repo, "rev-parse", "HEAD"),
+it.each(["pull_request", "push", "schedule", "workflow_dispatch"] as const)(
+  "runs the production audit only for release dispatches: %s",
+  (eventName) => {
+    const audit = securityStep("Audit production dependencies");
+    for (const [dispatchId, release] of [
+      ["", false],
+      ["manual-ci", false],
+      ["full-release-validation", false],
+      ["release-native-android", false],
+      ["full-release-validation-1-1-ci", true],
+      ["release-native-android-1-1-a", true],
+    ] as const) {
+      expect(
+        evaluateWorkflowCondition(expectDefined(audit.if, "audit condition"), {
+          eventName,
+          dispatchId,
+          steps: { node_setup: { outputs: {}, outcome: "success" } },
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+        }),
+        `${eventName}: ${dispatchId}`,
+      ).toBe(eventName === "workflow_dispatch" && release);
+    }
+  },
+);
+
+it.each([0, 1, 2, 130])(
+  "warns without blocking CI or pre-commit for audit exit %s, retaining the strict daily audit",
+  (auditExit) => {
+    const repo = tempDirs.make("openclaw-audit-ci-");
+    const auditSource = readFileSync("scripts/ci-production-audit.mjs");
+    writeTree(repo, {
+      "scripts/pre-commit/pnpm-audit-prod.mjs": `console.log("audit report"); process.exit(${auditExit});\n`,
+      "scripts/ci-production-audit.mjs": auditSource,
+      ".ci-harness/scripts/ci-production-audit.mjs": auditSource,
+    });
+    expect(securityStep("Checkout trusted CI harness").with?.["sparse-checkout"]).toContain(
+      "scripts/ci-production-audit.mjs",
     );
-    expect(rejected.result.status).not.toBe(0);
-    expect(`${rejected.result.stdout}${rejected.result.stderr}`).toContain(
-      "trusted private-key scanner unavailable",
+    const audit = securityStep("Audit production dependencies");
+    const hooks = parse(readFileSync(".pre-commit-config.yaml", "utf8")) as {
+      repos: Array<{ hooks: Array<{ id: string; entry: string; verbose?: boolean }> }>;
+    };
+    const hook = hooks.repos
+      .flatMap((entry) => entry.hooks)
+      .find((candidate) => candidate.id === "pnpm-audit-prod");
+    expect(hook).toMatchObject({ verbose: true });
+    for (const step of [audit, { run: hook!.entry }]) {
+      const result = runStep(step, repo, { GITHUB_EVENT_NAME: "", GITHUB_EVENT_PATH: "" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain("audit report\n");
+      if (auditExit === 0) {
+        expect(result.stdout).not.toContain("::warning");
+      } else {
+        expectIncludes(result.stdout, [
+          "::warning title=Dependency audit is non-blocking::",
+          `Production dependency audit exited ${auditExit}.`,
+          "daily Dependency Audit workflow",
+          "dependency bump on main",
+        ]);
+      }
+    }
+    const scheduled = readWorkflow(".github/workflows/dependency-audit.yml");
+    const strictStep = requiredWorkflowStep(
+      scheduled.jobs.audit.steps,
+      "Audit production dependencies",
     );
-    expect(rejected.githubEnvironment).toEqual({});
-    expect(existsSync(join(fixture.runnerTemp, "detect-private-keys.mts"))).toBe(false);
+    const summary = join(repo, "summary.md");
+    const strict = runStep(strictStep, repo, { GITHUB_STEP_SUMMARY: summary });
+    expect(strict.status).toBe(auditExit);
+    expect(readFileSync(summary, "utf8")).toContain("Triage owner: @steipete");
+  },
+);
+
+it("generates the exact local-only scanner contract from trusted policy", () => {
+  const checkoutHarness = securityStep("Checkout trusted CI harness");
+  const prepare = securityStep("Prepare trusted scanner config");
+  const install = securityStep("Install security scanners");
+  const detect = securityStep("Detect committed private keys");
+  const zizmor = securityStep("Audit changed GitHub workflows with zizmor");
+
+  expect(checkoutHarness.with).toMatchObject({
+    ref: "${{ github.workflow_sha }}",
+    "persist-credentials": false,
   });
+  expectIncludes(checkoutHarness.with?.["sparse-checkout"], [".github/zizmor.yml", scannerPath]);
+  expect(securitySteps.some((step) => step.name === "Resolve Python runtime")).toBe(false);
+  expect(install.run).toContain("python3 --version");
+  expect(install.run).toContain("pre-commit==4.6.2 zizmor==1.30.1");
+  expect(install.run).not.toContain("pre-commit-hooks");
+  expect(prepare.run).not.toMatch(/origin\/|BASE_REF|PRE_COMMIT_CONFIG_PATH:-/u);
+  // Scan with trusted code before third-party installation.
+  expect(detect.run).toBe('node "$PRIVATE_KEY_SCANNER_PATH"');
+  expect(securityStepIndex("Setup Node.js")).toBeLessThan(securityStepIndex(detect.name!));
+  expect(securityStepIndex(detect.name!)).toBeLessThan(securityStepIndex(install.name!));
+  expect(zizmor.run).toContain(localGitCommand);
+
+  const fixture = createFixture();
+  const prepared = fixture.prepare("pull_request");
+  expect(prepared.result.status, `${prepared.result.stdout}${prepared.result.stderr}`).toBe(0);
+  const configPath = expectDefined(
+    prepared.githubEnvironment.PRE_COMMIT_CONFIG_PATH,
+    "scanner config path was not published",
+  );
+  const config = parse(readFileSync(configPath, "utf8"));
+  const expectedHook = {
+    id: "zizmor",
+    name: "zizmor",
+    entry: "zizmor",
+    language: "system",
+    types: ["yaml"],
+    files: String.raw`(\.github/(workflows/.*|dependabot.ya?ml))|(action\.ya?ml)$`,
+    require_serial: true,
+    args: [
+      "--config",
+      join(fixture.runnerTemp, "zizmor.yml"),
+      "--persona=regular",
+      "--min-severity=medium",
+      "--min-confidence=medium",
+    ],
+    exclude: "^(vendor/|apps/swabble/)",
+  };
+  expect(config.repos).toEqual([{ repo: "local", hooks: [expectedHook] }]);
+  expect(fixture.read("zizmor.yml")).toBe("rules:\n  trusted-base: {}\n");
+  expect(readFileSync(configPath, "utf8")).not.toContain("example.invalid");
+
+  const trustedScanner = prepared.githubEnvironment.PRIVATE_KEY_SCANNER_PATH;
+  expect(trustedScanner).toBe(join(fixture.runnerTemp, "detect-private-keys.mts"));
+  expect(readFileSync(trustedScanner!)).toEqual(fixture.realScanner);
+
+  const scanned = fixture.run(detect, prepared.githubEnvironment);
+  expect(scanned.status).toBe(1);
+  expectIncludes(scanned.stderr, [
+    "Private key found: leaked.pem (BEGIN RSA PRIVATE KEY)",
+    "[detect-private-keys] FAILED (exit 1)",
+  ]);
+});
+
+it.each(["policy", "scanner"] as const)("fails closed for a missing exact-base %s", (missing) => {
+  const fixture = createFixture();
+  let base = fixture.missingPolicySha;
+  if (missing === "scanner") {
+    fixture.write({ ".github/zizmor.yml": "rules:\n  trusted-base: {}\n" });
+    fixture.git("rm", "-q", "--cached", scannerPath);
+    // Do not re-add the poisoned, now untracked scanner.
+    fixture.git("add", ".github/zizmor.yml");
+    fixture.git("commit", "-m", "base without scanner");
+    base = fixture.git("rev-parse", "HEAD");
+  }
+  const rejected = fixture.prepare("pull_request", base);
+  expect(rejected.result.status).not.toBe(0);
+  expect(`${rejected.result.stdout}${rejected.result.stderr}`).toContain(
+    `trusted ${missing === "scanner" ? "private-key scanner" : "zizmor policy"} unavailable`,
+  );
+  expect(rejected.githubEnvironment).toEqual({});
+  if (missing === "scanner") {
+    expect(existsSync(join(fixture.runnerTemp, "detect-private-keys.mts"))).toBe(false);
+  }
+});
+
+it.each(["push", "workflow_dispatch"] as const)("trusts the harness for %s", (eventName) => {
+  const fixture = createFixture();
+  const prepared = fixture.prepare(eventName);
+  expect(prepared.result.status, `${prepared.result.stdout}${prepared.result.stderr}`).toBe(0);
+  expect(fixture.read("zizmor.yml")).toBe("rules:\n  trusted-harness: {}\n");
+  expect(readFileSync(join(fixture.runnerTemp, "detect-private-keys.mts"))).toEqual(
+    fixture.realScanner,
+  );
 });

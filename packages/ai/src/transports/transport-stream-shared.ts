@@ -1,8 +1,3 @@
-/**
- * Shared transport-stream normalization helpers.
- *
- * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
- */
 import type {
   AssistantMessage,
   Model,
@@ -11,6 +6,7 @@ import type {
   Usage,
 } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
 import { getAiTransportHost } from "../host.js";
 import {
   appendAssistantMessageDiagnostic,
@@ -21,21 +17,55 @@ import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { shortHash } from "../utils/hash.js";
 import { headersToRecord } from "../utils/headers.js";
 import { repairJson } from "../utils/json-parse.js";
-import { projectProviderError, type ProviderErrorProjection } from "../utils/provider-error.js";
+import {
+  projectProviderError,
+  readTransportDiagnosticLabel,
+  type ProviderErrorProjection,
+} from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { createZeroUsage } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
-type ContextUsage = NonNullable<Usage["contextUsage"]>;
+/** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
+export async function* iterateSseFrames(
+  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
+  assertWithinLimit?: (pending: string) => void,
+): AsyncGenerator<{ frame: string; terminated: boolean }> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  // CRLF remains one line ending even when the delimiter expression backtracks.
+  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
+  let scanOffset = 0;
+  for (;;) {
+    const { done, value } = await read();
+    buffer += decoder.decode(value, { stream: !done });
+    delimiter.lastIndex = scanOffset;
+    for (;;) {
+      const boundary = delimiter.exec(buffer);
+      if (!boundary && (!done || !buffer)) {
+        break;
+      }
+      const frameEnd = boundary?.index ?? buffer.length;
+      const frame = buffer.slice(0, frameEnd);
+      assertWithinLimit?.(frame);
+      buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
+      delimiter.lastIndex = 0;
+      yield { frame, terminated: boundary !== null };
+    }
+    assertWithinLimit?.(buffer);
+    if (done) {
+      return;
+    }
+    scanOffset = Math.max(0, buffer.length - 3);
+  }
+}
 
-type TransportUsage = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-  contextUsage?: ContextUsage;
-  totalTokens: number;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+type TransportUsage = Pick<
+  Usage,
+  "input" | "output" | "cacheRead" | "cacheWrite" | "contextUsage" | "totalTokens"
+> & {
+  cost: Pick<Usage["cost"], "input" | "output" | "cacheRead" | "cacheWrite" | "total">;
 };
 
 export type WritableTransportStream = Pick<
@@ -192,32 +222,8 @@ export function mergeTransportHeaders(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-export function mergeTransportMetadata<T extends Record<string, unknown>>(
-  payload: T,
-  metadata?: Record<string, string>,
-): T {
-  if (!metadata || Object.keys(metadata).length === 0) {
-    return payload;
-  }
-  const existingMetadata = asOptionalRecord(payload.metadata) as Record<string, string> | undefined;
-  return {
-    ...payload,
-    metadata: {
-      ...existingMetadata,
-      ...metadata,
-    },
-  };
-}
-
 export function createEmptyTransportUsage(): TransportUsage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
+  return createZeroUsage();
 }
 
 export function createWritableTransportEventStream() {
@@ -243,6 +249,60 @@ export function transportAbortError(signal?: AbortSignal): Error {
   return reason instanceof Error && typeof (reason as { code?: unknown }).code === "string"
     ? reason
     : new Error("Request was aborted");
+}
+
+const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 6;
+const MODEL_STREAM_COOPERATIVE_YIELD_BUDGET = 64;
+// Readiness fans out lifecycle state; body events can share a larger batch.
+const MODEL_STREAM_START_WORK = 8;
+let streamWorkThisTurn = 0;
+let streamTurnStartedAt = 0;
+let nextStreamTurn: Promise<void> | undefined;
+
+export function throwIfModelStreamAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw transportAbortError(signal);
+  }
+}
+
+async function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> {
+  throwIfModelStreamAborted(signal);
+  // All streams share the main loop. Recheck after waking so a swarm cannot
+  // spend a fresh per-stream budget in the same microtask burst.
+  for (;;) {
+    if (
+      !nextStreamTurn ||
+      (streamWorkThisTurn + work <= MODEL_STREAM_COOPERATIVE_YIELD_BUDGET &&
+        Date.now() - streamTurnStartedAt < MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
+    ) {
+      break;
+    }
+    await nextStreamTurn;
+    throwIfModelStreamAborted(signal);
+  }
+  if (!nextStreamTurn) {
+    streamTurnStartedAt = Date.now();
+    nextStreamTurn = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        streamWorkThisTurn = 0;
+        nextStreamTurn = undefined;
+        resolve();
+      }, 0);
+    });
+  }
+  streamWorkThisTurn += work;
+}
+
+/** Keep ready provider events from monopolizing the main loop, including ignored events. */
+export async function* iterateModelStream<T>(
+  events: AsyncIterable<T> | Iterable<T>,
+  signal?: AbortSignal,
+): AsyncGenerator<T> {
+  for await (const event of events) {
+    await waitForModelStreamTurn(signal);
+    yield event;
+    throwIfModelStreamAborted(signal);
+  }
 }
 
 export type ProviderAcceptance =
@@ -320,25 +380,8 @@ async function awaitProviderLifecycleCallback(
   }
   const callbackPromise = Promise.resolve().then(callback);
   getAiTransportHost().observePendingProviderWork?.(callbackPromise);
-  if (!signal) {
-    await callbackPromise;
-    return;
-  }
-  let onAbort: (() => void) | undefined;
-  try {
-    await Promise.race([
-      callbackPromise,
-      new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(transportAbortError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-  if (signal.aborted) {
+  await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
+  if (signal?.aborted) {
     throw transportAbortError(signal);
   }
 }
@@ -458,6 +501,8 @@ export function withProviderResponseHook<T = never>(params: {
     async *[Symbol.asyncIterator]() {
       try {
         await awaitProviderLifecycleCallback(params.hook, params.signal);
+        // Hooks may finish together after waiting through earlier work budgets.
+        await waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
       } catch (error) {
         params.abort(error instanceof Error ? error : new Error(String(error)));
         throw error;
@@ -495,8 +540,43 @@ export function assignTransportErrorDetails(
   error: unknown,
   signal?: AbortSignal,
 ): ProviderErrorProjection {
+  if (!signal?.aborted) {
+    // Provider prose and response bodies can echo prompts and tool results.
+    try {
+      const record = asOptionalRecord(error);
+      const response = asOptionalRecord(record?.response);
+      const cause = asOptionalRecord(record?.cause);
+      const detail =
+        asOptionalRecord(record?.error) ??
+        asOptionalRecord(response?.error) ??
+        asOptionalRecord(asOptionalRecord(record?.payload)?.error);
+      getAiTransportHost().logWarn("provider-error", "Model request failed", {
+        provider: output.provider,
+        model: output.model,
+        status: readTransportDiagnosticLabel(
+          record?.status ?? record?.statusCode ?? response?.status,
+        ),
+        code: readTransportDiagnosticLabel(record?.errorCode ?? record?.code ?? detail?.code),
+        type: readTransportDiagnosticLabel(record?.errorType ?? detail?.type ?? record?.type),
+        causeName: readTransportDiagnosticLabel(cause?.name),
+        causeCode: readTransportDiagnosticLabel(cause?.code),
+        requestId: readTransportDiagnosticLabel(record?.request_id ?? record?.requestId),
+        responseId: readTransportDiagnosticLabel(
+          record?.responseId ?? response?.id ?? output.responseId,
+        ),
+      });
+    } catch {
+      // Diagnostic accessors and log sinks cannot replace the original failure.
+    }
+  }
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
+  // A failure after terminal accounting cannot erase it. Earlier cumulative
+  // snapshots and initial zeros never establish a complete response total.
+  if (output.usage.usageReport?.state !== "available") {
+    output.usage.usageReport = { state: "unavailable" };
+    output.usage.contextUsage = { state: "unavailable" };
+  }
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&

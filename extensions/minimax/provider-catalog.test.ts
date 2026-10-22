@@ -6,7 +6,7 @@ import {
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, expect, it, vi } from "vitest";
-import { registerMinimaxProviders } from "./provider-registration.js";
+import minimaxPlugin from "./index.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -48,7 +48,7 @@ it.each([
     );
     vi.stubGlobal("fetch", fetchMock);
     const { providers } = await registerProviderPlugin({
-      plugin: { register: registerMinimaxProviders },
+      plugin: minimaxPlugin,
       id: "minimax",
       name: "MiniMax",
     });
@@ -80,7 +80,7 @@ it.each([
       provider: {
         baseUrl: baseUrl.trim(),
         api: "anthropic-messages",
-        models: [expect.objectContaining({ id: "MiniMax-M3" })],
+        models: [expect.objectContaining({ id: "MiniMax-M3", compat: { codeMode: "preferred" } })],
       },
       outcomes: [{ provider, profileId, status: "ready" }],
     });

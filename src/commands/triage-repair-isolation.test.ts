@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import * as configPaths from "../config/paths.js";
 import * as repairRuntime from "../infra/update-repair-agent.runtime.js";
+import { repairRoute } from "../infra/update-repair-agent.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import * as doctorPolicy from "./doctor-service-repair-policy.js";
@@ -10,12 +11,28 @@ import { triageCommand } from "./triage.js";
 import { createTriageRuntime, withTriageTerminal } from "./triage.test-support.js";
 
 const mocks = vi.hoisted(() => ({
-  agentExecCommand: vi.fn(),
+  runEmbeddedAgent: vi.fn(),
   oracle: vi.fn(),
   serviceStop: vi.fn(),
 }));
-vi.mock("./agent-exec.js", () => ({ agentExecCommand: mocks.agentExecCommand }));
-vi.mock("./doctor-lint.js", () => ({ collectDoctorFindings: async () => [] }));
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.runEmbeddedAgent }));
+vi.mock("../agents/embedded-agent-runner/run-entry.js", () => ({
+  runEmbeddedAgentEntry: async (params: {
+    selection: { provider: string; model: string };
+    runCandidate: (
+      provider: string,
+      model: string,
+      options: { agentHarnessRuntimeOverride: string },
+    ) => Promise<unknown>;
+  }) => {
+    const { provider, model } = params.selection;
+    const result = await params.runCandidate(provider, model, {
+      agentHarnessRuntimeOverride: "openclaw",
+    });
+    return { result, provider, model, terminal: { outcome: { status: "ok" } } };
+  },
+}));
+vi.mock("./doctor-lint-runner.js", () => ({ collectDoctorFindings: async () => [] }));
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runUtf8CommandWithTimeout: mocks.oracle,
@@ -26,7 +43,6 @@ vi.mock("../daemon/gateway-entrypoint.js", async (original) => ({
 }));
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", () => ({
   maybeStopManagedServiceBeforeMutableUpdate: mocks.serviceStop,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate: async () => {},
 }));
 
 afterEach(() => {
@@ -35,111 +51,86 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("manual triage repair isolation", () => {
-  it.each([false, true])(
-    "repairs synthetic state without Doctor service effects and restores policy (throws=%s)",
-    async (throws) => {
-      await withOpenClawTestState({ layout: "split" }, async (state) => {
-        // Triage, the repair loop, its environment owner, and Doctor maintenance
-        // run real code; inference, executor, oracle, and service effects are mocked.
-        vi.spyOn(configPaths, "isDefaultInstallIdentity").mockReturnValue(true);
-        vi.spyOn(doctorPolicy, "shouldManageGatewayService").mockResolvedValue(true);
-        mocks.serviceStop.mockResolvedValue({
-          inspected: true,
-          serviceUpdateVerdict: { kind: "owned", refreshDefinition: false },
-          stopped: false,
-        });
-        const keys = [
-          "OPENCLAW_SERVICE_REPAIR_POLICY",
-          "OPENCLAW_UPDATE_IN_PROGRESS",
-          "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
-          "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION",
-          "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE",
-          "OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART",
-        ];
-        for (const key of keys) {
-          vi.stubEnv(key, undefined);
-        }
-        const config = {
-          plugins: { enabled: false },
-          agents: { entries: { repair: { model: "fixture/repair" } } },
-        };
-        await state.writeConfig(config);
-        vi.spyOn(repairRuntime, "prepareUpdateRepairInference").mockResolvedValue({
-          ok: true,
-          route: {
-            runner: "embedded",
-            agentId: "repair",
-            agentDir: state.statePath("agents", "repair", "agent"),
-            provider: "fixture",
-            model: "repair",
-            modelLabel: "fixture/repair",
-            runConfig: config,
-            sourceConfig: config,
-          },
-          modelFallbacks: [],
-        });
-        const marker = state.statePath("repair-marker.txt");
-        let repaired = false;
-        let observedPolicy: { service: string; activation: boolean | undefined } | undefined;
-        const runtime = createTriageRuntime();
-        mocks.oracle.mockImplementation(async () => ({
-          code: repaired ? 0 : 1,
-          termination: "exit",
-          stdout: JSON.stringify({
-            ok: repaired,
-            findings: repaired ? [] : [{ severity: "error", message: "Synthetic repair needed" }],
-          }),
-        }));
-        mocks.agentExecCommand.mockImplementation(async () => {
-          observedPolicy = {
-            service: doctorPolicy.resolveServiceRepairPolicy(),
-            activation: doctorPolicy.resolveUpdateParentGatewayActivation(process.env),
-          };
-          const maintenance = await beginDoctorMaintenance({
-            options: { repair: true },
-            root: state.workspaceDir,
-            runtime,
-          });
-          expect(maintenance).toBeDefined();
-          try {
-            await fs.writeFile(marker, "repaired");
-            repaired = true;
-            await maintenance?.finish(config);
-          } finally {
-            await maintenance?.release();
-          }
-          if (throws) {
-            throw new Error("Synthetic executor failure");
-          }
-          return {
-            exitCode: 0,
-            toolCalls: 1,
-            envelope: {
-              status: "ok",
-              final: 'REPAIR_RESULT: {"status":"fixed","summary":"Synthetic repair completed"}',
-            },
-          };
-        });
-        const run = withTriageTerminal(true, () =>
-          triageCommand(runtime, { run: true, noExport: true }),
-        );
-        if (throws) {
-          await expect(run).rejects.toMatchObject({ code: 1 });
-        } else {
-          await run;
-          expect(runtime.log).toHaveBeenCalledWith(
-            "Embedded repair repaired: Doctor lint reports no errors.",
-          );
-        }
-        expect(mocks.agentExecCommand).toHaveBeenCalledOnce();
-        expect(await fs.readFile(marker, "utf8")).toBe("repaired");
-        expect(mocks.serviceStop).not.toHaveBeenCalled();
-        expect(observedPolicy).toEqual({ service: "external", activation: false });
-        for (const key of keys) {
-          expect(process.env[key], key).toBeUndefined();
-        }
+it.each([false, true])(
+  "triage repairs synthetic state without Doctor service effects and restores policy (throws=%s)",
+  async (throws) => {
+    await withOpenClawTestState({ layout: "split" }, async (state) => {
+      vi.spyOn(configPaths, "isDefaultInstallIdentity").mockReturnValue(true);
+      vi.spyOn(doctorPolicy, "shouldManageGatewayService").mockResolvedValue(true);
+      const keys = [
+        "OPENCLAW_SERVICE_REPAIR_POLICY",
+        "OPENCLAW_UPDATE_IN_PROGRESS",
+        "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR",
+        "OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION",
+        "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE",
+        "OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART",
+      ];
+      keys.forEach((key) => vi.stubEnv(key, undefined));
+      const config = {
+        plugins: { enabled: false },
+        agents: { entries: { repair: { model: "fixture/repair" } } },
+      };
+      await state.writeConfig(config);
+      vi.spyOn(repairRuntime, "prepareUpdateRepairInference").mockResolvedValue({
+        ok: true,
+        route: {
+          ...repairRoute(state.statePath("agents", "repair", "agent"), config),
+          agentId: "repair",
+        },
+        modelFallbacks: [],
       });
-    },
-  );
-});
+      const marker = state.statePath("repair-marker.txt");
+      let repaired = false;
+      const runtime = createTriageRuntime();
+      mocks.oracle.mockImplementation(async () => ({
+        code: repaired ? 0 : 1,
+        termination: "exit",
+        stdout: JSON.stringify({
+          ok: repaired,
+          findings: repaired ? [] : [{ severity: "error", message: "Synthetic repair needed" }],
+        }),
+      }));
+      mocks.runEmbeddedAgent.mockImplementation(async () => {
+        expect({
+          service: doctorPolicy.resolveServiceRepairPolicy(),
+          activation: doctorPolicy.resolveUpdateParentGatewayActivation(process.env),
+        }).toEqual({ service: "external", activation: false });
+        const maintenance = await beginDoctorMaintenance({
+          options: { repair: true },
+          root: state.workspaceDir,
+          runtime,
+        });
+        expect(maintenance).toBeDefined();
+        try {
+          await fs.writeFile(marker, "repaired");
+          await maintenance?.finish(config);
+        } finally {
+          await maintenance?.release();
+        }
+        if (throws) {
+          throw new Error("Synthetic executor failure");
+        }
+        repaired = true;
+        return {
+          payloads: [{ text: 'REPAIR_RESULT: {"status":"fixed","summary":"Repaired"}' }],
+          meta: { durationMs: 1 },
+        };
+      });
+      const run = withTriageTerminal(true, () =>
+        triageCommand(runtime, { run: true, noExport: true }),
+      );
+      if (throws) {
+        await expect(run).rejects.toMatchObject({ code: 1 });
+      } else {
+        await run;
+        expect(runtime.log).toHaveBeenCalledWith(
+          "Embedded repair repaired: Doctor lint reports no errors.",
+        );
+      }
+      expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(await fs.readFile(marker, "utf8")).toBe("repaired");
+      expect(mocks.serviceStop).not.toHaveBeenCalled();
+      expect(keys.filter((key) => process.env[key] !== undefined)).toEqual([]);
+    });
+  },
+);

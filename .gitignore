@@ -92,7 +92,8 @@ apps/android/fastlane/Preview.html
 apps/android/fastlane/test_output/
 apps/android/fastlane/logs/
 apps/android/fastlane/.env
-apps/android/fastlane/metadata/android/**/images/
+apps/android/fastlane/metadata/android/**/images/**
+!apps/android/fastlane/metadata/android/en-US/images/icon.png
 
 # fastlane build artifacts (local)
 apps/ios/*.ipa

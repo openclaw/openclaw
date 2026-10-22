@@ -1,10 +1,11 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { PluginJsonValueSchema } from "./plugins.js";
+import { PluginJsonValueSchema } from "./plugin-json-value.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionParticipantSchema } from "./session-participant.js";
 import { SessionCreatedActorSchema } from "./sessions-row.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 const SessionCatalogErrorSchema = closedObject({ code: NonEmptyString, message: NonEmptyString });
 
@@ -52,12 +53,7 @@ export const SessionCatalogPullRequestSummarySchema = closedObject({
     maxItems: 20,
     uniqueItems: true,
   }),
-  state: Type.Union([
-    Type.Literal("open"),
-    Type.Literal("draft"),
-    Type.Literal("merged"),
-    Type.Literal("closed"),
-  ]),
+  state: stringLiteralUnion(["open", "draft", "merged", "closed"]),
 });
 
 export const SessionCatalogSessionSchema = closedObject({
@@ -88,8 +84,10 @@ export const SessionCatalogSessionSchema = closedObject({
 export const SessionCatalogHostSchema = closedObject({
   hostId: NonEmptyString,
   label: NonEmptyString,
-  kind: Type.Union([Type.Literal("gateway"), Type.Literal("node")]),
+  kind: stringLiteralUnion(["gateway", "node"]),
   connected: Type.Boolean(),
+  /** First snapshot is still loading; retain prior rows until the host publication arrives. */
+  pending: Type.Optional(Type.Boolean()),
   nodeId: Type.Optional(NonEmptyString),
   canStartTerminal: Type.Optional(Type.Boolean()),
   sessions: Type.Array(SessionCatalogSessionSchema),
@@ -98,9 +96,7 @@ export const SessionCatalogHostSchema = closedObject({
 });
 
 export const SessionCatalogSchema = closedObject({
-  id: NonEmptyString,
-  label: NonEmptyString,
-  capabilities: SessionCatalogCapabilitiesSchema,
+  ...SessionCatalogDescriptorSchema.properties,
   shareRoute: Type.Optional(SessionCatalogShareRouteSchema),
   hosts: Type.Array(SessionCatalogHostSchema),
   error: Type.Optional(SessionCatalogErrorSchema),
@@ -109,6 +105,8 @@ export const SessionCatalogSchema = closedObject({
 const SessionsCatalogListCommonProperties = {
   agentId: Type.Optional(NonEmptyString),
   progressId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Opt into pending hosts completed by incremental publications for this progressId. */
+  allowPartialResults: Type.Optional(Type.Boolean()),
   search: Type.Optional(Type.String()),
   limitPerHost: Type.Optional(Type.Integer({ minimum: 1 })),
   hostIds: Type.Optional(Type.Array(NonEmptyString)),
@@ -116,6 +114,8 @@ const SessionsCatalogListCommonProperties = {
 
 export const SessionsCatalogListParamsSchema = closedObject({
   catalogId: Type.Optional(NonEmptyString),
+  /** Return catalog labels and capabilities with empty hosts, without listing sessions. */
+  metadataOnly: Type.Optional(Type.Boolean()),
   cursors: Type.Optional(Type.Record(NonEmptyString, Type.String())),
   ...SessionsCatalogListCommonProperties,
 });
@@ -137,13 +137,13 @@ export const SessionsCatalogHostEventSchema = closedObject({
 
 export const SessionCatalogTranscriptItemSchema = closedObject({
   id: Type.Optional(Type.String()),
-  type: Type.Union([
-    Type.Literal("userMessage"),
-    Type.Literal("agentMessage"),
-    Type.Literal("reasoning"),
-    Type.Literal("toolCall"),
-    Type.Literal("toolResult"),
-    Type.Literal("other"),
+  type: stringLiteralUnion([
+    "userMessage",
+    "agentMessage",
+    "reasoning",
+    "toolCall",
+    "toolResult",
+    "other",
   ]),
   text: Type.Optional(Type.String()),
   timestamp: Type.Optional(Type.String()),
@@ -171,6 +171,26 @@ export const SessionsCatalogReadResultSchema = closedObject({
 export const SessionsCatalogContinueParamsSchema = SessionCatalogLocatorSchema;
 
 export const SessionsCatalogContinueResultSchema = closedObject({ sessionKey: NonEmptyString });
+
+export const SessionsCatalogImportParamsSchema = closedObject({
+  ...SessionCatalogLocatorSchema.properties,
+  displayName: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 500,
+      description:
+        "Prepared presentation title for a newly created imported session. Ignored when updating an existing import.",
+    }),
+  ),
+});
+
+export const SessionsCatalogImportResultSchema = closedObject({
+  sessionKey: NonEmptyString,
+  importedItems: Type.Integer({ minimum: 0 }),
+  totalItems: Type.Integer({ minimum: 0 }),
+  complete: Type.Boolean(),
+  created: Type.Boolean(),
+});
 
 export const SessionsCatalogArchiveParamsSchema = closedObject({
   ...SessionCatalogLocatorSchema.properties,
@@ -215,6 +235,8 @@ export type SessionsCatalogReadParams = Static<typeof SessionsCatalogReadParamsS
 export type SessionsCatalogReadResult = Static<typeof SessionsCatalogReadResultSchema>;
 export type SessionsCatalogContinueParams = Static<typeof SessionsCatalogContinueParamsSchema>;
 export type SessionsCatalogContinueResult = Static<typeof SessionsCatalogContinueResultSchema>;
+export type SessionsCatalogImportParams = Static<typeof SessionsCatalogImportParamsSchema>;
+export type SessionsCatalogImportResult = Static<typeof SessionsCatalogImportResultSchema>;
 export type SessionsCatalogArchiveParams = Static<typeof SessionsCatalogArchiveParamsSchema>;
 export type SessionsCatalogArchiveResult = Static<typeof SessionsCatalogArchiveResultSchema>;
 export type SessionsCatalogStartTerminalParams = Static<

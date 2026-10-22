@@ -1,54 +1,104 @@
-// Covers diagnostic event emission and metadata handling.
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  hasInternalDiagnosticEventInterest,
-  hasInternalDiagnosticEventListeners,
+  getRecentDiagnosticPhases,
+  resetDiagnosticPhasesForTest,
+  withDiagnosticPhase,
+} from "../logging/diagnostic-phase.js";
+import {
+  hasInternalDiagnosticEventInterest as hasInterest,
+  hasInternalDiagnosticEventListeners as hasListeners,
 } from "./diagnostic-event-listener-presence.js";
 import {
-  areDiagnosticsEnabledForProcess,
-  emitDiagnosticEvent,
-  emitInternalDiagnosticEvent,
-  emitTrustedDiagnosticEvent,
-  emitTrustedDiagnosticEventWithPrivateData,
-  emitTrustedSkillUsedDiagnosticEvent,
-  emitTrustedSecurityEvent,
-  hasPendingInternalDiagnosticEvent,
-  isInternalDiagnosticEventMetadata,
-  isDiagnosticsEnabled,
-  onInternalDiagnosticEvent,
-  onDiagnosticEvent,
-  onTrustedInternalDiagnosticEvent,
-  resetDiagnosticEventsForTest,
-  setDiagnosticsEnabledForProcess,
-  waitForDiagnosticEventsDrained,
-  type DiagnosticEventMetadata,
-  type DiagnosticEventPrivateData,
-  type DiagnosticEventPayload,
+  emitDiagnosticEvent as emit,
+  emitInternalDiagnosticEvent as emitInternal,
+  emitTrustedDiagnosticEvent as emitTrusted,
+  emitTrustedDiagnosticEventWithPrivateData as emitPrivate,
+  emitTrustedSkillUsedDiagnosticEvent as emitSkill,
+  emitTrustedSecurityEvent as emitSecurity,
+  hasPendingInternalDiagnosticEvent as hasPending,
+  isInternalDiagnosticEventMetadata as isInternal,
+  isDiagnosticsEnabled as isEnabled,
+  onInternalDiagnosticEvent as onInternal,
+  onDiagnosticEvent as onPublic,
+  onTrustedInternalDiagnosticEvent as onTrusted,
+  onTrustedToolExecutionEvent as onTool,
+  resetDiagnosticEventsForTest as resetEvents,
+  setDiagnosticsEnabledForProcess as setEnabled,
+  waitForDiagnosticEventsDrained as drain,
+  type DiagnosticEventMetadata as Metadata,
+  type DiagnosticEventPrivateData as PrivateData,
+  type DiagnosticEventPayload as Event,
+  createQueuedDiagnosticPhaseEmitter as phaseEmitter,
 } from "./diagnostic-events.js";
-import { isCoreSemanticRunProgressDiagnosticMetadata } from "./diagnostic-semantic-run-progress.js";
+import { markTrustedOtelDiagnosticListener } from "./diagnostic-otel-listener-provenance.js";
+import { markHostPluginUsageDiagnosticEvent } from "./diagnostic-plugin-usage-provenance.js";
+import { resolveCoreSemanticRunProgressDiagnosticMetadata } from "./diagnostic-semantic-run-progress.js";
 import {
-  createDiagnosticTraceContext,
-  formatDiagnosticTraceparent,
-  runWithDiagnosticTraceContext,
+  createDiagnosticTraceContext as createTrace,
+  formatDiagnosticTraceparent as formatTraceparent,
+  runWithDiagnosticTraceContext as withTrace,
 } from "./diagnostic-trace-context.js";
 import {
-  type DiagnosticTracePropagationBridge,
-  formatPropagatedDiagnosticTraceparent,
-  registerDiagnosticTracePropagationBridge,
+  type DiagnosticTracePropagationBridge as PropagationBridge,
+  formatPropagatedDiagnosticTraceparent as propagatedTraceparent,
+  registerDiagnosticTracePropagationBridge as registerBridge,
 } from "./diagnostic-trace-propagation.js";
 
+function modelStartedEvent(runId = "run-1", callId = "call-1") {
+  return {
+    type: "model.call.started" as const,
+    runId,
+    callId,
+    provider: "openai",
+    model: "gpt-5.4",
+  };
+}
+
+function collectEvents(subscribe: (listener: (event: Event) => void) => unknown) {
+  const events: Event[] = [];
+  subscribe((event) => events.push(event));
+  return events;
+}
+
+function collectPrivateEvents() {
+  const events: Array<{ event: Event; privateData: PrivateData }> = [];
+  onTrusted((event, _metadata, privateData) => events.push({ event, privateData }));
+  return events;
+}
+
+type Listener = (event: Event, metadata: Metadata, privateData?: PrivateData) => void;
+function captureEvents(subscribe: (listener: Listener) => unknown) {
+  const listener = vi.fn<Listener>();
+  subscribe(listener);
+  return listener;
+}
+
+function toolErrorEvent(runId: string, toolCallId: string) {
+  return {
+    type: "tool.execution.error" as const,
+    runId,
+    toolName: "exec",
+    toolCallId,
+    durationMs: 1,
+    errorCategory: "test",
+  };
+}
+
+const diagnosticTraceInput = {
+  traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
+  spanId: "00f067aa0ba902b7",
+  traceFlags: "01",
+};
+
+beforeEach(resetEvents);
+afterEach(() => {
+  resetEvents();
+  vi.restoreAllMocks();
+});
+
 describe("diagnostic-events", () => {
-  beforeEach(() => {
-    resetDiagnosticEventsForTest();
-  });
-
-  afterEach(() => {
-    resetDiagnosticEventsForTest();
-    vi.restoreAllMocks();
-  });
-
   function expectConsoleErrorPrefix(errorSpy: { mock: { calls: unknown[][] } }, prefix: string) {
     expect(errorSpy.mock.calls).toHaveLength(1);
     const [message] = expectDefined(errorSpy.mock.calls[0], "console error call");
@@ -56,247 +106,118 @@ describe("diagnostic-events", () => {
     expect((message as string).startsWith(prefix)).toBe(true);
   }
 
-  it("reports active internal diagnostic listeners only while dispatch is enabled", () => {
-    const hasActiveListeners = () =>
-      areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventListeners();
-    expect(hasActiveListeners()).toBe(false);
+  it("does not read or queue payloads until a consumer accepts their trust and type", async () => {
+    let payloadReads = 0;
+    const event = {
+      ...modelStartedEvent(),
+      get provider() {
+        payloadReads += 1;
+        return "openai";
+      },
+    };
+    emitTrusted(event);
+    const publicEvents = collectEvents(onPublic);
+    emitTrusted(event);
+    onInternal(() => {}, { includeTrusted: ["model.call.error"] });
+    emitTrusted(event);
+    expect(payloadReads).toBe(0);
+    expect(hasPending(() => true)).toBe(false);
 
-    const stopInternal = onInternalDiagnosticEvent(() => undefined);
-    expect(hasActiveListeners()).toBe(true);
-    setDiagnosticsEnabledForProcess(false);
-    expect(hasActiveListeners()).toBe(false);
-    setDiagnosticsEnabledForProcess(true);
-    stopInternal();
-    expect(hasActiveListeners()).toBe(false);
-
-    const stopTrusted = onTrustedInternalDiagnosticEvent(() => undefined);
-    expect(hasActiveListeners()).toBe(true);
-    stopTrusted();
-    expect(hasActiveListeners()).toBe(false);
-  });
-
-  it("emits monotonic seq and timestamps to subscribers", () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(111).mockReturnValueOnce(222);
-    const events: Array<{ seq: number; ts: number; type: string }> = [];
-    const stop = onDiagnosticEvent((event) => {
-      events.push({ seq: event.seq, ts: event.ts, type: event.type });
-    });
-
-    emitDiagnosticEvent({
-      type: "model.usage",
-      usage: { total: 1 },
-    });
-    emitDiagnosticEvent({
-      type: "session.state",
-      state: "processing",
-    });
-    stop();
-
-    expect(events).toEqual([
-      { seq: 1, ts: 111, type: "model.usage" },
-      { seq: 2, ts: 222, type: "session.state" },
+    emit(event);
+    await drain();
+    expect(publicEvents).toMatchObject([
+      { type: "model.call.started", provider: "openai", seq: 4 },
     ]);
-  });
+    expect(payloadReads).toBe(1);
 
-  it("isolates listener failures and logs them", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const seen: string[] = [];
-    onDiagnosticEvent(() => {
-      throw new Error("boom");
+    const trustedEvents: Event[] = [];
+    const stop = onTrusted((value) => trustedEvents.push(value), {
+      include: ["model.call.started"],
     });
-    onDiagnosticEvent((event) => {
-      seen.push(event.type);
-    });
-
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "telegram",
-    });
-
-    expect(seen).toEqual(["message.queued"]);
-    expectConsoleErrorPrefix(
-      errorSpy,
-      "[diagnostic-events] listener error type=message.queued seq=1: Error: boom",
-    );
-  });
-
-  it("supports unsubscribe and full reset", () => {
-    const seen: string[] = [];
-    const stop = onDiagnosticEvent((event) => {
-      seen.push(event.type);
-    });
-
-    emitDiagnosticEvent({
-      type: "webhook.received",
-      channel: "telegram",
-    });
-    stop();
-    emitDiagnosticEvent({
-      type: "webhook.processed",
-      channel: "telegram",
-    });
-
-    expect(seen).toEqual(["webhook.received"]);
-
-    resetDiagnosticEventsForTest();
-    emitDiagnosticEvent({
-      type: "webhook.error",
-      channel: "telegram",
-      error: "failed",
-    });
-    expect(seen).toEqual(["webhook.received"]);
-  });
-
-  it("applies internal listener interests before dispatch", async () => {
-    const included: string[] = [];
-    const excluded: string[] = [];
-    onInternalDiagnosticEvent((event) => included.push(event.type), {
-      include: ["message.queued"],
-    });
-    onTrustedInternalDiagnosticEvent((event) => excluded.push(event.type), {
-      exclude: ["log.record"],
-    });
-
-    emitDiagnosticEvent({ type: "message.queued", source: "plugin" });
-    emitDiagnosticEvent({ type: "log.record", level: "INFO", message: "ignored" });
-    await waitForDiagnosticEventsDrained();
-
-    expect(included).toEqual(["message.queued"]);
-    expect(excluded).toEqual(["message.queued"]);
-  });
-
-  it("tracks broad, included, and excluded event interest through unsubscribe and reset", () => {
-    const stopBroad = onInternalDiagnosticEvent(() => undefined);
-    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(true);
-    stopBroad();
-    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
-
-    const stopIncluded = onInternalDiagnosticEvent(() => undefined, {
-      include: ["message.queued", "log.record"],
-      exclude: ["log.record"],
-    });
-    expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(true);
-    expect(hasInternalDiagnosticEventInterest("log.record")).toBe(false);
-
-    resetDiagnosticEventsForTest();
-    expect(hasInternalDiagnosticEventInterest("message.queued")).toBe(false);
-    stopIncluded();
-  });
-
-  it("carries explicit trace context without creating retained trace state", () => {
-    const trace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-    });
-    const events: Array<{ trace: typeof trace | undefined; type: string }> = [];
-    const stop = onDiagnosticEvent((event) => {
-      events.push({ trace: event.trace, type: event.type });
-    });
-
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "telegram",
-      trace,
-    });
-    stop();
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "telegram",
-      trace,
-    });
-
-    expect(events).toEqual([{ trace, type: "message.queued" }]);
-  });
-
-  it("uses active request trace context when events omit explicit trace", () => {
-    const trace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-    });
-    const explicitTrace = createDiagnosticTraceContext({
-      traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      spanId: "bbbbbbbbbbbbbbbb",
-    });
-    const events: Array<{ trace: typeof trace | undefined; type: string }> = [];
-    const stop = onDiagnosticEvent((event) => {
-      events.push({ trace: event.trace, type: event.type });
-    });
-
-    runWithDiagnosticTraceContext(trace, () => {
-      emitDiagnosticEvent({
-        type: "message.queued",
-        source: "telegram",
-      });
-      emitDiagnosticEvent({
-        type: "message.queued",
-        source: "telegram",
-        trace: explicitTrace,
-      });
-    });
-    stop();
-
-    expect(events).toEqual([
-      { trace, type: "message.queued" },
-      { trace: explicitTrace, type: "message.queued" },
+    emitTrusted(event);
+    await drain();
+    expect(trustedEvents).toMatchObject([
+      { type: "model.call.started", provider: "openai", seq: 5 },
     ]);
+    expect(payloadReads).toBe(2);
+    stop();
+    emitTrusted(event);
+    expect(payloadReads).toBe(2);
+    expect(hasPending(() => true)).toBe(false);
   });
+
+  it("keeps duplicate public subscriptions independent and passes only the event", () => {
+    const listener = vi.fn();
+    const stopFirst = onPublic(listener);
+    const stopSecond = onPublic(listener);
+    const event = { type: "message.queued" as const, source: "plugin" };
+    emit(event);
+    expect(listener.mock.calls.map((args) => args.length)).toEqual([1, 1]);
+    stopFirst();
+    emit(event);
+    expect(listener).toHaveBeenCalledTimes(3);
+    stopSecond();
+    emit(event);
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([true, false])(
+    "only snapshots tool audits for a consumer (diagnostics %s)",
+    (enabled) => {
+      setEnabled(enabled);
+      let payloadReads = 0;
+      const event = {
+        type: "tool.execution.started" as const,
+        get toolName() {
+          payloadReads += 1;
+          return "exec";
+        },
+      };
+      emitTrusted(event);
+      expect(payloadReads).toBe(0);
+      const listener = vi.fn();
+      const stop = onTool(listener);
+      emitTrusted(event);
+      expect(payloadReads).toBe(1);
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({ toolName: "exec", seq: 2 }));
+      stop();
+      emitTrusted(event);
+      expect(payloadReads).toBe(1);
+    },
+  );
 
   it("marks dispatcher provenance separately from trust", async () => {
-    const events: Array<{
-      internal: boolean;
-      metadataTrusted: boolean;
-      type: string;
-    }> = [];
-    onInternalDiagnosticEvent((event, metadata) => {
-      events.push({
-        internal: isInternalDiagnosticEventMetadata(metadata),
-        metadataTrusted: metadata.trusted,
-        type: event.type,
-      });
-    });
+    const events = captureEvents(onInternal);
 
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "plugin",
-    });
-    emitInternalDiagnosticEvent({
-      type: "webhook.received",
-      channel: "telegram",
-    });
-    emitTrustedDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
+    emit({ type: "message.queued", source: "plugin" });
+    emitInternal({ type: "webhook.received", channel: "telegram" });
+    emitTrusted(modelStartedEvent());
 
     await yieldToEventLoop();
-    expect(events).toEqual([
+    expect(
+      events.mock.calls.map(([event, metadata]) => ({
+        internal: isInternal(metadata),
+        metadataTrusted: metadata.trusted,
+        type: event.type,
+      })),
+    ).toEqual([
       { internal: false, metadataTrusted: false, type: "message.queued" },
       { internal: true, metadataTrusted: false, type: "webhook.received" },
       { internal: false, metadataTrusted: true, type: "model.call.started" },
     ]);
-    expect(isInternalDiagnosticEventMetadata({ trusted: false })).toBe(false);
+    expect(isInternal({ trusted: false })).toBe(false);
   });
 
   it("prepares trusted events synchronously without cloning private data", async () => {
-    const diagnosticTrace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-      traceFlags: "01",
-    });
-    const exportedTrace = createDiagnosticTraceContext({
+    const diagnosticTrace = createTrace(diagnosticTraceInput);
+    const exportedTrace = createTrace({
       traceId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       spanId: "bbbbbbbbbbbbbbbb",
       traceFlags: "00",
     });
     const prepared: string[] = [];
     let privateDataReads = 0;
-    const bridge: DiagnosticTracePropagationBridge<
-      DiagnosticEventPayload,
-      DiagnosticEventMetadata
-    > = {
+    const bridge: PropagationBridge<Event, Metadata> = {
       shouldPrepareEvent(event) {
         return event.type === "model.call.started";
       },
@@ -308,17 +229,10 @@ describe("diagnostic-events", () => {
         return exportedTrace;
       },
     };
-    registerDiagnosticTracePropagationBridge(bridge);
+    registerBridge(bridge);
 
-    emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type: "model.call.started",
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.4",
-        trace: diagnosticTrace,
-      },
+    emitPrivate(
+      { ...modelStartedEvent(), trace: diagnosticTrace },
       {
         modelContent: {
           get inputMessages() {
@@ -329,51 +243,39 @@ describe("diagnostic-events", () => {
       },
     );
     expect(privateDataReads).toBe(0);
-    emitTrustedDiagnosticEvent({
+    expect(hasPending(() => true)).toBe(false);
+    emitTrusted({
+      ...modelStartedEvent(),
       type: "model.call.completed",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
       durationMs: 1,
       trace: diagnosticTrace,
     });
 
     expect(prepared).toEqual(["model.call.started"]);
-    expect(formatDiagnosticTraceparent(diagnosticTrace)).toBe(
+    expect(formatTraceparent(diagnosticTrace)).toBe(
       `00-${diagnosticTrace.traceId}-${diagnosticTrace.spanId}-01`,
     );
-    expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBe(
+    expect(propagatedTraceparent(diagnosticTrace)).toBe(
       `00-${exportedTrace.traceId}-${exportedTrace.spanId}-00`,
     );
-    await waitForDiagnosticEventsDrained();
+    await drain();
     expect(privateDataReads).toBe(0);
   });
 
   it("does not fall back to diagnostic ids when an active propagation bridge misses", () => {
-    const diagnosticTrace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-      traceFlags: "01",
-    });
-    registerDiagnosticTracePropagationBridge({
+    const diagnosticTrace = createTrace(diagnosticTraceInput);
+    registerBridge({
       resolveTraceContext: () => undefined,
     });
 
-    expect(formatDiagnosticTraceparent(diagnosticTrace)).toBe(
+    expect(formatTraceparent(diagnosticTrace)).toBe(
       `00-${diagnosticTrace.traceId}-${diagnosticTrace.spanId}-01`,
     );
-    expect(formatPropagatedDiagnosticTraceparent(diagnosticTrace)).toBeUndefined();
+    expect(propagatedTraceparent(diagnosticTrace)).toBeUndefined();
   });
 
   it("shares semantic provenance across duplicate module instances", async () => {
-    const events: Array<{ coreSemantic: boolean; type: string }> = [];
-    onInternalDiagnosticEvent((event, metadata) => {
-      events.push({
-        coreSemantic: isCoreSemanticRunProgressDiagnosticMetadata(metadata),
-        type: event.type,
-      });
-    });
+    const events = captureEvents(onInternal);
 
     vi.resetModules();
     const duplicateSemanticProgress = await import(
@@ -384,9 +286,15 @@ describe("diagnostic-events", () => {
       runId: "duplicate-semantic-run",
       reason: "model_call:semantic_result",
     });
-    await waitForDiagnosticEventsDrained();
+    await drain();
 
-    expect(events).toEqual([{ coreSemantic: true, type: "run.progress" }]);
+    expect(events).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ type: "run.progress" }),
+      expect.anything(),
+    );
+    expect(
+      resolveCoreSemanticRunProgressDiagnosticMetadata(events.mock.calls[0]![1]),
+    ).toBeDefined();
   });
 
   it("does not expose mutable diagnostic state on the obsolete global symbol", async () => {
@@ -395,67 +303,30 @@ describe("diagnostic-events", () => {
     globalStore[Symbol.for("openclaw.diagnosticEventsState")] = {
       listeners: new Set([() => events.push(true)]),
     };
-    onInternalDiagnosticEvent((eventValue, metadata) => {
+    onInternal((eventValue, metadata) => {
       events.push(metadata.trusted);
     });
 
-    emitDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
+    emit(modelStartedEvent());
 
     await yieldToEventLoop();
     expect(events).toEqual([false]);
     delete globalStore[Symbol.for("openclaw.diagnosticEventsState")];
   });
 
-  it("keeps trusted internal events off the public diagnostic stream", async () => {
-    const publicEvents: string[] = [];
-    const internalEvents: Array<{ trusted: boolean; type: string }> = [];
-    onDiagnosticEvent((event) => {
-      publicEvents.push(event.type);
-    });
-    onInternalDiagnosticEvent((event, metadata) => {
-      internalEvents.push({ trusted: metadata.trusted, type: event.type });
-    });
-
-    emitTrustedDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    await yieldToEventLoop();
-    expect(publicEvents).toStrictEqual([]);
-    expect(internalEvents).toEqual([{ trusted: true, type: "model.call.started" }]);
-  });
-
   it.each([true, false])(
     "keeps skill file identity trusted-only when diagnostics enabled=%s",
     async (enabled) => {
       const skillFile = "/workspace/skills/daily-brief/SKILL.md";
-      const publicEvents: DiagnosticEventPayload[] = [];
-      const sharedEvents: DiagnosticEventPayload[] = [];
+      const publicEvents = collectEvents(onPublic);
+      const sharedEvents = collectEvents(onInternal);
       const metadataOnly = vi.fn();
       const readSkillFile = vi.fn(() => skillFile);
-      const trustedEvents: Array<{
-        event: DiagnosticEventPayload;
-        privateData: DiagnosticEventPrivateData;
-      }> = [];
-      onDiagnosticEvent((event) => publicEvents.push(event));
-      onInternalDiagnosticEvent((event) => sharedEvents.push(event));
-      onTrustedInternalDiagnosticEvent(metadataOnly, undefined, { includePrivateData: false });
-      onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-        trustedEvents.push({ event, privateData });
-      });
-      setDiagnosticsEnabledForProcess(enabled);
+      onTrusted(metadataOnly, undefined, { includePrivateData: false });
+      const trustedEvents = collectPrivateEvents();
+      setEnabled(enabled);
 
-      emitTrustedSkillUsedDiagnosticEvent(
+      emitSkill(
         {
           type: "skill.used",
           skillName: "Daily Brief",
@@ -470,7 +341,7 @@ describe("diagnostic-events", () => {
           },
         },
       );
-      await waitForDiagnosticEventsDrained();
+      await drain();
 
       expect(JSON.stringify(publicEvents)).not.toContain(skillFile);
       expect(JSON.stringify(sharedEvents)).not.toContain(skillFile);
@@ -489,91 +360,44 @@ describe("diagnostic-events", () => {
   );
 
   it("emits canonical security events only through the trusted security helper", () => {
-    const internalEvents: Array<{
-      action?: string;
-      eventId?: string;
-      trusted: boolean;
-      type: string;
-    }> = [];
-    onInternalDiagnosticEvent((event, metadata) => {
-      internalEvents.push({
-        action: event.type === "security.event" ? event.action : undefined,
-        eventId: event.type === "security.event" ? event.eventId : undefined,
-        trusted: metadata.trusted,
-        type: event.type,
-      });
-    });
+    const publicEvents = collectEvents(onPublic);
+    const internalEvents = captureEvents(onInternal);
 
-    emitDiagnosticEvent({
-      type: "security.event",
-      eventId: "untrusted-security-event",
+    const security = {
       category: "tool",
       action: "tool.execution.blocked",
       outcome: "denied",
       severity: "medium",
-    } as unknown as Parameters<typeof emitDiagnosticEvent>[0]);
-    emitTrustedDiagnosticEvent({
-      type: "security.event",
-      eventId: "generic-trusted-security-event",
-      category: "tool",
-      action: "tool.execution.blocked",
-      outcome: "denied",
-      severity: "medium",
-    } as unknown as Parameters<typeof emitTrustedDiagnosticEvent>[0]);
-    emitTrustedSecurityEvent({
-      eventId: "security-event-1",
-      category: "tool",
-      action: "tool.execution.blocked",
-      outcome: "denied",
-      severity: "medium",
-    });
+    } as const;
+    for (const send of [emit, emitTrusted]) {
+      send({ ...security, type: "security.event", eventId: "forged" } as unknown as Parameters<
+        typeof emit
+      >[0]);
+    }
+    emitSecurity({ ...security, eventId: "security-event-1" });
 
-    expect(internalEvents).toEqual([
-      {
+    expect(internalEvents).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
         action: "tool.execution.blocked",
         eventId: "security-event-1",
-        trusted: true,
         type: "security.event",
-      },
-    ]);
-  });
-
-  it("keeps trusted security events off the public diagnostic stream", () => {
-    const publicEvents: string[] = [];
-    const internalEvents: Array<{ trusted: boolean; type: string }> = [];
-    onDiagnosticEvent((event) => {
-      publicEvents.push(event.type);
-    });
-    onInternalDiagnosticEvent((event, metadata) => {
-      internalEvents.push({ trusted: metadata.trusted, type: event.type });
-    });
-
-    emitTrustedSecurityEvent({
-      eventId: "security-event-public-filter",
-      category: "auth",
-      action: "gateway.auth.failed",
-      outcome: "failure",
-      severity: "medium",
-    });
-
+      }),
+      expect.objectContaining({ trusted: true }),
+    );
     expect(publicEvents).toStrictEqual([]);
-    expect(internalEvents).toEqual([{ trusted: true, type: "security.event" }]);
   });
 
   it("isolates diagnostic metadata from listener mutation", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const seen: boolean[] = [];
-    onInternalDiagnosticEvent((eventValue, metadata) => {
+    onInternal((eventValue, metadata) => {
       (metadata as { trusted: boolean }).trusted = true;
     });
-    onInternalDiagnosticEvent((eventValue, metadata) => {
+    onInternal((eventValue, metadata) => {
       seen.push(metadata.trusted);
     });
 
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "plugin",
-    });
+    emit({ type: "message.queued", source: "plugin" });
 
     expect(seen).toEqual([false]);
     expectConsoleErrorPrefix(
@@ -582,61 +406,88 @@ describe("diagnostic-events", () => {
     );
   });
 
-  it("isolates trusted event trace context from listener mutation", async () => {
+  it("shares a frozen snapshot isolated from listener and producer mutation", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const trace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-    });
-    const seen: Array<{ traceId: string | undefined; trusted: boolean }> = [];
-    onInternalDiagnosticEvent((event) => {
-      (event.trace as { traceId: string }).traceId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    });
-    onInternalDiagnosticEvent((event, metadata) => {
-      seen.push({ traceId: event.trace?.traceId, trusted: metadata.trusted });
-    });
-
-    emitTrustedDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-      trace,
-    });
-
-    await yieldToEventLoop();
-    expect(seen).toEqual([{ traceId: trace.traceId, trusted: true }]);
-    expectConsoleErrorPrefix(
-      errorSpy,
-      "[diagnostic-events] listener error type=model.call.started seq=1: TypeError",
-    );
-  });
-
-  it("isolates nested diagnostic payloads from listener mutation", () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const usage = { total: 42 };
+    const events: Event[] = [];
     const seen: Array<{ total: number | undefined; trusted: boolean }> = [];
-    onInternalDiagnosticEvent((event) => {
+    onInternal((event) => {
+      events.push(event);
+      usage.total = 7;
       if (event.type === "model.usage") {
         event.usage.total = 0;
       }
     });
-    onInternalDiagnosticEvent((event, metadata) => {
+    onInternal((event, metadata) => {
+      events.push(event);
       if (event.type === "model.usage") {
         seen.push({ total: event.usage.total, trusted: metadata.trusted });
       }
     });
+    onTrusted((event) => events.push(event));
 
-    emitTrustedDiagnosticEvent({
-      type: "model.usage",
-      usage: { total: 42 },
-    });
+    emitTrusted({ type: "model.usage", usage });
 
+    expect(events).toHaveLength(3);
+    expect(events[1]).toBe(events[0]);
+    expect(events[2]).toBe(events[0]);
+    expect(usage.total).toBe(7);
     expect(seen).toEqual([{ total: 42, trusted: true }]);
     expectConsoleErrorPrefix(
       errorSpy,
       "[diagnostic-events] listener error type=model.usage seq=1: TypeError",
     );
+  });
+
+  it("keeps opaque plugin values isolated across listeners", () => {
+    const extra = {
+      map: new Map([["value", 42]]),
+      date: new Date(123),
+      set: new Set([42]),
+      array: Object.assign([1], { bytes: new Uint8Array([42]) }),
+    };
+    const eventInput = { type: "message.queued" as const, source: "plugin", extra };
+    onPublic((event) => {
+      const captured = (event as Event & typeof eventInput).extra;
+      captured.map.set("value", 0);
+      captured.date.setTime(0);
+      captured.set.clear();
+      captured.array.bytes[0] = 0;
+    });
+    const observed: Event[] = [];
+    onTrusted((event) => observed.push(event));
+
+    emit(eventInput);
+
+    expect(observed).toHaveLength(1);
+    const captured = (observed[0] as Event & typeof eventInput).extra;
+    for (const value of [captured, extra]) {
+      expect(value.map.get("value")).toBe(42);
+      expect(value.date.getTime()).toBe(123);
+      expect([...value.set]).toEqual([42]);
+      expect(value.array.bytes[0]).toBe(42);
+    }
+  });
+
+  it("freezes extra array properties and cyclic plugin payloads before sharing", () => {
+    const children = Object.assign([1], { extra: { value: 42 } });
+    const extra = { children, self: {} };
+    extra.self = extra;
+    const input = { type: "message.queued" as const, source: "plugin", extra };
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    onPublic((event) => {
+      (event as Event & typeof input).extra.children.extra.value = 0;
+    });
+    const observed: Event[] = [];
+    onPublic((event) => observed.push(event));
+
+    emit(input);
+
+    const captured = (observed[0] as Event & typeof input).extra;
+    expect(captured.children.extra.value).toBe(42);
+    expect(captured.self).toBe(captured);
+    expect(Object.isFrozen(captured.children.extra)).toBe(true);
+    expect(errors).toHaveBeenCalledOnce();
   });
 
   it("drops prototype-pollution keys during event enrichment", () => {
@@ -645,17 +496,14 @@ describe("diagnostic-events", () => {
       source: "plugin",
       constructor: "blocked",
       prototype: "blocked",
-    }) as Parameters<typeof emitDiagnosticEvent>[0] & Record<string, unknown>;
+    }) as Parameters<typeof emit>[0] & Record<string, unknown>;
     Object.defineProperty(eventInput, "__proto__", {
       enumerable: true,
       value: { polluted: true },
     });
-    const events: Array<Parameters<Parameters<typeof onInternalDiagnosticEvent>[0]>[0]> = [];
-    onInternalDiagnosticEvent((event) => {
-      events.push(event);
-    });
+    const events = collectEvents(onInternal);
 
-    emitDiagnosticEvent(eventInput);
+    emit(eventInput);
 
     expect(events).toHaveLength(1);
     expect(Object.hasOwn(events[0] ?? {}, "__proto__")).toBe(false);
@@ -664,99 +512,18 @@ describe("diagnostic-events", () => {
     expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
   });
 
-  it("dispatches high-frequency tool and model lifecycle events asynchronously", async () => {
-    const events: string[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event.type);
-    });
-
-    emitDiagnosticEvent({
-      type: "tool.execution.started",
-      toolName: "read",
-    });
-    emitDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    expect(events).toStrictEqual([]);
-    await yieldToEventLoop();
-    expect(events).toEqual(["tool.execution.started", "model.call.started"]);
-  });
-
-  it("yields between large high-frequency diagnostic event bursts", async () => {
-    const events: string[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event.type);
-    });
-
-    for (let index = 0; index < 250; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `run-${index}`,
-        callId: `call-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
-    }
-
-    expect(events).toStrictEqual([]);
-    await yieldToEventLoop();
-    expect(events).toHaveLength(100);
-    await yieldToEventLoop();
-    expect(events).toHaveLength(200);
-    await yieldToEventLoop();
-    expect(events).toHaveLength(250);
-  });
-
-  it("waits for all queued high-frequency diagnostic events to drain", async () => {
-    const events: string[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event.type);
-    });
-
-    for (let index = 0; index < 250; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `run-${index}`,
-        callId: `call-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
-    }
-
-    await waitForDiagnosticEventsDrained();
-
-    expect(events).toHaveLength(250);
-  });
-
   it("does not extend a drain barrier for events queued after it starts", async () => {
     const callIds: string[] = [];
-    onDiagnosticEvent((event) => {
+    onPublic((event) => {
       if (event.type === "model.call.started") {
         callIds.push(event.callId);
       }
     });
 
-    emitDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-before-barrier",
-      callId: "before-barrier",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-    const drained = waitForDiagnosticEventsDrained();
+    emit(modelStartedEvent("run-before-barrier", "before-barrier"));
+    const drained = drain();
     for (let index = 0; index < 250; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `run-after-${index}`,
-        callId: `after-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
+      emit(modelStartedEvent(`run-after-${index}`, `after-${index}`));
     }
 
     await drained;
@@ -764,59 +531,20 @@ describe("diagnostic-events", () => {
     expect(callIds).toHaveLength(100);
     expect(callIds[0]).toBe("before-barrier");
     expect(
-      hasPendingInternalDiagnosticEvent(
-        (event) => event.type === "model.call.started" && event.callId === "after-249",
-      ),
+      hasPending((event) => event.type === "model.call.started" && event.callId === "after-249"),
     ).toBe(true);
 
-    await waitForDiagnosticEventsDrained();
+    await drain();
     expect(callIds).toHaveLength(251);
   });
 
-  it("reports pending async diagnostic events before they drain", async () => {
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.error",
-      runId: "run-pending",
-      toolName: "exec",
-      toolCallId: "call-pending",
-      durationMs: 1,
-      errorCategory: "test",
-    });
-
-    expect(
-      hasPendingInternalDiagnosticEvent(
-        (event, metadata) =>
-          metadata.trusted &&
-          event.type === "tool.execution.error" &&
-          event.toolCallId === "call-pending",
-      ),
-    ).toBe(true);
-
-    await waitForDiagnosticEventsDrained();
-
-    expect(
-      hasPendingInternalDiagnosticEvent((event) => event.type === "tool.execution.error"),
-    ).toBe(false);
-  });
-
   it("passes immutable pending diagnostic copies to queue inspectors", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    onInternalDiagnosticEvent((event) => {
-      events.push(event);
-    });
-
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.error",
-      runId: "run-immutable",
-      toolName: "exec",
-      toolCallId: "call-immutable",
-      durationMs: 1,
-      errorCategory: "test",
-    });
+    const events = collectEvents(onInternal);
+    emitTrusted(toolErrorEvent("run-immutable", "call-immutable"));
 
     let mutationErrors = 0;
     expect(
-      hasPendingInternalDiagnosticEvent((event, metadata) => {
+      hasPending((event, metadata) => {
         try {
           (event as { type: string }).type = "model.usage";
         } catch {
@@ -836,36 +564,22 @@ describe("diagnostic-events", () => {
     ).toBe(true);
     expect(mutationErrors).toBe(2);
 
-    await waitForDiagnosticEventsDrained();
+    await drain();
+    expect(hasPending((event) => event.type === "tool.execution.error")).toBe(false);
 
-    expect(events).toMatchObject([
-      {
-        type: "tool.execution.error",
-        toolCallId: "call-immutable",
-      },
-    ]);
+    expect(events).toMatchObject([{ type: "tool.execution.error", toolCallId: "call-immutable" }]);
   });
 
   it("skips uncloneable pending diagnostics during queue inspection", async () => {
-    emitDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-uncloneable",
-      callId: "call-uncloneable",
-      provider: "openai",
-      model: "gpt-5.4",
+    onInternal(() => {});
+    emit({
+      ...modelStartedEvent("run-uncloneable", "call-uncloneable"),
       badValue: () => undefined,
     } as never);
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.error",
-      runId: "run-cloneable",
-      toolName: "exec",
-      toolCallId: "call-cloneable",
-      durationMs: 1,
-      errorCategory: "test",
-    });
+    emitTrusted(toolErrorEvent("run-cloneable", "call-cloneable"));
 
     expect(
-      hasPendingInternalDiagnosticEvent(
+      hasPending(
         (event, metadata) =>
           metadata.trusted &&
           event.type === "tool.execution.error" &&
@@ -874,182 +588,29 @@ describe("diagnostic-events", () => {
     ).toBe(true);
   });
 
-  it("preserves trusted lifecycle terminals when the async queue is full", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    onInternalDiagnosticEvent((event) => {
-      events.push(event);
-    });
-    const model = {
-      runId: "run-model",
-      callId: "call-model",
-      provider: "openai",
-      model: "gpt-5.4",
-    };
-    const harness = { runId: "run-harness", harnessId: "harness" };
-    const terminalEvents: Array<Parameters<typeof emitTrustedDiagnosticEvent>[0]> = [
-      { type: "tool.execution.completed", toolName: "exec", durationMs: 1 },
-      { type: "tool.execution.error", toolName: "exec", durationMs: 1, errorCategory: "test" },
-      { type: "model.call.completed", ...model, durationMs: 1 },
-      { type: "model.call.error", ...model, durationMs: 1, errorCategory: "test" },
-      { type: "harness.run.completed", ...harness, durationMs: 1, outcome: "completed" },
-      {
-        type: "harness.run.error",
-        ...harness,
-        durationMs: 1,
-        phase: "resolve",
-        errorCategory: "test",
-      },
-    ];
-
-    emitTrustedDiagnosticEvent(terminalEvents[0]!);
-
-    for (let index = 0; index < 9_999; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `saturation-run-${index}`,
-        callId: `saturation-call-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
-    }
-    for (const terminalEvent of terminalEvents.slice(1)) {
-      emitTrustedDiagnosticEvent(terminalEvent);
-    }
-
-    expect(
-      hasPendingInternalDiagnosticEvent(
-        (event, metadata) => metadata.trusted && event.type === "harness.run.error",
-      ),
-    ).toBe(true);
-
-    await waitForDiagnosticEventsDrained();
-
-    for (const terminalEvent of terminalEvents) {
-      expect(events).toContainEqual(expect.objectContaining(terminalEvent));
-    }
-    expect(
-      events.filter(
-        (event) => event.type === "model.call.started" && event.runId.startsWith("saturation-run-"),
-      ),
-    ).toHaveLength(9_994);
-  });
-
-  it("emits a bounded summary when async diagnostics are dropped at saturation", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event);
-    });
-
-    for (let index = 0; index < 10_001; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `drop-run-${index}`,
-        callId: `drop-call-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
-    }
-    emitTrustedDiagnosticEvent({ type: "gateway.rpc", method: "health", phase: "received" });
-
-    await waitForDiagnosticEventsDrained();
-
-    const dropSummary = events.find(
-      (
-        event,
-      ): event is Extract<DiagnosticEventPayload, { type: "diagnostic.async_queue.dropped" }> =>
-        event.type === "diagnostic.async_queue.dropped",
-    );
-    expect(dropSummary).toMatchObject({
-      type: "diagnostic.async_queue.dropped",
-      droppedEvents: 2,
-      droppedTrustedEvents: 1,
-      droppedUntrustedEvents: 1,
-      maxQueueLength: 10_000,
-      drainBatchSize: 100,
-    });
-    expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(10_000);
-    expect(events.some((event) => event.type === "gateway.rpc")).toBe(false);
-  });
-
-  it("emits exec approval followup suppression events on the public stream", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event);
-    });
-
-    emitDiagnosticEvent({
-      type: "exec.approval.followup_suppressed",
-      approvalId: "approval-123",
-      reason: "session_rebound",
-      phase: "gateway_preflight",
-    });
-
-    await waitForDiagnosticEventsDrained();
-
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "exec.approval.followup_suppressed",
-        approvalId: "approval-123",
-        reason: "session_rebound",
-        phase: "gateway_preflight",
-        ts: expect.any(Number),
-      }),
-    );
-  });
-
   it("keeps trusted private data off shared internal diagnostic listeners", async () => {
-    const internalEvents: DiagnosticEventPayload[] = [];
-    const trustedEvents: Array<{
-      event: DiagnosticEventPayload;
-      privateData: unknown;
-    }> = [];
-    onInternalDiagnosticEvent((event) => {
-      internalEvents.push(event);
-    });
-    onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      trustedEvents.push({ event, privateData });
+    const internalEvents = collectEvents(onInternal);
+    const trustedEvents = collectPrivateEvents();
+
+    emitPrivate(modelStartedEvent(), {
+      modelContent: { inputMessages: ["secret prompt"], systemPrompt: "secret system" },
     });
 
-    emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type: "model.call.started",
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.4",
-      },
-      {
-        modelContent: {
-          inputMessages: ["secret prompt"],
-          systemPrompt: "secret system",
-        },
-      },
-    );
-
-    await waitForDiagnosticEventsDrained();
+    await drain();
 
     expect(JSON.stringify(internalEvents)).not.toContain("secret");
     expect(JSON.stringify(trustedEvents[0]?.event)).not.toContain("secret");
     expect(trustedEvents[0]?.privateData).toEqual({
-      modelContent: {
-        inputMessages: ["secret prompt"],
-        systemPrompt: "secret system",
-      },
+      modelContent: { inputMessages: ["secret prompt"], systemPrompt: "secret system" },
     });
   });
 
   it("skips event enrichment and subscribers when diagnostics are disabled", () => {
     const nowSpy = vi.spyOn(Date, "now");
-    const seen: string[] = [];
-    onDiagnosticEvent((event) => {
-      seen.push(event.type);
-    });
-    setDiagnosticsEnabledForProcess(false);
+    const seen = collectEvents(onPublic);
+    setEnabled(false);
 
-    emitDiagnosticEvent({
-      type: "webhook.received",
-      channel: "telegram",
-    });
+    emit({ type: "webhook.received", channel: "telegram" });
 
     expect(seen).toStrictEqual([]);
     expect(nowSpy).not.toHaveBeenCalled();
@@ -1058,20 +619,12 @@ describe("diagnostic-events", () => {
   it("drops recursive emissions after the guard threshold", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     let calls = 0;
-    onDiagnosticEvent(() => {
+    onPublic(() => {
       calls += 1;
-      emitDiagnosticEvent({
-        type: "queue.lane.enqueue",
-        lane: "main",
-        queueSize: calls,
-      });
+      emit({ type: "queue.lane.enqueue", lane: "main", queueSize: calls });
     });
 
-    emitDiagnosticEvent({
-      type: "queue.lane.enqueue",
-      lane: "main",
-      queueSize: 0,
-    });
+    emit({ type: "queue.lane.enqueue", lane: "main", queueSize: 0 });
 
     expect(calls).toBe(101);
     expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
@@ -1080,10 +633,239 @@ describe("diagnostic-events", () => {
   });
 
   it("enables diagnostics unless explicitly disabled", () => {
-    expect(isDiagnosticsEnabled()).toBe(true);
-    expect(isDiagnosticsEnabled({} as never)).toBe(true);
-    expect(isDiagnosticsEnabled({ diagnostics: {} } as never)).toBe(true);
-    expect(isDiagnosticsEnabled({ diagnostics: { enabled: false } } as never)).toBe(false);
-    expect(isDiagnosticsEnabled({ diagnostics: { enabled: true } } as never)).toBe(true);
+    expect(isEnabled()).toBe(true);
+    expect(isEnabled({} as never)).toBe(true);
+    expect(isEnabled({ diagnostics: {} } as never)).toBe(true);
+    expect(isEnabled({ diagnostics: { enabled: false } } as never)).toBe(false);
+    expect(isEnabled({ diagnostics: { enabled: true } } as never)).toBe(true);
+  });
+  it("keeps log records and runtime measurements off the public diagnostic event stream", async () => {
+    const publicEvents = collectEvents(onPublic);
+    const internalEvents = collectEvents(onInternal);
+
+    emit({ type: "log.record", level: "INFO", message: "private log" });
+    emitInternal({ type: "gateway.event_loop.sample", intervalMs: 1_000, delayMaxMs: 1_500 });
+    emitInternal({ type: "diagnostic.gc", durationMs: 25 });
+    emitInternal({ type: "gateway.http.cancelled", source: "client" });
+    expect(internalEvents).toStrictEqual([]);
+
+    await yieldToEventLoop();
+    expect(publicEvents).toStrictEqual([]);
+    expect(internalEvents.map((event) => event.type)).toEqual([
+      "log.record",
+      "gateway.event_loop.sample",
+      "diagnostic.gc",
+      "gateway.http.cancelled",
+    ]);
+  });
+});
+
+const trace = { traceId: "1234567890abcdef1234567890abcdef", spanId: "1234567890abcdef" };
+const phase = { name: "runtime.fixture", startedAt: 10, endedAt: 20, durationMs: 10 };
+
+describe("queued runtime diagnostic phases", () => {
+  beforeEach(resetDiagnosticPhasesForTest);
+  afterEach(async () => {
+    await drain();
+    resetDiagnosticPhasesForTest();
+  });
+
+  it("preserves synchronous startup history and queues owned runtime snapshots with their captured trace", async () => {
+    const publicEvents = collectEvents(onPublic);
+    const events = collectEvents(onTrusted);
+    await withDiagnosticPhase("startup.fixture", () => undefined);
+    expect(events.map((event) => event.type)).toEqual(["diagnostic.phase.completed"]);
+    expect(getRecentDiagnosticPhases(0).map((entry) => entry.name)).toEqual(["startup.fixture"]);
+
+    const bound = withTrace(trace, phaseEmitter)!;
+    const parentless = withTrace(undefined, phaseEmitter)!;
+    const details = { threadCpuMs: 3 };
+    withTrace(trace, () => {
+      parentless({ ...phase, name: "runtime.parentless" });
+      bound({ ...phase, details });
+    });
+    details.threadCpuMs = 999;
+    expect(events).toHaveLength(1);
+    await drain();
+
+    expect(events[1]).toMatchObject({ name: "runtime.parentless", trace: undefined });
+    expect(events[2]).toMatchObject({ ...phase, trace, details: { threadCpuMs: 3 } });
+    expect(publicEvents).toHaveLength(1);
+    expect(getRecentDiagnosticPhases(0).map((entry) => entry.name)).toEqual(["startup.fixture"]);
+  });
+
+  it("requires a currently interested trusted consumer and respects disabled diagnostics", async () => {
+    const events = collectEvents(onInternal);
+    onTrusted(() => {}, { includeTrusted: ["gateway.rpc"] });
+    expect(phaseEmitter()).toBeUndefined();
+    const stop = onTrusted(() => {}, { include: ["diagnostic.phase.completed"] });
+    setEnabled(false);
+    expect(phaseEmitter()).toBeUndefined();
+    setEnabled(true);
+    const emitPhase = phaseEmitter()!;
+    setEnabled(false);
+    emitPhase(phase);
+    setEnabled(true);
+    stop();
+    emitPhase(phase);
+    await drain();
+    expect(events).toEqual([]);
+  });
+
+  it("uses the bounded diagnostic queue without displacing required lifecycle terminals", async () => {
+    const publicEvents = collectEvents(onPublic);
+    const events = collectEvents(onTrusted);
+    const emitPhase = phaseEmitter()!;
+    for (let index = 0; index < 9_999; index++) {
+      emitPhase(phase);
+    }
+    emit(modelStartedEvent("queued", "queued"));
+    emitPhase(phase);
+    emit(modelStartedEvent("dropped", "dropped"));
+    emitTrusted({ type: "tool.execution.completed", toolName: "exec", durationMs: 1 });
+    expect(events).toHaveLength(0);
+    await drain();
+    expect(events.filter((event) => event.type === "diagnostic.phase.completed")).toHaveLength(
+      9_998,
+    );
+    expect(events).toContainEqual(expect.objectContaining({ type: "tool.execution.completed" }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic.async_queue.dropped",
+        droppedEvents: 3,
+        droppedTrustedEvents: 2,
+        droppedUntrustedEvents: 1,
+        maxQueueLength: 10_000,
+        drainBatchSize: 100,
+      }),
+    );
+    expect(publicEvents.map((event) => event.type)).toEqual([
+      "model.call.started",
+      "diagnostic.async_queue.dropped",
+    ]);
+  });
+});
+
+describe("diagnostic event plugin usage attribution", () => {
+  function attribution([event, metadata, privateData]: Parameters<Listener>) {
+    const eventPluginId: unknown = Reflect.get(event, "pluginId");
+    const hostPluginId: unknown = Reflect.get(privateData ?? metadata, "hostPluginId");
+    return {
+      eventPluginId,
+      hostPluginId,
+      internal: metadata.internal,
+      trusted: metadata.trusted,
+    };
+  }
+
+  it("keeps host plugin attribution private and unforgeable", () => {
+    const publicEvents = captureEvents(onInternal);
+    const trustedEvents = captureEvents(onTrusted);
+    const otelEvents = captureEvents((listener) =>
+      onTrusted(markTrustedOtelDiagnosticListener(listener)),
+    );
+
+    emitTrusted({
+      type: "model.usage",
+      usage: { input: 1 },
+      pluginId: "public-emitter-spoof",
+    } as Parameters<typeof emitTrusted>[0] & { pluginId: string });
+    emitPrivate({ type: "model.usage", usage: { input: 2 } }, {
+      hostPluginId: "private-data-spoof",
+    } as Parameters<typeof emitPrivate>[1] & {
+      hostPluginId: string;
+    });
+    emitTrusted(
+      markHostPluginUsageDiagnosticEvent({ type: "model.usage", usage: { input: 3 } }, "llm-task"),
+    );
+
+    const unattributed = {
+      eventPluginId: undefined,
+      hostPluginId: undefined,
+      internal: undefined,
+      trusted: true,
+    };
+    const expectedUnattributed = [
+      { ...unattributed, eventPluginId: "public-emitter-spoof" },
+      unattributed,
+      { ...unattributed, internal: true },
+    ];
+    expect(publicEvents.mock.calls.map(attribution)).toEqual(expectedUnattributed);
+    expect(trustedEvents.mock.calls.map(attribution)).toEqual(expectedUnattributed);
+    expect(otelEvents.mock.calls.map(attribution)).toEqual([
+      ...expectedUnattributed.slice(0, 2),
+      { ...expectedUnattributed[2], hostPluginId: "llm-task" },
+    ]);
+  });
+
+  it("scopes OTel attribution to one listener registration", () => {
+    const sharedListener = vi.fn<Listener>();
+    onTrusted(sharedListener);
+    onTrusted(markTrustedOtelDiagnosticListener(sharedListener));
+
+    emitTrusted(
+      markHostPluginUsageDiagnosticEvent({ type: "model.usage", usage: { input: 1 } }, "llm-task"),
+    );
+
+    expect(sharedListener.mock.calls.map(attribution).map((event) => event.hostPluginId)).toEqual([
+      undefined,
+      "llm-task",
+    ]);
+  });
+});
+
+describe("private diagnostic data", () => {
+  it("shares the frozen empty private payload with OTel listeners", () => {
+    const received: PrivateData[] = [];
+    onTrusted((_evt, _meta, data) => received.push(data));
+    onTrusted(markTrustedOtelDiagnosticListener((_evt, _meta, data) => received.push(data)));
+
+    emitTrusted({ type: "model.usage", usage: { input: 1 } });
+    emitTrusted({ type: "model.usage", usage: { input: 2 } });
+
+    expect(received).toHaveLength(4);
+    expect(received[0]).toEqual({});
+    expect(Object.isFrozen(received[0])).toBe(true);
+    expect(new Set(received).size).toBe(1);
+  });
+
+  it("replaces private-data policy with listener interests and clears it on reset", () => {
+    const received = vi.fn();
+    const readPrivateData = vi.fn(() => "synthetic private error");
+    const send = () =>
+      emitPrivate(
+        { type: "model.usage", usage: { input: 1 } },
+        {
+          get errorMessage() {
+            return readPrivateData();
+          },
+        },
+      );
+    const stop = onTrusted(received, { include: ["log.record"] });
+    onTrusted(received, { include: ["model.usage"] }, { includePrivateData: false });
+    expect(hasInterest("log.record")).toBe(false);
+    expect(hasInterest("model.usage")).toBe(true);
+    send();
+    expect(received.mock.calls[0]?.[2]).toEqual({});
+    expect(readPrivateData).not.toHaveBeenCalled();
+
+    onTrusted(received, { include: ["model.usage"] });
+    send();
+    expect(received.mock.calls[1]?.[2]).toEqual({ errorMessage: "synthetic private error" });
+    expect(readPrivateData).toHaveBeenCalledOnce();
+    stop();
+    expect(hasInterest("model.usage")).toBe(false);
+    expect(hasListeners()).toBe(false);
+    send();
+    expect(received).toHaveBeenCalledTimes(2);
+
+    onTrusted(received, undefined, { includePrivateData: false });
+    resetEvents();
+    expect(hasListeners()).toBe(false);
+    const stopAfterReset = onTrusted(received);
+    send();
+    expect(received.mock.calls[2]?.[2]).toEqual({ errorMessage: "synthetic private error" });
+    expect(readPrivateData).toHaveBeenCalledTimes(2);
+    stopAfterReset();
   });
 });

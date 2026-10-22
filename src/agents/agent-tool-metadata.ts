@@ -1,11 +1,22 @@
+import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import { PluginHostObject } from "../plugins/plugin-instance-owned-values.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { copyAgentToolAvailability } from "./agent-tool-availability.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { copyBeforeToolCallMetadata } from "./before-tool-call-metadata.js";
+import {
+  copyBeforeToolCallMetadata,
+  type ToolExecutionWrapper,
+} from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { copyCodeModeControlToolIdentity } from "./code-mode-control-tools.js";
 import { copyCronScheduledToolProjection } from "./exec-tool-target-pinning.js";
-import { copyInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
+import {
+  attachInternalToolExecutionPreparer,
+  copyInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+} from "./runtime/internal-hooks.js";
+import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
+import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 export type AgentToolActionDescriptor = Readonly<{
@@ -13,26 +24,89 @@ export type AgentToolActionDescriptor = Readonly<{
   operation: "filesystem" | "memory" | "openclaw" | "process";
 }>;
 
-const actionDescriptors = new WeakMap<AnyAgentTool, AgentToolActionDescriptor>();
+export type AgentToolExecutionLocation =
+  | { kind: "placement" }
+  | {
+      kind: "gateway";
+      unavailableReason?: string;
+      replay?: boolean;
+      connectionScoped?: true;
+      timeout?: WorkerToolSurface["tools"][number]["timeout"];
+    };
+
+type ToolActionState = Readonly<{
+  descriptor?: AgentToolActionDescriptor;
+  executionLocation?: AgentToolExecutionLocation;
+  gatewayPolicyControl?: true;
+}>;
+
+// Rebuilt tools retain prepared classification without adding weak-table edges.
+class ToolActionMetadata extends PluginHostObject {
+  #state: ToolActionState;
+
+  constructor(tool: AnyAgentTool, state: ToolActionState) {
+    super(tool);
+    this.#state = state;
+  }
+
+  static get(tool: object): ToolActionState | undefined {
+    return #state in tool ? tool.#state : undefined;
+  }
+
+  static set(tool: AnyAgentTool, state: ToolActionState): void {
+    if (#state in tool) {
+      tool.#state = { ...tool.#state, ...state };
+    } else {
+      void new ToolActionMetadata(tool, state);
+    }
+  }
+}
+
+/** Only host-owned catalog dispatchers bypass the target-tool allowlist. */
+export function bindGatewayToolPolicyControl<T extends AnyAgentTool>(tool: T): T {
+  ToolActionMetadata.set(tool, { gatewayPolicyControl: true });
+  return tool;
+}
+
+export function isGatewayToolPolicyControl(tool: object): boolean {
+  return ToolActionMetadata.get(tool)?.gatewayPolicyControl === true;
+}
+
+const memoryAction: AgentToolActionDescriptor = Object.freeze({
+  family: "data",
+  operation: "memory",
+});
+const openclawAction: AgentToolActionDescriptor = Object.freeze({
+  family: "tool",
+  operation: "openclaw",
+});
+
+export function bindAgentToolExecutionLocation(
+  tool: AnyAgentTool,
+  location: AgentToolExecutionLocation,
+): void {
+  ToolActionMetadata.set(tool, { executionLocation: location });
+}
+
+export function getAgentToolExecutionLocation(tool: AnyAgentTool): AgentToolExecutionLocation {
+  return (
+    ToolActionMetadata.get(tool)?.executionLocation ?? {
+      kind: resolveCoreToolExecutionLocation(tool.name),
+    }
+  );
+}
 
 export function bindAgentToolActionDescriptor(
   tool: AnyAgentTool,
   descriptor: AgentToolActionDescriptor,
 ): void {
-  actionDescriptors.set(tool, descriptor);
+  ToolActionMetadata.set(tool, { descriptor });
 }
 
 export function getAgentToolActionDescriptor(
   tool: AnyAgentTool,
 ): AgentToolActionDescriptor | undefined {
-  return actionDescriptors.get(tool);
-}
-
-function copyAgentToolActionDescriptor(source: AnyAgentTool, target: AnyAgentTool): void {
-  const descriptor = actionDescriptors.get(source);
-  if (descriptor) {
-    actionDescriptors.set(target, descriptor);
-  }
+  return ToolActionMetadata.get(tool)?.descriptor;
 }
 
 /** Preserve only the metadata owned by a before-tool-call wrapper rebuild. */
@@ -44,39 +118,62 @@ export function copyBeforeToolCallWrapperMetadata(
   // SAFETY: both metadata owners attach to the same runtime tool object shape.
   copyChannelAgentToolMeta(source as never, target as never);
   copyToolTerminalPresentation(source, target);
-  copyAgentToolActionDescriptor(source, target);
+  copyCodeModeControlToolIdentity(source, target);
+  const state = ToolActionMetadata.get(source);
+  if (state) {
+    ToolActionMetadata.set(target, state);
+  }
   copyAgentToolAvailability(source, target);
+  copyAgentToolReplaySafety(source, target);
 }
 
 /** Bind the broad family at final assembly from private, process-stable owner metadata. */
 export function bindAssembledAgentToolActionDescriptor(tool: AnyAgentTool): void {
-  if (actionDescriptors.has(tool)) {
+  if (getAgentToolActionDescriptor(tool)) {
     return;
   }
   const kind = getPluginToolMeta(tool)?.kind;
   const memory = kind === "memory" || (Array.isArray(kind) && kind.includes("memory"));
-  actionDescriptors.set(
-    tool,
-    memory ? { family: "data", operation: "memory" } : { family: "tool", operation: "openclaw" },
-  );
+  bindAgentToolActionDescriptor(tool, memory ? memoryAction : openclawAction);
 }
 
 /**
  * Preserve identity-backed tool metadata that object spread cannot carry.
  * Losing it detaches policy, hooks, presentation, and control-flow ownership.
  */
-export function copyAgentToolMetadata<T extends AnyAgentTool>(source: AnyAgentTool, target: T): T {
+export function copyAgentToolMetadata<T extends AnyAgentTool>(
+  source: AnyAgentTool,
+  target: T,
+  wrapExecution?: ToolExecutionWrapper,
+): T {
   if (source === target) {
     return target;
   }
-  copyPluginToolMeta(source, target);
-  copyChannelAgentToolMeta(source as never, target as never);
-  copyBeforeToolCallMetadata(source, target);
-  copyToolTerminalPresentation(source, target);
-  copyCodeModeControlToolIdentity(source, target);
+  copyBeforeToolCallWrapperMetadata(source, target);
+  copyBeforeToolCallMetadata(source, target, wrapExecution);
   copyCronScheduledToolProjection(source, target);
   copyInternalToolExecutionPreparer(source, target);
-  copyAgentToolActionDescriptor(source, target);
-  copyAgentToolAvailability(source, target);
   return target;
+}
+
+export function wrapAgentToolExecutionContext<T extends AnyAgentTool>(
+  tool: T,
+  execute: T["execute"],
+  run: <R>(operation: () => Promise<R>) => Promise<R>,
+  rewrap: ToolExecutionWrapper,
+): T {
+  const wrapped = copyAgentToolMetadata(tool, { ...tool, execute }, rewrap);
+  const sourcePreparer = getInternalToolExecutionPreparer(tool);
+  if (sourcePreparer) {
+    attachInternalToolExecutionPreparer(wrapped, async (params) => {
+      const prepared = await run(() => sourcePreparer(params));
+      return prepared.kind === "ready"
+        ? {
+            ...prepared,
+            execute: (start) => run(() => prepared.execute(start)),
+          }
+        : prepared;
+    });
+  }
+  return wrapped;
 }

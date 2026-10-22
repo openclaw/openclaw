@@ -293,6 +293,32 @@ struct ChatToolDiffTests {
         #expect(resolved.lines.first == ChatToolDiffLine(kind: .add, lineNo: 1, text: "input"))
     }
 
+    @Test func `overflowing patch line numbers preserve content without wrapping`() throws {
+        let cases: [(String, ChatToolDiffLineKind, Int?)] = [
+            ("+", .add, nil),
+            ("-", .del, .max - 1),
+            (" ", .ctx, nil),
+        ]
+        for (prefix, kind, tailLine) in cases {
+            let patch = [
+                "*** Update File: example.swift",
+                "@@ -\(Int.max - 1),3 +\(Int.max - 1),3 @@",
+                "\(prefix)first", "\(prefix)last", "\(prefix)overflow", "+tail",
+            ].joined(separator: "\n")
+            let resolved = try #require(ChatToolDiff.resolveDiff(
+                name: "apply_patch",
+                arguments: AnyCodable(["input": patch]),
+                details: nil))
+
+            #expect(resolved.lines == [
+                ChatToolDiffLine(kind: kind, lineNo: .max - 1, text: "first"),
+                ChatToolDiffLine(kind: kind, lineNo: .max, text: "last"),
+                ChatToolDiffLine(kind: kind, text: "overflow"),
+                ChatToolDiffLine(kind: .add, lineNo: tailLine, text: "tail"),
+            ])
+        }
+    }
+
     @Test func `separates add delete and move patch files`() throws {
         let patch = [
             "*** Begin Patch",

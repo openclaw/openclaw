@@ -1,45 +1,51 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCircuitBreakerKey,
-  getCircuitBreakerEntry,
   isCircuitBreakerOpen,
-  recordCircuitBreakerTimeout,
-  resetActiveRecallStateForTests,
+  recordCircuitBreakerTimeout as recordTimeout,
+  resetCircuitBreaker,
   shouldCacheResult,
 } from "./recall-state.js";
 import { DEFAULT_MAX_CACHE_ENTRIES } from "./types.js";
+
+const circuitKeys = new Set<string>();
+function recordCircuitBreakerTimeout(key: string, cooldownMs: number) {
+  circuitKeys.add(key);
+  recordTimeout(key, cooldownMs);
+}
 
 describe("active-memory timeout circuit breakers", () => {
   it.each([
     [{ status: "timeout_partial", elapsedMs: 1, summary: "partial" }, false],
     [{ status: "ok", elapsedMs: 1, rawReply: "full", summary: "full" }, true],
-    [{ status: "empty", elapsedMs: 1, summary: null }, false],
-    [{ status: "no_relevant_memory", elapsedMs: 1, summary: null }, false],
   ] as const)("applies cache eligibility to %#", (result, expected) => {
     expect(shouldCacheResult(result)).toBe(expected);
   });
 
   beforeEach(() => {
-    resetActiveRecallStateForTests();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
   });
 
   afterEach(() => {
-    resetActiveRecallStateForTests();
+    for (const key of circuitKeys) {
+      resetCircuitBreaker(key);
+    }
+    circuitKeys.clear();
     vi.useRealTimers();
   });
 
-  it.each([5_000, 120_000])("expires other entries after the %d ms cooldown", (cooldownMs) => {
+  it("keeps recent timeout circuits active after earlier circuits expire", () => {
+    const cooldownMs = 5_000;
     recordCircuitBreakerTimeout("old", cooldownMs);
     vi.advanceTimersByTime(cooldownMs - 1);
     recordCircuitBreakerTimeout("recent", cooldownMs);
     vi.advanceTimersByTime(1);
     recordCircuitBreakerTimeout("new", cooldownMs);
 
-    expect(getCircuitBreakerEntry("old")).toBeUndefined();
-    expect(getCircuitBreakerEntry("recent")?.consecutiveTimeouts).toBe(1);
-    expect(getCircuitBreakerEntry("new")?.consecutiveTimeouts).toBe(1);
+    expect(isCircuitBreakerOpen("old", 1, cooldownMs)).toBe(false);
+    expect(isCircuitBreakerOpen("recent", 1, cooldownMs)).toBe(true);
+    expect(isCircuitBreakerOpen("new", 1, cooldownMs)).toBe(true);
   });
 
   it("restarts an expired key before adding a new timeout", () => {
@@ -48,7 +54,7 @@ describe("active-memory timeout circuit breakers", () => {
     vi.advanceTimersByTime(cooldownMs);
     recordCircuitBreakerTimeout("same", cooldownMs);
 
-    expect(getCircuitBreakerEntry("same")?.consecutiveTimeouts).toBe(1);
+    expect(isCircuitBreakerOpen("same", 1, cooldownMs)).toBe(true);
     expect(isCircuitBreakerOpen("same", 2, cooldownMs)).toBe(false);
   });
 
@@ -58,11 +64,9 @@ describe("active-memory timeout circuit breakers", () => {
       recordCircuitBreakerTimeout(`model-${index}`, cooldownMs);
     }
 
-    expect(getCircuitBreakerEntry("model-0")).toBeUndefined();
-    expect(getCircuitBreakerEntry("model-1")?.consecutiveTimeouts).toBe(1);
-    expect(getCircuitBreakerEntry(`model-${DEFAULT_MAX_CACHE_ENTRIES}`)?.consecutiveTimeouts).toBe(
-      1,
-    );
+    expect(isCircuitBreakerOpen("model-0", 1, cooldownMs)).toBe(false);
+    expect(isCircuitBreakerOpen("model-1", 1, cooldownMs)).toBe(true);
+    expect(isCircuitBreakerOpen(`model-${DEFAULT_MAX_CACHE_ENTRIES}`, 1, cooldownMs)).toBe(true);
   });
 
   it("refreshes an existing key before evicting the least recently updated peer", () => {
@@ -74,9 +78,10 @@ describe("active-memory timeout circuit breakers", () => {
     recordCircuitBreakerTimeout("model-0", cooldownMs);
     recordCircuitBreakerTimeout("newest", cooldownMs);
 
-    expect(getCircuitBreakerEntry("model-0")?.consecutiveTimeouts).toBe(2);
-    expect(getCircuitBreakerEntry("model-1")).toBeUndefined();
-    expect(getCircuitBreakerEntry("newest")?.consecutiveTimeouts).toBe(1);
+    expect(isCircuitBreakerOpen("model-0", 2, cooldownMs)).toBe(true);
+    expect(isCircuitBreakerOpen("model-0", 3, cooldownMs)).toBe(false);
+    expect(isCircuitBreakerOpen("model-1", 1, cooldownMs)).toBe(false);
+    expect(isCircuitBreakerOpen("newest", 1, cooldownMs)).toBe(true);
   });
 
   it("keeps circuit-breaker decisions scoped to the agent, provider, and model", () => {

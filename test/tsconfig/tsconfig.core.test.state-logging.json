@@ -4,6 +4,8 @@
     "tsBuildInfoFile": "../../.artifacts/tsgo-cache/core-test-state-logging.tsbuildinfo"
   },
   "include": [
+    "../../src/audit/**/*.test.ts",
+    "../../src/audit/**/*.test.tsx",
     "../../src/state/**/*.test.ts",
     "../../src/state/**/*.test.tsx",
     "../../src/plugin-state/**/*.test.ts",
@@ -13,7 +15,7 @@
     "../../src/shared/**/*.test.ts",
     "../../src/shared/**/*.test.tsx",
     "../../src/infra/sqlite-*.test.ts",
-    "../../src/config/sessions/**/*.test.ts",
-    "../../src/config/sessions/**/*.test.tsx"
+    "../../src/infra/state-migrations*.test.ts",
+    "../../src/infra/state-migrations*.test.tsx"
   ]
 }

@@ -1,4 +1,3 @@
-// Discord plugin module implements audit core behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type {
   DiscordGuildChannelConfig,
@@ -46,24 +45,12 @@ export function resolveRequiredDiscordChannelPermissions(channelType?: number): 
   return [...REQUIRED_TEXT_CHANNEL_PERMISSIONS];
 }
 
-function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined) {
-  if (!config) {
-    return true;
-  }
-  if (config.enabled === false) {
-    return false;
-  }
-  return true;
-}
-
-function listConfiguredGuildChannelKeys(
-  guilds: Record<string, DiscordGuildEntry> | undefined,
-): string[] {
-  if (!guilds) {
-    return [];
-  }
+export function collectDiscordAuditChannelIdsForAccount(config: {
+  guilds?: Record<string, DiscordGuildEntry>;
+  voice?: { autoJoin?: Array<{ guildId?: string; channelId?: string }> };
+}) {
   const ids = new Set<string>();
-  for (const entry of Object.values(guilds)) {
+  for (const entry of Object.values(config.guilds ?? {})) {
     if (!entry || typeof entry !== "object") {
       continue;
     }
@@ -73,48 +60,29 @@ function listConfiguredGuildChannelKeys(
     }
     for (const [key, value] of Object.entries(channelsRaw)) {
       const channelId = normalizeOptionalString(key) ?? "";
-      if (!channelId) {
-        continue;
-      }
-      if (channelId === "*") {
-        continue;
-      }
-      if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined)) {
+      if (
+        !channelId ||
+        channelId === "*" ||
+        (value as DiscordGuildChannelConfig | undefined)?.enabled === false
+      ) {
         continue;
       }
       ids.add(channelId);
     }
   }
-  return [...ids].toSorted((a, b) => a.localeCompare(b));
-}
-
-function collectDiscordAuditChannelIdsForGuilds(
-  guilds: Record<string, DiscordGuildEntry> | undefined,
-) {
-  const keys = listConfiguredGuildChannelKeys(guilds);
-  const channelIds = keys.filter((key) => /^\d+$/.test(key));
-  const unresolvedChannels = keys.length - channelIds.length;
-  return { channelIds, unresolvedChannels };
-}
-
-export function collectDiscordAuditChannelIdsForAccount(config: {
-  guilds?: Record<string, DiscordGuildEntry>;
-  voice?: { autoJoin?: Array<{ guildId?: string; channelId?: string }> };
-}) {
-  const collected = collectDiscordAuditChannelIdsForGuilds(config.guilds);
-  const channelIds = new Set(collected.channelIds);
-  let unresolvedVoiceChannels = 0;
+  const channelIds = new Set([...ids].filter((key) => /^\d+$/.test(key)));
+  let unresolvedChannels = ids.size - channelIds.size;
   for (const entry of config.voice?.autoJoin ?? []) {
     const channelId = normalizeOptionalString(entry?.channelId) ?? "";
     if (/^\d+$/.test(channelId)) {
       channelIds.add(channelId);
     } else if (channelId) {
-      unresolvedVoiceChannels++;
+      unresolvedChannels++;
     }
   }
   return {
     channelIds: [...channelIds].toSorted((a, b) => a.localeCompare(b)),
-    unresolvedChannels: collected.unresolvedChannels + unresolvedVoiceChannels,
+    unresolvedChannels,
   };
 }
 
@@ -134,19 +102,9 @@ export async function auditDiscordChannelPermissionsWithFetcher(params: {
 }): Promise<DiscordChannelPermissionsAudit> {
   const started = Date.now();
   const token = normalizeOptionalString(params.token) ?? "";
-  if (!token || params.channelIds.length === 0) {
-    return {
-      ok: true,
-      checkedChannels: 0,
-      unresolvedChannels: 0,
-      channels: [],
-      elapsedMs: Date.now() - started,
-    };
-  }
-
   const channels: DiscordChannelPermissionsAuditEntry[] = [];
 
-  for (const channelId of params.channelIds) {
+  for (const channelId of token ? params.channelIds : []) {
     try {
       const perms = await params.fetchChannelPermissions(channelId, {
         cfg: params.cfg,

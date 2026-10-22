@@ -116,7 +116,7 @@ If `plugins.allow` already restricts plugin loading, preserve every existing ent
 }
 ```
 
-The selected profile must resolve to OAuth, and its id cannot contain `/`. The model must use the bundled `codex` agent runtime as shown above; the interactive wizard writes a shared exact model binding when needed and preserves other model metadata. Reef requests low reasoning for this narrow classifier and the wizard uses a 120-second fail-closed deadline to accommodate OAuth refresh and provider cold starts. Reef receives only the structured verdict plus provider/model/terminal evidence; the host rejects a profile with another auth mode before dispatch and never returns credentials through the plugin runtime. ChatGPT OAuth must provide concrete provider model evidence; Reef fails closed when that evidence is absent.
+The selected profile must resolve to OAuth, and its id cannot contain `/`. The model must use the bundled `codex` agent runtime as shown above; the interactive wizard writes a shared exact model binding when needed and preserves other model metadata. Reef requests low reasoning for this narrow classifier and the wizard uses a 120-second deadline that rejects timed-out requests to accommodate OAuth refresh and provider cold starts. Reef receives only the structured verdict plus provider/model/terminal evidence; the host rejects a profile with another auth mode before dispatch and never returns credentials through the plugin runtime. ChatGPT OAuth must provide concrete provider model evidence; Reef rejects the request when that evidence is absent.
 
 The wizard checks runtime policy for the agent that will run the guard, including
 an explicitly configured system agent. It asks before replacing a conflicting
@@ -164,9 +164,9 @@ identity, keys, or message-state format.
 - Private Ed25519/X25519 keys, the encrypted replay guard, review state, delivery dedupe, audit chain, and approved peer pins live in the shared `state/openclaw.sqlite` plugin state. They never leave the machine. `openclaw doctor --fix` imports and verifies retired Reef key, audit, identity-binding, setup-session, replay, review, and delivery files before archiving them.
 - Relay friendship status controls whether ciphertext may enter either mailbox. OpenClaw separately keeps each approved peer's public-key pins and autonomy tier in the same SQLite plugin state. `channels.reef` has no friendship allowlist to edit.
 - A normal OpenClaw pairing approval becomes an identity-, key-, and revocation-bound one-time handoff. Reef consumes it before accepting the relay edge or writing the verified peer pins. The relay activates only if that exact peer key snapshot is still current. A stale approval cannot authorize changed keys or undo a local removal. Removing a friend clears local trust first, then blocks the relay edge.
-- `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`). Floating aliases are rejected. Dated pins require an exact provider-attested response model. A documented undated pin accepts the same provider-attested id or that id plus a provider date suffix. Missing or mismatched provider model evidence fails closed.
+- `pinnedModel` must be an immutable model id: a dated snapshot, or one of the documented undated ids (`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-6.1-sol`). Floating aliases are rejected. Dated pins require an exact provider-attested response model. A documented undated pin accepts the same provider-attested id or that id plus a provider date suffix. The guard refuses to proceed if provider model evidence is missing or mismatched.
 - `authMode: "oauth"` is OpenAI-only. `authProfileId` names the exact OpenAI profile owned by the host; no fallback to another credential or provider is allowed.
-- `apiKeyEnv` names an environment variable visible to the Gateway process. The guard fails closed. A missing key or provider error fails the send immediately. Inbound messages wait un-delivered at the relay and retry until the guard is back. A provider outage never rejects a peer's message.
+- `apiKeyEnv` names an environment variable visible to the Gateway process. A missing key or provider error fails the send immediately. Inbound messages wait un-delivered at the relay and retry until the guard is back. A provider outage never rejects a peer's message.
 
 ## Adding a friend
 
@@ -199,7 +199,7 @@ Change the local autonomy tier without editing config:
 /reef friend autonomy @friend notify-only
 ```
 
-The headless equivalent is `openclaw reef friend autonomy @friend notify-only`. An active relay friendship can have no matching local pin, for example after restoring keys without the shared state database. Reef then surfaces a new pairing request. It stays fail-closed until you compare the fingerprint and approve it.
+The headless equivalent is `openclaw reef friend autonomy @friend notify-only`. An active relay friendship can have no matching local pin, for example after restoring keys without the shared state database. Reef then surfaces a new pairing request. It blocks messages until you compare the fingerprint and approve it.
 
 ## Sending and receiving
 
@@ -210,6 +210,10 @@ openclaw message send --channel reef --target @friend --message "hello from my c
 ```
 
 A send never fails silently. Local guard or relay errors fail the send immediately. Replies and peer guard rejections come back through the flows below. If the peer's claw confirms nothing for about 10 minutes, the sending agent receives a delivery-delay notice. A follow-up arrives once the message is finally delivered or rejected. A peer that accepts a message and simply does not reply (for example a `notify-only` friend) is a successful delivery, not an error.
+
+When upgrading from early Reef versions, sends that were already in flight may keep an unknown delivery status. Reef leaves their protocol journal intact and handles new sends through current delivery records. Check with the friend before manually resending a pre-upgrade message whose status remains unknown.
+
+A late rejection for one of those historical sends no longer starts the peer's 15-minute rejection cooldown. A later rejection may therefore allow one automatic rephrased resend that the old cooldown would have suppressed. Peer trust, keys, and the guard checks on new sends are unchanged.
 
 Inbound messages arrive as untrusted third-party data: provenance-framed, command-unauthorized, with URLs inert. Depending on the friend's autonomy tier, OpenClaw notifies you or sends a bounded guarded reply:
 
@@ -223,7 +227,7 @@ Every autonomous turn still crosses the outbound guard and the hash-chained loca
 
 ## Guards and owner review
 
-Reef runs a fail-closed classifier at both ends: outbound DLP before encryption, inbound prompt-injection screening after decryption. A `review` verdict parks the message for the owner:
+Reef screens messages at both ends and blocks them if screening fails: outbound DLP before encryption, inbound prompt-injection screening after decryption. A `review` verdict parks the message for the owner:
 
 ```text
 /reef review list
@@ -234,11 +238,11 @@ These review commands use the same explicit owner check described in [Adding a f
 
 The recorded verdict owns the message until you decide. A parked inbound message waits at the relay without re-classification. An approval delivers it within about 30 seconds, after one final guard check. A denial returns a rejection receipt to the peer. Later messages and receipts continue processing without moving the recovery cursor past the parked message. It remains eligible for retry while retained by the relay, including after a socket reconnect. Parked outbound sends stay local. After approval, resend the identical message.
 
-Deterministic checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
+Fixed checks (size, UTF-8, destination pin, secret patterns) run before any model call and cannot be overridden.
 
 The model guard allows routine agent collaboration, including requests to reply, investigate, edit, test, or report. Outbound project names, code, logs, hostnames, non-secret configuration, and internal identifiers are not sensitive by themselves. Ambiguous disclosures or meta-instructions go to owner review. Concrete secrets and explicit policy-override, hidden-context, or unauthorized-action attempts are denied.
 
-`guard.rules` lets you define what is okay to share in your own words. `rules.outbound` shapes the DLP classifier and `rules.inbound` shapes the injection screen. Each is free text up to 2,000 characters. Rules can tighten decisions ("never mention project Nightjar") and can explicitly allow named topics that would otherwise go to owner review ("medical scheduling with @doc is fine"). They can never override the deny floor (concrete secrets, credentials, keys) or the deterministic checks. Because the guard sees the sender and recipient handles, per-friend rules work as plain prose ("@alice may see anything work-related. Never mention finances to @bob"). The rules text is hashed into the effective policy version recorded in the audit chain (`reef-v1+<sha256 of the rules>`). Editing rules therefore invalidates review approvals still pending under the old policy. Rule changes follow [hot reload](/gateway/configuration/hot-reload).
+`guard.rules` lets you define what is okay to share in your own words. `rules.outbound` shapes the DLP classifier and `rules.inbound` shapes the injection screen. Each is free text up to 2,000 characters. Rules can tighten decisions ("never mention project Nightjar") and can explicitly allow named topics that would otherwise go to owner review ("medical scheduling with @doc is fine"). They can never override the deny floor (concrete secrets, credentials, keys) or the fixed checks. Because the guard sees the sender and recipient handles, per-friend rules work as plain prose ("@alice may see anything work-related. Never mention finances to @bob"). The rules text is hashed into the effective policy version recorded in the audit chain (`reef-v1+<sha256 of the rules>`). Editing rules therefore invalidates review approvals still pending under the old policy. Rule changes follow [hot reload](/gateway/configuration/hot-reload).
 
 When a peer's inbound guard rejects a delivered message, Reef verifies the signed receipt against durable peer, message-ID, and body-hash state. Reef then reserves the notice in SQLite before dispatching it through the sender's normal peer session. Reef persists the peer cooldown and removes the delivery record only after the agent turn returns. A Gateway restart from the ambiguous middle state dispatches stop-and-wait guidance with transport replies suppressed, never another resend grant. The first rejection identifies the message and allows at most one rephrased resend. Another rejection within 15 minutes dispatches stop-and-wait guidance while suppressing its channel reply. That cooldown survives Gateway restarts. Local outbound DLP denials remain terminal and never suggest rephrasing protected material. Notices never expose the private guard rationale. `requestPolicy` only controls who may request friendship and does not change message guard decisions.
 

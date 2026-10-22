@@ -1,0 +1,507 @@
+import { createRouter, definePage, type RouteMatch, type Router } from "@openclaw/uirouter";
+import type { JSX } from "@solidjs/web";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferredCore } from "../../../src/shared/deferred.js";
+import type { SolidRouteProps } from "../app-route-types.tsx";
+import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
+import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import {
+  disposeRouterOutlets,
+  mountRouterOutlet,
+  settleRouterOutlet,
+  type MountedRouterOutlet,
+} from "./router-outlet.test-support.tsx";
+
+type RouteId = "page" | "next";
+type TestContext = { label: string };
+type TestData = { label: string };
+type TestOwnerMatch = Pick<RouteMatch<string, unknown, TestData>, "data" | "location">;
+type TestModule = {
+  renderSolid: (props: SolidRouteProps<TestData>) => JSX.Element;
+  retainOnNavigate?: boolean;
+  renderOwnerKey?: (
+    match: TestOwnerMatch,
+    settled: TestOwnerMatch | undefined,
+  ) => string | undefined;
+};
+type TestRouter = Router<RouteId, TestContext, TestModule, TestData>;
+type RouterOutletElement = MountedRouterOutlet;
+
+function createOutlet(router: TestRouter, context: TestContext): RouterOutletElement {
+  return mountRouterOutlet({ router, retryContext: context });
+}
+
+afterEach(() => {
+  disposeRouterOutlets();
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
+  await settleRouterOutlet(outlet);
+}
+
+describe("openclaw-router-outlet", () => {
+  it("publishes native and Solid route hosts and retires their references with the route", async () => {
+    const Bridge = defineSolidBridge<{ label: string }>(
+      "openclaw-route-ref-test",
+      (props) => <span>{props.label}</span>,
+      { properties: { label: { default: "native" } } },
+    );
+    const native = new Bridge.Element();
+    const context = { label: "page" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            renderSolid: () => (
+              <>
+                {native}
+                <Bridge label="Solid" />
+              </>
+            ),
+          }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ({ renderSolid: () => <p>Next</p> }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    try {
+      await router.navigate("page", context);
+      await settleOutlet(outlet);
+      const hosts = outlet.renderedElements?.("openclaw-route-ref-test");
+      expect(hosts).toHaveLength(2);
+      expect(hosts).toContain(native);
+      expect(hosts?.map((host) => host.textContent)).toEqual(["native", "Solid"]);
+      expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBe(native);
+
+      await router.navigate("next", context);
+      await settleOutlet(outlet);
+      expect(outlet.renderedElements?.("openclaw-route-ref-test")).toEqual([]);
+      expect(outlet.renderedElement?.("openclaw-route-ref-test")).toBeUndefined();
+    } finally {
+      outlet.dispose();
+      router.stop();
+    }
+  });
+
+  it("settles the active route when a parked descendant's update fails", async () => {
+    const parked = document.createElement("test-parked-surface");
+    const ParkedRoute = () => <section>{parked}</section>;
+    const context = { label: "page" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            retainOnNavigate: true,
+            renderOwnerKey: () => "retained-page",
+            renderSolid: () => <ParkedRoute />,
+          }),
+          loader: () => ({ label: "page" }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ({ renderSolid: () => <p>Current destination</p> }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    const childUpdate = createDeferredCore<boolean>();
+    // Background work observes its own failure independently of route presentation.
+    void childUpdate.promise.catch(() => undefined);
+    try {
+      await router.navigate("page", context);
+      await settleOutlet(outlet);
+      await router.navigate("next", context);
+      await settleOutlet(outlet);
+      expect(parked.isConnected).toBe(true);
+      expect(parked.closest("[hidden][inert][aria-hidden=true]")).not.toBeNull();
+      Object.defineProperty(parked, "updateComplete", { value: childUpdate.promise });
+
+      const settlement = outlet.settlePresentation();
+      childUpdate.reject(new Error("Parked background update failed"));
+      await expect(settlement).resolves.toBe(true);
+      expect(outlet.textContent).toContain("Current destination");
+    } finally {
+      childUpdate.resolve(true);
+      outlet.dispose();
+      router.stop();
+    }
+  });
+
+  it("retains MCP Apps across route IDs that share an explicit owner", async () => {
+    const teardownView = vi.fn(async () => undefined);
+    const nextData = createDeferredCore<TestData>();
+    const OwnedRoute = (props: { label: string }) => (
+      <>
+        <mcp-app-view
+          ref={(element) => {
+            const target = Object.assign(element, {
+              restartAfterTeardown: vi.fn(),
+              teardown: teardownView,
+            });
+            onTestFinished(registerMcpAppUnmountTarget(target));
+          }}
+        />
+        <div data-testid="owned-route">{props.label}</div>
+      </>
+    );
+    const renderOwnedRoute = (props: SolidRouteProps<TestData>) => (
+      <OwnedRoute label={props.data?.label ?? ""} />
+    );
+    const ownedModule: TestModule = {
+      renderOwnerKey: () => "shared-owner",
+      renderSolid: renderOwnedRoute,
+    };
+    const context = { label: "page" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ownedModule,
+          loader: () => ({ label: "page" }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ownedModule,
+          loader: () => nextData.promise,
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    await router.navigate("page", context);
+    await settleOutlet(outlet);
+    const appView = outlet.querySelector("mcp-app-view");
+
+    const navigation = router.navigate("next", context);
+    await settleOutlet(outlet);
+    expect(outlet.querySelector("mcp-app-view")).toBe(appView);
+    expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("page");
+    expect(teardownView).not.toHaveBeenCalled();
+
+    nextData.resolve({ label: "next" });
+    await navigation;
+    await settleOutlet(outlet);
+
+    expect(outlet.querySelector("mcp-app-view")).toBe(appView);
+    expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("next");
+    expect(teardownView).not.toHaveBeenCalled();
+    outlet.dispose();
+    router.stop();
+  });
+
+  it("replaces the loading skeleton with the resolved route", async () => {
+    const routeModule = createDeferredCore<TestModule>();
+    const context = { label: "loaded" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => routeModule.promise,
+          loader: (loadContext) => ({ label: loadContext.label }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    const navigation = router.navigate("page", context);
+
+    await settleOutlet(outlet);
+
+    const loadingState = outlet.querySelector('[role="status"]');
+    expect(loadingState?.getAttribute("aria-label")).toBe("Loading…");
+    expect(loadingState?.querySelector(".loading-skeleton")?.getAttribute("aria-hidden")).toBe(
+      "true",
+    );
+    expect(loadingState?.getAttribute("aria-busy")).toBeNull();
+    expect(loadingState?.textContent?.trim()).toBe("");
+    expect(outlet.textContent).not.toContain("Loading panel");
+
+    routeModule.resolve({
+      renderSolid: (props) => <div data-testid="route-page">{props.data?.label}</div>,
+    });
+    await navigation;
+    await settleOutlet(outlet);
+
+    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("loaded");
+    expect(outlet.querySelector('[role="status"]')).toBeNull();
+    expect(outlet.querySelector(".loading-skeleton")).toBeNull();
+    outlet.dispose();
+    router.stop();
+  });
+
+  it.each(["finish", "disconnect"])("settles a retiring MCP route after %s", async (completion) => {
+    const teardown = createDeferredCore();
+    const teardownView = vi.fn(() => teardown.promise);
+    const RetiringRoute = () => (
+      <>
+        <mcp-app-view
+          ref={(element) => {
+            const target = Object.assign(element, {
+              restartAfterTeardown: vi.fn(),
+              teardown: teardownView,
+            });
+            onTestFinished(registerMcpAppUnmountTarget(target));
+          }}
+        />
+        <div data-testid="route-page">page</div>
+      </>
+    );
+    const context = { label: "loaded" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            renderSolid: () => <RetiringRoute />,
+          }),
+          loader: () => ({ label: "page" }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ({
+            renderSolid: () => <div data-testid="route-next">next</div>,
+          }),
+          loader: () => ({ label: "next" }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    await router.navigate("page", context);
+    await settleOutlet(outlet);
+
+    await router.navigate("next", context);
+    await settleOutlet(outlet);
+    expect(teardownView).toHaveBeenCalledOnce();
+    expect(outlet.querySelector('[data-testid="route-page"]')).not.toBeNull();
+    expect(outlet.querySelector('[data-testid="route-next"]')).toBeNull();
+
+    if (completion === "disconnect") {
+      let result: boolean | undefined;
+      const settlement = outlet.settlePresentation().then((value) => {
+        result = value;
+      });
+      outlet.dispose();
+      try {
+        await settleOutlet(outlet);
+        expect(result).toBe(false);
+      } finally {
+        teardown.resolve();
+        await settlement;
+        router.stop();
+      }
+      return;
+    }
+
+    teardown.resolve(undefined);
+    await expect.poll(() => outlet.querySelector('[data-testid="route-next"]')).not.toBeNull();
+    expect(outlet.querySelector("mcp-app-view")).toBeNull();
+    outlet.dispose();
+    router.stop();
+  });
+
+  it("keeps a loaded route visible with an error and retries through the latest context", async () => {
+    const firstLoad = createDeferredCore<TestData>();
+    let loadCount = 0;
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            renderSolid: (props: SolidRouteProps<TestData>) => (
+              <div data-testid="route-page">{props.data?.label ?? "pending"}</div>
+            ),
+          }),
+          loader: (context) => {
+            loadCount += 1;
+            return loadCount === 1 ? firstLoad.promise : { label: context.label };
+          },
+        }),
+      ],
+    });
+    const initialContext = { label: "initial" };
+    const retryContext = { label: "retried" };
+    const outlet = createOutlet(router, initialContext);
+    const navigation = router.navigate("page", initialContext);
+    await settleOutlet(outlet);
+    firstLoad.reject(new Error("load failed"));
+    await expect(navigation).rejects.toThrow("load failed");
+    await settleOutlet(outlet);
+
+    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("pending");
+    expect(outlet.querySelector('[role="alert"]')?.textContent).toContain("load failed");
+
+    outlet.setInputs({ retryContext });
+    await settleOutlet(outlet);
+    outlet.querySelector<HTMLButtonElement>("button")?.click();
+    await settleOutlet(outlet);
+
+    expect(loadCount).toBe(2);
+    expect(outlet.querySelector('[data-testid="route-page"]')?.textContent).toBe("retried");
+    expect(outlet.querySelector('[role="alert"]')).toBeNull();
+    outlet.dispose();
+    router.stop();
+  });
+
+  it("keeps asset recovery retryable after the reachability wait expires", async () => {
+    vi.useFakeTimers();
+    let loadCount = 0;
+    let finishProbe: ((response: Response) => void) | undefined;
+    const fetchMock = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        await new Promise<Response>((resolve, reject) => {
+          finishProbe = resolve;
+          const signal = init?.signal;
+          if (!signal) {
+            return;
+          }
+          signal.addEventListener("abort", () => reject(new Error("document probe aborted")), {
+            once: true,
+          });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => Promise.reject(new Error("Importing a module script failed.")),
+          loader: (context) => {
+            loadCount += 1;
+            return { label: context.label };
+          },
+        }),
+      ],
+    });
+    const context = { label: "stale" };
+    const outlet = createOutlet(router, context);
+
+    await expect(router.navigate("page", context)).rejects.toThrow(
+      "Importing a module script failed.",
+    );
+    await settleOutlet(outlet);
+
+    const alert = outlet.querySelector('[role="alert"]');
+    expect(alert?.textContent).toContain("Importing a module script failed.");
+    expect(alert?.textContent).toContain("Check your connection, then reload");
+    expect(alert?.textContent).not.toContain("updated in the background");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(loadCount).toBe(1);
+    const button = outlet.querySelector<HTMLButtonElement>("button");
+    button?.click();
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // The gateway restart is what stranded the chunk, so one failed probe must
+    // not end the retry: the click keeps waiting (and shows it) rather than
+    // silently degrading to a revalidation that cannot fix a replaced chunk.
+    await vi.advanceTimersByTimeAsync(3_000);
+    vi.runAllTicks();
+    await settleOutlet(outlet);
+    expect(loadCount).toBe(1);
+    expect(button?.disabled).toBe(true);
+
+    // Failed asset imports require document recovery; a timed-out probe leaves
+    // the existing error and manual reload available instead of retrying the module.
+    await vi.advanceTimersByTimeAsync(35_000);
+    vi.runAllTicks();
+    await settleOutlet(outlet);
+    expect(loadCount).toBe(1);
+    expect(button?.disabled).toBe(false);
+    expect(outlet.querySelector('[role="alert"]')).not.toBeNull();
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+    // Manual timeout leaves automatic recovery alive. Settle its shared probe
+    // before fake timers are removed so it cannot leak into the next document.
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    finishProbe?.(new Response(null, { status: 200 }));
+    await vi.advanceTimersByTimeAsync(0);
+    outlet.dispose();
+    router.stop();
+  });
+
+  it("keeps the Reload banner while unsaved work blocks recovery, then reloads when allowed", async () => {
+    vi.useFakeTimers();
+    let allowed = false;
+    const blocked = vi.fn();
+    const releaseGuard = registerControlUiReloadGuard(() => allowed, blocked);
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    let moduleLoads = 0;
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => {
+            moduleLoads += 1;
+            if (moduleLoads === 1) {
+              return Promise.reject(new Error("Unable to preload CSS for /assets/agents.css"));
+            }
+            // Vite remembers a failed CSS dependency as seen, so a repeated
+            // component import can succeed without the required stylesheet.
+            return { renderSolid: () => <div data-testid="unstyled-page">Agents</div> };
+          },
+          loader: (context) => ({ label: context.label }),
+        }),
+      ],
+    });
+    const context = { label: "offline" };
+    const outlet = createOutlet(router, context);
+    try {
+      await expect(router.navigate("page", context)).rejects.toThrow("Unable to preload CSS");
+      await settleOutlet(outlet);
+      const button = outlet.querySelector<HTMLButtonElement>("button");
+      expect(button?.textContent?.trim()).toBe("Reload");
+      expect(fetchMock).not.toHaveBeenCalled();
+      button?.click();
+      await settleOutlet(outlet);
+      expect(blocked).toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(moduleLoads).toBe(1);
+      expect(outlet.querySelector('[data-testid="unstyled-page"]')).toBeNull();
+      expect(outlet.querySelector('[role="alert"]')?.textContent).toContain(
+        "Unable to preload CSS",
+      );
+      expect(button?.disabled).toBe(false);
+
+      const target = window;
+      const replace = vi.fn();
+      vi.stubGlobal("window", {
+        location: { href: target.location.href, replace },
+        addEventListener: target.addEventListener.bind(target),
+        removeEventListener: target.removeEventListener.bind(target),
+      });
+      allowed = true;
+      button?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(replace).toHaveBeenCalledOnce();
+      expect(new URL(replace.mock.calls[0]![0]).searchParams.has("openclaw_mount_recovery")).toBe(
+        true,
+      );
+      expect(moduleLoads).toBe(1);
+    } finally {
+      releaseGuard();
+      outlet.dispose();
+      router.stop();
+    }
+  });
+});

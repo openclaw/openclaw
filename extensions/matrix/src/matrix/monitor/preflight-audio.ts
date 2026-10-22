@@ -11,7 +11,7 @@ export function isMatrixAudioContent(params: { msgtype?: string; mimetype?: stri
   return false;
 }
 
-const matrixPreflightAudio = createChannelPreflightAudio({
+export const matrixPreflightAudio = createChannelPreflightAudio({
   channel: "matrix",
   isAudio: isMatrixAudioContent,
 });
@@ -25,7 +25,6 @@ export async function resolveMatrixPreflightAudioTranscript(params: {
   originatingTo: string;
   messageThreadId?: string;
   sessionKey: string;
-  abortSignal?: AbortSignal;
 }): Promise<string | undefined> {
   return await matrixPreflightAudio.resolve({
     request: {
@@ -42,16 +41,5 @@ export async function resolveMatrixPreflightAudioTranscript(params: {
       },
       cfg: params.cfg,
     },
-    abortSignal: params.abortSignal,
   });
-}
-
-export async function sendMatrixPreflightAudioTranscriptEcho(params: {
-  transcript: string;
-  cfg: OpenClawConfig;
-  accountId: string;
-  originatingTo: string;
-  messageThreadId?: string;
-}): Promise<void> {
-  await matrixPreflightAudio.send(params);
 }

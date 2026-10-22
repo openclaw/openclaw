@@ -30,9 +30,14 @@ export function forwardChatWheelToTranscript(
       continue;
     }
     const style = getComputedStyle(target);
+    const contextCanScroll =
+      event.deltaY < 0
+        ? target.scrollTop > 0
+        : target.scrollTop + target.clientHeight < target.scrollHeight - 1;
     if (
       /^(auto|scroll)$/.test(style.overflowY) &&
-      (target.scrollHeight > target.clientHeight ||
+      ((target.scrollHeight > target.clientHeight &&
+        (!target.closest(".chat-footer__context") || contextCanScroll)) ||
         style.overscrollBehaviorY === "contain" ||
         style.overscrollBehaviorY === "none")
     ) {
@@ -138,4 +143,42 @@ export function isTranscriptScrollKey(event: KeyboardEvent): boolean {
     }
   }
   return true;
+}
+
+const HISTORY_TOUCH_INTENT_PX = 8;
+const HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
+
+export class TranscriptHistoryInput {
+  private touchY: number | null = null;
+
+  reset(): void {
+    this.touchY = null;
+  }
+
+  isUpward(event: Event): boolean {
+    let upward =
+      (event instanceof WheelEvent && event.deltaY < 0) ||
+      (event instanceof KeyboardEvent &&
+        HISTORY_UPWARD_KEYS.has(event.key) &&
+        isTranscriptScrollKey(event));
+    if (typeof TouchEvent !== "undefined" && event instanceof TouchEvent) {
+      const touchY = event.touches[0]?.clientY ?? null;
+      if (event.type === "touchstart") {
+        this.touchY = touchY;
+        return false;
+      }
+      if (event.type === "touchend" || event.type === "touchcancel") {
+        this.touchY = null;
+        return false;
+      }
+      const previousTouchY = this.touchY;
+      if (touchY !== null && previousTouchY !== null) {
+        upward = touchY - previousTouchY >= HISTORY_TOUCH_INTENT_PX;
+        if (upward || touchY < previousTouchY) {
+          this.touchY = touchY;
+        }
+      }
+    }
+    return upward;
+  }
 }

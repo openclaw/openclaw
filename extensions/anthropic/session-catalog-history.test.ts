@@ -1,12 +1,29 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { importClaudeHistory } from "./session-catalog-history.js";
 import { parseTranscriptLine } from "./session-catalog-transcript.js";
 
 const appended: Array<Record<string, unknown>> = [];
+function importItems(items: Parameters<typeof importClaudeHistory>[0]["items"]) {
+  appended.length = 0;
+  return importClaudeHistory({
+    items,
+    threadId: "thread-1",
+    storePath: "/tmp/sessions.json",
+    sessionId: "session-1",
+    sessionKey: "agent:main:catalog-adopt",
+    agentId: "main",
+    config: {},
+  });
+}
 
+function parseMessage(role: string, content: string, flags: Record<string, unknown> = {}) {
+  const row = { type: role, ...flags, message: { role, content } };
+  return parseTranscriptLine(Buffer.from(JSON.stringify(row)));
+}
+
+// mock-isolation: Exercise native message projection without opening the transcript store.
 vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
-  withSessionTranscriptWriteLock: async (
+  withSessionTranscriptWrite: async (
     _params: unknown,
     run: (transcript: {
       appendMessage: (input: { message: Record<string, unknown> }) => Promise<void>;
@@ -21,48 +38,23 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
 }));
 
 describe("importClaudeHistory", () => {
+  it.each(["", "{", "null", "[]", "42", '"text"', "{}"])(
+    "ignores malformed JSON and non-message transcript rows: %j",
+    (line) => {
+      expect(parseTranscriptLine(Buffer.from(line))).toBeUndefined();
+    },
+  );
+
   it("omits metadata without changing other native conversation rows", async () => {
-    appended.length = 0;
-    const parse = (entry: Record<string, unknown>) =>
-      parseTranscriptLine(Buffer.from(JSON.stringify(entry)), (value, maxLength) =>
-        typeof value === "string" && value.length <= maxLength ? value : undefined,
-      );
     const items = [
-      parse({
-        type: "user",
-        isMeta: true,
-        message: { role: "user", content: "private skill instructions" },
-      }),
-      parse({
-        type: "user",
-        uuid: "operator-1",
-        message: { role: "user", content: "run the review" },
-      }),
-      parse({
-        type: "user",
-        isCompactSummary: true,
-        message: { role: "user", content: "compacted context" },
-      }),
-      parse({
-        type: "user",
-        isVisibleInTranscriptOnly: true,
-        message: { role: "user", content: "transcript-only context" },
-      }),
-      parse({
-        type: "assistant",
-        message: { role: "assistant", content: "done" },
-      }),
+      parseMessage("user", "private skill instructions", { isMeta: true }),
+      parseMessage("user", "run the review", { uuid: "operator-1" }),
+      parseMessage("user", "compacted context", { isCompactSummary: true }),
+      parseMessage("user", "transcript-only context", { isVisibleInTranscriptOnly: true }),
+      parseMessage("assistant", "done"),
     ].filter((item) => item !== undefined);
 
-    await importClaudeHistory({
-      items,
-      threadId: "thread-1",
-      storePath: "/tmp/sessions.json",
-      sessionId: "session-1",
-      sessionKey: "agent:main:catalog-adopt",
-      agentId: "main",
-      config: {} as OpenClawConfig,
-    });
+    await importItems(items);
 
     expect(JSON.stringify(appended)).not.toContain("private skill instructions");
     expect(appended.find((message) => message.content === "run the review")?.provenance).toBe(
@@ -75,30 +67,21 @@ describe("importClaudeHistory", () => {
   });
 
   it("preserves Date.parse semantics for valid strings and falls back for invalid values", async () => {
-    appended.length = 0;
     const fallbackTimestamp = new Date("2026-07-18T12:00:00.000Z").getTime();
     vi.useFakeTimers();
     vi.setSystemTime(fallbackTimestamp);
     try {
-      await importClaudeHistory({
-        items: [
-          { type: "userMessage", text: "invalid", timestamp: "not-a-date", uuid: "u-1" },
-          { type: "userMessage", text: "numeric year", timestamp: "2026", uuid: "u-2" },
-          { type: "userMessage", text: "numeric zero", timestamp: "0", uuid: "u-3" },
-          {
-            type: "userMessage",
-            text: "pre-epoch",
-            timestamp: "1969-12-31T23:59:59.000Z",
-            uuid: "u-4",
-          },
-        ],
-        threadId: "thread-1",
-        storePath: "/tmp/sessions.json",
-        sessionId: "session-1",
-        sessionKey: "agent:main:catalog-adopt",
-        agentId: "main",
-        config: {} as OpenClawConfig,
-      });
+      await importItems([
+        { type: "userMessage", text: "invalid", timestamp: "not-a-date", uuid: "u-1" },
+        { type: "userMessage", text: "numeric year", timestamp: "2026", uuid: "u-2" },
+        { type: "userMessage", text: "numeric zero", timestamp: "0", uuid: "u-3" },
+        {
+          type: "userMessage",
+          text: "pre-epoch",
+          timestamp: "1969-12-31T23:59:59.000Z",
+          uuid: "u-4",
+        },
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -114,19 +97,10 @@ describe("importClaudeHistory", () => {
   });
 
   it("tags imported native user rows so self-echo provenance excludes them", async () => {
-    appended.length = 0;
-    await importClaudeHistory({
-      items: [
-        { type: "userMessage", text: "continue", uuid: "u-1" },
-        { type: "assistantMessage", text: "done", uuid: "a-1" },
-      ],
-      threadId: "thread-1",
-      storePath: "/tmp/sessions.json",
-      sessionId: "session-1",
-      sessionKey: "agent:main:catalog-adopt",
-      agentId: "main",
-      config: {} as OpenClawConfig,
-    });
+    await importItems([
+      { type: "userMessage", text: "continue", uuid: "u-1" },
+      { type: "assistantMessage", text: "done", uuid: "a-1" },
+    ]);
 
     const userRow = appended.find((message) => message.role === "user");
     // mirrorOrigin keeps imported native prompts out of ownRecentUserTexts; without
@@ -138,19 +112,10 @@ describe("importClaudeHistory", () => {
   });
 
   it("omits empty native reasoning records instead of rendering a placeholder", async () => {
-    appended.length = 0;
-    await importClaudeHistory({
-      items: [
-        { type: "reasoning", content: [{ type: "thinking", thinking: "" }], uuid: "r-1" },
-        { type: "assistantMessage", text: "AUTH_OK", uuid: "a-1" },
-      ],
-      threadId: "thread-1",
-      storePath: "/tmp/sessions.json",
-      sessionId: "session-1",
-      sessionKey: "agent:main:catalog-adopt",
-      agentId: "main",
-      config: {} as OpenClawConfig,
-    });
+    await importItems([
+      { type: "reasoning", content: [{ type: "thinking", thinking: "" }], uuid: "r-1" },
+      { type: "assistantMessage", text: "AUTH_OK", uuid: "a-1" },
+    ]);
 
     expect(appended).toHaveLength(1);
     expect(JSON.stringify(appended)).toContain("AUTH_OK");
@@ -158,16 +123,7 @@ describe("importClaudeHistory", () => {
   });
 
   it("retains the placeholder for unsupported non-reasoning records", async () => {
-    appended.length = 0;
-    await importClaudeHistory({
-      items: [{ type: "toolCall", content: [{ type: "tool_use" }], uuid: "t-1" }],
-      threadId: "thread-1",
-      storePath: "/tmp/sessions.json",
-      sessionId: "session-1",
-      sessionKey: "agent:main:catalog-adopt",
-      agentId: "main",
-      config: {} as OpenClawConfig,
-    });
+    await importItems([{ type: "toolCall", content: [{ type: "tool_use" }], uuid: "t-1" }]);
 
     expect(appended).toHaveLength(1);
     expect(JSON.stringify(appended)).toContain("Unsupported Claude transcript item");

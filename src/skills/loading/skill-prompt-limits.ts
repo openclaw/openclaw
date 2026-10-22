@@ -1,4 +1,3 @@
-// Skill prompt limits keep every catalog producer within one shared model-context budget.
 import {
   COMPACT_DESCRIPTION_MAX_CHARS,
   formatSkillsCompactForPrompt,
@@ -12,52 +11,18 @@ const DEFAULT_MAX_SKILLS_PROMPT_CHARS = 18_000;
 
 type SkillsPromptFormat = { kind: "full" } | { kind: "compact"; descriptionMaxChars: number };
 
-function buildSkillsLimitNote(params: {
-  truncated: boolean;
-  format: SkillsPromptFormat;
-  included: number;
-  total: number;
-}): string {
-  if (params.truncated) {
-    const compactDetails =
-      params.format.kind === "compact"
-        ? ` (compact format, ${params.format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted"})`
-        : "";
-    return `⚠️ Skills truncated: included ${params.included} of ${params.total}${compactDetails}. Run \`openclaw skills check\` to audit.`;
+function largestFittingValue(min: number, max: number, fits: (value: number) => boolean): number {
+  let lo = min;
+  let hi = max;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (fits(mid)) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
   }
-  if (params.format.kind === "compact") {
-    const compactDetails =
-      params.format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted";
-    return `⚠️ Skills catalog using compact format (${compactDetails}). Run \`openclaw skills check\` to audit.`;
-  }
-  return "";
-}
-
-function buildRenderedSkillsPrompt(params: {
-  skills: Skill[];
-  total: number;
-  format: SkillsPromptFormat;
-  includeLimitNote?: boolean;
-}): string {
-  // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
-  // The production-renderer parity test in src/agents/code-mode.skills.test.ts enforces this coupling.
-  const truncated = params.skills.length < params.total;
-  const limitNote =
-    params.includeLimitNote === false
-      ? ""
-      : buildSkillsLimitNote({
-          truncated,
-          format: params.format,
-          included: params.skills.length,
-          total: params.total,
-        });
-  const catalog =
-    params.format.kind === "compact"
-      ? formatSkillsCompactForPrompt(params.skills, {
-          descriptionMaxChars: params.format.descriptionMaxChars,
-        })
-      : formatSkillsForPromptCore(params.skills);
-  return [limitNote, catalog].filter(Boolean).join("\n");
+  return lo;
 }
 
 type SkillsPromptParams = {
@@ -92,8 +57,31 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     format: SkillsPromptFormat,
     includeLimitNote = true,
   ): string | undefined => {
+    // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
+    // The production-renderer parity test in src/agents/code-mode.skills.test.ts enforces this coupling.
+    const truncated = skills.length < total;
+    let limitNote = "";
+    if (includeLimitNote) {
+      if (truncated) {
+        const compactDetails =
+          format.kind === "compact"
+            ? ` (compact format, ${format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted"})`
+            : "";
+        limitNote = `⚠️ Skills truncated: included ${skills.length} of ${total}${compactDetails}. Run \`openclaw skills check\` to audit.`;
+      } else if (format.kind === "compact") {
+        const compactDetails =
+          format.descriptionMaxChars > 0 ? "descriptions shortened" : "descriptions omitted";
+        limitNote = `⚠️ Skills catalog using compact format (${compactDetails}). Run \`openclaw skills check\` to audit.`;
+      }
+    }
+    const catalog =
+      format.kind === "compact"
+        ? formatSkillsCompactForPrompt(skills, {
+            descriptionMaxChars: format.descriptionMaxChars,
+          })
+        : formatSkillsForPromptCore(skills);
     // Reuse the catalog and limit notice when the optional remote note does not fit.
-    const prompt = buildRenderedSkillsPrompt({ skills, total, format, includeLimitNote });
+    const prompt = [limitNote, catalog].filter(Boolean).join("\n");
     if (
       params.remoteNote &&
       params.remoteNote.length + prompt.length + (prompt ? 1 : 0) <= maxSkillsPromptChars
@@ -120,17 +108,10 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
   }
 
   if (!fitsCompact(skillsForPrompt, 0)) {
-    let lo = 0;
-    let hi = skillsForPrompt.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (fitsCompact(skillsForPrompt.slice(0, mid), 0)) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    skillsForPrompt = skillsForPrompt.slice(0, lo);
+    const count = largestFittingValue(0, skillsForPrompt.length, (candidateCount) =>
+      fitsCompact(skillsForPrompt.slice(0, candidateCount), 0),
+    );
+    skillsForPrompt = skillsForPrompt.slice(0, count);
   }
 
   if (skillsForPrompt.length === 0 && byCount.length > 0) {
@@ -138,18 +119,11 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     if (fullWithoutNotice !== undefined) {
       return { prompt: fullWithoutNotice, skills: byCount };
     }
-    let lo = 0;
-    let hi = byCount.length;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (fitsCompact(byCount.slice(0, mid), 0, false)) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    if (lo > 0) {
-      skillsForPrompt = byCount.slice(0, lo);
+    const count = largestFittingValue(0, byCount.length, (candidateCount) =>
+      fitsCompact(byCount.slice(0, candidateCount), 0, false),
+    );
+    if (count > 0) {
+      skillsForPrompt = byCount.slice(0, count);
     }
   }
 
@@ -159,17 +133,11 @@ export function prepareSkillsForPrompt(params: SkillsPromptParams): {
     skillsForPrompt.length > 0 &&
     fitsCompact(skillsForPrompt, COMPACT_DESCRIPTION_MIN_CHARS, includeLimitNote)
   ) {
-    let lo = COMPACT_DESCRIPTION_MIN_CHARS;
-    let hi = COMPACT_DESCRIPTION_MAX_CHARS;
-    while (lo < hi) {
-      const mid = Math.ceil((lo + hi) / 2);
-      if (fitsCompact(skillsForPrompt, mid, includeLimitNote)) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    descriptionMaxChars = lo;
+    descriptionMaxChars = largestFittingValue(
+      COMPACT_DESCRIPTION_MIN_CHARS,
+      COMPACT_DESCRIPTION_MAX_CHARS,
+      (chars) => fitsCompact(skillsForPrompt, chars, includeLimitNote),
+    );
   }
   const prompt =
     renderWithinLimit(

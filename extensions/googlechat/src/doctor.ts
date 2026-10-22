@@ -1,4 +1,3 @@
-// Googlechat plugin module implements doctor behavior.
 import {
   buildMutableAllowEntryDetector,
   collectStandardAllowlistLists,

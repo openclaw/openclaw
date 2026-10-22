@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -9,11 +11,13 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import * as transcriptReaders from "../session-transcript-readers.js";
+import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 async function request(
@@ -33,6 +37,8 @@ async function request(
   expect(respond).toHaveBeenCalledOnce();
   return expectDefined(respond.mock.calls[0], "RPC response");
 }
+
+const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 describe("registered chat read scope", () => {
   it.each([
@@ -61,9 +67,17 @@ describe("registered chat read scope", () => {
   ] as const)(
     "$name applies identical session visibility to history and full messages",
     async (testCase) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withOpenClawTestState(profileState, async (state) => {
         const cfg = rolePolicyConfig();
+        if (testCase.actor === "admin") {
+          expectDefined(cfg.gateway?.roles?.definitions.write, "admin role definition").scopes = [
+            "operator.admin",
+          ];
+        }
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
+        ensureUserProfilesSchema({});
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const owner = roleClient("write", "synthetic-owner");
         const client =
           testCase.actor === "owner"
@@ -110,7 +124,7 @@ describe("registered chat read scope", () => {
         );
         try {
           receipt.finish("cancelled");
-          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+          const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
           const history = await request(context, client, "chat.history", {
             sessionKey: scope.sessionKey,
           });
@@ -140,7 +154,10 @@ describe("registered chat read scope", () => {
   );
 
   it("traverses a full hidden page and keeps raw custody counts separate from execution", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState(profileState, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      ensureUserProfilesSchema({});
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const client = roleClient("write", "pagination-owner");
       const scope = {
         agentId: "main",
@@ -173,7 +190,7 @@ describe("registered chat read scope", () => {
         const interrupted = expectDefined(receipts[2], "interrupted receipt");
         cancelled.finish("cancelled");
         interrupted.finish("interrupted");
-        const context = createDirectChatContext();
+        const context = await createHistoryReadContext();
         const history = async (pendingBefore?: number) => {
           const [ok, payload, error] = await request(context, client, "chat.history", {
             sessionKey: scope.sessionKey,
@@ -191,7 +208,12 @@ describe("registered chat read scope", () => {
           };
         };
         const first = (await history()).pendingInputs;
-        expect(first).toEqual({ total: 23, items: [], nextBefore: expect.any(Number) });
+        expect(first).toEqual({
+          total: 23,
+          items: [],
+          queuedCount: 0,
+          nextBefore: expect.any(Number),
+        });
         const second = (await history(first.nextBefore)).pendingInputs;
         expect(second).toMatchObject({
           total: 23,
@@ -221,7 +243,7 @@ describe("registered chat read scope", () => {
           sessionId: "replacement-physical-session",
           updatedAt: 2,
         });
-        expect((await history()).pendingInputs).toEqual({ items: [], total: 0 });
+        expect((await history()).pendingInputs).toEqual({ items: [], total: 0, queuedCount: 0 });
       } finally {
         for (const receipt of receipts) {
           receipt.finish("interrupted");
@@ -233,9 +255,12 @@ describe("registered chat read scope", () => {
   it.each(["draft", "replacement"] as const)(
     "rechecks %s after an asynchronous transcript read",
     async (change) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await withOpenClawTestState(profileState, async (state) => {
         const cfg = rolePolicyConfig();
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
+        ensureUserProfilesSchema({});
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const owner = roleClient("write", "async-owner");
         const client = roleClient("view", "async-reader");
         const scope = {
@@ -269,7 +294,7 @@ describe("registered chat read scope", () => {
             return result;
           });
         const lookup = request(
-          createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
           client,
           "chat.message.get",
           { sessionKey: scope.sessionKey, messageId: "async-message" },

@@ -1,4 +1,3 @@
-// Render bounded, sanitized doctor findings into a fixing-agent handoff prompt.
 import { HEALTH_FINDING_SEVERITY_RANK, type HealthFinding } from "../flows/health-checks.js";
 import {
   redactSupportString,
@@ -109,7 +108,6 @@ function renderTriageTail(bundle: TriageBundle, redaction: SupportRedactionConte
   ];
 }
 
-/** Render a bounded fixing-agent prompt from already-sanitized doctor findings. */
 export function renderTriagePrompt(params: {
   findings: readonly HealthFinding[];
   bundle: TriageBundle;
@@ -124,14 +122,14 @@ export function renderTriagePrompt(params: {
     return severity || left.checkId.localeCompare(right.checkId);
   });
   const lines = [
-    "You are repairing THIS machine's OpenClaw installation. Diagnose the root cause, apply the repair autonomously within your existing permissions, and verify the result. Preserve configuration, history, and databases. Use local `openclaw doctor`, `openclaw doctor --fix`, `openclaw status --all`, and `openclaw logs` as needed. Product documentation: https://docs.openclaw.ai.",
+    "You are repairing THIS machine's OpenClaw installation. Diagnose the root cause, apply the repair autonomously within your existing permissions, and verify the result. Preserve configuration, history, and databases. Use read-only `openclaw doctor --lint --json`, `openclaw status --all`, and `openclaw logs` for diagnostics. Product documentation: https://docs.openclaw.ai.",
     "",
     "## Environment",
     "",
     `- OpenClaw: ${VERSION}`,
     `- Platform: ${process.platform}`,
     `- Node.js: ${process.versions.node} (the runtime executing OpenClaw, which may differ from the shell default)`,
-    "- Local shell commands inherit `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_WORKSPACE_DIR` for the diagnosed installation and its default workspace; expand archive references in that shell. In embedded triage, in-process config and session tools use temporary agent run state. The execution cwd is separate from the installation's default workspace. Do not substitute a remote or sandbox installation for this local target.",
+    "- Local shell commands inherit `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, and `OPENCLAW_WORKSPACE_DIR` for the diagnosed installation and its default workspace; expand archive references in that shell. The diagnostic conversation is separate from the installation's saved sessions. The execution cwd is separate from the installation's default workspace. Do not substitute a remote or sandbox installation for this local target.",
   ];
   const failureIndex = lines.length;
   lines.push(
@@ -142,8 +140,8 @@ export function renderTriagePrompt(params: {
     failure?.gateway === "preserve"
       ? "Do not start or restart the Gateway: this invocation did not authorize activation. Preserve --no-restart and intentional stops. Use read-only status checks and report live health verification as deferred while it is intentionally stopped."
       : "Only activate a Gateway intended to run. For managed recovery, use atomic `openclaw gateway restart` when needed, never stop then start: an explicit stop after native scope attachment cancels this recovery and its children. Preserve later operator stops and report cancellation or infeasibility instead of claiming recovery.",
-    "For a running Gateway, verify this installation with `openclaw health --json` AND `openclaw status --all` or `openclaw gateway status --deep`. Verify the running version matches the expected version above when supplied, and reproduce the original symptom to confirm it is resolved.",
-    "A valid config, process PID, repair command exit 0, or health snapshot's top-level ok alone is not success. Inspect relevant health/status failures. End with a concise report of changes, verification commands and evidence, and any remaining blocker. Do not claim recovery without that evidence.",
+    "For a running Gateway, verify this installation with `openclaw health --json` AND `openclaw gateway status --deep --require-rpc`. Verify the running version matches the expected version above when supplied, and reproduce the original symptom to confirm it is resolved.",
+    "Default gateway status exit 0 means diagnostics completed, not health. `--require-rpc` proves read-scope RPC, not plugin/channel readiness. A valid config, process PID, repair command exit 0, or health snapshot's top-level ok alone is not success. Inspect relevant health/status failures. End with a concise report of changes, verification commands and evidence, and any remaining blocker. Do not claim recovery without that evidence.",
     "",
   );
 

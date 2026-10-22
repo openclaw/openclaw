@@ -1,5 +1,4 @@
 import { isRecord } from "../utils.js";
-import type { ConfigHealthEntry, ConfigHealthFingerprint } from "./io.health-state.types.js";
 
 type ConfigObserveSuspiciousBaseline = {
   bytes: number;
@@ -23,7 +22,15 @@ function isUpdateChannelOnlyRoot(value: unknown): boolean {
   return updateKeys.length === 1 && typeof update.channel === "string";
 }
 
+const inheritedAnomalyReason = "inherited-config-anomaly";
+
+export function createInheritedConfigAnomalySignature(hash: string): string {
+  return `${hash}:${inheritedAnomalyReason}`;
+}
+
 export function resolveConfigObserveSuspiciousReasons(params: {
+  hash?: string;
+  lastObservedSuspiciousSignature?: string | null;
   bytes: number;
   hasMeta: boolean;
   gatewayMode: string | null;
@@ -47,37 +54,13 @@ export function resolveConfigObserveSuspiciousReasons(params: {
   if (baseline.gatewayMode && isUpdateChannelOnlyRoot(params.parsed)) {
     reasons.push("update-channel-only-root");
   }
+  // Metadata stamping can conceal the original loss without restoring user data.
+  if (
+    reasons.length === 0 &&
+    params.hash &&
+    params.lastObservedSuspiciousSignature === createInheritedConfigAnomalySignature(params.hash)
+  ) {
+    reasons.push(inheritedAnomalyReason);
+  }
   return reasons;
-}
-
-function isRecoverableConfigReadSuspiciousReason(reason: string): boolean {
-  return (
-    reason === "missing-meta-vs-last-good" ||
-    reason === "gateway-mode-missing-vs-last-good" ||
-    reason === "update-channel-only-root" ||
-    reason.startsWith("size-drop-vs-last-good:")
-  );
-}
-
-export function resolveConfigReadRecoveryContext(params: {
-  current: ConfigHealthFingerprint;
-  parsed: unknown;
-  entry: ConfigHealthEntry;
-  backupBaseline?: ConfigHealthFingerprint;
-}): { suspicious: string[]; suspiciousSignature: string } | null {
-  const suspicious = resolveConfigObserveSuspiciousReasons({
-    bytes: params.current.bytes,
-    hasMeta: params.current.hasMeta,
-    gatewayMode: params.current.gatewayMode,
-    parsed: params.parsed,
-    lastKnownGood: params.backupBaseline,
-  });
-  if (!suspicious.some(isRecoverableConfigReadSuspiciousReason)) {
-    return null;
-  }
-  const suspiciousSignature = `${params.current.hash}:${suspicious.join(",")}`;
-  if (params.entry.lastObservedSuspiciousSignature === suspiciousSignature) {
-    return null;
-  }
-  return { suspicious, suspiciousSignature };
 }

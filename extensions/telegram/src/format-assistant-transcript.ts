@@ -1,9 +1,5 @@
 import { markdownToIR, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
-import {
-  decodeTelegramHtmlEntities,
-  findTelegramHtmlEntityEnd,
-  isTelegramRichLineBreakStructuralTag,
-} from "./format-html.js";
+import { decodeTelegramHtmlEntities, isTelegramRichLineBreakStructuralTag } from "./format-html.js";
 
 export const TELEGRAM_ASSISTANT_TRANSCRIPT_PREFIX = "<code>Assistant:</code> ";
 
@@ -11,26 +7,6 @@ type TelegramHtmlVisibleProjection = {
   text: string;
   excludedRanges: Array<{ start: number; end: number }>;
 };
-
-function maskTelegramExcludedText(text: string): string {
-  return text
-    .split("\n")
-    .map((line) =>
-      line.trim() ? `x${" ".repeat(Math.max(0, line.length - 1))}` : " ".repeat(line.length),
-    )
-    .join("\n");
-}
-
-function maskTelegramExcludedRanges(projection: TelegramHtmlVisibleProjection): string {
-  let masked = "";
-  let cursor = 0;
-  for (const range of projection.excludedRanges) {
-    masked += projection.text.slice(cursor, range.start);
-    masked += maskTelegramExcludedText(projection.text.slice(range.start, range.end));
-    cursor = range.end;
-  }
-  return masked + projection.text.slice(cursor);
-}
 
 function telegramProjectionHasRoleHeader(projection: TelegramHtmlVisibleProjection): boolean {
   // Header delimiters must be literal or entity-encoded before Markdown parsing.
@@ -41,8 +17,19 @@ function telegramProjectionHasRoleHeader(projection: TelegramHtmlVisibleProjecti
   ) {
     return false;
   }
+  let masked = "";
+  let cursor = 0;
+  for (const range of projection.excludedRanges) {
+    masked += projection.text.slice(cursor, range.start);
+    masked += projection.text
+      .slice(range.start, range.end)
+      .replace(/[^\n]+/g, (line) =>
+        line.trim() ? `x${" ".repeat(line.length - 1)}` : " ".repeat(line.length),
+      );
+    cursor = range.end;
+  }
   return Boolean(
-    markdownToIR(maskTelegramExcludedRanges(projection), {
+    markdownToIR(masked + projection.text.slice(cursor), {
       assistantTranscriptRoleHeaders: true,
       autolink: false,
       blockquotePrefix: "",
@@ -53,94 +40,46 @@ function telegramProjectionHasRoleHeader(projection: TelegramHtmlVisibleProjecti
   );
 }
 
-function appendTelegramHtmlVisibleValue(
-  projection: TelegramHtmlVisibleProjection,
-  value: string,
-  excluded: boolean,
-): void {
-  if (!value) {
-    return;
-  }
-  const start = projection.text.length;
-  projection.text += value;
-  if (!excluded) {
-    return;
-  }
-  const previous = projection.excludedRanges.at(-1);
-  if (previous?.end === start) {
-    previous.end = projection.text.length;
-  } else {
-    projection.excludedRanges.push({ start, end: projection.text.length });
-  }
-}
-
-function appendTelegramHtmlVisibleSegment(
-  projection: TelegramHtmlVisibleProjection,
-  segment: string,
-  excluded: boolean,
-): void {
-  let index = 0;
-  while (index < segment.length) {
-    if (segment[index] === "&") {
-      const entityEnd = findTelegramHtmlEntityEnd(segment, index);
-      if (entityEnd >= 0) {
-        const rawEntity = segment.slice(index, entityEnd + 1);
-        appendTelegramHtmlVisibleValue(projection, decodeTelegramHtmlEntities(rawEntity), excluded);
-        index = entityEnd + 1;
-        continue;
-      }
-    }
-    const codePoint = segment.codePointAt(index);
-    if (codePoint === undefined) {
-      break;
-    }
-    const character = String.fromCodePoint(codePoint);
-    appendTelegramHtmlVisibleValue(projection, character, excluded);
-    index += character.length;
-  }
-}
-
 function projectTelegramHtmlVisibleText(html: string): TelegramHtmlVisibleProjection {
   const projection: TelegramHtmlVisibleProjection = { text: "", excludedRanges: [] };
-  let codeDepth = 0;
-  let preDepth = 0;
+  const depths = { code: 0, pre: 0 };
+  const append = (value: string) => {
+    if (!value) {
+      return;
+    }
+    const start = projection.text.length;
+    projection.text += value;
+    if (depths.code === 0 && depths.pre === 0) {
+      return;
+    }
+    const previous = projection.excludedRanges.at(-1);
+    if (previous?.end === start) {
+      previous.end = projection.text.length;
+    } else {
+      projection.excludedRanges.push({ start, end: projection.text.length });
+    }
+  };
   let lastIndex = 0;
 
   for (const tag of tokenizeHtmlTags(html)) {
-    const tagStart = tag.start;
-    const tagEnd = tag.end;
-    appendTelegramHtmlVisibleSegment(
-      projection,
-      html.slice(lastIndex, tagStart),
-      codeDepth > 0 || preDepth > 0,
-    );
+    append(decodeTelegramHtmlEntities(html.slice(lastIndex, tag.start)));
 
-    const rawTag = tag.raw;
-    const tagName = tag.name;
-    const isClosing = tag.closing;
-    const isSelfClosing = tag.selfClosing;
     if (
-      isTelegramRichLineBreakStructuralTag(rawTag, tagName) &&
+      isTelegramRichLineBreakStructuralTag(tag.raw, tag.name) &&
       projection.text &&
       !projection.text.endsWith("\n")
     ) {
-      appendTelegramHtmlVisibleValue(projection, "\n", codeDepth > 0 || preDepth > 0);
+      append("\n");
     }
-    if (tagName === "br" && !isClosing) {
-      appendTelegramHtmlVisibleValue(projection, "\n", codeDepth > 0 || preDepth > 0);
+    if (tag.name === "br" && !tag.closing) {
+      append("\n");
     }
-    if (!isSelfClosing && tagName === "code") {
-      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
-    } else if (!isSelfClosing && tagName === "pre") {
-      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    if (!tag.selfClosing && (tag.name === "code" || tag.name === "pre")) {
+      depths[tag.name] = tag.closing ? Math.max(0, depths[tag.name] - 1) : depths[tag.name] + 1;
     }
-    lastIndex = tagEnd;
+    lastIndex = tag.end;
   }
-  appendTelegramHtmlVisibleSegment(
-    projection,
-    html.slice(lastIndex),
-    codeDepth > 0 || preDepth > 0,
-  );
+  append(decodeTelegramHtmlEntities(html.slice(lastIndex)));
   return projection;
 }
 

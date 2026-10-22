@@ -1,4 +1,5 @@
 import {
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeFastMode,
@@ -11,7 +12,11 @@ export function supportsAnthropicPriorityTier(model: {
   id: string;
   params?: Record<string, unknown>;
 }): boolean {
-  return !resolveClaudeOpus5ModelIdentity(model) && !resolveClaudeSonnet5ModelIdentity(model);
+  return (
+    !resolveClaudeOpus5ModelIdentity(model) &&
+    !resolveClaudeSonnet5ModelIdentity(model) &&
+    !resolveClaudeHaiku55ModelIdentity(model)
+  );
 }
 
 export function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | undefined {

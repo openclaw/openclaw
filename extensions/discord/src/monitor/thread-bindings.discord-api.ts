@@ -1,21 +1,22 @@
-// Discord API module exposes the plugin public contract.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRestClient } from "../client.js";
-import { createChannelWebhook, getChannel } from "../internal/discord.js";
+import { getChannel, Routes } from "../internal/discord.js";
+import { withDiscordRequestAuthority } from "../internal/request-authority.js";
+import { DiscordError } from "../internal/rest.js";
 import { canFallbackDiscordWebhookSend } from "../retry.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
-import { resolveDiscordChannelIdSafe, resolveDiscordChannelInfoSafe } from "./channel-access.js";
+import { resolveDiscordChannelInfoSafe } from "./channel-access.js";
 import { resolveThreadBindingPersonaFromRecord } from "./thread-bindings.persona.js";
 import {
-  BINDINGS_BY_THREAD_ID,
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL,
-  rememberReusableWebhook,
   toReusableWebhookKey,
 } from "./thread-bindings.state.js";
 import {
@@ -24,10 +25,6 @@ import {
 } from "./thread-bindings.types.js";
 
 const log = createSubsystemLogger("discord/thread-bindings");
-
-function buildThreadTarget(threadId: string): string {
-  return /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
-}
 
 export function isThreadArchived(raw: unknown): boolean {
   if (!raw || typeof raw !== "object") {
@@ -38,19 +35,14 @@ export function isThreadArchived(raw: unknown): boolean {
     thread_metadata?: { archived?: unknown };
     threadMetadata?: { archived?: unknown };
   };
-  if (asRecord.archived === true) {
-    return true;
-  }
-  if (asRecord.thread_metadata?.archived === true) {
-    return true;
-  }
-  if (asRecord.threadMetadata?.archived === true) {
-    return true;
-  }
-  return false;
+  return (
+    asRecord.archived === true ||
+    asRecord.thread_metadata?.archived === true ||
+    asRecord.threadMetadata?.archived === true
+  );
 }
 
-function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
+export function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
   const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return null;
@@ -66,10 +58,8 @@ export function summarizeDiscordError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
   }
-  if (typeof err === "string") {
-    return err;
-  }
   if (
+    typeof err === "string" ||
     typeof err === "number" ||
     typeof err === "boolean" ||
     typeof err === "bigint" ||
@@ -80,53 +70,14 @@ export function summarizeDiscordError(err: unknown): string {
   return "error";
 }
 
-function extractNumericDiscordErrorValue(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
-}
-
-function extractDiscordErrorStatus(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate = err as {
-    status?: unknown;
-    statusCode?: unknown;
-    response?: { status?: unknown };
-  };
-  return (
-    extractNumericDiscordErrorValue(candidate.status) ??
-    extractNumericDiscordErrorValue(candidate.statusCode) ??
-    extractNumericDiscordErrorValue(candidate.response?.status)
-  );
-}
-
-function extractDiscordErrorCode(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate = err as {
-    code?: unknown;
-    rawError?: { code?: unknown };
-    body?: { code?: unknown };
-    response?: { body?: { code?: unknown }; data?: { code?: unknown } };
-  };
-  return (
-    extractNumericDiscordErrorValue(candidate.code) ??
-    extractNumericDiscordErrorValue(candidate.rawError?.code) ??
-    extractNumericDiscordErrorValue(candidate.body?.code) ??
-    extractNumericDiscordErrorValue(candidate.response?.body?.code) ??
-    extractNumericDiscordErrorValue(candidate.response?.data?.code)
-  );
-}
-
 export function isDiscordThreadGoneError(err: unknown): boolean {
-  const code = extractDiscordErrorCode(err);
-  if (code === DISCORD_UNKNOWN_CHANNEL_ERROR_CODE) {
-    return true;
-  }
-  const status = extractDiscordErrorStatus(err);
   // 404: deleted/unknown channel. 403: bot no longer has access.
-  return status === 404 || status === 403;
+  return (
+    err instanceof DiscordError &&
+    (err.discordCode === DISCORD_UNKNOWN_CHANNEL_ERROR_CODE ||
+      err.status === 404 ||
+      err.status === 403)
+  );
 }
 
 export async function maybeSendBindingMessage(params: {
@@ -134,21 +85,27 @@ export async function maybeSendBindingMessage(params: {
   record: ThreadBindingRecord;
   text: string;
   preferWebhook?: boolean;
+  assertCurrent?: () => void;
 }) {
+  const assertCurrent = params.assertCurrent;
   const text = params.text.trim();
   if (!text) {
     return;
   }
   const record = params.record;
-  if (params.preferWebhook !== false && record.webhookId && record.webhookToken) {
+  const { webhookId, webhookToken } = record;
+  if (params.preferWebhook !== false && webhookId && webhookToken) {
     try {
-      await sendWebhookMessageDiscord(text, {
-        cfg: params.cfg,
-        webhookId: record.webhookId,
-        webhookToken: record.webhookToken,
-        accountId: record.accountId,
-        threadId: record.threadId,
-        username: resolveThreadBindingPersonaFromRecord(record),
+      await withDiscordRequestAuthority(assertCurrent, () => {
+        assertCurrent?.();
+        return sendWebhookMessageDiscord(text, {
+          cfg: params.cfg,
+          webhookId,
+          webhookToken,
+          accountId: record.accountId,
+          threadId: record.threadId,
+          username: resolveThreadBindingPersonaFromRecord(record),
+        });
       });
       return;
     } catch (err) {
@@ -163,9 +120,14 @@ export async function maybeSendBindingMessage(params: {
     }
   }
   try {
-    await sendMessageDiscord(buildThreadTarget(record.threadId), text, {
-      cfg: params.cfg,
-      accountId: record.accountId,
+    await withDiscordRequestAuthority(assertCurrent, () => {
+      assertCurrent?.();
+      const threadId = record.threadId;
+      const target = /^(channel:|user:)/i.test(threadId) ? threadId : `channel:${threadId}`;
+      return sendMessageDiscord(target, text, {
+        cfg: params.cfg,
+        accountId: record.accountId,
+      });
     });
   } catch (err) {
     logVerbose(`discord thread binding fallback send failed: ${summarizeDiscordError(err)}`);
@@ -177,20 +139,26 @@ export async function createWebhookForChannel(params: {
   accountId: string;
   token?: string;
   channelId: string;
+  assertCreateAllowed?: () => void;
 }): Promise<{ webhookId?: string; webhookToken?: string }> {
+  const assertCreateAllowed = params.assertCreateAllowed;
   try {
     const rest = createDiscordRestClient({
       cfg: params.cfg,
       accountId: params.accountId,
       token: params.token,
     }).rest;
-    const created = await createChannelWebhook(rest, params.channelId, {
-      body: {
-        name: "OpenClaw Agents",
-      },
+    const rawCreated = await withDiscordRequestAuthority(assertCreateAllowed, () => {
+      assertCreateAllowed?.();
+      return rest.post(Routes.channelWebhooks(params.channelId), {
+        body: {
+          name: "OpenClaw Agents",
+        },
+      });
     });
-    const webhookId = normalizeOptionalString(created?.id) ?? "";
-    const webhookToken = normalizeOptionalString(created?.token) ?? "";
+    const created = asNonArrayRecord(rawCreated);
+    const webhookId = normalizeOptionalString(created.id) ?? "";
+    const webhookToken = normalizeOptionalString(created.token) ?? "";
     if (!webhookId || !webhookToken) {
       return {};
     }
@@ -207,34 +175,7 @@ export function findReusableWebhook(params: { accountId: string; channelId: stri
   webhookId?: string;
   webhookToken?: string;
 } {
-  const reusableKey = toReusableWebhookKey({
-    accountId: params.accountId,
-    channelId: params.channelId,
-  });
-  const cached = REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.get(reusableKey);
-  if (cached) {
-    return {
-      webhookId: cached.webhookId,
-      webhookToken: cached.webhookToken,
-    };
-  }
-  for (const record of BINDINGS_BY_THREAD_ID.values()) {
-    if (record.accountId !== params.accountId) {
-      continue;
-    }
-    if (record.channelId !== params.channelId) {
-      continue;
-    }
-    if (!record.webhookId || !record.webhookToken) {
-      continue;
-    }
-    rememberReusableWebhook(record);
-    return {
-      webhookId: record.webhookId,
-      webhookToken: record.webhookToken,
-    };
-  }
-  return {};
+  return REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.get(toReusableWebhookKey(params)) ?? {};
 }
 
 export async function resolveChannelIdForBinding(params: {
@@ -260,7 +201,7 @@ export async function resolveChannelIdForBinding(params: {
     }).rest;
     const channel = await getChannel(rest, lookupThreadId);
     const channelInfo = resolveDiscordChannelInfoSafe(channel);
-    const channelId = normalizeOptionalString(resolveDiscordChannelIdSafe(channel)) ?? "";
+    const channelId = normalizeOptionalString(channelInfo.id) ?? "";
     const type = channelInfo.type;
     const parentId = normalizeOptionalString(channelInfo.parentId) ?? "";
     // Only thread channels should resolve to their parent channel.
@@ -283,7 +224,9 @@ export async function createThreadForBinding(params: {
   token?: string;
   channelId: string;
   threadName: string;
+  assertCreateAllowed?: () => void;
 }): Promise<string | null> {
+  const assertCreateAllowed = params.assertCreateAllowed;
   try {
     const created = await createThreadDiscord(
       params.channelId,
@@ -294,10 +237,10 @@ export async function createThreadForBinding(params: {
         cfg: params.cfg,
         accountId: params.accountId,
         token: params.token,
+        ...(assertCreateAllowed ? { assertCreateAllowed } : {}),
       },
     );
-    const createdId = normalizeOptionalString(created?.id) ?? "";
-    return createdId || null;
+    return normalizeOptionalString(created?.id) ?? null;
   } catch (err) {
     logVerbose(
       `discord thread binding auto-thread create failed for ${params.channelId}: ${summarizeDiscordError(err)}`,

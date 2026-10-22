@@ -1,62 +1,31 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import {
-  normalizeAgentId,
-  normalizeSessionKeyForUiComparison,
-  parseAgentSessionKey,
-} from "../lib/sessions/session-key.ts";
-import type { ExecApprovalRequest } from "./exec-approval.ts";
+import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
+import { t } from "../i18n/index.ts";
 
-export type ApprovalBadgeSnapshot = {
-  agentCounts: ReadonlyMap<string, number>;
-  sessionKeys: ReadonlySet<string>;
-};
-
-export function findInlineApproval(
-  queue: readonly ExecApprovalRequest[],
-  sessionKey: string | null | undefined,
-): ExecApprovalRequest | null {
-  const normalizedSessionKey = normalizeSessionKeyForUiComparison(sessionKey);
-  if (!normalizedSessionKey || parseCatalogSessionKey(normalizedSessionKey)) {
-    return null;
+export function summarizeApprovalScopeLabel(scope: ApprovalScope): string {
+  switch (scope.kind) {
+    case "standing-grant":
+      return scope.expiresInDays !== undefined
+        ? t("execApproval.scope.standingGrantDays", {
+            automation: scope.automation,
+            count: String(scope.expiresInDays),
+          })
+        : t("execApproval.scope.standingGrant", { automation: scope.automation });
+    case "message-send":
+      return t("execApproval.scope.messageSend", {
+        count: String(scope.recipientCount),
+        target: scope.target,
+      });
+    case "payment":
+      return t("execApproval.scope.payment", {
+        amount: scope.amount,
+        currency: scope.currency,
+        target: scope.target,
+      });
+    case "external-post":
+      return t("execApproval.scope.externalPost", { target: scope.target });
   }
-  return (
-    queue.find(
-      (entry) =>
-        normalizeSessionKeyForUiComparison(entry.request.sessionKey) === normalizedSessionKey,
-    ) ?? null
-  );
-}
-
-export function deriveApprovalBadgeSnapshot(
-  queue: readonly ExecApprovalRequest[],
-): ApprovalBadgeSnapshot {
-  const agentCounts = new Map<string, number>();
-  const sessionKeys = new Set<string>();
-  for (const entry of queue) {
-    // agentId is optional on approval events; an agent-scoped session key
-    // still names the owner, and dropping it would badge the session row
-    // while the agent card shows no pending count.
-    const agentId =
-      entry.request.agentId?.trim() || parseAgentSessionKey(entry.request.sessionKey)?.agentId;
-    if (agentId) {
-      const normalizedAgentId = normalizeAgentId(agentId);
-      agentCounts.set(normalizedAgentId, (agentCounts.get(normalizedAgentId) ?? 0) + 1);
-    }
-    const sessionKey = normalizeSessionKeyForUiComparison(entry.request.sessionKey);
-    if (sessionKey) {
-      sessionKeys.add(sessionKey);
-    }
-  }
-  return { agentCounts, sessionKeys };
-}
-
-export function sessionHasPendingApproval(
-  snapshot: ApprovalBadgeSnapshot,
-  sessionKey: string | null | undefined,
-): boolean {
-  const normalizedSessionKey = normalizeSessionKeyForUiComparison(sessionKey);
-  return normalizedSessionKey ? snapshot.sessionKeys.has(normalizedSessionKey) : false;
+  return scope satisfies never;
 }
 
 export function compactApprovalCommand(command: string): string {

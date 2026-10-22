@@ -2,9 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as diskSpace from "../../infra/disk-space.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
 import { updateGitInstall } from "./update-command-git.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -20,13 +24,13 @@ async function git(root: string, ...args: string[]): Promise<string> {
 }
 
 it.each([
-  { current: true, inspection: false },
-  { current: true, inspection: true },
-  { current: false, inspection: false },
-  { current: false, inspection: true },
+  { current: true, runtimeReady: true, noOp: true, reportingFails: false },
+  { current: false, runtimeReady: true, noOp: false, reportingFails: false },
+  { current: true, runtimeReady: false, noOp: false, reportingFails: false },
+  { current: false, runtimeReady: true, noOp: false, reportingFails: true },
 ])(
-  "checks snapshot space after the Git no-op decision (current=$current, inspection=$inspection)",
-  async ({ current, inspection }) => {
+  "checks snapshot space after the Git no-op decision (current=$current, runtimeReady=$runtimeReady, reportingFails=$reportingFails)",
+  async ({ current, runtimeReady, noOp, reportingFails }) => {
     await withTestDir({ prefix: "git-update-snapshot-" }, async (base) => {
       const root = path.join(base, "checkout");
       const stateDir = path.join(base, "state");
@@ -41,7 +45,7 @@ it.each([
       await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
       await fs.writeFile(
         path.join(root, "package.json"),
-        '{"name":"openclaw","version":"2026.9.1"}',
+        JSON.stringify({ name: "openclaw", version: "2026.9.1" }),
       );
       await fs.writeFile(path.join(root, "openclaw.mjs"), "export {};\n");
       await fs.writeFile(path.join(root, ".gitignore"), "dist/\nnode_modules/\n.artifacts/\n");
@@ -51,6 +55,9 @@ it.each([
       await git(root, "add", ".");
       await git(root, "commit", "-m", "fixture");
       const before = await git(root, "rev-parse", "HEAD");
+      if (runtimeReady) {
+        await writeOpenClawPackageFixture(root, "2026.9.1", { builtSha: before });
+      }
       let target = before;
       if (!current) {
         await fs.writeFile(path.join(root, "candidate.txt"), "candidate\n");
@@ -66,14 +73,9 @@ it.each([
         totalBytes: 1024 ** 3,
       }));
       const runCommand = processRunner.runCommandWithTimeout;
-      const candidateCommand = vi.fn(() => ({
-        stdout: "",
-        stderr: "synthetic stop before candidate package commands",
-        code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      }));
+      const candidateCommand = vi.fn(() =>
+        createCommandResult({ stderr: "unexpected candidate command", code: 1 }),
+      );
       vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) =>
         argv[0] === "git" ? runCommand(argv, options) : Promise.resolve(candidateCommand()),
       );
@@ -81,52 +83,84 @@ it.each([
       const beforeGitMutation = vi.fn();
       const validateCandidate = vi.fn();
       const getSnapshotSource = vi.fn(async () => ({ config: {}, env }));
+      const reportingError = new Error("snapshot capacity receipt rejected");
+      const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>(
+        async (step) => {
+          if (reportingFails && step.name === "snapshot-space-preflight") {
+            throw reportingError;
+          }
+        },
+      );
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const capacityStep = { name: "snapshot-space-preflight", exitCode: 1 };
       const originalArgv = process.argv;
       process.argv = [process.execPath, path.join(root, "openclaw.mjs")];
       try {
-        const result = await updateGitInstall({
+        const update = updateGitInstall({
           root,
           switchToGit: false,
           installKind: "git",
-          timeoutMs: 5000,
+          timeoutMs: undefined,
           startedAt: Date.now(),
-          progress: {},
+          progress: { onStepComplete },
           channel: "dev",
-          tag: "latest",
           devTarget: { mode: "detached", ref: target },
           beforeGitMutation,
           validateCandidate,
-          inspectGitTarget: inspection ? async () => {} : undefined,
+          inspectGitTarget: async () => {},
           getManagedServiceEnv: () => undefined,
           getSnapshotSource,
           jsonMode: true,
-          allowGatewayServiceRepair: false,
-          allowGatewayActivation: false,
         });
-        expect(result).toMatchObject(
-          current
-            ? { status: "skipped", reason: "already-current" }
-            : { status: "error", reason: "snapshot-capacity-insufficient" },
-        );
-        expect(capacity.mock.calls.length === 0).toBe(current);
-        expect(getSnapshotSource).toHaveBeenCalledTimes(current ? 0 : 1);
-        if (!current) {
-          expect(result.steps).toContainEqual(
+        if (reportingFails) {
+          const errors = await update.then(() => [], collectNestedErrorCandidates);
+          expect(errors).toContain(reportingError);
+          expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(capacityStep));
+          expect(errors).toContainEqual(
             expect.objectContaining({
-              name: "snapshot-space-preflight",
               exitCode: 1,
+              stderrTail: expect.stringMatching(
+                /snapshot-capacity-insufficient[\s\S]*Initial snapshot needs/,
+              ),
+              snapshotCapacity: expect.objectContaining({
+                reason: "snapshot-capacity-insufficient",
+                requiredBytes: expect.any(Number),
+                selection: null,
+                candidates: expect.arrayContaining([
+                  expect.objectContaining({ availableBytes: 0 }),
+                ]),
+              }),
             }),
           );
+        } else {
+          const result = await update;
+          expect(result).toMatchObject(
+            noOp
+              ? { status: "skipped", reason: "already-current" }
+              : { status: "error", reason: "snapshot-capacity-insufficient" },
+          );
+          if (!noOp) {
+            expect(result.steps).toContainEqual(expect.objectContaining(capacityStep));
+          }
         }
+        const headCommandOptions = vi
+          .mocked(processRunner.runCommandWithTimeout)
+          .mock.calls.find(([argv]) => argv.join(" ") === `git -C ${root} rev-parse HEAD`)?.[1];
+        expect(
+          typeof headCommandOptions === "number"
+            ? headCommandOptions
+            : headCommandOptions?.timeoutMs,
+        ).toBe(20 * 60_000);
+        expect(capacity.mock.calls.length === 0).toBe(noOp);
+        expect(getSnapshotSource).toHaveBeenCalledTimes(noOp ? 0 : 1);
         expect(
           allocate.mock.calls.some(
             ([prefix]) => prefix.includes("update-preflight-") || prefix.includes("ocu-pf-"),
           ),
         ).toBe(false);
-        expect(candidateCommand).not.toHaveBeenCalled();
-        expect(beforeGitMutation).not.toHaveBeenCalled();
-        expect(validateCandidate).not.toHaveBeenCalled();
+        expect(
+          [candidateCommand, beforeGitMutation, validateCandidate].map((fn) => fn.mock.calls),
+        ).toEqual([[], [], []]);
         expect(await git(root, "rev-parse", "HEAD")).toBe(before);
         expect(await fs.readdir(stateDir)).toEqual(["openclaw.json"]);
       } finally {

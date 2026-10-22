@@ -12,9 +12,11 @@ export function isGatewayProtocolResponseError(
 export type GatewayProtocolRequestOptions = {
   timeoutMs?: number | null;
   expectFinal?: boolean;
-  onSent?: () => void;
+  onSent?: (requestId: string) => void;
   onAccepted?: (payload: unknown) => void;
   signal?: AbortSignal;
+  /** Abort unsent/retry work while retaining a sent write's result and original deadline. */
+  retainSentResultOnAbort?: boolean;
 };
 
 export class GatewayProtocolRequestError extends Error {

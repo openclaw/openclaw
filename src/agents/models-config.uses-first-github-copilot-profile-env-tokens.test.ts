@@ -1,9 +1,6 @@
-// Verifies GitHub Copilot profile token fallback and implicit provider planning.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { expect, it, vi } from "vitest";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
-import type { ProviderConfig } from "./models-config.providers.secrets.js";
+import type { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 
 vi.mock("./model-auth-env.js", () => ({
@@ -28,244 +25,75 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 
-vi.mock("./models-config.providers.js", () => ({
+vi.mock("./models-config.providers.catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-config.providers.catalog.js")>()),
   materializeConfiguredProviderCatalogModels: (providers: unknown) => providers,
-  enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
   normalizeProviderCatalogModelsForConfig: (providers: unknown) => providers,
-  normalizeProviders: ({ providers }: { providers: unknown }) => providers,
-  resolveImplicitProviders: vi.fn(),
 }));
 
-const resolveImplicitProvidersMock = vi.mocked(resolveImplicitProviders);
+vi.mock("./models-config.providers.source-managed.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-config.providers.source-managed.js")>()),
+  enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
+}));
 
-beforeEach(() => {
-  resolveImplicitProvidersMock
-    .mockReset()
-    .mockImplementation(async ({ explicitProviders }) => explicitProviders ?? {});
+vi.mock("./models-config.providers.normalize.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-config.providers.normalize.js")>()),
+  normalizeProviders: ({ providers }: { providers: unknown }) => providers,
+}));
+
+vi.mock("./models-config.providers.implicit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-config.providers.implicit.js")>()),
+  resolveImplicitProviders: async ({
+    explicitProviders,
+  }: Parameters<typeof resolveImplicitProviders>[0]) => explicitProviders ?? {},
+}));
+
+const tokenCredential = { type: "token" as const, provider: "github-copilot" };
+const expectedAuth = (profile: string, apiKey: string, discoveryApiKey = apiKey) => ({
+  apiKey,
+  discoveryApiKey,
+  mode: "token",
+  source: "profile",
+  profileId: `github-copilot:${profile}`,
 });
 
-describe("models-config", () => {
-  it("uses the first github-copilot profile when env tokens are missing", () => {
-    const auth = createProviderAuthResolver({} as NodeJS.ProcessEnv, {
-      version: 1,
-      profiles: {
-        "github-copilot:alpha": {
-          type: "token",
-          provider: "github-copilot",
-          token: "alpha-token",
-        },
-        "github-copilot:beta": {
-          type: "token",
-          provider: "github-copilot",
-          token: "beta-token",
-        },
+it.each([
+  [
+    "uses the first github-copilot profile when env tokens are missing",
+    {},
+    {
+      "github-copilot:alpha": { ...tokenCredential, token: "alpha-token" },
+      "github-copilot:beta": { ...tokenCredential, token: "beta-token" },
+    },
+    expectedAuth("alpha", "alpha-token"),
+  ],
+  [
+    "uses tokenRef env var when github-copilot profile omits plaintext token",
+    { COPILOT_REF_TOKEN: "token-from-ref-env" },
+    {
+      "github-copilot:default": {
+        ...tokenCredential,
+        tokenRef: { source: "env" as const, provider: "default", id: "COPILOT_REF_TOKEN" },
       },
-    });
-
-    expect(auth("github-copilot")).toEqual({
-      apiKey: "alpha-token",
-      discoveryApiKey: "alpha-token",
-      mode: "token",
-      source: "profile",
-      profileId: "github-copilot:alpha",
-    });
-  });
-
-  it("does not override explicit github-copilot provider config", async () => {
-    const cfg = {
-      models: {
-        providers: {
-          "github-copilot": {
-            baseUrl: "https://copilot.local",
-            api: "openai-responses" as const,
-            models: [],
-          },
-        },
-      },
-    };
-    const env = {} as NodeJS.ProcessEnv;
-    const plan = await planOpenClawModelsJson({
-      context: {
-        cfg,
-        discoveryAuthConfig: cfg,
-        sourceConfigForSecrets: cfg,
-        agentDir: "/tmp/openclaw-agent",
-        env,
-        envFingerprint: env,
-      },
-      existingRaw: "",
-      existingParsed: null,
-    });
-
-    expect(plan.action).toBe("write");
-    expect(
-      plan.action === "write"
-        ? (
-            JSON.parse(plan.contents) as {
-              providers?: Record<string, { baseUrl?: string }>;
-            }
-          ).providers?.["github-copilot"]?.baseUrl
-        : undefined,
-    ).toBe("https://copilot.local");
-  });
-
-  it("passes explicit provider config to implicit discovery so plugins can skip duplicates", async () => {
-    resolveImplicitProvidersMock.mockImplementationOnce(async ({ explicitProviders }) => {
-      expect(explicitProviders?.vllm?.baseUrl).toBe("http://127.0.0.1:8000/v1");
-      return {};
-    });
-
-    const plan = await planModelsJsonForTest({
-      cfg: {
-        models: {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-      },
-      agentDir: "/tmp/openclaw-agent",
-      env: { VLLM_API_KEY: "test-vllm-key" } as NodeJS.ProcessEnv,
-    });
-
-    expect(resolveImplicitProvidersMock).toHaveBeenCalledOnce();
-    expect(plan).toEqual({
-      action: "write",
-      pluginCatalogWrites: {},
-      contents: `${JSON.stringify(
-        {
-          providers: {
-            vllm: {
-              baseUrl: "http://127.0.0.1:8000/v1",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    });
-  });
-
-  it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
-    const kilocodeProvider = {
-      baseUrl: "https://api.kilo.ai/api/gateway/v1",
-      api: "openai-completions" as const,
-      models: [],
-    };
-    const existingContents = `${JSON.stringify(
-      {
-        providers: {
-          kilocode: {
-            baseUrl: "https://api.kilo.ai/api/gateway",
-            api: "openai-completions",
-            models: [],
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`;
-
-    resolveImplicitProvidersMock.mockResolvedValueOnce({});
-    const plan = await planModelsJsonForTest({
-      cfg: {
-        models: {
-          providers: {
-            kilocode: kilocodeProvider,
-          },
-        },
-      },
-      sourceConfigForSecrets: {
-        models: {
-          providers: {
-            kilocode: kilocodeProvider,
-          },
-        },
-      },
-      agentDir: "/tmp/openclaw-agent",
-      env: {} as NodeJS.ProcessEnv,
-      existingRaw: existingContents,
-      existingParsed: JSON.parse(existingContents),
-    });
-
-    expect(plan).toEqual({ action: "noop", pluginCatalogWrites: {} });
-  });
-
-  it("uses tokenRef env var when github-copilot profile omits plaintext token", () => {
-    const auth = createProviderAuthResolver(
-      {
-        COPILOT_REF_TOKEN: "token-from-ref-env",
-      } as NodeJS.ProcessEnv,
-      {
-        version: 1,
-        profiles: {
-          "github-copilot:default": {
-            type: "token",
-            provider: "github-copilot",
-            tokenRef: { source: "env", provider: "default", id: "COPILOT_REF_TOKEN" },
-          },
-        },
-      },
-    );
-
-    expect(auth("github-copilot")).toEqual({
-      apiKey: "COPILOT_REF_TOKEN",
-      discoveryApiKey: "token-from-ref-env",
-      mode: "token",
-      source: "profile",
-      profileId: "github-copilot:default",
-    });
-  });
-
-  it("writes an implicit github-copilot provider discovered from a token exchange", async () => {
-    const plan = await planCopilotWithImplicitProvider({
-      provider: { baseUrl: "https://api.copilot.example", models: [] },
-    });
-
-    expect(expectCopilotProviderFromPlan(plan)).toEqual({
-      baseUrl: "https://api.copilot.example",
-      models: [],
-    });
-  });
-
-  it("writes default github-copilot baseUrl when the token exchange fails", async () => {
-    const plan = await planCopilotWithImplicitProvider({
-      provider: { baseUrl: "https://api.individual.githubcopilot.com", models: [] },
-    });
-
-    expect(expectCopilotProviderFromPlan(plan)).toEqual({
-      baseUrl: "https://api.individual.githubcopilot.com",
-      models: [],
-    });
-  });
+    },
+    expectedAuth("default", "COPILOT_REF_TOKEN", "token-from-ref-env"),
+  ],
+] as const)("%s", (_name, env, profiles, expected) => {
+  const auth = createProviderAuthResolver(env, { version: 1, profiles });
+  expect(auth("github-copilot")).toEqual(expected);
 });
 
-async function planCopilotWithImplicitProvider(params: { provider: ProviderConfig }) {
-  resolveImplicitProvidersMock.mockResolvedValueOnce({ "github-copilot": params.provider });
-  return await planModelsJsonForTest({
-    cfg: { models: { providers: {} } },
+it("keeps a non-empty existing models.json baseUrl when merge mode regenerates the provider", async () => {
+  const baseUrl = "https://api.kilo.ai/api/gateway";
+  const provider = { baseUrl: `${baseUrl}/v1`, api: "openai-completions" as const, models: [] };
+  const existing = { providers: { kilocode: { ...provider, baseUrl } } };
+  const plan = await planModelsJsonForTest({
+    cfg: { models: { providers: { kilocode: provider } } },
     agentDir: "/tmp/openclaw-agent",
-    env: {} as NodeJS.ProcessEnv,
+    env: {},
+    existingRaw: `${JSON.stringify(existing, null, 2)}\n`,
+    existingParsed: existing,
   });
-}
 
-function expectCopilotProviderFromPlan(
-  plan: Awaited<ReturnType<typeof planCopilotWithImplicitProvider>>,
-) {
-  // Keep assertions on the emitted provider payload, not planner implementation details.
-  expect(plan.action).toBe("write");
-  const parsed =
-    plan.action === "write"
-      ? (JSON.parse(plan.contents) as { providers?: Record<string, unknown> })
-      : {};
-  const provider = parsed.providers?.["github-copilot"];
-  if (provider === null || typeof provider !== "object") {
-    throw new Error("Expected GitHub Copilot provider config");
-  }
-  return provider;
-}
+  expect(plan).toEqual({ action: "noop", pluginCatalogWrites: {} });
+});

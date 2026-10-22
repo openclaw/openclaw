@@ -1,0 +1,473 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
+import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
+import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
+import { VERSION } from "../version.js";
+import {
+  commandCalls,
+  expectNoSideEffects,
+  freshRestartCalls,
+  getErrorOutput,
+  getLogOutput,
+  lastWriteJsonCall,
+  packageInstallCommandCall,
+  requireValue,
+} from "./update-cli-assertions.test-support.js";
+import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
+import {
+  candidateValidation,
+  gatewayFixturePid,
+  inferenceRepair,
+  loadInstalledPluginIndexInstallRecords,
+  nodeVersionSatisfiesEngine,
+  readPackageVersion,
+  resolveNodeRuntimeInfo,
+  serviceDefinitionMutationCapability,
+  serviceLoaded,
+  serviceReadCommand,
+  serviceReadRuntime,
+  serviceRestart,
+  serviceStop,
+  syncPluginsForUpdateChannel,
+  updateNpmInstalledPlugins,
+} from "./update-cli-mocks.test-support.js";
+import {
+  defaultRuntime,
+  ExitError,
+  fetchNpmPackageTargetStatus,
+  listUpdateRuns,
+  resolveGatewayInstallEntrypoint,
+  runCommandWithTimeout,
+  runPostCorePluginConvergenceSpy,
+  updateCommand,
+} from "./update-cli-modules.test-support.js";
+import { mockPostCoreConvergenceOnce } from "./update-cli/update-cli-config.test-support.js";
+import {
+  packageTargetStatus,
+  writeJsonFixture,
+  writeOpenClawPackageFixture,
+} from "./update-cli/update-cli-package.test-support.js";
+import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
+
+await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
+
+describe("update-cli", () => {
+  const {
+    baseConfig,
+    createCaseDir,
+    mockFileBackedPathExists,
+    mockGatewayHealth,
+    mockNpmPluginOutcomes,
+    mockPackageInstallStatus,
+    mockServicePackageCommands,
+    primeNpmChannelTag,
+    primeServiceCommand,
+    setupServicePackageAtPrefix,
+    tempDirs,
+  } = createUpdateCliFixture();
+
+  beforeEach(() => runtimeRecovery.stubNodeRuntime());
+
+  it("updates the invoking package and rebinds its owned Gateway after a Node-prefix switch", async () => {
+    expect((await migrateDaemonRuntimePins(process.env)).warnings).toEqual([]);
+    const invokingVersion = "2026.5.18";
+    const oldInstall = await setupServicePackageAtPrefix({
+      prefix: tempDirs.make("openclaw-node-a-"),
+    });
+    const newInstall = await setupServicePackageAtPrefix({
+      prefix: tempDirs.make("openclaw-node-b-"),
+      version: invokingVersion,
+    });
+    mockPackageInstallStatus(newInstall.root);
+    readPackageVersion.mockImplementation(async (packageRoot: string) => {
+      const manifest: { version: string } = JSON.parse(
+        await fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
+      );
+      return manifest.version;
+    });
+    // A must be observed independently before B is activated.
+    mockGatewayHealth("2026.5.18", "retained-node-A");
+    // Canonical readers omit managedDefinition unless an operator override exists.
+    const originalCommand = {
+      programArguments: [oldInstall.serviceNode, oldInstall.entrypoint, "gateway"],
+    };
+    serviceReadCommand.mockResolvedValue(originalCommand);
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: gatewayFixturePid,
+      state: "running",
+    });
+    primeNpmChannelTag("latest", "2026.5.20");
+    mockFileBackedPathExists();
+    mockServicePackageCommands({
+      nodeModules: newInstall.nodeModules,
+      packageRoot: newInstall.root,
+      targetVersion: "2026.5.20",
+      npmCommands: ["npm", newInstall.serviceNpm, requireValue(newInstall.serviceNpmReal, "npm")],
+      nodeVersions: { [oldInstall.serviceNode]: "v24.19.0" },
+      onGatewayInstall: (argv) =>
+        serviceReadCommand.mockResolvedValue({
+          programArguments: [
+            requireValue(argv[0], "Node"),
+            requireValue(argv[1], "entrypoint"),
+            "gateway",
+          ],
+        }),
+    });
+
+    const { createManagedHandoffLeaseStore } =
+      await import("../infra/update-managed-service-handoff-lease.js");
+    const store = createManagedHandoffLeaseStore();
+    const installationKeys = [oldInstall.root, newInstall.root].map(resolveUpdateInstallRoot);
+    const assertRootsOwned = () => {
+      for (const admittedRoot of installationKeys) {
+        expect(store.acquire(admittedRoot, "different-profile", { kind: "update" }).kind).toBe(
+          "busy",
+        );
+      }
+    };
+    const validate = requireValue(
+      candidateValidation.getMockImplementation(),
+      "candidate validation",
+    );
+    candidateValidation.mockImplementation(async (...args) => {
+      assertRootsOwned();
+      return await validate(...args);
+    });
+    const rename = fs.rename;
+    const publicationChecks: string[] = [];
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(from) === newInstall.root || String(to) === newInstall.root) {
+        assertRootsOwned();
+        publicationChecks.push(String(to));
+      }
+      return await rename(from, to);
+    });
+    await updateCommand({ yes: true }).catch((cause: unknown) => {
+      throw new Error(getErrorOutput() + getLogOutput(), { cause });
+    });
+    expect(publicationChecks).toContain(newInstall.root);
+
+    const installed = JSON.parse(
+      await fs.readFile(path.join(newInstall.root, "package.json"), "utf8"),
+    );
+    const previous = JSON.parse(
+      await fs.readFile(path.join(oldInstall.root, "package.json"), "utf8"),
+    );
+    expect(installed.version).toBe("2026.5.20");
+    expect(previous.version).toBe("2026.5.18");
+    const serviceInstall = commandCalls().find(
+      ([argv]) => argv[2] === "gateway" && argv[3] === "install",
+    );
+    expect(serviceInstall?.[0].slice(0, 2)).toEqual([process.execPath, newInstall.entrypoint]);
+    expect(serviceStop).toHaveBeenCalledOnce();
+    expect(getLogOutput()).toContain("Gateway: restarted and verified");
+  });
+
+  it.each([
+    { scenario: "different Node", command: "gateway", selected: true },
+    { scenario: "non-Gateway command", command: "agent", selected: false },
+  ])(
+    "plans service Node selection independently of database admission ($scenario)",
+    async ({ command, selected }) => {
+      const root = createCaseDir("openclaw-same-root");
+      const entrypoint = await writeOpenClawPackageFixture(root, "2026.5.18");
+      const serviceNode = "/opt/other-node/bin/node";
+      mockPackageInstallStatus(root);
+      primeServiceCommand([serviceNode, "--import", "tsx", entrypoint, command]);
+
+      await updateCommand({ dryRun: true });
+      if (command !== "gateway") {
+        expect(getLogOutput()).toContain("Stop the Gateway through its owner");
+      }
+
+      expect(serviceReadCommand).toHaveBeenCalledTimes(2);
+      const logs = getLogOutput();
+      expect(logs).not.toContain("Targeting managed gateway service package root");
+      if (selected) {
+        expect(logs).toContain("differs from the managed gateway service runtime");
+        expect(logs).toContain(serviceNode);
+        expect(logs).toContain(
+          "Using the managed service runtime for this update so the gateway can start after the upgrade",
+        );
+      } else {
+        expect(logs).not.toContain("differs from the managed gateway service runtime");
+        expect(logs).not.toContain(serviceNode);
+      }
+    },
+  );
+
+  it.each([
+    { fallback: false, writable: true, refreshFails: false },
+    { fallback: true, writable: false, refreshFails: false },
+    { fallback: true, writable: true, refreshFails: true },
+  ])(
+    "admits managed Node before already-current plugin maintenance ($fallback, writable=$writable, refreshFails=$refreshFails)",
+    async ({ fallback, writable, refreshFails }) => {
+      const servicePrefix = tempDirs.make("openclaw-current-runtime-");
+      const { nodeModules, root, serviceNode, serviceNpm, serviceNpmReal, entrypoint } =
+        await setupServicePackageAtPrefix({ prefix: servicePrefix, version: VERSION });
+      mockPackageInstallStatus(root);
+      readPackageVersion.mockResolvedValue(VERSION);
+      primeServiceCommand([serviceNode, entrypoint, "gateway"]);
+      serviceLoaded.mockResolvedValue(true);
+      if (!writable) {
+        serviceDefinitionMutationCapability.mockResolvedValue({
+          kind: "sealed",
+          detail: "test service owner",
+        });
+      }
+      serviceReadRuntime.mockResolvedValue({
+        status: "running",
+        pid: gatewayFixturePid,
+        state: "running",
+      });
+      primeNpmChannelTag("latest", VERSION);
+      vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+        packageTargetStatus({ version: VERSION, nodeEngine: ">=24.22.1 <25 || >=26.12.1" }),
+      );
+      nodeVersionSatisfiesEngine.mockImplementation(
+        (version) => fallback && version === process.versions.node,
+      );
+      resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => {
+        const oldRuntime = nodePath === serviceNode;
+        return {
+          status: oldRuntime ? "unsupported" : "supported",
+          version: oldRuntime ? "22.23.1" : process.versions.node,
+          sqliteVersion: "3.51.3",
+          nodeSharedSqlite: false,
+          sqliteProbe: {
+            available: true,
+            version: "3.51.3",
+            text: !oldRuntime,
+            blob: true,
+            json: true,
+          },
+          ...(oldRuntime ? { capabilityError: "broken TEXT decoder" } : {}),
+        };
+      });
+      mockFileBackedPathExists();
+      vi.mocked(resolveGatewayInstallEntrypoint).mockReset();
+      mockServicePackageCommands({
+        nodeModules,
+        packageRoot: root,
+        targetVersion: VERSION,
+        npmCommands: [serviceNpm, serviceNpmReal!],
+        nodeVersions: {
+          [serviceNode]: "v22.23.1",
+          [process.execPath]: `v${process.versions.node}`,
+        },
+      });
+      const fixtureCommand = requireValue(
+        vi.mocked(runCommandWithTimeout).getMockImplementation(),
+        "runtime fixture command",
+      );
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+        if (argv[2] === "gateway" && argv[3] === "install") {
+          if (refreshFails) {
+            return commandResult({ code: 1, stderr: "runtime refresh failed" });
+          }
+          primeServiceCommand([argv[0], entrypoint, "gateway"]);
+        }
+        return fixtureCommand(argv, options);
+      });
+      const installPath = createCaseDir("current-runtime-plugin");
+      await fs.mkdir(installPath, { recursive: true });
+      await writeJsonFixture(path.join(installPath, "package.json"), {
+        name: "@openclaw/brave-plugin",
+        version: "2026.9.2",
+      });
+      const record: PluginInstallRecord = {
+        source: "npm",
+        spec: "@openclaw/brave-plugin",
+        installPath,
+        version: "2026.9.2",
+      };
+      loadInstalledPluginIndexInstallRecords.mockResolvedValue({ brave: record });
+      const updated = { ...record, version: "2026.9.3" };
+      mockNpmPluginOutcomes(
+        [
+          {
+            pluginId: "brave",
+            status: "updated",
+            currentVersion: "2026.9.2",
+            nextVersion: "2026.9.3",
+            message: "Updated brave.",
+          },
+        ],
+        true,
+        { ...baseConfig, plugins: { ...baseConfig.plugins, installs: { brave: updated } } },
+      );
+      mockPostCoreConvergenceOnce(runPostCorePluginConvergenceSpy, {
+        installRecords: { brave: updated },
+      });
+
+      if (!fallback || !writable) {
+        await expect(updateCommand({ yes: true, restart: true, json: true })).rejects.toEqual(
+          new ExitError(1),
+        );
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "error",
+          reason: "node-runtime-preflight",
+        });
+        const refusedRun = requireValue(listUpdateRuns({ limit: 1 })[0], "refused update run");
+        expect(refusedRun.reason).toBe("node-runtime-preflight");
+        const captureWarnings = refusedRun.steps
+          .filter((step) => step.step.startsWith("warning:original-state-capture:"))
+          .map((step) => `Warning: ${requireValue(step.detail, "original capture warning")}\n`)
+          .join("");
+        expect(getErrorOutput()).toContain(captureWarnings);
+        expect(getErrorOutput()).toContain(
+          `Required: openclaw@${VERSION} Node >=24.22.1 <25 || >=26.12.1; detected: Node 22.23.1 at ${serviceNode}`,
+        );
+        expect(getErrorOutput()).toContain(
+          `broken TEXT decoder\n${runtimeRecovery.expectedPlainRecovery(VERSION, "24.22.1", writable ? "refresh" : "owner", "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR", root, writable ? undefined : serviceNode)}`,
+        );
+        expectNoSideEffects(
+          updateNpmInstalledPlugins,
+          syncPluginsForUpdateChannel,
+          serviceStop,
+          serviceRestart,
+        );
+      } else {
+        await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "error",
+          reason: "service-runtime-refresh-failed",
+          run: { status: "failed" },
+        });
+        expect(inferenceRepair).not.toHaveBeenCalled();
+        expect(freshRestartCalls()).toHaveLength(1);
+        expect(serviceRestart).not.toHaveBeenCalled();
+        expect((await serviceReadCommand(process.env))?.programArguments[0]).toBe(serviceNode);
+        expect(getErrorOutput()).toContain("openclaw update repair");
+        expect(getLogOutput() + getErrorOutput()).not.toMatch(/keep the gateway stopped/i);
+      }
+      expect(packageInstallCommandCall()).toBeUndefined();
+    },
+  );
+
+  it("refuses an incompatible service Node before using a compatible shell Node", async () => {
+    const servicePrefix = tempDirs.make("openclaw-service-prefix-");
+    const { nodeModules, root, serviceNode, serviceNpm, serviceNpmReal, entrypoint } =
+      await setupServicePackageAtPrefix({ prefix: servicePrefix });
+    // Same package root for both shell and service.
+    mockPackageInstallStatus(root);
+    const serviceCommand = [serviceNode, entrypoint, "gateway"];
+    primeServiceCommand(serviceCommand);
+    serviceLoaded.mockResolvedValue(true);
+    primeNpmChannelTag("latest", "2026.7.1");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({
+        version: "2026.7.1",
+        nodeEngine: ">=24.15.0 <25",
+      }),
+    );
+    nodeVersionSatisfiesEngine.mockImplementation(
+      (version: string | null) => version === "24.15.0",
+    );
+    resolveNodeRuntimeInfo.mockImplementation(async (nodePath) => {
+      const version =
+        nodePath === serviceNode ? "24.14.0" : nodePath === process.execPath ? "24.15.0" : null;
+      if (!version) {
+        throw new Error("Unexpected runtime probe target");
+      }
+      return {
+        status: "supported",
+        version,
+        sqliteVersion: "3.51.3",
+        nodeSharedSqlite: false,
+        sqliteProbe: { available: true, version: "3.51.3", text: true, blob: true, json: true },
+      };
+    });
+    mockFileBackedPathExists();
+    mockServicePackageCommands({
+      nodeModules,
+      packageRoot: root,
+      targetVersion: "2026.7.1",
+      npmCommands: [serviceNpm, serviceNpmReal!],
+      nodeVersions: { [serviceNode]: "v24.14.0", [process.execPath]: "v24.15.0" },
+    });
+    const recovery = await import("./update-cli/update-command-node-runtime-resolution.js");
+    const recoverNode = vi
+      .spyOn(recovery, "resolveTargetNodeRuntime")
+      .mockResolvedValue(process.execPath);
+    const packageBefore = await fs.readFile(path.join(root, "package.json"));
+
+    await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
+
+    expect(lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      reason: "preflight-node-runtime-incompatible",
+    });
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Gateway service Node 24.14.0 at ${serviceNode} requires >=24.15.0 <25. Install Node 24.22.1 and update that service definition, then retry; changing the shell's Node alone does not update the service.`,
+      ),
+    );
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expectNoSideEffects(recoverNode, serviceStop, serviceRestart);
+    expect((await serviceReadCommand(process.env)).programArguments).toEqual(serviceCommand);
+    expect(await fs.readFile(path.join(root, "package.json"))).toEqual(packageBefore);
+  });
+
+  it("keeps the CLI and service untouched after an incompatible nvm Node refusal", async () => {
+    resolveNodeRuntimeInfo.mockResolvedValue(runtimeRecovery.unsupportedServiceRuntimeFixture);
+    const { root, serviceNode, entrypoint } = await setupServicePackageAtPrefix({
+      prefix: path.join(tempDirs.make("runtime-recovery-"), ".nvm/versions/node/v22.18.0"),
+      withNpm: false,
+    });
+    mockPackageInstallStatus(root);
+    const serviceCommand = [serviceNode, entrypoint, "gateway"];
+    primeServiceCommand(serviceCommand);
+    primeNpmChannelTag("latest", "2026.5.20");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ version: "2026.5.20" }),
+    );
+    vi.mocked(runCommandWithTimeout).mockImplementation(
+      runtimeRecovery.runtimeRecoveryCommandFixture(serviceNode),
+    );
+    nodeVersionSatisfiesEngine.mockReturnValue(false);
+    const recovery = await import("./update-cli/update-command-node-runtime-resolution.js");
+    const recoverNode = vi
+      .spyOn(recovery, "resolveTargetNodeRuntime")
+      .mockResolvedValue(process.execPath);
+    const packageBefore = await fs.readFile(path.join(root, "package.json"));
+    const expectedRecoverySteps = runtimeRecovery
+      .expectedRuntimeRecoverySteps("24.22.1", root, "2026.5.20")
+      .map((step) =>
+        step.kind === "select-runtime"
+          ? {
+              kind: "select-runtime" as const,
+              command: runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.22.1"),
+            }
+          : step,
+      );
+
+    await expect(updateCommand({ yes: true, restart: false, json: true })).rejects.toEqual(
+      new ExitError(1),
+    );
+
+    expect(lastWriteJsonCall()).toMatchObject({
+      reason: "preflight-node-runtime-incompatible",
+      failedStep: {
+        recoverySteps: expectedRecoverySteps,
+      },
+    });
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expectNoSideEffects(recoverNode, serviceStop, serviceRestart);
+    expect((await serviceReadCommand(process.env)).programArguments).toEqual(serviceCommand);
+    expect(await fs.readFile(path.join(root, "package.json"))).toEqual(packageBefore);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("preflight-node-runtime-incompatible");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)\n${runtimeRecovery.expectedPlainRecovery("2026.5.20", "24.22.1", "absent", undefined, root).replace("2. Install and select Node 24.22.1 using your system package manager or https://nodejs.org/en/download.", `2. Run \`${runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.22.1")}\`.`)}\nGateway service Node 22.18.0 at ${serviceNode} requires >=22.19.0. Install Node 24.22.1 and update that service definition, then retry; changing the shell's Node alone does not update the service.`,
+      ),
+    );
+  });
+});

@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
 export const VALID_CONFIG: OpenClawConfig = {
-  agents: { entries: { main: { default: true } } },
+  agents: { entries: { main: {} } },
   tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: false } },
 };
 

@@ -54,141 +54,83 @@ function matchRoleAt(
   return null;
 }
 
-function findDelimitedEnd(params: {
-  text: string;
-  contentStart: number;
-  lineEnd: number;
-  close: "]" | ">";
-  minContentLength: number;
-  maxContentLength: number;
-}): number | null {
-  const searchEnd = Math.min(params.lineEnd, params.contentStart + params.maxContentLength + 1);
-  let closeAt = -1;
-  for (let index = params.contentStart; index < searchEnd; index += 1) {
-    const char = params.text[index];
+function findDelimitedEnd(
+  text: string,
+  contentStart: number,
+  lineEnd: number,
+  close: "]" | ">",
+  minContentLength: number,
+): number | null {
+  const searchEnd = Math.min(lineEnd, contentStart + 160 + 1);
+  for (let index = contentStart; index < searchEnd; index += 1) {
+    const char = text[index];
     // Paired backticks are parsed as code and excluded earlier. An unmatched
     // delimiter leaves a header that target renderers cannot wrap consistently.
     if (char === "`") {
       return null;
     }
-    if (char === params.close) {
-      closeAt = index;
-      break;
+    if (char === close) {
+      return index - contentStart >= minContentLength ? index + 1 : null;
     }
   }
-  if (closeAt === -1) {
-    return null;
-  }
-  const contentLength = closeAt - params.contentStart;
-  if (contentLength < params.minContentLength || contentLength > params.maxContentLength) {
-    return null;
-  }
-  return closeAt + 1;
+  return null;
 }
 
 function isHeaderBoundary(char: string | undefined): boolean {
   return char === undefined || isLineTrailingWhitespace(char) || char === ":" || char === "：";
 }
 
-function matchRoleTimestampHeader(
+function matchRoleHeader(
   text: string,
   start: number,
   lineEnd: number,
 ): AssistantTranscriptRoleHeaderSpan | null {
-  const role = matchRoleAt(text, start, lineEnd);
-  if (!role) {
-    return null;
+  const opener = text[start];
+  let roleStart = start;
+  if (opener === "[") {
+    const bracketEnd = findDelimitedEnd(text, start + 1, lineEnd, "]", 4);
+    if (!bracketEnd) {
+      return null;
+    }
+    roleStart = skipHorizontalWhitespace(text, bracketEnd, lineEnd);
+  } else if (opener === "<") {
+    roleStart = skipHorizontalWhitespace(text, start + 1, lineEnd);
   }
-  const bracketStart = skipHorizontalWhitespace(text, role.end, lineEnd);
-  if (text[bracketStart] !== "[") {
-    return null;
-  }
-  const headerEnd = findDelimitedEnd({
-    text,
-    contentStart: bracketStart + 1,
-    lineEnd,
-    close: "]",
-    minContentLength: 1,
-    maxContentLength: 160,
-  });
-  if (!headerEnd || !isHeaderBoundary(text[headerEnd])) {
-    return null;
-  }
-  return {
-    start,
-    end: headerEnd,
-    kind: "role_timestamp_bracket",
-    role: role.role,
-  };
-}
-
-function matchTimestampRoleHeader(
-  text: string,
-  start: number,
-  lineEnd: number,
-): AssistantTranscriptRoleHeaderSpan | null {
-  if (text[start] !== "[") {
-    return null;
-  }
-  const bracketEnd = findDelimitedEnd({
-    text,
-    contentStart: start + 1,
-    lineEnd,
-    close: "]",
-    minContentLength: 4,
-    maxContentLength: 160,
-  });
-  if (!bracketEnd) {
-    return null;
-  }
-  const roleStart = skipHorizontalWhitespace(text, bracketEnd, lineEnd);
   const role = matchRoleAt(text, roleStart, lineEnd);
   if (!role) {
     return null;
   }
-  const colonAt = skipHorizontalWhitespace(text, role.end, lineEnd);
-  if (text[colonAt] !== ":" && text[colonAt] !== "：") {
-    return null;
-  }
-  return {
-    start,
-    end: colonAt + 1,
-    kind: "timestamp_role_colon",
-    role: role.role,
-  };
-}
 
-function matchAngleRoleHeader(
-  text: string,
-  start: number,
-  lineEnd: number,
-): AssistantTranscriptRoleHeaderSpan | null {
-  if (text[start] !== "<") {
-    return null;
+  let end: number | null;
+  let kind: AssistantTranscriptRoleHeaderKind;
+  if (opener === "[") {
+    const colonAt = skipHorizontalWhitespace(text, role.end, lineEnd);
+    if (text[colonAt] !== ":" && text[colonAt] !== "：") {
+      return null;
+    }
+    end = colonAt + 1;
+    kind = "timestamp_role_colon";
+  } else {
+    if (opener === "<") {
+      const boundary = text[role.end];
+      if (boundary !== ">" && !isHorizontalWhitespace(boundary)) {
+        return null;
+      }
+      end = findDelimitedEnd(text, role.end, lineEnd, ">", 0);
+      kind = "angle_role_header";
+    } else {
+      const bracketStart = skipHorizontalWhitespace(text, role.end, lineEnd);
+      if (text[bracketStart] !== "[") {
+        return null;
+      }
+      end = findDelimitedEnd(text, bracketStart + 1, lineEnd, "]", 1);
+      kind = "role_timestamp_bracket";
+    }
+    if (!end || !isHeaderBoundary(text[end])) {
+      return null;
+    }
   }
-  const roleStart = skipHorizontalWhitespace(text, start + 1, lineEnd);
-  const role = matchRoleAt(text, roleStart, lineEnd);
-  const roleBoundary = role ? text[role.end] : undefined;
-  if (!role || (roleBoundary !== ">" && !isHorizontalWhitespace(roleBoundary))) {
-    return null;
-  }
-  const headerEnd = findDelimitedEnd({
-    text,
-    contentStart: role.end,
-    lineEnd,
-    close: ">",
-    minContentLength: 0,
-    maxContentLength: 160,
-  });
-  if (!headerEnd || !isHeaderBoundary(text[headerEnd])) {
-    return null;
-  }
-  return {
-    start,
-    end: headerEnd,
-    kind: "angle_role_header",
-    role: role.role,
-  };
+  return { start, end, kind, role: role.role };
 }
 
 function rangesOverlap(left: TextRange, right: TextRange): boolean {
@@ -204,7 +146,7 @@ export function findAssistantTranscriptRoleHeaderSpans(
     return [];
   }
   const spans: AssistantTranscriptRoleHeaderSpan[] = [];
-  const sortedExcludedRanges = [...excludedRanges].toSorted(
+  const sortedExcludedRanges = excludedRanges.toSorted(
     (left, right) => left.start - right.start || left.end - right.end,
   );
   let excludedRangeIndex = 0;
@@ -213,10 +155,7 @@ export function findAssistantTranscriptRoleHeaderSpans(
     const newlineAt = text.indexOf("\n", lineStart);
     const lineEnd = newlineAt === -1 ? text.length : newlineAt;
     const contentStart = skipHorizontalWhitespace(text, lineStart, lineEnd);
-    const span =
-      matchTimestampRoleHeader(text, contentStart, lineEnd) ??
-      matchAngleRoleHeader(text, contentStart, lineEnd) ??
-      matchRoleTimestampHeader(text, contentStart, lineEnd);
+    const span = matchRoleHeader(text, contentStart, lineEnd);
     if (span) {
       for (;;) {
         const excludedRange = sortedExcludedRanges[excludedRangeIndex];

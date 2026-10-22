@@ -1,10 +1,11 @@
-// Feishu plugin module implements send result behavior.
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createMessageReceiptFromOutboundResults,
+  type ChannelMessageSendResult,
   type MessageReceipt,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { FeishuSendResult } from "./types.js";
 
 type FeishuMessageApiResponse = {
   code?: number;
@@ -33,7 +34,7 @@ export function resolveFeishuReceiptKind(msgType?: string): MessageReceiptPartKi
   }
 }
 
-export function createFeishuSendReceipt(params: {
+function createFeishuSendReceipt(params: {
   messageId?: string;
   chatId: string;
   kind?: MessageReceiptPartKind;
@@ -63,11 +64,7 @@ export function toFeishuSendResult(
   kind?: MessageReceiptPartKind,
   errorPrefix = "Feishu send failed",
   replyToId?: string,
-): {
-  messageId: string;
-  chatId: string;
-  receipt: MessageReceipt;
-} {
+): FeishuSendResult {
   const messageId = response.data?.message_id?.trim();
   if (!messageId) {
     // Feishu already accepted this send; an ordinary error would invite a duplicate retry.
@@ -80,5 +77,22 @@ export function toFeishuSendResult(
     messageId,
     chatId,
     receipt: createFeishuSendReceipt({ messageId, chatId, kind, replyToId }),
+  };
+}
+
+export function toFeishuMessageSendResult(
+  result: { messageId?: string; chatId?: string; receipt?: ChannelMessageSendResult["receipt"] },
+  kind: MessageReceiptPartKind,
+): ChannelMessageSendResult {
+  const receipt =
+    result.receipt ??
+    createFeishuSendReceipt({
+      messageId: result.messageId,
+      chatId: result.chatId ?? "",
+      kind,
+    });
+  return {
+    messageId: result.messageId || receipt.primaryPlatformMessageId,
+    receipt,
   };
 }

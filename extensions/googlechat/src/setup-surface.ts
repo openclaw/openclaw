@@ -1,5 +1,4 @@
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
-// Googlechat plugin module implements setup surface behavior.
 import {
   applySetupAccountConfigPatch,
   createPromptParsedAllowFromForAccount,

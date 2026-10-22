@@ -58,6 +58,37 @@ class ChatQuestionTest {
   }
 
   @Test
+  fun richChoicesSubmitCanonicalValuesAndKeepCustomTitles() {
+    val parts =
+      question.copy(
+        options = listOf(QuestionOption("Bolt", value = "part:m4"), QuestionOption("Bolt", value = "part:m6")),
+        presentation = "form",
+      )
+    val draft = ChatQuestionDraft().toggle(parts, "part:m6").toggle(parts, "part:m4").setOther(parts, "Bolt")
+    assertEquals(mapOf("meal" to listOf("part:m4", "part:m6", "Bolt")), draft.answers(listOf(parts)))
+    assertEquals(ChatQuestionDraft(), ChatQuestionDraft().toggle(parts, "Bolt"))
+    val prompt =
+      ChatQuestionPrompt(
+        record(status = "answered").copy(
+          questions = listOf(parts),
+          answers = QuestionAnswers(mapOf("meal" to listOf("part:m6"))),
+        ),
+      )
+    assertEquals("Bolt", terminalQuestionAnswer(prompt, parts, ChatQuestionStatus.Answered))
+  }
+
+  @Test
+  fun richDefaultsPreserveWhitespaceAndClearedOptionalAnswers() {
+    val tags = question.copy(options = emptyList(), presentation = "form", answerFormat = "lines", allowEmpty = true, defaultAnswers = listOf(" first ", "second"))
+    val draft = ChatQuestionDraft.fromQuestions(listOf(tags))
+    assertEquals(mapOf("meal" to listOf(" first ", "second")), draft.answers(listOf(tags)))
+    assertEquals(mapOf("meal" to emptyList<String>()), draft.setOther(tags, "").answers(listOf(tags)))
+    val legacy = json.decodeFromString<Question>("""{"questionId":"q","header":"Q","question":"Question","options":[]}""")
+    assertEquals(null, legacy.presentation)
+    assertEquals(null, legacy.answerFormat)
+  }
+
+  @Test
   fun secretDraftPreservesBytesWhileNormalAnswersTrim() {
     for (isSecret in listOf(false, true)) {
       val textQuestion = question.copy(options = emptyList(), isSecret = isSecret)

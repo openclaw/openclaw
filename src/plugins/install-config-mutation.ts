@@ -1,15 +1,22 @@
 // Config admission shared by plugin policy changes and source installs.
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   hashConfigIncludeRaw,
   readConfigIncludeFileWithGuards,
   resolveConfigIncludeWritePath,
 } from "../config/includes.js";
+import {
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+} from "../config/io.invalid-config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { containsConfigIncludeDirective } from "../config/io.read-helpers.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { composeConfigWriteAssertions } from "../config/write-authority.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 export type ConfigSnapshotForInstallPersist = {
@@ -224,10 +231,7 @@ export function selectInstallMutationWriteOptions(
   // Install work may outlive its config read. Keep only mutation-start ownership
   // and conflict facts; plugin metadata must come from the commit-time read.
   const assertConfigPathForWrite = beforePersistentApply
-    ? () => {
-        writeOptions.assertConfigPathForWrite?.();
-        beforePersistentApply();
-      }
+    ? composeConfigWriteAssertions(writeOptions.assertConfigPathForWrite, beforePersistentApply)
     : writeOptions.assertConfigPathForWrite;
   return {
     inputBase: "source",
@@ -239,4 +243,56 @@ export function selectInstallMutationWriteOptions(
     includeFileHashesForWrite: writeOptions.includeFileHashesForWrite,
     includeFileTargetsForWrite: writeOptions.includeFileTargetsForWrite,
   };
+}
+
+function assertWriteOptionRecordFresh(params: {
+  current?: Record<string, string>;
+  expected?: Record<string, string>;
+  message: string;
+}): void {
+  if (!isDeepStrictEqual(params.current ?? {}, params.expected ?? {})) {
+    throw new ConfigMutationConflictError(params.message);
+  }
+}
+
+export async function assertRecordsOnlyUpdateConfigFresh(params: {
+  baseHash?: string;
+  writeOptions?: ConfigWriteOptions;
+}): Promise<void> {
+  const { readConfigFileSnapshotForWrite } = await import("../config/config.js");
+  const prepared = await readConfigFileSnapshotForWrite(params.writeOptions);
+  const writeOptions = {
+    ...prepared.writeOptions,
+    ...params.writeOptions,
+  };
+  const currentHash = prepared.snapshot.hash ?? null;
+
+  writeOptions.assertConfigPathForWrite?.();
+  if (
+    writeOptions.expectedConfigPath !== undefined &&
+    writeOptions.expectedConfigPath !== prepared.snapshot.path
+  ) {
+    throw new ConfigMutationConflictError("config path changed since last load", {
+      retryable: false,
+    });
+  }
+  if (params.baseHash !== undefined && params.baseHash !== currentHash) {
+    throw new ConfigMutationConflictError("config changed since last load");
+  }
+  assertWriteOptionRecordFresh({
+    current: prepared.writeOptions.includeFileTargetsForWrite,
+    expected: params.writeOptions?.includeFileTargetsForWrite,
+    message: "included config target changed since last load",
+  });
+  assertWriteOptionRecordFresh({
+    current: prepared.writeOptions.includeFileHashesForWrite,
+    expected: params.writeOptions?.includeFileHashesForWrite,
+    message: "included config changed since last load",
+  });
+  if (!prepared.snapshot.valid) {
+    throw createInvalidConfigError(
+      prepared.snapshot.path,
+      formatInvalidConfigDetails(prepared.snapshot.issues),
+    );
+  }
 }

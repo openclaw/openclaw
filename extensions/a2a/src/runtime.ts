@@ -1,5 +1,4 @@
-import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import type { PluginRuntime } from "./runtime-api.js";
+import { createPluginRuntimeStore, type PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 
 const { setRuntime: setA2aChannelRuntime, getRuntime: getA2aChannelRuntime } =
   createPluginRuntimeStore<PluginRuntime>({

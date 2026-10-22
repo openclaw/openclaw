@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,13 +9,12 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
-import {
-  readUpdateStateSchemaVersions,
-  updateStateSchemaVersionsMatch,
-} from "./update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
 import { runUpdateCandidateSnapshotWorker } from "./update-candidate-state.test-support.js";
+import { updateStateSchemaVersionsMatch } from "./update-candidate-state.versions.js";
 
 let root: string;
 beforeEach(async () => {
@@ -37,6 +37,44 @@ async function createDatabase(file: string): Promise<void> {
   }
 }
 
+function registerDatabases(stateDir: string, registrations: [string, string][]): void {
+  const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } }).db;
+  try {
+    const insert = registry.prepare(
+      "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
+    );
+    for (const registration of registrations) {
+      insert.run(...registration);
+    }
+  } finally {
+    closeOpenClawStateDatabaseByPath(path.join(stateDir, "state", "openclaw.sqlite"));
+  }
+}
+
+function readRegisteredPath(stateDir: string, agentId: string): string {
+  const registry = openNodeSqliteDatabase(path.join(stateDir, "state", "openclaw.sqlite"));
+  try {
+    const row = registry
+      .prepare("SELECT path FROM agent_databases WHERE agent_id = ?")
+      .get(agentId);
+    assert(typeof row?.path === "string", "Expected a registered database path");
+    return row.path;
+  } finally {
+    registry.close();
+  }
+}
+
+function expectPreservedEvidence(file: string): void {
+  const copied = openNodeSqliteDatabase(file);
+  try {
+    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
+      value: "preserved",
+    });
+  } finally {
+    copied.close();
+  }
+}
+
 function runSnapshotWorker(
   input: Omit<Parameters<typeof runUpdateCandidateSnapshotWorker>[0], "candidateRoot">,
 ) {
@@ -45,55 +83,6 @@ function runSnapshotWorker(
     candidateRoot: path.join(root, "candidate-host"),
   });
 }
-
-// Windows registries can carry extended-length \\?\ agent paths (issue #144581):
-// projection must rebase them under the candidate root instead of embedding the
-// namespace prefix mid-path and failing the snapshot mkdir.
-it.skipIf(process.platform !== "win32")(
-  "projects extended-length registered agent paths under the candidate state root",
-  async () => {
-    const source = path.join(root, "source");
-    const target = path.join(root, "copy");
-    const canonical = path.join(source, "agents", "main", "agent", "openclaw-agent.sqlite");
-    await createDatabase(canonical);
-    const namespaced = `\\\\?\\${canonical}`;
-    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
-    registry
-      .prepare(
-        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
-      )
-      .run("main", namespaced);
-    closeOpenClawStateDatabaseByPath(path.join(source, "state", "openclaw.sqlite"));
-    const versions = await runSnapshotWorker({
-      stateDir: source,
-      targetStateDir: target,
-      config: {},
-    });
-    // The physical copy dedupes to one identity, but the published versions
-    // keep every raw alias so released mixed-alias baselines still match.
-    expect(versions.map((entry) => entry.path)).toContain(canonical);
-    expect(versions.map((entry) => entry.path)).toContain(namespaced);
-    const copied = openNodeSqliteDatabase(
-      path.join(target, "agents", "main", "agent", "openclaw-agent.sqlite"),
-    );
-    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
-      value: "preserved",
-    });
-    copied.close();
-    const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
-    const rebound = copiedRegistry
-      .prepare("SELECT path FROM agent_databases WHERE agent_id = 'main'")
-      .get() as { path: string };
-    copiedRegistry.close();
-    expect(path.isAbsolute(rebound.path)).toBe(false);
-    expect(rebound.path.split(/[\\/]/)).toEqual([
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    ]);
-  },
-);
 
 // A namespaced registration outside the state root must keep one projection
 // identity: the copy and the rebound registry entry must name the same hashed
@@ -106,31 +95,17 @@ it.skipIf(process.platform !== "win32")(
     const external = path.join(root, "external", "openclaw-agent.sqlite");
     await createDatabase(external);
     const namespacedExternal = `\\\\?\\${external}`;
-    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
-    registry
-      .prepare(
-        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
-      )
-      .run("external", namespacedExternal);
-    closeOpenClawStateDatabaseByPath(path.join(source, "state", "openclaw.sqlite"));
+    registerDatabases(source, [["external", namespacedExternal]]);
     await runSnapshotWorker({
       stateDir: source,
       targetStateDir: target,
       config: {},
     });
-    const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
-    const rebound = copiedRegistry
-      .prepare("SELECT path FROM agent_databases WHERE agent_id = 'external'")
-      .get() as { path: string };
-    copiedRegistry.close();
-    expect(path.isAbsolute(rebound.path)).toBe(false);
-    expect(rebound.path).toMatch(/^candidate-external/);
+    const rebound = readRegisteredPath(target, "external");
+    expect(path.isAbsolute(rebound)).toBe(false);
+    expect(rebound).toMatch(/^candidate-external/);
     // The rebound registry entry must name the database the snapshot copied.
-    const copied = openNodeSqliteDatabase(path.join(target, rebound.path));
-    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
-      value: "preserved",
-    });
-    copied.close();
+    expectPreservedEvidence(path.join(target, rebound));
   },
 );
 
@@ -146,31 +121,17 @@ it.skipIf(process.platform !== "win32")(
     await createDatabase(canonical);
     const noncanonical =
       source + path.sep + ["agents", "main", ".", "agent", "openclaw-agent.sqlite"].join(path.sep);
-    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
-    registry
-      .prepare(
-        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
-      )
-      .run("main", noncanonical);
-    closeOpenClawStateDatabaseByPath(path.join(source, "state", "openclaw.sqlite"));
+    registerDatabases(source, [["main", noncanonical]]);
     await runSnapshotWorker({
       stateDir: source,
       targetStateDir: target,
       config: {},
     });
-    const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
-    const rebound = copiedRegistry
-      .prepare("SELECT path FROM agent_databases WHERE agent_id = 'main'")
-      .get() as { path: string };
-    copiedRegistry.close();
-    expect(path.isAbsolute(rebound.path)).toBe(false);
-    expect(rebound.path).toMatch(/^candidate-external/);
+    const rebound = readRegisteredPath(target, "main");
+    expect(path.isAbsolute(rebound)).toBe(false);
+    expect(rebound).toMatch(/^candidate-external/);
     // The rebound registry entry must name the database the snapshot copied.
-    const copied = openNodeSqliteDatabase(path.join(target, rebound.path));
-    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
-      value: "preserved",
-    });
-    copied.close();
+    expectPreservedEvidence(path.join(target, rebound));
   },
 );
 
@@ -185,13 +146,9 @@ it.skipIf(process.platform !== "win32")(
     const target = path.join(root, "copy");
     const canonical = path.join(plainState, "agents", "main", "agent", "openclaw-agent.sqlite");
     await createDatabase(canonical);
-    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: plainState } }).db;
-    registry
-      .prepare(
-        "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
-      )
-      .run("main", path.join("agents", "main", "agent", "openclaw-agent.sqlite"));
-    closeOpenClawStateDatabaseByPath(path.join(plainState, "state", "openclaw.sqlite"));
+    registerDatabases(plainState, [
+      ["main", path.join("agents", "main", "agent", "openclaw-agent.sqlite")],
+    ]);
     const inspected = await readUpdateStateSchemaVersions({
       stateDir: namespacedState,
       config: {},
@@ -211,18 +168,10 @@ it.skipIf(process.platform !== "win32")(
     });
     // Snapshot mode reports the same legacy identities for the deduped copy.
     expect(versions).toEqual(inspected);
-    const copiedRegistry = openNodeSqliteDatabase(path.join(target, "state", "openclaw.sqlite"));
-    const rebound = copiedRegistry
-      .prepare("SELECT path FROM agent_databases WHERE agent_id = 'main'")
-      .get() as { path: string };
-    copiedRegistry.close();
-    expect(path.isAbsolute(rebound.path)).toBe(false);
+    const rebound = readRegisteredPath(target, "main");
+    expect(path.isAbsolute(rebound)).toBe(false);
     // The rebound registry entry must name exactly the one copied database.
-    const copied = openNodeSqliteDatabase(path.join(target, rebound.path));
-    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
-      value: "preserved",
-    });
-    copied.close();
+    expectPreservedEvidence(path.join(target, rebound));
   },
 );
 
@@ -242,16 +191,12 @@ it.skipIf(process.platform !== "win32")(
     await createDatabase(canonical);
     const namespaced = `\\\\?\\${canonical}`;
     const shared = path.join(source, "state", "openclaw.sqlite");
-    const registry = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: source } }).db;
-    const insert = registry.prepare(
-      "INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at) VALUES (?, ?, 3, 0)",
-    );
-    insert.run("main", path.join("agents", "main", "agent", "openclaw-agent.sqlite"));
-    insert.run("main", namespaced);
-    closeOpenClawStateDatabaseByPath(shared);
-    // Hand-built to mirror a released worker's response: every discovered
-    // spelling, with versions read straight from the physical databases rather
-    // than from a patched worker's response.
+    registerDatabases(source, [
+      ["main", path.join("agents", "main", "agent", "openclaw-agent.sqlite")],
+      ["main", namespaced],
+    ]);
+    // Retain the released worker's raw aliases alongside this current profile's
+    // local credentials; neither comes from the response under test.
     const sharedDb = openNodeSqliteDatabase(shared, { readOnly: true });
     const releasedBaseline = [
       {
@@ -261,6 +206,10 @@ it.skipIf(process.platform !== "win32")(
       },
       { path: canonical, userVersion: 3 },
       { path: namespaced, userVersion: 3 },
+      {
+        path: path.join(source, "client", "credentials.sqlite"),
+        userVersion: CLIENT_CREDENTIAL_SCHEMA_VERSION,
+      },
     ];
     sharedDb.close();
     const inspected = await readUpdateStateSchemaVersions({
@@ -270,7 +219,15 @@ it.skipIf(process.platform !== "win32")(
     expect(inspected.map((entry) => entry.path)).toEqual(
       expect.arrayContaining([shared, canonical, namespaced]),
     );
-    expect(inspected).toHaveLength(3);
+    expect(inspected).toContainEqual({
+      path: path.join(source, "control", "services.sqlite"),
+      userVersion: null,
+    });
+    expect(inspected).toContainEqual({
+      path: path.join(source, "client", "credentials.sqlite"),
+      userVersion: CLIENT_CREDENTIAL_SCHEMA_VERSION,
+    });
+    expect(inspected).toHaveLength(5);
     expect(
       updateStateSchemaVersionsMatch(releasedBaseline, inspected, { sharedPath: shared }),
     ).toBe(true);
@@ -281,12 +238,9 @@ it.skipIf(process.platform !== "win32")(
     });
     // Snapshot mode publishes the same aliases but copies each database once.
     expect(versions).toEqual(inspected);
-    const copied = openNodeSqliteDatabase(
-      path.join(target, "agents", "main", "agent", "openclaw-agent.sqlite"),
-    );
-    expect(copied.prepare("SELECT value FROM evidence").get()).toMatchObject({
-      value: "preserved",
-    });
-    copied.close();
+    const rebound = readRegisteredPath(target, "main");
+    expect(path.isAbsolute(rebound)).toBe(false);
+    expect(rebound.split(/[\\/]/)).toEqual(["agents", "main", "agent", "openclaw-agent.sqlite"]);
+    expectPreservedEvidence(path.join(target, rebound));
   },
 );

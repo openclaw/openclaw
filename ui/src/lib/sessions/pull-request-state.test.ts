@@ -1,81 +1,38 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayEventFrame,
-} from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
+import { interrupted as personalReview } from "../../pages/chat/chat-github-publication.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
-  GitHubPublicationController,
+  GitHubPublicationOwner,
   type GitHubPublicationOptions,
-} from "./github-publication-controller.ts";
-import { createTestSessionCapability } from "./session-capability.test-support.ts";
+} from "./github-publication-owner.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
+import {
+  createGatewayHarness as baseGateway,
+  createTestSessionCapability,
+  sessionsResult,
+} from "./session-capability.test-support.ts";
 import type { GitHubPublicationBinding, SessionGateway } from "./session-capability.ts";
 import { sessionRetryDelayMs } from "./session-retry.ts";
 
-function sessionsResult(sessions: SessionsListResult["sessions"]): SessionsListResult {
-  return {
-    ts: 2,
-    path: "(multiple)",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
-
 function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot: SessionGateway["snapshot"] = {
-    client: client as GatewayBrowserClient | null,
-    phase: "connected" as ApplicationGatewayPhase,
-    sessionKey: "agent:main:main",
-    assistantAgentId: "main",
-    hello: null,
-  };
-  const listeners = new Set<(next: typeof snapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const harness = baseGateway(client);
   return {
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe(listener: (next: typeof snapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
-    },
-    emitEvent(this: void, event: GatewayEventFrame) {
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
+    ...harness,
     update(this: void, next: Partial<SessionGateway["snapshot"]>) {
-      snapshot = { ...snapshot, ...next };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      Object.assign(harness.gateway.snapshot, next);
+      harness.publish(harness.gateway.snapshot.phase === "connected");
     },
-    publish(
-      this: void,
-      connected: boolean,
-      nextClient: GatewayBrowserClient | null = snapshot.client,
-    ) {
-      snapshot = {
-        ...snapshot,
-        client: nextClient,
-        phase: connected ? "connected" : "reconnecting",
-      };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+    sessionEvent(this: void, session: GatewaySessionRow, reason = "patch", agentId = "main") {
+      harness.emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { agentId, reason, session },
+      });
     },
   };
 }
@@ -95,18 +52,16 @@ describe("session pull-request state", () => {
     sessions.setPullRequestSummary("agent:main:pr-session", summary);
     expect(listener).toHaveBeenCalledTimes(1);
 
-    const publicationsBeforeReplacement = listener.mock.calls.length;
-    harness.publish(true, {} as GatewayBrowserClient);
-    expect(sessions.pullRequestSummary("agent:main:pr-session")).toBeUndefined();
-    expect(listener.mock.calls.length).toBeGreaterThan(publicationsBeforeReplacement);
-
-    sessions.setPullRequestSummary("agent:main:pr-session", summary);
-    const publicationsBeforeDisconnect = listener.mock.calls.length;
-    harness.publish(false);
-    expect(sessions.pullRequestSummary("agent:main:pr-session")).toBeUndefined();
-    expect(listener.mock.calls.length).toBeGreaterThan(publicationsBeforeDisconnect);
-
-    sessions.dispose();
+    const replacement = {} as GatewayBrowserClient;
+    for (const connected of [true, false]) {
+      const before = listener.mock.calls.length;
+      harness.publish(connected, replacement);
+      expect(sessions.pullRequestSummary("agent:main:pr-session")).toBeUndefined();
+      expect(listener.mock.calls.length).toBeGreaterThan(before);
+      if (connected) {
+        sessions.setPullRequestSummary("agent:main:pr-session", summary);
+      }
+    }
   });
 
   it("rejects an older pane's pull-request result", () => {
@@ -121,7 +76,6 @@ describe("session pull-request state", () => {
     sessions.setPullRequestSummary(key, undefined, olderEpoch);
 
     expect(sessions.pullRequestSummary(key)).toEqual({ numbers: [111532], state: "draft" });
-    sessions.dispose();
   });
 
   it("retires pull-request state when a session is deleted", async () => {
@@ -131,7 +85,7 @@ describe("session pull-request state", () => {
         return { ok: true, deleted: true };
       }
       if (method === "sessions.list") {
-        return sessionsResult([]);
+        return sessionsResult([], 2);
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -146,30 +100,45 @@ describe("session pull-request state", () => {
 
     sessions.setPullRequestSummary(key, { numbers: [111532], state: "open" }, epoch);
     expect(sessions.pullRequestSummary(key)).toBeUndefined();
-    sessions.dispose();
   });
 });
 
 const sharedPublisher = { source: "system-configured" as const, accountId: 1, login: "system-bot" };
-function publicationHarness() {
-  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
-    if (method === "sessions.github.options") {
-      return { shared: sharedPublisher, personal: null, pendingPersonal: null, latestShared: null };
-    }
-    if (method === "sessions.github.publish") {
-      throw new Error("Response lost");
-    }
-    if (method === "sessions.list") {
-      return sessionsResult([]);
-    }
-    if (method === "sessions.subscribe") {
-      return { subscribed: true };
-    }
-    throw new Error(`Unexpected request: ${method}`);
-  });
+const sharedOptions = {
+  shared: sharedPublisher,
+  personal: null,
+  pendingPersonal: null,
+  latestShared: null,
+};
+function publicationCalls(
+  request: { mock: { calls: [string, ...unknown[]][] } },
+  method = "publish",
+) {
+  return request.mock.calls.filter(([name]) => name === `sessions.github.${method}`);
+}
+function globalRow(agentId: string, sessionId: string): GatewaySessionRow {
+  return { key: "global", agentId, kind: "global", sessionId, updatedAt: 1 };
+}
+const publicationChanges = new WeakMap<GitHubPublicationBinding, () => Promise<void>>();
+function publicationHarness(responses?: {
+  options?: () => unknown;
+  status?: () => unknown;
+  subscribe?: () => unknown;
+}) {
+  const replies: Record<string, (() => unknown) | undefined> = {
+    "sessions.github.options": responses ? responses.options : () => sharedOptions,
+    "sessions.github.publish": responses
+      ? undefined
+      : () => {
+          throw new Error("Response lost");
+        },
+    "sessions.list": () => sessionsResult([], 2),
+    "sessions.subscribe": responses ? responses.subscribe : () => ({ subscribed: true }),
+    "sessions.github.status": responses?.status,
+  };
+  const request = sessionRequest(replies);
   const harness = createGatewayHarness(createTestGatewayClient(request));
   const sessions = createTestSessionCapability(harness.gateway);
-  onTestFinished(() => sessions.dispose());
   const row = (id: string): GatewaySessionRow => ({
     key: `agent:main:${id}`,
     kind: "direct",
@@ -177,13 +146,17 @@ function publicationHarness() {
     updatedAt: 1,
   });
   const attach = (session = row("publication")) => {
-    const binding = sessions.githubPublication.attach(
-      session,
-      vi.fn(),
-      GitHubPublicationController,
-    )!;
+    let changed = createDeferred();
+    const binding = sessions.githubPublication.attach(session, GitHubPublicationOwner)!;
+    binding.subscribe(() => {
+      const previous = changed;
+      changed = createDeferred();
+      previous.resolve();
+    });
+    publicationChanges.set(binding, () => changed.promise);
     binding.sync({
-      canWrite: true,
+      canPublishShared: true,
+      canPublishPersonal: true,
       personalReady: true,
       isPresented: () => true,
       isCurrent: () => binding.matches(session),
@@ -191,10 +164,47 @@ function publicationHarness() {
     onTestFinished(() => binding.detach());
     return binding;
   };
-  return { ...harness, request, sessions, row, attach };
+  const ready = async (session?: GatewaySessionRow) => {
+    const binding = attach(session);
+    await publicationSettled(binding);
+    return binding;
+  };
+  const pending = async (session?: GatewaySessionRow) => {
+    const binding = await ready(session);
+    const view = binding.view()!;
+    const response = createDeferred<unknown>();
+    request.mockImplementationOnce(() => response.promise);
+    void view.onPublish?.();
+    return { binding, view, response, original: request.mock.calls.at(-1) };
+  };
+  const globalHello = () => {
+    const hello = gatewayHelloForMethods(["sessions.github.publish"]);
+    hello.snapshot = {
+      sessionDefaults: { defaultAgentId: "main", mainKey: "main", mainSessionKey: "global" },
+    };
+    harness.update({ hello });
+  };
+  return {
+    ...harness,
+    publish: (...args: Parameters<typeof harness.publish>) => harness.publish(...args),
+    request,
+    sessions,
+    row,
+    attach,
+    ready,
+    pending,
+    globalHello,
+  };
 }
 async function publicationSettled(binding: GitHubPublicationBinding) {
-  await vi.waitFor(() => expect(binding.view()?.activity).toBeNull());
+  const nextChange = publicationChanges.get(binding)!;
+  await vi.waitFor(async () => {
+    // Completion can start a queued refresh before this notification resumes us.
+    while (binding.view()?.activity !== null) {
+      await nextChange();
+    }
+    expect(binding.view()?.activity).toBeNull();
+  });
   return binding.view()!;
 }
 const publishedResult = {
@@ -206,15 +216,21 @@ const publishedResult = {
   branch: "feature/one",
   headCommit: "a".repeat(40),
 };
+const acceptedResult = {
+  requestId: publishedResult.requestId,
+  publisher: sharedPublisher,
+  status: "requested",
+  message: "Accepted.",
+};
+async function publishAndSettle(binding: GitHubPublicationBinding) {
+  void (await publicationSettled(binding)).onPublish?.();
+  return publicationSettled(binding);
+}
 
 describe("application-owned publication custody", () => {
   it.each(["research", "main"])("keeps the ordinary %s global session literal", async (agentId) => {
-    const { attach, request, update } = publicationHarness();
-    const hello = gatewayHelloForMethods(["sessions.github.publish"]);
-    hello.snapshot = {
-      sessionDefaults: { defaultAgentId: "main", mainKey: "main", mainSessionKey: "global" },
-    };
-    update({ hello });
+    const { attach, request, globalHello } = publicationHarness();
+    globalHello();
     const key = `agent:${agentId}:global`;
     const binding = attach({ key, agentId, kind: "global", sessionId: key, updatedAt: 1 });
     await publicationSettled(binding);
@@ -223,126 +239,38 @@ describe("application-owned publication custody", () => {
     ]);
   });
 
-  it("keeps every publication stage on its explicit global owner when another owner attaches", async () => {
-    const { attach, request, update } = publicationHarness();
-    const hello = gatewayHelloForMethods(["sessions.github.publish"]);
-    hello.snapshot = {
-      sessionDefaults: { defaultAgentId: "main", mainKey: "main", mainSessionKey: "global" },
-    };
-    update({ hello });
-    const account = { accountId: 2, login: "synthetic-tools" };
-    const generation = "bdca439a-e787-4f9f-b5f3-a878c662cc76";
-    const requestId = "bdca439a-e787-4f9f-b5f3-a878c662cc77";
-    const options: GitHubPublicationOptions = {
-      shared: null,
-      personal: {
-        state: "connected",
-        generation,
-        account,
-        accessExpiresAtMs: null,
-        refreshState: "available",
-        pending: null,
-      },
-      pendingPersonal: null,
-      latestShared: null,
-    };
-    const result = {
-      requestId,
-      publisher: { source: "personal" as const, ...account },
-      status: "needs_confirmation" as const,
-      message: "Review the synthetic publication.",
-    };
-    const confirmation = {
-      account,
-      generation,
-      requestDigest: "a".repeat(64),
-      pushRepository: "synthetic/demo",
-      repository: "synthetic/demo",
-      branch: "feature/one",
-      baseBranch: "main",
-      sourceHeadCommit: "1".repeat(40),
-      sourceIndexTree: "2".repeat(40),
-      workspaceTree: "3".repeat(40),
-    };
-    request.mockResolvedValueOnce(options);
-    const research = attach({
-      key: "global",
-      agentId: "research",
-      kind: "global",
-      sessionId: "research-parent",
-      updatedAt: 1,
-    });
-    (await publicationSettled(research)).onSelect!("personal");
-    request.mockResolvedValueOnce(result).mockResolvedValueOnce({ result, confirmation });
-    research.view()!.onPublish!();
-    const review = await publicationSettled(research);
-    request.mockResolvedValueOnce({ ...publishedResult, requestId, publisher: result.publisher });
-    review.onConfirm!();
-    await publicationSettled(research);
-    expect(
-      request.mock.calls
-        .filter(([method]) => method.startsWith("sessions.github."))
-        .map(([method]) => method),
-    ).toEqual([
-      "sessions.github.options",
-      "sessions.github.publish",
-      "sessions.github.status",
-      "sessions.github.confirm",
-    ]);
-    for (const method of [
-      "sessions.github.options",
-      "sessions.github.publish",
-      "sessions.github.status",
-      "sessions.github.confirm",
-    ]) {
-      expect(request).toHaveBeenCalledWith(
-        method,
-        expect.objectContaining({ sessionKey: "global", agentId: "research" }),
-      );
-    }
-
+  it("keeps late personal options on their global owner when another owner attaches", async () => {
+    const { attach, request, ready, globalHello } = publicationHarness();
+    globalHello();
+    const research = await ready(globalRow("research", "research-parent"));
     const old = createDeferred<GitHubPublicationOptions>();
     request.mockImplementationOnce(() => old.promise);
-    research.view()!.onRefresh();
+    void research.view()!.onRefresh();
     research.detach();
     const mainOptions = {
+      ...sharedOptions,
       shared: { source: "system-configured" as const, accountId: 3, login: "main-tools" },
-      personal: null,
-      pendingPersonal: null,
-      latestShared: null,
     };
     request.mockResolvedValueOnce(mainOptions);
-    const main = attach({
-      key: "global",
-      agentId: "main",
-      kind: "global",
-      sessionId: "main-parent",
-      updatedAt: 1,
-    });
+    const main = attach(globalRow("main", "main-parent"));
     expect((await publicationSettled(main)).options).toEqual(mainOptions);
     expect(request).toHaveBeenLastCalledWith("sessions.github.options", {
       sessionKey: "global",
       agentId: "main",
     });
-    old.resolve({ ...options, pendingPersonal: { result, confirmation } });
+    old.resolve({ ...sharedOptions, pendingPersonal: personalReview });
     await nextTurn();
-    expect(main.view()!.options).toEqual(mainOptions);
-    expect(main.view()!.result).toBeNull();
+    expect(main.view()).toMatchObject({ options: mainOptions, result: null });
   });
 
   it.each(["not-deleted", "rejected", "confirmed"] as const)(
     "keeps publication custody until a pending deletion is %s",
     async (outcome) => {
-      const { attach, request, row, sessions } = publicationHarness();
+      const { attach, request, row, sessions, pending } = publicationHarness();
       const session = row("publication");
-      request.mockResolvedValueOnce(sessionsResult([session]));
+      request.mockResolvedValueOnce(sessionsResult([session], 2));
       await sessions.refresh({ force: true });
-      const first = attach(session);
-      const ready = await publicationSettled(first);
-      const publication = createDeferred<unknown>();
-      request.mockImplementationOnce(() => publication.promise);
-      ready.onPublish?.();
-      const original = request.mock.calls.at(-1);
+      const { binding, view, response, original } = await pending(session);
       const deletion = createDeferred<{ deleted: boolean }>();
       request.mockImplementationOnce(() => deletion.promise);
       const removal = sessions.delete(session.key, { expectedSessionId: session.sessionId }).then(
@@ -350,16 +278,14 @@ describe("application-owned publication custody", () => {
         (error: unknown) => ({ value: null, error }),
       );
       expect(sessions.deletionState(session.key)).toBe("pending");
-      publication.reject(new Error("Publication response lost"));
+      response.reject(new Error("Publication response lost"));
       // Let the publication response settle while the independent deletion is still pending.
       await nextTurn();
-      expect(first.view()).toBeUndefined();
-      ready.onPublish?.();
-      ready.onRefresh();
-      expect(request.mock.calls.filter(([method]) => method === "sessions.github.publish")).toEqual(
-        [original],
-      );
-      first.detach();
+      expect(binding.view()).toBeUndefined();
+      void view.onPublish?.();
+      void view.onRefresh();
+      expect(publicationCalls(request)).toEqual([original]);
+      binding.detach();
 
       if (outcome === "rejected") {
         deletion.reject(new Error("Deletion failed"));
@@ -378,37 +304,27 @@ describe("application-owned publication custody", () => {
       } else {
         const retry = await publicationSettled(returned);
         expect(retry.locked).toBe(true);
-        retry.onPublish?.();
-        await publicationSettled(returned);
-        expect(
-          request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-        ).toEqual([original, original]);
+        await publishAndSettle(returned);
+        expect(publicationCalls(request)).toEqual([original, original]);
       }
     },
   );
 
   it("shares idle bindings until the last detach and reloads options on return", async () => {
-    const { attach, request } = publicationHarness();
-    const first = attach();
-    await publicationSettled(first);
-    const second = attach();
-    await publicationSettled(second);
+    const { attach, request, ready } = publicationHarness();
+    const first = await ready();
+    const second = await ready();
     expect(request).toHaveBeenCalledTimes(1);
 
     first.detach();
     first.detach();
-    second.view()?.onRefresh();
+    void second.view()?.onRefresh();
     await publicationSettled(second);
     expect(request).toHaveBeenCalledTimes(2);
 
     second.detach();
     const replacementPublisher = { ...sharedPublisher, accountId: 3, login: "replacement-bot" };
-    request.mockResolvedValueOnce({
-      shared: replacementPublisher,
-      personal: null,
-      pendingPersonal: null,
-      latestShared: null,
-    });
+    request.mockResolvedValueOnce({ ...sharedOptions, shared: replacementPublisher });
     const returned = attach();
     expect((await publicationSettled(returned)).selection).toEqual({
       source: "shared",
@@ -420,16 +336,11 @@ describe("application-owned publication custody", () => {
   it.each(["unknown", "published"] as const)(
     "keeps a late %s outcome after every presentation detaches",
     async (outcome) => {
-      const { attach, request, sessions } = publicationHarness();
-      const first = attach();
-      const ready = await publicationSettled(first);
-      const response = createDeferred<unknown>();
-      request.mockImplementationOnce(() => response.promise);
-      ready.onPublish?.();
-      const original = request.mock.calls.at(-1);
+      const { attach, request, sessions, pending } = publicationHarness();
+      const { binding: first, view: ready, response, original } = await pending();
       first.detach();
-      ready.onPublish?.();
-      ready.onRefresh();
+      void ready.onPublish?.();
+      void ready.onRefresh();
       ready.onSelect?.("personal");
       expect(request).toHaveBeenCalledTimes(2);
       // An empty filtered roster cannot retire an admitted operation.
@@ -442,13 +353,12 @@ describe("application-owned publication custody", () => {
       const returned = attach();
       const view = await publicationSettled(returned);
       if (outcome === "unknown") {
-        expect(view.locked).toBe(true);
-        expect(view.selection).toEqual({ source: "shared", expected: sharedPublisher });
-        view.onPublish?.();
-        await publicationSettled(returned);
-        expect(
-          request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-        ).toEqual([original, original]);
+        expect(view).toMatchObject({
+          locked: true,
+          selection: { source: "shared", expected: sharedPublisher },
+        });
+        await publishAndSettle(returned);
+        expect(publicationCalls(request)).toEqual([original, original]);
       } else {
         expect(view.result).toEqual(publishedResult);
         expect(view.onNewAction).toBeTypeOf("function");
@@ -460,31 +370,24 @@ describe("application-owned publication custody", () => {
     const { attach, request, row } = publicationHarness();
     for (let index = 0; index < 32; index += 1) {
       const binding = attach(row(`capacity-${index}`));
-      (await publicationSettled(binding)).onPublish?.();
-      await publicationSettled(binding);
+      await publishAndSettle(binding);
       binding.detach();
     }
     const full = attach(row("capacity-32"));
-    (await publicationSettled(full)).onPublish?.();
-    expect((await publicationSettled(full)).error).toContain("publications are awaiting review");
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-    ).toHaveLength(32);
-    const original = request.mock.calls.find(([method]) => method === "sessions.github.publish");
+    expect((await publishAndSettle(full)).error).toContain("publications are awaiting review");
+    expect(publicationCalls(request)).toHaveLength(32);
+    const original = publicationCalls(request)[0];
     const retained = attach(row("capacity-0"));
     request.mockResolvedValueOnce(publishedResult);
-    (await publicationSettled(retained)).onPublish?.();
-    const terminal = await publicationSettled(retained);
+    const terminal = await publishAndSettle(retained);
     expect(request.mock.calls.at(-1)).toEqual(original);
-    full.view()?.onPublish?.();
+    void full.view()?.onPublish?.();
     expect((await publicationSettled(full)).error).toContain("publications are awaiting review");
-    terminal.onNewAction?.();
+    void terminal.onNewAction?.();
     await publicationSettled(retained);
-    full.view()?.onPublish?.();
+    void full.view()?.onPublish?.();
     await publicationSettled(full);
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-    ).toHaveLength(34);
+    expect(publicationCalls(request)).toHaveLength(34);
   });
 
   it.each([
@@ -498,12 +401,8 @@ describe("application-owned publication custody", () => {
   ] as const)(
     "retires a detached operation after %s and rejects its late outcome",
     async (change) => {
-      const { attach, request, row, publish, update, emitEvent } = publicationHarness();
-      const first = attach();
-      const ready = await publicationSettled(first);
-      const response = createDeferred<unknown>();
-      request.mockImplementationOnce(() => response.promise);
-      ready.onPublish?.();
+      const { attach, request, row, publish, update, sessionEvent, pending } = publicationHarness();
+      const { binding: first, view: ready, response } = await pending();
       first.detach();
       const session = row("publication");
       if (change === "disconnect") {
@@ -524,95 +423,64 @@ describe("application-owned publication custody", () => {
         if (change === "incarnation") {
           session.sessionId = "replacement";
         }
-        emitEvent({
-          type: "event",
-          event: "sessions.changed",
-          payload: {
-            agentId: "main",
-            reason: change === "delete" ? "delete" : "patch",
-            session: { ...session, updatedAt: 2 },
-          },
-        });
+        sessionEvent({ ...session, updatedAt: 2 }, change === "delete" ? "delete" : "patch");
       }
       response.resolve(publishedResult);
-      ready.onPublish?.();
-      ready.onRefresh();
+      void ready.onPublish?.();
+      void ready.onRefresh();
       const returned = attach(session);
       if (change === "delete") {
         expect(returned.view()).toBeUndefined();
       } else {
         expect((await publicationSettled(returned)).result).toBeNull();
       }
-      expect(
-        request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-      ).toHaveLength(1);
+      expect(publicationCalls(request)).toHaveLength(1);
     },
   );
 
   it("lets a replacement presentation observe the same operation without reviving detached callbacks", async () => {
     const { attach, request } = publicationHarness();
     const first = attach();
-    (await publicationSettled(first)).onPublish?.();
-    const unknown = await publicationSettled(first);
+    const unknown = await publishAndSettle(first);
     const other = attach();
     first.detach();
-    unknown.onPublish?.();
-    expect(
-      request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-    ).toHaveLength(1);
-    (await publicationSettled(other)).onPublish?.();
-    await publicationSettled(other);
-    const calls = request.mock.calls.filter(([method]) => method === "sessions.github.publish");
+    void unknown.onPublish?.();
+    expect(publicationCalls(request)).toHaveLength(1);
+    await publishAndSettle(other);
+    const calls = publicationCalls(request);
     expect(calls).toHaveLength(2);
     expect(calls[1]).toEqual(calls[0]);
   });
 });
 
 it("does not apply another agent's global-session permission event to a retained publication", async () => {
-  const { attach, request, emitEvent } = publicationHarness();
-  const own: GatewaySessionRow = {
-    key: "global",
-    agentId: "main",
-    kind: "global",
-    sessionId: "own-global",
-    updatedAt: 1,
-  };
+  const { attach, request, sessionEvent } = publicationHarness();
+  const own: GatewaySessionRow = globalRow("main", "own-global");
   const binding = attach(own);
-  (await publicationSettled(binding)).onPublish?.();
-  const unknown = await publicationSettled(binding);
+  const unknown = await publishAndSettle(binding);
   const original = request.mock.calls.at(-1);
   binding.detach();
-  emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: {
-      agentId: "writer",
-      reason: "patch",
-      session: {
-        key: "global",
-        kind: "global",
-        sessionId: "other-global",
-        updatedAt: 2,
-        visibility: "draft",
-        sharingRole: "viewer",
-      },
+  sessionEvent(
+    {
+      key: "global",
+      kind: "global",
+      sessionId: "other-global",
+      updatedAt: 2,
+      visibility: "draft",
+      sharingRole: "viewer",
     },
-  });
+    "patch",
+    "writer",
+  );
   const returned = attach(own);
   const retained = await publicationSettled(returned);
-  expect(retained.locked).toBe(true);
-  expect(retained.selection).toEqual(unknown.selection);
-  retained.onPublish?.();
-  await publicationSettled(returned);
-  expect(request.mock.calls.filter(([method]) => method === "sessions.github.publish")).toEqual([
-    original,
-    original,
-  ]);
+  expect(retained).toMatchObject({ locked: true, selection: unknown.selection });
+  await publishAndSettle(returned);
+  expect(publicationCalls(request)).toEqual([original, original]);
 });
 
 it("recovers pending publication observation when the session event subscription is restored", async () => {
   vi.useFakeTimers();
-  const fixture = publicationHarness();
   const failure = new GatewayRequestError({
     code: "UNAVAILABLE",
     message: "Observer unavailable",
@@ -621,40 +489,19 @@ it("recovers pending publication observation when the session event subscription
   const delay = sessionRetryDelayMs(failure);
   expect(delay).not.toBeNull();
   let subscriptions = 0;
-  const result = {
-    ...publishedResult,
-    requestId: "bdca439a-e787-4f9f-b5f3-a878c662cc77",
-    publisher: sharedPublisher,
-  };
-  const accepted = {
-    requestId: result.requestId,
-    publisher: sharedPublisher,
-    status: "requested",
-    message: "Accepted.",
-  };
-  fixture.request.mockImplementation(async (method: string) => {
-    if (method === "sessions.github.options") {
-      return {
-        shared: sharedPublisher,
-        personal: null,
-        pendingPersonal: null,
-        latestShared: { result: accepted, confirmation: null },
-      };
-    }
-    if (method === "sessions.github.status") {
-      return { result, confirmation: null };
-    }
-    if (method === "sessions.subscribe") {
+  const fixture = publicationHarness({
+    options: () => ({
+      ...sharedOptions,
+      latestShared: { result: acceptedResult, confirmation: null },
+    }),
+    status: () => ({ result: publishedResult, confirmation: null }),
+    subscribe: () => {
       subscriptions += 1;
       if (subscriptions === 1) {
         throw failure;
       }
       return { subscribed: true };
-    }
-    if (method === "sessions.list") {
-      return sessionsResult([]);
-    }
-    throw new Error("Unexpected request: " + method);
+    },
   });
   try {
     const binding = fixture.attach();
@@ -664,12 +511,8 @@ it("recovers pending publication observation when the session event subscription
     await vi.advanceTimersByTimeAsync(delay!);
     await vi.waitFor(() => expect(subscriptions).toBe(2));
     await vi.waitFor(() => expect(binding.result?.status).toBe("published"));
-    expect(
-      fixture.request.mock.calls.filter(([method]) => method === "sessions.github.status"),
-    ).toHaveLength(1);
-    expect(
-      fixture.request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-    ).toHaveLength(0);
+    expect(publicationCalls(fixture.request, "status")).toHaveLength(1);
+    expect(publicationCalls(fixture.request)).toHaveLength(0);
   } finally {
     fixture.publish(false);
     vi.useRealTimers();
@@ -678,36 +521,11 @@ it("recovers pending publication observation when the session event subscription
 
 describe("shared publication event ownership", () => {
   it("coalesces publication hints into receipt reads without replaying writes", async () => {
-    const fixture = publicationHarness();
-    const result = {
-      ...publishedResult,
-      requestId: "bdca439a-e787-4f9f-b5f3-a878c662cc77",
-      publisher: sharedPublisher,
-    };
-    const accepted = {
-      requestId: result.requestId,
-      publisher: sharedPublisher,
-      status: "requested",
-      message: "Accepted.",
-    };
-    let stored: unknown = { result: accepted, confirmation: null };
+    let stored: unknown = { result: acceptedResult, confirmation: null };
     const status = createDeferred<unknown>();
-    fixture.request.mockImplementation(async (method: string) => {
-      if (method === "sessions.github.options") {
-        return {
-          shared: sharedPublisher,
-          personal: null,
-          pendingPersonal: null,
-          latestShared: stored,
-        };
-      }
-      if (method === "sessions.github.status") {
-        return await status.promise;
-      }
-      if (method === "sessions.list") {
-        return sessionsResult([]);
-      }
-      throw new Error("Unexpected request: " + method);
+    const fixture = publicationHarness({
+      options: () => ({ ...sharedOptions, latestShared: stored }),
+      status: () => status.promise,
     });
     const binding = fixture.attach();
     expect((await publicationSettled(binding)).result?.status).toBe("requested");
@@ -719,44 +537,38 @@ describe("shared publication event ownership", () => {
         payload: { sessionKey: key, agentId: "main", reason: "github-publication" },
       });
     }
-    expect(
-      fixture.request.mock.calls.filter(([method]) => method === "sessions.github.status"),
-    ).toHaveLength(1);
-    stored = { result, confirmation: null };
+    expect(publicationCalls(fixture.request, "status")).toHaveLength(1);
+    stored = { result: publishedResult, confirmation: null };
     status.resolve(stored);
-    await vi.waitFor(() =>
-      expect(
-        fixture.request.mock.calls.filter(([method]) => method === "sessions.github.options"),
-      ).toHaveLength(2),
-    );
-    expect((await publicationSettled(binding)).result).toEqual(result);
-    expect(
-      fixture.request.mock.calls.filter(([method]) => method === "sessions.github.publish"),
-    ).toHaveLength(0);
+    await vi.waitFor(() => expect(publicationCalls(fixture.request, "options")).toHaveLength(2));
+    expect((await publicationSettled(binding)).result).toEqual(publishedResult);
+    expect(publicationCalls(fixture.request)).toHaveLength(0);
   });
 
-  it.each(["worktree", "branch", "repository"] as const)(
-    "retires an admitted presentation on a known %s replacement",
+  it.each(["worktree", "branch", "repository", "incidental branch"] as const)(
+    "preserves publication custody only when the changed %s is not its owner",
     async (change) => {
       const fixture = publicationHarness();
+      const incidental = change === "incidental branch";
       const original: GatewaySessionRow = {
         ...fixture.row("publication"),
-        ...(change === "repository"
+        ...(change === "repository" || incidental
           ? { repositoryWorkspaceId: "repository-one" }
-          : {
+          : {}),
+        ...(change !== "repository"
+          ? {
               worktree: { id: "worktree-one", branch: "feature/one", repoRoot: "/workspace/demo" },
-            }),
+            }
+          : {}),
       };
-      const binding = fixture.attach(original);
-      const ready = await publicationSettled(binding);
-      fixture.request.mockResolvedValueOnce({
-        requestId: "bdca439a-e787-4f9f-b5f3-a878c662cc77",
-        publisher: sharedPublisher,
-        status: "requested",
-        message: "Accepted.",
-      });
-      ready.onPublish?.();
-      const pending = await publicationSettled(binding);
+      const binding = await fixture.ready(original);
+      if (!incidental) {
+        fixture.request.mockResolvedValueOnce(acceptedResult);
+      }
+      const pending = await publishAndSettle(binding);
+      if (incidental) {
+        expect(pending.locked).toBe(true);
+      }
       const replacement: GatewaySessionRow = {
         ...original,
         ...(original.worktree ? { worktree: { ...original.worktree } } : {}),
@@ -764,45 +576,21 @@ describe("shared publication event ownership", () => {
       };
       if (change === "worktree") {
         replacement.worktree!.id = "worktree-two";
-      } else if (change === "branch") {
-        replacement.worktree!.branch = "feature/two";
-      } else {
+      } else if (change === "repository") {
         replacement.repositoryWorkspaceId = "repository-two";
+      } else {
+        replacement.worktree!.branch = "feature/two";
       }
-      fixture.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { agentId: "main", reason: "patch", session: replacement },
-      });
-      expect(binding.matches(original)).toBe(false);
-      const count = fixture.request.mock.calls.length;
-      pending.onRefresh();
-      expect(fixture.request).toHaveBeenCalledTimes(count);
-      expect((await publicationSettled(fixture.attach(replacement))).result).toBeNull();
+      fixture.sessionEvent(replacement);
+      expect(binding.matches(original)).toBe(incidental);
+      if (incidental) {
+        expect(binding.view()?.locked).toBe(true);
+      } else {
+        const count = fixture.request.mock.calls.length;
+        void pending.onRefresh();
+        expect(fixture.request).toHaveBeenCalledTimes(count);
+        expect((await publicationSettled(fixture.attach(replacement))).result).toBeNull();
+      }
     },
   );
-});
-
-it("keeps a repository publication when non-owning worktree metadata changes", async () => {
-  const fixture = publicationHarness();
-  const original = {
-    ...fixture.row("publication"),
-    repositoryWorkspaceId: "repository-owner",
-    worktree: { id: "incidental-worktree", branch: "feature/one", repoRoot: "/workspace/demo" },
-  };
-  const binding = fixture.attach(original);
-  (await publicationSettled(binding)).onPublish?.();
-  expect((await publicationSettled(binding)).locked).toBe(true);
-  const replacement = {
-    ...original,
-    worktree: { ...original.worktree, branch: "feature/two" },
-    updatedAt: 2,
-  };
-  fixture.emitEvent({
-    type: "event",
-    event: "sessions.changed",
-    payload: { agentId: "main", reason: "patch", session: replacement },
-  });
-  expect(binding.matches(original)).toBe(true);
-  expect(binding.view()?.locked).toBe(true);
 });

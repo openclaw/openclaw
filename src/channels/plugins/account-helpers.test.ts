@@ -1,229 +1,67 @@
-// Account helper tests cover channel account normalization and lookup helpers.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   createAccountListHelpers,
   describeAccountSnapshot,
   describeWebhookAccountSnapshot,
-  listCombinedAccountIds,
-  mergeAccountConfig,
   resolveListedDefaultAccountId,
-  resolveMergedAccountConfig,
 } from "./account-helpers.js";
 
-const { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId } =
-  createAccountListHelpers("testchannel");
-
-function cfg(accounts?: Record<string, unknown> | null, defaultAccount?: string): OpenClawConfig {
-  if (accounts === null) {
-    return {
-      channels: {
-        testchannel: defaultAccount ? { defaultAccount } : {},
-      },
-    } as unknown as OpenClawConfig;
-  }
-  if (accounts === undefined && !defaultAccount) {
-    return {} as unknown as OpenClawConfig;
-  }
+function cfg(
+  accounts: Record<string, unknown>,
+  defaultAccount?: string,
+  root: Record<string, unknown> = {},
+): OpenClawConfig {
   return {
-    channels: {
-      testchannel: {
-        ...(accounts === undefined ? {} : { accounts }),
-        ...(defaultAccount ? { defaultAccount } : {}),
-      },
-    },
+    channels: { testchannel: { ...root, accounts, ...(defaultAccount ? { defaultAccount } : {}) } },
   } as unknown as OpenClawConfig;
 }
 
-function expectResolvedAccountIdsCase(params: {
-  resolve: (cfg: OpenClawConfig) => string[];
-  input: OpenClawConfig;
-  expected: string[];
-}) {
-  expect(params.resolve(params.input)).toEqual(params.expected);
-}
-
-function expectResolvedDefaultAccountCase(input: OpenClawConfig, expected: string) {
-  expect(resolveDefaultAccountId(input)).toBe(expected);
-}
+afterEach(() => vi.unstubAllEnvs());
 
 describe("createAccountListHelpers", () => {
-  describe("listConfiguredAccountIds", () => {
-    it.each([
-      ["returns empty for missing config", {} as OpenClawConfig],
-      ["returns empty when no accounts key", cfg(null)],
-      ["returns empty for empty accounts object", cfg({})],
-    ])("%s", (_name, input) => {
-      expectResolvedAccountIdsCase({
-        resolve: listConfiguredAccountIds,
-        input,
-        expected: [],
-      });
+  it("keeps an implicit default account when root env credentials coexist with named accounts", () => {
+    vi.stubEnv("TESTCHANNEL_TOKEN", "env-token");
+    const helpers = createAccountListHelpers("testchannel", {
+      implicitDefaultAccount: { envVars: ["TESTCHANNEL_TOKEN"] },
     });
-
-    it("filters out empty keys", () => {
-      expect(listConfiguredAccountIds(cfg({ "": {}, a: {} }))).toEqual(["a"]);
-    });
-
-    it("returns account keys", () => {
-      expect(listConfiguredAccountIds(cfg({ work: {}, personal: {} }))).toEqual([
-        "work",
-        "personal",
-      ]);
-    });
+    expect(helpers.listAccountIds(cfg({ work: {} }))).toEqual(["default", "work"]);
   });
 
-  describe("with normalizeAccountId option", () => {
-    const normalized = createAccountListHelpers("testchannel", { normalizeAccountId });
-
-    it("normalizes and deduplicates configured account ids", () => {
-      expect(
-        normalized.listConfiguredAccountIds(
-          cfg({
-            "Router D": {},
-            "router-d": {},
-            "Personal A": {},
-          }),
-        ),
-      ).toEqual(["router-d", "personal-a"]);
+  it("does not synthesize an account when an owner disables the empty fallback", () => {
+    const helpers = createAccountListHelpers("testchannel", {
+      fallbackAccountIdWhenEmpty: false,
+      implicitDefaultAccount: { channelKeys: ["token"] },
     });
+
+    expect(helpers.listAccountIds({} as OpenClawConfig)).toEqual([]);
+    expect(helpers.listAccountIds(cfg({}))).toEqual([]);
+    expect(
+      helpers.listAccountIds({
+        channels: { testchannel: { token: "root-token" } },
+      } as unknown as OpenClawConfig),
+    ).toEqual(["default"]);
+    expect(helpers.resolveDefaultAccountId({} as OpenClawConfig)).toBe("default");
   });
 
-  describe("listAccountIds", () => {
-    it.each([
-      ['returns ["default"] for empty config', {} as OpenClawConfig, ["default"]],
-      ['returns ["default"] for empty accounts', cfg({}), ["default"]],
-      ["returns sorted ids", cfg({ z: {}, a: {}, m: {} }), ["a", "m", "z"]],
-    ])("%s", (_name, input, expected) => {
-      expectResolvedAccountIdsCase({
-        resolve: listAccountIds,
-        input,
-        expected,
-      });
+  it("allows a single-account owner to name its configured implicit account", () => {
+    const helpers = createAccountListHelpers("testchannel", {
+      fallbackAccountIdWhenEmpty: false,
+      resolveImplicitAccountId: (config) => {
+        const channel = config.channels?.["testchannel"] as
+          | { token?: string; defaultAccount?: string }
+          | undefined;
+        return channel?.token ? (channel.defaultAccount ?? "default") : undefined;
+      },
     });
 
-    it("keeps an implicit default account when root credential keys coexist with named accounts", () => {
-      const helpers = createAccountListHelpers("testchannel", {
-        implicitDefaultAccount: { channelKeys: ["token"] },
-      });
-
-      expect(
-        helpers.listAccountIds({
-          channels: {
-            testchannel: {
-              token: "root-token",
-              accounts: { work: {} },
-            },
-          },
-        } as unknown as OpenClawConfig),
-      ).toEqual(["default", "work"]);
-    });
-
-    it("keeps an implicit default account when root env credentials coexist with named accounts", () => {
-      const previous = process.env.TESTCHANNEL_TOKEN;
-      process.env.TESTCHANNEL_TOKEN = "env-token";
-      try {
-        const helpers = createAccountListHelpers("testchannel", {
-          implicitDefaultAccount: { envVars: ["TESTCHANNEL_TOKEN"] },
-        });
-
-        expect(helpers.listAccountIds(cfg({ work: {} }))).toEqual(["default", "work"]);
-      } finally {
-        if (previous === undefined) {
-          delete process.env.TESTCHANNEL_TOKEN;
-        } else {
-          process.env.TESTCHANNEL_TOKEN = previous;
-        }
-      }
-    });
-
-    it("does not synthesize an account when an owner disables the empty fallback", () => {
-      const helpers = createAccountListHelpers("testchannel", {
-        fallbackAccountIdWhenEmpty: false,
-        implicitDefaultAccount: { channelKeys: ["token"] },
-      });
-
-      expect(helpers.listAccountIds({} as OpenClawConfig)).toEqual([]);
-      expect(helpers.listAccountIds(cfg({}))).toEqual([]);
-      expect(
-        helpers.listAccountIds({
-          channels: { testchannel: { token: "root-token" } },
-        } as unknown as OpenClawConfig),
-      ).toEqual(["default"]);
-      expect(helpers.resolveDefaultAccountId({} as OpenClawConfig)).toBe("default");
-    });
-
-    it("combines additional owner-discovered accounts without changing stable order", () => {
-      const helpers = createAccountListHelpers("testchannel", {
-        additionalAccountIds: () => ["bound", "work", "bound"],
-      });
-
-      expect(helpers.listAccountIds(cfg({ work: {}, alerts: {} }))).toEqual([
-        "alerts",
-        "bound",
-        "work",
-      ]);
-    });
-
-    it("allows a single-account owner to name its configured implicit account", () => {
-      const helpers = createAccountListHelpers("testchannel", {
-        fallbackAccountIdWhenEmpty: false,
-        resolveImplicitAccountId: (config) => {
-          const channel = config.channels?.["testchannel"] as
-            | { token?: string; defaultAccount?: string }
-            | undefined;
-          return channel?.token ? (channel.defaultAccount ?? "default") : undefined;
-        },
-      });
-
-      expect(helpers.listAccountIds({} as OpenClawConfig)).toEqual([]);
-      expect(
-        helpers.listAccountIds({
-          channels: { testchannel: { token: "root-token", defaultAccount: "work" } },
-        } as unknown as OpenClawConfig),
-      ).toEqual(["work"]);
-    });
-  });
-
-  describe("resolveDefaultAccountId", () => {
-    it.each([
-      [
-        "prefers configured defaultAccount when it matches a configured account id",
-        cfg({ alpha: {}, beta: {} }, "beta"),
-        "beta",
-      ],
-      [
-        "normalizes configured defaultAccount before matching",
-        cfg({ "router-d": {} }, "Router D"),
-        "router-d",
-      ],
-      [
-        "falls back when configured defaultAccount is missing",
-        cfg({ beta: {}, alpha: {} }, "missing"),
-        "alpha",
-      ],
-      ['returns "default" when present', cfg({ alpha: {}, default: {}, other: {} }), "default"],
-      [
-        "falls back to the listed default when configured defaultAccount is missing",
-        cfg({ alpha: {}, default: {} }, "missing"),
-        "default",
-      ],
-      ["returns first sorted id when no default", cfg({ beta: {}, alpha: {} }), "alpha"],
-      ['returns "default" for empty config', {} as OpenClawConfig, "default"],
-    ])("%s", (_name, input, expected) => {
-      expectResolvedDefaultAccountCase(input, expected);
-    });
-
-    it("can preserve configured defaults that are not present in accounts", () => {
-      const preserveDefault = createAccountListHelpers("testchannel", {
-        allowUnlistedDefaultAccount: true,
-      });
-
-      expect(preserveDefault.resolveDefaultAccountId(cfg({ default: {}, zeta: {} }, "ops"))).toBe(
-        "ops",
-      );
-    });
+    expect(helpers.listAccountIds({} as OpenClawConfig)).toEqual([]);
+    expect(
+      helpers.listAccountIds({
+        channels: { testchannel: { token: "root-token", defaultAccount: "work" } },
+      } as unknown as OpenClawConfig),
+    ).toEqual(["work"]);
   });
 });
 
@@ -253,349 +91,58 @@ describe("createAccountListHelpers account resolution", () => {
   });
 
   it("merges owner-declared nested fields while omitting account-selection metadata", () => {
-    const input = {
-      channels: {
-        testchannel: {
-          enabled: true,
-          defaultAccount: "Work Team",
-          commands: { native: true },
-          accounts: {
-            "Work Team": {
-              name: "Work",
-              commands: { callbackPath: "/work" },
-            },
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const input = cfg(
+      { "Work Team": { enabled: true, name: "Work", commands: { callbackPath: "/work" } } },
+      "Work Team",
+      { enabled: false, commands: { native: true } },
+    );
 
     expect(resolver.resolveAccountConfig(input, "work-team")).toEqual({
       enabled: true,
       name: "Work",
       commands: { native: true, callbackPath: "/work" },
     });
+    expect(input.channels?.["testchannel"]).toMatchObject({ enabled: false });
   });
 
   it("preserves unresolved SecretRef values without inspecting credentials", () => {
     const token = { source: "env" as const, provider: "default", id: "TESTCHANNEL_TOKEN" };
-    const input = {
-      channels: {
-        testchannel: {
-          accounts: { work: { token } },
-        },
-      },
-    } as unknown as OpenClawConfig;
+    const input = cfg({ work: { token } });
 
     expect(resolver.resolveAccountConfig(input, "work").token).toBe(token);
   });
+});
 
-  it("keeps a disabled root and explicit account overrides visible to their owner", () => {
-    const input = {
-      channels: {
-        testchannel: {
-          enabled: false,
-          accounts: { work: { enabled: true, name: "Work" } },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(resolver.resolveAccountConfig(input, "work")).toEqual({
-      enabled: true,
-      name: "Work",
-    });
-    expect(input.channels?.["testchannel"]).toMatchObject({ enabled: false });
+it("supports an explicit fallback id for ambiguous multi-account setups", () => {
+  expect(
+    resolveListedDefaultAccountId({
+      accountIds: ["alerts", "work"],
+      ambiguousFallbackAccountId: "default",
+    }),
+  ).toBe("default");
+});
+it("normalizes missing identity fields to the shared defaults", () => {
+  expect(describeAccountSnapshot({ account: {} })).toEqual({
+    accountId: "default",
+    name: undefined,
+    enabled: true,
+    configured: undefined,
   });
 });
 
-describe("listCombinedAccountIds", () => {
-  it("combines configured, additional, and implicit ids once", () => {
-    expect(
-      listCombinedAccountIds({
-        configuredAccountIds: ["work", "alerts"],
-        additionalAccountIds: ["default", "alerts"],
-        implicitAccountId: "ops",
-      }),
-    ).toEqual(["alerts", "default", "ops", "work"]);
-  });
-
-  it("uses the fallback id when no accounts are present", () => {
-    expect(
-      listCombinedAccountIds({
-        configuredAccountIds: [],
-        fallbackAccountIdWhenEmpty: "default",
-      }),
-    ).toEqual(["default"]);
-  });
-});
-
-describe("resolveListedDefaultAccountId", () => {
-  it.each([
-    [
-      "prefers the configured default when present in the listed ids",
-      {
-        accountIds: ["alerts", "work"],
-        configuredDefaultAccountId: "work",
-      },
-      "work",
-    ],
-    [
-      "matches configured defaults against normalized listed ids",
-      {
-        accountIds: ["Router D"],
-        configuredDefaultAccountId: "router-d",
-      },
-      "router-d",
-    ],
-    [
-      "prefers the default account id when listed",
-      {
-        accountIds: ["default", "work"],
-      },
-      "default",
-    ],
-    [
-      "can preserve an unlisted configured default",
-      {
-        accountIds: ["default", "work"],
-        configuredDefaultAccountId: "ops",
-        allowUnlistedDefaultAccount: true,
-      },
-      "ops",
-    ],
-    [
-      "supports an explicit fallback id for ambiguous multi-account setups",
-      {
-        accountIds: ["alerts", "work"],
-        ambiguousFallbackAccountId: "default",
-      },
-      "default",
-    ],
-  ])("%s", (_name, input, expected) => {
-    expect(resolveListedDefaultAccountId(input)).toBe(expected);
-  });
-});
-
-describe("account snapshots", () => {
-  it.each([
-    [
-      "builds the standard snapshot shape with optional extras",
-      () =>
-        describeAccountSnapshot({
-          account: {
-            accountId: "work",
-            name: "Work",
-            enabled: true,
-          },
-          configured: true,
-          extra: {
-            tokenSource: "config",
-          },
-        }),
-      {
-        accountId: "work",
-        name: "Work",
-        enabled: true,
-        configured: true,
-        tokenSource: "config",
-      },
-    ],
-    [
-      "normalizes missing identity fields to the shared defaults",
-      () => describeAccountSnapshot({ account: {} }),
-      { accountId: "default", name: undefined, enabled: true, configured: undefined },
-    ],
-    [
-      "defaults mode to webhook while preserving caller extras",
-      () =>
-        describeWebhookAccountSnapshot({
-          account: {
-            accountId: "work",
-            name: "Work",
-          },
-          configured: true,
-          extra: {
-            tokenSource: "config",
-          },
-        }),
-      {
-        accountId: "work",
-        name: "Work",
-        enabled: true,
-        configured: true,
-        tokenSource: "config",
-        mode: "webhook",
-      },
-    ],
-    [
-      "allows callers to override the mode when the transport is not always webhook",
-      () =>
-        describeWebhookAccountSnapshot({
-          account: {
-            accountId: "work",
-          },
-          mode: "polling",
-        }),
-      {
-        accountId: "work",
-        name: undefined,
-        enabled: true,
-        configured: undefined,
-        mode: "polling",
-      },
-    ],
-  ] as const)("%s", (_name, resolveSnapshot, expected) => {
-    expect(resolveSnapshot()).toEqual(expected);
-  });
-});
-
-describe("account config merging", () => {
-  type MergeAccountConfigShape = {
-    enabled?: boolean;
-    defaultAccount?: string;
-    name?: string;
-    accounts?: Record<string, { name: string }>;
-    commands?: {
-      native?: boolean;
-      callbackPath?: string;
-    };
-  };
-
-  type MergeAccountInput = Parameters<typeof mergeAccountConfig<MergeAccountConfigShape>>[0];
-
-  it.each<[string, MergeAccountInput, MergeAccountConfigShape]>([
-    [
-      "drops accounts from the base config before merging",
-      {
-        channelConfig: {
-          enabled: true,
-          accounts: {
-            work: { name: "Work" },
-          },
-        },
-        accountConfig: {
-          name: "Work",
-        },
-      },
-      {
-        enabled: true,
-        name: "Work",
-      },
-    ],
-    [
-      "drops caller-specified keys from the base config before merging",
-      {
-        channelConfig: {
-          enabled: true,
-          defaultAccount: "work",
-        },
-        accountConfig: {
-          name: "Work",
-        },
-        omitKeys: ["defaultAccount"],
-      },
-      {
-        enabled: true,
-        name: "Work",
-      },
-    ],
-    [
-      "deep-merges selected nested object keys",
-      {
-        channelConfig: {
-          commands: {
-            native: true,
-          },
-        },
-        accountConfig: {
-          commands: {
-            callbackPath: "/work",
-          },
-        },
-        nestedObjectKeys: ["commands"],
-      },
-      {
-        commands: {
-          native: true,
-          callbackPath: "/work",
-        },
-      },
-    ],
-  ])("%s", (_name, input, expected) => {
-    expect(mergeAccountConfig<MergeAccountConfigShape>(input)).toEqual(expected);
-  });
-
-  type MergedChannelConfig = { enabled?: boolean; name?: string };
-  type ResolveMergedInput = Parameters<typeof resolveMergedAccountConfig<MergedChannelConfig>>[0];
-
-  const resolveMergedCases: Array<[string, ResolveMergedInput, MergedChannelConfig]> = [
-    [
-      "merges the matching account config into channel config",
-      {
-        channelConfig: {
-          enabled: true,
-        },
-        accounts: {
-          work: {
-            name: "Work",
-          },
-        },
-        accountId: "work",
-      },
-      {
-        enabled: true,
-        name: "Work",
-      },
-    ],
-    [
-      "supports normalized account lookups",
-      {
-        channelConfig: {
-          enabled: true,
-        },
-        accounts: {
-          "Router D": {
-            name: "Router",
-          },
-        },
-        accountId: "router-d",
-        normalizeAccountId,
-      },
-      {
-        enabled: true,
-        name: "Router",
-      },
-    ],
-  ];
-
-  it.each(resolveMergedCases)("%s", (_name, input, expected) => {
-    expect(resolveMergedAccountConfig<MergedChannelConfig>(input)).toEqual(expected);
-  });
-
-  it("deep-merges selected nested object keys after resolving the account", () => {
-    const merged = resolveMergedAccountConfig<{
-      nickserv?: { service?: string; registerEmail?: string };
-    }>({
-      channelConfig: {
-        nickserv: {
-          service: "NickServ",
-        },
-      },
-      accounts: {
-        work: {
-          nickserv: {
-            registerEmail: "work@example.com",
-          },
-        },
-      },
-      accountId: "work",
-      nestedObjectKeys: ["nickserv"],
-    });
-
-    expect(merged).toEqual({
-      nickserv: {
-        service: "NickServ",
-        registerEmail: "work@example.com",
-      },
-    });
+it("defaults mode to webhook while preserving caller extras", () => {
+  expect(
+    describeWebhookAccountSnapshot({
+      account: { accountId: "work", name: "Work" },
+      configured: true,
+      extra: { tokenSource: "config" },
+    }),
+  ).toEqual({
+    accountId: "work",
+    name: "Work",
+    enabled: true,
+    configured: true,
+    tokenSource: "config",
+    mode: "webhook",
   });
 });

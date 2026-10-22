@@ -17,10 +17,21 @@ export function browserTabCardRevision(card: ToolCard): string | undefined {
   return card.callId ?? card.messageId ?? card.previewRevision;
 }
 
+// History and live tool arrays are replaced, never mutated; scan each pair once
+// instead of on every scroll-driven render.
+const latestTabsByHistory = new WeakMap<
+  readonly unknown[],
+  { toolMessages: readonly unknown[]; latest: ReadonlyMap<string, BrowserTabSelection> }
+>();
+
 export function latestBrowserTabCards(
   messages: readonly unknown[],
   toolMessages: readonly unknown[],
 ): ReadonlyMap<string, BrowserTabSelection> {
+  const cached = latestTabsByHistory.get(messages);
+  if (cached?.toolMessages === toolMessages) {
+    return cached.latest;
+  }
   const latest = new Map<string, BrowserTabSelection>();
   // History precedes the current live stream. Select before search/virtualization
   // so expanding an old row cannot turn it into a new capture request.
@@ -39,6 +50,7 @@ export function latestBrowserTabCards(
       }
     }
   }
+  latestTabsByHistory.set(messages, { toolMessages, latest });
   return latest;
 }
 

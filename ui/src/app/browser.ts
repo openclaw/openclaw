@@ -6,6 +6,7 @@ import {
   pluginSlugCandidate,
 } from "../app-route-paths.ts";
 import { uiDevGatewayResourceBasePath } from "../dev-gateway.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { isNativeEmbedHost } from "./native-web-chrome.ts";
 
 type WindowWithControlUiBasePath = Window &
@@ -69,27 +70,6 @@ export function createBrowserHistory(): RouterHistory {
   const listeners = new Set<(location: RouteLocation) => void>();
   let stopPopState: (() => void) | undefined;
 
-  const ensurePopStateListener = () => {
-    if (stopPopState) {
-      return;
-    }
-    const onPopState = () => {
-      const location = readLocation();
-      for (const listener of listeners) {
-        listener(location);
-      }
-    };
-    window.addEventListener("popstate", onPopState);
-    stopPopState = () => window.removeEventListener("popstate", onPopState);
-  };
-
-  const releasePopStateListener = () => {
-    if (listeners.size === 0) {
-      stopPopState?.();
-      stopPopState = undefined;
-    }
-  };
-
   return {
     location: readLocation,
     // Only app-owned pushes establish a usable back target. history.length also
@@ -108,10 +88,18 @@ export function createBrowserHistory(): RouterHistory {
       ),
     listen: (listener) => {
       listeners.add(listener);
-      ensurePopStateListener();
+      if (!stopPopState) {
+        stopPopState = listen(window, "popstate", () => {
+          const location = readLocation();
+          listeners.forEach((subscriber) => subscriber(location));
+        });
+      }
       return () => {
         listeners.delete(listener);
-        releasePopStateListener();
+        if (listeners.size === 0) {
+          stopPopState?.();
+          stopPopState = undefined;
+        }
       };
     },
   };

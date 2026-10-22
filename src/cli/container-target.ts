@@ -1,10 +1,9 @@
-// CLI container targeting: parse --container and re-exec the command inside Docker/Podman.
 import { spawnSync } from "node:child_process";
 import { isIP } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { rewriteUpdateFlagArgv } from "./argv.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
@@ -17,15 +16,7 @@ type CliContainerTargetResult =
   | { handled: true; exitCode: number }
   | { handled: false; argv: string[] };
 
-type ContainerTargetDeps = {
-  env: NodeJS.ProcessEnv;
-  spawnSync: typeof spawnSync;
-  stdinIsTTY: boolean;
-  stdoutIsTTY: boolean;
-};
-
 const CONTAINER_RUNTIMES = ["podman", "docker"] as const;
-type ContainerRuntime = (typeof CONTAINER_RUNTIMES)[number];
 
 const CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV = "OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL";
 const CONTAINER_RUNTIME_PROBE_TIMEOUT_MS = 10_000;
@@ -46,11 +37,7 @@ export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
     return { kind: "pass" };
   });
 
-  if (!scanned.ok) {
-    return scanned;
-  }
-
-  return { ok: true, container, argv: scanned.argv };
+  return scanned.ok ? { ok: true, container, argv: scanned.argv } : scanned;
 }
 
 export function resolveCliContainerTarget(
@@ -64,92 +51,12 @@ export function resolveCliContainerTarget(
   return parsed.container ?? normalizeOptionalString(env.OPENCLAW_CONTAINER) ?? null;
 }
 
-function isContainerRunning(params: {
-  runtime: ContainerRuntime;
-  containerName: string;
-  deps: Pick<ContainerTargetDeps, "spawnSync">;
-}): boolean {
-  const result = params.deps.spawnSync(
-    params.runtime,
-    ["inspect", "--format", "{{.State.Running}}", params.containerName],
-    {
-      encoding: "utf8",
-      killSignal: "SIGKILL",
-      timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS,
-    },
-  );
-  return result.status === 0 && result.stdout.trim() === "true";
-}
-
-function resolveRunningContainer(params: {
-  containerName: string;
-  deps: Pick<ContainerTargetDeps, "spawnSync">;
-}): ContainerRuntime | null {
-  const matches: ContainerRuntime[] = [];
-  for (const runtime of CONTAINER_RUNTIMES) {
-    if (
-      isContainerRunning({
-        runtime,
-        containerName: params.containerName,
-        deps: params.deps,
-      })
-    ) {
-      matches.push(runtime);
-    }
-  }
-  if (matches.length === 0) {
-    return null;
-  }
-  if (matches.length > 1) {
-    const runtimes = matches.join(", ");
-    throw new Error(
-      `Container "${params.containerName}" is running under multiple runtimes (${runtimes}); use a unique container name.`,
-    );
-  }
-  return expectDefined(matches[0], "matches capture group 0");
-}
-
-function buildContainerExecArgs(params: {
-  runtime: ContainerRuntime;
-  containerName: string;
-  argv: string[];
-  env: NodeJS.ProcessEnv;
-  stdinIsTTY: boolean;
-  stdoutIsTTY: boolean;
-}): string[] {
-  // Preserve proxy env only after loopback validation; localhost would point inside the container.
-  const envFlag = params.runtime === "docker" ? "-e" : "--env";
-  const proxyUrl = normalizeOptionalString(params.env.OPENCLAW_PROXY_URL);
-  if (proxyUrl) {
-    assertContainerProxyUrlIsReachable(proxyUrl, params.env);
-  }
-  const proxyEnvArgs = proxyUrl ? [envFlag, `OPENCLAW_PROXY_URL=${proxyUrl}`] : [];
-  const interactiveFlags = ["-i", ...(params.stdinIsTTY && params.stdoutIsTTY ? ["-t"] : [])];
-  return [
-    "exec",
-    ...interactiveFlags,
-    envFlag,
-    `OPENCLAW_CONTAINER_HINT=${params.containerName}`,
-    envFlag,
-    "OPENCLAW_CLI_CONTAINER_BYPASS=1",
-    ...proxyEnvArgs,
-    params.containerName,
-    "openclaw",
-    ...params.argv,
-  ];
-}
-
-function assertContainerProxyUrlIsReachable(proxyUrl: string, env: NodeJS.ProcessEnv): void {
-  if (env[CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV] === "1") {
+function assertContainerProxyUrlIsReachable(proxyUrl: string): void {
+  if (process.env[CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV] === "1") {
     return;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(proxyUrl);
-  } catch {
-    return;
-  }
-  if (!isLoopbackProxyHostname(parsed.hostname)) {
+  const parsed = URL.parse(proxyUrl);
+  if (!parsed || !isLoopbackProxyHostname(parsed.hostname)) {
     return;
   }
   throw new Error(
@@ -182,22 +89,83 @@ function isLoopbackProxyHostname(hostname: string): boolean {
 }
 
 function redactProxyUrlForMessage(raw: string): string {
-  try {
-    const url = new URL(raw);
-    if (url.username || url.password) {
-      url.username = "redacted";
-      url.password = url.password ? "redacted" : "";
-    }
-    url.search = "";
-    url.hash = "";
-    return url.toString();
-  } catch {
+  const url = URL.parse(raw);
+  if (!url) {
     return "<invalid URL>";
   }
+  if (url.username || url.password) {
+    url.username = "redacted";
+    url.password = url.password ? "redacted" : "";
+  }
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
-function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const next = { ...env };
+export function maybeRunCliInContainer(argv: string[]): CliContainerTargetResult {
+  if (process.env.OPENCLAW_CLI_CONTAINER_BYPASS === "1") {
+    return { handled: false, argv };
+  }
+
+  const parsed = parseCliContainerArgs(argv);
+  if (!parsed.ok) {
+    throw new Error(parsed.error);
+  }
+  const containerName = parsed.container ?? normalizeOptionalString(process.env.OPENCLAW_CONTAINER);
+  if (!containerName) {
+    return { handled: false, argv: parsed.argv };
+  }
+  const invocationArgv = ["node", "openclaw", ...parsed.argv.slice(2)];
+  if (
+    resolveCliArgvInvocation(invocationArgv).primary === "update" ||
+    // A shorthand is blocked even when malformed root options hide the rewritten primary.
+    rewriteUpdateFlagArgv(invocationArgv) !== invocationArgv
+  ) {
+    throw new Error(
+      "openclaw update is not supported with --container; rebuild or restart the container image instead.",
+    );
+  }
+
+  const matches = CONTAINER_RUNTIMES.filter((runtime) => {
+    const result = spawnSync(
+      runtime,
+      ["inspect", "--format", "{{.State.Running}}", containerName],
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS },
+    );
+    return result.status === 0 && result.stdout.trim() === "true";
+  });
+  if (matches.length === 0) {
+    throw new Error(`No running container matched "${containerName}" under podman or docker.`);
+  }
+  if (matches.length > 1) {
+    const runtimes = matches.join(", ");
+    throw new Error(
+      `Container "${containerName}" is running under multiple runtimes (${runtimes}); use a unique container name.`,
+    );
+  }
+  const runningContainer = expectDefined(matches[0], "matches capture group 0");
+  const containerArgs = parsed.argv.slice(2);
+  // Preserve proxy env only after loopback validation; localhost would point inside the container.
+  const envFlag = runningContainer === "docker" ? "-e" : "--env";
+  const proxyUrl = normalizeOptionalString(process.env.OPENCLAW_PROXY_URL);
+  if (proxyUrl) {
+    assertContainerProxyUrlIsReachable(proxyUrl);
+  }
+  const proxyEnvArgs = proxyUrl ? [envFlag, `OPENCLAW_PROXY_URL=${proxyUrl}`] : [];
+  const execArgs = [
+    "exec",
+    "-i",
+    ...(process.stdin.isTTY && process.stdout.isTTY ? ["-t"] : []),
+    envFlag,
+    `OPENCLAW_CONTAINER_HINT=${containerName}`,
+    envFlag,
+    "OPENCLAW_CLI_CONTAINER_BYPASS=1",
+    ...proxyEnvArgs,
+    containerName,
+    "openclaw",
+    ...containerArgs,
+  ];
+  const next = { ...process.env };
   // Container-targeted CLI invocations should use the container's own profile
   // and gateway auth/runtime state rather than inheriting host overrides.
   delete next.OPENCLAW_PROFILE;
@@ -209,85 +177,7 @@ function buildContainerExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   // OPENCLAW_CONTAINER_HINT, but it should not treat itself as still
   // container-targeted for validation/routing.
   next.OPENCLAW_CONTAINER = "";
-  return next;
-}
-
-function isBlockedContainerCommand(argv: string[]): boolean {
-  if (resolveCliArgvInvocation(["node", "openclaw", ...argv]).primary === "update") {
-    return true;
-  }
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      return false;
-    }
-    if (arg === "--update") {
-      return true;
-    }
-    const consumedRootOption = consumeRootOptionToken(argv, i);
-    if (consumedRootOption > 0) {
-      i += consumedRootOption - 1;
-      continue;
-    }
-    if (!arg.startsWith("-")) {
-      return false;
-    }
-  }
-  return false;
-}
-
-export function maybeRunCliInContainer(
-  argv: string[],
-  deps?: Partial<ContainerTargetDeps>,
-): CliContainerTargetResult {
-  const resolvedDeps: ContainerTargetDeps = {
-    env: deps?.env ?? process.env,
-    spawnSync: deps?.spawnSync ?? spawnSync,
-    stdinIsTTY: deps?.stdinIsTTY ?? process.stdin.isTTY,
-    stdoutIsTTY: deps?.stdoutIsTTY ?? process.stdout.isTTY,
-  };
-
-  if (resolvedDeps.env.OPENCLAW_CLI_CONTAINER_BYPASS === "1") {
-    return { handled: false, argv };
-  }
-
-  const parsed = parseCliContainerArgs(argv);
-  if (!parsed.ok) {
-    throw new Error(parsed.error);
-  }
-  const containerName = resolveCliContainerTarget(argv, resolvedDeps.env);
-  if (!containerName) {
-    return { handled: false, argv: parsed.argv };
-  }
-  if (isBlockedContainerCommand(parsed.argv.slice(2))) {
-    throw new Error(
-      "openclaw update is not supported with --container; rebuild or restart the container image instead.",
-    );
-  }
-
-  const runningContainer = resolveRunningContainer({
-    containerName,
-    deps: resolvedDeps,
-  });
-  if (!runningContainer) {
-    throw new Error(`No running container matched "${containerName}" under podman or docker.`);
-  }
-
-  const result = resolvedDeps.spawnSync(
-    runningContainer,
-    buildContainerExecArgs({
-      runtime: runningContainer,
-      containerName,
-      argv: parsed.argv.slice(2),
-      env: resolvedDeps.env,
-      stdinIsTTY: resolvedDeps.stdinIsTTY,
-      stdoutIsTTY: resolvedDeps.stdoutIsTTY,
-    }),
-    {
-      stdio: "inherit",
-      env: buildContainerExecEnv(resolvedDeps.env),
-    },
-  );
+  const result = spawnSync(runningContainer, execArgs, { stdio: "inherit", env: next });
   if (result.error) {
     throw result.error;
   }

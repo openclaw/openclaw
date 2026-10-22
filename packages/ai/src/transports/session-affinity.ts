@@ -1,12 +1,8 @@
 import type { Model, StreamOptions } from "../types.js";
 
 function isOpencodeEndpoint(baseUrl: string): boolean {
-  try {
-    const url = new URL(baseUrl);
-    return url.protocol === "https:" && url.hostname.replace(/\.$/, "") === "opencode.ai";
-  } catch {
-    return false;
-  }
+  const url = URL.parse(baseUrl);
+  return url?.protocol === "https:" && url.hostname.replace(/\.$/, "") === "opencode.ai";
 }
 
 /** Required conversation identity is independent of optional prompt caching. */

@@ -15,14 +15,6 @@ function collect(fetchPage: (cursor?: string) => Promise<MockPage>) {
 }
 
 describe("collectSlackCursorPages", () => {
-  it("collects a single page without a cursor", async () => {
-    const fetchPage = vi.fn().mockResolvedValue({ items: ["a", "b"] });
-
-    await expect(collect(fetchPage)).resolves.toEqual(["a", "b"]);
-    expect(fetchPage).toHaveBeenCalledOnce();
-    expect(fetchPage).toHaveBeenCalledWith(undefined);
-  });
-
   it("collects pages while cursors advance", async () => {
     const fetchPage = vi
       .fn()

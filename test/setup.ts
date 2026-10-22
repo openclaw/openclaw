@@ -1,8 +1,10 @@
 // Default test setup installs the shared test environment.
-import { ensureSqliteLibrarySelected } from "../src/infra/bun-sqlite-library.js";
+import { fileURLToPath } from "node:url";
+import { sha256File } from "@openclaw/fs-safe/durability";
+import { isSupported as isProcessIdentitySupported } from "@openclaw/proc-safe/identity";
 import { installSharedTestSetup } from "./setup.shared.js";
 
-if (process.versions.bun) {
-  ensureSqliteLibrarySelected();
-}
 installSharedTestSetup();
+// Select host bindings before platform fixtures can poison the dependencies' process caches.
+await sha256File(fileURLToPath(import.meta.url));
+isProcessIdentitySupported();

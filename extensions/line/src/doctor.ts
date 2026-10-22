@@ -4,8 +4,8 @@ import type {
   ChannelDoctorAdapter,
   ChannelDoctorEmptyAllowlistAccountContext,
 } from "openclaw/plugin-sdk/channel-contract";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeAllowFrom } from "./bot-access.js";
+import { isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLineAllowEntry } from "./bot-access.js";
 import {
   resolveExactLineGroupConfigKey,
   resolveLineGroupConfigEntry,
@@ -27,7 +27,7 @@ type LineGroupCoverage = {
 const GROUP_DEFAULTS_KEY = "*";
 
 function classifyAllowFrom(values?: unknown): { covered: boolean; referenced: boolean } {
-  const entries = Array.isArray(values) ? normalizeAllowFrom(values).entries : [];
+  const entries = Array.isArray(values) ? values.map(normalizeLineAllowEntry).filter(Boolean) : [];
   return {
     covered: entries.some((entry) => parseAccessGroupAllowFromEntry(entry) === null),
     referenced: entries.some((entry) => parseAccessGroupAllowFromEntry(entry) !== null),
@@ -120,14 +120,10 @@ function readLineGroupCoverage(
   });
 }
 
-function readGroupPolicy(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 function isLineGroupAllowlistScope(params: ChannelDoctorEmptyAllowlistAccountContext): boolean {
   return (
     params.channelName === "line" &&
-    (readGroupPolicy(params.account.groupPolicy) ?? readGroupPolicy(params.parent?.groupPolicy)) ===
+    (readStringValue(params.account.groupPolicy) ?? readStringValue(params.parent?.groupPolicy)) ===
       "allowlist"
   );
 }

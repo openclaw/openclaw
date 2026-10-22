@@ -1,4 +1,3 @@
-// QA Lab Slack invalid-blocks fallback fixture.
 import { randomUUID } from "node:crypto";
 import {
   SLACK_QA_INVALID_TABLE_DATA_ROW_COUNT,
@@ -33,13 +32,8 @@ export function buildSlackInvalidBlocksTableProbe() {
     SLACK_QA_INVALID_TABLE_HEADERS.join("\t"),
     ...dataRows.map((row) => row.join("\t")),
   ].join("\n");
-  const cellCharacterCount = [...SLACK_QA_INVALID_TABLE_HEADERS, ...dataRows.flat()].reduce(
-    (total, value) => total + Array.from(value).length,
-    0,
-  );
   return {
     block,
-    cellCharacterCount,
     dataRowCount: dataRows.length,
     fallbackText,
     firstRowText: buildSlackInvalidBlocksTableRow(1).join("\t"),

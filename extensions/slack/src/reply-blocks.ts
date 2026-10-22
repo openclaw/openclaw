@@ -3,7 +3,6 @@ import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-// Slack plugin module implements reply blocks behavior.
 import {
   resolveAskUserQuestionOptionIndices,
   resolveSendableOutboundReplyParts,
@@ -26,8 +25,7 @@ import {
 import { parseSlackBlocksInput, SLACK_MAX_BLOCKS } from "./blocks-input.js";
 import {
   buildSlackInteractiveBlocks,
-  buildSlackPresentationBlocks,
-  canRenderSlackPresentation,
+  buildSlackPresentationBlocksIfComplete,
   resolveSlackBlockOffsets,
   type SlackBlock,
   type SlackBlockRenderOptions,
@@ -39,20 +37,11 @@ import {
   hasSlackNativeDataBlock,
 } from "./native-data-blocks.js";
 import { SLACK_SECTION_TEXT_MAX } from "./presentation.js";
-import {
-  SLACK_APPROVAL_BUTTON_ACTION_ID,
-  SLACK_APPROVAL_SELECT_ACTION_ID,
-  SLACK_CALLBACK_BUTTON_ACTION_ID,
-  SLACK_CALLBACK_SELECT_ACTION_ID,
-  SLACK_QUESTION_BUTTON_ACTION_ID,
-  SLACK_REPLY_BUTTON_ACTION_ID,
-  SLACK_REPLY_LINK_ACTION_ID,
-  SLACK_REPLY_SELECT_ACTION_ID,
-} from "./reply-action-ids.js";
+import { SLACK_BUTTON_ACTION_IDS, SLACK_SELECT_ACTION_IDS } from "./reply-action-ids.js";
 
 export type SlackReplyBlockSegment =
   | { kind: "blocks"; blocks: SlackBlock[] }
-  | { kind: "text"; text: string; mrkdwn: false };
+  | { kind: "text"; text: string };
 
 export type SlackReplyBlockResolution = {
   authoredTextPlacement: SlackAuthoredTextPlacement;
@@ -79,31 +68,6 @@ export function normalizeSlackReplyPayload(payload: ReplyPayload): ReplyPayload 
       slack: { ...slackData, authoredPresentationText: payload.text },
     },
   };
-}
-
-export function parseSlackReplyBlockSegments(value: unknown): SlackReplyBlockSegment[] | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (!Array.isArray(value)) {
-    throw new Error("Slack rendered presentation segments must be an array");
-  }
-  return value.map((raw): SlackReplyBlockSegment => {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-      throw new Error("Slack rendered presentation segment must be an object");
-    }
-    const segment = raw as { blocks?: unknown; kind?: unknown; mrkdwn?: unknown; text?: unknown };
-    if (segment.kind === "text" && typeof segment.text === "string" && segment.mrkdwn === false) {
-      return { kind: "text", text: segment.text, mrkdwn: false };
-    }
-    if (segment.kind === "blocks") {
-      const blocks = parseSlackBlocksInput(segment.blocks) as SlackBlock[] | undefined;
-      if (blocks?.length) {
-        return { kind: "blocks", blocks };
-      }
-    }
-    throw new Error("Slack rendered presentation segment is invalid");
-  });
 }
 
 export type SlackReplyDeliveryMessage = {
@@ -189,7 +153,6 @@ export type PreparedSlackReply = {
 /** One attempt owns its authored compilation; media captions retain a separate delivery policy. */
 export function prepareSlackReply(payload: ReplyPayload): PreparedSlackReply {
   const text = payload.text;
-  const source = { ...payload, text };
   let authoredChunks: readonly string[] | undefined;
   let structuredContent: boolean | undefined;
   let materialized: SlackReplyBlockResolution | undefined;
@@ -197,21 +160,22 @@ export function prepareSlackReply(payload: ReplyPayload): PreparedSlackReply {
   let preview: SlackReplyRenderPlan | undefined;
   const resolveAuthoredTextChunks = () =>
     (authoredChunks ??= markdownToSlackMrkdwnChunks(text?.trim() ?? "", SLACK_SECTION_TEXT_MAX));
-  const hasStructuredContent = () => (structuredContent ??= hasSlackReplyStructuredContent(source));
+  const hasStructuredContent = () =>
+    (structuredContent ??= hasSlackReplyStructuredContent(payload));
   const resolve = (materializeAuthoredText: boolean) =>
     materializeAuthoredText
-      ? (materialized ??= resolveSlackReplyBlockResolution(source, {
+      ? (materialized ??= resolveSlackReplyBlockResolution(payload, {
           materializeAuthoredText: true,
           resolveAuthoredTextChunks,
         }))
-      : (unmaterialized ??= resolveSlackReplyBlockResolution(source));
+      : (unmaterialized ??= resolveSlackReplyBlockResolution(payload));
   return {
     payload,
     resolveDelivery: () =>
-      resolve(!resolveSendableOutboundReplyParts(source).hasMedia && hasStructuredContent()),
+      resolve(!resolveSendableOutboundReplyParts(payload).hasMedia && hasStructuredContent()),
     resolvePreview: (override = text) => {
       if (override !== text) {
-        return prepareSlackReply({ ...source, text: override }).resolvePreview();
+        return prepareSlackReply({ ...payload, text: override }).resolvePreview();
       }
       return (preview ??= projectSlackReplyRenderPlan(
         text,
@@ -280,11 +244,7 @@ function projectSlackReplyRenderPlan(
 }
 
 function readSlackChannelBlocks(payload: ReplyPayload): SlackBlock[] {
-  const slackData = payload.channelData?.slack;
-  if (!slackData || typeof slackData !== "object" || Array.isArray(slackData)) {
-    return [];
-  }
-  return (parseSlackBlocksInput((slackData as { blocks?: unknown }).blocks) as SlackBlock[]) ?? [];
+  return parseSlackBlocksInput(asOptionalRecord(payload.channelData?.slack)?.blocks) ?? [];
 }
 
 export function hasSlackReplyStructuredContent(payload: ReplyPayload): boolean {
@@ -356,7 +316,7 @@ function appendTextSegment(segments: SlackReplyBlockSegment[], text: string): vo
     last.text = `${last.text}\n\n${trimmed}`;
     return;
   }
-  segments.push({ kind: "text", text: trimmed, mrkdwn: false });
+  segments.push({ kind: "text", text: trimmed });
 }
 
 function appendBlockSegment(
@@ -392,39 +352,25 @@ function resolvePresentationRenderOptions(
   };
 }
 
-function renderNativePresentation(
-  presentation: MessagePresentation,
-  options: SlackBlockRenderOptions,
-): SlackBlock[] | undefined {
-  if (!canRenderSlackPresentation(presentation, options)) {
-    return undefined;
-  }
-  const blocks = buildSlackPresentationBlocks(presentation, options);
-  return blocks.length > 0 ? blocks : undefined;
-}
-
 function appendPresentationPart(
   segments: SlackReplyBlockSegment[],
   presentation: MessagePresentation,
   questionOptionIndices?: AskUserQuestionOptionIndices,
 ): void {
   const currentBlocks = readLastBlockSegment(segments);
-  const currentRendered = renderNativePresentation(presentation, {
-    ...resolvePresentationRenderOptions(segments, "current"),
-    questionOptionIndices,
-  });
-  if (currentRendered && currentBlocks.length + currentRendered.length <= SLACK_MAX_BLOCKS) {
-    appendBlockSegment(segments, currentRendered);
-    return;
-  }
-
-  const freshRendered = renderNativePresentation(presentation, {
-    ...resolvePresentationRenderOptions(segments, "new-message"),
-    questionOptionIndices,
-  });
-  if (freshRendered) {
-    appendBlockSegment(segments, freshRendered, true);
-    return;
+  for (const mode of ["current", "new-message"] as const) {
+    const rendered = buildSlackPresentationBlocksIfComplete(presentation, {
+      ...resolvePresentationRenderOptions(segments, mode),
+      questionOptionIndices,
+    });
+    const startNew = mode === "new-message";
+    if (
+      rendered?.length &&
+      (startNew || currentBlocks.length + rendered.length <= SLACK_MAX_BLOCKS)
+    ) {
+      appendBlockSegment(segments, rendered, startNew);
+      return;
+    }
   }
 
   appendTextSegment(
@@ -435,18 +381,8 @@ function appendPresentationPart(
   );
 }
 
-const SLACK_BUTTON_CONTROL_ACTION_IDS = [
-  SLACK_APPROVAL_BUTTON_ACTION_ID,
-  SLACK_CALLBACK_BUTTON_ACTION_ID,
-  SLACK_QUESTION_BUTTON_ACTION_ID,
-  SLACK_REPLY_BUTTON_ACTION_ID,
-  SLACK_REPLY_LINK_ACTION_ID,
-] as const;
-const SLACK_SELECT_CONTROL_ACTION_IDS = [
-  SLACK_APPROVAL_SELECT_ACTION_ID,
-  SLACK_CALLBACK_SELECT_ACTION_ID,
-  SLACK_REPLY_SELECT_ACTION_ID,
-] as const;
+const SLACK_BUTTON_CONTROL_ACTION_IDS = Object.values(SLACK_BUTTON_ACTION_IDS);
+const SLACK_SELECT_CONTROL_ACTION_IDS = Object.values(SLACK_SELECT_ACTION_IDS);
 
 function readGeneratedSlackControlRowKey(block: SlackBlock): string | undefined {
   const record = block as { block_id?: unknown; elements?: unknown; type?: unknown };

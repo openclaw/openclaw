@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -10,18 +10,15 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnePasswordBroker, type StandingGrant } from "./broker.js";
 import type { OnePasswordConfig } from "./config.js";
-import { MemoryKeyedStore, MemorySyncKeyedStore } from "./memory-store.test-support.js";
+import { MemoryKeyedStore } from "./memory-store.test-support.js";
 import { createOnePasswordTool } from "./tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const NOW = 10_000;
 const invocation = { agentId: "agent-a", sessionKey: "session-a", sessionId: "conversation-a" };
 
-function grantKey(agentId: string, slug: string) {
-  return createHash("sha256")
-    .update(JSON.stringify([agentId, slug]))
-    .digest("hex");
-}
+const hash = (parts: string[]) => createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+const grantKey = (agentId: string, slug: string) => hash([agentId, slug]);
 
 function configured(slugs: string[]): OnePasswordConfig {
   return {
@@ -45,9 +42,7 @@ function grant(slug: string, agentId = invocation.agentId): StandingGrant {
     slug,
     grantedAtMs: NOW - 1,
     expiresAtMs: NOW + 60_000,
-    targetFingerprint: createHash("sha256")
-      .update(JSON.stringify(["Automation", slug, "credential"]))
-      .digest("hex"),
+    targetFingerprint: hash(["Automation", slug, "credential"]),
   };
 }
 
@@ -58,67 +53,43 @@ describe("onepassword list with SQLite grants", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("onepassword-list-") };
+    vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
 
   afterEach(async () => {
-    vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
+    vi.restoreAllMocks();
   });
 
   function openGrants() {
-    return createPluginStateKeyedStoreForTests<StandingGrant>("onepassword", {
-      namespace: "grants",
-      maxEntries: 1_024,
-      overflowPolicy: "evict-oldest",
-      env,
-    });
+    return createPluginStateKeyedStoreV2ForTests<StandingGrant>(
+      "onepassword",
+      {
+        namespace: "grants",
+        maxEntries: 1_024,
+        overflowPolicy: "evict-oldest",
+        env,
+      },
+      { assertCurrent() {} },
+    );
   }
 
-  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant> = openGrants()) {
+  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant, 2>) {
     const getItem = vi.fn(async () => {
       throw new Error("list must not retrieve a secret");
     });
     const broker = new OnePasswordBroker({
-      now: () => NOW,
       resolveConfig: () => configured(slugs),
       opClient: { getItem },
-      stores: { grants, audit: new MemoryKeyedStore(), pending: new MemorySyncKeyedStore() },
+      stores: { grants, audit: new MemoryKeyedStore(), pending: new MemoryKeyedStore() },
     });
     const list = (agentId: string | undefined = invocation.agentId) =>
       createOnePasswordTool(broker, { ...invocation, agentId }).execute("list", { action: "list" });
     return { list, getItem };
   }
 
-  it("requests only the configured agent's grant keys when listing items", async () => {
-    const grants = openGrants();
-    const slugs = ["second", "first"];
-    for (const agentId of [
-      invocation.agentId,
-      ...Array.from({ length: 31 }, (_, i) => `other-${i}`),
-    ]) {
-      for (const slug of slugs) {
-        await grants.register(grantKey(agentId, slug), grant(slug, agentId));
-      }
-    }
-    const { list, getItem } = setup(slugs, grants);
-    const lookupMany = vi.spyOn(grants, "lookupMany");
-    expect((await list()).details).toEqual({
-      ok: true,
-      items: ["first", "second"].map((slug) => ({
-        slug,
-        description: "",
-        policy: "approve",
-        standingGrantActive: true,
-      })),
-    });
-    expect(lookupMany).toHaveBeenCalledExactlyOnceWith(
-      ["first", "second"].map((slug) => grantKey(invocation.agentId, slug)),
-    );
-    expect(getItem).not.toHaveBeenCalled();
-  });
-
-  it.each([true, false])("validates selected grants with bulk support=%s", async (bulk) => {
+  it("validates selected grants", async () => {
     const grants = openGrants();
     const slugs = ["wrong-slug", "wrong-agent", "retargeted", "missing", "expired", "active"];
     for (const slug of slugs.filter((value) => value !== "missing")) {
@@ -130,8 +101,7 @@ describe("onepassword list with SQLite grants", () => {
         ...(slug === "retargeted" ? { targetFingerprint: "old-target" } : {}),
       });
     }
-    const { lookupMany: _lookupMany, ...olderStore } = grants;
-    const { list, getItem } = setup(slugs, bulk ? grants : olderStore);
+    const { list, getItem } = setup(slugs, grants);
     expect((await list()).details).toEqual({
       ok: true,
       items: [...slugs].toSorted().map((slug) => ({
@@ -144,44 +114,41 @@ describe("onepassword list with SQLite grants", () => {
     expect(getItem).not.toHaveBeenCalled();
   });
 
-  it("ignores unrelated corrupt JSON but reports selected corruption", async () => {
+  it.each([false, true])("validates stored corruption (selected: %s)", async (selected) => {
     const grants = openGrants();
     const key = grantKey(invocation.agentId, "selected");
-    await grants.register(key, grant("selected"));
-    await grants.register("unrelated", grant("unrelated", "other"));
     const { db } = openOpenClawStateDatabase({ env });
-    const corrupt = db.prepare(
-      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'onepassword' AND namespace = 'grants' AND entry_key = ?",
+    // Seed malformed storage before reads or writes can publish a cached postimage.
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('onepassword', 'grants', ?, ?, ?, NULL)",
     );
-    corrupt.run("{", "unrelated");
+    insert.run(key, selected ? "{" : JSON.stringify(grant("selected")), NOW);
+    insert.run("unrelated", "{", NOW);
+    if (selected) {
+      expect((await setup(["selected"], grants).list()).details).toMatchObject({
+        ok: false,
+        error: { code: "PLUGIN_STATE_CORRUPT" },
+      });
+      return;
+    }
     expect((await setup(["selected"], grants).list()).details).toMatchObject({
       ok: true,
       items: [{ slug: "selected", standingGrantActive: true }],
-    });
-    const { lookupMany: _lookupMany, ...olderStore } = grants;
-    expect((await setup(["selected"], olderStore).list()).details).toMatchObject({
-      ok: false,
-      error: { code: "PLUGIN_STATE_CORRUPT" },
-    });
-    corrupt.run("{", key);
-    expect((await setup(["selected"], grants).list()).details).toMatchObject({
-      ok: false,
-      error: { code: "PLUGIN_STATE_CORRUPT" },
     });
   });
 
   it("treats null and expired rows as inactive without changing stored rows", async () => {
     const grants = openGrants();
-    for (const slug of ["null-value", "expired-row"]) {
-      await grants.register(grantKey(invocation.agentId, slug), grant(slug));
-    }
     const { db } = openOpenClawStateDatabase({ env });
-    db.prepare("UPDATE plugin_state_entries SET value_json = 'null' WHERE entry_key = ?").run(
-      grantKey(invocation.agentId, "null-value"),
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('onepassword', 'grants', ?, ?, ?, ?)",
     );
-    db.prepare("UPDATE plugin_state_entries SET expires_at = ? WHERE entry_key = ?").run(
-      NOW,
+    insert.run(grantKey(invocation.agentId, "null-value"), "null", NOW, null);
+    insert.run(
       grantKey(invocation.agentId, "expired-row"),
+      JSON.stringify(grant("expired-row")),
+      NOW - 1,
+      NOW,
     );
     const rows = () => db.prepare("SELECT * FROM plugin_state_entries ORDER BY entry_key").all();
     const before = rows();

@@ -16,6 +16,13 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionCatalogListLifetime } from "./session-catalog-list-lifetime.js";
 import { listSessionCatalogProvider } from "./session-catalog-provider-access.js";
+import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
+
+const blockedProvider = (gate: ReturnType<typeof createDeferredCore<SessionCatalogHost[]>>) =>
+  catalogProvider("blocking-catalog", {
+    label: "Blocking catalog",
+    list: vi.fn(() => gate.promise),
+  });
 
 describe("session catalog provider admission", () => {
   it("preserves the queued caller's plugin scope and retained Gateway root", async () => {
@@ -25,12 +32,7 @@ describe("session catalog provider admission", () => {
     const firstRegistry = createEmptyPluginRegistry();
     const queuedRegistry = createEmptyPluginRegistry();
     const gate = createDeferredCore<SessionCatalogHost[]>();
-    const blocker: SessionCatalogProvider = {
-      id: "blocking-catalog",
-      label: "Blocking catalog",
-      list: vi.fn(() => gate.promise),
-      read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-    };
+    const blocker = blockedProvider(gate);
     let observedScope: ReturnType<typeof getPluginRuntimeGatewayRequestScope>;
     const retained: { release: (() => void) | null } = { release: null };
     const queued: SessionCatalogProvider = {
@@ -45,7 +47,12 @@ describe("session catalog provider admission", () => {
     const active = predecessor.run(async () =>
       withPluginRuntimeGatewayRequestScope(
         { pluginRegistry: firstRegistry, pluginId: "first-owner", isWebchatConnect: () => false },
-        () => Promise.all(Array.from({ length: 4 }, () => listSessionCatalogProvider(blocker, {}))),
+        () =>
+          Promise.all(
+            Array.from({ length: 16 }, (_, index) =>
+              listSessionCatalogProvider({ ...blocker, id: `blocking-catalog-${index}` }, {}),
+            ),
+          ),
       ),
     );
     const pending = requester.run(async () =>
@@ -55,7 +62,7 @@ describe("session catalog provider admission", () => {
       ),
     );
     try {
-      expect(blocker.list).toHaveBeenCalledTimes(4);
+      expect(blocker.list).toHaveBeenCalledTimes(16);
       expect(queued.list).not.toHaveBeenCalled();
       gate.resolve([]);
       await Promise.all([active, pending]);
@@ -86,20 +93,18 @@ describe("session catalog provider admission", () => {
       const before = getActiveGatewayRootWorkHolders();
       const root = tryBeginGatewayRootWorkAdmission("retired-catalog-enumeration")!;
       const gate = createDeferredCore<SessionCatalogHost[]>();
-      const blocker: SessionCatalogProvider = {
-        id: "blocking-catalog",
-        label: "Blocking catalog",
-        list: vi.fn(() => gate.promise),
-        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-      };
+      const blocker = blockedProvider(gate);
       const queued = { ...blocker, id: "retired-catalog", list: vi.fn(async () => []) };
       const successor = { ...blocker, id: "live-catalog", list: vi.fn(async () => []) };
       const activeOwner = new AbortController();
-      const active = Array.from({ length: 4 }, () =>
-        listSessionCatalogProvider(blocker, { signal: activeOwner.signal }),
+      const active = Array.from({ length: 16 }, (_, index) =>
+        listSessionCatalogProvider(
+          { ...blocker, id: `blocking-catalog-${index}` },
+          { signal: activeOwner.signal },
+        ),
       );
       const owner = new AbortController();
-      const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal]);
+      const lifetime = new SessionCatalogListLifetime([owner.signal]);
       let retiredErrors: unknown[] | undefined;
       const rejected = root.run(async () => {
         try {
@@ -118,7 +123,7 @@ describe("session catalog provider admission", () => {
       let nextError: unknown;
       let next: Promise<SessionCatalogHost[] | undefined> | undefined;
       try {
-        expect(blocker.list).toHaveBeenCalledTimes(4);
+        expect(blocker.list).toHaveBeenCalledTimes(16);
         expect(queued.list).not.toHaveBeenCalled();
         await expect
           .soft(listSessionCatalogProvider(queued, { signal: AbortSignal.abort(retirement) }))

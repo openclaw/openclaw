@@ -3,18 +3,18 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import { chromium, type BrowserContext, type Page } from "playwright-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isLiveTestEnabled } from "../../test-support.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { assertBrowserNavigationAllowed } from "./navigation-guard.js";
 import { closePlaywrightBrowserConnection, getPageForTargetId } from "./pw-session.js";
 import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
 
 // Only source DNS is synthetic. The real policy owner validates its public answer;
 // Chromium maps that test hostname to our loopback fixture, never the public Internet.
-vi.mock("../infra/net/ssrf.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/net/ssrf.js")>();
+vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/security-runtime")>();
   return {
     ...actual,
     resolvePinnedHostnameWithPolicy: (

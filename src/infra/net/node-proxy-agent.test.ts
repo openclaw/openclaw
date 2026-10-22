@@ -1,30 +1,8 @@
-// Node proxy agent tests cover shared Node HTTP(S) proxy agent construction.
+import { request as httpRequest } from "node:http";
+import { request as httpsRequest } from "node:https";
 import { inspect } from "node:util";
-import { describe, expect, it } from "vitest";
-import { withEnv } from "../../test-utils/env.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeProxyAgent, resolveEnvNodeProxyUrlForTarget } from "./node-proxy-agent.js";
-
-const PROXY_ENV_KEYS = [
-  "http_proxy",
-  "HTTP_PROXY",
-  "https_proxy",
-  "HTTPS_PROXY",
-  "all_proxy",
-  "ALL_PROXY",
-  "no_proxy",
-  "NO_PROXY",
-] as const;
-
-function withProxyEnv<T>(
-  env: Partial<Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>>,
-  fn: () => T,
-): T {
-  const clearedEnv = Object.fromEntries(PROXY_ENV_KEYS.map((key) => [key, undefined])) as Record<
-    (typeof PROXY_ENV_KEYS)[number],
-    undefined
-  >;
-  return withEnv({ ...clearedEnv, ...env }, fn);
-}
 
 describe("resolveEnvNodeProxyUrlForTarget", () => {
   it("rereads proxy and bypass settings for each request", () => {
@@ -57,60 +35,83 @@ describe("resolveEnvNodeProxyUrlForTarget", () => {
 });
 
 describe("createNodeProxyAgent", () => {
+  let previousEnv: NodeJS.ProcessEnv;
+  beforeEach(() => {
+    previousEnv = process.env;
+    // Avoid Bun's native fetch proxy cache by replacing, rather than mutating, the real env.
+    process.env = { ...previousEnv };
+    for (const key of ["http_proxy", "https_proxy", "all_proxy", "no_proxy"]) {
+      delete process.env[key];
+      delete process.env[key.toUpperCase()];
+    }
+  });
+  afterEach(() => {
+    process.env = previousEnv;
+  });
+  it.each(["socks5://proxy.example:1080", new URL("socks5://proxy.example:1080")])(
+    "rejects unsupported explicit proxy %s before creating a request",
+    (proxyUrl) => {
+      expect(() => createNodeProxyAgent({ mode: "explicit", proxyUrl })).toThrow(
+        "Unsupported proxy protocol",
+      );
+    },
+  );
+
+  it("rejects unusable env proxies at either Node request boundary", () => {
+    process.env.HTTP_PROXY = "socks5://proxy.example:1080";
+    const agent = createNodeProxyAgent({ mode: "env" });
+    expect(agent).toBeDefined();
+    try {
+      for (const request of [httpRequest, httpsRequest]) {
+        expect(() => request({ hostname: "upload.invalid", agent }).destroy()).toThrow(
+          "Unsupported proxy protocol",
+        );
+      }
+    } finally {
+      agent?.destroy();
+    }
+  });
+
   it.each(["env", "explicit"] as const)(
     "keeps malformed %s proxy credentials out of errors",
     (mode) => {
       const proxyUrl = "https://qa-user:qa-password@[invalid";
-      withProxyEnv({ HTTPS_PROXY: proxyUrl }, () => {
-        let error: unknown;
-        try {
-          if (mode === "env") {
-            createNodeProxyAgent({ mode, targetUrl: "https://collector.example.test" });
-          } else {
-            createNodeProxyAgent({ mode, proxyUrl });
-          }
-        } catch (cause) {
-          error = cause;
+      process.env.HTTPS_PROXY = proxyUrl;
+      const create = vi.fn(() => {
+        if (mode === "env") {
+          return createNodeProxyAgent({ mode, targetUrl: "https://collector.example.test" });
         }
-        expect(error).toMatchObject({ message: expect.stringContaining("Invalid proxy URL") });
-        const rendered = inspect(error, { depth: null });
-        expect(rendered).not.toContain("qa-user");
-        expect(rendered).not.toContain("qa-password");
+        return createNodeProxyAgent({ mode, proxyUrl });
       });
+      expect(create).toThrow("Invalid proxy URL");
+      const error = create.mock.results[0]?.value;
+      expect(inspect(error, { depth: null })).not.toMatch(/qa-user|qa-password/);
     },
   );
 
   it("preserves caller Node agent options on env proxy agents", () => {
-    withProxyEnv({ HTTPS_PROXY: "http://proxy.example:8080" }, () => {
-      const agent = createNodeProxyAgent({
-        mode: "env",
-        targetUrl: "https://collector.example.test/v1/traces",
-        agentOptions: {
-          keepAlive: true,
-          ca: "collector-ca",
-          cert: "collector-cert",
-          key: "collector-key",
-        },
-      });
-
-      const agentState = agent as
-        | {
-            options?: {
-              keepAlive?: boolean;
-              ca?: string;
-              cert?: string;
-              key?: string;
-            };
-            keepAlive?: boolean;
-          }
-        | undefined;
-      expect(agentState?.options).toMatchObject({
-        keepAlive: true,
-        ca: "collector-ca",
-        cert: "collector-cert",
-        key: "collector-key",
-      });
-      expect(agentState?.keepAlive).toBe(true);
+    process.env.HTTPS_PROXY = "http://proxy.example:8080";
+    const poolOptions = {
+      keepAlive: true,
+      keepAliveMsecs: 750,
+      maxSockets: 3,
+      maxTotalSockets: 6,
+      maxFreeSockets: 2,
+      scheduling: "fifo" as const,
+    };
+    const tlsOptions = {
+      timeout: 5000,
+      ca: "collector-ca",
+      cert: "collector-cert",
+      key: "collector-key",
+    };
+    const agent = createNodeProxyAgent({
+      mode: "env",
+      targetUrl: "https://collector.example.test/v1/traces",
+      agentOptions: { ...poolOptions, ...tlsOptions },
     });
+    expect(agent?.options).toMatchObject({ keepAlive: true, ...tlsOptions });
+    expect(agent).toMatchObject(poolOptions);
+    agent?.destroy();
   });
 });

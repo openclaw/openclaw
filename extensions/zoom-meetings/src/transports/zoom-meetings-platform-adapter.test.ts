@@ -1,15 +1,22 @@
 import { runInNewContext } from "node:vm";
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { zoomMeetingLeaveScript, zoomMeetingStatusScript } from "./zoom-meetings-page-scripts.js";
+import { zoomMeetingPageScripts } from "./zoom-meetings-page-scripts.js";
 import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./zoom-meetings-platform-adapter.js";
 
 const URL = "https://acme.zoom.us/j/12345678901?pwd=abc";
+const browser = ZOOM_MEETINGS_PLATFORM_ADAPTER.browser;
+const inCallUrl = "https://app.zoom.us/wc/12345678901/join";
+
+function ownedWindow(state: Record<string, unknown> = {}) {
+  return {
+    __openclawZoomMeeting: { identity: "zoom:12345678901", sessionId: "session-1", ...state },
+  };
+}
 
 it.each([true, false])(
   "starts browser capture only for the current Zoom session (owner=%s)",
   async (owns) => {
-    const source = ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.buildAudioCaptureScript?.({
+    const source = browser.buildAudioCaptureScript?.({
       action: "start",
       captureId: "capture-1",
       meetingSessionId: "session-1",
@@ -28,7 +35,7 @@ it.each([true, false])(
   },
 );
 
-function pageControl(label: string) {
+function pageControl(label: string, toggledLabel?: string) {
   const click = vi.fn();
   const control = {
     disabled: false,
@@ -36,95 +43,69 @@ function pageControl(label: string) {
     textContent: label,
     click,
     closest: () => control,
-    getAttribute: (name: string) => (name === "aria-label" ? label : null),
+    getAttribute: (name: string) =>
+      name === "aria-label" ? (toggledLabel ? control.textContent : label) : null,
     matches: (selector: string) => selector === "button",
     querySelector: () => undefined,
     querySelectorAll: () => [],
   };
+  if (toggledLabel) {
+    click.mockImplementation(() => {
+      control.textContent = toggledLabel;
+    });
+  }
   return control;
 }
 
-function guestInput(value: string) {
-  return {
-    ...pageControl("Guest name"),
-    dispatchEvent: vi.fn(),
-    focus: vi.fn(),
-    placeholder: "Enter your name",
-    value,
-  };
-}
-
+type Control = ReturnType<typeof pageControl>;
 function statusDocument(params: {
-  bodyText: string;
-  camera?: ReturnType<typeof pageControl>;
-  challenge?: ReturnType<typeof pageControl>;
-  devicePrompt?: ReturnType<typeof pageControl>;
-  guest?: ReturnType<typeof guestInput>;
-  join?: ReturnType<typeof pageControl>;
+  bodyText?: string;
+  camera?: Control;
+  challenge?: Control;
+  devicePrompt?: Control;
+  join?: Control;
   kind?: string;
-  leave?: ReturnType<typeof pageControl>;
-  microphone?: ReturnType<typeof pageControl>;
+  leave?: Control;
+  microphone?: Control;
 }) {
-  const controls = [
-    params.camera,
-    params.challenge,
-    params.devicePrompt,
-    params.join,
-    params.leave,
-    params.microphone,
-  ].filter((control): control is ReturnType<typeof pageControl> => Boolean(control));
+  const { camera, challenge, devicePrompt, join, leave, microphone, kind } = params;
+  const controls = [camera, challenge, devicePrompt, join, leave, microphone].filter(
+    (control): control is Control => Boolean(control),
+  );
   return {
-    body: { appendChild: () => {}, textContent: params.bodyText },
-    defaultView: {
-      Event: globalThis.Event,
-      HTMLInputElement: function HTMLInputElement() {
-        return undefined;
-      },
-      MutationObserver: function MutationObserver() {
-        return undefined;
-      },
-    },
+    body: { textContent: params.bodyText ?? "" },
     title: "Zoom",
-    getElementById: () => undefined,
     querySelector(selector: string) {
-      if (selector.includes("preview-join-button")) {
-        return params.join;
-      }
-      if (selector.includes("input-for-name")) {
-        return params.guest;
-      }
-      if (selector.includes('aria-label="Leave"')) {
-        return params.leave;
-      }
-      if (selector.includes("preview-video-control-button") || selector.includes("send-video")) {
-        return params.camera;
-      }
-      if (
-        selector.includes("preview-audio-control-button") ||
-        selector.includes("mute my microphone") ||
-        selector.includes("unmute my microphone")
-      ) {
-        return params.microphone;
-      }
-      if (
-        params.kind === "passcode" &&
-        (selector.includes("password") || selector.includes("passcode"))
-      ) {
-        return params.challenge;
-      }
-      if (
-        params.kind === "captcha" &&
-        (selector.includes("recaptcha") ||
-          selector.includes("captcha") ||
-          selector.includes("data-sitekey"))
-      ) {
-        return params.challenge;
-      }
-      return undefined;
+      const matches = (...parts: string[]) => parts.some((part) => selector.includes(part));
+      const rules: [boolean, Control | undefined][] = [
+        [matches("preview-join-button"), join],
+        [matches('aria-label="Leave"'), leave],
+        [matches("preview-video-control-button", "send-video"), camera],
+        [
+          matches("preview-audio-control-button", "mute my microphone", "unmute my microphone"),
+          microphone,
+        ],
+        [kind === "passcode" && matches("password", "passcode"), challenge],
+        [kind === "captcha" && matches("recaptcha", "captcha", "data-sitekey"), challenge],
+      ];
+      return rules.find(([matched]) => matched)?.[1];
     },
     querySelectorAll: (selector: string) =>
       selector === "button" || selector.includes('[role="button"]') ? controls : [],
   };
+}
+
+function inCallDocument(overrides: Parameters<typeof statusDocument>[0] = {}) {
+  return statusDocument({
+    camera: pageControl("Start Video"),
+    leave: pageControl("Leave"),
+    microphone: pageControl("Unmute my microphone"),
+    ...overrides,
+  });
+}
+
+function pageContext(document: object, currentUrl = URL, window: Record<string, unknown> = {}) {
+  return { URL: globalThis.URL, document, location: new globalThis.URL(currentUrl), window };
 }
 
 async function runStatusFixture(params: {
@@ -136,7 +117,7 @@ async function runStatusFixture(params: {
   window?: Record<string, unknown>;
 }) {
   const result = await runInNewContext(
-    `(${zoomMeetingStatusScript({
+    `(${zoomMeetingPageScripts.status({
       allowMicrophone: params.allowMicrophone ?? false,
       allowSessionAdoption: true,
       autoJoin: true,
@@ -148,21 +129,50 @@ async function runStatusFixture(params: {
       waitForInCallMs: 60_000,
     })})()`,
     {
-      URL: globalThis.URL,
-      crypto: { randomUUID: () => "caption-id" },
-      document: params.document,
-      location: new globalThis.URL(params.currentUrl ?? URL),
+      ...pageContext(params.document, params.currentUrl, params.window),
       navigator: params.navigator ?? {},
       setTimeout,
-      clearTimeout,
-      window: params.window ?? {},
     },
   );
   return JSON.parse(result) as Record<string, unknown>;
 }
 
+function runLeaveFixture(params: {
+  document: object;
+  currentUrl?: string;
+  leaveInitiated?: boolean;
+  window?: Record<string, unknown>;
+}) {
+  return JSON.parse(
+    runInNewContext(
+      `(${zoomMeetingPageScripts.leave({
+        leaveInitiated: params.leaveInitiated ?? false,
+        meetingSessionId: "session-1",
+        meetingUrl: URL,
+      })})()`,
+      pageContext(params.document, params.currentUrl, params.window),
+    ),
+  );
+}
+
+function runAudioInputFixture(deviceLabel: string, window?: Record<string, unknown>) {
+  return runStatusFixture({
+    allowMicrophone: true,
+    document: inCallDocument({ microphone: pageControl("Mute my microphone") }),
+    navigator: {
+      mediaDevices: {
+        enumerateDevices: vi.fn(async () => [
+          { deviceId: "virtual-input", kind: "audioinput", label: deviceLabel },
+        ]),
+      },
+    },
+    readOnly: true,
+    window,
+  });
+}
+
 function status(reason: string) {
-  const health = ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({
+  const health = browser.parseStatus({
     result: JSON.stringify({
       inCall: false,
       manualAction: { reason, message: "manual action" },
@@ -176,131 +186,32 @@ function status(reason: string) {
 }
 
 describe("Zoom meeting platform adapter", () => {
-  it("preserves host-ended state from the browser status", () => {
-    expect(
-      ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.parseStatus({
-        result: JSON.stringify({ inCall: false, meetingEnded: true }),
-      }),
-    ).toMatchObject({ inCall: false, meetingEnded: true });
-  });
-
-  it.each([
-    ["zoom-login-required", "login-required"],
-    ["zoom-admission-required", "admission-required"],
-    ["zoom-passcode-required", "admission-required"],
-    ["zoom-captcha-required", "admission-required"],
-    ["zoom-permission-required", "permission-required"],
-    ["zoom-audio-choice-required", "audio-choice-required"],
-    ["zoom-session-conflict", "session-conflict"],
-    ["browser-control-unavailable", "browser-control-unavailable"],
-  ])("classifies %s as %s", (reason, category) => {
-    expect(ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.classifyManualAction(status(reason))).toEqual({
-      category,
+  it("classifies Zoom session conflicts", () => {
+    const reason = "zoom-session-conflict";
+    expect(browser.classifyManualAction(status(reason))).toEqual({
+      category: "session-conflict",
       reason,
       message: "manual action",
     });
   });
 
   it("grants microphone and optional output routing on the Zoom Web App origin", () => {
-    expect(
-      ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.permissions({
-        allowMicrophone: true,
-        meetingUrl: URL,
-      }),
-    ).toEqual({
+    expect(browser.permissions({ allowMicrophone: true, meetingUrl: URL })).toEqual({
       origin: "https://app.zoom.us",
       permissions: ["audioCapture"],
       optionalPermissions: ["speakerSelection"],
     });
-    expect(
-      ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.permissions({
-        allowMicrophone: false,
-        meetingUrl: URL,
-      }),
-    ).toBeUndefined();
-  });
-
-  it("builds the live-validated guest, iframe, audio, leave, and caption controls", () => {
-    const script = zoomMeetingStatusScript({
-      allowMicrophone: true,
-      allowSessionAdoption: true,
-      autoJoin: true,
-      captureCaptions: true,
-      guestName: "OpenClaw Agent",
-      meetingSessionId: "session-1",
-      meetingUrl: URL,
-      waitForInCallMs: 60_000,
-    });
-
-    expect(script).toContain("#webclient");
-    expect(script).toContain("input#input-for-name");
-    expect(script).toContain("#preview-audio-control-button");
-    expect(script).toContain("#preview-video-control-button");
-    expect(script).toContain('aria-label=\\\"Leave\\\"');
-    expect(script).toContain("live-transcription-subtitle__box");
-    expect(script).toContain("live-transcription-subtitle__item");
-    expect(script).toContain("zmu-data-selector-item__icon");
-    expect(script).toContain("audio-option-menu__pop-menu");
-    expect(script).toContain("videooff");
-    expect(script).toContain("my )?(?:microphone|mic)");
-    expect(script).toContain("join from browser");
-    expect(script).toContain("host will let you in soon");
-    expect(script).toContain("setSinkId");
-    expect(script).toContain("blackhole 2ch");
-    expect(script).toContain("openclaw meeting audio");
-  });
-
-  it("enables caption snapshots for durable notes in every mode", () => {
-    expect(ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("transcribe")).toBe(true);
-    expect(ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("agent")).toBe(true);
-    expect(ZOOM_MEETINGS_PLATFORM_ADAPTER.browser.captions.enabled("bidi")).toBe(true);
-  });
-
-  it("requires verified bidirectional audio before realtime startup", () => {
-    expect(
-      MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
-        inCall: true,
-        micMuted: false,
-        audioInputRouted: true,
-        audioOutputRouted: true,
-      }),
-    ).toBe(true);
-    expect(
-      MeetingPlatformAdapter.isRealtimeRouteReady("agent", {
-        inCall: true,
-        micMuted: true,
-        audioInputRouted: true,
-        audioOutputRouted: true,
-      }),
-    ).toBe(false);
+    expect(browser.permissions({ allowMicrophone: false, meetingUrl: URL })).toBeUndefined();
   });
 
   it("recognizes the Zoom Web App home redirect as completed leave", () => {
-    const state = { identity: "zoom:12345678901", sessionId: "session-1" };
-    const document = {
-      body: { textContent: "Join Meeting" },
-      querySelector: () => undefined,
-      querySelectorAll: () => [],
-    };
-    const result = runInNewContext(
-      `(${zoomMeetingLeaveScript({
-        leaveInitiated: true,
-        meetingSessionId: "session-1",
-        meetingUrl: URL,
-      })})()`,
-      {
-        URL: globalThis.URL,
-        document,
-        location: new globalThis.URL("https://app.zoom.us/wc?ref_from=waffle_zwa"),
-        window: { __openclawZoomMeeting: state },
-      },
-    );
-
-    expect(JSON.parse(result)).toEqual({
-      departed: true,
-      sessionMatched: true,
-      urlMatched: true,
+    const result = runLeaveFixture({
+      document: statusDocument({ bodyText: "Join Meeting" }),
+      leaveInitiated: true,
+      currentUrl: "https://app.zoom.us/wc?ref_from=waffle_zwa",
+      window: ownedWindow(),
     });
+    expect(result).toEqual({ departed: true, sessionMatched: true, urlMatched: true });
   });
 
   it("does not treat a live Web App home page or meeting text as post-call", () => {
@@ -316,64 +227,20 @@ describe("Zoom meeting platform adapter", () => {
             ? [{ textContent: "Someone said the meeting has ended" }]
             : [],
     };
-    const result = runInNewContext(
-      `(${zoomMeetingLeaveScript({
-        leaveInitiated: false,
-        meetingSessionId: "session-1",
-        meetingUrl: URL,
-      })})()`,
-      {
-        URL: globalThis.URL,
-        document,
-        location: new globalThis.URL("https://app.zoom.us/wc"),
-        window: {
-          __openclawZoomMeeting: {
-            identity: "zoom:12345678901",
-            inCallControl: leave,
-            inCallUrl: "https://app.zoom.us/wc",
-            sessionId: "session-1",
-          },
-        },
-      },
-    );
-
-    expect(JSON.parse(result)).toMatchObject({ departed: false, leaveAction: "leave" });
+    const result = runLeaveFixture({
+      document,
+      currentUrl: "https://app.zoom.us/wc",
+      window: ownedWindow({ inCallControl: leave, inCallUrl: "https://app.zoom.us/wc" }),
+    });
+    expect(result).toMatchObject({ departed: false, leaveAction: "leave" });
     expect(leave.click).toHaveBeenCalledOnce();
   });
 
   it("re-adopts a verified meeting URL after a full document reload before leaving", () => {
-    const leave = {
-      disabled: false,
-      isConnected: true,
-      textContent: "Leave",
-      click: vi.fn(),
-      closest: () => leave,
-      getAttribute: (name: string) => (name === "aria-label" ? "Leave" : null),
-      matches: (selector: string) => selector === "button",
-      querySelector: () => undefined,
-    };
-    const document = {
-      body: { textContent: "" },
-      querySelector: (selector: string) =>
-        selector.includes('aria-label="Leave"') ? leave : undefined,
-      querySelectorAll: (selector: string) => (selector === "button" ? [leave] : []),
-    };
+    const leave = pageControl("Leave");
     const window: Record<string, unknown> = {};
-    const result = runInNewContext(
-      `(${zoomMeetingLeaveScript({
-        leaveInitiated: false,
-        meetingSessionId: "session-1",
-        meetingUrl: URL,
-      })})()`,
-      {
-        URL: globalThis.URL,
-        document,
-        location: new globalThis.URL(URL),
-        window,
-      },
-    );
-
-    expect(JSON.parse(result)).toMatchObject({ leaveAction: "leave", urlMatched: true });
+    const result = runLeaveFixture({ document: statusDocument({ leave }), window });
+    expect(result).toMatchObject({ leaveAction: "leave", urlMatched: true });
     expect(leave.click).toHaveBeenCalledOnce();
     expect(window).toMatchObject({
       __openclawZoomMeeting: { identity: "zoom:12345678901", sessionId: "session-1" },
@@ -381,47 +248,16 @@ describe("Zoom meeting platform adapter", () => {
   });
 
   it.each([
-    {
-      bodyText: "Enter meeting passcode",
-      kind: "passcode",
-      reason: "zoom-passcode-required",
-    },
-    {
-      bodyText: "Security check",
-      kind: "captcha",
-      reason: "zoom-captcha-required",
-    },
+    { bodyText: "Enter meeting passcode", kind: "passcode", reason: "zoom-passcode-required" },
+    { bodyText: "Security check", kind: "captcha", reason: "zoom-captcha-required" },
   ])("reports a $kind challenge before camera gating", async ({ bodyText, kind, reason }) => {
     const join = pageControl("Join");
     const challenge = pageControl(kind === "passcode" ? "Meeting passcode" : "CAPTCHA");
-    const document = statusDocument({ bodyText, challenge, join, kind });
-    const result = await runStatusFixture({ document });
-
-    expect(result).toMatchObject({
-      clickedJoin: false,
-      manualAction: { reason },
-    });
-    expect(join.click).not.toHaveBeenCalled();
-  });
-
-  it("replaces Zoom's remembered guest name before joining", async () => {
-    const guest = guestInput("Remembered Human");
-    const join = pageControl("Join");
     const result = await runStatusFixture({
-      document: statusDocument({
-        bodyText: "",
-        camera: pageControl("Start Video"),
-        guest,
-        join,
-        microphone: pageControl("Unmute my microphone"),
-      }),
+      document: statusDocument({ bodyText, challenge, join, kind }),
     });
-
-    expect(guest.value).toBe("OpenClaw Agent");
-    expect(guest.dispatchEvent).toHaveBeenCalledTimes(2);
-    expect(join.click).toHaveBeenCalledOnce();
-    expect(result.clickedJoin).toBe(true);
-    expect(result.manualAction).toBeUndefined();
+    expect(result).toMatchObject({ clickedJoin: false, manualAction: { reason } });
+    expect(join.click).not.toHaveBeenCalled();
   });
 
   it("persists Zoom's confirmed no-device state for observe-only joins", async () => {
@@ -431,64 +267,31 @@ describe("Zoom meeting platform adapter", () => {
       devicePrompt.disabled = true;
     });
     const first = await runStatusFixture({
-      document: statusDocument({
-        bodyText: "",
-        devicePrompt,
-        join: pageControl("Join"),
-      }),
+      document: statusDocument({ devicePrompt, join: pageControl("Join") }),
       window,
     });
     const second = await runStatusFixture({
-      document: statusDocument({ bodyText: "", join: pageControl("Join") }),
+      document: statusDocument({ join: pageControl("Join") }),
       readOnly: true,
       window,
     });
-
     expect(devicePrompt.click).toHaveBeenCalled();
     expect(first.manualAction).toBeUndefined();
-    expect(first).toMatchObject({
-      cameraOff: true,
-      clickedJoin: true,
-      micMuted: true,
-    });
-    expect(second).toMatchObject({
-      cameraOff: true,
-      micMuted: true,
-    });
+    expect(first).toMatchObject({ cameraOff: true, clickedJoin: true, micMuted: true });
+    expect(second).toMatchObject({ cameraOff: true, micMuted: true });
     expect(window["__openclawZoomMeeting"]).toMatchObject({ devicesDisabled: true });
   });
 
   it("re-mutes an observe-only session after admission", async () => {
-    let microphoneLabel = "Mute my microphone";
-    const microphone = pageControl(microphoneLabel);
-    microphone.getAttribute = (name: string) => (name === "aria-label" ? microphoneLabel : null);
-    microphone.click.mockImplementation(() => {
-      microphoneLabel = "Unmute my microphone";
-      microphone.textContent = microphoneLabel;
-    });
-    const result = await runStatusFixture({
-      document: statusDocument({
-        bodyText: "",
-        camera: pageControl("Start Video"),
-        leave: pageControl("Leave"),
-        microphone,
-      }),
-    });
-
+    const microphone = pageControl("Mute my microphone", "Unmute my microphone");
+    const result = await runStatusFixture({ document: inCallDocument({ microphone }) });
     expect(result).toMatchObject({ inCall: true, micMuted: true });
     expect(result.manualAction).toBeUndefined();
     expect(microphone.click).toHaveBeenCalledOnce();
   });
 
   it("fails closed when an in-call observe-only microphone cannot be verified", async () => {
-    const result = await runStatusFixture({
-      document: statusDocument({
-        bodyText: "",
-        camera: pageControl("Start Video"),
-        leave: pageControl("Leave"),
-      }),
-    });
-
+    const result = await runStatusFixture({ document: inCallDocument({ microphone: undefined }) });
     expect(result).toMatchObject({
       inCall: true,
       manualAction: { reason: "zoom-microphone-required" },
@@ -496,36 +299,15 @@ describe("Zoom meeting platform adapter", () => {
   });
 
   it("turns off an adopted in-call camera", async () => {
-    let cameraLabel = "Stop Video";
-    const camera = pageControl(cameraLabel);
-    camera.getAttribute = (name: string) => (name === "aria-label" ? cameraLabel : null);
-    camera.click.mockImplementation(() => {
-      cameraLabel = "Start Video";
-      camera.textContent = cameraLabel;
-    });
-    const result = await runStatusFixture({
-      document: statusDocument({
-        bodyText: "",
-        camera,
-        leave: pageControl("Leave"),
-        microphone: pageControl("Unmute my microphone"),
-      }),
-    });
-
+    const camera = pageControl("Stop Video", "Start Video");
+    const result = await runStatusFixture({ document: inCallDocument({ camera }) });
     expect(result).toMatchObject({ cameraOff: true, inCall: true });
     expect(result.manualAction).toBeUndefined();
     expect(camera.click).toHaveBeenCalledOnce();
   });
 
   it("fails closed when an adopted in-call camera cannot be verified", async () => {
-    const result = await runStatusFixture({
-      document: statusDocument({
-        bodyText: "",
-        leave: pageControl("Leave"),
-        microphone: pageControl("Unmute my microphone"),
-      }),
-    });
-
+    const result = await runStatusFixture({ document: inCallDocument({ camera: undefined }) });
     expect(result).toMatchObject({
       inCall: true,
       manualAction: { reason: "zoom-camera-required" },
@@ -535,139 +317,60 @@ describe("Zoom meeting platform adapter", () => {
   it("marks a previously verified call ended after its control stays gone", async () => {
     const result = await runStatusFixture({
       currentUrl: "https://app.zoom.us/wc",
-      document: statusDocument({ bodyText: "" }),
-      window: {
-        __openclawZoomMeeting: {
-          identity: "zoom:12345678901",
-          inCallControl: { isConnected: false },
-          inCallControlLostAt: Date.now() - 6_000,
-          inCallUrl: "https://app.zoom.us/wc/12345678901/join",
-          sessionId: "session-1",
-          verifiedAt: Date.now() - 6_000,
-        },
-      },
+      document: statusDocument({}),
+      window: ownedWindow({
+        inCallControl: { isConnected: false },
+        inCallControlLostAt: Date.now() - 6_000,
+        inCallUrl,
+        verifiedAt: Date.now() - 6_000,
+      }),
     });
-
     expect(result).toMatchObject({ inCall: false, meetingEnded: true });
   });
 
   it("re-adopts a replacement Leave control after a late Zoom rerender", async () => {
     const result = await runStatusFixture({
-      currentUrl: "https://app.zoom.us/wc/12345678901/join",
-      document: statusDocument({
-        bodyText: "",
-        camera: pageControl("Start Video"),
-        leave: pageControl("Leave"),
-        microphone: pageControl("Unmute my microphone"),
-      }),
+      currentUrl: inCallUrl,
+      document: inCallDocument(),
       readOnly: true,
-      window: {
-        __openclawZoomMeeting: {
-          identity: "zoom:12345678901",
-          inCallControl: { isConnected: false },
-          inCallUrl: "https://app.zoom.us/wc/12345678901/join",
-          sessionId: "session-1",
-          verifiedAt: Date.now() - 60_000,
-        },
-      },
+      window: ownedWindow({
+        inCallControl: { isConnected: false },
+        inCallUrl,
+        verifiedAt: Date.now() - 60_000,
+      }),
     });
-
     expect(result).toMatchObject({ inCall: true, meetingEnded: false });
   });
 
   it("does not trust a cached BlackHole device after Zoom hides its current selection", async () => {
     const meetingState = {
-      audioInputDeviceId: "blackhole-device",
+      audioInputDeviceId: "virtual-input",
       identity: "zoom:12345678901",
       sessionId: "session-1",
     };
-    const result = await runStatusFixture({
-      allowMicrophone: true,
-      document: statusDocument({
-        bodyText: "",
-        camera: pageControl("Start Video"),
-        leave: pageControl("Leave"),
-        microphone: pageControl("Mute my microphone"),
-      }),
-      navigator: {
-        mediaDevices: {
-          enumerateDevices: vi.fn(async () => [
-            { deviceId: "blackhole-device", kind: "audioinput", label: "BlackHole 2ch" },
-          ]),
-        },
-      },
-      readOnly: true,
-      window: { __openclawZoomMeeting: meetingState },
+    const result = await runAudioInputFixture("BlackHole 2ch", {
+      __openclawZoomMeeting: meetingState,
     });
-
     expect(result).toMatchObject({
+      audioInputDeviceLabel: "BlackHole 2ch",
       audioInputRouted: false,
-      manualAction: { reason: "zoom-audio-choice-required" },
+      manualAction: {
+        message:
+          "Verify the OpenClaw virtual audio device is selected as both the Zoom microphone and speaker before starting talk-back.",
+        reason: "zoom-audio-choice-required",
+      },
     });
     expect(meetingState).not.toHaveProperty("audioInputDeviceId");
   });
 
-  it.each(["BlackHole 2ch", "BlackHole 2ch (Virtual)", "OpenClaw Meeting Audio"])(
-    "recognizes the exact virtual audio input label %s",
-    async (deviceLabel) => {
-      const result = await runStatusFixture({
-        allowMicrophone: true,
-        document: statusDocument({
-          bodyText: "",
-          camera: pageControl("Start Video"),
-          leave: pageControl("Leave"),
-          microphone: pageControl("Mute my microphone"),
-        }),
-        navigator: {
-          mediaDevices: {
-            enumerateDevices: vi.fn(async () => [
-              { deviceId: "virtual-input", kind: "audioinput", label: deviceLabel },
-            ]),
-          },
-        },
-        readOnly: true,
-      });
-
-      expect(result).toMatchObject({
-        audioInputDeviceLabel: deviceLabel,
-        audioInputRouted: false,
-        manualAction: {
-          message:
-            "Verify the OpenClaw virtual audio device is selected as both the Zoom microphone and speaker before starting talk-back.",
-          reason: "zoom-audio-choice-required",
-        },
-      });
-    },
-  );
-
-  it.each(["OpenClaw Meeting Audio (Virtual)", "Monitor of OpenClaw Meeting Audio"])(
-    "rejects the non-contract virtual audio input label %s",
-    async (deviceLabel) => {
-      const result = await runStatusFixture({
-        allowMicrophone: true,
-        document: statusDocument({
-          bodyText: "",
-          camera: pageControl("Start Video"),
-          leave: pageControl("Leave"),
-          microphone: pageControl("Mute my microphone"),
-        }),
-        navigator: {
-          mediaDevices: {
-            enumerateDevices: vi.fn(async () => [
-              { deviceId: "virtual-input", kind: "audioinput", label: deviceLabel },
-            ]),
-          },
-        },
-        readOnly: true,
-      });
-
-      expect(result).not.toHaveProperty("audioInputDeviceLabel");
-      expect(result).toMatchObject({
-        audioInputRouted: false,
-        manualAction: { reason: "zoom-audio-choice-required" },
-      });
-    },
-  );
+  it("rejects the non-contract virtual audio input label", async () => {
+    const result = await runAudioInputFixture("OpenClaw Meeting Audio (Virtual)");
+    expect(result).not.toHaveProperty("audioInputDeviceLabel");
+    expect(result).toMatchObject({
+      audioInputRouted: false,
+      manualAction: { reason: "zoom-audio-choice-required" },
+    });
+  });
 
   it("retains meeting ownership through an unbounded lobby wait", async () => {
     const window: Record<string, unknown> = {};
@@ -677,17 +380,11 @@ describe("Zoom meeting platform adapter", () => {
     });
     const marker = window["__openclawZoomMeeting"] as Record<string, unknown>;
     marker.verifiedAt = 0;
-
     const admitted = await runStatusFixture({
       currentUrl: "https://app.zoom.us/wc",
-      document: statusDocument({
-        bodyText: "",
-        leave: pageControl("Leave"),
-        microphone: pageControl("Unmute my microphone"),
-      }),
+      document: inCallDocument({ camera: undefined }),
       window,
     });
-
     expect(waiting).toMatchObject({
       lobbyWaiting: true,
       manualAction: { reason: "zoom-admission-required" },

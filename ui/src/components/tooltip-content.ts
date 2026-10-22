@@ -16,30 +16,47 @@ function isElementNode(node: Node): node is Element {
   return node.nodeType === Node.ELEMENT_NODE;
 }
 
-function collectTooltipText(element: Element, checkOpacity: boolean): string {
-  const style = element.ownerDocument.defaultView?.getComputedStyle(element);
-  if (
-    element.hasAttribute("hidden") ||
-    (!checkOpacity && element.getAttribute("aria-hidden") === "true") ||
-    style?.display === "none" ||
-    style?.contentVisibility === "hidden"
-  ) {
-    return "";
+function collectTooltipText(
+  root: Element,
+  checkOpacity: boolean,
+  overflowTargets?: Element[],
+): string {
+  function collect(element: Element, collectText: boolean): string {
+    if (overflowTargets && (element === root || isTooltipTriggerElement(element))) {
+      overflowTargets.push(element);
+    }
+    const style = collectText
+      ? element.ownerDocument.defaultView?.getComputedStyle(element)
+      : undefined;
+    const hidesText =
+      !collectText ||
+      element.hasAttribute("hidden") ||
+      (!checkOpacity && element.getAttribute("aria-hidden") === "true") ||
+      (checkOpacity && element !== root && style?.opacity === "0") ||
+      style?.display === "none" ||
+      style?.contentVisibility === "hidden";
+    if (hidesText && !overflowTargets) {
+      return "";
+    }
+    // Hidden descendants still participate in overflow, but not in label text.
+    // Opacity on the trigger or an entering ancestor does not hide its own label.
+    const rendersOwnText =
+      !hidesText &&
+      style?.visibility !== "hidden" &&
+      style?.visibility !== "collapse" &&
+      (style?.display === "contents" ||
+        typeof element.checkVisibility !== "function" ||
+        element.checkVisibility({ checkVisibilityCSS: true }));
+    return [...element.childNodes]
+      .map((node) => {
+        if (isElementNode(node)) {
+          return collect(node, !hidesText);
+        }
+        return node.nodeType === Node.TEXT_NODE && rendersOwnText ? (node.textContent ?? "") : "";
+      })
+      .join(" ");
   }
-  const rendersOwnText =
-    style?.visibility !== "hidden" &&
-    style?.visibility !== "collapse" &&
-    (style?.display === "contents" ||
-      typeof element.checkVisibility !== "function" ||
-      element.checkVisibility({ checkOpacity, checkVisibilityCSS: true }));
-  return [...element.childNodes]
-    .map((node) => {
-      if (isElementNode(node)) {
-        return collectTooltipText(node, checkOpacity);
-      }
-      return node.nodeType === Node.TEXT_NODE && rendersOwnText ? (node.textContent ?? "") : "";
-    })
-    .join(" ");
+  return collect(root, true);
 }
 
 export function collectTooltipNameText(element: Element): string {
@@ -58,17 +75,11 @@ function hasTooltipOverflow(element: Element) {
 
 export function isTooltipTextRedundant(content: string, trigger: Element) {
   const tooltipText = normalizeTooltipText(content);
-  const triggerText = normalizeTooltipText(collectTooltipText(trigger, true));
-  if (!tooltipText || !triggerText.includes(tooltipText)) {
+  if (!tooltipText) {
     return false;
   }
-  if (hasTooltipOverflow(trigger)) {
-    return false;
-  }
-  for (const element of trigger.querySelectorAll("*")) {
-    if (isTooltipTriggerElement(element) && hasTooltipOverflow(element)) {
-      return false;
-    }
-  }
-  return true;
+  const overflowTargets: Element[] = [];
+  const triggerText = normalizeTooltipText(collectTooltipText(trigger, true, overflowTargets));
+  // Read geometry only when text repeats; the text walk already collected its targets.
+  return triggerText.includes(tooltipText) && !overflowTargets.some(hasTooltipOverflow);
 }

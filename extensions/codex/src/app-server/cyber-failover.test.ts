@@ -1,9 +1,5 @@
-/**
- * Daybreak cyber-failover policy: what may escalate, and for how long a
- * workspace that cannot use the target stops trying.
- */
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   planCodexCyberEscalation,
   readCodexCyberAttemptVerdict,
@@ -29,6 +25,16 @@ function config(overrides: Partial<CodexCyberFailoverConfig> = {}): CodexCyberFa
   return { mode: "auto", model: DAYBREAK, cooloffMs: 600_000, ...overrides };
 }
 
+function planEscalation(overrides: Partial<Parameters<typeof planCodexCyberEscalation>[0]> = {}) {
+  return planCodexCyberEscalation({
+    config: config(),
+    currentModel: PRIMARY,
+    replaySafe: true,
+    workspace: nextWorkspace(),
+    ...overrides,
+  });
+}
+
 function outcome(overrides: Partial<CodexCyberAttemptOutcome> = {}): CodexCyberAttemptOutcome {
   return {
     terminal: { kind: "ok" },
@@ -36,6 +42,13 @@ function outcome(overrides: Partial<CodexCyberAttemptOutcome> = {}): CodexCyberA
     replayMetadata: { replaySafe: false, hadPotentialSideEffects: false },
     ...overrides,
   };
+}
+
+function expectVerdict(
+  attempt: CodexCyberAttemptOutcome | undefined,
+  expected: Partial<ReturnType<typeof readCodexCyberAttemptVerdict>>,
+) {
+  expect(readCodexCyberAttemptVerdict(attempt)).toMatchObject(expected);
 }
 
 function refusal(category: string, provider = "openai") {
@@ -49,236 +62,106 @@ function refusal(category: string, provider = "openai") {
   });
 }
 
-describe("config", () => {
-  it("defaults to automatic Daybreak Blue escalation with a cooloff", () => {
-    expect(resolveCodexCyberFailoverConfig(undefined)).toEqual({
-      mode: "auto",
-      model: DAYBREAK,
-      cooloffMs: 600_000,
+it.each([undefined, { mode: "off", model: "gpt-daybreak-red-latest" }] as const)(
+  "resolves operator config %j",
+  (overrides) => {
+    const input = overrides && { appServer: { cyberFailover: overrides } };
+    expect(resolveCodexCyberFailoverConfig(input)).toEqual(config(overrides));
+  },
+);
+
+it("escalates only OpenAI's own cyber refusal on this attempt", () => {
+  expectVerdict(refusal("cyber"), { cyberRefused: true, replaySafe: true });
+  for (const attempt of [refusal("bio"), refusal("misalignment"), refusal("cyber", "other")]) {
+    expectVerdict(attempt, { cyberRefused: false });
+  }
+  const previousRefusal = outcome({ lastAssistant: refusal("cyber").currentAttemptAssistant });
+  for (const attempt of [previousRefusal, undefined]) {
+    expectVerdict(attempt, { cyberRefused: false, replaySafe: false });
+  }
+});
+
+it("counts only a real reply as answered", () => {
+  const reply = makeAgentAssistantMessage({ content: [{ type: "text", text: "Reply" }] });
+  const aborted = makeAgentAssistantMessage({ content: [], stopReason: "aborted" });
+  expectVerdict(outcome({ currentAttemptAssistant: reply }), { answered: true });
+  expectVerdict(
+    outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
+    { answered: false, unavailable: false },
+  );
+  expectVerdict(
+    outcome({ terminal: { kind: "aborted", source: "runtime" }, currentAttemptAssistant: aborted }),
+    { answered: false },
+  );
+  expectVerdict(refusal("bio"), { answered: false });
+  expectVerdict(outcome(), { answered: false });
+});
+
+it("reads an unauthorized target from the canonical terminal", () => {
+  const error = new Error(
+    "unexpected status 401 Unauthorized: not authorized to access this model.",
+  );
+  expectVerdict(outcome({ terminal: { kind: "failed", source: "prompt", error } }), {
+    unavailable: true,
+  });
+});
+
+it.each([
+  [{ replaySafe: false }, "not_replay_safe"],
+  [{ config: config({ mode: "off" }) }, "disabled"],
+] as const)("skips escalation for %j", (params, reason) => {
+  expect(planEscalation(params)).toEqual({ kind: "skip", reason });
+});
+
+it("does not escalate a turn already running on Daybreak", () => {
+  const workspace = nextWorkspace();
+  for (const currentModel of [DAYBREAK, `openai/${DAYBREAK}`]) {
+    expect(planEscalation({ currentModel, workspace })).toEqual({
+      kind: "skip",
+      reason: "already_daybreak",
     });
-  });
-
-  it("reads operator overrides from the codex app-server config", () => {
-    expect(
-      resolveCodexCyberFailoverConfig({
-        appServer: { cyberFailover: { mode: "off", model: "gpt-daybreak-red-latest" } },
-      }),
-    ).toEqual({ mode: "off", model: "gpt-daybreak-red-latest", cooloffMs: 600_000 });
-  });
+  }
 });
 
-describe("attempt verdict", () => {
-  it("escalates only OpenAI's own cyber refusal on this attempt", () => {
-    expect(readCodexCyberAttemptVerdict(refusal("cyber")).cyberRefused).toBe(true);
-    expect(readCodexCyberAttemptVerdict(refusal("bio")).cyberRefused).toBe(false);
-    expect(readCodexCyberAttemptVerdict(refusal("misalignment")).cyberRefused).toBe(false);
-    expect(readCodexCyberAttemptVerdict(refusal("cyber", "other")).cyberRefused).toBe(false);
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ lastAssistant: refusal("cyber").currentAttemptAssistant }),
-      ).cyberRefused,
-    ).toBe(false);
-    expect(readCodexCyberAttemptVerdict(undefined).cyberRefused).toBe(false);
+it.each(["expiry", "other workspace"] as const)("releases a denial for %s", (release) => {
+  const workspace = nextWorkspace();
+  const now = 1_000;
+  deny(workspace, now);
+  expect(planEscalation({ workspace, now: now + 1 })).toEqual({
+    kind: "skip",
+    reason: "target_unavailable",
   });
-
-  it("requires an affirmative replay verdict", () => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ replayMetadata: { replaySafe: true, hadPotentialSideEffects: false } }),
-      ).replaySafe,
-    ).toBe(true);
-    expect(readCodexCyberAttemptVerdict(outcome()).replaySafe).toBe(false);
-    expect(readCodexCyberAttemptVerdict(undefined).replaySafe).toBe(false);
-  });
-
-  it("counts only a real reply as answered", () => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({
-          currentAttemptAssistant: makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Reply" }],
-          }),
-        }),
-      ).answered,
-    ).toBe(true);
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
-      ).answered,
-    ).toBe(false);
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({
-          terminal: { kind: "aborted", source: "runtime" },
-          currentAttemptAssistant: makeAgentAssistantMessage({
-            content: [],
-            stopReason: "aborted",
-          }),
-        }),
-      ).answered,
-    ).toBe(false);
-    expect(readCodexCyberAttemptVerdict(refusal("bio")).answered).toBe(false);
-    expect(readCodexCyberAttemptVerdict(outcome()).answered).toBe(false);
-  });
-
-  it.each([
-    "unexpected status 403 Forbidden: target is not authorized",
-    new Error("unexpected status 401 Unauthorized: not authorized to access this model."),
-  ])("reads an unauthorized target from the canonical terminal", (error) => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ terminal: { kind: "failed", source: "prompt", error } }),
-      ).unavailable,
-    ).toBe(true);
-  });
-
-  it("does not record other terminal failures as target denials", () => {
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
-      ).unavailable,
-    ).toBe(false);
-  });
+  expect(
+    planEscalation({
+      workspace: release === "expiry" ? workspace : nextWorkspace(),
+      now: now + (release === "expiry" ? 600_001 : 1),
+    }),
+  ).toEqual({ kind: "escalate", model: DAYBREAK });
 });
 
-describe("escalation planning", () => {
-  it("escalates a refused turn to the configured Daybreak model", () => {
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace: nextWorkspace(),
-      }),
-    ).toEqual({ kind: "escalate", model: DAYBREAK });
-  });
-
-  it("refuses to replay a turn that already acted", () => {
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: false,
-        workspace: nextWorkspace(),
-      }),
-    ).toEqual({ kind: "skip", reason: "not_replay_safe" });
-  });
-
-  it("does not escalate when the operator disabled it", () => {
-    expect(
-      planCodexCyberEscalation({
-        config: config({ mode: "off" }),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace: nextWorkspace(),
-      }),
-    ).toEqual({ kind: "skip", reason: "disabled" });
-  });
-
-  it("does not escalate a turn already running on Daybreak", () => {
-    const workspace = nextWorkspace();
-    for (const currentModel of [DAYBREAK, `openai/${DAYBREAK}`]) {
-      expect(
-        planCodexCyberEscalation({ config: config(), currentModel, replaySafe: true, workspace }),
-      ).toEqual({ kind: "skip", reason: "already_daybreak" });
-    }
-  });
+it("stays bounded as workspaces churn", () => {
+  const now = 1_000;
+  for (let index = 0; index < 400; index += 1) {
+    deny({ agentId: `churn-${index}`, authProfileId: "p" }, now);
+  }
+  const live = Array.from({ length: 400 }, (_, index) =>
+    planEscalation({
+      workspace: { agentId: `churn-${index}`, authProfileId: "p" },
+      now: now + 1,
+    }),
+  ).filter((plan) => plan.kind === "skip").length;
+  expect(live).toBeGreaterThan(0);
+  expect(live).toBeLessThanOrEqual(256);
 });
 
-describe("unauthorized targets", () => {
-  it("stops every session in the workspace, then releases on expiry", () => {
-    const workspace = nextWorkspace();
-    const now = 1_000;
-    recordCodexCyberTargetUnavailable({
-      model: DAYBREAK,
-      workspace,
-      cooloffMs: 600_000,
-      now,
-    });
-    // A session that never saw the failure still must not pay for it.
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace,
-        now: now + 1,
-      }),
-    ).toEqual({ kind: "skip", reason: "target_unavailable" });
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace,
-        now: now + 600_001,
-      }),
-    ).toEqual({ kind: "escalate", model: DAYBREAK });
-  });
-
-  it("keeps one workspace's denial out of another's way", () => {
-    const denied = nextWorkspace();
-    const entitled = nextWorkspace();
-    const now = 1_000;
-    recordCodexCyberTargetUnavailable({
-      model: DAYBREAK,
-      workspace: denied,
-      cooloffMs: 600_000,
-      now,
-    });
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace: entitled,
-        now: now + 1,
-      }),
-    ).toEqual({ kind: "escalate", model: DAYBREAK });
-  });
-
-  it("stays bounded as workspaces churn", () => {
-    const now = 1_000;
-    for (let index = 0; index < 400; index += 1) {
-      recordCodexCyberTargetUnavailable({
-        model: DAYBREAK,
-        workspace: { agentId: `churn-${index}`, authProfileId: "p" },
-        cooloffMs: 600_000,
-        now,
-      });
-    }
-    const live = Array.from({ length: 400 }, (_, index) =>
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace: { agentId: `churn-${index}`, authProfileId: "p" },
-        now: now + 1,
-      }),
-    ).filter((plan) => plan.kind === "skip").length;
-    expect(live).toBeGreaterThan(0);
-    expect(live).toBeLessThanOrEqual(256);
-  });
-
-  it("holds siblings while one probe is in flight", () => {
-    const workspace = nextWorkspace();
-    const release = reserveCodexCyberProbe({ model: DAYBREAK, workspace });
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace,
-      }),
-    ).toEqual({ kind: "skip", reason: "probe_in_flight" });
-    release();
-    expect(
-      planCodexCyberEscalation({
-        config: config(),
-        currentModel: PRIMARY,
-        replaySafe: true,
-        workspace,
-      }),
-    ).toEqual({ kind: "escalate", model: DAYBREAK });
-  });
+it("holds siblings while one probe is in flight", () => {
+  const workspace = nextWorkspace();
+  const release = reserveCodexCyberProbe({ model: DAYBREAK, workspace });
+  expect(planEscalation({ workspace })).toEqual({ kind: "skip", reason: "probe_in_flight" });
+  release();
+  expect(planEscalation({ workspace })).toEqual({ kind: "escalate", model: DAYBREAK });
 });
+
+function deny(workspace: ReturnType<typeof nextWorkspace>, now: number) {
+  recordCodexCyberTargetUnavailable({ model: DAYBREAK, workspace, cooloffMs: 600_000, now });
+}

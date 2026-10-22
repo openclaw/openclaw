@@ -41,7 +41,15 @@ export async function loadDesktopEnvironments(
     isCurrent: () => boolean;
     recoverToPicker: boolean;
   },
-): Promise<{ environments: EnvironmentSummary[]; selectedSource: string | undefined } | undefined> {
+): Promise<
+  | {
+      environments: EnvironmentSummary[];
+      selectedSource: string | undefined;
+      pendingSource?: string;
+      hostSetup?: EnvironmentSummary;
+    }
+  | undefined
+> {
   const selectedTarget = await options.target;
   if (!options.isCurrent()) {
     return undefined;
@@ -49,6 +57,20 @@ export async function loadDesktopEnvironments(
   let environments = await requestDesktopEnvironments(client, selectedTarget);
   if (!options.isCurrent()) {
     return undefined;
+  }
+  const selectedEnvironment = environments.find((environment) => environment.id === selectedTarget);
+  if (selectedEnvironment?.status === "starting") {
+    return {
+      environments: [selectedEnvironment],
+      selectedSource: undefined,
+      pendingSource: selectedEnvironment.id,
+    };
+  }
+  if (
+    selectedEnvironment?.status === "error" ||
+    (!options.recoverToPicker && selectedEnvironment && selectedEnvironment.status !== "available")
+  ) {
+    throw new Error(selectedEnvironment.worker?.error ?? "Desktop environment is unavailable");
   }
   if (
     options.recoverToPicker &&
@@ -61,11 +83,34 @@ export async function loadDesktopEnvironments(
       return undefined;
     }
   }
+  const selectedSource = environments.find(
+    (environment) =>
+      environment.id === selectedTarget &&
+      environment.status === "available" &&
+      environment.desktop === true,
+  )?.id;
+  let hostSetup: EnvironmentSummary | undefined;
+  if (
+    !options.recoverToPicker &&
+    selectedTarget === "gateway" &&
+    selectedSource === undefined &&
+    selectedEnvironment?.status === "available"
+  ) {
+    // Host Desktop is off: ask what setup the host needs; a failed check keeps the generic notice.
+    const listed = await client
+      .request<EnvironmentsListResult>("environments.list", { includeDesktopSetup: true })
+      .catch(() => undefined);
+    if (!options.isCurrent()) {
+      return undefined;
+    }
+    hostSetup = listed?.environments.find(
+      (environment) => environment.id === "gateway" && environment.desktopSetup,
+    );
+  }
   return {
-    selectedSource: environments.find(
-      (environment) => environment.id === selectedTarget && environment.desktop === true,
-    )?.id,
+    selectedSource,
     environments: environments.filter((environment) => environment.desktop === true),
+    ...(hostSetup ? { hostSetup } : {}),
   };
 }
 

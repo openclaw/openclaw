@@ -1,6 +1,11 @@
 // Bundled-discovery compatibility is machine-owned upgrade state.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshot,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  isArtifactPreservingStateRead,
+} from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
@@ -12,7 +17,6 @@ import {
   getPluginCacheRetirementSignal,
   getProcessPluginCache,
   preparePluginCacheFact,
-  PluginCacheFactInvalidatedError,
 } from "./plugin-cache.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import { readPluginMetadataStateRow } from "./plugin-metadata-state-worker.js";
@@ -56,9 +60,11 @@ export function readBundledDiscoveryMode(
 // interleaved isolated scopes (agent execution, doctor lint) from inheriting
 // another root's cached mode; the reads honor the active install-root context.
 const discoveryState = resolveGlobalSingleton<{
-  generation: object;
   memoized?: { key: string; value: BundledDiscoveryMode };
-}>(Symbol.for("openclaw.bundledDiscoveryMode"), () => ({ generation: {} }));
+  snapshotModes: WeakMap<object, { value: BundledDiscoveryMode }>;
+}>(Symbol.for("openclaw.bundledDiscoveryMode"), () => ({
+  snapshotModes: new WeakMap(),
+}));
 
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   clearBundledDiscoveryModeMemo();
@@ -81,20 +87,28 @@ export function readBundledDiscoveryModeMemoized(
   behavior: { artifactPreservingReadOnly?: boolean } = {},
   readPreparedValue?: (databasePath: string) => unknown,
 ): "compat" | "allowlist" | undefined {
-  if (behavior.artifactPreservingReadOnly) {
-    // Copied-state planning binds the observed bytes, not process-stable runtime metadata.
-    // Read a private SQLite snapshot so neither cached state nor source WAL coordination leaks in.
-    return readBundledDiscoveryMode(env === process.env ? {} : { env }, behavior);
+  const options = env === process.env ? {} : { env };
+  const snapshot =
+    behavior.artifactPreservingReadOnly || isArtifactPreservingStateRead()
+      ? getActiveOpenClawStateDatabaseReadSnapshot(resolveBundledDiscoveryOptions(options))
+      : undefined;
+  if (snapshot || behavior.artifactPreservingReadOnly) {
+    // Reuse policy only for these private bytes; it must never replace the live memo.
+    const prepared = snapshot && discoveryState.snapshotModes.get(snapshot);
+    if (prepared) {
+      return prepared.value;
+    }
+    const value = readBundledDiscoveryMode(options, behavior);
+    if (snapshot) {
+      discoveryState.snapshotModes.set(snapshot, { value });
+    }
+    return value;
   }
   const key = resolveBundledDiscoveryMemoKey(env);
   if (discoveryState.memoized?.key !== key) {
     const owner = getPluginCache();
     const prepared = owner.preparedBundledDiscoveryModes.get(key);
-    if (
-      prepared &&
-      "value" in prepared &&
-      prepared.value.generation === discoveryState.generation
-    ) {
+    if (prepared && "value" in prepared) {
       getPluginCacheRetirementSignal(owner).throwIfAborted();
       discoveryState.memoized = { key, value: prepared.value.value };
     } else {
@@ -112,40 +126,54 @@ export function readBundledDiscoveryModeMemoized(
 /** Prepare the same machine-owned fact for synchronous metadata derivation. */
 export async function prepareBundledDiscoveryMode(
   env: NodeJS.ProcessEnv = process.env,
+  readPreparedRow?: (databasePath: string) => Promise<{ value_json: string } | undefined>,
 ): Promise<() => void> {
   const owner = getPluginCache();
-  const cache = owner.preparedBundledDiscoveryModes;
   const key = resolveBundledDiscoveryMemoKey(env);
-  const generation = discoveryState.generation;
-  const current = cache.get(key);
-  if (current && "value" in current && current.value.generation !== generation) {
-    cache.delete(key);
+  const options = resolveBundledDiscoveryOptions({ env });
+  const snapshot = isArtifactPreservingStateRead()
+    ? await getActiveOpenClawStateDatabaseReadSnapshotAsync(options)
+    : undefined;
+  if (snapshot) {
+    const existing = discoveryState.snapshotModes.get(snapshot);
+    // The read worker retains these snapshot bytes; derivation consumes its result locally.
+    let value = existing?.value;
+    if (!existing) {
+      const row = readPreparedRow
+        ? await readPreparedRow(key)
+        : await readPluginMetadataStateRow("bundled-discovery", options);
+      value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
+    }
+    const activate = () => {
+      discoveryState.snapshotModes.set(snapshot, { value });
+      // Startup adopts this operation cache after releasing its private snapshot.
+      // Private inspection must not replace an already live process fact.
+      if (owner.kind === "operation") {
+        owner.preparedBundledDiscoveryModes.set(key, { value: { value, generation: owner } });
+      }
+    };
+    activate();
+    return activate;
   }
+  const cache = owner.preparedBundledDiscoveryModes;
   const prepared = await preparePluginCacheFact(owner, cache, key, async () => {
     let value: BundledDiscoveryMode;
     if (discoveryState.memoized?.key === key) {
       value = discoveryState.memoized.value;
     } else {
-      const row = await readPluginMetadataStateRow(
-        "bundled-discovery",
-        resolveBundledDiscoveryOptions({ env }),
-      );
+      const row = readPreparedRow
+        ? await readPreparedRow(key)
+        : await readPluginMetadataStateRow(
+            "bundled-discovery",
+            resolveBundledDiscoveryOptions({ env }),
+          );
       value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
-    if (discoveryState.generation !== generation) {
-      throw new PluginCacheFactInvalidatedError(
-        "Plugin discovery state changed during preparation; retry the operation.",
-      );
-    }
-    return { value, generation };
+    // Keep the SDK-reachable fact shape without a separate invalidation generation.
+    return { value, generation: owner };
   });
   const activate = () => {
     prepared.assertCurrent();
-    if (discoveryState.generation !== generation) {
-      throw new PluginCacheFactInvalidatedError(
-        "Plugin discovery state changed during preparation; retry the operation.",
-      );
-    }
     // Another root may use the single-slot memo while preparation awaits its row.
     // Reuse this operation's captured fact for the following synchronous derivation.
     discoveryState.memoized = { key, value: prepared.value.value };
@@ -161,7 +189,7 @@ export async function prepareBundledDiscoveryMode(
  */
 export function clearBundledDiscoveryModeMemo(): void {
   discoveryState.memoized = undefined;
-  discoveryState.generation = {};
+  discoveryState.snapshotModes = new WeakMap();
   for (const cache of new Set([getPluginCache(), getProcessPluginCache()])) {
     cache.preparedBundledDiscoveryModes.clear();
   }

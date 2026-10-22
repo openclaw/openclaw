@@ -1,12 +1,11 @@
-// Identifies whether an ESM module is running as the process entry point.
 import fs from "node:fs";
 import path from "node:path";
+import { tryProcessCwd } from "./safe-cwd.js";
 
 type IsMainModuleOptions = {
   currentFile: string;
   argv?: string[];
   env?: NodeJS.ProcessEnv;
-  cwd?: string;
   wrapperEntryPairs?: Array<{
     wrapperBasename: string;
     entryBasename: string;
@@ -27,25 +26,14 @@ function normalizePathCandidate(candidate: string | undefined, cwd: string): str
   }
 }
 
-function resolveDefaultCwd(currentFile: string): string {
-  try {
-    return process.cwd();
-  } catch {
-    // `process.cwd()` can throw when the launch directory was removed; entrypoint checks should
-    // still work relative to the current module path.
-    return path.dirname(currentFile);
-  }
-}
-
 /** Detects whether a module is executing as the process entrypoint, including wrapper launches. */
 export function isMainModule({
   currentFile,
   argv = process.argv,
   env = process.env,
-  cwd,
   wrapperEntryPairs = [],
 }: IsMainModuleOptions): boolean {
-  const resolvedCwd = cwd ?? resolveDefaultCwd(currentFile);
+  const resolvedCwd = tryProcessCwd() ?? path.dirname(currentFile);
   const normalizedCurrent = normalizePathCandidate(currentFile, resolvedCwd);
   const normalizedArgv1 = normalizePathCandidate(argv[1], resolvedCwd);
 
@@ -64,13 +52,10 @@ export function isMainModule({
   if (normalizedCurrent && normalizedArgv1 && wrapperEntryPairs.length > 0) {
     const currentBase = path.basename(normalizedCurrent);
     const argvBase = path.basename(normalizedArgv1);
-    const matched = wrapperEntryPairs.some(
+    return wrapperEntryPairs.some(
       ({ wrapperBasename, entryBasename }) =>
         currentBase === entryBasename && argvBase === wrapperBasename,
     );
-    if (matched) {
-      return true;
-    }
   }
 
   return false;

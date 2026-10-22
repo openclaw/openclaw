@@ -1,21 +1,23 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { extractQueryTerms } from "./helpers.ts";
-import type { CostDailyEntry, UsageAggregates, UsageSessionEntry } from "./types.ts";
-
-function neutralizeSpreadsheetFormulaCell(value: string): string {
-  return /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value) ? `'${value}` : value;
-}
+import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
+import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
+import type { CostDailyEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
 function csvEscape(value: string, neutralizeFormulas = true): string {
-  const safeValue = neutralizeFormulas ? neutralizeSpreadsheetFormulaCell(value) : value;
+  const safeValue =
+    neutralizeFormulas && /^[ \t\r\n]*[=+\-@\uFF0B\uFF0D\uFF1D\uFF20]/u.test(value)
+      ? `'${value}`
+      : value;
   if (/[",\r\n]/.test(safeValue)) {
     return `"${safeValue.replaceAll('"', '""')}"`;
   }
   return safeValue;
 }
 
-function toCsvRow(values: Array<string | number | undefined | null>): string {
+type CsvValue = string | number | undefined | null;
+
+function toCsvRow(values: CsvValue[]): string {
   return values
     .map((value) => {
       if (value === undefined || value === null) {
@@ -26,204 +28,111 @@ function toCsvRow(values: Array<string | number | undefined | null>): string {
     .join(",");
 }
 
-const buildSessionsCsv = (sessions: UsageSessionEntry[]): string => {
-  const rows = [
-    toCsvRow([
-      "key",
-      "label",
-      "agentId",
-      "channel",
-      "provider",
-      "model",
-      "updatedAt",
-      "durationMs",
-      "messages",
-      "errors",
-      "toolCalls",
-      "inputTokens",
-      "outputTokens",
-      "cacheReadTokens",
-      "cacheWriteTokens",
-      "totalTokens",
-      "totalCost",
-    ]),
-  ];
+function buildCsv<Entry>(
+  entries: Entry[],
+  columns: Record<string, (entry: Entry) => CsvValue>,
+): string {
+  const readers = Object.values(columns);
+  return [
+    toCsvRow(Object.keys(columns)),
+    ...entries.map((entry) => toCsvRow(readers.map((read) => read(entry)))),
+  ].join("\n");
+}
 
-  for (const session of sessions) {
-    const usage = session.usage;
-    rows.push(
-      toCsvRow([
-        session.key,
-        session.label ?? "",
-        session.agentId ?? "",
-        session.channel ?? "",
-        session.modelProvider ?? session.providerOverride ?? "",
-        session.model ?? session.modelOverride ?? "",
-        timestampMsToIsoString(session.updatedAt) ?? "",
-        usage?.durationMs ?? "",
-        usage?.messageCounts?.total ?? "",
-        usage?.messageCounts?.errors ?? "",
-        usage?.messageCounts?.toolCalls ?? "",
-        usage?.input ?? "",
-        usage?.output ?? "",
-        usage?.cacheRead ?? "",
-        usage?.cacheWrite ?? "",
-        usage?.totalTokens ?? "",
-        usage?.totalCost ?? "",
-      ]),
-    );
-  }
+function usageCsvValue(
+  value: number | undefined,
+  report?: CostDailyEntry["usageReport"],
+): CsvValue {
+  return report?.state === "unavailable" ? undefined : value;
+}
 
-  return rows.join("\n");
-};
+const buildSessionsCsv = (sessions: UsageSessionEntry[]): string =>
+  buildCsv(sessions, {
+    key: (session) => session.key,
+    label: (session) => session.label,
+    agentId: (session) => session.agentId,
+    channel: (session) => session.channel,
+    provider: (session) => session.modelProvider ?? session.providerOverride,
+    model: (session) => session.model ?? session.modelOverride,
+    updatedAt: (session) => timestampMsToIsoString(session.updatedAt),
+    durationMs: (session) => session.usage?.durationMs,
+    messages: (session) => session.usage?.messageCounts?.total,
+    errors: (session) => session.usage?.messageCounts?.errors,
+    toolCalls: (session) => session.usage?.messageCounts?.toolCalls,
+    inputTokens: (session) => usageCsvValue(session.usage?.input, session.usage?.usageReport),
+    outputTokens: (session) => usageCsvValue(session.usage?.output, session.usage?.usageReport),
+    cacheReadTokens: (session) =>
+      usageCsvValue(session.usage?.cacheRead, session.usage?.usageReport),
+    cacheWriteTokens: (session) =>
+      usageCsvValue(session.usage?.cacheWrite, session.usage?.usageReport),
+    totalTokens: (session) => usageCsvValue(session.usage?.totalTokens, session.usage?.usageReport),
+    totalCost: (session) => usageCsvValue(session.usage?.totalCost, session.usage?.usageReport),
+  });
 
-const buildDailyCsv = (daily: CostDailyEntry[]): string => {
-  const rows = [
-    toCsvRow([
-      "date",
-      "inputTokens",
-      "outputTokens",
-      "cacheReadTokens",
-      "cacheWriteTokens",
-      "totalTokens",
-      "inputCost",
-      "outputCost",
-      "cacheReadCost",
-      "cacheWriteCost",
-      "totalCost",
-    ]),
-  ];
-
-  for (const day of daily) {
-    rows.push(
-      toCsvRow([
-        day.date,
-        day.input,
-        day.output,
-        day.cacheRead,
-        day.cacheWrite,
-        day.totalTokens,
-        day.inputCost ?? "",
-        day.outputCost ?? "",
-        day.cacheReadCost ?? "",
-        day.cacheWriteCost ?? "",
-        day.totalCost,
-      ]),
-    );
-  }
-
-  return rows.join("\n");
-};
+const buildDailyCsv = (daily: CostDailyEntry[]): string =>
+  buildCsv(daily, {
+    date: (day) => day.date,
+    inputTokens: (day) => usageCsvValue(day.input, day.usageReport),
+    outputTokens: (day) => usageCsvValue(day.output, day.usageReport),
+    cacheReadTokens: (day) => usageCsvValue(day.cacheRead, day.usageReport),
+    cacheWriteTokens: (day) => usageCsvValue(day.cacheWrite, day.usageReport),
+    totalTokens: (day) => usageCsvValue(day.totalTokens, day.usageReport),
+    inputCost: (day) => usageCsvValue(day.inputCost, day.usageReport),
+    outputCost: (day) => usageCsvValue(day.outputCost, day.usageReport),
+    cacheReadCost: (day) => usageCsvValue(day.cacheReadCost, day.usageReport),
+    cacheWriteCost: (day) => usageCsvValue(day.cacheWriteCost, day.usageReport),
+    totalCost: (day) => usageCsvValue(day.totalCost, day.usageReport),
+  });
 
 type QuerySuggestion = {
   label: string;
   value: string;
 };
 
-type UsageFilterOptions = Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
-
-function appendFilterValues<T>(
-  values: string[],
-  entries: readonly T[],
-  read: (entry: T) => string | undefined,
-  limit = 12,
-): void {
-  for (const entry of entries) {
-    if (values.length >= limit) {
-      break;
-    }
-    const value = read(entry);
-    if (value && !values.includes(value)) {
-      values.push(value);
-    }
-  }
-}
-
-export function buildUsageFilterOptions(
-  sessions: readonly UsageSessionEntry[],
-  aggregates?: UsageAggregates | null,
-): UsageFilterOptions {
-  const options: UsageFilterOptions = { agent: [], channel: [], provider: [], model: [], tool: [] };
-  appendFilterValues(options.agent, sessions, (session) => session.agentId, 6);
-  appendFilterValues(options.channel, sessions, (session) => session.channel);
-  appendFilterValues(options.provider, sessions, (session) => session.modelProvider);
-  // Overrides follow every observed provider, preserving the menu's first-seen order.
-  appendFilterValues(options.provider, sessions, (session) => session.providerOverride);
-  appendFilterValues(options.provider, aggregates?.byProvider ?? [], (entry) => entry.provider);
-  appendFilterValues(options.model, sessions, (session) => session.model);
-  appendFilterValues(options.model, aggregates?.byModel ?? [], (entry) => entry.model);
-  appendFilterValues(options.tool, aggregates?.tools.tools ?? [], (entry) => entry.name);
-  return options;
-}
-
-const buildQuerySuggestions = (query: string, options: UsageFilterOptions): QuerySuggestion[] => {
-  const trimmed = query.trim();
-  if (!trimmed) {
+const buildQuerySuggestions = (
+  query: string,
+  terms: ReturnType<typeof extractQueryTerms>,
+  options: SessionsUsageOverview["filterOptions"],
+): QuerySuggestion[] => {
+  if (!query.trim()) {
     return [];
   }
-  const tokens = extractQueryTerms(trimmed).map((term) => term.raw);
-  const lastQueryWord = tokens.at(-1) ?? "";
-  const [rawKey, rawValue] = lastQueryWord.includes(":")
-    ? [
-        lastQueryWord.slice(0, lastQueryWord.indexOf(":")),
-        lastQueryWord.slice(lastQueryWord.indexOf(":") + 1),
-      ]
-    : ["", ""];
-
-  const key = normalizeLowercaseStringOrEmpty(rawKey);
-  const value = normalizeLowercaseStringOrEmpty(rawValue);
+  const lastTerm = terms.at(-1);
+  const key = normalizeLowercaseStringOrEmpty(lastTerm?.key);
+  const value = normalizeLowercaseStringOrEmpty(lastTerm?.value);
 
   if (!key) {
     return [
-      { label: "agent:", value: "agent:" },
-      { label: "channel:", value: "channel:" },
-      { label: "provider:", value: "provider:" },
-      { label: "model:", value: "model:" },
-      { label: "tool:", value: "tool:" },
-      { label: "has:errors", value: "has:errors" },
-      { label: "has:tools", value: "has:tools" },
-      { label: "minTokens:", value: "minTokens:" },
-      { label: "maxCost:", value: "maxCost:" },
-    ];
+      "agent:",
+      "channel:",
+      "provider:",
+      "model:",
+      "tool:",
+      "has:errors",
+      "has:tools",
+      "minTokens:",
+      "maxCost:",
+    ].map((suggestion) => ({ label: suggestion, value: suggestion }));
   }
 
-  const suggestions: QuerySuggestion[] = [];
-  const addValues = (prefix: string, values: string[]) => {
-    for (const val of values.slice(0, 6)) {
-      if (!value || normalizeLowercaseStringOrEmpty(val).includes(value)) {
-        suggestions.push({ label: `${prefix}:${val}`, value: `${prefix}:${val}` });
-      }
-    }
-  };
-
+  let candidates: string[];
   switch (key) {
     case "agent":
-      addValues("agent", options.agent);
-      break;
     case "channel":
-      addValues("channel", options.channel);
-      break;
     case "provider":
-      addValues("provider", options.provider);
-      break;
     case "model":
-      addValues("model", options.model);
-      break;
     case "tool":
-      addValues("tool", options.tool);
+      candidates = options[key].slice(0, 6);
       break;
     case "has":
-      ["errors", "tools", "context", "usage", "model", "provider"].forEach((entry) => {
-        if (!value || entry.includes(value)) {
-          suggestions.push({ label: `has:${entry}`, value: `has:${entry}` });
-        }
-      });
+      candidates = ["errors", "tools", "context", "usage", "model", "provider"];
       break;
     default:
-      break;
+      return [];
   }
-
-  return suggestions;
+  return candidates
+    .filter((candidate) => !value || normalizeLowercaseStringOrEmpty(candidate).includes(value))
+    .map((candidate) => ({ label: `${key}:${candidate}`, value: `${key}:${candidate}` }));
 };
 
 const applySuggestionToQuery = (query: string, suggestion: string): string => {
@@ -236,8 +145,6 @@ const applySuggestionToQuery = (query: string, suggestion: string): string => {
   return `${tokens.join(" ")} `;
 };
 
-const normalizeQueryText = (value: string): string => normalizeLowercaseStringOrEmpty(value);
-
 const removeQueryToken = (query: string, token: string): string => {
   const tokens = extractQueryTerms(query).map((term) => term.raw);
   const next = tokens.filter((entry) => entry !== token);
@@ -245,14 +152,14 @@ const removeQueryToken = (query: string, token: string): string => {
 };
 
 const setQueryTokensForKey = (query: string, key: string, values: string[]): string => {
-  const normalizedKey = normalizeQueryText(key);
-  const remaining = new Map(values.map((value) => [normalizeQueryText(value), value]));
+  const normalizedKey = normalizeLowercaseStringOrEmpty(key);
+  const remaining = new Map(values.map((value) => [normalizeLowercaseStringOrEmpty(value), value]));
   const tokens: string[] = [];
   // Retained values keep their authored spelling and quotes; serialize only new selections.
   for (const term of extractQueryTerms(query)) {
     if (
-      normalizeQueryText(term.key ?? "") !== normalizedKey ||
-      remaining.delete(normalizeQueryText(term.value))
+      normalizeLowercaseStringOrEmpty(term.key ?? "") !== normalizedKey ||
+      remaining.delete(normalizeLowercaseStringOrEmpty(term.value))
     ) {
       tokens.push(term.raw);
     }
@@ -266,7 +173,6 @@ export {
   buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
-  normalizeQueryText,
   removeQueryToken,
   setQueryTokensForKey,
 };

@@ -1,9 +1,10 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { ChannelHeartbeatAdapter } from "../../channels/plugins/types.adapters.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createRecoveryTypingManager } from "../recovery-typing.js";
 
-const managers: ReturnType<typeof createRecoveryTypingManager>[] = [];
+let f: ReturnType<typeof fixture>;
 beforeAll(async () => {
   // Resolve the real lazy dependency before fake timers can stall its initialization.
   await import("../../agents/agent-scope-config.js");
@@ -13,187 +14,117 @@ beforeEach(() => {
   vi.useFakeTimers({
     toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
+  f = fixture();
 });
 afterEach(() => {
-  for (const manager of managers.splice(0)) {
-    manager.close();
-  }
+  f.manager.close();
   vi.useRealTimers();
 });
-function fixture(
-  options: {
-    timeoutSeconds?: number;
-    resolveAdapter?: () => Promise<ChannelHeartbeatAdapter | undefined>;
-  } = {},
-) {
-  let current = true;
-  let available = true;
-  const sendTyping = vi.fn(async () => {});
+type Options = Parameters<typeof createRecoveryTypingManager>[0];
+type Defaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+function fixture() {
+  const defaults: Defaults = { timeoutSeconds: 120 };
+  const state = { current: true, available: true };
+  const started = createDeferredCore();
+  const sendTyping = vi.fn(async () => started.resolve());
   const clearTyping = vi.fn(async () => {});
   const onError = vi.fn();
-  const manager = createRecoveryTypingManager({
-    getConfig: () => ({ agents: { defaults: { timeoutSeconds: options.timeoutSeconds ?? 120 } } }),
-    isAvailable: () => available,
-    resolveAdapter:
-      options.resolveAdapter ?? (async () => ({ sendTypingGuarded: sendTyping, clearTyping })),
+  const options: Options = {
+    getConfig: () => ({ agents: { defaults } }),
+    isAvailable: () => state.available,
+    resolveAdapter: async () => ({ sendTypingGuarded: sendTyping, clearTyping }),
     onError,
-  });
-  managers.push(manager);
+  };
+  const manager = createRecoveryTypingManager(options);
   const params = {
     channel: "telegram",
     to: "123",
     accountId: "work",
     threadId: 99,
     runId: "recovered-run",
-    isCurrent: () => current,
+    isCurrent: () => state.current,
   };
-  return {
-    manager,
-    params,
-    sendTyping,
-    clearTyping,
-    onError,
-    retire: () => {
-      current = false;
-    },
-    closeGateway: () => {
-      available = false;
-    },
-  };
+  return { manager, params, sendTyping, clearTyping, onError, state, defaults, options, started };
 }
-describe("recovery typing", () => {
-  it("keeps only typing active beyond one minute and stops at command settlement", async () => {
-    const f = fixture();
-    const firstTyping = createDeferredCore();
-    f.sendTyping.mockImplementationOnce(async () => {
-      firstTyping.resolve();
-    });
-    const stop = f.manager.start(f.params);
-    await firstTyping.promise;
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(65_000);
-    expect(f.sendTyping.mock.calls.length).toBeGreaterThan(20);
-    expect(f.sendTyping).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "123", accountId: "work", threadId: 99 }),
-    );
-    const count = f.sendTyping.mock.calls.length;
-    stop();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(f.sendTyping).toHaveBeenCalledTimes(count);
-    expect(f.clearTyping).toHaveBeenCalledOnce();
-  });
-  it.each(["retired", "gateway unavailable", "closed"])("stops when %s", async (state) => {
-    const f = fixture();
+function typingConfig(typingMode?: "instant" | "never"): OpenClawConfig {
+  return { agents: { defaults: { typingMode: "never" }, entries: { main: { typingMode } } } };
+}
+it("honors configured cadence beyond one minute and stops at settlement", async () => {
+  f.defaults.typingIntervalSeconds = 10;
+  const stop = f.manager.start(f.params);
+  await f.started.promise;
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.advanceTimersByTimeAsync(9_999);
+  expect(f.sendTyping).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(55_001);
+  expect(f.sendTyping).toHaveBeenCalledTimes(7);
+  expect(f.sendTyping).toHaveBeenCalledWith(
+    expect.objectContaining({ to: "123", accountId: "work", threadId: 99 }),
+  );
+  const count = f.sendTyping.mock.calls.length;
+  stop();
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(f.sendTyping).toHaveBeenCalledTimes(count);
+  expect(f.clearTyping).toHaveBeenCalledOnce();
+});
+it.each(["retired", "gateway unavailable", "closed", "timed out"])(
+  "stops when %s",
+  async (state) => {
+    f.defaults.timeoutSeconds = state === "timed out" ? 1 : 120;
     f.manager.start(f.params);
     await vi.advanceTimersByTimeAsync(0);
     if (state === "retired") {
-      f.retire();
+      f.state.current = false;
     } else if (state === "gateway unavailable") {
-      f.closeGateway();
-    } else {
+      f.state.available = false;
+    } else if (state === "closed") {
       f.manager.close();
     }
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(state === "timed out" ? 5_000 : 10_000);
     expect(f.sendTyping).toHaveBeenCalledOnce();
     expect(f.clearTyping).toHaveBeenCalledOnce();
-  });
-  it("does not start after a delayed adapter lookup loses its owner", async () => {
-    const adapter = createDeferredCore<ChannelHeartbeatAdapter>();
-    const sendTyping = vi.fn(async () => {});
-    const f = fixture({ resolveAdapter: () => adapter.promise });
-    f.manager.start(f.params);
-    f.retire();
-    adapter.resolve({ sendTypingGuarded: sendTyping });
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(sendTyping).not.toHaveBeenCalled();
-  });
-  it("shares one loop for duplicate starts of the same recovered run", async () => {
-    const f = fixture();
-    const first = f.manager.start(f.params);
-    expect(f.manager.start(f.params)).toBe(first);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(f.sendTyping).toHaveBeenCalledOnce();
-  });
-  it("retains the configured agent timeout as a safety bound", async () => {
-    const f = fixture({ timeoutSeconds: 1 });
-    f.manager.start(f.params);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(f.sendTyping).toHaveBeenCalledOnce();
-    expect(f.clearTyping).toHaveBeenCalledOnce();
-  });
-  it("stops a failed typing request without throwing into final delivery", async () => {
-    const f = fixture();
-    f.sendTyping.mockRejectedValueOnce(new Error("Typing unavailable"));
-    expect(() => f.manager.start(f.params)).not.toThrow();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(f.sendTyping).toHaveBeenCalledOnce();
-    expect(f.onError).toHaveBeenCalledOnce();
-  });
-  it("does nothing for a channel without typing support", async () => {
-    const f = fixture({ resolveAdapter: async () => undefined });
-    f.manager.start(f.params);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(f.sendTyping).not.toHaveBeenCalled();
+  },
+);
+it.each(["retired", "legacy"])("rejects a %s adapter after lookup", async (reason) => {
+  const adapter = createDeferredCore<ChannelHeartbeatAdapter>();
+  const sendTyping = vi.fn(async () => {});
+  f.options.resolveAdapter = () => adapter.promise;
+  f.manager.start(f.params);
+  if (reason === "retired") {
+    f.state.current = false;
+  }
+  adapter.resolve(reason === "legacy" ? { sendTyping } : { sendTypingGuarded: sendTyping });
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(sendTyping).not.toHaveBeenCalled();
+  if (reason === "legacy") {
     expect(f.onError).not.toHaveBeenCalled();
-  });
-  it.each(["default", "agent"] as const)("respects a %s typing opt-out", async (where) => {
-    const sendTyping = vi.fn(async () => {});
-    const manager = createRecoveryTypingManager({
-      isAvailable: () => true,
-      getConfig: () => ({
-        agents: {
-          defaults: { typingMode: where === "default" ? "never" : "instant" },
-          entries: { main: { typingMode: where === "agent" ? "never" : undefined } },
-        },
-      }),
-      resolveAdapter: async () => ({ sendTypingGuarded: sendTyping }),
-    });
-    managers.push(manager);
-    manager.start({
-      agentId: "main",
-      channel: "telegram",
-      to: "123",
-      runId: "optout",
-      isCurrent: () => true,
-    });
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(sendTyping).not.toHaveBeenCalled();
-  });
-  it("honors an agent override and a later opt-out without using stale config", async () => {
-    let enabled = true;
-    const sendTyping = vi.fn(async () => {});
-    const clearTyping = vi.fn(async () => {});
-    const manager = createRecoveryTypingManager({
-      isAvailable: () => true,
-      getConfig: () => ({
-        agents: {
-          defaults: { typingMode: "never" },
-          entries: { main: { typingMode: enabled ? "instant" : "never" } },
-        },
-      }),
-      resolveAdapter: async () => ({ sendTypingGuarded: sendTyping, clearTyping }),
-    });
-    managers.push(manager);
-    manager.start({
-      agentId: "main",
-      channel: "telegram",
-      to: "123",
-      runId: "override",
-      isCurrent: () => true,
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(sendTyping).toHaveBeenCalledOnce();
-    enabled = false;
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(sendTyping).toHaveBeenCalledOnce();
-    expect(clearTyping).toHaveBeenCalledOnce();
-  });
-  it("does not fall back to an unguarded legacy typing hook", async () => {
-    const legacy = vi.fn(async () => {});
-    const f = fixture({ resolveAdapter: async () => ({ sendTyping: legacy }) });
-    f.manager.start(f.params);
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(legacy).not.toHaveBeenCalled();
-    expect(f.onError).not.toHaveBeenCalled();
-  });
+  }
 });
+it("shares one loop for duplicate starts of the same recovered run", async () => {
+  const first = f.manager.start(f.params);
+  expect(f.manager.start(f.params)).toBe(first);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(f.sendTyping).toHaveBeenCalledOnce();
+});
+it("stops a failed typing request without throwing into final delivery", async () => {
+  f.sendTyping.mockRejectedValueOnce(new Error("Typing unavailable"));
+  expect(() => f.manager.start(f.params)).not.toThrow();
+  await vi.advanceTimersByTimeAsync(10_000);
+  expect(f.sendTyping).toHaveBeenCalledOnce();
+  expect(f.onError).toHaveBeenCalledOnce();
+});
+it.each([undefined, "instant"] as const)(
+  "applies the %s override and live opt-out",
+  async (initial) => {
+    let mode: "instant" | "never" | undefined = initial;
+    f.options.getConfig = () => typingConfig(mode);
+    f.manager.start({ ...f.params, agentId: "main" });
+    await vi.advanceTimersByTimeAsync(0);
+    const calls = initial ? 1 : 0;
+    expect(f.sendTyping).toHaveBeenCalledTimes(calls);
+    mode = "never";
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(f.sendTyping).toHaveBeenCalledTimes(calls);
+    expect(f.clearTyping).toHaveBeenCalledTimes(calls);
+  },
+);

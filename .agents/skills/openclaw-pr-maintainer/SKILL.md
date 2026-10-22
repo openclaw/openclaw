@@ -5,39 +5,29 @@ description: "Review, triage, repair, or land OpenClaw issues and pull requests 
 
 # OpenClaw PR Maintainer
 
-Use for the requested OpenClaw issue/PR operation. Root `AGENTS.md` owns repair,
-product, source-trust, and approval policy; this skill owns the GitHub workflow.
-A pasted ref is context, not permission to publish or expand the task.
+- Requested issue/PR operation only. Root `AGENTS.md`: repair, product, source-trust, approval policy. This skill: GitHub workflow and maintainer authority.
+- Pasted ref ≠ publication permission or scope expansion.
+
+## Maintainer authority
+
+- **Red `main` is an emergency, not an unrelated landing prerequisite.** Push proven red-`main` fixes directly to `main` within repair scope. For a scoped maintainer instruction to land despite unrelated/pre-existing CI, select the [inherited-failure exception](references/landing.md#authorized-pre-existing-failures); do not demand special wording, renewed approval, or repair/rerun unrelated main CI first. Human authorization, failure evidence, and the protected writer's execution capability are separate checks.
+- Repair-and-land authority covers internal scheduling, database admission, lifecycle design, risk, verification. In-task bug fixes (including compatible SDK fixes) and backed-up repairs removing only invalid or unreachable data need no renewed approval.
+- Bulk close/reopen above 50 items needs explicit count and scope.
+- Advisory workflows need explicit security request.
+- Peter-instructed Team updates use the [release deployer](../update-team-server/SKILL.md); never edit live state outside its owner. Notify Night Watch of every deploy/restart; it coordinates restart timing, not update approval.
 
 ## Select the scope
 
-- **Review, triage, or list:** read-only. Explain the change, actionable findings,
-  useful evidence, and material uncertainty. Do not edit, assign, label, comment,
-  or close unless separately authorized.
-- **Fix only:** investigate, repair locally, and validate. Publishing still
-  requires ship/land or equivalent scoped authority.
-- **Land/ship or autonomous repair:** finish the authorized scope through current
-  source proof, review, exact-head CI, native merge, and remote verification.
-  Preserve contributor credit and unrelated work. Routine steps need no repeated
-  permission; security, schema, product, release, and other root gates remain.
-- **Queue/discovery:** read [triage](references/triage.md). Batch live reads and
-  shared discovery; do not turn one named PR into an unsolicited queue sweep.
-- **Author or regression attribution question:** read
-  [author and provenance research](references/attribution.md). Account age and
-  contribution-history queries are conditional, not a prerequisite for every PR.
-
-The lead remains hands-on. Use bounded independent workers where they add
-useful evidence; serialize shared checkout/ref mutations and GitHub writes.
-Do not create user-owned app tasks to hide internal subtasks. Preserve a stalled
-worker's patches, claims, and proof before taking over or reassigning its work.
+- **Review/triage/list:** read-only; explain change/findings/proof/uncertainty. Edits, assignment, labels, comments, closes need authority.
+- **Fix only:** investigate/repair/validate locally; publication needs ship/land or scoped equivalent.
+- **Land/ship/autonomous repair:** source proof → review → native submission → verified merge. Track pending requests; repair PR-caused CI/conflicts under same authority, route attributed inherited CI through the exception above. Accepted auto-merge ≠ done. Preserve credit/unrelated work; root gates remain, no repeat routine permission.
+- **Queue/discovery:** read [triage](references/triage.md). Batch live reads/shared discovery; named PR ≠ queue sweep.
+- **Author/regression attribution:** [author and provenance research](references/attribution.md); account age/history conditional.
+- Lead hands-on; bounded useful workers, serialized checkout/refs + GitHub writes. No user-owned app tasks hiding internal subtasks. Preserve stalled worker patches/claims/proof before takeover/reassignment.
 
 ## Inspect the actual item
 
-Start with `git status -sb`; preserve unrelated changes. Use available local
-`gitcrawl` data for related work when useful, then bare PATH `gh` with narrow
-JSON fields for live decisions. Stale/missing archives fall through to `gh`;
-do not broadly sync archives just to begin. PR source comes from `gh pr
-view/diff` and the checkout, not web search.
+- Start `git status -sb`; preserve unrelated work. Local `gitcrawl` → bare PATH `gh`, narrow live JSON. Stale/missing archive → `gh`, no broad sync. PR source: `gh pr view/diff` + checkout, not web search.
 
 ```bash
 gh pr view <pr> --repo openclaw/openclaw \
@@ -46,68 +36,39 @@ gh issue view <issue> --repo openclaw/openclaw \
   --json number,title,state,body,author,assignees,comments
 ```
 
-Check assignment before deep work. Mention another assignee and treat a fresh
-assignment as active ownership unless the user directs otherwise. Assignment
-alone is not a block when stale or explicitly overridden. Claim an unassigned
-named item only under assignment or landing/autonomous-resolution authority,
-using the verified authenticated login. Never remove others' assignments
-without direction. Account/activity research belongs to its conditional route.
+- Assignment: [triage](references/triage.md#assignment), before deep work. Mention other assignees; preserve ownership. Account/activity research conditional.
 
 ## Establish the outcome
 
-Read the affected owner, entry points, callers, relevant siblings, tests, docs,
-history, and current main as needed to support a conclusion. Inspect dependency
-contracts directly when they determine behavior; apply the root's personal
-Codex-source inspection requirement when relevant. Investigate contrary evidence
-before defending a verdict. Do not fill an arbitrary evidence matrix or invent
-a rejected alternative merely to satisfy a form.
+- Read owner, entry points, callers, siblings, tests, docs, history, current main; inspect determining dependency contracts. Codex: root's personal source inspection. Contrary evidence → investigate before defending. No invented matrix/alternative.
+- **Already fixed:** prove current-main repair; canonical commit/PR + matching source/runnable proof. Closure authority → comment evidence + close; otherwise report.
+- **Real defect:** reproduce → repair owning invariant → prove path/siblings. Simplification over symptom guard; size/LOC ≠ correctness gate.
+- **Useful PR:** improve editable branch; unsafe → authorized credited replacement before closure. Replaced ancestry → maintainer-owned replacement, never squash contributor PR.
+- **Uncertain/product decision:** state gap; no speculative merge/automatic out-of-scope close.
+- Proof + source-trust/host route: `$openclaw-testing`, [landing](references/landing.md#red-main-and-inherited-failures). Focused proof → ready PR; PR CI = broad proof. Prefer bounded local proof on a qualified, available host. Deliberate remote proof can cover expensive checks or environment gaps; queues → stop task-owned allocation, use PR CI or a safe local scope, preserve uncovered requirements. Never execute untrusted source locally. Optional live gaps → meaningful boundary proof + limitation; explicit live, external API, authenticated-risk proof mandatory. Mocks/skips/old head ≠ live.
+- Behavioral changes: [boundary-proof contract](../../../docs/help/testing/writing-tests.md#prove-behavior-at-the-owning-boundary) + `$test-audit`. Requested behavior and repo standards: check separately.
 
-- **Already fixed:** prove the original behavior is repaired on current main,
-  with the canonical commit/PR and matching source or runnable proof. Under
-  closure authority, comment that evidence and close; otherwise report it.
-- **Real defect:** reproduce it, repair its owning invariant, and prove the
-  repaired path and affected siblings. Prefer a coherent simplification over a
-  symptom guard. Size and LOC are context, not correctness gates.
-- **Existing useful PR:** improve the editable branch rather than replacing it
-  unnecessarily. If it cannot safely be updated, create an authorized credited
-  replacement before closing the source. Never squash a contributor-owned PR
-  after replacing its ancestry; use a maintainer-owned replacement.
-- **Uncertain or product decision:** state the concrete gap. Do not merge a
-  speculative repair or automatically close work as out of scope.
+## CODEOWNERS review
 
-Use `$openclaw-testing` to choose proportional proof and its source-trust/host
-route. Trusted development proof defaults local; remote proof needs an environment
-or isolation reason. Unavailable optional live proof may use meaningful boundary
-proof with the limitation stated. Explicit live requests, external API contracts,
-and changes whose risk requires authenticated execution keep their required proof.
-Never describe mocks, skipped checks, or an older head as live evidence.
+- `CODEOWNERS` routes review; inspect live enforcement. Restricted/security paths + material product/behavior/security/ownership changes need listed-owner involvement.
+- ownership/review governance: verified active organization-admin direction also qualifies; repository admin/bypass alone does not. Neither route waives enforced reviews.
 
 ## Review and publish
 
-Before committing or landing nontrivial code, run `$autoreview` and resolve
-verified actionable findings. Use it for a review-only request when that request
-asks for independent autoreview; ordinary findings-only review does not need a
-second reviewer by default. Do not add another mandatory CLI review pass.
-Reopen review for substantive changes or unresolved concerns, not a patch-identical
-rebase or a mechanical head change. Address real human/bot findings and explain
-rejected ones; bot scores and Rank-up lists do not create separate obligations.
+- Before committing or landing nontrivial code: fresh review through permitted workflow; resolve actionable findings unless user opts out. Actionable = likely or high-impact; decline unlikely, recoverable edge cases whose fix adds disproportionate complexity, with one-line reason.
 
-Use the current PR template. Lead with the plain-language problem and concrete
-user impact; keep the explanation short and leave implementation inventories in
-the diff or optional details. Keep important risks, migrations, required actions,
-useful evidence, known gaps, and contributor credit visible and current. Do not
-invent a user benefit for internal-only work. Explain material tradeoffs when they
-matter; do not require universal LOC tables, provenance fields, or alternate-fix
-essays. `CHANGELOG.md` is release-owned; user-facing release-note context stays
-in the PR/commit. Omit agent transcripts unless explicitly requested.
+- Nontrivial code commit/landing: `$autoreview`; resolve verified actionable findings. Review-only: independent pass only when requested, no extra mandatory CLI pass.
+- Reopen review for substantive changes/unresolved concerns, not patch-identical rebase/mechanical head change. Address real human/bot findings; explain rejections. Bot scores/Rank-up lists create no separate obligations. ClawSweeper advisory; never wait for comment to land.
+- Current PR template: plain problem/impact; inventories in diff/details. Keep risks, migrations, actions, proof, gaps, credit current; explain material tradeoffs. No invented internal-only user benefit or universal LOC/provenance/alternate-fix essays.
+- `CHANGELOG.md` release-owned; release-note context in PR/commit. Agent transcripts only on explicit request.
+- Public mutation: verify author/committer + writer; shell-sensitive body files. Authorized scope only; update existing comment/body, no duplicates.
+- Publication/merge: read [landing](references/landing.md) (media, exact-head CI, native workflow).
+- Verify remote merge/closure + source. Report problem, owning change, proof/gaps, credit, linked final state in prose; worthwhile follow-ups only.
 
-Before public mutation, verify author/committer and authenticated writer identity.
-Use body files for shell-sensitive text. Post findings only under the authorized
-write scope, and update an existing relevant comment/body instead of duplicating it.
-Publication, media, exact-head CI, and native landing mechanics are in
-[landing](references/landing.md); read that reference before publishing or merging.
+## Finalize and clean up
 
-Verify the final merge/closure state and source rather than trusting a local
-summary. Report the problem, owner-level change, important proof and limitations,
-credit, and linked final state in concise prose. Record worthwhile follow-ups;
-do not manufacture another task after a bounded request is complete.
+- Never remove worktree holding live session cwd, including yours or subdirectories. Child `cd`/cwd override does not move parent. Retain until owner exits/releases cwd; report path.
+- Verified outcome → remove task logs, receipts, proof archives, `.crabbox`, scratch, finished worktrees via [native closeout](references/landing.md#recovery-and-closeout). No retention/archive/export/handoff just for removal.
+- Remove created worktrees once work/PR lands, unless immediately needed next; never remove a live-cwd worktree.
+- Every task: findings in chat/stdout; files only for deliverables/tool/proof/recovery needs, state purpose/reuse. Pre-merge proof mandatory; optional follow-ups never hold completion.
+- Preserve requested deliverables/retention, unfinished source + necessary recovery state, active/live/unknown owners, credentials, agent state, shared dependencies.

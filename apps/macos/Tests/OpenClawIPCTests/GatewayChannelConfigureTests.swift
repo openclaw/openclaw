@@ -363,7 +363,62 @@ struct GatewayConnectionTests {
         #expect(snap.type == "hello-ok")
     }
 
-    @Test func `subscribe emits seq gap before event`() async throws {
+    @Test(arguments: ["final", "error", "aborted"])
+    func `queued chat terminal survives gap recovery but not route replacement`(state: String) async throws {
+        let session = self.makeSession()
+        let (conn, config) = try self.makeConnection(session: session)
+        let queued = await conn.subscribe(bufferingNewest: 10)
+        let observer = await conn.subscribe(bufferingNewest: 10)
+        do {
+            _ = try await conn.request(method: "status", params: nil)
+            var observations = observer.makeAsyncIterator()
+            let hello = await observations.next()
+            guard case .snapshot = hello?.push else {
+                Issue.record("expected the admitted connection hello")
+                await conn.shutdown()
+                return
+            }
+            let socket = try #require(session.latestTask())
+            socket.emitReceiveSuccess(.data(Data("""
+            {"type":"event","event":"chat","seq":1,"payload":{"runId":"run","sessionKey":"main",
+            "state":"delta","deltaText":"partial","message":{"role":"assistant","content":[{"type":"text","text":"partial"}]}}}
+            """.utf8)))
+            socket.emitReceiveSuccess(.data(Data("""
+            {"type":"event","event":"chat","seq":3,"payload":{"runId":"run","sessionKey":"main",
+            "state":"\(state)","message":{"role":"assistant","content":[{"type":"text","text":"settled"}]}}}
+            """.utf8)))
+
+            // Hold the consumer queue until the real receive path has retired its socket.
+            while let delivery = await observations.next() {
+                if case .disconnected = delivery.event { break }
+            }
+            var consumer = queued.makeAsyncIterator()
+            _ = await consumer.next() // hello
+            let delta = try #require(await consumer.next())
+            let terminal = try #require(await consumer.next())
+            #expect(!delta.isCurrent)
+            #expect(terminal.isCurrent)
+            #expect(!conn.serverLeaseMatchesCurrentState(terminal.serverLease))
+            let push = try #require(terminal.push)
+            guard case let .chat(chat) = MacGatewayChatTransport.mapPushToTransportEvent(push) else {
+                Issue.record("queued terminal was not available to the chat consumer")
+                await conn.shutdown()
+                return
+            }
+            #expect(chat.state == state)
+            #expect(OpenClawChatEventText.assistantText(from: chat) == "settled")
+
+            config.setToken("replacement-test-token")
+            _ = try await conn.request(method: "status", params: nil)
+            #expect(!terminal.isCurrent)
+            await conn.shutdown()
+        } catch {
+            await conn.shutdown()
+            throw error
+        }
+    }
+
+    @Test func `subscribe emits seq gap then disconnects without the gapped event`() async throws {
         let session = self.makeSession()
         let (conn, _) = try makeConnection(session: session)
 
@@ -393,18 +448,19 @@ struct GatewayConnectionTests {
         session.latestTask()?.emitReceiveSuccess(.data(evt3))
 
         let gap = await iterator.next()
-        guard gap?.isCurrent == true, case let .seqGap(expected, received) = gap?.push else {
+        guard case let .seqGap(expected, received) = gap?.push else {
             Issue.record("expected seqGap, got \(String(describing: gap))")
             return
         }
         #expect(expected == 2)
         #expect(received == 3)
 
-        let secondEvent = await iterator.next()
-        guard secondEvent?.isCurrent == true, case let .event(secondFrame) = secondEvent?.push else {
-            Issue.record("expected event, got \(String(describing: secondEvent))")
+        let disconnected = await iterator.next()
+        guard case .disconnected = disconnected?.event else {
+            Issue.record("expected disconnect, got \(String(describing: disconnected))")
+            await conn.shutdown()
             return
         }
-        #expect(secondFrame.seq == 3)
+        await conn.shutdown()
     }
 }

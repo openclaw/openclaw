@@ -13,7 +13,6 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,8 +38,6 @@ import org.xbill.DNS.Type
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.nio.ByteBuffer
-import java.nio.charset.CodingErrorAction
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
@@ -75,17 +72,18 @@ class GatewayDiscovery(
   private val wideAreaDomain = System.getenv("OPENCLAW_WIDE_AREA_DOMAIN")
   private val logTag = "OpenClaw/GatewayDiscovery"
 
-  private val localById = ConcurrentHashMap<String, GatewayEndpoint>()
-  private val unicastById = ConcurrentHashMap<String, GatewayEndpoint>()
+  private val discoveryLock = Any()
+  private val localById = mutableMapOf<String, GatewayEndpoint>()
+  private val unicastById = mutableMapOf<String, GatewayEndpoint>()
   private val _gateways = MutableStateFlow<List<GatewayEndpoint>>(emptyList())
 
   /** Current discovered gateway list, merged from local DNS-SD and optional wide-area DNS-SD. */
   val gateways: StateFlow<List<GatewayEndpoint>> = _gateways.asStateFlow()
 
-  private var unicastJob: Job? = null
   private val dnsExecutor: Executor = Executors.newCachedThreadPool()
+  private val serviceInfoExecutor = context.mainExecutor
   private val availableNetworks = ConcurrentHashMap.newKeySet<Network>()
-  private val serviceInfoCallbacks = ConcurrentHashMap<String, Any>()
+  private val serviceInfoCallbacks = mutableMapOf<String, Any>()
 
   // Legacy NSD callbacks share one handler and one resolve slot, which only a terminal callback releases.
   private val legacyResolutions = ArrayDeque<LegacyResolution>()
@@ -119,16 +117,16 @@ class GatewayDiscovery(
 
       override fun onServiceFound(serviceInfo: NsdServiceInfo) {
         if (serviceInfo.serviceType != this@GatewayDiscovery.serviceType) return
-        resolve(serviceInfo)
+        updateDiscovery { resolve(serviceInfo) }
       }
 
-      override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-        val serviceName = BonjourEscapes.decode(serviceInfo.serviceName)
-        val id = stableId(serviceName, "local.")
-        localById.remove(id)
-        unregisterServiceInfoCallback(id)
-        publish()
-      }
+      override fun onServiceLost(serviceInfo: NsdServiceInfo) =
+        updateDiscovery {
+          val serviceName = BonjourEscapes.decode(serviceInfo.serviceName)
+          val id = stableId(serviceName, "local.")
+          localById.remove(id)
+          unregisterServiceInfoCallback(id)
+        }
     }
 
   init {
@@ -160,17 +158,16 @@ class GatewayDiscovery(
   }
 
   private fun startUnicastDiscovery(domain: String) {
-    unicastJob =
-      scope.launch(Dispatchers.IO) {
-        while (true) {
-          try {
-            refreshUnicast(domain)
-          } catch (_: Throwable) {
-            // ignore (best-effort)
-          }
-          delay(5000)
+    scope.launch(Dispatchers.IO) {
+      while (true) {
+        try {
+          refreshUnicast(domain)
+        } catch (_: Throwable) {
+          // ignore (best-effort)
         }
+        delay(5000)
       }
+    }
   }
 
   private fun resolve(serviceInfo: NsdServiceInfo) {
@@ -194,27 +191,26 @@ class GatewayDiscovery(
   ) {
     val callback =
       object : NsdManager.ServiceInfoCallback {
-        override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) {
-          serviceInfoCallbacks.remove(id, this)
-        }
+        override fun onServiceInfoCallbackRegistrationFailed(errorCode: Int) = updateDiscovery { serviceInfoCallbacks.remove(id, this) }
 
-        override fun onServiceInfoCallbackUnregistered() {
-          serviceInfoCallbacks.remove(id, this)
-        }
+        override fun onServiceInfoCallbackUnregistered() = updateDiscovery { serviceInfoCallbacks.remove(id, this) }
 
-        override fun onServiceLost() {
-          localById.remove(id)
-          publish()
-        }
+        override fun onServiceLost() =
+          updateDiscovery {
+            if (serviceInfoCallbacks[id] === this) localById.remove(id)
+          }
 
-        override fun onServiceUpdated(serviceInfo: NsdServiceInfo) {
-          upsertResolvedService(serviceInfo)
-        }
+        override fun onServiceUpdated(serviceInfo: NsdServiceInfo) =
+          updateDiscovery {
+            // Unregister does not cancel callbacks that Android already handed to the executor.
+            if (serviceInfoCallbacks[id] === this) upsertResolvedService(serviceInfo)
+          }
       }
 
     serviceInfoCallbacks[id] = callback
     try {
-      nsd.registerServiceInfoCallback(serviceInfo, dnsExecutor, callback)
+      // A serial executor preserves update/loss order within the same live registration.
+      nsd.registerServiceInfoCallback(serviceInfo, serviceInfoExecutor, callback)
     } catch (_: Throwable) {
       serviceInfoCallbacks.remove(id, callback)
     }
@@ -263,12 +259,13 @@ class GatewayDiscovery(
       finish(resolved)
     }
 
-    private fun finish(resolved: NsdServiceInfo?) {
-      // Loss/rediscovery may replace this identity while the old OS request is still completing.
-      if (serviceInfoCallbacks.remove(id, this) && resolved != null) upsertResolvedService(resolved)
-      legacyResolutions.removeFirst()
-      startNextLegacyResolution()
-    }
+    private fun finish(resolved: NsdServiceInfo?) =
+      updateDiscovery {
+        // Loss/rediscovery may replace this identity while the old OS request is still completing.
+        if (serviceInfoCallbacks.remove(id, this) && resolved != null) upsertResolvedService(resolved)
+        legacyResolutions.removeFirst()
+        startNextLegacyResolution()
+      }
   }
 
   private fun upsertResolvedService(resolved: NsdServiceInfo) {
@@ -276,30 +273,29 @@ class GatewayDiscovery(
     val port = resolved.port
     if (port <= 0) return
 
-    val rawServiceName = resolved.serviceName
-    val serviceName = BonjourEscapes.decode(rawServiceName)
-    val displayName = BonjourEscapes.decode(txt(resolved, "displayName") ?: serviceName)
-    val lanHost = txt(resolved, "lanHost")
-    val tailnetDns = txt(resolved, "tailnetDns")
-    val gatewayPort = txtInt(resolved, "gatewayPort")
-    val tlsEnabled = parseTxtBool(txt(resolved, "gatewayTls"))
-    val tlsFingerprint = txt(resolved, "gatewayTlsSha256")
-    val id = stableId(serviceName, "local.")
     // Local NSD gives the socket host/port; TXT ports are retained as gateway metadata only.
-    localById[id] =
-      GatewayEndpoint(
-        stableId = id,
-        name = displayName,
-        host = host,
-        port = port,
-        lanHost = lanHost,
-        tailnetDns = tailnetDns,
-        gatewayPort = gatewayPort,
-        tlsEnabled = tlsEnabled,
-        tlsFingerprintSha256 = tlsFingerprint,
-      )
-    publish()
+    val endpoint = discoveredEndpoint(BonjourEscapes.decode(resolved.serviceName), "local.", host, port) { txt(resolved, it) }
+    localById[endpoint.stableId] = endpoint
   }
+
+  private fun discoveredEndpoint(
+    serviceName: String,
+    domain: String,
+    host: String,
+    port: Int,
+    readTxt: (String) -> String?,
+  ): GatewayEndpoint =
+    GatewayEndpoint(
+      stableId = stableId(serviceName, domain),
+      name = readTxt("displayName") ?: serviceName,
+      host = host,
+      port = port,
+      lanHost = readTxt("lanHost"),
+      tailnetDns = readTxt("tailnetDns"),
+      gatewayPort = readTxt("gatewayPort")?.toIntOrNull(),
+      tlsEnabled = parseTxtBool(readTxt("gatewayTls")),
+      tlsFingerprintSha256 = readTxt("gatewayTlsSha256"),
+    )
 
   private fun resolvedHostAddress(resolved: NsdServiceInfo): String? {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -316,10 +312,14 @@ class GatewayDiscovery(
       null
     }
 
-  private fun publish() {
-    _gateways.value =
-      // Merge local and wide-area results deterministically for stable UI selection.
-      (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
+  private fun updateDiscovery(update: () -> Unit) {
+    // Registration authority, endpoint mutations and publication are one transition across all producers.
+    synchronized(discoveryLock) {
+      update()
+      _gateways.value =
+        // Merge local and wide-area results deterministically for stable UI selection.
+        (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
+    }
   }
 
   private fun stableId(
@@ -334,17 +334,8 @@ class GatewayDiscovery(
     key: String,
   ): String? {
     val bytes = info.attributes[key] ?: return null
-    return try {
-      String(bytes, Charsets.UTF_8).trim().ifEmpty { null }
-    } catch (_: Throwable) {
-      null
-    }
+    return String(bytes, Charsets.UTF_8).trim().ifEmpty { null }
   }
-
-  private fun txtInt(
-    info: NsdServiceInfo,
-    key: String,
-  ): Int? = txt(info, key)?.toIntOrNull()
 
   private fun parseTxtBool(value: String?): Boolean {
     val raw = value?.trim()?.lowercase() ?: return false
@@ -359,10 +350,12 @@ class GatewayDiscovery(
     val next = LinkedHashMap<String, GatewayEndpoint>()
     for (ptr in ptrRecords) {
       val instanceFqdn = ptr.target.toString()
+      var srvMessage: Message? = null
       val srv =
         recordByName(ptrMsg, instanceFqdn, Type.SRV) as? SRVRecord
           ?: run {
             val msg = lookupUnicastMessage(instanceFqdn, Type.SRV) ?: return@run null
+            srvMessage = msg
             recordByName(msg, instanceFqdn, Type.SRV) as? SRVRecord
           }
           ?: continue
@@ -372,14 +365,13 @@ class GatewayDiscovery(
       val targetFqdn = srv.target.toString()
       val host =
         resolveHostFromMessage(ptrMsg, targetFqdn)
-          ?: resolveHostFromMessage(lookupUnicastMessage(instanceFqdn, Type.SRV), targetFqdn)
+          ?: resolveHostFromMessage(srvMessage ?: lookupUnicastMessage(instanceFqdn, Type.SRV), targetFqdn)
           ?: resolveHostUnicast(targetFqdn)
           ?: continue
 
       // Wide-area DNS-SD may put TXT in additional records; fall back to a direct TXT query.
       val txtFromPtr =
-        recordsByName(ptrMsg, Section.ADDITIONAL)[keyName(instanceFqdn)]
-          .orEmpty()
+        recordsForName(ptrMsg, Section.ADDITIONAL, instanceFqdn)
           .mapNotNull { it as? TXTRecord }
       val txt =
         if (txtFromPtr.isNotEmpty()) {
@@ -389,30 +381,14 @@ class GatewayDiscovery(
           records(msg, Section.ANSWER).mapNotNull { it as? TXTRecord }
         }
       val instanceName = BonjourEscapes.decode(decodeInstanceName(instanceFqdn, domain))
-      val displayName = BonjourEscapes.decode(txtValue(txt, "displayName") ?: instanceName)
-      val lanHost = txtValue(txt, "lanHost")
-      val tailnetDns = txtValue(txt, "tailnetDns")
-      val gatewayPort = txtIntValue(txt, "gatewayPort")
-      val tlsEnabled = parseTxtBool(txtValue(txt, "gatewayTls"))
-      val tlsFingerprint = txtValue(txt, "gatewayTlsSha256")
-      val id = stableId(instanceName, domain)
-      next[id] =
-        GatewayEndpoint(
-          stableId = id,
-          name = displayName,
-          host = host,
-          port = port,
-          lanHost = lanHost,
-          tailnetDns = tailnetDns,
-          gatewayPort = gatewayPort,
-          tlsEnabled = tlsEnabled,
-          tlsFingerprintSha256 = tlsFingerprint,
-        )
+      val endpoint = discoveredEndpoint(instanceName, domain, host, port) { gatewayDnsTxtValue(txt, it) }
+      next[endpoint.stableId] = endpoint
     }
 
-    unicastById.clear()
-    unicastById.putAll(next)
-    publish()
+    updateDiscovery {
+      unicastById.clear()
+      unicastById.putAll(next)
+    }
 
     if (next.isEmpty()) {
       Log.d(
@@ -433,10 +409,8 @@ class GatewayDiscovery(
       } else {
         instanceFqdn.substringBefore(serviceType)
       }
-    return normalizeName(stripTrailingDot(withoutSuffix))
+    return normalizeName(withoutSuffix.removeSuffix("."))
   }
-
-  private fun stripTrailingDot(raw: String): String = raw.removeSuffix(".")
 
   private suspend fun lookupUnicastMessage(
     name: String,
@@ -491,39 +465,28 @@ class GatewayDiscovery(
 
   private fun keyName(raw: String): String = raw.trim().lowercase()
 
-  private fun recordsByName(
-    msg: Message,
+  private fun recordsForName(
+    msg: Message?,
     section: Int,
-  ): Map<String, List<Record>> {
-    val next = LinkedHashMap<String, MutableList<Record>>()
-    for (r in records(msg, section)) {
-      val name = r.name?.toString() ?: continue
-      next.getOrPut(keyName(name)) { mutableListOf() }.add(r)
-    }
-    return next
+    fqdn: String,
+  ): List<Record> {
+    val key = keyName(fqdn)
+    return records(msg, section).filter { it.name?.toString()?.let(::keyName) == key }
   }
 
   private fun recordByName(
     msg: Message,
     fqdn: String,
     type: Int,
-  ): Record? {
-    val key = keyName(fqdn)
-    val byNameAnswer = recordsByName(msg, Section.ANSWER)
-    val fromAnswer = byNameAnswer[key].orEmpty().firstOrNull { it.type == type }
-    if (fromAnswer != null) return fromAnswer
-
-    val byNameAdditional = recordsByName(msg, Section.ADDITIONAL)
-    return byNameAdditional[key].orEmpty().firstOrNull { it.type == type }
-  }
+  ): Record? =
+    recordsForName(msg, Section.ANSWER, fqdn).firstOrNull { it.type == type }
+      ?: recordsForName(msg, Section.ADDITIONAL, fqdn).firstOrNull { it.type == type }
 
   private fun resolveHostFromMessage(
     msg: Message?,
     hostname: String,
   ): String? {
-    val m = msg ?: return null
-    val key = keyName(hostname)
-    val additional = recordsByName(m, Section.ADDITIONAL)[key].orEmpty()
+    val additional = recordsForName(msg, Section.ADDITIONAL, hostname)
     val a = additional.mapNotNull { it as? ARecord }.mapNotNull { it.address?.hostAddress }
     val aaaa = additional.mapNotNull { it as? AAAARecord }.mapNotNull { it.address?.hostAddress }
     return a.firstOrNull() ?: aaaa.firstOrNull()
@@ -531,16 +494,14 @@ class GatewayDiscovery(
 
   private fun preferredDnsNetwork(): android.net.Network? {
     val cm = connectivity ?: return null
-
     // Prefer VPN (Tailscale) when present; otherwise use the active network.
-    trackedNetworks(cm)
-      .firstOrNull { n ->
-        val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-      }?.let { return it }
-
-    return cm.activeNetwork
+    return preferredVpnNetwork(cm) ?: cm.activeNetwork
   }
+
+  private fun preferredVpnNetwork(cm: ConnectivityManager): Network? =
+    trackedNetworks(cm).firstOrNull { network ->
+      cm.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+    }
 
   private fun trackedNetworks(cm: ConnectivityManager): List<Network> =
     buildList {
@@ -554,11 +515,7 @@ class GatewayDiscovery(
     val candidateNetworks =
       buildList {
         // Put VPN DNS first so Tailscale split-horizon names win over public DNS.
-        trackedNetworks(cm)
-          .firstOrNull { n ->
-            val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-          }?.let(::add)
+        preferredVpnNetwork(cm)?.let(::add)
         cm.activeNetwork?.let(::add)
       }.distinct()
 
@@ -571,23 +528,11 @@ class GatewayDiscovery(
         .toList()
     if (servers.isEmpty()) return null
 
-    return try {
-      val resolvers =
-        servers.mapNotNull { addr ->
-          try {
-            SimpleResolver().apply {
-              setAddress(InetSocketAddress(addr, 53))
-              setTimeout(Duration.ofSeconds(3))
-            }
-          } catch (_: Throwable) {
-            null
-          }
-        }
-      if (resolvers.isEmpty()) return null
-      ExtendedResolver(resolvers.toTypedArray()).apply { setTimeout(Duration.ofSeconds(3)) }
-    } catch (_: Throwable) {
-      null
-    }
+    val resolvers =
+      servers.map { address ->
+        SimpleResolver(InetSocketAddress(address, 53)).apply { setTimeout(Duration.ofSeconds(3)) }
+      }
+    return ExtendedResolver(resolvers).apply { setTimeout(Duration.ofSeconds(3)) }
   }
 
   private suspend fun rawQuery(
@@ -619,49 +564,6 @@ class GatewayDiscovery(
       )
     }
 
-  private fun txtValue(
-    records: List<TXTRecord>,
-    key: String,
-  ): String? {
-    val prefix = "$key="
-    for (r in records) {
-      val strings: List<String> =
-        try {
-          r.strings
-        } catch (_: Throwable) {
-          emptyList()
-        }
-      for (s in strings) {
-        val trimmed = decodeDnsTxtString(s).trim()
-        if (trimmed.startsWith(prefix)) {
-          return trimmed.removePrefix(prefix).trim().ifEmpty { null }
-        }
-      }
-    }
-    return null
-  }
-
-  private fun txtIntValue(
-    records: List<TXTRecord>,
-    key: String,
-  ): Int? = txtValue(records, key)?.toIntOrNull()
-
-  private fun decodeDnsTxtString(raw: String): String {
-    // dnsjava treats TXT as opaque bytes and decodes as ISO-8859-1 to preserve bytes.
-    // Our TXT payload is UTF-8 (written by the gateway), so re-decode when possible.
-    val bytes = raw.toByteArray(Charsets.ISO_8859_1)
-    val decoder =
-      Charsets.UTF_8
-        .newDecoder()
-        .onMalformedInput(CodingErrorAction.REPORT)
-        .onUnmappableCharacter(CodingErrorAction.REPORT)
-    return try {
-      decoder.decode(ByteBuffer.wrap(bytes)).toString()
-    } catch (_: Throwable) {
-      raw
-    }
-  }
-
   private suspend fun resolveHostUnicast(hostname: String): String? {
     val a =
       records(lookupUnicastMessage(hostname, Type.A), Section.ANSWER)
@@ -674,4 +576,20 @@ class GatewayDiscovery(
 
     return a.firstOrNull() ?: aaaa.firstOrNull()
   }
+}
+
+internal fun gatewayDnsTxtValue(
+  records: List<TXTRecord>,
+  key: String,
+): String? {
+  val prefix = "$key="
+  for (record in records) {
+    // The default getter escapes DNS presentation text instead of decoding the advertised UTF-8 value.
+    val strings: List<String> = record.getStrings(false)
+    for (value in strings) {
+      val trimmed = value.trim()
+      if (trimmed.startsWith(prefix)) return trimmed.removePrefix(prefix).trim().ifEmpty { null }
+    }
+  }
+  return null
 }

@@ -1,8 +1,8 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import createDOMPurify from "dompurify";
 import type { MermaidConfig } from "mermaid";
-import mermaidScriptUrl from "mermaid/dist/mermaid.min.js?url&no-inline";
 import frameScriptUrl from "./frame.js?url&no-inline";
+import mermaidScriptUrl from "./mermaid-script-url.ts";
 
 export type MermaidTheme = {
   background: string;
@@ -47,29 +47,7 @@ const SVG_TAGS = [
   "stop",
   "pattern",
 ];
-const SVG_ATTRIBUTES = [
-  "id",
-  "xmlns",
-  "viewBox",
-  "width",
-  "height",
-  "x",
-  "y",
-  "dx",
-  "dy",
-  "x1",
-  "y1",
-  "x2",
-  "y2",
-  "cx",
-  "cy",
-  "r",
-  "rx",
-  "ry",
-  "d",
-  "points",
-  "transform",
-  "preserveAspectRatio",
+const SVG_PRESENTATION_ATTRIBUTES = [
   "fill",
   "fill-opacity",
   "fill-rule",
@@ -94,6 +72,31 @@ const SVG_ATTRIBUTES = [
   "word-spacing",
   "visibility",
   "display",
+];
+const SVG_ATTRIBUTES = [
+  "id",
+  "xmlns",
+  "viewBox",
+  "width",
+  "height",
+  "x",
+  "y",
+  "dx",
+  "dy",
+  "x1",
+  "y1",
+  "x2",
+  "y2",
+  "cx",
+  "cy",
+  "r",
+  "rx",
+  "ry",
+  "d",
+  "points",
+  "transform",
+  "preserveAspectRatio",
+  ...SVG_PRESENTATION_ATTRIBUTES,
   "markerWidth",
   "markerHeight",
   "refX",
@@ -185,6 +188,9 @@ function sanitizeMermaidSvg(source: string, backgroundColor: string): string {
 }
 
 function createMermaidFrame(): MermaidFrame {
+  if (!mermaidScriptUrl) {
+    throw new MermaidTransientError("The Mermaid classic script URL was not injected.");
+  }
   const frame = document.createElement("iframe");
   const channel = new MessageChannel();
   let readyResolve: () => void;
@@ -279,7 +285,11 @@ function createMermaidFrame(): MermaidFrame {
     loaded = true;
     // The frame has an opaque origin. Only this exact window receives the port;
     // all subsequent diagram data travels on that private channel.
-    frame.contentWindow?.postMessage({ type: "openclaw:mermaid-init" }, "*", [channel.port2]);
+    frame.contentWindow?.postMessage(
+      { type: "openclaw:mermaid-init", presentationAttributes: SVG_PRESENTATION_ATTRIBUTES },
+      "*",
+      [channel.port2],
+    );
   });
   frame.setAttribute("sandbox", "allow-scripts");
   frame.setAttribute("aria-hidden", "true");
@@ -335,6 +345,12 @@ export function renderMermaidSvg(source: string, theme: MermaidTheme): Promise<s
         maxEdges: MAX_EDGES,
         arrowMarkerAbsolute: false,
         theme: "base",
+        look: "classic",
+        flowchart: { layout: "dagre" },
+        state: { layout: "dagre" },
+        class: { layout: "dagre" },
+        er: { layout: "dagre" },
+        requirement: { layout: "dagre" },
         themeCSS: "",
         fontFamily: theme.fontFamily,
         themeVariables: {

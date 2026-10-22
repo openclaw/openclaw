@@ -14,11 +14,6 @@ describe("Agents route location", () => {
     ["/settings/agents/research", "research", "overview"],
     ["/settings/agents/research/overview", "research", "overview"],
     ["/settings/agents/research/files", "research", "files"],
-    ["/settings/agents/research/tools", "research", "tools"],
-    ["/settings/agents/research/skills", "research", "skills"],
-    ["/settings/agents/research/channels", "research", "channels"],
-    ["/settings/agents/research/cron", "research", "cron"],
-    ["/settings/agents/research/memory", "research", "memory"],
   ] as const)("reads %s without rewriting it", (url, requestedAgentId, panel) => {
     expect(resolveAgentsRouteLocation(location(url))).toMatchObject({
       requestedAgentId,

@@ -14,9 +14,9 @@ type Routing = Pick<
   | "mainSessionRestartRecovery"
   | "lifecycleStartedAt"
   | "lifecycleGeneration"
-  | "isHeartbeat"
   | "verboseLevel"
   | "registeredAt"
+  | "eventState"
 >;
 
 type RoutingRecord = { owner: WeakRef<AgentRunContext>; routing: Routing };
@@ -55,9 +55,9 @@ export function recordAgentEventRouting(
     mainSessionRestartRecovery: context.mainSessionRestartRecovery,
     lifecycleStartedAt: context.lifecycleStartedAt,
     lifecycleGeneration: context.lifecycleGeneration,
-    isHeartbeat: context.isHeartbeat,
     verboseLevel: context.verboseLevel,
     registeredAt: context.registeredAt,
+    eventState: context.eventState,
   };
   const routingByRun = (scope.routingByRun ??= new Map());
   const record = routingByRun.get(runId);

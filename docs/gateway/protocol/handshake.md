@@ -66,6 +66,20 @@ Client replies with `connect`:
 
 Gateway responds with `hello-ok`:
 
+The default connect deadline is 30 seconds, allowing authentication and profile
+preparation to finish on busy or slower hosts. It is a total deadline, not an idle
+timeout: progress does not extend it. The client connect watchdog and server
+preauth timeout share this default. Operators can override the server budget with
+`OPENCLAW_HANDSHAKE_TIMEOUT_MS`; configure connecting clients with the same budget.
+
+When the Gateway already holds a named canonical owner and its local-owner
+binding, initial connections and reconnects reuse those profile facts. Committed
+profile writes update the retained catalog; creating an owner, adopting a missing
+name, or restoring an absent binding still uses the profile writer. Merged or
+misbound owners require `openclaw doctor --fix` before reconnecting. Every
+connection retains its authentication, device authorization, role, and visibility
+checks.
+
 ```json
 {
   "type": "res",
@@ -96,6 +110,26 @@ Gateway responds with `hello-ok`:
 reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
+
+Clients that do not use health details at connection time can advertise
+`hello-health-on-demand` in `connect.caps`, as the Control UI does. The Gateway
+then sends `snapshot.health: {}` instead of the cached health details. The
+required snapshot fields and version counters remain present; health RPCs and
+health events are unchanged. Clients without this capability retain the full
+cached health snapshot, and older Gateways ignore the capability.
+
+Clients can independently advertise `health-summary` to omit `agents` and
+`sessions` from health events and cached hello health. Channel status, errors,
+and other health fields remain present. The `health` RPC always retains the
+full diagnostic snapshot, including heartbeat configuration and recent sessions.
+
+The Control UI also advertises `hello-presence-self`: hello contains only the
+connecting client's presence row, preserving its profile bootstrap. The existing
+presence event stream supplies the full roster after hello, including the initial
+reset for `presence-deltas` clients. Clients without this capability keep the full
+hello roster. This avoids sending that roster twice during reconnects without
+caching presence across connections or authorization changes.
+
 `controlUiUrl` optionally advertises the Gateway's configured public Control UI
 origin and base path for shareable links, independent of the client's tunnel or
 development-server address. It is omitted when `gateway.publicOrigin` is unset
@@ -128,6 +162,10 @@ Validating before send:
 `pluginSurfaceUrls` is optional and maps plugin surface names (e.g.
 `canvas`) to scoped hosted URLs; it may expire, so nodes call
 `node.pluginSurface.refresh` with `{ "surface": "canvas" }` for a fresh entry.
+The Control UI uses `plugin.surface.refresh` only when the hello's granted scopes
+satisfy `operator.read` (including `operator.write` and `operator.admin`). A
+`FORBIDDEN` response stops automatic renewal retries for the current lease;
+reconnecting evaluates the new hello's grants.
 The deprecated `canvasHostUrl` / `canvasCapability` / `node.canvas.capability.refresh`
 path is not supported; use plugin surfaces.
 The `sessions.observer.ask` method was removed; use `sessions.companion.ask`.
@@ -149,9 +187,9 @@ route exits or is replaced, the Gateway closes connections that received its
 identity URL with code `1012`; reconnect to discover the current route.
 
 `openclaw.setup.verify` additionally checks the Gateway's current application and
-restart state before and after its live inference probe. It returns
+restart state before and after its live inference check. It returns
 `{ ok: false, status: "unavailable", error }` while saved settings are not active,
-restart work remains, or the verified runtime changes during the probe. Clients
+restart work remains, or the verified runtime changes during the check. Clients
 should preserve the selected model and retry after application or restart finishes.
 Standalone CLI verification still tests saved configuration without requiring a
 running Gateway.
@@ -234,6 +272,12 @@ the general protocol version. Frames stay under 64 KiB, except a negotiated
 `worker.heartbeat`, `worker.transcript.commit`, `worker.live-event`,
 `worker.inference.start`, and `worker.inference.cancel`.
 
+Assistant messages in `worker.transcript.commit` may carry the live event's
+`itemId`. The Gateway binds it to its generated commit key, removes it before
+storage, and publishes the correlation only after the row commits. It is not
+provider replay data. This worker-only field travels between the exact
+builds admitted by the bundle, version, and feature checks above.
+
 For an identity-audited attached run, the live turn capability can record the
 credential, build, owner-epoch, and placement checks as one enforced admission
 receipt. The receipt contains none of the credential, build hashes, tokens,
@@ -252,6 +296,14 @@ Operator clients may advertise optional capabilities in `connect.params.caps`:
 
 - `tool-events`: accepts structured tool lifecycle events.
 - `inline-widgets`: can render hosted inline widget tool results.
+- `ultrafast`: accepts the explicit `"ultrafast"` fast-mode value in session metadata.
+  Without it, session responses and events present that value as Fast (`true`)
+  for released native decoders that only accept booleans and `"auto"`. This is a
+  per-connection presentation: stored selection and execution stay `"ultrafast"`.
+  Upgraded clients advertise this capability to retain the explicit selection;
+  remove the legacy projection only when those released clients are no longer supported.
+- `chat-only-assistant-text`: renders assistant text from `chat` and omits the
+  redundant assistant-text `agent` stream. See [event families](/gateway/protocol/rpc-bootstrap-and-events#common-event-families).
 
 Client capabilities describe the connected client, not authorization. Agent tools may declare required capabilities; the Gateway omits those tools unless every requirement appears in the originating client's `caps`. Channel-originated runs have no Gateway client capabilities, so capability-gated tools are unavailable even when tool policy explicitly allows them.
 

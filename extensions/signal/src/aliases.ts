@@ -1,4 +1,3 @@
-// Signal alias helpers keep OpenClaw-side names inside the Signal plugin boundary.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -22,15 +21,7 @@ type ResolvedSignalTarget =
     };
 
 function normalizeAliasKey(raw: string): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const withoutSignal = /^signal:/i.test(trimmed)
-    ? trimmed.slice("signal:".length).trim()
-    : trimmed;
-  const normalized = normalizeLowercaseStringOrEmpty(withoutSignal);
-  return normalized || undefined;
+  return normalizeLowercaseStringOrEmpty(raw.trim().replace(/^signal:/i, "")) || undefined;
 }
 
 function resolveAliasMap(params: {
@@ -52,10 +43,6 @@ function resolveAliasMap(params: {
   return aliases;
 }
 
-function resolveTargetKind(target: string): SignalResolvedTargetKind {
-  return normalizeLowercaseStringOrEmpty(target).startsWith("group:") ? "group" : "user";
-}
-
 function resolveRawSignalTarget(
   input: string,
 ): { to: string; kind: SignalResolvedTargetKind } | null {
@@ -65,7 +52,7 @@ function resolveRawSignalTarget(
   }
   return {
     to: normalized,
-    kind: resolveTargetKind(normalized),
+    kind: normalized.startsWith("group:") ? "group" : "user",
   };
 }
 
@@ -86,8 +73,8 @@ function resolveSignalAliasTargetFromMap(params: {
     }
     visited.add(alias);
 
-    const rawValue = params.aliases.get(alias);
-    if (typeof rawValue !== "string" || !rawValue.trim()) {
+    const rawValue = params.aliases.get(alias)?.trim();
+    if (!rawValue) {
       throw new Error(`Signal alias "${alias}" must point to a non-empty Signal target.`);
     }
 
@@ -111,18 +98,6 @@ function resolveSignalAliasTargetFromMap(params: {
   }
 }
 
-function resolveSignalAliasTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  input: string;
-}): ResolvedSignalAliasTarget | null {
-  const aliases = resolveAliasMap(params);
-  return resolveSignalAliasTargetFromMap({
-    aliases,
-    input: params.input,
-  });
-}
-
 export function resolveSignalTarget(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -135,7 +110,10 @@ export function resolveSignalTarget(params: {
       source: "raw",
     };
   }
-  const aliasTarget = resolveSignalAliasTarget(params);
+  const aliasTarget = resolveSignalAliasTargetFromMap({
+    aliases: resolveAliasMap(params),
+    input: params.input,
+  });
   if (aliasTarget) {
     return { ...aliasTarget, source: "alias" };
   }
@@ -173,7 +151,7 @@ export function listSignalAliasDirectoryEntries(params: {
 }): ChannelDirectoryEntry[] {
   const aliases = resolveAliasMap(params);
   const query = normalizeLowercaseStringOrEmpty(params.query);
-  const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
+  const limit = params.limit != null && params.limit > 0 ? params.limit : undefined;
   const exactAlias = params.query ? normalizeAliasKey(params.query) : undefined;
   if (exactAlias && aliases.has(exactAlias)) {
     const target = resolveSignalAliasTargetFromMap({ aliases, input: exactAlias });
@@ -206,7 +184,7 @@ export function listSignalAliasDirectoryEntries(params: {
       continue;
     }
     entries.push({ kind: params.kind, id: target.to, name: alias });
-    if (typeof limit === "number" && entries.length >= limit) {
+    if (limit !== undefined && entries.length >= limit) {
       break;
     }
   }

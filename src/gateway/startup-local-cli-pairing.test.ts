@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import {
+  emptySqliteCounts,
+  observeParentSqlite,
+} from "../../test/helpers/sqlite-parent-observer.js";
+import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
+import { loadDeviceIdentityIfPresentAsync } from "../infra/device-identity-async.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -17,16 +22,31 @@ afterEach(() => {
 });
 
 describe("startup local CLI pairing", () => {
-  it("persists canonical Windows metadata for a new local CLI pairing", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  it("creates and reuses a local CLI pairing off the main thread with canonical Windows metadata", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     await withStateDirEnv("openclaw-startup-local-cli-pairing-", async () => {
-      const identity = loadOrCreateDeviceIdentity();
-
-      await expect(ensureStartupLocalCliPairing()).resolves.toBe("created");
-      await expect(getPairedDevice(identity.deviceId)).resolves.toMatchObject({
+      const observer = observeParentSqlite();
+      try {
+        await expect(ensureStartupLocalCliPairing()).resolves.toBe("created");
+        await expect(ensureStartupLocalCliPairing()).resolves.toBe("reused");
+        expect(observer.counts).toEqual(emptySqliteCounts());
+      } finally {
+        observer.restore();
+      }
+      const identity = await loadDeviceIdentityIfPresentAsync();
+      expect(identity).not.toBeNull();
+      const paired = await getPairedDevice(identity!.deviceId);
+      expect(paired).toMatchObject({
         platform: "windows",
         deviceFamily: "Windows",
+        tokens: { operator: { token: expect.any(String) } },
+      });
+      platform.mockRestore();
+      expect(
+        readDeviceAuthTokenForTest({ deviceId: identity!.deviceId, role: "operator" }),
+      ).toMatchObject({
+        token: paired?.tokens?.operator?.token,
       });
     });
   });
@@ -50,7 +70,9 @@ describe("startup local CLI pairing", () => {
       expect(approved?.status).toBe("approved");
 
       await expect(ensureStartupLocalCliPairing()).resolves.toBe("unavailable");
-      expect(loadDeviceAuthToken({ deviceId: identity.deviceId, role: "operator" })).toBeNull();
+      expect(
+        readDeviceAuthTokenForTest({ deviceId: identity.deviceId, role: "operator" }),
+      ).toBeNull();
       await expect(getPairedDevice(identity.deviceId)).resolves.toMatchObject({
         approvedScopes: [READ_SCOPE],
       });

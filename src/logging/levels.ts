@@ -1,4 +1,3 @@
-// Log level constants define accepted logger levels and ordering.
 export const ALLOWED_LOG_LEVELS = [
   "silent",
   "fatal",
@@ -37,4 +36,10 @@ export function normalizeLogLevel(level?: string, fallback: LogLevel = "info") {
 
 export function levelToMinLevel(level: LogLevel): number {
   return MIN_LEVEL_BY_LOG_LEVEL[level];
+}
+
+export function isLogLevelEnabled(level: LogLevel, minimum: LogLevel): boolean {
+  return (
+    level !== "silent" && minimum !== "silent" && levelToMinLevel(level) >= levelToMinLevel(minimum)
+  );
 }

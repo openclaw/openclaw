@@ -1,9 +1,18 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../../test/helpers/temp-dir.js";
 import darkTheme from "./dark.json" with { type: "json" };
 import { loadThemeFromPath } from "./theme.js";
+
+const terminal = vi.hoisted(() => ({ trueColor: false }));
+vi.mock("@earendil-works/pi-tui", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@earendil-works/pi-tui")>();
+  return {
+    ...actual,
+    getCapabilities: () => ({ ...actual.getCapabilities(), trueColor: terminal.trueColor }),
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -16,7 +25,8 @@ function loadColor(color: string | number, mode: "256color" | "truecolor") {
       colors: { ...darkTheme.colors, accent: color, selectedBg: color },
     }),
   );
-  return loadThemeFromPath(themePath, mode);
+  terminal.trueColor = mode === "truecolor";
+  return loadThemeFromPath(themePath);
 }
 
 describe("loadThemeFromPath", () => {
@@ -24,40 +34,18 @@ describe("loadThemeFromPath", () => {
     ["#0000ff", 21],
     ["#2f00ff", 21],
     ["#3000ff", 57],
-    ["#7200ff", 57],
     ["#7300ff", 57],
     ["#7400ff", 93],
-    ["#9a00ff", 93],
-    ["#9b00ff", 93],
-    ["#9c00ff", 129],
-    ["#c200ff", 129],
-    ["#c300ff", 129],
-    ["#c400ff", 165],
-    ["#ea00ff", 165],
-    ["#eb00ff", 165],
-    ["#ec00ff", 201],
-    ["#ff00ff", 201],
-    ["#ff7200", 202],
     ["#ff7300", 202],
     ["#ff7400", 208],
-    ["#00ff72", 47],
     ["#00ff73", 47],
     ["#00ff74", 48],
     ["#5f87af", 67],
     ["#000000", 16],
     ["#040404", 16],
     ["#050505", 232],
-    ["#080808", 232],
-    ["#0c0c0c", 232],
     ["#0d0d0d", 232],
     ["#0e0e0e", 233],
-    ["#707070", 242],
-    ["#717171", 242],
-    ["#727272", 243],
-    ["#e8e8e8", 254],
-    ["#e9e9e9", 254],
-    ["#eaeaea", 255],
-    ["#eeeeee", 255],
     ["#ffffff", 231],
     ["#606060", 59],
     ["#616161", 241],

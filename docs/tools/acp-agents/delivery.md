@@ -24,6 +24,11 @@ work. The delivery path depends on that shape.
     session, and ACP output is delivered back to that same
     channel/thread/topic.
 
+    Once a prepared ACP turn is accepted for submission, the channel's
+    five-minute ingress startup timeout no longer applies. The turn keeps its
+    configured execution timeout and can still be stopped explicitly; a slow
+    reply does not cause the trigger message to be dispatched again.
+
     When an ACP agent requests structured input during a delivered turn,
     OpenClaw presents supported form fields as transient Gateway questions in
     batches of up to three. Single- and multi-select fields support up to four

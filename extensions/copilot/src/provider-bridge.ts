@@ -1,4 +1,3 @@
-// Copilot plugin module implements BYOK provider mapping.
 import type { ProviderConfig } from "@github/copilot-sdk";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -49,7 +48,7 @@ const QUERY_PARAM_NAME_SEPARATOR_RE = /[\p{C}\p{Z}\u115F\u1160\u3164\uFFA0+]/gu;
 
 type CopilotProviderMode = "github-copilot" | "byok";
 
-type CopilotModelProviderInput = {
+export type CopilotModelProviderInput = {
   api?: string;
   id: string;
   provider: string;
@@ -91,7 +90,7 @@ export function resolveCopilotProvider(params: {
   if (!baseUrl) {
     throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
   }
-  assertByokEndpointAllowed(baseUrl);
+  assertByokEndpointHostAllowed(baseUrl);
   if (hasUnsupportedTransportPolicy(params.model)) {
     throw new Error(COPILOT_BYOK_TRANSPORT_POLICY_ERROR);
   }
@@ -160,16 +159,17 @@ export function supportsCopilotByokProviderShape(
     "api" | "baseUrl" | "requestProxy" | "requestTls" | "requestAllowPrivateNetwork"
   >,
 ): boolean {
-  if (!normalizeOptionalString(model.baseUrl) || hasUnsupportedTransportPolicy(model)) {
+  const baseUrl = normalizeOptionalString(model.baseUrl);
+  if (!baseUrl || hasUnsupportedTransportPolicy(model)) {
     return false;
   }
   try {
     resolveProviderType(
       normalizeOptionalString(model.api)?.toLowerCase() ?? "openai-responses",
-      normalizeOptionalString(model.baseUrl)!,
+      baseUrl,
       undefined,
     );
-    assertByokEndpointHostAllowed(normalizeOptionalString(model.baseUrl)!);
+    assertByokEndpointHostAllowed(baseUrl);
     return true;
   } catch {
     return false;
@@ -223,10 +223,6 @@ function normalizeCredentialQueryParamName(name: string): string {
   } catch {
     return stripped.toLowerCase().replace(/[-_]/g, "");
   }
-}
-
-function assertByokEndpointAllowed(baseUrl: string): void {
-  assertByokEndpointHostAllowed(baseUrl);
 }
 
 function resolveProviderType(

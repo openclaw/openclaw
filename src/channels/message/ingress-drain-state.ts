@@ -1,4 +1,5 @@
-import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
 export class IngressAdoptionLostError extends Error {
   readonly code: "guillotined" | "superseded" | "reclaimed";
@@ -16,6 +17,10 @@ export function isIngressAdoptionLostError(error: unknown): error is IngressAdop
 
 export type ChannelIngressDrainDispatchResult =
   | { kind: "completed" }
+  /** The dispatch owner already committed this claim to its durable receipt. */
+  | { kind: "transferred" }
+  /** Normal admission backpressure; the caller owns the next wake. */
+  | { kind: "pending" }
   | { kind: "deferred" }
   | { kind: "failed-retryable"; error: unknown };
 
@@ -28,6 +33,8 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   phase: "dispatching" | "deferred" | "adopted" | "settled";
   occupiesLane: boolean;
   task: Promise<void>;
+  settlement?: Promise<void>;
+  settlementFailure?: { error: unknown };
   stallTimer?: ReturnType<typeof setTimeout>;
   claimRefreshTimer?: ReturnType<typeof setInterval>;
   /** Closed code: pre-adoption stall watchdog has claimed settle ownership. */
@@ -38,32 +45,50 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
 
+export function isPreAdoptionState<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+): boolean {
+  return (
+    (state.phase === "dispatching" || state.phase === "deferred") &&
+    !state.guillotined &&
+    !state.superseded
+  );
+}
+
 export function createIngressSettleOwner<TPayload, TMetadata>(
   state: ActiveHandlerState<TPayload, TMetadata>,
   removeActive: (state: ActiveHandlerState<TPayload, TMetadata>) => void,
 ): (fn: () => Promise<void>) => Promise<void> {
   let settlePromise: Promise<void> | undefined;
-  let settled = false;
   return async (fn) => {
-    if (settled) {
+    if (state.phase === "settled") {
       return;
     }
     if (settlePromise) {
-      await settlePromise;
-      return;
+      return settlePromise;
     }
-    settlePromise = (async () => {
-      // Only mark settled after the tombstone/fail/release write commits.
-      // Write failure must keep heartbeat + in-memory ownership (wedged > duplicated).
-      await fn();
-      settled = true;
-      state.phase = "settled";
-      removeActive(state);
-    })();
+    settlePromise = Promise.resolve().then(async () => {
+      try {
+        // Only mark settled after the tombstone/fail/release write commits.
+        // Write failure must keep heartbeat + in-memory ownership (wedged > duplicated).
+        await fn();
+        state.settlementFailure = undefined;
+        state.phase = "settled";
+        removeActive(state);
+      } catch (error) {
+        state.settlementFailure = isIngressAdoptionLostError(error) ? undefined : { error };
+        throw error;
+      } finally {
+        state.settlement = undefined;
+      }
+    });
+    state.settlement = settlePromise;
     try {
       await settlePromise;
     } catch (err) {
-      settlePromise = undefined;
+      if (!hasSqliteWorkerOutcomeUnknown(err)) {
+        settlePromise = undefined;
+      }
       throw err;
     }
   };

@@ -1,8 +1,23 @@
-// Reef plugin module implements cli metadata behavior.
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 import { definePluginEntry } from "openclaw/plugin-sdk/core";
-import { registerReefCliMetadata } from "./src/cli-metadata.js";
 
-export { registerReefCliMetadata } from "./src/cli-metadata.js";
+export function registerReefCliMetadata(api: OpenClawPluginApi) {
+  api.registerCli(
+    async ({ program }) => {
+      const { registerReefCli } = await import("./src/cli.js");
+      registerReefCli({ program });
+    },
+    {
+      descriptors: [
+        {
+          name: "reef",
+          description: "Register on a Reef relay and manage guarded claw-to-claw friendships",
+          hasSubcommands: true,
+        },
+      ],
+    },
+  );
+}
 
 export default definePluginEntry({
   id: "reef",

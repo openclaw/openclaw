@@ -51,7 +51,7 @@ for ((attempt = 1; attempt <= attempts; attempt++)); do
   else
     last_status="$?"
   fi
-  echo "Docker pull failed or timed out after ${timeout_seconds}s: status=${last_status}" >&2
+  echo "::warning::Docker pull failed or timed out after ${timeout_seconds}s: status=${last_status}" >&2
   if [[ "$attempt" -lt "$attempts" && "$retry_delay_seconds" -gt 0 ]]; then
     sleep "$retry_delay_seconds"
   fi

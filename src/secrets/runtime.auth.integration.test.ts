@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import { withTempHome } from "../config/home-env.test-harness.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import {
   asConfig,
   beginSecretsRuntimeIsolationForTest,
@@ -103,53 +104,32 @@ describe("secrets runtime snapshot auth integration", () => {
     await withTempHome("openclaw-secrets-runtime-agent-dirs-", async (home) => {
       const mainAgentDir = path.join(home, ".openclaw", "agents", "main", "agent");
       const opsAgentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
-      await fs.mkdir(mainAgentDir, { recursive: true });
-      await fs.mkdir(opsAgentDir, { recursive: true });
-      await fs.writeFile(
-        path.join(mainAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                keyRef: OPENAI_ENV_KEY_REF,
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
-      await fs.writeFile(
-        path.join(opsAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "anthropic:ops": {
-                type: "api_key",
-                provider: "anthropic",
-                keyRef: { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" },
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        { encoding: "utf8", mode: 0o600 },
-      );
-
-      const prepared = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({}),
-        env: {
-          OPENAI_API_KEY: "sk-main-runtime",
-          ANTHROPIC_API_KEY: "sk-ops-runtime",
-        },
+      const opsKeyRef = { source: "env", provider: "default", id: "ANTHROPIC_API_KEY" } as const;
+      const writeProfile = async (
+        agentDir: string,
+        id: string,
+        provider: string,
+        keyRef: SecretRef,
+      ) => {
+        await fs.mkdir(agentDir, { recursive: true });
+        const profiles = { [id]: { type: "api_key", provider, keyRef } };
+        await fs.writeFile(
+          path.join(agentDir, "auth-profiles.json"),
+          `${JSON.stringify({ version: 1, profiles }, null, 2)}\n`,
+          { encoding: "utf8", mode: 0o600 },
+        );
+      };
+      await writeProfile(mainAgentDir, "openai:default", "openai", OPENAI_ENV_KEY_REF);
+      await writeProfile(opsAgentDir, "anthropic:ops", "anthropic", opsKeyRef);
+      const options = {
+        env: { OPENAI_API_KEY: "sk-main-runtime", ANTHROPIC_API_KEY: "sk-ops-runtime" },
         loadAuthStore: loadAuthStoreFromTestFile,
         loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+      };
+
+      const prepared = await prepareSecretsRuntimeSnapshot({
+        ...options,
+        config: asConfig({}),
       });
 
       activateSecretsRuntimeSnapshot(prepared);
@@ -160,33 +140,17 @@ describe("secrets runtime snapshot auth integration", () => {
       ).toBeUndefined();
 
       const refreshed = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          agents: {
-            list: [{ id: "ops", agentDir: opsAgentDir }],
-          },
-        }),
-        env: {
-          OPENAI_API_KEY: "sk-main-runtime",
-          ANTHROPIC_API_KEY: "sk-ops-runtime",
-        },
-        loadAuthStore: loadAuthStoreFromTestFile,
-        loadablePluginOrigins: EMPTY_LOADABLE_PLUGIN_ORIGINS,
+        ...options,
+        config: asConfig({ agents: { entries: { ops: { agentDir: opsAgentDir } } } }),
       });
       activateSecretsRuntimeSnapshot(refreshed);
 
       const profile = getActiveSecretsRuntimeSnapshot()?.authStores.find(
         (entry) => entry.agentDir === opsAgentDir,
       )?.store.profiles["anthropic:ops"];
-      expect(profile?.type).toBe("api_key");
-      if (profile?.type !== "api_key") {
-        throw new Error("Expected anthropic ops API key profile");
-      }
-      expect(profile.key).toBe("sk-ops-runtime");
-      expect(profile.keyRef).toEqual({
-        source: "env",
-        provider: "default",
-        id: "ANTHROPIC_API_KEY",
-      });
+      expect(profile).toEqual(
+        expect.objectContaining({ type: "api_key", key: "sk-ops-runtime", keyRef: opsKeyRef }),
+      );
     });
   });
 });

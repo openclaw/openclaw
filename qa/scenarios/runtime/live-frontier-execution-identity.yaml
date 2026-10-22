@@ -1,0 +1,159 @@
+title: Live frontier execution identity inspection
+
+scenario:
+  id: live-frontier-execution-identity
+  surface: gateway
+  coverage:
+    secondary:
+      - gateway.identity-and-presence-apis
+  objective: Inspect distinct admitted executions from two real frontier turns in one session, with exact CLI selection and immutable identity after restart.
+  gatewayConfigPatch:
+    logging:
+      audit:
+        enabled: true
+        executionIdentity: true
+  successCriteria:
+    - Only the live-frontier provider lane is eligible; the selected model comes from operator input or the existing live defaults.
+    - Each completed turn has a matching assistant reply from the selected provider and model, plus a distinct execution and context id.
+    - Run discovery, exact RPC inspection, and human and JSON CLI inspection agree without claiming admission authorization or retaining prompt content.
+    - Exact context bytes survive a lifecycle-owned Gateway replacement.
+  docsRefs:
+    - docs/gateway/audit.md
+    - docs/cli/audit.md
+  codeRefs:
+    - extensions/qa-lab/src/suite-runtime-agent-process.ts
+    - src/gateway/server-methods/audit.ts
+    - src/commands/audit.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    providerMode: live-frontier
+    suiteIsolation: isolated
+    isolationReason: Enables identity collection in isolated state and replaces its Gateway before exact readback.
+    retryCount: 0
+    summary: Run `pnpm openclaw qa suite --provider-mode live-frontier --scenario live-frontier-execution-identity`; needs authorized provider auth and the source-owned live model selection. Does not require external channel credentials.
+    config:
+      requiredProviderMode: live-frontier
+
+flow:
+  steps:
+    - name: inspects two real frontier executions
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: execution identity qualification requires live-frontier
+        - set: selected
+          value: { expr: "splitModelRef(env.primaryModel)" }
+        - assert:
+            expr: "selected?.provider && selected?.model && !['mock-openai', 'aimock'].includes(selected.provider)"
+            message: execution identity qualification requires a real provider and model
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - set: sessionKey
+          value: { expr: "`agent:qa:live-identity-${randomUUID()}`" }
+        - set: inspections
+          value: []
+        - forEach:
+            items: [first, second]
+            item: turn
+            actions:
+              - set: marker
+                value: { expr: "`QA-LIVE-IDENTITY-${turn}-${randomUUID()}`" }
+              - set: started
+                value:
+                  expr: "await env.gateway.call('agent', { agentId: 'qa', sessionKey, message: `Reply exactly: ${marker}`, deliver: false, provider: selected.provider, model: selected.model, idempotencyKey: randomUUID() })"
+              - assert:
+                  expr: "started.status === 'accepted' && typeof started.runId === 'string' && started.runId.length > 0"
+                  message: live agent turn was not admitted
+              - call: waitForAgentRun
+                saveAs: terminal
+                args:
+                  [
+                    { ref: env },
+                    { expr: "started.runId" },
+                    { expr: "liveTurnTimeoutMs(env, 60000)" },
+                  ]
+              - assert:
+                  expr: "['ok', 'completed', 'succeeded'].includes(terminal.status)"
+                  message: live agent turn did not complete successfully
+              - call: waitForAgentHistoryReply
+                args:
+                  - ref: env
+                  - ref: sessionKey
+                  - lambda:
+                      params: [text]
+                      expr: "text.trim() === marker"
+                  - expr: liveTurnTimeoutMs(env, 60000)
+              - set: history
+                value: { expr: "await env.gateway.call('chat.history', { sessionKey, limit: 12 })" }
+              - set: assistant
+                value:
+                  {
+                    expr: "history.messages.filter((message) => message.role === 'assistant').at(-1)",
+                  }
+              - assert:
+                  expr: "assistant?.provider === selected.provider && assistant?.model === selected.model && assistant?.stopReason !== 'error' && assistant?.content?.some((part) => part.type === 'text' && part.text.trim() === marker)"
+                  message: completed reply did not come from the selected live provider and model
+              - call: waitForCondition
+                saveAs: inspection
+                args:
+                  - lambda:
+                      async: true
+                      expr: "env.gateway.call('audit.run.inspect', { runId: started.runId }).then((value) => value.identity.state === 'present' ? value : undefined)"
+                  - 60000
+                  - 250
+              - set: context
+                value: { expr: "inspection.identity.context" }
+              - assert:
+                  expr: "inspection.run.runId === started.runId && inspection.run.executionId === context.executionId && context.runId === started.runId && context.contextId && context.executionId && context.ingress.state === 'present' && context.ingress.kind === 'gateway-client' && context.ingress.boundary === 'gateway.ws.authenticated-connect' && context.invoker.state === 'absent' && context.coverageState === 'unattributed'"
+                  message: live execution inspection lost its exact authenticated ingress or fabricated an invoker
+              - assert:
+                  expr: "context.agentPrincipal.kind === 'agent' && context.agentPrincipal.principalRef === 'qa' && context.agentDefinition.definitionRef === 'qa' && context.trustDomain.state === 'present' && context.runtimeInstance.state === 'present' && ['gateway', 'embedded', 'plugin-harness'].includes(context.runtimeInstance.kind) && [context.trustDomain.domainRef, context.runtimeInstance.runtimeRef].every((ref) => /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/.test(ref)) && JSON.stringify(context).length <= 16384"
+                  message: live execution lost bounded agent or pseudonymized runtime identity
+              - assert:
+                  expr: "inspection.decisionDisplays.some((display) => display.provenance.state === 'verified' && display.provenance.producer === 'run-admission' && display.decision.outcome === 'not-applicable' && display.decision.reasonCode === 'run_admission_identity_not_evaluated') && !Object.hasOwn(inspection, 'decisions') && !JSON.stringify(inspection).includes(marker)"
+                  message: live inspection overstated admission authority or exposed private content
+              - set: exact
+                value:
+                  {
+                    expr: "await runQaCli(env, ['audit', '--execution', context.executionId, '--explain', '--json'], { timeoutMs: 60000, json: true })",
+                  }
+              - assert:
+                  expr: "exact.run.executionId === context.executionId && JSON.stringify(exact.identity.context) === JSON.stringify(context)"
+                  message: exact CLI inspection selected a different live execution
+              - set: human
+                value:
+                  {
+                    expr: "await runQaCli(env, ['audit', '--execution', context.executionId, '--explain'], { timeoutMs: 60000 })",
+                  }
+              - assert:
+                  expr: "['Identity', 'Invoker [absent]', 'Decisions', 'run_admission_identity_not_evaluated', 'not-applicable'].every((label) => human.includes(label)) && !human.includes(marker)"
+                  message: human live inspection omitted non-enforcement evidence or leaked the prompt
+              - set: inspections
+                value: { expr: "[...inspections, context]" }
+        - assert:
+            expr: "inspections.length === 2 && new Set(inspections.map((context) => context.executionId)).size === 2 && new Set(inspections.map((context) => context.contextId)).size === 2"
+            message: repeated live turns reused one execution identity
+      detailsExpr: "`live turns=2; distinct executions=${inspections.length}; exact RPC and CLI identity inspected`"
+    - name: retains live execution identity across Gateway replacement
+      actions:
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                expr: "Promise.resolve()"
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - forEach:
+            items: { ref: inspections }
+            item: before
+            actions:
+              - set: after
+                value:
+                  {
+                    expr: "await env.gateway.call('audit.run.inspect', { executionId: before.executionId })",
+                  }
+              - assert:
+                  expr: "after.run.executionId === before.executionId && after.identity.state === 'present' && JSON.stringify(after.identity.context) === JSON.stringify(before)"
+                  message: live execution identity changed across Gateway replacement
+      detailsExpr: "`restart-stable exact executions=${inspections.length}`"

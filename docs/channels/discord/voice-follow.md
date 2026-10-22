@@ -177,11 +177,11 @@ room disconnects; `voice.realtime.speakerVoice` remains the default for future
 calls. This requires an owner-authorized voice turn, agent delegation, and access
 to the `talk_voice` tool.
 
-In-call changes also require a provider voice catalog and a transport that either
-delegates directly to the agent or supports suppressed tool results, so pending
-answers can move to the replacement voice without duplicate speech. Google Live
-currently requires setting `voice.realtime.speakerVoice` and rejoining the voice
-channel; `talk_voice` reports that in-call changes are unavailable on that connection.
+In-call changes require a provider voice catalog. Google Live supports the same
+`talk_voice` flow: OpenClaw opens a fresh connection with the selected voice and
+keeps unfinished agent work with the Discord call. Answers waiting to be sent
+follow the replacement. A response already submitted to the previous connection
+may be interrupted by the switch and is not replayed, avoiding duplicate speech.
 
 While a delegated OpenClaw run is active, command-authorized Discord conversation transcripts are treated as live run control before starting another agent turn. Phrases such as "status", "cancel that", "use the smaller fix", or "when you're done also check tests" are classified as status, cancel, steering, or follow-up input for the active session. Status, cancel, accepted steering, and follow-up outcomes are spoken back into the voice channel so the caller knows whether OpenClaw handled the request.
 

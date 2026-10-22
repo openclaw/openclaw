@@ -1,4 +1,3 @@
-// Moonshot setup module handles plugin onboarding behavior.
 import {
   createDefaultModelsPresetAppliers,
   type OpenClawConfig,

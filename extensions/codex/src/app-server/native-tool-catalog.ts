@@ -9,7 +9,7 @@ import {
   type CodexDynamicToolFunctionSpec,
   type CodexDynamicToolSpec,
 } from "./protocol.js";
-import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import type { CodexBindingAuthority, CodexAppServerThreadBinding } from "./session-binding.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
 export function hasCodexNativeToolCatalog(
@@ -26,7 +26,7 @@ export function parseCodexNativeToolCatalog(
 ): CodexDynamicToolSpec[] {
   const fail = () =>
     new Error(
-      "The canonical Codex native tool catalog is missing, corrupt, or changed; the thread is preserved. Reconnect and inspect its native metadata before retrying.",
+      "The saved Codex native tool catalog is missing, corrupt, or changed; the thread is preserved. Reconnect and inspect its native metadata before retrying.",
     );
   if (!isJsonObject(metadata) || metadata.id !== threadId) {
     throw fail();
@@ -60,7 +60,7 @@ export function parseCodexNativeToolCatalog(
       type: "function",
       name: value.name,
       description: value.description,
-      inputSchema: structuredClone(value.inputSchema),
+      inputSchema: value.inputSchema,
       ...(value.deferLoading === true ? { deferLoading: true } : {}),
     };
   };
@@ -99,6 +99,7 @@ export async function loadCodexNativeToolCatalog(params: {
   appServer: CodexAppServerRuntimeOptions;
   agentDir: string;
   assertCurrent: () => void;
+  authority?: CodexBindingAuthority;
 }): Promise<CodexDynamicToolSpec[]> {
   const { binding, client, appServer, agentDir, assertCurrent } = params;
   assertCurrent();
@@ -107,7 +108,7 @@ export async function loadCodexNativeToolCatalog(params: {
   if (
     !hasCodexNativeToolCatalog(binding) ||
     !binding.dynamicToolsFingerprint ||
-    appServer.start.transport !== "stdio" ||
+    (appServer.start.transport !== "stdio" && appServer.start.transport !== "unix") ||
     appServer.remoteWorkspaceRoot ||
     !actualHome ||
     path.resolve(actualHome) !== path.resolve(home) ||
@@ -115,7 +116,7 @@ export async function loadCodexNativeToolCatalog(params: {
       buildCodexAppServerConnectionFingerprint(appServer, agentDir)
   ) {
     throw new Error(
-      "Canonical Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
+      "Saved Codex declarations require the original verified local binding and selected native connection; the thread is preserved.",
     );
   }
   const metadata = await readCodexClientSessionMeta(
@@ -124,6 +125,9 @@ export async function loadCodexNativeToolCatalog(params: {
     binding.rolloutPath,
     binding.threadId,
   );
-  assertCurrent();
-  return parseCodexNativeToolCatalog(metadata, binding.threadId, binding.dynamicToolsFingerprint);
+  const consume = () => {
+    assertCurrent();
+    return parseCodexNativeToolCatalog(metadata, binding.threadId, binding.dynamicToolsFingerprint);
+  };
+  return params.authority ? await params.authority.withCurrent(consume) : consume();
 }

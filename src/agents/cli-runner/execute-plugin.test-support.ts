@@ -1,9 +1,14 @@
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   CliBackendExecute,
   CliBackendExecuteContext,
 } from "../../plugins/cli-backend.types.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "../agent-tools.before-tool-call.state.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
@@ -32,6 +37,7 @@ export async function createExecution(
 ) {
   const runId = options.runId ?? `plugin-owner-${++nextRunId}`;
   const config = options.config ?? { tools: { exec: { security: "full", ask: "off" } } };
+  setRuntimeConfigSnapshot(config);
   const admission = prepareSystemAgentRunAdmission(config, runId, "main", "plugin-test");
   activeAdmissions.push(admission);
   const context = buildPreparedCliRunContext({
@@ -79,10 +85,12 @@ export function runPlugin(
     onNoOutputTimeout?: NonNullable<
       Parameters<typeof executePluginOwnedProcess>[0]["onNoOutputTimeout"]
     >;
-    onOutstandingWorkChange?: (active: boolean) => void;
+    onOutstandingWorkChange?: NonNullable<
+      Parameters<typeof executePluginOwnedProcess>[0]["onOutstandingWorkChange"]
+    >;
     activeToolCount?: () => number;
     getActiveLoopbackAskUserDeadline?: () => number | undefined;
-    onActiveLoopbackAskUserDeadlineChange?: (listener: () => void) => () => void;
+    setOnActiveLoopbackAskUserDeadlineChange?: (listener: (() => void) | undefined) => void;
     onInterrupted?: (reason: "aborted" | "timeout") => boolean;
   } = {},
 ) {
@@ -107,7 +115,7 @@ export function runPlugin(
     onOutstandingWorkChange: options.onOutstandingWorkChange,
     activeToolCount: options.activeToolCount,
     getActiveLoopbackAskUserDeadline: options.getActiveLoopbackAskUserDeadline,
-    onActiveLoopbackAskUserDeadlineChange: options.onActiveLoopbackAskUserDeadlineChange,
+    setOnActiveLoopbackAskUserDeadlineChange: options.setOnActiveLoopbackAskUserDeadlineChange,
     ...(options.onInterrupted ? { onInterrupted: options.onInterrupted } : {}),
     noOutputTimeoutMs: options.noOutputTimeoutMs ?? 2_000,
     consumeStdout: options.consumeStdout ?? (() => {}),
@@ -131,6 +139,8 @@ export function closePluginTestAdmissions(): void {
   for (const admission of activeAdmissions.splice(0)) {
     admission.close();
   }
+  resetAdjustedParamsByToolCallIdForTests();
+  clearRuntimeConfigSnapshot();
 }
 
 export function waitUntilAborted(execution: CliBackendExecuteContext): Promise<void> {
