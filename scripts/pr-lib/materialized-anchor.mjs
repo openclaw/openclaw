@@ -113,8 +113,11 @@ export function sweepMaterializedAnchors(ownedAnchor) {
               }
             }
           }
-          // Legacy names have no creator PID: an old operation running beyond
-          // 24 hours can lose its anchor. PID reuse in new names only delays cleanup.
+          // Accepted residual: a dead creator stands in for a drained operation,
+          // and legacy names have no creator PID. Descendants still running more
+          // than 24 hours after a crashed or undrained supervisor, or a legacy
+          // operation that old, can lose their anchor; undrained operations keep
+          // their PR locks. PID reuse in new names only delays cleanup.
           rmSync(path, { recursive: true });
           removed++;
         } catch (error) {

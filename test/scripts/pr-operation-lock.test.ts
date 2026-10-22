@@ -1552,7 +1552,7 @@ exec ${shellQuote(mktemp)} "$@"
         "acquire_pr_operation_lock 42",
         `: > '${ready}'`,
         fixtureReceiptCommand(repoDir, ready),
-        "while :; do :; done",
+        "sleep 30",
       ],
       { signal, materializedAnchor: true, terminateWhenReady: ready },
     );

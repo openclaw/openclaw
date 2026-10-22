@@ -18,7 +18,10 @@ signals, and failed execs; a supervised operation retains its anchor only while
 its process group or notification pipe has not drained. Every supervisor startup
 also sweeps at most four owned, mode-0700 anchor directories whose modification
 and change times are both older than 24 hours, excluding its own anchor and any
-recorded live creator PID. Legacy names without a PID qualify by age alone.
+recorded live creator PID. Legacy names without a PID qualify by age alone. A dead
+creator is the sweep's only evidence that an operation ended: descendants still
+running 24 hours after a crashed or undrained supervisor can lose their anchor,
+while that operation's retained PR lock still requires `lock-recover`.
 
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the
