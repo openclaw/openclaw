@@ -1,7 +1,7 @@
 import { renderQrTerminal } from "openclaw/plugin-sdk/media-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { FeishuDomain } from "./types.js";
 
@@ -138,10 +138,11 @@ export async function pollAppRegistration(params: {
   interval: number;
   expireIn: number;
   initialDomain?: FeishuDomain;
+  abortSignal?: AbortSignal;
   /** Registration type parameter. The CLI bot QR flow uses "ob_cli_app". */
   tp?: string;
 }): Promise<PollOutcome> {
-  const { deviceCode, expireIn, initialDomain = "feishu", tp } = params;
+  const { deviceCode, expireIn, initialDomain = "feishu", abortSignal, tp } = params;
   let currentInterval = params.interval;
   let domain: FeishuDomain = initialDomain;
   let domainSwitched = false;
@@ -151,6 +152,10 @@ export async function pollAppRegistration(params: {
   const deadline = Date.now() + expireInMs;
 
   while (Date.now() < deadline) {
+    if (abortSignal?.aborted) {
+      return { status: "timeout" };
+    }
+
     const baseUrl = accountsBaseUrl(domain);
 
     let pollRes: PollResponse;
@@ -162,7 +167,7 @@ export async function pollAppRegistration(params: {
       });
     } catch {
       // Transient network error — keep polling.
-      await sleepRegistrationPollInterval(currentInterval);
+      await sleepRegistrationPollInterval(currentInterval, abortSignal);
       continue;
     }
 
@@ -200,7 +205,7 @@ export async function pollAppRegistration(params: {
       }
     }
 
-    await sleepRegistrationPollInterval(currentInterval);
+    await sleepRegistrationPollInterval(currentInterval, abortSignal);
   }
 
   return { status: "timeout" };
@@ -283,9 +288,14 @@ export async function getAppOwnerOpenId(params: {
   }
 }
 
-function sleepRegistrationPollInterval(intervalSeconds: number): Promise<void> {
+async function sleepRegistrationPollInterval(
+  intervalSeconds: number,
+  abortSignal?: AbortSignal,
+): Promise<void> {
   const intervalMs =
     finiteSecondsToTimerSafeMilliseconds(intervalSeconds) ??
     DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS * 1_000;
-  return sleep(intervalMs);
+  // Swallow the abort rejection: the poll loop's `aborted` check owns the exit
+  // path so PollOutcome stays "timeout" instead of an unhandled rejection.
+  await sleepWithAbort(intervalMs, abortSignal).catch(() => {});
 }
