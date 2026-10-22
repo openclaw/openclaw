@@ -1,4 +1,5 @@
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { buildClawAddPlan } from "../claws/lifecycle.js";
 import {
@@ -68,8 +69,10 @@ export async function runClawsCreateCommand(
       });
       return;
     }
-    runtime.log(`Created Claw project: ${result.root}`);
-    runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
+    runtime.log(`Created Claw project: ${sanitizeTerminalText(result.root)}`);
+    runtime.log(
+      `Package: ${sanitizeTerminalText(result.packageJson.name)}@${sanitizeTerminalText(result.packageJson.version)}`,
+    );
   } catch (error) {
     reportProjectError(
       error,
@@ -109,10 +112,12 @@ export async function runClawsValidateCommand(
     });
     return;
   }
-  runtime.log(`Valid Claw project: ${result.root}`);
-  runtime.log(`Package: ${result.packageJson.name}@${result.packageJson.version}`);
+  runtime.log(`Valid Claw project: ${sanitizeTerminalText(result.root)}`);
+  runtime.log(
+    `Package: ${sanitizeTerminalText(result.packageJson.name)}@${sanitizeTerminalText(result.packageJson.version)}`,
+  );
   for (const path of result.excludedPaths) {
-    runtime.log(`Excluded: ${path}`);
+    runtime.log(`Excluded: ${sanitizeTerminalText(path)}`);
   }
 }
 
@@ -126,7 +131,9 @@ export async function runClawsBuildCommand(
       writeRuntimeJson(runtime, { ...result, stability: CLAW_OUTPUT_STABILITY, ok: true });
       return;
     }
-    runtime.log(`Built Claw: ${result.claw.name}@${result.claw.version}`);
+    runtime.log(
+      `Built Claw: ${sanitizeTerminalText(result.claw.name)}@${sanitizeTerminalText(result.claw.version)}`,
+    );
     runtime.log(`Artifact: ${result.artifact}`);
     runtime.log(`Integrity: ${result.integrity}`);
     runtime.log(`Excluded project paths: ${result.excludedPaths.length}`);

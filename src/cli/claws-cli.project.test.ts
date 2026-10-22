@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -76,6 +77,24 @@ describe("Claw project CLI", () => {
     expect(first).toEqual(devPlan(4));
     expect(JSON.stringify(first)).not.toContain("openclaw-claw-artifact-");
     expect(first.claw.packageRoot).toMatch(/^claw-artifact:sha256:/u);
+  });
+
+  it("keeps terminal controls out of the human Claw project report", async () => {
+    // A checked-out Claw project can carry control characters in its directory and file names.
+    const root = join(tempDirs.make("openclaw-claw-controls-"), "author\x1b[2J\x07");
+    await runClawsCreateCommand(root, { name: "author-flow", json: true });
+    const excluded = "payload\x1b[2J\x07\n.bin";
+    await writeFile(join(root, excluded), "payload\n");
+    await runClawsValidateCommand(root, {});
+    const report = runtime.log.mock.calls.map(([value]) => String(value)).join(" | ");
+    expect(report).toContain("Package: author-flow@0.1.0");
+    expect(report).not.toMatch(/\p{Cc}/u);
+    expect(report).toContain("\\n");
+
+    await runClawsValidateCommand(root, { json: true });
+    const payload = payloads().at(-1) as { root: string; excludedPaths: string[] };
+    expect(payload.root).toContain("author\x1b[2J\x07");
+    expect(payload.excludedPaths).toContain(excluded);
   });
 
   it("uses command-specific schemas for build and dev failures", async () => {
