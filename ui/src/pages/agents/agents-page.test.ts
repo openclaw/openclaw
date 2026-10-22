@@ -277,9 +277,11 @@ describe("AgentsPage gateway lifecycle", () => {
     const context = pageContext(gateway(snapshot(client)), agents);
     Object.assign(context.runtimeConfig, { save });
     const { page } = mountPage(client, "overview", context);
-    page.read().onConfigSave();
-    await waitForFast(() => expect(save).toHaveBeenCalledOnce());
+    context.runtimeConfig.state.lastError = "Synthetic config save refused";
+    await page.read().onConfigSave();
+    expect(save).toHaveBeenCalledOnce();
     expect(refreshList).not.toHaveBeenCalled();
+    expect(page.read().config.lastError).toBe("Synthetic config save refused");
   });
 
   it("refreshes effective tools after saving tool settings for the same session", async () => {
@@ -309,12 +311,19 @@ describe("AgentsPage gateway lifecycle", () => {
       expect(page.read().readData().toolsEffectiveResult?.profile).toBe("messaging"),
     );
 
-    page.read().onConfigSave();
+    let completed = false;
+    const completion = page
+      .read()
+      .onConfigSave()
+      .then(() => {
+        completed = true;
+      });
     saved.resolve(true);
-    await saved.promise;
+    await waitForFast(() => expect(agents.refreshList).toHaveBeenCalledOnce());
+    expect(completed).toBe(false);
     roster.resolve(agentsList);
-    await roster.promise;
-    await Promise.resolve();
+    await completion;
+    expect(completed).toBe(true);
 
     await waitForFast(() =>
       expect(page.read().readData().toolsEffectiveResult?.profile).toBe("full"),
