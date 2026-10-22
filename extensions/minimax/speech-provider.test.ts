@@ -208,12 +208,7 @@ describe("MiniMax auth and synthesis", () => {
     ],
     [
       "providerConfig",
-      {
-        apiKey: "sk-test",
-        speed: 3,
-        vol: -1,
-        pitch: 20,
-      },
+      { apiKey: "sk-test", speed: 3, vol: -1, pitch: 20 },
       { voice_setting: { speed: 1, vol: 1, pitch: 0 } },
     ],
   ] as const)("normalizes %s synthesis settings", async (field, settings, expected) => {

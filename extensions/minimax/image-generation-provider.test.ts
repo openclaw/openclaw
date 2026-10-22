@@ -75,9 +75,7 @@ describe("minimax image-generation provider", () => {
     mockMinimaxImageResponse();
     const postJsonResponse = vi.spyOn(providerHttp, "postJsonResponse");
 
-    await generateImage({
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
-    });
+    await generateImage({ ssrfPolicy: { allowRfc2544BenchmarkRange: true } });
 
     expect(postJsonResponse).toHaveBeenCalledOnce();
     const request = postJsonResponse.mock.calls[0]?.[0];

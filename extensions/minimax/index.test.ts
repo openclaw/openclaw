@@ -462,10 +462,7 @@ describe("minimax provider hooks", () => {
         typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
       expect(url).toBe("https://api.minimax.io/v1/token_plan/remains");
       return Response.json({
-        data: {
-          current_interval_total_count: 100,
-          current_interval_usage_count: 98,
-        },
+        data: { current_interval_total_count: 100, current_interval_usage_count: 98 },
       });
     });
 
