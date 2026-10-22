@@ -1,10 +1,7 @@
-/**
- * Creates and configures stdio-backed Codex app-server transports, including
- * Windows spawn normalization and environment filtering.
- */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import { resolveLaunchableNodePath } from "openclaw/plugin-sdk/process-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -53,7 +50,7 @@ export function resolveCodexAppServerSpawnInvocation(
     // never let its env shebang choose another Node architecture from PATH.
     return {
       ...resolved,
-      command: process.execPath,
+      command: resolveLaunchableNodePath(),
       argv: [resolved.command, ...resolved.argv],
       resolution: "node-entrypoint",
     };
