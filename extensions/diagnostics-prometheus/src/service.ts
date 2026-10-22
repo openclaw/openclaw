@@ -602,7 +602,12 @@ type TrustedExporterDiagnosticsBridge = {
 };
 
 export function createDiagnosticsPrometheusExporter() {
-  const store = createPrometheusMetricStore();
+  let logger: OpenClawPluginServiceContext["logger"] | undefined;
+  const store = createPrometheusMetricStore((family) => {
+    logger?.warn(
+      `diagnostics-prometheus: series budget reached for ${family}; new label sets are being dropped. See openclaw_prometheus_family_series_dropped_total.`,
+    );
+  });
   let unsubscribe: (() => void) | undefined;
   let unsubscribeWork: (() => void) | undefined;
   let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
@@ -628,6 +633,7 @@ export function createDiagnosticsPrometheusExporter() {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
       }
+      logger = ctx.logger;
       reserveMainGcHistograms(store);
       const identity = isDiagnosticsEnabled(ctx.config)
         ? ctx.internalDiagnostics?.getRuntimeIdentity?.()
@@ -681,6 +687,7 @@ export function createDiagnosticsPrometheusExporter() {
       });
       internalDiagnostics = undefined;
       store.reset();
+      logger = undefined;
     },
   } satisfies OpenClawPluginService;
 

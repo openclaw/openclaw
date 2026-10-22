@@ -84,6 +84,7 @@ export function createMetricsHarness(
   start();
   return {
     handler: exporter.handler,
+    logger: context.logger,
     record(event: EventInput, metadata: DiagnosticEventMetadata = trusted) {
       expectDefined(listener, "Prometheus diagnostics listener")(
         { ...baseEvent(), ...event },
