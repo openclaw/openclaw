@@ -154,39 +154,6 @@ function resolveRequestInputType(
   return client.inputType;
 }
 
-function buildHeaders(params: {
-  apiKey: string | undefined;
-  provider: Record<string, unknown> | undefined;
-  remote: Record<string, unknown> | undefined;
-}): Record<string, string> {
-  const headers: Record<string, string> = {
-    accept: "application/json",
-    "content-type": "application/json",
-  };
-  for (const [path, extra] of [
-    ["models.providers.*.headers", params.provider],
-    ["memory.search.remote.headers", params.remote],
-  ] as const) {
-    for (const [name, rawValue] of Object.entries(extra ?? {})) {
-      const normalizedName = name.trim().toLowerCase();
-      if (!normalizedName) {
-        continue;
-      }
-      const value = normalizeResolvedSecretInputString({
-        value: rawValue,
-        path: `${path}.${normalizedName}`,
-      });
-      if (value) {
-        headers[normalizedName] = value;
-      }
-    }
-  }
-  if (params.apiKey && !headers.authorization) {
-    headers.authorization = `Bearer ${params.apiKey}`;
-  }
-  return headers;
-}
-
 function isSensitiveHeaderName(name: string): boolean {
   return (
     name === "authorization" ||
@@ -354,182 +321,188 @@ const fetchWithCallerDeadline: typeof fetchWithRuntimeDispatcher = (url, init) =
     ),
   });
 
-async function postEmbeddingRequest(params: {
-  client: OpenAICompatibleEmbeddingClient;
-  input: string[];
-  callOptions?: EmbeddingProviderCallOptions;
-}): Promise<number[][]> {
-  const { client, input, callOptions } = params;
-  const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL];
-  const errorPrefix = "openai-compatible embeddings failed";
-  const context = `${client.providerId} embeddings failed (model: ${client.model}, batch size: ${input.length})`;
-  const inputType = resolveRequestInputType(client, callOptions?.inputType);
-  const body = {
-    model: client.model,
-    input,
-    ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
-    ...(inputType ? { input_type: inputType } : {}),
-  };
-  const localServiceLease =
-    client.localServiceTarget && client.acquireLocalService
-      ? await client.acquireLocalService(
-          {
-            ...client.localServiceTarget,
-            ...(deadlineControl
-              ? {
-                  onReadinessWait: (waiting: boolean) =>
-                    deadlineControl.report(waiting ? "pause" : "resume"),
-                }
-              : {}),
-          },
-          callOptions?.signal,
-        )
-      : undefined;
-  try {
-    debugEmbeddingsLog("memory embeddings: remote request", {
-      context,
-      inputCount: input.length,
-    });
-    const target = resolveAzureApiVersionRequestTarget({
-      url: client.endpointUrl,
-      headers: client.headers,
-    });
-    return await withRemoteHttpResponse({
-      url: target.url,
-      init: {
-        method: "POST",
-        headers: target.headers,
-        body: JSON.stringify(body),
-      },
-      signal: callOptions?.signal,
-      fetchImpl: callOptions?.signal ? fetchWithCallerDeadline : undefined,
-      ssrfPolicy: client.ssrfPolicy,
-      auditContext: "embedding-provider:openai-compatible",
-      onResponse: async (response) => {
-        debugEmbeddingsLog("memory embeddings: remote response", {
-          context,
-          ...embeddingResponseLogMeta(response),
-        });
-        try {
-          if (!response.ok) {
-            throw await createEmbeddingHttpError(response, client.headers, errorPrefix);
-          }
-          const payload = await readProviderJsonResponse<unknown>(response, errorPrefix);
-          const vectors = readEmbeddingVectors(
-            asOptionalRecord(payload)?.data,
-            input.length,
-            context,
-          );
-          assertRequestedDimensions(vectors, client.dimensions, context);
-          callOptions?.onUsage?.(extractEmbeddingUsage(payload));
-          return vectors;
-        } catch (error) {
-          if (callOptions?.signal?.aborted) {
-            throw error;
-          }
-          throw addEmbeddingErrorContext(error, errorPrefix, context);
-        }
-      },
-    });
-  } finally {
-    localServiceLease?.release();
-  }
-}
-
-/** Creates a normalized OpenAI-compatible embedding client from runtime config. */
-async function createOpenAICompatibleEmbeddingClient(
-  options: EmbeddingProviderCreateOptions,
-): Promise<OpenAICompatibleEmbeddingClient> {
-  const resolvedProvider = resolveConfiguredProvider(options);
-  const configuredProvider = resolvedProvider?.config;
-  const providerId =
-    resolvedProvider?.providerId ??
-    options.provider?.trim() ??
-    OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID;
-  const remoteBaseUrl = normalizeOptionalString(options.remote?.baseUrl);
-  const providerBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
-  const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
-  // The embedding SDK also loads the provider registry; keep this shared policy edge lazy.
-  const {
-    embeddingProviderOwnsDestination,
-    resolveEmbeddingEndpointUrl,
-    resolveEmbeddingProviderSsrFPolicy,
-  } = await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
-  const providerOwnsDestination =
-    providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
-  const model = normalizeModel(options.model, options.provider);
-  const inputType = normalizeOptionalString(options.inputType);
-  const queryInputType = normalizeOptionalString(options.queryInputType);
-  const documentInputType = normalizeOptionalString(options.documentInputType);
-  const headers = buildHeaders({
-    apiKey: normalizeResolvedSecretInputString({
-      value: options.remote?.apiKey,
-      path: "memory.search.remote.apiKey",
-    }),
-    provider: providerOwnsDestination ? configuredProvider?.headers : undefined,
-    remote: options.remote?.headers,
-  });
-  if (providerOwnsDestination && !headers.authorization) {
-    const providerApiKey = await resolveConfiguredProviderApiKey({
-      providerId,
-      options,
-      configuredProvider,
-    });
-    if (providerApiKey) {
-      headers.authorization = `Bearer ${providerApiKey}`;
-    }
-  }
-  const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
-  return {
-    providerId,
-    baseUrl,
-    endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
-    headers,
-    authHeaderName:
-      providerOwnsDestination && configuredProvider?.request?.auth?.mode === "header"
-        ? configuredProvider.request.auth.headerName.trim().toLowerCase()
-        : undefined,
-    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
-      provider: providerId,
-      api: configuredProvider?.api ?? "openai-completions",
-      baseUrl,
-      allowPrivateNetwork: configuredProvider?.request?.allowPrivateNetwork,
-    }),
-    model,
-    ...(configuredProvider?.localService && !remoteBaseUrl
-      ? {
-          localServiceTarget: {
-            providerId,
-            baseUrl,
-            headers,
-          },
-          acquireLocalService: localServiceOptions.acquireLocalService,
-        }
-      : {}),
-    ...(options.dimensions !== undefined
-      ? { dimensions: normalizeDimensions(options.dimensions) }
-      : {}),
-    ...(inputType ? { inputType } : {}),
-    ...(queryInputType ? { queryInputType } : {}),
-    ...(documentInputType ? { documentInputType } : {}),
-  };
-}
-
 /** Embedding provider adapter for OpenAI-compatible remote embedding APIs. */
 export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
   id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
   transport: "remote",
   create: async (options) => {
-    const client = await createOpenAICompatibleEmbeddingClient(options);
+    const resolvedProvider = resolveConfiguredProvider(options);
+    const configuredProvider = resolvedProvider?.config;
+    const providerId =
+      resolvedProvider?.providerId ??
+      options.provider?.trim() ??
+      OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID;
+    const remoteBaseUrl = normalizeOptionalString(options.remote?.baseUrl);
+    const providerBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
+    const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
+    // The embedding SDK also loads the provider registry; keep this shared policy edge lazy.
+    const {
+      embeddingProviderOwnsDestination,
+      resolveEmbeddingEndpointUrl,
+      resolveEmbeddingProviderSsrFPolicy,
+    } = await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
+    const providerOwnsDestination =
+      providerBaseUrl !== undefined &&
+      embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
+    const model = normalizeModel(options.model, options.provider);
+    const inputType = normalizeOptionalString(options.inputType);
+    const queryInputType = normalizeOptionalString(options.queryInputType);
+    const documentInputType = normalizeOptionalString(options.documentInputType);
+    const apiKey = normalizeResolvedSecretInputString({
+      value: options.remote?.apiKey,
+      path: "memory.search.remote.apiKey",
+    });
+    const providerHeaders = providerOwnsDestination ? configuredProvider?.headers : undefined;
+    const remoteHeaders = options.remote?.headers;
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      "content-type": "application/json",
+    };
+    for (const [path, extra] of [
+      ["models.providers.*.headers", providerHeaders],
+      ["memory.search.remote.headers", remoteHeaders],
+    ] as const) {
+      for (const [name, rawValue] of Object.entries(extra ?? {})) {
+        const normalizedName = name.trim().toLowerCase();
+        if (!normalizedName) {
+          continue;
+        }
+        const value = normalizeResolvedSecretInputString({
+          value: rawValue,
+          path: `${path}.${normalizedName}`,
+        });
+        if (value) {
+          headers[normalizedName] = value;
+        }
+      }
+    }
+    if (apiKey && !headers.authorization) {
+      headers.authorization = `Bearer ${apiKey}`;
+    }
+    if (providerOwnsDestination && !headers.authorization) {
+      const providerApiKey = await resolveConfiguredProviderApiKey({
+        providerId,
+        options,
+        configuredProvider,
+      });
+      if (providerApiKey) {
+        headers.authorization = `Bearer ${providerApiKey}`;
+      }
+    }
+    const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
+    // Creates a normalized OpenAI-compatible embedding client from runtime config.
+    const client: OpenAICompatibleEmbeddingClient = {
+      providerId,
+      baseUrl,
+      endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
+      headers,
+      authHeaderName:
+        providerOwnsDestination && configuredProvider?.request?.auth?.mode === "header"
+          ? configuredProvider.request.auth.headerName.trim().toLowerCase()
+          : undefined,
+      ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+        provider: providerId,
+        api: configuredProvider?.api ?? "openai-completions",
+        baseUrl,
+        allowPrivateNetwork: configuredProvider?.request?.allowPrivateNetwork,
+      }),
+      model,
+      ...(configuredProvider?.localService && !remoteBaseUrl
+        ? {
+            localServiceTarget: {
+              providerId,
+              baseUrl,
+              headers,
+            },
+            acquireLocalService: localServiceOptions.acquireLocalService,
+          }
+        : {}),
+      ...(options.dimensions !== undefined
+        ? { dimensions: normalizeDimensions(options.dimensions) }
+        : {}),
+      ...(inputType ? { inputType } : {}),
+      ...(queryInputType ? { queryInputType } : {}),
+      ...(documentInputType ? { documentInputType } : {}),
+    };
     const embedBatch: EmbeddingProvider["embedBatch"] = async (inputs, callOptions) => {
       if (inputs.length === 0) {
         return [];
       }
-      return await postEmbeddingRequest({
-        client,
-        input: inputs.map(embeddingInputToText),
-        callOptions,
-      });
+      const input = inputs.map(embeddingInputToText);
+      const deadlineControl = callOptions?.[MEMORY_SEARCH_DEADLINE_CONTROL];
+      const errorPrefix = "openai-compatible embeddings failed";
+      const context = `${client.providerId} embeddings failed (model: ${client.model}, batch size: ${input.length})`;
+      const requestInputType = resolveRequestInputType(client, callOptions?.inputType);
+      const body = {
+        model: client.model,
+        input,
+        ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+        ...(requestInputType ? { input_type: requestInputType } : {}),
+      };
+      const localServiceLease =
+        client.localServiceTarget && client.acquireLocalService
+          ? await client.acquireLocalService(
+              {
+                ...client.localServiceTarget,
+                ...(deadlineControl
+                  ? {
+                      onReadinessWait: (waiting: boolean) =>
+                        deadlineControl.report(waiting ? "pause" : "resume"),
+                    }
+                  : {}),
+              },
+              callOptions?.signal,
+            )
+          : undefined;
+      try {
+        debugEmbeddingsLog("memory embeddings: remote request", {
+          context,
+          inputCount: input.length,
+        });
+        const target = resolveAzureApiVersionRequestTarget({
+          url: client.endpointUrl,
+          headers: client.headers,
+        });
+        return await withRemoteHttpResponse({
+          url: target.url,
+          init: {
+            method: "POST",
+            headers: target.headers,
+            body: JSON.stringify(body),
+          },
+          signal: callOptions?.signal,
+          fetchImpl: callOptions?.signal ? fetchWithCallerDeadline : undefined,
+          ssrfPolicy: client.ssrfPolicy,
+          auditContext: "embedding-provider:openai-compatible",
+          onResponse: async (response) => {
+            debugEmbeddingsLog("memory embeddings: remote response", {
+              context,
+              ...embeddingResponseLogMeta(response),
+            });
+            try {
+              if (!response.ok) {
+                throw await createEmbeddingHttpError(response, client.headers, errorPrefix);
+              }
+              const payload = await readProviderJsonResponse<unknown>(response, errorPrefix);
+              const vectors = readEmbeddingVectors(
+                asOptionalRecord(payload)?.data,
+                input.length,
+                context,
+              );
+              assertRequestedDimensions(vectors, client.dimensions, context);
+              callOptions?.onUsage?.(extractEmbeddingUsage(payload));
+              return vectors;
+            } catch (error) {
+              if (callOptions?.signal?.aborted) {
+                throw error;
+              }
+              throw addEmbeddingErrorContext(error, errorPrefix, context);
+            }
+          },
+        });
+      } finally {
+        localServiceLease?.release();
+      }
     };
     const cacheHeaders = sanitizeCacheHeaders(client.headers, client.authHeaderName);
     const cacheKeyData = {
