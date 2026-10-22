@@ -9,7 +9,7 @@ import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("create-as-draft availability", () => {
+it("requires draft policy and multiple creator identities", () => {
   const capabilities = new NewSessionCapabilities(
     () => {},
     () => {},
@@ -27,11 +27,9 @@ describe("create-as-draft availability", () => {
         },
       },
     } as ApplicationContext);
-  it("requires both draft policy and multiple creator identities", () => {
-    expect(canStartSessionAsDraft(["shared", "draft"])).toBe(true);
-    expect(canStartSessionAsDraft(["shared"])).toBe(false);
-    expect(canStartSessionAsDraft()).toBe(false);
-  });
+  expect(canStartSessionAsDraft(["shared", "draft"])).toBe(true);
+  expect(canStartSessionAsDraft(["shared"])).toBe(false);
+  expect(canStartSessionAsDraft()).toBe(false);
 });
 
 type Draft = Omit<SessionCreateParams, "visibility"> & {
@@ -102,7 +100,7 @@ describe("buildSelectedSessionCreateParams", () => {
   };
   it.each([
     [
-      "creates a device folder without leaking another workspace source",
+      "device folder excludes other sources",
       {
         ...checkout,
         repository,
@@ -119,7 +117,7 @@ describe("buildSelectedSessionCreateParams", () => {
       },
     ],
     [
-      "creates an empty workspace without carrying a previous checkout source",
+      "empty workspace excludes checkout",
       {
         ...checkout,
         repository,
@@ -131,7 +129,7 @@ describe("buildSelectedSessionCreateParams", () => {
       { message: "", titleSource: "Start a new project", worktree: true, worktreeSource: "empty" },
     ],
     [
-      "retains a cloud repository without sending local checkout options",
+      "cloud repository excludes local checkout",
       {
         ...checkout,
         repository,
@@ -142,7 +140,7 @@ describe("buildSelectedSessionCreateParams", () => {
       { message: "", titleSource: "x".repeat(999), repository },
     ],
     [
-      "keeps incognito prompts out of early naming",
+      "incognito suppresses early naming",
       {
         message: "private task",
         deferInitialTurn: true,
@@ -150,20 +148,12 @@ describe("buildSelectedSessionCreateParams", () => {
       },
       { message: "", incognito: true },
     ],
-    ["adds draft visibility only when selected", { visibility: "draft" }, { visibility: "draft" }],
+    ["draft visibility", { visibility: "draft" }, { visibility: "draft" }],
+    ["initial attachments", { message: "", attachments }, { message: "", attachments }],
+    ["model overrides", overrides, overrides],
+    ["capability overrides", { toolOverrides }, { toolOverrides }],
     [
-      "includes initial-message attachments",
-      { message: "", attachments },
-      { message: "", attachments },
-    ],
-    ["includes model, context-window, thinking, and fast overrides", overrides, overrides],
-    [
-      "includes capability overrides in the atomic create request",
-      { toolOverrides },
-      { toolOverrides },
-    ],
-    [
-      "does not combine a catalog target with a draft model override",
+      "catalog excludes model overrides",
       {
         model: "openai/gpt-5.5",
         contextWindow: "200k",
@@ -174,7 +164,7 @@ describe("buildSelectedSessionCreateParams", () => {
       { catalogId: "claude" },
     ],
     [
-      "maps worktree selections onto additive create params",
+      "worktree params",
       {
         worktree: true,
         baseRef: "origin/main",
@@ -185,7 +175,7 @@ describe("buildSelectedSessionCreateParams", () => {
       { worktree: true, worktreeBaseRef: "origin/main", worktreeName: "bug-fix" },
     ],
     [
-      "assigns a session created from a custom group",
+      "custom group",
       {
         worktree: true,
         cwd: "/repos/client",
@@ -195,7 +185,7 @@ describe("buildSelectedSessionCreateParams", () => {
       { category: "Client work", cwd: "/repos/client", worktree: true },
     ],
     [
-      "submits a selected project by id without leaking its host path",
+      "project id excludes host path",
       {
         projectId: "openclaw",
         worktree: true,

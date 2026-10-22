@@ -1,24 +1,10 @@
-import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
-import { NewSessionPlaceControls } from "./target-controls-view.tsx";
+import { hostedRuntime, mountPlacement, nativeRuntime } from "./placement.test-support.ts";
 
-const runtime = {
-  id: "openclaw",
-  source: "model" as const,
-  cloudPlacementSupported: true,
-  cloudPlacementExecutionMode: "worker-turn" as const,
-  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-};
-const hostedRuntime = {
-  id: "agentsapi",
-  source: "model" as const,
-  cloudPlacementSupported: false,
-  workspaceEnvironment: { kind: "provider-hosted" as const, label: "OpenAI (Agents API)" },
-};
+const runtime = nativeRuntime();
 const profile = {
   id: "dedicated",
   providerId: "device",
@@ -244,25 +230,7 @@ it("does not grant a model or write permission through required worker metadata"
 
 it("renders required placement as a readonly indicator, not a machine or workspace picker", async () => {
   const f = await ready();
-  const container = document.createElement("div");
-  mountSolid(
-    () =>
-      createComponent(NewSessionPlaceControls, {
-        params: {
-          context: f.context,
-          data: undefined,
-          gateway: f.gateway,
-          place: f.place,
-          submitting: false,
-          pendingPlacement: false,
-          onConnectMachine: vi.fn(),
-          onNavigate: vi.fn(),
-          onFocusComposer: vi.fn(),
-          onChange: vi.fn(),
-        },
-      }),
-    { container },
-  );
+  const container = mountPlacement(f);
   expect(container.textContent).toContain("OpenClaw worker");
   expect(container.querySelector("[data-required-placement]")).not.toBeNull();
   expect(container.querySelector("button, input, .oc-popover")).toBeNull();

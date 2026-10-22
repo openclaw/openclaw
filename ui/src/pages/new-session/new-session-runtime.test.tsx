@@ -14,12 +14,7 @@ describe("new session menu dismissal", () => {
     let menu!: MenuHandle;
     let picker!: HTMLDivElement;
     const view = mountSolid(() => (
-      <div
-        class="new-session-page__select--agent"
-        ref={(node) => {
-          picker = node;
-        }}
-      >
+      <div class="new-session-page__select--agent" ref={(node) => (picker = node)}>
         <Menu
           id="draft-agent"
           label="Agent"
@@ -87,28 +82,16 @@ describe("new session picker focus", () => {
         });
         return (
           <>
-            <button
-              ref={(node) => {
-                outside = node;
-              }}
-            >
-              Elsewhere
-            </button>
+            <button ref={(node) => (outside = node)}>Elsewhere</button>
             <SessionPicker
               kind="project"
               label="Project"
               value="Workspace"
               icon={<span />}
               params={params}
-              ref={(handle) => {
-                popover = handle;
-              }}
+              ref={(handle) => (popover = handle)}
             >
-              <input
-                ref={(node) => {
-                  input = node;
-                }}
-              />
+              <input ref={(node) => (input = node)} />
             </SessionPicker>
           </>
         );

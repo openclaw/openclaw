@@ -63,8 +63,8 @@ describe("device placement projection", () => {
       "Update required: run openclaw update, then reconnect. For a headless node, run openclaw node restart.",
     ],
   ] satisfies [string, Partial<DraftEnvironment>, string | undefined][])(
-    "projects %s with one canonical eligibility decision",
-    (_: string, overrides: Partial<DraftEnvironment>, reason: string | undefined) => {
+    "projects %s",
+    (_, overrides, reason) => {
       expect(projectDevicePlacements([node(overrides)])).toMatchObject([
         {
           deviceId: "runner",
@@ -130,20 +130,16 @@ describe("device placement projection", () => {
   const requirement = { requiredNodeCommands: [command], consumesWorkerSlot: false };
   it.each([
     [
-      "an undeclared command fails closed even when worker slots are free",
+      "undeclared command",
       { invocableCommands: ["camera.snap"], requiredNodeCommand: { command, state: "undeclared" } },
       "Make codex.exec-server.stdio.v1 available on this device, then reconnect, or pick another device.",
     ],
     [
-      "a pending-approval command reports awaiting pairing approval",
+      "pending command approval",
       { requiredNodeCommand: { command, state: "pending-approval" } },
       "Ask an administrator to approve the pending codex.exec-server.stdio.v1 request, or pick another device.",
     ],
-    [
-      "missing command state fails closed",
-      {},
-      "The selected runner isn't ready yet. Try again in a moment.",
-    ],
+    ["missing command state", {}, "The selected runner isn't ready yet. Try again in a moment."],
   ] satisfies [string, Partial<DraftEnvironment>, string][])("%s", (_, environment, reason) => {
     const [device] = projectDevicePlacements([node(environment)], requirement);
     expect(device).toMatchObject({ selectable: false, disabledReason: reason });

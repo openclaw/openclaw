@@ -21,6 +21,8 @@ const routeData = (agentId = "main"): NewSessionRouteData => ({
   catalogLabel: "",
   startTerminal: false,
 });
+const pageHost = (container: Element) =>
+  container.querySelector<PageHost>("openclaw-new-session-page");
 
 function mountRoute(initial: NewSessionRouteData) {
   const [data, setData] = createSignal<NewSessionRouteData | undefined>(initial);
@@ -91,18 +93,16 @@ it("updates loader data without replacing the registered page host", async () =>
   const initial = routeData("research");
   const resolved = routeData("main");
   const { container, setData } = mountRoute(initial);
-  await waitForSolid(() =>
-    expect(container.querySelector<PageHost>("openclaw-new-session-page")?.data).toBe(initial),
-  );
-  const page = container.querySelector<PageHost>("openclaw-new-session-page");
+  await waitForSolid(() => expect(pageHost(container)?.data).toBe(initial));
+  const page = pageHost(container);
   setData(undefined);
   await waitForSolid(() => {
-    expect(container.querySelector("openclaw-new-session-page")).toBe(page);
+    expect(pageHost(container)).toBe(page);
     expect(page?.data).toBeUndefined();
   });
   setData(resolved);
   await waitForSolid(() => {
-    expect(container.querySelector("openclaw-new-session-page")).toBe(page);
+    expect(pageHost(container)).toBe(page);
     expect(page?.data).toBe(resolved);
   });
 });
@@ -117,11 +117,9 @@ it.each([true, false])("reuses retained DOM only while authorized (%s)", async (
     await waitForSolid(() => expect(container.firstElementChild).toBe(page));
     expect(container.querySelector("input")).toBe(input);
     expect(input.value).toBe("Keep this private unsent draft");
-    expect(container.querySelector("openclaw-new-session-page")).toBeNull();
+    expect(pageHost(container)).toBeNull();
   } else {
-    await waitForSolid(() =>
-      expect(container.querySelector<PageHost>("openclaw-new-session-page")?.data).toBe(data),
-    );
+    await waitForSolid(() => expect(pageHost(container)?.data).toBe(data));
     expect(container.contains(page)).toBe(false);
     expect(container.contains(input)).toBe(false);
   }

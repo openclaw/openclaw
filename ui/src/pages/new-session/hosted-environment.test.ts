@@ -1,31 +1,19 @@
-import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { managedModelControls, controlQueries } from "./model-control-view-queries.test-support.ts";
 import { contextWith, renderControl, waitForModelControl } from "./model-control.test-support.ts";
-import { NewSessionPlaceControls } from "./target-controls-view.tsx";
+import {
+  hostedRuntime as runtime,
+  mountPlacement as renderPlace,
+  nativeRuntime,
+} from "./placement.test-support.ts";
 const modelRef = "openai/hosted-model";
 const createSelection = { message: "hello", visibility: "normal" as const };
-const nativeRuntime = (id = "openclaw", mode: "worker-turn" | "remote-exec" = "worker-turn") => ({
-  id,
-  source: "model" as const,
-  cloudPlacementSupported: true,
-  cloudPlacementExecutionMode: mode,
-  devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-});
-
-const runtime = {
-  id: "agentsapi",
-  source: "model" as const,
-  cloudPlacementSupported: false,
-  workspaceEnvironment: { kind: "provider-hosted" as const, label: "OpenAI (Agents API)" },
-};
 const model: ModelCatalogEntry = {
   id: "hosted-model",
   name: "Hosted model",
@@ -44,24 +32,6 @@ afterEach(() => {
 function modelControl(context: Parameters<typeof renderControl>[1]) {
   const control = managed.make(() => {});
   return { control, ...controlQueries(control, context, "main", agent) };
-}
-function renderPlace(
-  f: Pick<ReturnType<typeof createDraftFixture>, "context" | "gateway" | "place">,
-  data?: NewSessionRouteData,
-) {
-  const params = {
-    ...f,
-    data,
-    submitting: false,
-    pendingPlacement: false,
-    onConnectMachine: vi.fn(),
-    onNavigate: vi.fn(),
-    onFocusComposer: vi.fn(),
-    onChange: vi.fn(),
-  };
-  const element = document.createElement("div");
-  mountSolid(() => createComponent(NewSessionPlaceControls, { params }), { container: element });
-  return element;
 }
 const catalog = (overrides: Partial<ModelCatalogEntry>) => ({
   models: [{ ...model, ...overrides }],
