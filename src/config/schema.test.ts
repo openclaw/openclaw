@@ -426,6 +426,45 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
+  it("explains named custom providers through schema lookup before configuration", () => {
+    const providers = expectDefined(
+      lookupConfigSchema(baseSchema, "models.providers"),
+      "providers",
+    );
+    expect(providers.hint?.help).toContain("gpu-a or my-lab");
+    expect(providers.hint?.help).toContain("Built-in and extension-owned IDs and aliases");
+    expect(providers.hint?.help).toContain("api does");
+    expect(providers.hint?.help).toContain("same adapter");
+    expect(providers.hint?.help).toContain("Custom entries must include baseUrl and models");
+    expect(providers.children.find((child) => child.key === "*")?.hint?.help).toContain(
+      "Replace * with your chosen ID",
+    );
+
+    for (const id of ["*", "gpu-a"]) {
+      const entry = expectDefined(
+        lookupConfigSchema(baseSchema, `models.providers.${id}`),
+        "provider",
+      );
+      expect(entry.hintPath).toBe("models.providers.*");
+      expect(entry.hint?.help).toContain("before a custom ID is configured");
+      const api = expectDefined(
+        lookupConfigSchema(baseSchema, `models.providers.${id}.api`),
+        "API",
+      );
+      expect(api.hint?.help).toContain("Chat Completions: openai-completions");
+      expect(api.hint?.help).toContain("Responses: openai-responses");
+      expect(api.hint?.help).toContain("Messages: anthropic-messages");
+      expect(api.schema.enum).toEqual(
+        expect.arrayContaining([
+          "openai-completions",
+          "openai-responses",
+          "anthropic-messages",
+          "ollama",
+        ]),
+      );
+    }
+  });
+
   it("includes reload metadata when a resolver is provided", () => {
     const lookup = lookupConfigSchema(baseSchema, "gateway", (path) => {
       if (path === "gateway.auth.mode") {
