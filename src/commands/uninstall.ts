@@ -38,6 +38,31 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean): Promise<bool
   return result.ok;
 }
 
+async function removeMacApplicationSupport(
+  runtime: RuntimeEnv,
+  dryRun?: boolean,
+): Promise<boolean> {
+  if (process.platform !== "darwin") {
+    return true;
+  }
+  const home = resolveHomeDir();
+  const dirs = [
+    path.join(home, "Library", "Application Support", "OpenClaw"),
+    path.join(home, "Library", "Application Support", "ai.openclaw"),
+  ];
+  let ok = true;
+  for (const dir of dirs) {
+    const result = await removePath(dir, runtime, {
+      dryRun,
+      label: dir,
+    });
+    if (!result.ok) {
+      ok = false;
+    }
+  }
+  return ok;
+}
+
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
   const scopes = new Set(
     (["service", "state", "workspace", "app"] as const).filter((scope) => opts.all || opts[scope]),
@@ -172,6 +197,14 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     stateRemoved = state ?? false;
     workspaceBlocked = state === undefined;
     failed ||= !stateRemoved;
+
+    if (process.platform === "darwin") {
+      const macAppSupport = await attemptCleanup(
+        "macOS Application Support cleanup failed",
+        () => removeMacApplicationSupport(runtime, dryRun),
+      );
+      failed ||= macAppSupport !== true;
+    }
   }
 
   if (scopes.has("workspace") && cleanupPlan && workspaceBlocked) {

@@ -37,11 +37,15 @@ export async function uninstallLaunchAgent({
   const domain = resolveLaunchAgentGuiDomain();
   const label = resolveLaunchAgentLabel(env);
   const plistPath = resolveLaunchAgentPlistPath(env);
-  const probe = await probeLaunchAgentState(`${domain}/${label}`);
+  const serviceTarget = `${domain}/${label}`;
+  const probe = await probeLaunchAgentState(serviceTarget);
   if (probe.state !== "not-loaded") {
-    const bootout = await execLaunchctl(["bootout", domain, plistPath]);
+    let bootout = await execLaunchctl(["bootout", domain, plistPath]);
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+      bootout = await execLaunchctl(["bootout", serviceTarget]);
+      if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+        throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+      }
     }
   }
 
@@ -116,6 +120,7 @@ export async function stageLaunchAgent(
 async function snapshotLaunchAgentLoadedState(
   plistContents: Buffer | null,
   serviceTarget: string,
+  warn?: (message: string) => void,
 ): Promise<boolean> {
   const probe = await probeLaunchAgentState(serviceTarget);
   if (probe.state === "unknown") {
@@ -125,17 +130,27 @@ async function snapshotLaunchAgentLoadedState(
   }
   const loaded = probe.state !== "not-loaded";
   if (loaded && plistContents === null) {
-    // launchd can retain a definition after its plist is deleted. Booting that
-    // job out would destroy the only copy, so no exact rollback is possible.
-    throw new Error(
-      `LaunchAgent ${serviceTarget} is loaded but its plist is missing; refusing an install that cannot restore the current definition if activation fails.`,
+    warn?.(
+      `LaunchAgent ${serviceTarget} is loaded in launchd but its plist is missing; flushing ghost registration before rewrite.`,
     );
+    const bootout = await execLaunchctl(["bootout", serviceTarget]);
+    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+      warn?.(
+        `launchctl bootout ${serviceTarget} returned: ${formatLaunchctlResultDetail(bootout)}`,
+      );
+    }
+    return false;
   }
   return loaded;
 }
 
-async function deactivateLaunchAgentDefinition(domain: string, plistPath: string): Promise<void> {
+async function deactivateLaunchAgentDefinition(
+  domain: string,
+  plistPath: string,
+  serviceTarget?: string,
+): Promise<void> {
   for (const args of [
+    ...(serviceTarget ? [["bootout", serviceTarget]] : []),
     ["bootout", domain, plistPath],
     ["unload", plistPath],
   ]) {
@@ -143,6 +158,9 @@ async function deactivateLaunchAgentDefinition(domain: string, plistPath: string
     const result = await execLaunchctl(args);
     assertGatewayServiceUpdateCurrent();
     if (result.code !== 0 && !isLaunchctlNotLoaded(result)) {
+      if (serviceTarget && args[0] === "bootout" && args[1] === serviceTarget) {
+        continue;
+      }
       throw new Error(
         `launchctl ${args[0]} failed during LaunchAgent install: ${formatLaunchctlResultDetail(result)}`,
       );
@@ -173,6 +191,7 @@ export async function installLaunchAgent(
       const wasLoaded = await snapshotLaunchAgentLoadedState(
         previous?.contents ?? null,
         serviceTarget,
+        args.warn,
       );
       return { publication: captured, loaded: wasLoaded, enabled: wasEnabled };
     },
@@ -203,7 +222,7 @@ export async function installLaunchAgent(
     assertGatewayServiceUpdateCurrent();
     activationAttempted = true;
     if (loaded) {
-      await deactivateLaunchAgentDefinition(domain, published.plistPath);
+      await deactivateLaunchAgentDefinition(domain, published.plistPath, serviceTarget);
     }
     await bootstrap(published.plistPath, "openclaw gateway install --force");
     assertGatewayServiceUpdateCurrent();
