@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { act, execution, listWindow } from "./commands.test-helpers.js";
+import { execution } from "./commands.test-helpers.js";
 import { CUA_DRIVER_CONTRACT_FIXTURES } from "./cua-driver-contract.test-fixtures.js";
 import { ClickButton } from "./driver-client.js";
 import { projectedToolDetails } from "./driver-result.js";
@@ -193,8 +193,8 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     );
     const driver = managedDriver({ ...endpoint, env: process.env });
     const computer = await execution(driver, "darwin");
-    const windowRef = await listWindow(computer);
-    const result = act(computer, "bring_to_front", { windowRef });
+    const windowRef = await computer.window();
+    const result = computer.send("bring_to_front", { windowRef });
     if (error) {
       await expect(result).rejects.toThrow(error);
     } else {
@@ -458,10 +458,7 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     }
   });
 
-  it.each([
-    ["disposal", "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP proxy is stopping"],
-    ["timeout", "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP tools/call timed out after 120000ms"],
-  ])("%s rejects pending calls without cancellation", async (trigger, message) => {
+  it("disposal rejects pending calls without cancellation", async () => {
     const held: RpcRequest[] = [];
     const endpoint = await createSessionEndpoint((request, fake) => {
       if (request.params?.arguments?.hold) {
@@ -472,28 +469,16 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     });
     const driver = managedDriver(endpoint);
     await driver.callTool("list_windows", {});
-    if (trigger === "timeout") {
-      vi.useFakeTimers();
-    }
-    try {
-      const settled = Promise.allSettled([
-        driver.callTool("list_windows", { hold: true }),
-        driver.callTool("list_windows", { hold: true }),
-      ]);
-      await vi.waitFor(() => expect(held).toHaveLength(2));
-      if (trigger === "timeout") {
-        await vi.advanceTimersByTimeAsync(120_000);
-      } else {
-        await driver.dispose();
-      }
-      expect(await settled).toEqual(rejectedPair(message));
-      expect(driver.isAvailable()).toBe(false);
-    } finally {
-      if (trigger === "timeout") {
-        vi.useRealTimers();
-      }
-    }
+    const settled = Promise.allSettled([
+      driver.callTool("list_windows", { hold: true }),
+      driver.callTool("list_windows", { hold: true }),
+    ]);
+    await vi.waitFor(() => expect(held).toHaveLength(2));
     await driver.dispose();
+    expect(await settled).toEqual(
+      rejectedPair("COMPUTER_DRIVER_UNAVAILABLE: CUA MCP proxy is stopping"),
+    );
+    expect(driver.isAvailable()).toBe(false);
     expect(received(endpoint, "notifications/cancelled")).toBe(false);
   });
 

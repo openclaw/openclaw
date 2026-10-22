@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, execution } from "./commands.test-helpers.js";
+import { execution } from "./commands.test-helpers.js";
 import {
   CUA_DRIVER_CONTRACT_FIXTURES,
   cuaToolResult,
@@ -151,7 +151,7 @@ describe("CUA Driver direct session", () => {
     const computer = await execution(driver);
     mocks.callTool.mockResolvedValueOnce(cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows));
 
-    const listed = JSON.parse(await act(computer, "list_windows"));
+    const listed = JSON.parse(await computer.send("list_windows"));
     expect(listed).toMatchObject({
       ok: true,
       details: {
@@ -256,25 +256,6 @@ describe("CUA Driver direct session", () => {
     }
   });
 
-  it("keeps a missing native desktop library behind command availability", async () => {
-    const loadSdk = vi.fn(async () => {
-      throw new Error("libX11.so.6: cannot open shared object file");
-    });
-    const driver = createCuaDriver({ loadSdk });
-
-    expect(loadSdk).not.toHaveBeenCalled();
-    expect(driver.isAvailable()).toBe(false);
-    expect(loadSdk).toHaveBeenCalledOnce();
-    await expect(driver.getScreenSize()).rejects.toThrow(
-      "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: libX11.so.6",
-    );
-
-    driver.resetAvailabilityCache();
-    expect(driver.isAvailable()).toBe(false);
-    expect(loadSdk).toHaveBeenCalledTimes(2);
-    await driver.dispose();
-  });
-
   it("awaits an ESM driver before the first availability declaration without starting an execution", async () => {
     let resolveSdk: ((value: typeof sdk) => void) | undefined;
     const sdkPromise = new Promise<typeof sdk>((resolve) => {
@@ -307,11 +288,17 @@ describe("CUA Driver direct session", () => {
     });
     const driver = createCuaDriver({ loadSdk });
 
+    expect(loadSdk).not.toHaveBeenCalled();
+    expect(driver.isAvailable()).toBe(false);
+    expect(loadSdk).toHaveBeenCalledOnce();
     await driver.prepareAvailability?.();
     expect(driver.isAvailable()).toBe(false);
-    await expect(driver.getDesktopState()).rejects.toThrow(
-      "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: native module is temporarily unavailable",
-    );
+    for (const read of [() => driver.getDesktopState(), () => driver.getScreenSize()]) {
+      await expect(read()).rejects.toThrow(
+        "COMPUTER_DRIVER_UNAVAILABLE: failed to load CUA Driver SDK: native module is temporarily unavailable",
+      );
+    }
+    expect(loadSdk).toHaveBeenCalledOnce();
 
     driver.resetAvailabilityCache();
     expect(driver.isAvailable()).toBe(false);
@@ -334,14 +321,14 @@ describe("CUA Driver direct session", () => {
     const driver = makeDriver();
     const computer = await execution(driver);
     mocks.getCursorPosition.mockResolvedValueOnce(cuaToolResult({ x: 10, y: 20 }));
-    await act(computer, "get_cursor_position");
+    await computer.send("get_cursor_position");
     const generation = driver.generation;
     mocks.isToolError.mockReturnValue(true);
     mocks.getSessionState.mockRejectedValueOnce(expired());
     mocks.endSession.mockRejectedValueOnce(expired());
 
     mocks.typeText.mockResolvedValueOnce(cuaToolResult({}));
-    expect(JSON.parse(await act(computer, "type", { text: "hello" }))).toMatchObject({
+    expect(JSON.parse(await computer.send("type", { text: "hello" }))).toMatchObject({
       ok: true,
     });
     expect(driver.generation).not.toBe(generation);
@@ -368,7 +355,7 @@ describe("CUA Driver direct session", () => {
     denied.inner.message = "Desktop scope denied";
     mocks.isToolError.mockReturnValue(true);
     mocks.getSessionState.mockRejectedValueOnce(denied);
-    await expect(act(computer, "type", { text: "must not type" })).rejects.toMatchObject({
+    await expect(computer.send("type", { text: "must not type" })).rejects.toMatchObject({
       message: "CUA_DRIVER_TOOL_ERROR: get_session_state: Desktop scope denied (permission_denied)",
       cause: denied,
     });
@@ -492,7 +479,7 @@ describe("CUA Driver direct session", () => {
       },
     });
     const computer = await execution(driver);
-    const acting = act(computer, "type", { text: "must not type" });
+    const acting = computer.send("type", { text: "must not type" });
     const rejected = expect(acting).rejects.toThrow("provider execution is closing");
     await entered.promise;
     const closing = computer.close("cancelled");
