@@ -416,6 +416,26 @@ it("shows rejected status refreshes beside retained controls and clears them dur
   await waitForSolid(() => expect(f.text()).toContain("Waiting for the provider to accept it."));
 });
 
+it.each(["pending", "rejected"] as const)(
+  "preserves a %s command failure when reopening the dialog",
+  async (phase) => {
+    const f = fixture();
+    await f.acknowledge();
+    if (phase === "rejected") {
+      f.outcome.reject(new Error("Continuation unavailable"));
+      await waitForSolid(() => expect(f.text()).toContain("Continuation unavailable"));
+    }
+    f.click("Close");
+    await f.open();
+    if (phase === "pending") {
+      f.outcome.reject(new Error("Continuation unavailable"));
+    }
+    await waitForSolid(() => expect(f.text()).toContain("Continuation unavailable"));
+    expect(f.calls()).toHaveLength(1);
+    expect(f.container.querySelector("openclaw-modal-dialog")).not.toBeNull();
+  },
+);
+
 it("prioritizes terminal owner feedback over a rejected refresh and admits an explicit fresh retry", async () => {
   const f = fixture();
   f.refresh.mockRejectedValueOnce(new Error("Status refresh unavailable"));

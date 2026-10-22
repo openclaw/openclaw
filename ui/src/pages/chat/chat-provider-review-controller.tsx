@@ -117,6 +117,10 @@ export function createChatProviderReview(deps: {
     if (!current) {
       return null;
     }
+    const [preparation, setPreparation] = createSignal<Promise<void>>();
+    const prepared = createMemo(() => preparation()?.then(() => null) ?? null, {
+      loadingValue: null,
+    });
     const [completion, setCompletion] = createSignal<Promise<void>>();
     const completed = createMemo(() => completion()?.then(() => null) ?? null, {
       loadingValue: null,
@@ -160,6 +164,8 @@ export function createChatProviderReview(deps: {
       setPending,
       checking,
       setChecking,
+      setPreparation,
+      prepared,
       setCompletion,
       completed,
     };
@@ -272,19 +278,23 @@ export function createChatProviderReview(deps: {
   });
   return {
     view,
-    completed: () => activity()?.completed(),
+    completed: () => {
+      const active = activity();
+      active?.prepared();
+      return active?.completed();
+    },
     async open() {
       const active = activity();
       if (!active || !isCurrent(active.current) || active.presentation.loading) {
         return;
       }
       update(active, { loading: true });
-      return observe(
-        active,
-        ProviderReviewModal.preload()
-          .then(() => update(active, { open: true }))
-          .finally(() => update(active, { loading: false })),
-      );
+      const preparation = ProviderReviewModal.preload()
+        .then(() => update(active, { open: true }))
+        .finally(() => update(active, { loading: false }));
+      // Reopening must not retire an in-flight command or its recovery error.
+      void active.setPreparation(preparation);
+      return preparation.catch(() => {});
     },
     close: () => update(activity(), { open: false }),
     refresh() {
