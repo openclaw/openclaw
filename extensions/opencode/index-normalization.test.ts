@@ -1,3 +1,4 @@
+import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it } from "vitest";
 import plugin from "./index.js";
@@ -47,4 +48,3 @@ it.each([undefined, "https://proxy.example.test/v1", "https://opencode.ai/zen/v1
     ).toBeUndefined();
   },
 );
-import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";

@@ -19,6 +19,7 @@ import { createSlackLookupClient, createSlackWriteClient, getSlackWriteClient } 
 import {
   openSlackConversationWithClient,
   parseSlackConversationOpenInput,
+  slackTeamIdSchema,
 } from "./conversation-open.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
@@ -247,14 +248,7 @@ export function parseSlackChannelCreateInput(
       .trim()
       .regex(/^[a-z0-9][a-z0-9_-]{0,79}$/)
       .parse(name),
-    teamId:
-      teamId === undefined
-        ? undefined
-        : z
-            .string()
-            .trim()
-            .regex(/^T[A-Z0-9]+$/i)
-            .parse(teamId),
+    teamId: slackTeamIdSchema.parse(teamId),
     inviteUserId:
       inviteUserId === undefined
         ? undefined
