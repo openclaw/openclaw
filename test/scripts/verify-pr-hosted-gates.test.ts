@@ -684,12 +684,20 @@ describe("verify-pr-hosted-gates", () => {
     ],
   ] satisfies Array<
     [string, WorkflowRunFixture[], { name: string; id: number; headSha?: string }?, boolean?]
-  >)("selects %s", (_name, runs, selected = undefined, changelogOnly = undefined) => {
-    expect(collectHostedGateEvidence(runs, { changelogOnly })).toEqual({
-      headSha: sha,
-      workflows: selected ? [expect.objectContaining(selected)] : [],
-    });
-  });
+  >)(
+    "selects %s",
+    (
+      _name,
+      runs,
+      selected?: { name: string; id: number; headSha?: string },
+      changelogOnly?: boolean,
+    ) => {
+      expect(collectHostedGateEvidence(runs, { changelogOnly })).toEqual({
+        headSha: sha,
+        workflows: selected ? [expect.objectContaining(selected)] : [],
+      });
+    },
+  );
 
   it("accepts a recent green fork head when GitHub omits pull request links", () => {
     const priorRun = makeRun("CI", 1, 50, forkRun({ head_sha: previousSha }));
@@ -772,7 +780,7 @@ describe("verify-pr-hosted-gates", () => {
     ["command failure", new Error("git rev-list failed")],
   ] satisfies Array<[string, string | Error, string?]>)(
     "rejects rev-list %s",
-    (_name, output, error = undefined) => {
+    (_name, output, error?: string) => {
       expect(() =>
         loadPullRequestCommitShas({ baseSha: "a".repeat(40), headSha: "b".repeat(40) }, () => {
           if (output instanceof Error) {
