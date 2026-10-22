@@ -131,59 +131,6 @@ function renderMessageList(
   }).trimEnd();
 }
 
-function renderReactions(payload: unknown, opts: FormatOpts): string | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const reactions = (payload as { reactions?: unknown }).reactions;
-  if (!Array.isArray(reactions)) {
-    return null;
-  }
-
-  const rows = reactions.slice(0, opts.displayLimit ?? 50).map((r) => {
-    const entry = r as Record<string, unknown>;
-    const emojiObj = entry.emoji as Record<string, unknown> | undefined;
-    const emoji =
-      firstNonemptyString(emojiObj, "raw") || firstNonemptyString(entry, "name", "emoji", "key");
-    const count = typeof entry.count === "number" ? String(entry.count) : "";
-    const userList = Array.isArray(entry.users)
-      ? (entry.users as unknown[])
-          .slice(0, 8)
-          .map((u) => {
-            if (typeof u === "string") {
-              return u;
-            }
-            if (!u || typeof u !== "object") {
-              return "";
-            }
-            const user = u as Record<string, unknown>;
-            return firstNonemptyString(user, "tag", "username", "id");
-          })
-          .filter(Boolean)
-      : [];
-    return {
-      Emoji: emoji,
-      Count: count,
-      Users: shortenText(userList.join(", "), 72),
-    };
-  });
-
-  if (rows.length === 0) {
-    return theme.muted("No reactions.");
-  }
-
-  // Escape remote labels and users only for display; raw keys remain identities in JSON.
-  return renderTerminalSafeTable({
-    width: opts.width,
-    columns: [
-      { key: "Emoji", header: "Emoji", minWidth: 8 },
-      { key: "Count", header: "Count", align: "right", minWidth: 6 },
-      { key: "Users", header: "Users", flex: true, minWidth: 20 },
-    ],
-    rows,
-  }).trimEnd();
-}
-
 function renderPaginationHint(payload: unknown, muted: (text: string) => string): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -305,9 +252,52 @@ export function formatMessageCliText(
     return [ok("✅ Reaction updated.")];
   }
 
-  const reactionsTable = renderReactions(payload, formatOpts);
-  if (reactionsTable !== null && result.action === "reactions") {
-    return [heading("Reactions"), reactionsTable];
+  if (result.action === "reactions" && payload && typeof payload === "object") {
+    const reactions = (payload as { reactions?: unknown }).reactions;
+    if (Array.isArray(reactions)) {
+      const rows = reactions.slice(0, displayLimit ?? 50).map((r) => {
+        const entry = r as Record<string, unknown>;
+        const emojiObj = entry.emoji as Record<string, unknown> | undefined;
+        const emoji =
+          firstNonemptyString(emojiObj, "raw") ||
+          firstNonemptyString(entry, "name", "emoji", "key");
+        const count = typeof entry.count === "number" ? String(entry.count) : "";
+        const userList = Array.isArray(entry.users)
+          ? (entry.users as unknown[])
+              .slice(0, 8)
+              .map((u) => {
+                if (typeof u === "string") {
+                  return u;
+                }
+                if (!u || typeof u !== "object") {
+                  return "";
+                }
+                const user = u as Record<string, unknown>;
+                return firstNonemptyString(user, "tag", "username", "id");
+              })
+              .filter(Boolean)
+          : [];
+        return {
+          Emoji: emoji,
+          Count: count,
+          Users: shortenText(userList.join(", "), 72),
+        };
+      });
+      // Escape remote labels and users only for display; raw keys remain identities in JSON.
+      const table =
+        rows.length === 0
+          ? theme.muted("No reactions.")
+          : renderTerminalSafeTable({
+              width,
+              columns: [
+                { key: "Emoji", header: "Emoji", minWidth: 8 },
+                { key: "Count", header: "Count", align: "right", minWidth: 6 },
+                { key: "Users", header: "Users", flex: true, minWidth: 20 },
+              ],
+              rows,
+            }).trimEnd();
+      return [heading("Reactions"), table];
+    }
   }
 
   if (result.action === "read" || result.action === "list-pins") {

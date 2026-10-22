@@ -497,6 +497,14 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       const runtime = retained.runtime;
       releaseRuntime = retained.release;
       admission = prepareCronRunAdmission({
+        scheduledExecution: params.occurrence.mint({
+          cfg: runtime.context.config,
+          agentId: runtime.context.agentId,
+          runId,
+          runSessionKey: runtime.context.sessionKey,
+          toolsAllow: request.toolsAllow,
+          operatorAuthorityRestored: false,
+        }),
         cfg: runtime.context.config,
         runId,
         agentId: runtime.context.agentId,

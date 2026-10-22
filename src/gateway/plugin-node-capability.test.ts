@@ -61,7 +61,8 @@ function makeRefreshClient() {
 }
 
 function refresh(client: GatewayWsClient, surface = "canvas", nowMs = 1_000) {
-  return refreshClientPluginNodeCapability({ client, surface: { surface }, nowMs });
+  using _ = vi.spyOn(Date, "now").mockReturnValueOnce(nowMs);
+  return refreshClientPluginNodeCapability({ client, surface: { surface } });
 }
 
 function makeTokenClient(expiresAtMs = 1_500, key = "canvas") {

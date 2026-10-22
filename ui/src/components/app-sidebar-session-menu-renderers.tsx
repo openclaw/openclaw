@@ -288,7 +288,7 @@ export function renderSidebarSessionSortMenuForMenus(
     onChange: (value: T) => void,
     inputRef?: (value: T, element: HTMLInputElement) => void,
   ) => (
-    <div id={id} class="sidebar-session-menu-row">
+    <div id={id} class="sidebar-session-menu-row sidebar-session-menu-row--segmented">
       <span aria-hidden="true" title={label()}>
         {label()}
       </span>

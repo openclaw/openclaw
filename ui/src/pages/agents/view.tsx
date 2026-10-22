@@ -48,6 +48,7 @@ export type AgentsProps = Omit<
   >;
   overview: Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
     Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">>;
+  identitySavePending?: boolean;
   onOpenMemoryImport?: AgentsPageView["onOpenMemoryImport"];
   onOpenMemorySettings?: AgentsPageView["onOpenMemorySettings"];
 };
@@ -261,6 +262,7 @@ export function Agents(props: AgentsProps) {
                       {(agentId) => (
                         <AgentOverview
                           {...props.overview}
+                          identitySavePending={props.identitySavePending ?? false}
                           readData={props.readData}
                           {...configActions()}
                           agent={agent()}

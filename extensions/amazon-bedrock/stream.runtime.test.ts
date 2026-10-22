@@ -237,6 +237,26 @@ describe("Bedrock profile endpoint resolution", () => {
 });
 
 describe("Bedrock stop reasons", () => {
+  it.each([
+    [BedrockStopReason.STOP_SEQUENCE, "stop", undefined],
+    [BedrockStopReason.MAX_TOKENS, "length", undefined],
+    [BedrockStopReason.MODEL_CONTEXT_WINDOW_EXCEEDED, "length", undefined],
+    ["unknown_provider_reason", "error", "unknown_provider_reason"],
+    [undefined, "error", "An unknown error occurred"],
+  ] as const)(
+    "projects terminal reason %s through the public stream",
+    async (reason, stopReason, errorMessage) => {
+      mockStream([startMessage, { messageStop: { stopReason: reason } }]);
+      const { eventTypes, result } = await collectStream(
+        streamSimpleBedrock(bedrockModel({}), userContext()),
+      );
+
+      expect(result.stopReason).toBe(stopReason);
+      expect(result.errorMessage).toBe(errorMessage);
+      expect(eventTypes.at(-1)).toBe(stopReason === "error" ? "error" : "done");
+    },
+  );
+
   it("rejects malformed terminal tool JSON before completing any sibling call", async () => {
     mockStream([
       startMessage,

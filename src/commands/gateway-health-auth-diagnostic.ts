@@ -15,16 +15,13 @@ export const GATEWAY_HEALTH_RATE_LIMITED_MESSAGE =
   "Gateway authentication is temporarily rate-limited. Wait for the temporary lockout to expire, then retry.";
 export const GATEWAY_HEALTH_RATE_LIMITED_TITLE = "Gateway authentication rate-limited";
 
-function gatewayProbeFailureKind(status: GatewayProbeReachabilityEvidence) {
-  return (
-    status.connectFailure?.kind ?? classifyGatewayConnectFailure({ message: status.error }).kind
-  );
-}
-
 export function gatewayProbeResultWasRateLimited(
   status: GatewayProbeReachabilityEvidence,
 ): boolean {
-  return gatewayProbeFailureKind(status) === "rate-limited";
+  return (
+    (status.connectFailure?.kind ??
+      classifyGatewayConnectFailure({ message: status.error }).kind) === "rate-limited"
+  );
 }
 
 export function gatewayConnectErrorWasRateLimited(error: unknown): boolean {

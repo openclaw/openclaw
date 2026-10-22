@@ -570,14 +570,19 @@ describe("session menu", () => {
     expect(blue?.getAttribute("aria-pressed")).toBe("true");
     expect(menu.querySelectorAll('.session-menu__colors [aria-pressed="true"]')).toHaveLength(1);
     const choices = iconChoices(menu);
-    expect(choices[0]?.getAttribute("role")).toBeNull();
-    expect(choices[0]?.getAttribute("aria-pressed")).toBe("true");
-    expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[0]]);
+    // Emoji and icon grids both lead with the clear choice.
+    const noIcon = () => [
+      ...menu.querySelectorAll<HTMLElement>(
+        '.session-menu__icon-grid > [aria-label="No icon"]:first-child',
+      ),
+    ];
+    expect(noIcon()).toHaveLength(2);
+    expect(choices[1]?.getAttribute("role")).toBeNull();
+    expect(choices[1]?.getAttribute("aria-pressed")).toBe("true");
+    expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[1]]);
     queryButton(menu, '.session-menu__color-choice[aria-label="Purple"]')?.click();
-    iconChoices(menu)[1]?.click();
-    const noIcon = queryButton(menu, '[aria-label="No icon"]');
-    expect(noIcon).not.toBeNull();
-    noIcon?.click();
+    iconChoices(menu)[2]?.click();
+    noIcon().forEach((choice) => choice.click());
     queryButton(menu, '.session-menu__color-choice[aria-label="No color"]')?.click();
     const reset = queryButton(menu, ".session-menu__icon-remove");
     expect(reset?.previousElementSibling?.getAttribute("role")).toBe("separator");
@@ -586,6 +591,7 @@ describe("session menu", () => {
     expect(onAction.mock.calls).toEqual([
       [{ kind: "set-color", color: "purple" }],
       [{ kind: "set-icon", icon: "🚀" }],
+      [{ kind: "set-icon", icon: null }],
       [{ kind: "set-icon", icon: null }],
       [{ kind: "set-color", color: null }],
       [{ kind: "reset-appearance" }],

@@ -159,74 +159,6 @@ function autoMemorySourceId(sourcePath: string): string {
   return crypto.createHash("sha256").update(path.resolve(sourcePath)).digest("hex").slice(0, 10);
 }
 
-async function discoverAutoMemorySources(params: {
-  root: string;
-  homeProjectsDir?: string;
-  userSettingsPath?: string;
-}): Promise<ClaudeAutoMemorySource[]> {
-  const candidates: Array<{ configured?: boolean; label: string; path: string }> = [];
-  if (params.homeProjectsDir) {
-    for (const entry of await safeReadDir(params.homeProjectsDir)) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      candidates.push({
-        label: entry.name,
-        path: path.join(params.homeProjectsDir, entry.name, "memory"),
-      });
-    }
-  }
-  const userSettings = await readJsonObject(params.userSettingsPath);
-  const customDirectory = userSettings.autoMemoryDirectory;
-  if (typeof customDirectory === "string" && customDirectory.trim()) {
-    const configuredPath = customDirectory.trim();
-    // Bare ~ would select the whole home tree; Claude only permits absolute or ~/-prefixed paths.
-    if (!path.isAbsolute(configuredPath) && !configuredPath.startsWith("~/")) {
-      throw new Error("Claude autoMemoryDirectory must be absolute or start with ~/.");
-    }
-    const customPath = resolveHomePath(configuredPath);
-    candidates.push({
-      configured: true,
-      label: path.basename(customPath) || "custom",
-      path: customPath,
-    });
-  }
-  if (path.basename(params.root) === "memory") {
-    candidates.push({
-      label: path.basename(path.dirname(params.root)) || "project",
-      path: params.root,
-    });
-  }
-
-  const seen = new Set<string>();
-  const sources: ClaudeAutoMemorySource[] = [];
-  for (const candidate of candidates) {
-    const directoryExists = candidate.configured
-      ? await isConfiguredAutoMemoryDirectory(candidate.path)
-      : await isDirectory(candidate.path);
-    if (!directoryExists) {
-      continue;
-    }
-    // A capped discovery probe must remain conservative: planning performs the
-    // full bounded scan and reports oversized trees instead of hiding them.
-    const scan = await listMarkdownFiles(candidate.path, 0);
-    if (scan.files.length === 0 && !scan.truncatedBy) {
-      continue;
-    }
-    const canonical = await fs.realpath(candidate.path).catch(() => path.resolve(candidate.path));
-    if (seen.has(canonical)) {
-      continue;
-    }
-    seen.add(canonical);
-    sources.push({
-      id: autoMemorySourceId(canonical),
-      label: candidate.label,
-      path: candidate.path,
-    });
-  }
-  return sources.toSorted((left, right) => left.label.localeCompare(right.label));
-}
-
 export async function discoverClaudeSource(input?: string): Promise<ClaudeSource> {
   const explicitInput = Boolean(input?.trim());
   const root = resolveHomePath(input?.trim() || defaultClaudeHome());
@@ -308,11 +240,71 @@ export async function discoverClaudeSource(input?: string): Promise<ClaudeSource
     }
   }
 
-  source.autoMemorySources = await discoverAutoMemorySources({
-    root,
-    homeProjectsDir: source.homeProjectsDir,
-    userSettingsPath: source.userSettingsPath,
-  });
+  const memoryHomeProjectsDir = source.homeProjectsDir;
+  const memoryUserSettingsPath = source.userSettingsPath;
+  const candidates: Array<{ configured?: boolean; label: string; path: string }> = [];
+  if (memoryHomeProjectsDir) {
+    for (const entry of await safeReadDir(memoryHomeProjectsDir)) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      candidates.push({
+        label: entry.name,
+        path: path.join(memoryHomeProjectsDir, entry.name, "memory"),
+      });
+    }
+  }
+  const userSettings = await readJsonObject(memoryUserSettingsPath);
+  const customDirectory = userSettings.autoMemoryDirectory;
+  if (typeof customDirectory === "string" && customDirectory.trim()) {
+    const configuredPath = customDirectory.trim();
+    // Bare ~ would select the whole home tree; Claude only permits absolute or ~/-prefixed paths.
+    if (!path.isAbsolute(configuredPath) && !configuredPath.startsWith("~/")) {
+      throw new Error("Claude autoMemoryDirectory must be absolute or start with ~/.");
+    }
+    const customPath = resolveHomePath(configuredPath);
+    candidates.push({
+      configured: true,
+      label: path.basename(customPath) || "custom",
+      path: customPath,
+    });
+  }
+  if (path.basename(root) === "memory") {
+    candidates.push({
+      label: path.basename(path.dirname(root)) || "project",
+      path: root,
+    });
+  }
+
+  const seen = new Set<string>();
+  const sources: ClaudeAutoMemorySource[] = [];
+  for (const candidate of candidates) {
+    const directoryExists = candidate.configured
+      ? await isConfiguredAutoMemoryDirectory(candidate.path)
+      : await isDirectory(candidate.path);
+    if (!directoryExists) {
+      continue;
+    }
+    // A capped discovery probe must remain conservative: planning performs the
+    // full bounded scan and reports oversized trees instead of hiding them.
+    const scan = await listMarkdownFiles(candidate.path, 0);
+    if (scan.files.length === 0 && !scan.truncatedBy) {
+      continue;
+    }
+    const canonical = await fs.realpath(candidate.path).catch(() => path.resolve(candidate.path));
+    if (seen.has(canonical)) {
+      continue;
+    }
+    seen.add(canonical);
+    sources.push({
+      id: autoMemorySourceId(canonical),
+      label: candidate.label,
+      path: candidate.path,
+    });
+  }
+  source.autoMemorySources = sources.toSorted((left, right) =>
+    left.label.localeCompare(right.label),
+  );
 
   const claudeJson = await readJsonObject(source.userClaudeJsonPath);
   const hasClaudeJsonState = Boolean(claudeJson.mcpServers || claudeJson.projects);

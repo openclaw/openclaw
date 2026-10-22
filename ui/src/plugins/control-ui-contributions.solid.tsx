@@ -1,5 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, For, Loading, Show, createMemo, createSignal, onSettled } from "solid-js";
+import {
+  normalizeSessionIconValue,
+  SESSION_ICON_SVG_DATA_URL_PREFIX,
+} from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { iconData, type IconName } from "../components/icon-data.ts";
 import type { SidebarMenus } from "../components/sidebar-menus.tsx";
@@ -115,6 +119,14 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     // SAFETY: the own-key check admits only names from the fixed icon registry.
     return Object.hasOwn(iconData, name) ? (name as IconName) : "plug";
   };
+  // Destinations may carry an emoji appearance instead of an icon name (Workboard boards);
+  // show it as the board page does instead of the fallback icon.
+  const emojiIcon = (entry: Navigation["entry"]) => {
+    const icon = entry.value.icon;
+    const appearance =
+      icon && !Object.hasOwn(iconData, icon) ? normalizeSessionIconValue(icon) : null;
+    return appearance?.startsWith(SESSION_ICON_SVG_DATA_URL_PREFIX) ? null : appearance;
+  };
   function NavigationLink(link: { item: Navigation; child?: boolean; fallbackIcon?: string }) {
     const menu: JSX.EventHandler<HTMLAnchorElement, MouseEvent | KeyboardEvent> = (event) => {
       if (!link.item.entry.value.actions?.length) {
@@ -159,7 +171,12 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         }}
       >
         <span class="nav-item__icon" aria-hidden="true">
-          <Icon name={iconName(link.item.entry, link.fallbackIcon)} />
+          <Show
+            when={emojiIcon(link.item.entry)}
+            fallback={<Icon name={iconName(link.item.entry, link.fallbackIcon)} />}
+          >
+            {(icon) => <span class="session-glyph__emoji">{icon()}</span>}
+          </Show>
         </span>
         <span class="nav-item__text">{link.item.entry.value.label}</span>
       </a>

@@ -491,6 +491,31 @@ describe("gateway sessions patch", () => {
     expect(pinned.updatedAt).toBeGreaterThan(1);
   });
 
+  test("commits an icon or color change without ageing the session row", async () => {
+    const store = mainStoreEntry({ sessionId: "sess-icon" });
+
+    const iconed = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, icon: "✅", expectedSessionId: "sess-icon" },
+      }),
+    );
+    expect(iconed.icon).toBe("✅");
+    expect(iconed.updatedAt).toBe(1);
+
+    const cleared = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, icon: null, color: null } }),
+    );
+    expect(cleared.icon).toBeUndefined();
+    expect(cleared.updatedAt).toBe(1);
+
+    const renamed = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, icon: "🐛", label: "Waiting" } }),
+    );
+    expect(renamed.icon).toBe("🐛");
+    expect(renamed.updatedAt).toBeGreaterThan(1);
+  });
+
   test("stores sanitized agent status with attention and a bounded TTL", async () => {
     const before = Date.now();
     const entry = await patchOk({

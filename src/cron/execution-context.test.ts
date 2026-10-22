@@ -268,9 +268,19 @@ describe("buildScheduledExecutionContext principals", () => {
     });
   });
 
-  it("does not build a context for main-session jobs", () => {
-    const result = buildScheduledExecutionContext(job({ sessionTarget: "main" }), facts());
-    expect(result.status).toBe("fail");
+  it("runs main-session jobs in the main session, like session:<key>", () => {
+    const context = ready(
+      job({ sessionTarget: "main" }),
+      facts({ runSessionKey: MAIN_KEY, agentSandboxMode: "non-main" }),
+    );
+    expect(context.placement).toBe("in-session");
+    expect(context.resources).toMatchObject({
+      boardSessionKey: MAIN_KEY,
+      eventTargetSessionKey: MAIN_KEY,
+      fileScope: "session",
+      bootstrap: "default",
+      sandbox: { required: false, basis: [] },
+    });
   });
 });
 

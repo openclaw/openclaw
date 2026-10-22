@@ -1,5 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
 import { serializeCacheTtlToolResultProjections as snapshot } from "./cache-ttl-checkpoint.js";
 import { appendAttemptCacheTtlIfNeeded } from "./run/attempt-thread-helpers.js";
@@ -186,6 +186,7 @@ describe("cache-TTL tool-result projection", () => {
           entries.push({ type: "custom", customType, data: JSON.parse(serialized) });
         },
       };
+      using _ = vi.spyOn(Date, "now").mockReturnValueOnce(NOW);
       await appendAttemptCacheTtlIfNeeded({
         sessionManager,
         config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
@@ -195,7 +196,6 @@ describe("cache-TTL tool-result projection", () => {
         compactionOccurredThisAttempt: false,
         isCacheTtlEligibleProvider: () => true,
         toolResultPromptProjectionState: state,
-        now: NOW,
       });
       expect(entries.at(-1)?.data).toMatchObject({
         timestamp: NOW,

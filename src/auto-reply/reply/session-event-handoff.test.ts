@@ -28,6 +28,7 @@ import * as sessionReplacement from "../../config/sessions/session-accessor.sqli
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
   enqueueRequiredSystemEventEntry,
@@ -248,6 +249,7 @@ describe("session event target custody", () => {
         options: {
           source: "cron",
           scheduledAutomation: {
+            occurrence: TEST_SCHEDULED_OCCURRENCE,
             job,
             admissionSource: "operator-schedule",
             assertCurrent: () => {},

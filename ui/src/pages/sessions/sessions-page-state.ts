@@ -75,6 +75,7 @@ import {
 import { createSessionsDialog } from "./page-dialog.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
+import { createSessionsRosterReadiness } from "./roster-readiness.ts";
 import type { SessionsRouteData } from "./route.ts";
 import {
   reconcileSelectedSessions,
@@ -120,6 +121,7 @@ export function createSessionsPage(
     page: 0,
     pageSize: 25,
     result: null,
+    roster: null,
     loading: false,
     refreshing: false,
     error: null,
@@ -153,6 +155,7 @@ export function createSessionsPage(
   let listRequest: Promise<void> | undefined;
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let appliedListResult: SessionsListResult | null | undefined;
+  const rosterReadiness = createSessionsRosterReadiness(state);
   const details = createSessionDetails({
     captureScope: captureRequestScope,
     isCurrent: isRequestScopeCurrent,
@@ -263,6 +266,7 @@ export function createSessionsPage(
     retirePageOperations();
     clearSearchTimer();
     listRequest = undefined;
+    rosterReadiness.retire();
     resetTranscriptSearchState(state.transcriptSearchQuery);
     state.loading = false;
     state.refreshing = false;
@@ -430,6 +434,7 @@ export function createSessionsPage(
       state.page = 0;
       listBinding = { sessions, query, key, transcriptKey };
       appliedListResult = undefined;
+      rosterReadiness.restart(captureRequestScope() !== null);
     }
     const binding = listBinding!;
     if (unsubscribeList) {
@@ -455,8 +460,7 @@ export function createSessionsPage(
     if (listBinding !== binding || application.sessions !== binding.sessions) {
       return;
     }
-    state.loading = snapshot.loading;
-    state.error = snapshot.error;
+    rosterReadiness.update(snapshot.loading, snapshot.error);
     const result = snapshot.result;
     if (!result) {
       return;
@@ -490,6 +494,7 @@ export function createSessionsPage(
     if (!binding || binding.sessions !== scope.sessions || !isRequestScopeCurrent(scope)) {
       return;
     }
+    state.error = null;
     await loadSessionList(binding, { force: true });
     if (isRequestScopeCurrent(scope) && listBinding === binding) {
       applyListSnapshot(binding, binding.sessions.listSnapshot(binding.query));
@@ -1468,6 +1473,7 @@ export function createSessionsPage(
     gatewayLifecycle.connect();
     return () => {
       active = false;
+      rosterReadiness.dispose();
       commandRetirement.resolve();
       observation.dispose();
       stopScope();

@@ -8,6 +8,7 @@ import type {
 import type { RestoredGatewayOperatorAuthority } from "../gateway/operator-run-recovery.js";
 import { makeCronJob } from "./delivery.test-helpers.js";
 import { resolveCronSourceDeliveryPlan } from "./isolated-agent/source-delivery-plan.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { createCronAgentWatchdog } from "./service/agent-watchdog.js";
 import { runCronSessionTurn } from "./session-run.js";
 
@@ -75,6 +76,7 @@ afterEach(() => {
 
 function input(): Parameters<typeof runCronSessionTurn>[0] {
   return {
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     cfg: fixture.config,
     agentId: "main",
     sessionKey: "agent:main:scheduled",

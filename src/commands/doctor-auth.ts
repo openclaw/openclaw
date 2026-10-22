@@ -266,29 +266,6 @@ function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | nul
   }
 }
 
-function formatOAuthRefreshFailureDoctorLine(params: {
-  profileId: string;
-  provider: string;
-  message: string;
-}): string | null {
-  const classified = classifyOAuthRefreshFailure(params.message);
-  if (!classified) {
-    return null;
-  }
-  const rawProvider = classified.provider ?? params.provider;
-  const provider = rawProvider
-    ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
-    : null;
-  const command = buildOAuthRefreshFailureLoginCommand(provider, {
-    profileId: provider === rawProvider ? params.profileId : undefined,
-  });
-  const commandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(command);
-  if (classified.reason) {
-    return `- ${params.profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run ${commandMarkdown}.`;
-  }
-  return `- ${params.profileId}: OAuth refresh failed — Try again; if this persists, run ${commandMarkdown}.`;
-}
-
 async function resolveAuthIssueHint(
   issue: AuthIssue,
   cfg: OpenClawConfig,
@@ -448,58 +425,6 @@ export async function collectAuthProfileHealthFindings(params: {
   return [...findings, ...collectLegacyCodexProviderOverrideFindings(params.cfg)];
 }
 
-async function inspectAuthProfileHealthTarget(params: {
-  cfg: OpenClawConfig;
-  prompter: DoctorPrompter;
-  allowKeychainPrompt: boolean;
-  target: AuthProfileHealthTarget;
-  labelStores: boolean;
-}): Promise<readonly HealthFinding[]> {
-  let { store, summary } = loadAuthProfileHealth(params);
-  const refreshTargets = summary.profiles
-    .filter(isAuthProfileHealthIssue)
-    .filter((issue) => issue.type === "oauth");
-  const refreshErrors = new Map<string, string>();
-  const shouldRefresh =
-    refreshTargets.length > 0 &&
-    (await params.prompter.confirmAutoFix({
-      message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
-      initialValue: true,
-    }));
-  if (shouldRefresh) {
-    for (const profile of refreshTargets) {
-      try {
-        await resolveApiKeyForProfile({
-          cfg: params.cfg,
-          store,
-          profileId: profile.profileId,
-          agentDir: params.target.agentDir,
-          forceRefresh: true,
-        });
-      } catch (error) {
-        const message = formatErrorMessage(error);
-        refreshErrors.set(
-          profile.profileId,
-          formatOAuthRefreshFailureDoctorLine({
-            profileId: profile.profileId,
-            provider: profile.provider,
-            message,
-          }) ?? `OAuth refresh failed: ${message}`,
-        );
-      }
-    }
-    ({ store, summary } = loadAuthProfileHealth({ ...params, allowKeychainPrompt: false }));
-  }
-  const findings = await collectAuthProfileTargetFindings({ ...params, store, summary });
-  for (const [index, finding] of findings.entries()) {
-    const error = finding.target && refreshErrors.get(finding.target);
-    if (error) {
-      findings[index] = { ...finding, message: `${finding.message} ${error}` };
-    }
-  }
-  return findings;
-}
-
 /** Aggregate normal Doctor output; lint retains each store's location and finding. */
 export async function inspectAuthProfileHealth(params: {
   cfg: OpenClawConfig;
@@ -509,11 +434,68 @@ export async function inspectAuthProfileHealth(params: {
   const targets = listAuthProfileHealthTargets(params.cfg);
   const grouped = new Map<string, { finding: HealthFinding; stores: Set<string> }>();
   for (const target of targets) {
-    const findings = await inspectAuthProfileHealthTarget({
-      ...params,
+    const { cfg, prompter, allowKeychainPrompt } = params;
+    let { store, summary } = loadAuthProfileHealth({ cfg, target, allowKeychainPrompt });
+    const refreshTargets = summary.profiles
+      .filter(isAuthProfileHealthIssue)
+      .filter((issue) => issue.type === "oauth");
+    const refreshErrors = new Map<string, string>();
+    const shouldRefresh =
+      refreshTargets.length > 0 &&
+      (await prompter.confirmAutoFix({
+        message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
+        initialValue: true,
+      }));
+    if (shouldRefresh) {
+      for (const profile of refreshTargets) {
+        try {
+          await resolveApiKeyForProfile({
+            cfg,
+            store,
+            profileId: profile.profileId,
+            agentDir: target.agentDir,
+            forceRefresh: true,
+          });
+        } catch (error) {
+          const message = formatErrorMessage(error);
+          const profileId = profile.profileId;
+          const profileProvider = profile.provider;
+          const classified = classifyOAuthRefreshFailure(message);
+          if (!classified) {
+            refreshErrors.set(profileId, `OAuth refresh failed: ${message}`);
+            continue;
+          }
+          const rawProvider = classified.provider ?? profileProvider;
+          const provider = rawProvider
+            ? (DOCTOR_REAUTH_PROVIDER_ALIASES[rawProvider] ?? rawProvider)
+            : null;
+          const command = buildOAuthRefreshFailureLoginCommand(provider, {
+            profileId: provider === rawProvider ? profileId : undefined,
+          });
+          const commandMarkdown = formatOAuthRefreshFailureLoginCommandMarkdown(command);
+          refreshErrors.set(
+            profileId,
+            classified.reason
+              ? `- ${profileId}: re-auth required [${formatOAuthRefreshFailureReason(classified.reason)}] — Run ${commandMarkdown}.`
+              : `- ${profileId}: OAuth refresh failed — Try again; if this persists, run ${commandMarkdown}.`,
+          );
+        }
+      }
+      ({ store, summary } = loadAuthProfileHealth({ cfg, target, allowKeychainPrompt: false }));
+    }
+    const findings = await collectAuthProfileTargetFindings({
+      cfg,
       target,
       labelStores: false,
+      store,
+      summary,
     });
+    for (const [index, finding] of findings.entries()) {
+      const error = finding.target && refreshErrors.get(finding.target);
+      if (error) {
+        findings[index] = { ...finding, message: `${finding.message} ${error}` };
+      }
+    }
     for (const finding of findings) {
       const { path: _path, ...diagnostic } = finding;
       const key = JSON.stringify(diagnostic);

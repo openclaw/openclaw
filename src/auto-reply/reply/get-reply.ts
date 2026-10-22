@@ -639,7 +639,6 @@ async function resolveReplyFromConfig(
       try {
         await applyResetModelOverride({
           ...replyContext,
-          resetTriggered,
           bodyStripped,
           sessionCtx,
           sessionEntryHandle,

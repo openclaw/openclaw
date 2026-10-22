@@ -130,6 +130,7 @@ export function createAgentsPage(context: ApplicationContext, routeData?: Agents
   };
   pages.add(dispose);
   return {
+    identitySavePending: state.identitySavePending,
     read: () => state.read(),
     setRouteData(next?: AgentsRouteData) {
       state.setRouteData(next);

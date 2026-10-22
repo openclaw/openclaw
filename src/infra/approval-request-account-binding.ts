@@ -80,7 +80,6 @@ export async function classifyApprovalRequestChannelRouteAsync(params: {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
   channel: string;
-  defaultAccountId?: string | null;
 }): Promise<ApprovalRequestChannelRouteClass> {
   const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {

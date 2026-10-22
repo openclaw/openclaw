@@ -40,10 +40,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import {
-  mintCronPromptExecutionContext,
-  resolveCronJobToolPolicyContext,
-} from "../execution-context-admission.js";
+import { resolveCronJobToolPolicyContext } from "../execution-context-admission.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
@@ -203,30 +200,29 @@ export function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
-    const scheduledExecution = await mintCronPromptExecutionContext(params, { runId, trigger });
-    // Admission releases the context when it closes; a failed preparation never reaches close.
-    let cronAdmission: ReturnType<typeof prepareCronRunAdmission>;
-    try {
-      cronAdmission = prepareCronRunAdmission({
-        scheduledExecution,
-        operatorAuthority: params.operatorAuthority,
-        admissionSource: params.admissionSource,
-        deliveryAttemptFence: params.deliveryAttemptFence,
+    const cronAdmission = prepareCronRunAdmission({
+      scheduledExecution: params.occurrence.mint({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
         runId,
-        sessionId: params.cronSession.sessionEntry.sessionId,
-        sessionKey: params.runSessionKey,
-        jobId: params.job.id,
-        channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
+        runSessionKey: params.runSessionKey,
         toolsAllow: params.agentPayload?.toolsAllow,
-        scheduledToolPolicy,
-        executionIdentity: params.executionIdentity,
-      });
-    } catch (error) {
-      scheduledExecution.release();
-      throw error;
-    }
+        operatorAuthorityRestored: params.operatorAuthority !== undefined,
+      }),
+      operatorAuthority: params.operatorAuthority,
+      admissionSource: params.admissionSource,
+      deliveryAttemptFence: params.deliveryAttemptFence,
+      cfg: params.cfgWithAgentDefaults,
+      agentId: params.agentId,
+      runId,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      sessionKey: params.runSessionKey,
+      jobId: params.job.id,
+      channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
+      toolsAllow: params.agentPayload?.toolsAllow,
+      scheduledToolPolicy,
+      executionIdentity: params.executionIdentity,
+    });
     params.onPromptAdmission(cronAdmission);
     // Record the cron source fact at its producer for the run's lifetime so
     // exec-approval creation and standing-grant use never infer job identity

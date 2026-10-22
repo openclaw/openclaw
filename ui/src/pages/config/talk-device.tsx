@@ -1,4 +1,13 @@
-import { createMemo, Errored, For, Loading, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  refresh,
+  Show,
+} from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -14,14 +23,12 @@ import { NativeVoiceControls } from "./talk-device-controls.tsx";
 registerEnglishCatalog(registerSettingsEnglish);
 
 type DeviceLocaleSelection = { primary: string; additional: string[] };
-const pendingDeviceLocales = new WeakMap<
-  NativeDeviceSettingsCapability,
-  Partial<DeviceLocaleSelection>
->();
+type PendingDeviceLocales = Partial<DeviceLocaleSelection> & {
+  errors: Partial<Record<keyof DeviceLocaleSelection, string>>;
+};
+const pendingDeviceLocales = new WeakMap<NativeDeviceSettingsCapability, PendingDeviceLocales>();
 
-function deviceLocaleSelection(
-  capability: NativeDeviceSettingsCapability,
-): DeviceLocaleSelection | null {
+function deviceLocaleSelection(capability: NativeDeviceSettingsCapability) {
   const locale = capability.snapshot?.voice.locale;
   if (!locale) {
     return null;
@@ -30,9 +37,11 @@ function deviceLocaleSelection(
   const primary = pending?.primary ?? locale.primary;
   return {
     primary,
+    available: locale.available,
     additional: [...new Set(pending?.additional ?? locale.additional)].filter(
       (id) => id !== primary,
     ),
+    error: pending?.errors.primary ?? pending?.errors.additional ?? null,
   };
 }
 
@@ -40,27 +49,40 @@ function changeDeviceLocales(
   capability: NativeDeviceSettingsCapability,
   change: Partial<DeviceLocaleSelection>,
 ) {
-  const desired = Object.assign(pendingDeviceLocales.get(capability) ?? {}, change);
+  const desired: PendingDeviceLocales = Object.assign(
+    pendingDeviceLocales.get(capability) ?? { errors: {} },
+    change,
+  );
   pendingDeviceLocales.set(capability, desired);
+  const writes: Promise<void>[] = [];
   for (const key of ["additional", "primary"] as const) {
     const value = change[key];
     if (value === undefined) {
       continue;
     }
-    capability.set(`voice.locale.${key}`, value, () => {
-      // Native settles before publishing its snapshot. Do not retire a newer edit.
-      if (desired[key] === value) {
-        delete desired[key];
-      }
-      if (
-        desired.primary === undefined &&
-        desired.additional === undefined &&
-        pendingDeviceLocales.get(capability) === desired
-      ) {
-        pendingDeviceLocales.delete(capability);
-      }
-    });
+    delete desired.errors[key];
+    writes.push(
+      capability.set(`voice.locale.${key}`, value, (error) => {
+        // Native settles before publishing its snapshot. Do not retire a newer edit.
+        if (desired[key] === value) {
+          if (error) {
+            desired.errors[key] = formatUiError(error);
+          } else {
+            delete desired[key];
+            delete desired.errors[key];
+          }
+        }
+        if (
+          desired.primary === undefined &&
+          desired.additional === undefined &&
+          pendingDeviceLocales.get(capability) === desired
+        ) {
+          pendingDeviceLocales.delete(capability);
+        }
+      }),
+    );
   }
+  return Promise.all(writes);
 }
 
 export type VoiceWakeEditorState =
@@ -212,13 +234,20 @@ function DeviceVoiceSettings(props: {
 }) {
   const voice = () => props.snapshot.voice;
   const microphone = () => voice().microphone;
-  const languageOptions = createMemo(() =>
-    (voice().locale?.available ?? []).map(({ id, name }) => ({ value: id, label: name })),
-  );
-  const locale = createMemo(() => {
+  // Choices and selection share one optimistic frame during overlapping native edits.
+  const [locale, setLocale] = createOptimistic(() => {
     // Reading the published snapshot invalidates the pending-intent overlay.
     void props.snapshot;
     return deviceLocaleSelection(props.capability);
+  });
+  // Keep the controls owned by availability, not each optimistic selection frame.
+  const hasLocale = createMemo(() => locale() !== null);
+  const changeLocales = action(function* (completion: ReturnType<typeof changeDeviceLocales>) {
+    setLocale(deviceLocaleSelection(props.capability));
+    yield completion;
+    // Other edits may still hold this transition open after this write settles.
+    setLocale(deviceLocaleSelection(props.capability));
+    void refresh(locale);
   });
   return (
     <>
@@ -227,25 +256,27 @@ function DeviceVoiceSettings(props: {
         snapshot={props.snapshot}
         presentationRetired={props.presentationRetired}
       />
-      {locale() && (
+      {hasLocale() && (
         <SettingsSelectRow
           title={t("configPage.deviceTalk.primaryLanguage")}
           value={locale()!.primary}
-          options={languageOptions()}
+          options={locale()!.available.map(({ id, name }) => ({ value: id, label: name }))}
           onChange={(value) => {
             const current = deviceLocaleSelection(props.capability);
             if (current) {
-              changeDeviceLocales(props.capability, {
-                primary: value,
-                ...(current.additional.includes(value)
-                  ? { additional: current.additional.filter((id) => id !== value) }
-                  : {}),
-              });
+              void changeLocales(
+                changeDeviceLocales(props.capability, {
+                  primary: value,
+                  ...(current.additional.includes(value)
+                    ? { additional: current.additional.filter((id) => id !== value) }
+                    : {}),
+                }),
+              );
             }
           }}
         />
       )}
-      {locale() && (
+      {hasLocale() && (
         <SettingsRow
           title={t("configPage.deviceTalk.additionalLanguages")}
           stacked
@@ -254,7 +285,7 @@ function DeviceVoiceSettings(props: {
               <For each={locale()!.additional} keyed={(id) => id}>
                 {(id) => {
                   const name = () =>
-                    languageOptions().find((option) => option.value === id())?.label ?? id();
+                    locale()?.available.find((language) => language.id === id())?.name ?? id();
                   return (
                     <div>
                       {name()}
@@ -265,9 +296,11 @@ function DeviceVoiceSettings(props: {
                         onClick={() => {
                           const current = deviceLocaleSelection(props.capability);
                           if (current) {
-                            changeDeviceLocales(props.capability, {
-                              additional: current.additional.filter((value) => value !== id()),
-                            });
+                            void changeLocales(
+                              changeDeviceLocales(props.capability, {
+                                additional: current.additional.filter((value) => value !== id()),
+                              }),
+                            );
                           }
                         }}
                       >
@@ -289,27 +322,50 @@ function DeviceVoiceSettings(props: {
                     select.value !== current.primary &&
                     !current.additional.includes(select.value)
                   ) {
-                    changeDeviceLocales(props.capability, {
-                      additional: [...current.additional, select.value],
-                    });
+                    void changeLocales(
+                      changeDeviceLocales(props.capability, {
+                        additional: [...current.additional, select.value],
+                      }),
+                    );
                     select.value = "";
                   }
                 }}
               >
                 <option value="">{t("configPage.deviceTalk.addLanguage")}</option>
                 <For
-                  each={languageOptions().filter(
-                    ({ value }) =>
-                      value !== locale()!.primary && !locale()!.additional.includes(value),
+                  each={locale()!.available.filter(
+                    ({ id }) => id !== locale()!.primary && !locale()!.additional.includes(id),
                   )}
-                  keyed={(option) => option.value}
+                  keyed={false}
                 >
-                  {(option) => <option value={option().value}>{option().label}</option>}
+                  {(option) => <option value={option().id}>{option().name}</option>}
                 </For>
               </select>
             </>
           }
         />
+      )}
+      {locale()?.error && (
+        <div class="callout danger" role="alert">
+          {locale()!.error}
+          <button
+            class="btn btn--sm"
+            type="button"
+            onClick={() => {
+              const pending = pendingDeviceLocales.get(props.capability);
+              if (pending) {
+                void changeLocales(
+                  changeDeviceLocales(props.capability, {
+                    ...(pending.errors.primary ? { primary: pending.primary } : {}),
+                    ...(pending.errors.additional ? { additional: pending.additional } : {}),
+                  }),
+                );
+              }
+            }}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
       )}
       {microphone() && (
         <SettingsRow

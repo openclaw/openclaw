@@ -86,7 +86,9 @@ function createVoiceEdit<T extends boolean | string | null>(
     }
     const retired = props.presentationRetired();
     const pending = new Promise<void>((resolve, reject) => {
-      props.scope.capability.set(key(), desired, (error) => (error ? reject(error) : resolve()));
+      void props.scope.capability.set(key(), desired, (error) =>
+        error ? reject(error) : resolve(),
+      );
     });
     const previous = command();
     const completion = Promise.withResolvers<void>();

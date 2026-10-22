@@ -12,7 +12,7 @@ import {
   resolveHookEntries,
   type HookEnableStateReason,
 } from "./policy.js";
-import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
+import type { HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 type HookInstallOption = {
@@ -58,22 +58,18 @@ export function buildWorkspaceHookStatus(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
-    managedHooksDir?: string;
     entries?: HookEntry[];
-    eligibility?: HookEligibilityContext;
   },
 ): HookStatusReport {
-  const managedHooksDir = opts?.managedHooksDir ?? path.join(CONFIG_DIR, "hooks");
   const hookEntries = resolveHookEntries(
     opts?.entries ?? loadWorkspaceHookEntries(workspaceDir, opts),
   );
 
   return {
     workspaceDir,
-    managedHooksDir,
+    managedHooksDir: path.join(CONFIG_DIR, "hooks"),
     hooks: hookEntries.map((entry) => {
       const config = opts?.config;
-      const eligibility = opts?.eligibility;
       const hookKey = resolveHookKey(entry.hook.name, entry);
       const hookConfig = resolveHookConfig(config, hookKey);
       const managedByPlugin = entry.hook.source === "openclaw-plugin";
@@ -89,7 +85,6 @@ export function buildWorkspaceHookStatus(
           always,
           entry,
           hasLocalBin: hasBinary,
-          remote: eligibility?.remote,
           isEnvSatisfied,
           isConfigSatisfied,
         });

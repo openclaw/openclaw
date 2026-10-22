@@ -1,4 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { i18n, t } from "../i18n/index.ts";
+import { captureI18nStateForTesting } from "../i18n/lib/translate.test-support.ts";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
@@ -221,6 +223,38 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await expect.poll(occlusionTail).toEqual([false, true, false, true, false]);
     },
   );
+
+  it("moves long translated status options onto their own line instead of cutting them", async () => {
+    onTestFinished(captureI18nStateForTesting());
+    await i18n.setLocale("de");
+    const { sidebar, page } = await mountFilters(1440);
+    await page.getByRole("button", { name: t("chat.sidebar.sortSessions"), exact: true }).click();
+    const row = sidebar.querySelector<HTMLElement>("#sidebar-sessions-status")!;
+    await expect.element(row).toBeVisible();
+    const rowBounds = row.getBoundingClientRect();
+    const group = row.querySelector<HTMLElement>(".sidebar-session-menu-segmented")!;
+    const groupBounds = group.getBoundingClientRect();
+    const options = [...group.querySelectorAll<HTMLElement>(".settings-segmented__btn")];
+    expect(options.map((option) => option.textContent)).toEqual([
+      "Aktiv",
+      "Zurückgestellt",
+      "Archiviert",
+      "Alle",
+    ]);
+    for (const option of options) {
+      const bounds = option.getBoundingClientRect();
+      expect(option.scrollWidth).toBeLessThanOrEqual(option.clientWidth);
+      expect(bounds.top).toBeGreaterThanOrEqual(groupBounds.top);
+      expect(bounds.bottom).toBeLessThanOrEqual(groupBounds.bottom);
+      expect(bounds.right).toBeLessThanOrEqual(groupBounds.right);
+    }
+    // The control takes the full row below its label and the next row starts after it.
+    expect(groupBounds.top).toBeGreaterThan(row.firstElementChild!.getBoundingClientRect().top);
+    expect(groupBounds.bottom).toBeLessThanOrEqual(rowBounds.bottom);
+    expect(row.nextElementSibling!.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      rowBounds.bottom,
+    );
+  });
 
   it("isolates keyboard filters from a previous sidebar's hovered control", async () => {
     mockNative();

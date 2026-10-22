@@ -5,14 +5,18 @@ import {
   type AgentFilesState,
   type RetainedAgentFileDrafts,
 } from "./files.ts";
-import { resetIdentityDraft, type AgentIdentityDraft } from "./identity-actions.ts";
+import {
+  resetIdentityDraft,
+  type AgentIdentityDraft,
+  type AgentIdentityOutcome,
+} from "./identity-actions.ts";
 
 type AgentSelectionDraftHost = AgentFilesState & {
   agentsSelectedId: string | null;
   agentFileActive: string | null;
   identityDraft: AgentIdentityDraft;
   identitySaving: boolean;
-  identityError: string | null;
+  identityOutcome: Promise<AgentIdentityOutcome> | null;
 };
 
 type Selection = {

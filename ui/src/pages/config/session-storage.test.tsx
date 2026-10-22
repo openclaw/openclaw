@@ -170,7 +170,7 @@ it("does not hold a replacement submission behind a retired request", async () =
 });
 
 it("keeps a days draft and inventory through reconnect and retires them on client replacement", async () => {
-  const { page, runtimeConfig, request, respond, reply, publish, client } = await mount();
+  const { page, runtimeConfig, request, reply, publish, client } = await mount();
   const input = draft(page, "14");
   request.mockImplementation(reply("sessions.storage.status", async () => inventory(42)));
   click(page, "Refresh");
@@ -202,7 +202,20 @@ it("keeps a days draft and inventory through reconnect and retires them on clien
   expect(runtimeConfig.state.configFormDirty).toBe(false);
   expect(request.mock.calls.some(([method]) => method === "config.set")).toBe(false);
 
-  publish(true, { request: vi.fn(respond) } as unknown as GatewayBrowserClient);
+  const replacement = createDeferred<SessionsStorageStatusResult>();
+  const replacementRequest = vi.fn(reply("sessions.storage.status", () => replacement.promise));
+  publish(true, { request: replacementRequest } as unknown as GatewayBrowserClient);
+  try {
+    await waitForSolid(() => {
+      expect(
+        replacementRequest.mock.calls.some(([method]) => method === "sessions.storage.status"),
+      ).toBe(true);
+      expect(input.value).toBe("30");
+      expect(page.textContent).not.toContain("21 uncompressed");
+    });
+  } finally {
+    replacement.resolve(inventory(7));
+  }
   await waitText(page, "7 uncompressed");
   expect(input.value).toBe("30");
 });
