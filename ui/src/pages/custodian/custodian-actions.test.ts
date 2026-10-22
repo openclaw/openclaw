@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
+import type { SystemAgentChatResult } from "@openclaw/gateway-protocol";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { SystemAgentChatResult } from "../../api/types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
