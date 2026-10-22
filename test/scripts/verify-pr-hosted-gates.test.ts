@@ -684,7 +684,7 @@ describe("verify-pr-hosted-gates", () => {
     ],
   ] satisfies Array<
     [string, WorkflowRunFixture[], { name: string; id: number; headSha?: string }?, boolean?]
-  >)("selects %s", (_name, runs, selected, changelogOnly) => {
+  >)("selects %s", (_name, runs, selected = undefined, changelogOnly = undefined) => {
     expect(collectHostedGateEvidence(runs, { changelogOnly })).toEqual({
       headSha: sha,
       workflows: selected ? [expect.objectContaining(selected)] : [],
@@ -772,7 +772,7 @@ describe("verify-pr-hosted-gates", () => {
     ["command failure", new Error("git rev-list failed")],
   ] satisfies Array<[string, string | Error, string?]>)(
     "rejects rev-list %s",
-    (_name, output, error) => {
+    (_name, output, error = undefined) => {
       expect(() =>
         loadPullRequestCommitShas({ baseSha: "a".repeat(40), headSha: "b".repeat(40) }, () => {
           if (output instanceof Error) {

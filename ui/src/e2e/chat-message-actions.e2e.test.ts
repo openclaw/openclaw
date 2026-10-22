@@ -463,7 +463,7 @@ suite.define(() => {
       await expect.poll(inlinePresentation).toEqual({ opacity: "1", pointerEvents: "auto" });
     }));
 
-  it("keeps touch metadata within the mobile viewport and toggles it closed", () =>
+  it("shares tooltip styling and dismissal across message metadata, actions, and file hints", () =>
     withPage(
       async ({ page }) => {
         await installMockGateway(page, {
@@ -479,6 +479,17 @@ suite.define(() => {
           ],
         });
         const openTooltip = page.locator(".tooltip-surface[popover]:popover-open");
+        const popupStyle = () =>
+          openTooltip.evaluate((element) => {
+            const style = getComputedStyle(element);
+            return {
+              background: style.backgroundColor,
+              border: style.border,
+              radius: style.borderRadius,
+              padding: style.padding,
+              fontSize: style.fontSize,
+            };
+          });
         await page.goto(`${suite.server.baseUrl}chat`);
         const group = page.locator(".chat-group.assistant").filter({ hasText: "Tooltip proof." });
         await group
@@ -486,12 +497,36 @@ suite.define(() => {
           .first()
           .tap({ position: { x: 4, y: 4 } });
         const timestamp = group.locator(".msg-meta__summary");
-        await timestamp.tap();
+        await timestamp.hover();
         await pollCount(openTooltip).toBe(1);
         await group.locator(".msg-meta__details").waitFor({ state: "visible" });
+        const metadataStyle = await popupStyle();
         expect(await group.locator(".msg-meta__details").textContent()).toContain("gpt-5.6-luna");
         expect(await group.locator(".msg-meta__cost").textContent()).toContain("$0.12");
 
+        await timestamp.click();
+        await page.mouse.move(0, 0);
+        await pollCount(openTooltip).toBe(1);
+        const reply = group.getByRole("button", { name: "Reply to message" });
+        await expectHoverTooltip(reply, "Reply");
+        await pollCount(openTooltip).toBe(1);
+        expect(await popupStyle()).toEqual(metadataStyle);
+        await page.keyboard.press("Escape");
+        await pollCount(openTooltip).toBe(0);
+
+        const file = group.locator("a").filter({ hasText: "tooltip-proof.txt" });
+        await file.hover();
+        await pollCount(openTooltip).toBe(1);
+        const filePath = group.locator("openclaw-tooltip[open] .markdown-file-tooltip__path");
+        await filePath.waitFor({ state: "visible" });
+        expect(await filePath.textContent()).toBe("/workspace/tooltip-proof.txt");
+        expect(await popupStyle()).toEqual(metadataStyle);
+        expect(await file.getAttribute("title")).toBe("");
+
+        await page.setViewportSize({ width: 390, height: 844 });
+        await timestamp.tap();
+        await pollCount(openTooltip).toBe(1);
+        await group.locator(".msg-meta__details").waitFor({ state: "visible" });
         const bounds = await openTooltip.boundingBox();
         expect(bounds).not.toBeNull();
         expect(bounds!.x).toBeGreaterThanOrEqual(0);
@@ -501,7 +536,6 @@ suite.define(() => {
       },
       {
         hasTouch: true,
-        viewport: { width: 390, height: 844 },
       },
     ));
 
@@ -511,6 +545,8 @@ suite.define(() => {
         origin: new URL(suite.server.baseUrl).origin,
       });
       const messageText = "Reply and context menu action proof.";
+      const privateThinking = "private reply reasoning";
+      const visibleThinkingAnswer = "Visible reply context only.";
       const fullAssistantContent = realisticFullAssistantContent;
       const rawOversizedMarker = "[chat.history omitted: message too large]";
       const oversizedNotice = "This message is too large to display here.";
@@ -520,6 +556,13 @@ suite.define(() => {
           ...(
             [
               ["assistant-action-proof", "assistant", messageText, false],
+              ["user-action-separator", "user", "Keep the next assistant message separate.", false],
+              [
+                "assistant-thinking-proof",
+                "assistant",
+                `<thinking>${privateThinking}</thinking>${visibleThinkingAnswer}`,
+                false,
+              ],
               ["user-truncated-separator", "user", "Keep the truncated message separate.", false],
               ["assistant-full-message", "assistant", rawOversizedMarker, true],
               ["oversized-user", "user", rawOversizedMarker, true],
@@ -603,6 +646,19 @@ suite.define(() => {
       const group = page.locator(".chat-group.assistant").filter({ hasText: messageText });
       const bubble = group.locator(".chat-bubble");
       await bubble.waitFor({ state: "visible" });
+
+      const thinkingGroup = page
+        .locator(".chat-group.assistant")
+        .filter({ hasText: visibleThinkingAnswer });
+      await thinkingGroup.hover();
+      await thinkingGroup.getByRole("button", { name: "Reply to message" }).click();
+      const thinkingReplyPreview = page.locator(".chat-reply-preview");
+      await thinkingReplyPreview.waitFor({ state: "visible" });
+      expect(await thinkingReplyPreview.locator(".chat-reply-preview__text").textContent()).toBe(
+        visibleThinkingAnswer,
+      );
+      expect(await thinkingReplyPreview.textContent()).not.toContain(privateThinking);
+      await thinkingReplyPreview.getByRole("button", { name: "Cancel reply" }).click();
 
       await group.hover();
 

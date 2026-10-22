@@ -2187,6 +2187,12 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch("ui/src/e2e/worktrees.e2e.test.ts", ["config", "worktrees"]),
+  pageWatch("ui/src/e2e/chat-image-approval-loading.e2e.test.ts", ["chat"]),
+  pageWatch(
+    "ui/src/e2e/chat-model-selection-recovery.e2e.test.ts",
+    ["chat"],
+    ["ui/src/pages/chat/chat-pane.ts"],
+  ),
 ];
 
 export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = ownerWatches.map((watch) => ({

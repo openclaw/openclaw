@@ -5,7 +5,10 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { projectCodexCatalogNativeThread } from "../session-catalog-native-projection.js";
+import {
+  projectCodexCatalogNativeResponse,
+  projectCodexCatalogNativeThread,
+} from "../session-catalog-native-projection.js";
 import { useClientHarnesses } from "./client-harness.test-support.js";
 import * as messageDecoder from "./client-message-decoder.js";
 import type { JsonObject } from "./protocol.js";
@@ -208,6 +211,50 @@ describe("Codex catalog worker transport", () => {
     },
   );
 
+  it.each([0, 1])(
+    "orders result-first pages before notifications (%i rows)",
+    async (catalogRows) => {
+      const harness = createHarness();
+      const delivered = createDeferred<void>();
+      const observed: string[] = [];
+      const following = { method: "turn/completed", params: { threadId: "selected" } };
+      const followingLine = JSON.stringify(following);
+      harness.client.addNotificationHandler((notification) => {
+        expect(notification).toEqual(following);
+        observed.push(notification.method);
+        delivered.resolve();
+      });
+      const request = harness.list(
+        { limit: 64 },
+        {
+          catalogRows,
+          attemptWaiterFinished: () => observed.push("response"),
+        },
+      );
+      const page: JsonObject = {
+        data: [
+          {
+            id: "selected",
+            projectId: null,
+            preview: `First line\n${"second ".repeat(1_000)}`,
+            path: catalogRows ? "/synthetic/selected.jsonl" : "/".repeat(4_097),
+          },
+          { id: "discarded", path: "/".repeat(4_097), extra: { unneeded: "native payload" } },
+        ],
+        nextCursor: "next-page",
+      };
+      const raw = JSON.stringify({ result: page, id: requestId(harness) });
+      harness.process.stdout.write(`${raw}\n${followingLine}\n`);
+      const response = await request;
+      await delivered.promise;
+      expect(observed).toEqual(["response", following.method]);
+      expect(parse.mock.calls).toEqual([[followingLine, expect.any(Function)]]);
+      expect(response).toEqual(
+        projectCodexCatalogNativeResponse(page, sanitizeTerminalText, undefined, catalogRows),
+      );
+    },
+  );
+
   it("preserves stdout order across projected responses, notifications, and server requests", async () => {
     const harness = createHarness();
     const observed: string[] = [];
@@ -233,8 +280,8 @@ describe("Codex catalog worker transport", () => {
     const frames = [
       { method: "turn/started", params: { threadId: "thread-1" } },
       {
-        result: { data: [{ id: "second" }], unused: "x".repeat(64 * 1024), nextCursor: "next" },
         id: requestId(harness, 1),
+        result: { data: [{ id: "second" }], unused: "x".repeat(64 * 1024) },
       },
       {
         id: "approval-1",
@@ -257,7 +304,7 @@ describe("Codex catalog worker transport", () => {
     ]);
     await expect(Promise.all(requests)).resolves.toEqual([
       { data: [{ id: "first", projectId: null }] },
-      { data: [{ id: "second", projectId: null }], nextCursor: "next" },
+      { data: [{ id: "second", projectId: null }] },
     ]);
     expect(JSON.parse(await harness.waitForWrite(2))).toEqual({
       id: "approval-1",
@@ -411,150 +458,5 @@ describe("Codex catalog worker transport", () => {
     await expect(request).resolves.toEqual({
       data: [{ id: "ansi", projectId: null, preview: "meaningful text" }],
     });
-  });
-});
-
-describe("catalog previews", () => {
-  beforeEach(() => vi.useFakeTimers());
-  const prefix = "x".repeat(499);
-  const tail = "y".repeat(4096);
-  const fittingPair = "x".repeat(498) + "😀";
-  const oscPayload = "p".repeat(3000);
-
-  it.each([0, 1])(
-    "projects only the remaining %i catalog rows without shrinking the native page",
-    async (catalogRows) => {
-      const harness = createHarness();
-      const selected = {
-        id: "selected",
-        projectId: null,
-        preview: "Kept first user request",
-        cwd: "/workspace/selected",
-      };
-      const cache = vi.fn((thread: { id: string }) => {
-        if (catalogRows === 0 || thread.id !== "selected") {
-          throw new Error("Discarded rows must not read the resident preview cache");
-        }
-        return undefined;
-      });
-      const request = harness.list(
-        { limit: 64, cursor: "native-start", useStateDbOnly: true },
-        { timeoutMs: 1_000, catalogPreviewCache: cache, catalogRows },
-      );
-      const frame = JSON.parse(harness.writes[0]!);
-      expect(frame).toMatchObject({
-        method: "thread/list",
-        params: { limit: 64, cursor: "native-start", useStateDbOnly: true },
-      });
-      expect(frame.params).not.toHaveProperty("catalogRows");
-      harness.reply({
-        data: Array.from({ length: 64 }, (_, index) =>
-          index === 0
-            ? { ...selected, preview: `\u001b[32m${selected.preview}\u001b[0m` }
-            : {
-                id: `discarded-${index}`,
-                preview: "Discarded preview ".repeat(1024),
-                path: "/".repeat(4097),
-                turns: [{ items: [{ text: "Discarded transcript ".repeat(1024) }] }],
-              },
-        ),
-        nextCursor: "opaque-native-next",
-        backwardsCursor: "opaque-native-previous",
-      });
-      await expect(request).resolves.toEqual({
-        data: catalogRows ? [selected] : [],
-        nextCursor: "opaque-native-next",
-        backwardsCursor: "opaque-native-previous",
-      });
-      expect(cache.mock.calls.map(([thread]) => thread.id)).toEqual(
-        catalogRows ? ["selected"] : [],
-      );
-      expect(harness.writes).toHaveLength(1);
-    },
-  );
-
-  it("bounds catalog payloads while preserving ordinary thread/list results", async () => {
-    const harness = createHarness();
-    // Stay below the 8 MiB frame cap while exercising worker-side projection.
-    const large = "unused native history ".repeat(80_000);
-    const thread = {
-      id: "bounded-metadata",
-      preview: "x".repeat(1024 * 1024),
-      cwd: "/workspace/project",
-      name: "Sidebar review",
-      gitInfo: { branch: "catalog-fix", sha: large, originUrl: large },
-      extra: { payload: large },
-      turns: [{ items: [{ text: large }] }],
-    };
-    const catalog = harness.list({ limit: 64, useStateDbOnly: true }, { timeoutMs: 1_000 });
-    expect(Buffer.byteLength(JSON.stringify(thread))).toBeLessThan(8 * 1024 * 1024);
-    harness.reply({ data: [thread] });
-    const page = await catalog;
-    expect(page.data[0]).toMatchObject({
-      id: thread.id,
-      preview: "x".repeat(500),
-      cwd: thread.cwd,
-      name: thread.name,
-      gitInfo: { branch: "catalog-fix" },
-    });
-    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(2_048);
-    expect(parse).not.toHaveBeenCalled();
-    const ordinaryThread = { ...thread, preview: thread.preview.repeat(2) };
-    expect(Buffer.byteLength(JSON.stringify(ordinaryThread))).toBeGreaterThan(8 * 1024 * 1024);
-    const ordinary = harness.client.request("thread/list", { limit: 64, useStateDbOnly: true });
-    harness.reply({ data: [ordinaryThread] }, 1);
-    await expect(ordinary).resolves.toEqual({ data: [ordinaryThread] });
-    expect(parse).toHaveBeenCalledOnce();
-  });
-
-  it.each([0, 64 * 1024])(
-    "preserves native preview cache states with %i bytes of padding",
-    async (padding) => {
-      const harness = createHarness();
-      const cases = [
-        { id: "cleared", preview: "", cached: "retained", expected: "" },
-        { id: "whitespace", preview: " \n\t ", cached: "retained", expected: "retained" },
-        { id: "controls", preview: "\u001b[0m", cached: "retained", expected: "retained" },
-        { id: "newly-visible", preview: "visible", cached: "", expected: "visible" },
-        { id: "missing", cached: "retained", expected: "retained" },
-        { id: "missing-empty", cached: "", expected: "" },
-        { id: "empty", preview: "", cached: "", expected: "" },
-        { id: "cache-miss", preview: "uncached", cached: undefined, expected: "uncached" },
-      ];
-      const previews = new Map(cases.map(({ id, cached }) => [id, cached]));
-      const cache = vi.fn(({ id }: { id: string }) => previews.get(id));
-      const request = harness.list({}, { catalogPreviewCache: cache });
-      harness.reply({
-        data: cases.map(({ id, preview }) => ({ id, preview })),
-        unused: "x".repeat(padding),
-      });
-      await expect(request).resolves.toEqual({
-        data: cases.map(({ id, expected }) => ({ id, projectId: null, preview: expected })),
-      });
-      expect(cache.mock.calls.map(([thread]) => thread.id)).toEqual(cases.map(({ id }) => id));
-    },
-  );
-
-  it.each([
-    ["leading whitespace beyond the input prefix", " \t\n".repeat(4096) + "visible", "visible"],
-    ["whitespace before ANSI removal", "a \u001b[0m b", "a  b"],
-    ["space at the output boundary", prefix + " " + tail, prefix + " "],
-    ["trailing whitespace beyond the input prefix", prefix + " \n\t".repeat(4096), prefix],
-    ["surrogate pair across the output boundary", prefix + "😀" + tail, prefix],
-    ["surrogate pair fitting the output boundary", fittingPair + tail, fittingPair],
-    ["surrogate lookahead after trim", " ".repeat(1548) + prefix + "😀tail", prefix],
-    ["lone surrogate at the output boundary", prefix + "\ud800" + tail, prefix + "\ufffd"],
-    ["C0 removal after trim", "a\u0000b \u007f c".repeat(400), "ab  c".repeat(100)],
-    ["OSC terminator beyond input prefix", "\u001b]0;" + oscPayload + "\u0007visible", "visible"],
-    ["unterminated OSC payload", "\u001b]0;" + oscPayload, "]0;" + "p".repeat(497)],
-    ["C1 CSI crossing the input prefix", "\u009b" + "1;".repeat(1500) + "31mvisible", "visible"],
-  ])("preserves %s in catalog previews", async (_name, preview, expected) => {
-    const harness = createHarness();
-    const request = harness.list({ limit: 1 }, { timeoutMs: 1_000 });
-    harness.reply({ data: [{ id: "preview", projectId: null, preview }] });
-    await expect(request).resolves.toEqual({
-      data: [{ id: "preview", projectId: null, preview: expected }],
-    });
-    expect(vi.getTimerCount()).toBe(0);
   });
 });

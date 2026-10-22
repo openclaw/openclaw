@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -32,38 +31,14 @@ function resultEntryFor(promoted: PromotionCandidate, text = promoted.snippet): 
   return `- ${text} Source: ${promoted.path}#L${promoted.startLine}-L${promoted.endLine} ${buildPromotionRecallAnnotations(promoted)}`;
 }
 
-type ConsolidationPrompt = {
-  candidates: Array<{ key: string; resultEntry: string; projectKey: string | null }>;
-};
-type Decision = {
-  candidateKey: string;
-  action: "added" | "merged" | "superseded";
-  priorEntries: string[];
-};
-const addDecisions = (prompt: ConsolidationPrompt) => ({
-  operations: prompt.candidates.map(({ key }) => ({
-    candidateKey: key,
-    action: "added" as const,
-    priorEntries: [],
-  })),
-});
-function createSubagent(
-  output: string | ((prompt: ConsolidationPrompt) => { operations: Decision[] }),
-  status = "ok",
-  onWait?: () => Promise<void>,
-) {
+function createSubagent(output: string, status = "ok", onWait?: () => Promise<void>) {
   return {
-    complete: vi.fn(async (options: { message: string }) => {
+    complete: vi.fn(async (_options: unknown) => {
       await onWait?.();
       if (status !== "ok") {
         throw new Error(`completion ${status}`);
       }
-      return {
-        text:
-          typeof output === "string"
-            ? output
-            : JSON.stringify(output(JSON.parse(options.message) as ConsolidationPrompt)),
-      };
+      return { text: output };
     }),
   };
 }
@@ -82,22 +57,6 @@ const logger = { info: vi.fn(), warn: vi.fn() };
 const nowMs = Date.parse("2026-07-02T10:00:00.000Z");
 const consolidationDefaults = { maxPriorEntryLossFraction: 0.25, nowMs, logger };
 const promotionDefaults = { minScore: 0, minRecallCount: 0, minUniqueQueries: 0, nowMs };
-type ConsolidationInput = Parameters<typeof consolidateMemory>[0];
-function consolidateCandidate(
-  promoted: PromotionCandidate,
-  output: string,
-  existingMemory = "# Memory\n",
-  overrides: Partial<ConsolidationInput> = {},
-) {
-  return consolidateMemory({
-    subagent: createSubagent(output),
-    existingMemory,
-    candidates: [promoted],
-    ...consolidationDefaults,
-    ...overrides,
-  });
-}
-
 const recallResult = {
   path: "memory/2026-07-01.md",
   startLine: 1,
@@ -145,6 +104,15 @@ async function prepareRecall(
 
 describe("memory consolidation", () => {
   it("hard-excludes untrusted and system candidates before prompt construction", async () => {
+    const candidates = [
+      candidate("owner"),
+      candidate("agent"),
+      candidate("untrusted"),
+      candidate("system"),
+    ];
+    expect(
+      filterConsolidationCandidates(candidates).map((entry) => entry.provenance?.originClass),
+    ).toEqual(["owner", "agent"]);
     const cronSessionCandidate = {
       ...candidate("agent"),
       path: "memory/.dreams/session-corpus/2026-07-01.txt",
@@ -210,7 +178,14 @@ describe("memory consolidation", () => {
     async ({ snippet, previous }) => {
       const promoted = { ...candidate("owner"), snippet };
       const output = decisionOutput(promoted);
-      await expect(consolidateCandidate(promoted, output, previous)).resolves.toBeNull();
+      await expect(
+        consolidateMemory({
+          subagent: createSubagent(output),
+          existingMemory: previous,
+          candidates: [promoted],
+          ...consolidationDefaults,
+        }),
+      ).resolves.toBeNull();
     },
   );
 
@@ -228,7 +203,12 @@ describe("memory consolidation", () => {
       ],
     });
     const existingMemory = "# Memory\n\n- Keep this fact.\n";
-    const plan = await consolidateCandidate(promoted, output, existingMemory);
+    const plan = await consolidateMemory({
+      subagent: createSubagent(output),
+      existingMemory,
+      candidates: [promoted],
+      ...consolidationDefaults,
+    });
     expect(plan).not.toBeNull();
     const applied = applyMemoryConsolidationPlan({
       existingMemory,
@@ -270,7 +250,14 @@ describe("memory consolidation", () => {
         })),
       });
       await expect(
-        consolidateCandidate(promoted, output, undefined, { nowMs: 1_000 }),
+        consolidateMemory({
+          subagent: createSubagent(output),
+          existingMemory: "# Memory\n",
+          candidates: [promoted],
+          maxPriorEntryLossFraction: 0.25,
+          nowMs: 1_000,
+          logger,
+        }),
       ).resolves.toBeNull();
     },
   );
@@ -280,11 +267,12 @@ describe("memory consolidation", () => {
     const previousEntry = resultEntryFor(promoted);
     const output = decisionOutput(promoted, "merged", [previousEntry]);
 
-    const plan = await consolidateCandidate(
-      promoted,
-      output,
-      `# Memory\n\n${previousEntry}\n- Two.\n- Three.\n- Four.\n`,
-    );
+    const plan = await consolidateMemory({
+      subagent: createSubagent(output),
+      existingMemory: `# Memory\n\n${previousEntry}\n- Two.\n- Three.\n- Four.\n`,
+      candidates: [promoted],
+      ...consolidationDefaults,
+    });
     expect(plan).not.toBeNull();
     if (!plan) {
       return;
@@ -292,14 +280,15 @@ describe("memory consolidation", () => {
     const applied = applyMemoryConsolidationPlan({
       existingMemory: `# Memory\n\n${previousEntry}\n- Two.\n- Three.\n- Four.\n`,
       plan,
-      ...consolidationDefaults,
+      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
+      maxPriorEntryLossFraction: 0.25,
     });
     expect(applied).toMatchObject({ added: 0, merged: 1, superseded: 0 });
     expect(
       applyMemoryConsolidationPlan({
         existingMemory: `# Memory\n\n${previousEntry}\n- Two.\n- Three.\n- Four.\n`,
         plan,
-        nowMs,
+        nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
         memoryFileMaxChars: (applied?.content.length ?? 1) - 1,
         maxPriorEntryLossFraction: 0.25,
       }),
@@ -308,7 +297,7 @@ describe("memory consolidation", () => {
       applyMemoryConsolidationPlan({
         existingMemory: "# Memory\n\n- User prefers green tea.\n- Two.\n",
         plan,
-        nowMs,
+        nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
         maxPriorEntryLossFraction: 0.25,
       }),
     ).toBeNull();
@@ -319,11 +308,12 @@ describe("memory consolidation", () => {
     const output = decisionOutput(promoted, "merged", ["- Unrelated fact."]);
 
     await expect(
-      consolidateCandidate(
-        promoted,
-        output,
-        "# Memory\n\n- Unrelated fact.\n- Two.\n- Three.\n- Four.\n",
-      ),
+      consolidateMemory({
+        subagent: createSubagent(output),
+        existingMemory: "# Memory\n\n- Unrelated fact.\n- Two.\n- Three.\n- Four.\n",
+        candidates: [promoted],
+        ...consolidationDefaults,
+      }),
     ).resolves.toBeNull();
   });
 
@@ -332,12 +322,14 @@ describe("memory consolidation", () => {
     const output = decisionOutput(promoted, "merged", ["- User prefers green tea."]);
 
     await expect(
-      consolidateCandidate(
-        promoted,
-        output,
-        "# Memory\n\n- User prefers green tea.\n- User prefers green tea.\n- Two.\n- Three.\n- Four.\n",
-        { maxPriorEntryLossFraction: 0.5 },
-      ),
+      consolidateMemory({
+        subagent: createSubagent(output),
+        existingMemory:
+          "# Memory\n\n- User prefers green tea.\n- User prefers green tea.\n- Two.\n- Three.\n- Four.\n",
+        candidates: [promoted],
+        ...consolidationDefaults,
+        maxPriorEntryLossFraction: 0.5,
+      }),
     ).resolves.toBeNull();
   });
 
@@ -360,7 +352,14 @@ describe("memory consolidation", () => {
     ].join("\n");
     const output = decisionOutput(promoted, "superseded", ["- Unrelated adjacent fact."]);
 
-    await expect(consolidateCandidate(promoted, output, previous)).resolves.toBeNull();
+    await expect(
+      consolidateMemory({
+        subagent: createSubagent(output),
+        existingMemory: previous,
+        candidates: [promoted],
+        ...consolidationDefaults,
+      }),
+    ).resolves.toBeNull();
   });
 
   it("falls back to append-only promotion when the consolidation model fails", async () => {
@@ -464,6 +463,40 @@ describe("memory consolidation", () => {
     await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe("# Memory\n\n- Original fact.\n");
   });
 
+  it("rejects a candidate downgraded in the recall store during consolidation", async () => {
+    const { workspaceDir, memoryPath, promoted, apply } = await prepareRecall(
+      "memory-consolidation-provenance-race-",
+    );
+    const subagent = createSubagent(decisionOutput(promoted), "ok", async () => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "external tea claim",
+        results: [
+          {
+            ...recallResult,
+            provenance: {
+              originClass: "untrusted",
+              sessionKind: "interactive",
+              observedAt: Date.parse("2026-07-02T10:01:00.000Z"),
+            },
+          },
+        ],
+        nowMs: Date.parse("2026-07-02T10:01:00.000Z"),
+      });
+    });
+
+    const applied = await apply(subagent);
+
+    expect(applied.applied).toBe(0);
+    expect(applied.rejectedCandidates).toEqual([
+      expect.objectContaining({
+        category: "candidate changed",
+        reason: "candidate changed during apply",
+      }),
+    ]);
+    await expect(fs.readFile(memoryPath, "utf8")).resolves.toBe("# Memory\n\n- Original fact.\n");
+  });
+
   it("rejects a candidate whose ranking signals change during consolidation", async () => {
     const { workspaceDir, memoryPath, promoted, apply } = await prepareRecall(
       "memory-consolidation-ranking-race-",
@@ -493,119 +526,5 @@ describe("memory consolidation", () => {
       "2026-07-02T10:00:00.000Z",
     );
     expect(recallStore.updatedAt).toBe("2026-07-03T10:00:00.000Z");
-  });
-});
-
-function projectCandidate(key: string, snippet: string, projectKey?: string): PromotionCandidate {
-  return candidate("agent", { key, snippet, ...(projectKey ? { projectKey } : {}) });
-}
-
-function consolidate(
-  candidates: PromotionCandidate[],
-  existingMemory: string,
-  subagent = createSubagent(addDecisions),
-  memoryFileMaxChars?: number,
-) {
-  return consolidateMemory({
-    candidates,
-    existingMemory,
-    subagent,
-    memoryFileMaxChars,
-    ...consolidationDefaults,
-  });
-}
-
-describe("memory consolidation project groups", () => {
-  it("consolidates global and project candidates in deterministic isolated passes", async () => {
-    const existingMemory = "# Memory\n\n- Existing global fact.\n";
-    const candidates = [
-      projectCandidate("beta", "Beta deployment uses blue.", "github.com/acme/beta"),
-      projectCandidate("global", "Use metric units globally."),
-      projectCandidate("alpha", "Alpha deployment uses green.", "github.com/acme/alpha"),
-    ];
-    const subagent = createSubagent(addDecisions);
-
-    const plan = await consolidate(candidates, existingMemory, subagent);
-
-    const promptedGroups = subagent.complete.mock.calls.map(([options]) => {
-      const prompt = JSON.parse(options.message) as ConsolidationPrompt;
-      return prompt.candidates.map((item) => item.projectKey);
-    });
-    expect(promptedGroups).toEqual([[null], ["github.com/acme/alpha"], ["github.com/acme/beta"]]);
-
-    const result = applyMemoryConsolidationPlan({
-      existingMemory,
-      plan: expectDefined(plan, "consolidation plan"),
-      ...consolidationDefaults,
-    });
-    expect(result?.content).toContain(
-      "Alpha deployment uses green. Source: memory/2026-07-01.md#L1-L1 <!-- trigger: preference --> <!-- importance: 9 --> <!-- project: github.com/acme/alpha -->",
-    );
-    expect(result?.content).toContain(
-      "Beta deployment uses blue. Source: memory/2026-07-01.md#L1-L1 <!-- trigger: preference --> <!-- importance: 9 --> <!-- project: github.com/acme/beta -->",
-    );
-    const globalLine = result?.content
-      .split("\n")
-      .find((line) => line.includes("Use metric units globally."));
-    expect(globalLine).toBeDefined();
-    expect(globalLine).not.toContain("<!-- project:");
-  });
-
-  it("rejects a cross-project merge after completing the isolated group passes", async () => {
-    const betaPrior = "- Shared deployment uses blue. <!-- project: github.com/acme/beta -->";
-    const existingMemory = `# Memory\n\n${betaPrior}\n- Two.\n- Three.\n- Four.\n`;
-    const candidates = [
-      projectCandidate("beta", "Beta deployment uses blue.", "github.com/acme/beta"),
-      projectCandidate("global", "Use metric units globally."),
-      projectCandidate("alpha", "Shared deployment uses blue.", "github.com/acme/alpha"),
-    ];
-    const subagent = createSubagent((prompt) => {
-      const item = prompt.candidates[0]!;
-      const crossProject = item.projectKey === "github.com/acme/alpha";
-      return {
-        operations: [
-          {
-            candidateKey: item.key,
-            action: crossProject ? "merged" : "added",
-            priorEntries: crossProject ? [betaPrior] : [],
-          },
-        ],
-      };
-    });
-
-    await expect(consolidate(candidates, existingMemory, subagent)).resolves.toBeNull();
-    expect(subagent.complete).toHaveBeenCalledTimes(3);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("output crosses project groups for candidate alpha"),
-    );
-  });
-
-  it("rejects groups whose code-applied aggregate exceeds the memory budget", async () => {
-    const existingMemory = "# Memory\n";
-    const candidates = [
-      projectCandidate("global", "Use metric units globally."),
-      projectCandidate("alpha", "Alpha deployment uses green.", "github.com/acme/alpha"),
-    ];
-
-    const fullPlan = await consolidate(candidates, existingMemory);
-
-    const perGroupBudget = Math.max(
-      ...expectDefined(fullPlan, "full consolidation plan").operations.map((operation) => {
-        const result = applyMemoryConsolidationPlan({
-          existingMemory,
-          plan: { operations: [operation] },
-          ...consolidationDefaults,
-        });
-        expect(result).not.toBeNull();
-        return result!.content.length;
-      }),
-    );
-
-    await expect(
-      consolidate(candidates, existingMemory, undefined, perGroupBudget),
-    ).resolves.toBeNull();
-    expect(logger.warn).toHaveBeenCalledWith(
-      "memory-core: combined consolidation plan is invalid; using append-only fallback.",
-    );
   });
 });

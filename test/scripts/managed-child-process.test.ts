@@ -162,37 +162,6 @@ fs.renameSync(pidPath + ".tmp", pidPath);
 `;
 }
 
-function writeProcessTreeFixture(dir: string, onSignal: string) {
-  const childPidPath = path.join(dir, "child.pid");
-  const descendantPidPath = path.join(dir, "descendant.pid");
-  const childPath = writeFixture(
-    dir,
-    "child.mjs",
-    `
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-${fixtureReceiptClientSource(receipts.endpoint)}
-${onSignal}
-setInterval(() => {}, 1_000);
-const descendant = spawn(process.execPath, [
-  "-e",
-  ${JSON.stringify(`
-const fs = require("node:fs");
-process.on("SIGTERM", () => {});
-setInterval(() => {}, 1000);
-${publishReadyPidScript(1)}
-process.send("ready");
-`)},
-  process.argv[3],
-], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
-descendant.once("message", () => sendReceipt(process.argv[3], "ready"));
-${publishReadyPidScript(2)}
-sendReceipt(process.argv[2], "ready");
-`,
-  );
-  return { childPath, childPidPath, descendantPidPath };
-}
-
 // PID records are committed before receipts. A completed operation can beat the side channel.
 async function fixturePidBeforeSettlement(file: string, operation: PromiseLike<unknown>) {
   await Promise.race([
@@ -585,36 +554,76 @@ sendReceipt(process.argv[2], "ready");
     expect(signalExitCode("SIGKILL")).toBe(137);
   });
 
-  it.each([
-    {
-      bin: "pnpm.cmd",
-      args: ["lint:scripts", "--", "scripts"],
-      shell: true,
-      line: "pnpm.cmd lint:scripts -- scripts",
-    },
-    {
-      bin: "C:\\repo\\node_modules\\.bin\\tsgo",
-      args: ["-p", "packages/plugin-sdk/tsconfig.json", "--listFilesOnly", "--noEmit"],
-      shell: undefined,
-      line: "C:\\repo\\node_modules\\.bin\\tsgo -p packages/plugin-sdk/tsconfig.json --listFilesOnly --noEmit",
-    },
-    { bin: "node.exe", args: ["--version"], shell: false, line: undefined },
-  ])("normalizes Windows argv for $bin (shell=$shell)", ({ bin, args, shell, line }) => {
-    const command = "C:\\Windows\\System32\\cmd.exe";
-    const env = shell === false ? undefined : {};
-    const expectedArgs = line ? ["/d", "/s", "/c", line] : [...args];
+  it("wraps Windows shell argv through cmd.exe without Node shell mode", () => {
     expect(
-      createManagedCommandSpawnSpec({ bin, args, shell, env, platform: "win32", comSpec: command }),
+      createManagedCommandSpawnSpec({
+        args: ["lint:scripts", "--", "scripts"],
+        bin: "pnpm.cmd",
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        platform: "win32",
+        shell: true,
+      }),
     ).toEqual({
-      args: expectedArgs,
-      command: line ? command : bin,
+      args: ["/d", "/s", "/c", "pnpm.cmd lint:scripts -- scripts"],
+      command: "C:\\Windows\\System32\\cmd.exe",
       options: {
         cwd: undefined,
         detached: false,
-        env: shell === false ? undefined : {},
+        env: {},
         shell: false,
         stdio: "inherit",
-        windowsVerbatimArguments: line ? true : undefined,
+        windowsVerbatimArguments: true,
+      },
+    });
+  });
+
+  it("uses Windows shell normalization when the platform override is win32", () => {
+    expect(
+      createManagedCommandSpawnSpec({
+        args: ["-p", "packages/plugin-sdk/tsconfig.json", "--listFilesOnly", "--noEmit"],
+        bin: "C:\\repo\\node_modules\\.bin\\tsgo",
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        platform: "win32",
+      }),
+    ).toEqual({
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        "C:\\repo\\node_modules\\.bin\\tsgo -p packages/plugin-sdk/tsconfig.json --listFilesOnly --noEmit",
+      ],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      options: {
+        cwd: undefined,
+        detached: false,
+        env: {},
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: true,
+      },
+    });
+  });
+
+  it("preserves explicit non-shell Windows subprocesses", () => {
+    expect(
+      createManagedCommandSpawnSpec({
+        args: ["--version"],
+        bin: "node.exe",
+        platform: "win32",
+        shell: false,
+      }),
+    ).toEqual({
+      args: ["--version"],
+      command: "node.exe",
+      options: {
+        cwd: undefined,
+        detached: false,
+        env: undefined,
+        shell: false,
+        stdio: "inherit",
+        windowsVerbatimArguments: undefined,
       },
     });
   });
@@ -715,23 +724,20 @@ sendReceipt(process.argv[2], "ready");
     });
   });
 
-  it.each(["win32", "linux"] as const)(
-    "signals the direct child without %s tree ownership",
-    (platform) => {
-      const child = { kill: vi.fn(() => true), pid: 12345 };
-      const runTaskkill = vi.fn();
-      expect(
-        terminateManagedChild(child, "SIGTERM", {
-          platform,
-          runTaskkill,
-          useWindowsTaskkill: false,
-          useProcessGroup: false,
-        }),
-      ).toEqual({ processTreeState: "signaled" });
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-      expect(runTaskkill).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves direct Windows signaling when a caller does not own taskkill", () => {
+    const child = { kill: vi.fn(() => true), pid: 12345 };
+    const runTaskkill = vi.fn();
+
+    expect(
+      terminateManagedChild(child, "SIGTERM", {
+        platform: "win32",
+        runTaskkill,
+        useWindowsTaskkill: false,
+      }),
+    ).toEqual({ processTreeState: "signaled" });
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(runTaskkill).not.toHaveBeenCalled();
+  });
 
   it("signals POSIX process groups without signaling their leaders twice", () => {
     const kill = vi.spyOn(process, "kill").mockReturnValue(true);
@@ -1062,6 +1068,18 @@ if (mode === "waiter") {
     },
   );
 
+  it("signals the direct child when process-group ownership is disabled", () => {
+    const child = { kill: vi.fn(() => true), pid: 12345 };
+
+    expect(
+      terminateManagedChild(child, "SIGTERM", {
+        platform: "linux",
+        useProcessGroup: false,
+      }),
+    ).toEqual({ processTreeState: "signaled" });
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
   it("reports process-group signal errors before falling back to the direct child", () => {
     const originalKill = process.kill.bind(process);
     const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
@@ -1192,10 +1210,34 @@ if (mode === "waiter") {
     "times out and kills managed command descendants",
     joinedTest(async ({ signal }) => {
       const dir = createTempDir("openclaw-managed-timeout-");
+      const childPidPath = path.join(dir, "child.pid");
+      const descendantPidPath = path.join(dir, "descendant.pid");
       const signalPath = path.join(dir, "signal.txt");
-      const { childPath, childPidPath, descendantPidPath } = writeProcessTreeFixture(
+      const childPath = writeFixture(
         dir,
-        `process.on("SIGTERM", () => fs.writeFileSync(process.argv[4], "SIGTERM\\n"));`,
+        "child.mjs",
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
+
+process.on("SIGTERM", () => fs.writeFileSync(process.argv[4], "SIGTERM\\n"));
+setInterval(() => {}, 1_000);
+const descendant = spawn(process.execPath, [
+  "-e",
+  ${JSON.stringify(`
+const fs = require("node:fs");
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+${publishReadyPidScript(1)}
+process.send("ready");
+`)},
+  process.argv[3],
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+descendant.once("message", () => sendReceipt(process.argv[3], "ready"));
+${publishReadyPidScript(2)}
+sendReceipt(process.argv[2], "ready");
+`,
       );
 
       let childClosed: Promise<unknown> | undefined;
@@ -1523,6 +1565,35 @@ try {
       );
     },
   );
+
+  posixIt("joins real captured output before releasing strict command ownership", async () => {
+    const dir = createTempDir("openclaw-managed-real-output-close-");
+    const owner = createVitestResourceOwner(dir);
+    const closed = [false, false];
+    const output = ["", ""];
+    const code = await runManagedCommand({
+      bin: testNodeExecPath,
+      args: ["-e", "process.stdout.write('out'); process.stderr.write('err');"],
+      env: fixtureEnv(dir),
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      requireProcessTreeExit: true,
+      onReady(child) {
+        [child.stdout!, child.stderr!].forEach((pipe, index) => {
+          pipe.on("data", (chunk) => {
+            output[index] += String(chunk);
+          });
+          pipe.once("close", () => {
+            closed[index] = true;
+          });
+        });
+      },
+    });
+    expect(code).toBe(0);
+    expect(output).toEqual(["out", "err"]);
+    expect(closed).toEqual([true, true]);
+    expect(() => owner.assertReleased()).not.toThrow();
+  });
 
   posixIt("does not wait indefinitely when a timed-out child omits close", async () => {
     const startedAt = Date.now();
@@ -1965,11 +2036,14 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
 
   it("allows bounded retry output to complete", async () => {
     await expect(
-      runNodeCommand({
+      runManagedCommand({
+        bin: process.execPath,
         args: [
           "-e",
           "process.stderr.write('network retry 1\\n'); setTimeout(() => process.exit(0), 100)",
         ],
+        shell: false,
+        stdio: "ignore",
         timeoutMs: 1_000,
       }),
     ).resolves.toBe(0);
@@ -1977,9 +2051,12 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
 
   posixIt("allows strict normal long-running work to complete", async () => {
     await expect(
-      runNodeCommand({
+      runManagedCommand({
+        bin: process.execPath,
         args: ["-e", "setTimeout(() => process.exit(0), 200)"],
         requireProcessTreeExit: true,
+        shell: false,
+        stdio: "ignore",
         timeoutMs: 1_000,
       }),
     ).resolves.toBe(0);
@@ -2227,12 +2304,37 @@ child.once("message", () => ${typeof exit === "string" ? `process.kill(process.p
     "kills managed child process group descendants when the runner is terminated",
     joinedTest(async ({ signal }) => {
       const dir = createTempDir("openclaw-managed-child-");
+      const childPidPath = path.join(dir, "child.pid");
+      const descendantPidPath = path.join(dir, "descendant.pid");
       const helperUrl = managedModuleUrl;
-      const { childPath, childPidPath, descendantPidPath } = writeProcessTreeFixture(
+
+      const childPath = writeFixture(
         dir,
-        `for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
-  process.on(signal, () => process.exit(0));
-}`,
+        "child.mjs",
+        `
+	import { spawn } from "node:child_process";
+	import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
+
+	const descendant = spawn(process.execPath, [
+	  "-e",
+	  ${JSON.stringify(`
+const fs = require("node:fs");
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+${publishReadyPidScript(1)}
+process.send("ready");
+`)},
+	  process.argv[3],
+	], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  descendant.once("message", () => sendReceipt(process.argv[3], "ready"));
+	for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
+	  process.on(signal, () => process.exit(0));
+	}
+setInterval(() => {}, 1_000);
+${publishReadyPidScript(2)}
+sendReceipt(process.argv[2], "ready");
+`,
       );
       const runnerPath = writeFixture(
         dir,

@@ -1,26 +1,72 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-// mock-isolation: Record even caught import failures; lightweight requests cannot load these.
-const forbiddenLoad = vi.hoisted(() =>
-  vi.fn((module: string): never => {
-    throw new Error(`Optional runtime unavailable: ${module}`);
-  }),
-);
-vi.mock("./agent-run-handler.js", () => forbiddenLoad("agent-run"));
-vi.mock("../session-create-service.js", () => forbiddenLoad("session-create"));
-vi.mock("./chat.js", () => forbiddenLoad("chat-history"));
-vi.mock("../../agents/sandbox/context.js", () => forbiddenLoad("sandbox-context"));
-vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => forbiddenLoad("sandbox-media"));
-vi.mock("../../auto-reply/reply/reply-media-paths.js", () => forbiddenLoad("reply-media"));
-vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => forbiddenLoad("labels"));
-vi.mock("../../tts/tts-synthesis.js", () => forbiddenLoad("speech"));
-vi.mock("../../plugins/install.js", () => forbiddenLoad("plugin-install"));
-beforeEach(() => forbiddenLoad.mockClear());
-afterEach(() => expect(forbiddenLoad).not.toHaveBeenCalled());
+const unavailable = vi.hoisted(() => () => {
+  throw new Error("Optional runtime unavailable");
+});
+const runStackLoaded = vi.hoisted(() => vi.fn());
+const sessionCreateStackLoaded = vi.hoisted(() => vi.fn());
+const optionalMediaRuntimesLoaded = vi.hoisted(() => vi.fn());
+const titleRuntimeLoaded = vi.hoisted(() => vi.fn());
+
+vi.mock("./agent-run-handler.js", () => {
+  runStackLoaded();
+  return { agentRunHandler: vi.fn() };
+});
+
+vi.mock("../session-create-service.js", () => {
+  sessionCreateStackLoaded();
+  return {};
+});
+
+vi.mock("./chat.js", () => {
+  throw new Error("Chat history handlers are unavailable");
+});
+
+// mock-isolation: detect eager sandbox loading without initializing a real sandbox.
+vi.mock("../../agents/sandbox/context.js", () => {
+  optionalMediaRuntimesLoaded("sandbox-context");
+  return {
+    resolveSandboxContext: unavailable,
+    ensureSandboxWorkspaceForSession: unavailable,
+  };
+});
+
+// mock-isolation: detect eager media loading without staging files or starting sandbox runtimes.
+vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => {
+  optionalMediaRuntimesLoaded("stage-sandbox-media");
+  return {
+    SANDBOX_MEDIA_MAX_BYTES: 50 * 1024 * 1024,
+    stageSandboxMedia: unavailable,
+  };
+});
+
+vi.mock("../../auto-reply/reply/reply-media-paths.js", async (importOriginal) => {
+  optionalMediaRuntimesLoaded("reply-media-paths");
+  return {
+    ...(await importOriginal<typeof import("../../auto-reply/reply/reply-media-paths.js")>()),
+    createReplyMediaContext: unavailable,
+    createReplyMediaPathNormalizer: unavailable,
+  };
+});
+
+vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => {
+  titleRuntimeLoaded();
+  return {
+    generateConversationLabel: vi.fn(async () => null),
+    generateConversationLabelWithFallback: vi.fn(async () => null),
+  };
+});
+
+vi.mock("../../tts/tts-synthesis.js", () => {
+  throw new Error("Speech synthesis is unavailable");
+});
+
+vi.mock("../../plugins/install.js", () => {
+  throw new Error("Plugin inventory must not load source installers");
+});
 
 async function invoke(
   method: string,
@@ -45,7 +91,11 @@ async function invoke(
 }
 
 function expectInvalid(respond: ReturnType<typeof vi.fn>) {
-  expectRpcError(respond, { code: "INVALID_REQUEST" });
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ code: "INVALID_REQUEST" }),
+  );
 }
 
 describe("lazy core handler families", () => {
@@ -78,7 +128,11 @@ describe("lazy core handler families", () => {
       });
 
       if (errorCode) {
-        expectRpcError(respond, { code: errorCode });
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: errorCode }),
+        );
         expect(broadcast).not.toHaveBeenCalled();
       } else {
         const payload = {
@@ -86,7 +140,7 @@ describe("lazy core handler families", () => {
           phase: params.phase ?? null,
           ts: expect.any(Number),
         };
-        expectRpcResult(respond, payload);
+        expect(respond).toHaveBeenCalledWith(true, payload, undefined);
         expect(broadcast).toHaveBeenCalledWith("talk.mode", payload, { dropIfSlow: true });
       }
     },
@@ -105,18 +159,26 @@ describe("lazy core handler families", () => {
       { context: { getRuntimeConfig: () => ({}) } as never },
     );
 
-    expectRpcResult(respond, expect.objectContaining({ agentId: "main" }));
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ agentId: "main" }),
+      undefined,
+    );
+    expect(runStackLoaded).not.toHaveBeenCalled();
   });
 
   it("loads session reads without importing the session create stack", async () => {
     const respond = await invoke("sessions.list", { limit: "invalid" });
 
     expectInvalid(respond);
+    expect(sessionCreateStackLoaded).not.toHaveBeenCalled();
   });
 
   it("validates chat.send without importing history, media, or title runtimes", async () => {
     const respond = await invoke("chat.send", { sessionKey: 42 });
 
     expectInvalid(respond);
+    expect(optionalMediaRuntimesLoaded).not.toHaveBeenCalled();
+    expect(titleRuntimeLoaded).not.toHaveBeenCalled();
   });
 });

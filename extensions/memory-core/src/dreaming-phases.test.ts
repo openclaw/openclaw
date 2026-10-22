@@ -97,24 +97,21 @@ function mockUntrustedMemoryArtifact(params: {
   ]);
 }
 
-const textMessage = (role: "user" | "assistant", timestamp: string, text: string) =>
-  makeMessage(role, timestamp, [{ type: "text", text }]);
-
-async function seedTranscript(
-  sessionId: string,
+async function seedTranscript(params: {
   messages: Array<{
     role: "assistant" | "user";
     content: unknown;
     owner?: boolean;
     timestamp: number | string;
-  }>,
-  hookExternalContentSource?: "gmail" | "webhook",
-): Promise<void> {
+  }>;
+  sessionId: string;
+  hookExternalContentSource?: "gmail" | "webhook";
+}): Promise<void> {
   const agentId = "main";
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
   const storePath = path.join(sessionsDir, "sessions.json");
-  const sessionKey = `agent:${agentId}:chat:${sessionId}`;
-  const timestamps = messages
+  const sessionKey = `agent:${agentId}:chat:${params.sessionId}`;
+  const timestamps = params.messages
     .map((message) =>
       typeof message.timestamp === "number" ? message.timestamp : Date.parse(message.timestamp),
     )
@@ -128,16 +125,18 @@ async function seedTranscript(
     sessionKey,
     storePath,
     entry: {
-      sessionId,
+      sessionId: params.sessionId,
       updatedAt,
-      ...(hookExternalContentSource ? { hookExternalContentSource } : {}),
+      ...(params.hookExternalContentSource
+        ? { hookExternalContentSource: params.hookExternalContentSource }
+        : {}),
     },
   };
   await upsertSessionEntry(registration);
-  for (const message of messages) {
+  for (const message of params.messages) {
     await appendSessionTranscriptMessageByIdentity({
       agentId,
-      sessionId,
+      sessionId: params.sessionId,
       sessionKey,
       storePath,
       message: {
@@ -636,18 +635,31 @@ describe("memory-core dreaming phases", () => {
     const renderedSource = `[main/sessions/main/${transcriptName}#L4] `;
     const renderedPadding = "r".repeat(343 - renderedSource.length - "User: ".length);
     const snippetPadding = "s".repeat(273);
-    await seedTranscript(transcriptName, [
-      textMessage(
-        "user",
-        "2026-04-05T18:01:00.000Z",
-        "Move backups to S3 Glacier. OPENAI_API_KEY=sk-1234567890abcdef",
-      ),
-      textMessage("assistant", "2026-04-05T18:02:00.000Z", "Set retention to 365 days."),
-      textMessage("user", "2026-04-05T18:03:00.000Z", `${renderedPadding}🎉 omitted tail`),
-    ]);
-    await seedTranscript(snippetTranscriptName, [
-      textMessage("user", "2026-04-05T18:04:00.000Z", `${snippetPadding}🌍 omitted tail`),
-    ]);
+    await seedTranscript({
+      sessionId: transcriptName,
+      messages: [
+        makeMessage("user", "2026-04-05T18:01:00.000Z", [
+          {
+            type: "text",
+            text: "Move backups to S3 Glacier. OPENAI_API_KEY=sk-1234567890abcdef",
+          },
+        ]),
+        makeMessage("assistant", "2026-04-05T18:02:00.000Z", [
+          { type: "text", text: "Set retention to 365 days." },
+        ]),
+        makeMessage("user", "2026-04-05T18:03:00.000Z", [
+          { type: "text", text: `${renderedPadding}🎉 omitted tail` },
+        ]),
+      ],
+    });
+    await seedTranscript({
+      sessionId: snippetTranscriptName,
+      messages: [
+        makeMessage("user", "2026-04-05T18:04:00.000Z", [
+          { type: "text", text: `${snippetPadding}🌍 omitted tail` },
+        ]),
+      ],
+    });
 
     let firstSessionIngestion;
     await withClock(async () => {
@@ -689,6 +701,8 @@ describe("memory-core dreaming phases", () => {
     const snippets = recalled.map((entry) => entry.snippet).join("\n");
     expect(snippets).toContain("Move backups to S3 Glacier.");
     expect(snippets).toContain("Set retention to 365 days.");
+    const ranked = await rankCandidates(Date.parse("2026-04-05T19:00:00.000Z"));
+    expect(ranked).toHaveLength(0);
   });
 
   it("records policy exclusions and keeps forgotten sessions excluded after policy removal and resweeps", async () => {
@@ -711,14 +725,19 @@ describe("memory-core dreaming phases", () => {
     };
     const excludedHarness = createHarness(excludedConfig);
 
-    await seedTranscript(
-      "gmail-session",
-      [makeMessage("user", "2026-04-05T18:01:00.000Z", "Never retain this imported Gmail claim.")],
-      "gmail",
-    );
-    await seedTranscript("trusted-session", [
-      makeMessage("user", "2026-04-05T18:02:00.000Z", "Keep this trusted interactive claim."),
-    ]);
+    await seedTranscript({
+      sessionId: "gmail-session",
+      hookExternalContentSource: "gmail",
+      messages: [
+        makeMessage("user", "2026-04-05T18:01:00.000Z", "Never retain this imported Gmail claim."),
+      ],
+    });
+    await seedTranscript({
+      sessionId: "trusted-session",
+      messages: [
+        makeMessage("user", "2026-04-05T18:02:00.000Z", "Keep this trusted interactive claim."),
+      ],
+    });
 
     const corpusFile = corpusPath();
 
@@ -786,9 +805,10 @@ describe("memory-core dreaming phases", () => {
       };
 
       setRuntimeConfigSnapshot(cfg);
-      await seedTranscript(sessionId, [
-        { role: "user", content: claim, timestamp: nowMs, owner: true },
-      ]);
+      await seedTranscript({
+        sessionId,
+        messages: [{ role: "user", content: claim, timestamp: nowMs, owner: true }],
+      });
       const results = await appendSessionCorpusLines({
         workspaceDir,
         day: DAY,
@@ -905,18 +925,17 @@ describe("memory-core dreaming phases", () => {
     setStateDir(path.join(workspaceDir, ".state"));
     const { sweep } = createDailyHarness({ lookbackDays: 2 });
 
-    await seedTranscript("dreaming-main", [
-      textMessage(
-        "user",
-        "2026-04-01T12:00:00.000Z",
-        "Old planning note that should stay out of lookback.",
-      ),
-      textMessage(
-        "assistant",
-        "2026-04-05T18:02:00.000Z",
-        "Current reminder that should be in today corpus.",
-      ),
-    ]);
+    await seedTranscript({
+      sessionId: "dreaming-main",
+      messages: [
+        makeMessage("user", "2026-04-01T12:00:00.000Z", [
+          { type: "text", text: "Old planning note that should stay out of lookback." },
+        ]),
+        makeMessage("assistant", "2026-04-05T18:02:00.000Z", [
+          { type: "text", text: "Current reminder that should be in today corpus." },
+        ]),
+      ],
+    });
 
     await runLight(sweep);
 
@@ -934,14 +953,14 @@ describe("memory-core dreaming phases", () => {
     setStateDir(path.join(workspaceDir, ".state"));
     const { sweep } = createDailyHarness();
 
-    await seedTranscript(
-      "dreaming-main",
-      Array.from({ length: 160 }, (_, index) => ({
+    await seedTranscript({
+      sessionId: "dreaming-main",
+      messages: Array.from({ length: 160 }, (_, index) => ({
         role: index % 2 === 0 ? ("user" as const) : ("assistant" as const),
         timestamp: "2026-04-05T18:00:00.000Z",
         content: [{ type: "text", text: `bulk-line-${index}` }],
       })),
-    );
+    });
 
     await withClock(async () => {
       await sweepLight(sweep, 5);
@@ -968,13 +987,16 @@ describe("memory-core dreaming phases", () => {
       (_, index) => `aa-busy-${index.toString().padStart(2, "0")}`,
     );
     for (const sessionId of [...busySessionIds, "zz-known"]) {
-      await seedTranscript(sessionId, [
-        {
-          role: "user",
-          timestamp: "2026-04-05T18:00:00.000Z",
-          content: `Initial durable note for ${sessionId}`,
-        },
-      ]);
+      await seedTranscript({
+        sessionId,
+        messages: [
+          {
+            role: "user",
+            timestamp: "2026-04-05T18:00:00.000Z",
+            content: `Initial durable note for ${sessionId}`,
+          },
+        ],
+      });
     }
 
     await runLight(sweep);
@@ -983,14 +1005,14 @@ describe("memory-core dreaming phases", () => {
     const knownCheckpoint = expectDefined(before.files[knownStateKey], "known session checkpoint");
 
     for (const sessionId of busySessionIds) {
-      await seedTranscript(
+      await seedTranscript({
         sessionId,
-        Array.from({ length: 12 }, (_, index) => ({
+        messages: Array.from({ length: 12 }, (_, index) => ({
           role: "user" as const,
           timestamp: "2026-04-05T18:05:00.000Z",
           content: `New durable note ${index} for ${sessionId}`,
         })),
-      );
+      });
     }
     await runLight(sweep, 6);
 
@@ -1215,6 +1237,8 @@ describe("memory-core dreaming phases", () => {
     );
     expect(restricted.length).toBeGreaterThan(0);
     expect(restricted.every((entry) => entry.provenance?.originClass === "untrusted")).toBe(true);
+    const ranked = await rankCandidates(BASE_TIME.getTime());
+    expect(ranked.some((entry) => entry.path === restrictedRelativePath)).toBe(false);
     expect(prepared).toHaveLength(2);
     for (const { data } of prepared) {
       expect(data.snippets).toContain("Keep the owner-approved backup plan.");

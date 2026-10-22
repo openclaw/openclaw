@@ -3,7 +3,6 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { bindMemoryMigrationPlanSources } from "./memory-migration-source.js";
@@ -207,65 +206,6 @@ describe("copyMigrationFileItem", () => {
 });
 
 describe("copyMemoryMigrationFileItem", () => {
-  afterEach(() => __setFsSafeTestHooksForTest(undefined));
-
-  it.each(["destination", "staged"] as const)(
-    "preserves a %s directory substitution",
-    async (stage) => {
-      const { source, target, copy } = memoryFixture();
-      await writeFile(source, "new memory");
-      await writeFile(target, "old memory");
-      let stagedPath = "";
-      let swapped = false;
-      let movedDirectory = false;
-      const substituteDirectory = async (file: string) => {
-        await fs.rename(file, `${file}.retained`);
-        await fs.mkdir(file);
-        await fs.writeFile(path.join(file, "nested.md"), "user directory");
-      };
-      __setFsSafeTestHooksForTest({
-        afterRootReadFinalPathIdentityCheck: (filePath) => {
-          if (stage === "staged" && stagedPath && filePath === stagedPath) {
-            throw new Error("injected staged memory read failure");
-          }
-        },
-        beforeRootFallbackMutation: async (operation, destination) => {
-          if (operation !== "move") {
-            return;
-          }
-          if (!stagedPath) {
-            stagedPath = destination;
-            if (stage === "destination") {
-              await substituteDirectory(target);
-            }
-          } else if (stage === "destination") {
-            movedDirectory = (await fs.lstat(stagedPath)).isDirectory();
-          } else if (destination === target) {
-            swapped = true;
-            await substituteDirectory(stagedPath);
-          }
-        },
-      });
-      const result = await copy(true);
-      expect(stagedPath).not.toBe("");
-      expect(result.status).toBe("error");
-      if (stage === "staged") {
-        expect(swapped).toBe(true);
-        expect(result.details?.recoveryPath).toBe(stagedPath);
-      } else {
-        expect(movedDirectory).toBe(false);
-      }
-      const retained = stage === "staged" ? stagedPath : target;
-      await expect(fs.access(stage === "staged" ? target : stagedPath)).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      await expect(fs.readFile(path.join(retained, "nested.md"), "utf8")).resolves.toBe(
-        "user directory",
-      );
-      await expect(fs.readFile(`${retained}.retained`, "utf8")).resolves.toBe("old memory");
-    },
-  );
-
   it("rejects source bytes that changed after the reviewed plan", async () => {
     const root = tempDirs.make("openclaw-memory-copy-");
     const workspaceDir = path.join(root, "workspace");

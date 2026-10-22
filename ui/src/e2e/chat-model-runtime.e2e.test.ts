@@ -47,7 +47,7 @@ suite.define(() => {
       for (const [id, name, context] of [
         ["codex", "GPT-5.6 Sol codex", "200k · Codex"],
         ["openclaw", "GPT-5.6 Sol", "1M · OpenClaw"],
-      ]) {
+      ] as const) {
         const option = runtime(id);
         await revealChatModelOption(option);
         expect(await option.locator(".chat-controls__model-option-name").textContent()).toBe(name);

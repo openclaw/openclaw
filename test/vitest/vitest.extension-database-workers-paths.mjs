@@ -262,6 +262,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/native-subagent-inventory.test.ts",
   "extensions/codex/src/app-server/run-attempt-connection.environment.test.ts",
   "extensions/codex/src/app-server/side-question.test.ts",
+  "extensions/codex/src/app-server/side-question.fork.test.ts",
   "extensions/codex/src/app-server/run-attempt.hook-background-continuation.test.ts",
   "extensions/codex/src/app-server/run-attempt.native-background-outcome.test.ts",
   "extensions/codex/src/app-server/run-attempt.native-config.test.ts",

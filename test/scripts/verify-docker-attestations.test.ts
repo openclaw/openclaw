@@ -30,6 +30,26 @@ function createIndex() {
   };
 }
 
+function createAttestation(
+  predicates = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"],
+) {
+  return {
+    artifactType: "application/vnd.docker.attestation.manifest.v1+json",
+    layers: predicates.map((predicate) => ({
+      annotations: { "in-toto.io/predicate-type": predicate },
+    })),
+  };
+}
+
+function errorsFor(index = createIndex(), attestation = createAttestation()) {
+  return collectDockerAttestationErrors({
+    imageRef,
+    index,
+    requiredPlatforms: [parsePlatform("linux/amd64")],
+    inspectAttestation: () => attestation,
+  });
+}
+
 describe("verify-docker-attestations", () => {
   it("bounds docker manifest inspection calls", () => {
     const execFileSyncImpl = vi.fn(() => "{}");
@@ -64,6 +84,9 @@ describe("verify-docker-attestations", () => {
 
   it("rejects missing platform option values", () => {
     expect(() => parseArgs(["--platform"])).toThrow("--platform requires a value");
+    expect(() => parseArgs(["--platform", "-h"])).toThrow("--platform requires a value");
+    expect(() => parseArgs(["--platform", "--help"])).toThrow("--platform requires a value");
+    expect(() => parseArgs(["--platform", ""])).toThrow("--platform requires a value");
   });
 
   it("resolves digest refs from tagged image refs", () => {
@@ -77,21 +100,27 @@ describe("verify-docker-attestations", () => {
 
   it("reports unexpected attestation artifact types", () => {
     expect(
-      collectDockerAttestationErrors({
-        imageRef,
-        index: createIndex(),
-        requiredPlatforms: [parsePlatform("linux/amd64")],
-        inspectAttestation: () => ({
-          artifactType: "application/vnd.unknown",
-          layers: ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"].map(
-            (predicate) => ({
-              annotations: { "in-toto.io/predicate-type": predicate },
-            }),
-          ),
-        }),
+      errorsFor(createIndex(), {
+        ...createAttestation(),
+        artifactType: "application/vnd.unknown",
       }),
     ).toEqual([
       `ghcr.io/openclaw/openclaw:test: linux/amd64 attestation ${attestationDigest} has unexpected artifactType "application/vnd.unknown"`,
+    ]);
+  });
+
+  it("reports missing attestation manifests", () => {
+    const index = createIndex();
+    index.manifests = index.manifests.slice(0, 1);
+
+    expect(errorsFor(index)).toEqual([
+      "ghcr.io/openclaw/openclaw:test: missing attestation manifest for linux/amd64",
+    ]);
+  });
+
+  it("reports missing SBOM or provenance predicates", () => {
+    expect(errorsFor(createIndex(), createAttestation(["https://spdx.dev/Document"]))).toEqual([
+      "ghcr.io/openclaw/openclaw:test: linux/amd64 missing predicate https://slsa.dev/provenance/v1",
     ]);
   });
 });
