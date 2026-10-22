@@ -195,7 +195,6 @@ export async function xaiTTSStream(request: XaiTtsRequest): Promise<{
         return;
       }
       connectSettled = true;
-      clearTimers();
       void release();
       reject(error);
     };
@@ -326,8 +325,6 @@ export async function xaiTTSStream(request: XaiTtsRequest): Promise<{
             return;
           }
           case "audio.done":
-            clearTimers();
-            closeStream?.();
             void release();
             return;
           case "error":

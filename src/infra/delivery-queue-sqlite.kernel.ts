@@ -15,7 +15,6 @@ import {
   pruneDeliveryQueueTombstones,
   terminalizeBoundDeliveryQueueEntry,
   type DeliveryQueueDatabase,
-  type DeliveryQueueReadMode,
   type UpsertDeliveryQueueEntryParams,
   upsertBoundDeliveryQueueEntryInDatabase,
 } from "./delivery-queue-sqlite-bound.js";
@@ -235,11 +234,10 @@ function selectDeliveryQueueEntryOwners(
 export function loadDeliveryQueueEntriesInDatabase(
   database: OpenClawStateDatabase,
   queueName: string,
-  mode: DeliveryQueueReadMode = "pending",
 ): DeliveryQueueEntryState[] {
   const rows = executeSqliteQuerySync(
     database.db,
-    deliveryQueueEntriesQuery(database, [queueName], mode)
+    deliveryQueueEntriesQuery(database, [queueName], "pending")
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows;

@@ -108,6 +108,15 @@ function skillBody(location: string, content: string) {
   return `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${content}`;
 }
 
+function expectFragments(value: unknown, included: string[], excluded: string[] = []) {
+  for (const fragment of included) {
+    expect(value).toContain(fragment);
+  }
+  for (const fragment of excluded) {
+    expect(value).not.toContain(fragment);
+  }
+}
+
 describe("Code Mode catalog and model-visible surface", () => {
   it("refreshes guest metadata after catalog replacement and restriction", async () => {
     const { ctx, tools, exec } = catalog([fakeTool("lookup", "Original metadata")]);
@@ -195,29 +204,25 @@ describe("Code Mode catalog and model-visible surface", () => {
       { ...fakeTool("read", "Read file"), parameters: readToolInputSchema },
     ]);
     const prompt = catalogPrompt();
-    for (const fragment of [
-      "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
-      "- zeta_tool { value?: string } -> ?",
-      "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
-    ]) {
-      expect(prompt).toContain(fragment);
-    }
-    for (const fragment of [
-      "Description stays deferred.",
-      "openclaw:fake-code-mode",
-      "paired Gateway nodes",
-      "MCP tools use the `MCP` namespace",
-    ]) {
-      expect(prompt).not.toContain(fragment);
-    }
+    expectFragments(
+      prompt,
+      [
+        "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
+        "- zeta_tool { value?: string } -> ?",
+        "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
+        "If an input hint leaves needed arguments unclear (`...` or `unknown`), read `await callableName.describe()`",
+        "Call globals directly when their input contract is clear",
+      ],
+      [
+        "Description stays deferred.",
+        "openclaw:fake-code-mode",
+        "paired Gateway nodes",
+        "MCP tools use the `MCP` namespace",
+      ],
+    );
     expect(prompt.indexOf("alpha_tool")).toBeLessThan(prompt.indexOf("zeta_tool"));
     const incompleteLine = prompt.split("\n").find((line) => line.startsWith("- incomplete_tool "));
-    expect(incompleteLine).toContain("...");
-    expect(incompleteLine).not.toContain("schedule");
-    expect(prompt).toContain(
-      "If an input hint leaves needed arguments unclear (`...` or `unknown`), read `await callableName.describe()`",
-    );
-    expect(prompt).toContain("Call globals directly when their input contract is clear");
+    expectFragments(incompleteLine, ["..."], ["schedule"]);
     const described = await runCodeModeScriptHeadless({
       ctx,
       code: "return await incomplete_tool.describe();",
@@ -251,13 +256,11 @@ describe("Code Mode catalog and model-visible surface", () => {
       ),
       contractedTool("zzz_contracted_tool", pluginId),
     ]);
-    for (const fragment of [
+    expectFragments(index, [
       "additional tools omitted",
       "zzz_contracted_tool",
       "-> { ok: boolean }",
-    ]) {
-      expect(index).toContain(fragment);
-    }
+    ]);
   });
 
   it("skips a single oversized entry instead of blanking the whole index", () => {
@@ -265,10 +268,7 @@ describe("Code Mode catalog and model-visible surface", () => {
     const index = catalogIndex(
       [`a_${"z".repeat(9_000)}`, ...shortNames].map((name) => contractedTool(name)),
     );
-    expect(index).not.toContain("z".repeat(9_000));
-    for (const name of shortNames) {
-      expect(index).toContain(name);
-    }
+    expectFragments(index, shortNames, ["z".repeat(9_000)]);
   });
 });
 
@@ -348,8 +348,8 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
   const codeModeSkills = resolveCodeModeSkills({
     skillsPrompt: await resolveSkillsPrompt({ entries: [learned], workspaceDir: "/workspace" }),
     candidates: [learned.skill],
-    reader: async () => "# Learned instructions\n",
   });
+  codeModeSkills[0]!.reader = async () => "# Learned instructions\n";
   const used: Array<{ event: DiagnosticEventPayload; skillFile?: string }> = [];
   const stop = onTrustedInternalDiagnosticEvent(
     (event, _metadata, privateData) => {
@@ -614,13 +614,11 @@ it("returns missing implicitly optional daily memory through Code Mode", async (
 
 function replay(targets: AnyAgentTool[], options?: Parameters<typeof createCodeModeHarness>[0]) {
   const { tools } = createCatalogCodeModeHarness(targets, options);
-  const execTool = tools[0]!;
-  const waitTool = tools[1]!;
   return {
-    execTool,
-    waitTool,
+    execTool: tools[0]!,
+    waitTool: tools[1]!,
     run: (code: string, restartSafe = true) =>
-      runUntilCompleted({ execTool, waitTool, code, restartSafe }),
+      runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code, restartSafe }),
   };
 }
 
@@ -779,12 +777,7 @@ describe("session store bridge", () => {
       await store("e", 1);
       return { errors, unchanged, deleted: (await load("b")) === undefined, added: await load("e") };
     `,
-      {
-        errors: [true, true, true],
-        unchanged: 256 * 1024 - 2,
-        deleted: true,
-        added: 1,
-      },
+      { errors: [true, true, true], unchanged: 256 * 1024 - 2, deleted: true, added: 1 },
     );
   });
 

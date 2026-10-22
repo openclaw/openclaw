@@ -27,7 +27,10 @@ import {
   listReadOnlyChannelPluginsForConfig,
   resolveReadOnlyChannelPluginsForConfig,
 } from "./read-only.js";
-import { writeExternalSetupChannelPlugin } from "./read-only.test-support.js";
+import {
+  writeBundledSetupChannelPlugin,
+  writeExternalSetupChannelPlugin,
+} from "./read-only.test-support.js";
 
 type ReadOnlyPlugins = ReturnType<typeof listReadOnlyChannelPluginsForConfig>;
 
@@ -161,80 +164,6 @@ vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
       env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? actual.resolveBundledPluginsDir(env),
   };
 });
-
-function writeBundledSetupChannelPlugin(options: { persistedAuthPath?: string } = {}) {
-  const bundledRoot = makePluginLoaderTempDir();
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
-  const pluginId = "bundled-chat";
-  const channelId = pluginId;
-  const envVar = "BUNDLED_CHAT_TOKEN";
-  const pluginDir = path.join(bundledRoot, pluginId);
-  fs.mkdirSync(pluginDir, { recursive: true });
-  const fullMarker = path.join(pluginDir, "full-loaded.txt");
-  const setupMarker = path.join(pluginDir, "setup-loaded.txt");
-  const writeSource = (name: string, source: string) =>
-    fs.writeFileSync(path.join(pluginDir, name), source, "utf8");
-  const writeJson = (name: string, value: unknown) => writeSource(name, JSON.stringify(value));
-  const meta = {
-    id: channelId,
-    label: "Bundled Chat",
-    selectionLabel: "Bundled Chat",
-    docsPath: `/channels/${channelId}`,
-    blurb: "bundled setup entry",
-  };
-  writeJson("package.json", {
-    name: `@openclaw/${pluginId}`,
-    version: "1.0.0",
-    type: "commonjs",
-    openclaw: {
-      extensions: ["./index.cjs"],
-      setupEntry: "./setup-entry.cjs",
-      channel: {
-        ...meta,
-        configuredState: { env: { anyOf: [envVar] } },
-        persistedAuthState: options.persistedAuthPath
-          ? { specifier: "./auth-state.cjs", exportName: "hasAuth" }
-          : undefined,
-      },
-    },
-  });
-  if (options.persistedAuthPath) {
-    writeSource(
-      "auth-state.cjs",
-      `exports.hasAuth = () => require("node:fs").existsSync(${JSON.stringify(options.persistedAuthPath)});\n`,
-    );
-  }
-  writeJson("openclaw.plugin.json", {
-    id: pluginId,
-    configSchema: EMPTY_PLUGIN_SCHEMA,
-    channels: [channelId],
-  });
-  writeSource(
-    "index.cjs",
-    `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");`,
-  );
-  writeSource(
-    "setup-entry.cjs",
-    `module.exports = {
-  kind: "bundled-channel-setup-entry",
-  loadSetupPlugin() {
-    require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
-    return {
-      id: ${JSON.stringify(channelId)},
-      meta: ${JSON.stringify(meta)},
-      capabilities: { chatTypes: ["direct"] },
-      config: {
-        listAccountIds: () => ["default"],
-        resolveAccount: () => ({ accountId: "default", token: "configured" }),
-      },
-      outbound: { deliveryMode: "direct" },
-    };
-  },
-};`,
-  );
-
-  return { bundledRoot, pluginDir, fullMarker, setupMarker, pluginId, channelId, envVar };
-}
 
 function expectExternalChatSetupOnlyPluginLoaded(params: {
   plugins: ReadOnlyPlugins;
@@ -527,16 +456,21 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(findPlugin(second)?.meta.blurb).toBe("updated:after");
   });
 
-  it("clones setup-only plugins for every configured owned channel when setup id matches one channel", async () => {
-    const {
-      pluginDir,
-      cfg: discoveryConfig,
-      fullMarker,
-      setupMarker,
-    } = setupFixture(siblingSetup, siblingChannels);
-    fs.appendFileSync(
-      path.join(pluginDir, "setup-entry.cjs"),
-      `
+  it.each([true, false])(
+    "clones setup-only owned channels (setup channel configured=%s)",
+    async (both) => {
+      const {
+        pluginDir,
+        cfg: discoveryConfig,
+        fullMarker,
+        setupMarker,
+      } = setupFixture(
+        siblingSetup,
+        both ? siblingChannels : { "beta-chat": siblingChannels["beta-chat"] },
+      );
+      fs.appendFileSync(
+        path.join(pluginDir, "setup-entry.cjs"),
+        `
 Object.assign(module.exports.plugin.config, {
   resolveAccountAsync: async (cfg, accountId) => ({
     ...module.exports.plugin.config.resolveAccount(cfg),
@@ -545,68 +479,34 @@ Object.assign(module.exports.plugin.config, {
   hasConfiguredStateAsync: async ({ cfg, env }) =>
     cfg.channels?.["alpha-chat"]?.token === env?.FIXTURE_CHANNEL_TOKEN,
 });`,
-      "utf8",
-    );
-    const plugins = listReadOnlyChannelPluginsForConfig(discoveryConfig, coldOptions(true));
+        "utf8",
+      );
+      const plugins = listReadOnlyChannelPluginsForConfig(discoveryConfig, coldOptions(true));
 
-    const betaPlugin = findPlugin(plugins, "beta-chat");
-    for (const id of ["alpha-chat", "beta-chat"]) {
-      expect(findPlugin(plugins, id)?.meta).toMatchObject({ id, blurb: "setup entry" });
-    }
-    expectSecretTarget(betaPlugin, "beta-chat");
-    if (!betaPlugin) {
-      throw new Error("Expected configured beta channel");
-    }
-    const cfg = { channels: siblingChannels };
-    expect(betaPlugin.config.resolveAccount(cfg).token).toBe("beta-token");
-    const account = await resolveChannelAccount({ plugin: betaPlugin, cfg, accountId: "ops" });
-    expect(account).toMatchObject({ accountId: "ops", token: "beta-token" });
-    await expect(
-      channelHasConfiguredState({
-        plugin: betaPlugin,
-        cfg,
-        env: { FIXTURE_CHANNEL_TOKEN: "beta-token" },
-      }),
-    ).resolves.toBe(true);
-    expect(cfg.channels["alpha-chat"].token).toBe("alpha-token");
-    expectMarkers(setupMarker, fullMarker, true);
-  });
-
-  it("clones setup-only plugins when only another owned channel is configured", () => {
-    const { cfg, fullMarker, setupMarker } = setupFixture(siblingSetup, {
-      "beta-chat": siblingChannels["beta-chat"],
-    });
-    const plugins = listReadOnlyChannelPluginsForConfig(cfg, coldOptions(true));
-
-    expect(pluginIds(plugins)).not.toContain("alpha-chat");
-    const betaPlugin = findPlugin(plugins, "beta-chat");
-    expect(betaPlugin?.meta.id).toBe("beta-chat");
-    expectSecretTarget(betaPlugin, "beta-chat");
-    expect(
-      betaPlugin?.config.resolveAccount({ channels: { "beta-chat": { token: "beta-token" } } })
-        .token,
-    ).toBe("beta-token");
-    expectMarkers(setupMarker, fullMarker, true);
-  });
-
-  it("uses manifest channel configs when no setup entry exists", () => {
-    const { cfg, plugin, fullMarker, setupMarker } = manifestFixture(
-      {
-        "external-chat": {
-          defaultAccount: "Ops Team",
-          accounts: {
-            "Ops Team": { token: "configured" },
-            chat: { token: "chat-token" },
-          },
-        },
-      },
-      {},
-      true,
-    );
-    expect(plugin?.meta.blurb).toBe("manifest config");
-    expect(plugin?.config.defaultAccountId?.(cfg)).toBe("ops-team");
-    expectMarkers(setupMarker, fullMarker);
-  });
+      const betaPlugin = findPlugin(plugins, "beta-chat");
+      expect(pluginIds(plugins).includes("alpha-chat")).toBe(both);
+      for (const id of both ? ["alpha-chat", "beta-chat"] : ["beta-chat"]) {
+        expect(findPlugin(plugins, id)?.meta).toMatchObject({ id, blurb: "setup entry" });
+      }
+      expectSecretTarget(betaPlugin, "beta-chat");
+      if (!betaPlugin) {
+        throw new Error("Expected configured beta channel");
+      }
+      const cfg = { channels: siblingChannels };
+      expect(betaPlugin.config.resolveAccount(cfg).token).toBe("beta-token");
+      const account = await resolveChannelAccount({ plugin: betaPlugin, cfg, accountId: "ops" });
+      expect(account).toMatchObject({ accountId: "ops", token: "beta-token" });
+      await expect(
+        channelHasConfiguredState({
+          plugin: betaPlugin,
+          cfg,
+          env: { FIXTURE_CHANNEL_TOKEN: "beta-token" },
+        }),
+      ).resolves.toBe(true);
+      expect(cfg.channels["alpha-chat"].token).toBe("alpha-token");
+      expectMarkers(setupMarker, fullMarker, true);
+    },
+  );
 
   it.each(["external", "bundled"])(
     "uses %s manifest inventory before loading setup runtime",
@@ -656,10 +556,10 @@ Object.assign(module.exports.plugin.config, {
         } as never);
         expect(account).toMatchObject({ accountId: "default", config: { token: "configured" } });
         const namedCfg = externalConfig(pluginDir, {
-          "external-chat": { defaultAccount: "ops", accounts: { ops: {}, alerts: {} } },
+          "external-chat": { defaultAccount: "Ops Team", accounts: { "Ops Team": {}, alerts: {} } },
         });
-        expect(plugin?.config.listAccountIds(namedCfg)).toEqual(["alerts", "ops"]);
-        expect(plugin?.config.defaultAccountId?.(namedCfg)).toBe("ops");
+        expect(plugin?.config.listAccountIds(namedCfg)).toEqual(["alerts", "ops-team"]);
+        expect(plugin?.config.defaultAccountId?.(namedCfg)).toBe("ops-team");
         expectMarkers(setupMarker, fullMarker);
       }
       const plugins = listReadOnlyChannelPluginsForConfig(cfg, coldOptions(true));
@@ -668,10 +568,14 @@ Object.assign(module.exports.plugin.config, {
   );
 
   it("sanitizes terminal control sequences from manifest channel metadata", () => {
-    const { plugin } = manifestFixture(undefined, {
-      manifestChannelLabel: "External\u001b[31m Chat\u001b[0m",
-      manifestChannelDescription: "manifest\u001b[2K config",
-    });
+    const { plugin } = manifestFixture(
+      undefined,
+      {
+        manifestChannelLabel: "External\u001b[31m Chat\u001b[0m",
+        manifestChannelDescription: "manifest\u001b[2K config",
+      },
+      true,
+    );
     expect(plugin?.meta).toMatchObject({
       label: "External Chat",
       selectionLabel: "External Chat",

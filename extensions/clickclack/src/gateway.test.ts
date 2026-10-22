@@ -294,7 +294,7 @@ describe("ClickClack gateway", () => {
     ],
     [
       "older server",
-      { status: 404 },
+      new ClickClackHttpError(404, "not found", new Headers()),
       "debug",
       "[default] ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
     ],

@@ -1,6 +1,4 @@
 import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
-import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import type { CronJob, CronPayload } from "../../api/types.ts";
 import {
   formatDateTimeLocal,
@@ -8,6 +6,7 @@ import {
   durationMsToSecondsString,
   parseStaggerSchedule,
 } from "./form-schedule.ts";
+import { DEFAULT_CRON_FORM } from "./state.ts";
 import type { CronFormState } from "./types.ts";
 
 const CRON_CHANNEL_LAST = "last";
@@ -26,22 +25,16 @@ export function normalizeCronFormState(
   changed: Partial<CronFormState> = {},
 ): CronFormState {
   let normalized = form;
-  if (!form.payloadLocked) {
-    if (changed.sessionTarget !== undefined) {
-      const payloadKind = form.sessionTarget === "main" ? "systemEvent" : "agentTurn";
-      if (form.payloadKind !== payloadKind) {
-        normalized = { ...normalized, payloadKind };
-      }
-    } else if (form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
-      normalized = { ...normalized, sessionTarget: "main" };
-    } else if (form.payloadKind === "agentTurn" && form.sessionTarget === "main") {
-      normalized = { ...normalized, sessionTarget: "isolated" };
-    }
+  if (!form.payloadLocked && form.payloadKind === "systemEvent" && form.sessionTarget !== "main") {
+    normalized =
+      changed.sessionTarget !== undefined
+        ? { ...normalized, payloadKind: "agentTurn" }
+        : { ...normalized, sessionTarget: "main" };
   }
   if (
     normalized.deliveryMode !== "announce" ||
-    (normalized.sessionTarget !== "main" &&
-      (normalized.payloadKind === "agentTurn" || normalized.payloadLocked))
+    normalized.payloadKind === "agentTurn" ||
+    (normalized.sessionTarget !== "main" && normalized.payloadLocked)
   ) {
     return normalized;
   }
@@ -51,23 +44,15 @@ export function normalizeCronFormState(
   };
 }
 
-export function isReadOnlyCronPayload(
-  payload: CronPayload | null,
-  declarationKey?: string,
-): boolean {
-  return (
-    payload?.kind === "command" ||
-    payload?.kind === "script" ||
-    isSystemOwnedCronPayloadKind(payload?.kind) ||
-    isSystemMonitorDeclaration(declarationKey)
-  );
+export function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
+  return payload?.kind === "command" || payload?.kind === "script";
 }
 
 export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = job.payload;
   const agentTurn = payload.kind === "agentTurn" ? payload : undefined;
-  const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
+  const payloadLocked = isReadOnlyCronPayload(payload);
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
   }
@@ -90,6 +75,16 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     scheduleExact: false,
     staggerAmount: "",
     staggerUnit: "seconds",
+    activeHoursEnabled: job.activeHours !== undefined,
+    activeHoursStart: job.activeHours?.start ?? DEFAULT_CRON_FORM.activeHoursStart,
+    activeHoursEnd: job.activeHours?.end ?? DEFAULT_CRON_FORM.activeHoursEnd,
+    activeHoursTimezone: job.activeHours?.timezone ?? "",
+    idleOnly: job.idleOnly === true,
+    payloadSkipIfScratchEmpty: payload?.kind === "agentTurn" && payload.skipIfScratchEmpty === true,
+    deliveryTarget:
+      job.delivery && job.delivery.mode !== "webhook" ? (job.delivery.target ?? "") : "",
+    deliveryDirectPolicy:
+      job.delivery && job.delivery.mode !== "webhook" ? (job.delivery.directPolicy ?? "") : "",
     triggerEnabled: job.trigger !== undefined,
     triggerScript: job.trigger?.script ?? "",
     triggerOnce: job.trigger?.once === true,
@@ -110,6 +105,7 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     payloadModel: agentTurn?.model ?? "",
     payloadThinking: agentTurn?.thinking ?? "",
     payloadLightContext: agentTurn?.lightContext === true,
+    payloadIncludeReasoning: agentTurn?.includeReasoning === true,
     deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",

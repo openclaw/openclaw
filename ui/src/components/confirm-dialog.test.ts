@@ -126,9 +126,9 @@ describe("showConfirmDialog", () => {
     });
     await getRenderedModalDialog(document.body);
     expect([...document.body.querySelectorAll("button")].map((item) => item.textContent)).toEqual([
-      "This session",
-      "All sessions",
       "Cancel",
+      "All sessions",
+      "This session",
     ]);
     expect(findButton("This session").classList.contains("primary")).toBe(true);
     expect(findButton("All sessions").className).toBe("btn");

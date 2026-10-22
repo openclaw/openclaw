@@ -82,7 +82,10 @@ it.each(["merge", "replace"] as const)(
         { id: "exact" },
       ],
     };
-    const cfg = configFor(providerId, authoredProvider, mode) as unknown as OpenClawConfig;
+    const cfg = {
+      ...configFor(providerId, authoredProvider, mode),
+      agents: { defaults: { models: { "custom/latest": {} } } },
+    } as unknown as OpenClawConfig;
     const original = structuredClone(cfg);
     const discovered = {
       ...connection,

@@ -69,7 +69,9 @@ export function McpAppResources(props: McpAppResourcesProps) {
     requestScope();
     return null;
   });
-  const servers = createMemo(() => catalog().servers.filter((server) => server.mentionTool));
+  const servers = createMemo(() =>
+    catalog.snapshot().servers.filter((server) => server.mentionTool),
+  );
   const [serverName, setServerName] = createSignal<string>((previous = "") => {
     const available = servers();
     return available.length && !available.some((server) => server.serverName === previous)
@@ -104,7 +106,7 @@ export function McpAppResources(props: McpAppResourcesProps) {
   function search() {
     const client = context.gateway.snapshot.client;
     const selectedServer = serverSelect?.value ?? serverName();
-    if (!client || !catalog().available || !selectedServer) {
+    if (!client || !catalog.available() || !selectedServer) {
       return;
     }
     const searchGeneration = ++generation;
@@ -205,7 +207,7 @@ export function McpAppResources(props: McpAppResourcesProps) {
                   setVisibleGeneration(++generation);
                 }}
               />
-              <button class="btn" type="submit" disabled={busy() || !catalog().available}>
+              <button class="btn" type="submit" disabled={busy() || !catalog.available()}>
                 {t("mcpApp.resourceSearch")}
               </button>
             </form>
@@ -241,7 +243,7 @@ export function McpAppResources(props: McpAppResourcesProps) {
                           >
                             <Results
                               resources={result.resources}
-                              disabled={busy() || !catalog().available}
+                              disabled={busy() || !catalog.available()}
                               onAttach={(resource) => attach(resource, admitted)}
                             />
                           </Show>

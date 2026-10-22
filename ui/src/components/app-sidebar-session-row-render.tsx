@@ -356,29 +356,44 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   );
   return row;
 }
+type PendingSessionCreate = NonNullable<ReturnType<SessionListHost["pendingSessionCreate"]>>;
+
 /** The unadmitted create renders in the slot its admitted row will take: selected,
- *  actionless, and aligned with real rows. Only the native session list has that
- *  slot: the agent-only roster shows no row for a new session, so a handoff row
- *  there would flash under the agent and vanish on admission. */
+ *  actionless, and aligned with real rows. A create for a rendered custom group
+ *  leads that group's list; any other create leads the session list. Only the
+ *  native session list has that slot: the agent-only roster shows no row for a
+ *  new session, so a handoff row there would flash under the agent and vanish on
+ *  admission. */
 export function renderPendingSessionCreateRow(
-  host: () => Pick<SessionListHost, "pendingSessionCreate">,
+  pending: () => PendingSessionCreate | undefined,
+  listItem = false,
 ) {
   return (
-    <Show when={host().pendingSessionCreate()}>
-      {(value) => (
-        <div class="sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
-          <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
-            <span class="sidebar-session-indicator" aria-hidden="true" />
-            <span class="sidebar-recent-session__text">
-              <span class="sidebar-recent-session__title-row">
-                <Show when={value().displayName} fallback={<SessionTitlePlaceholder />}>
-                  {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
-                </Show>
+    <Show when={pending()}>
+      {(value) => {
+        const row = (
+          <div class="sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
+            <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
+              <span class="sidebar-session-indicator" aria-hidden="true" />
+              <span class="sidebar-recent-session__text">
+                <span class="sidebar-recent-session__title-row">
+                  <Show when={value().displayName} fallback={<SessionTitlePlaceholder />}>
+                    {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
+                  </Show>
+                </span>
               </span>
-            </span>
+            </div>
           </div>
-        </div>
-      )}
+        );
+        // Inside a section list it takes the tree wrapper its admitted row will have.
+        return listItem ? (
+          <div class="sidebar-session-tree" role="listitem">
+            {row}
+          </div>
+        ) : (
+          row
+        );
+      }}
     </Show>
   );
 }

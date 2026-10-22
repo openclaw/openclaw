@@ -12,6 +12,23 @@ const websocket = { kind: "websocket" as const, url: "wss://gateway.example/__op
 const credentials = { clientId: "cf-worker-id", clientSecret: "cf-worker-secret" };
 const plaintext = { ...websocket, url: "ws://127.0.0.1/__openclaw__/worker" };
 
+it.each([
+  { kind: "unix", socketPath: "/tmp/gateway:sock" },
+  ...[
+    "https://gateway.example/__openclaw__/worker",
+    "ws://user@gateway.example/__openclaw__/worker",
+    "wss://gateway.example/other",
+    "wss://gateway.example/__openclaw__/worker?token=x",
+  ].map((url) => Object.assign({}, websocket, { url })),
+  { ...plaintext, tlsFingerprint: fingerprint },
+  ...["", "ab:cd:ef", "g".repeat(64)].map((tlsFingerprint) =>
+    Object.assign({}, websocket, { tlsFingerprint }),
+  ),
+  { ...websocket, unexpected: true },
+])("rejects malformed or unsafe worker endpoint %j", (endpoint) => {
+  expect(parseEndpoint(endpoint)).toBeUndefined();
+});
+
 function expectBounded(input: unknown) {
   const parsed = parseEndpoint(input);
   expect(parsed).toBeDefined();

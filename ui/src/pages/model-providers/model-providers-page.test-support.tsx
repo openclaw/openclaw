@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { createRouter } from "@openclaw/uirouter";
 import { createSignal } from "solid-js";
 import { afterEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
@@ -7,6 +8,7 @@ import type {
   ModelAuthStatusResult,
   ModelCatalogResult,
 } from "../../api/types.ts";
+import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
@@ -334,6 +336,9 @@ export function createHarness(initialScopeId: string) {
     },
   });
   const context = {
+    router: createRouter<RouteId, ApplicationContext>({
+      routes: [{ id: "chat", path: "/chat", component: () => ({}) }],
+    }),
     gateway: gatewaySource.gateway,
     agents: {
       state: {

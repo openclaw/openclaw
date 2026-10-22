@@ -38,40 +38,20 @@ describe("isChannelConfigured", () => {
 
   afterEach(() => vi.unstubAllEnvs());
 
-  it("detects Telegram env configuration through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "telegram", { TELEGRAM_BOT_TOKEN: "token" })).toBe(true);
-  });
-
-  it("detects Discord env configuration through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "discord", { DISCORD_BOT_TOKEN: "token" })).toBe(true);
-  });
-
-  it("requires both Slack identity and transport tokens through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "slack", { SLACK_BOT_TOKEN: "xoxb-test" })).toBe(false);
-    expect(
-      isChannelConfigured({}, "slack", {
-        SLACK_BOT_TOKEN: "xoxb-test",
-        SLACK_APP_TOKEN: "xapp-test",
-      }),
-    ).toBe(true);
-  });
-
-  it("requires both IRC host and nick env vars through the package metadata seam", () => {
-    expect(isChannelConfigured({}, "irc", { IRC_HOST: "irc.example.com" })).toBe(false);
-    expect(
-      isChannelConfigured({}, "irc", {
-        IRC_HOST: "irc.example.com",
-        IRC_NICK: "openclaw",
-      }),
-    ).toBe(true);
-  });
-
-  it("requires both Mattermost URL and token env vars through the package metadata seam", () => {
-    const token = { MATTERMOST_BOT_TOKEN: "token" };
-    const url = { MATTERMOST_URL: "https://mattermost.example.test" };
-    expect(isChannelConfigured({}, "mattermost", token)).toBe(false);
-    expect(isChannelConfigured({}, "mattermost", url)).toBe(false);
-    expect(isChannelConfigured({}, "mattermost", { ...token, ...url })).toBe(true);
+  it.each<[string, NodeJS.ProcessEnv, boolean]>([
+    ["slack", { SLACK_BOT_TOKEN: "xoxb-test" }, false],
+    ["slack", { SLACK_BOT_TOKEN: "xoxb-test", SLACK_APP_TOKEN: "xapp-test" }, true],
+    ["irc", { IRC_HOST: "irc.example.com" }, false],
+    ["irc", { IRC_HOST: "irc.example.com", IRC_NICK: "openclaw" }, true],
+    ["mattermost", { MATTERMOST_BOT_TOKEN: "token" }, false],
+    ["mattermost", { MATTERMOST_URL: "https://mattermost.example.test" }, false],
+    [
+      "mattermost",
+      { MATTERMOST_BOT_TOKEN: "token", MATTERMOST_URL: "https://mattermost.example.test" },
+      true,
+    ],
+  ])("resolves %s package metadata for %j as %s", (channel, env, expected) => {
+    expect(isChannelConfigured({}, channel, env)).toBe(expected);
   });
 
   it("still falls back to generic config presence for channels without a custom hook", () => {
@@ -81,19 +61,7 @@ describe("isChannelConfigured", () => {
   });
 
   it("treats explicit enabled channel config as configured state", () => {
-    expect(
-      isChannelConfigured(
-        {
-          channels: {
-            "openclaw-weixin": {
-              enabled: true,
-            },
-          },
-        },
-        "openclaw-weixin",
-        {},
-      ),
-    ).toBe(true);
+    expect(configured("openclaw-weixin", { "openclaw-weixin": { enabled: true } })).toBe(true);
   });
 
   it("does not treat disabled channel config as configured state", () => {

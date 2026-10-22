@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
 import type { CodexThreadListParams } from "./app-server/protocol.js";
+import { catalogThread } from "./session-catalog-client.test-support.js";
 import type { CodexCatalogState, StoredCodexCatalogEntry } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { catalogRow } from "./session-catalog-index.test-support.js";
@@ -194,14 +195,7 @@ it("keeps event-owned tails outside an incomplete prefix and waits for old curso
   const firstCall = index.list({ limit: 10 });
   pending.push(firstCall);
   await headEntered.promise;
-  await index.upsertThread({
-    id: "old",
-    name: "old",
-    source: "cli",
-    projectId: null,
-    updatedAt: 100,
-    recencyAt: 100,
-  });
+  await index.upsertThread(catalogThread({ id: "old", name: "old" }));
   headReady.resolve();
   const first = await firstCall;
   expect.soft(first.sessions.map((session) => session.threadId)).toEqual(["newest", "head"]);

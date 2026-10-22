@@ -153,7 +153,7 @@ export function ChatCiAutomationView(props: ChatCiAutomationProps) {
               class="chat-ci__automation-retry"
               type="button"
               disabled={props.loading || props.saving || props.retryDisabled}
-              onClick={props.onRetry}
+              onClick={() => props.onRetry()}
             >
               {t("chat.pullRequests.automationRetry")}
             </button>

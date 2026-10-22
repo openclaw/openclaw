@@ -408,15 +408,18 @@ async function sendQueuedChatMessage(
             }
           }
           if (ack.status === "ok") {
+            // A replayed input receipt does not complete another run in this session.
+            const ownsLocalRun = host.chatRunId === ack.runId;
             reconcileChatRunLifecycle(host, {
               outcome: "done",
               sessionStatus: "done",
               runId: ack.runId,
               sessionKey,
-              clearLocalRun: true,
-              clearToolStream: true,
+              clearIndicators: ownsLocalRun,
+              clearLocalRun: ownsLocalRun,
+              clearToolStreamForRun: true,
               publishRunStatus: false,
-              armLocalTerminalReconcile: true,
+              armLocalTerminalReconcile: (!host.chatRunId || ownsLocalRun) && ack.runId === runId,
             });
             void loadChatHistory(host).then(() =>
               flushStoredChatOutbox(host, chatOutboxDrainDependencies),

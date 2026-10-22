@@ -308,7 +308,7 @@ describe("runtime auth profile snapshots", () => {
     expect(cleared.lastGood).toBe(worker.lastGood);
     expect(worker.usageStats["acme:primary"]).toEqual({ cooldownUntil: 20_000 });
 
-    const usage = { cooldownUntil: 30_000, failureCounts: { rate_limit: 2 } };
+    const usage = { cooldownUntil: 30_000, failureCounts: { timeout: 2 } };
     setUsage(published, agentDir, { "acme:primary": usage });
     const blocked = read(worker);
     expect(blocked.usageStats?.["acme:primary"]).toEqual(usage);

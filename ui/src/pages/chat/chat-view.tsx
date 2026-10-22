@@ -1,9 +1,8 @@
 import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createMemo, merge, Show } from "solid-js";
+import { createMemo, lazy, Loading, merge, Show } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
 import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -27,7 +26,7 @@ import {
   renderChatComposerNotices as ChatComposerNoticesView,
   renderChatTopbarNotices as ChatTopbarNotices,
 } from "./chat-view-notices.tsx";
-import type { ChatActivityPillsProps } from "./components/chat-activity-pills.tsx";
+import type { ChatActivityPillsProps } from "./components/chat-activity-pills-types.ts";
 import { ChatCommentController } from "./components/chat-comment-controller.ts";
 import {
   ComposerQuestionDock,
@@ -46,9 +45,7 @@ import { ChatConversationMobile } from "./components/chat-conversation-presentat
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
-import { ChatSessionSuggestions } from "./components/chat-session-suggestions.solid.tsx";
-import { ChatSwarmProgress } from "./components/chat-swarm-progress.solid.tsx";
-import { ChatTaskSuggestionTray } from "./components/chat-task-suggestions.tsx";
+import { resolveChatSwarmParent } from "./components/chat-swarm-progress-parent.ts";
 import {
   getTranscriptState,
   toggleTranscriptSearch,
@@ -57,6 +54,22 @@ import { ChatThread } from "./components/chat-thread-view.tsx";
 import { TranscriptSearch } from "./components/chat-transcript-search.tsx";
 import "../../components/resizable-divider.ts";
 export type { ChatProps } from "./chat-view-frame.ts";
+
+const ExecApprovalCard = lazy(() => import("../../components/exec-approval-card-solid.tsx"), {
+  export: "ExecApprovalCard",
+});
+const ChatSessionSuggestions = lazy(
+  () => import("./components/chat-session-suggestions.solid.tsx"),
+  {
+    export: "ChatSessionSuggestions",
+  },
+);
+const ChatSwarmProgress = lazy(() => import("./components/chat-swarm-progress.solid.tsx"), {
+  export: "ChatSwarmProgress",
+});
+const ChatTaskSuggestionTray = lazy(() => import("./components/chat-task-suggestions.tsx"), {
+  export: "ChatTaskSuggestionTray",
+});
 
 type ChatViewInput = {
   questions: ComposerQuestions;
@@ -85,6 +98,12 @@ function ChatFooterContent(
     activities?: ChatActivityPillsProps;
   },
 ) {
+  const swarm = createMemo(() => {
+    const progress = input.props.swarm;
+    return progress && resolveChatSwarmParent(progress)?.swarm?.groups.length
+      ? progress
+      : undefined;
+  });
   const pendingInputs = () => input.frame.pendingInputs;
   const pendingButton = (page: "earlier" | "latest") => (
     <button
@@ -129,18 +148,20 @@ function ChatFooterContent(
         }
       >
         <div class="chat-inline-approval">
-          <ExecApprovalCard
-            props={{
-              approval: input.props.inlineApproval!,
-              sourceSession: input.frame.approvalSourceSession,
-              busy: input.props.approvalBusy === true,
-              connected: input.props.connected,
-              canGrant: input.props.approvalCanGrant,
-              error: input.props.approvalErrors?.get(input.props.inlineApproval!.id) ?? null,
-              variant: "inline",
-              onDecision: input.props.onApprovalDecision!,
-            }}
-          />
+          <Loading>
+            <ExecApprovalCard
+              props={{
+                approval: input.props.inlineApproval!,
+                sourceSession: input.frame.approvalSourceSession,
+                busy: input.props.approvalBusy === true,
+                connected: input.props.connected,
+                canGrant: input.props.approvalCanGrant,
+                error: input.props.approvalErrors?.get(input.props.inlineApproval!.id) ?? null,
+                variant: "inline",
+                onDecision: input.props.onApprovalDecision!,
+              }}
+            />
+          </Loading>
         </div>
       </Show>
       <Show when={!input.props.detailsEnabled}>
@@ -162,17 +183,27 @@ function ChatFooterContent(
           publication={input.activities?.publication ? undefined : input.props.githubPublication}
         />
       </Show>
-      <ChatSessionSuggestions
-        suggestions={input.props.sessionSuggestions ?? []}
-        role={input.props.sessionSuggestionRole}
-        busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
-        archived={input.props.sessionSuggestionsArchived === true}
-        canResolve={input.props.canResolveSessionSuggestions === true}
-        onResolve={(suggestion, resolution) =>
-          input.props.onResolveSessionSuggestion?.(suggestion, resolution)
-        }
-      />
-      <Show when={input.props.swarm}>{(swarm) => <ChatSwarmProgress {...swarm()} />}</Show>
+      <Show when={input.props.sessionSuggestions?.length}>
+        <Loading>
+          <ChatSessionSuggestions
+            suggestions={input.props.sessionSuggestions ?? []}
+            role={input.props.sessionSuggestionRole}
+            busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
+            archived={input.props.sessionSuggestionsArchived === true}
+            canResolve={input.props.canResolveSessionSuggestions === true}
+            onResolve={(suggestion, resolution) =>
+              input.props.onResolveSessionSuggestion?.(suggestion, resolution)
+            }
+          />
+        </Loading>
+      </Show>
+      <Show when={swarm()}>
+        {(progress) => (
+          <Loading>
+            <ChatSwarmProgress {...progress()} />
+          </Loading>
+        )}
+      </Show>
       <Show when={input.application}>
         <openclaw-plugin-contributions
           prop:kind="composer"
@@ -262,19 +293,21 @@ function ChatComposerView(input: ChatViewInput) {
           }
         >
           <div class="agent-chat__mobile-approval">
-            <ExecApprovalCard
-              props={{
-                approval: input.props.inlineApproval!,
-                sourceSession: input.frame.approvalSourceSession,
-                busy: input.props.approvalBusy ?? false,
-                connected: input.props.connected,
-                canGrant: input.props.approvalCanGrant,
-                error: input.props.approvalErrors?.get(input.props.inlineApproval!.id) ?? null,
-                variant: "inline",
-                presentation: "mobile",
-                onDecision: input.props.onApprovalDecision!,
-              }}
-            />
+            <Loading>
+              <ExecApprovalCard
+                props={{
+                  approval: input.props.inlineApproval!,
+                  sourceSession: input.frame.approvalSourceSession,
+                  busy: input.props.approvalBusy ?? false,
+                  connected: input.props.connected,
+                  canGrant: input.props.approvalCanGrant,
+                  error: input.props.approvalErrors?.get(input.props.inlineApproval!.id) ?? null,
+                  variant: "inline",
+                  presentation: "mobile",
+                  onDecision: input.props.onApprovalDecision!,
+                }}
+              />
+            </Loading>
           </div>
         </Show>
       }
@@ -605,7 +638,11 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                             <ChatTopbarNotices {...input.props} />
                           </Show>
                         </div>
-                        <ChatTaskSuggestionTray view={input.props} />
+                        <Show when={input.props.taskSuggestions?.length}>
+                          <Loading>
+                            <ChatTaskSuggestionTray view={input.props} />
+                          </Loading>
+                        </Show>
                       </div>
                     </Show>
                     <div class="chat-footer" ref={[elementRef(input.props.onFooterElementRef)]}>

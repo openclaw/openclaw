@@ -188,4 +188,33 @@ describe("models scan command", () => {
     });
     expect(after?.agents?.defaults?.models).toHaveProperty([modelRef()]);
   });
+
+  it("summarizes mixed tool and image capability results", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "sk-or-test");
+    const capabilities: Array<[string, boolean, boolean]> = [
+      ["both-a", true, true],
+      ["both-b", true, true],
+      ["tools", true, false],
+      ["images", false, true],
+      ["neither", false, false],
+    ];
+    mocks.scanOpenRouterModels.mockResolvedValue(
+      capabilities.map(([name, tool, image]) =>
+        scanResult({
+          modelRef: modelRef(name),
+          tool: { ok: tool, latencyMs: 5, skipped: false },
+          image: { ok: image, latencyMs: 5, skipped: false },
+        }),
+      ),
+    );
+    mocks.updateConfig.mockImplementation(async (mutate: (cfg: OpenClawConfig) => OpenClawConfig) =>
+      mutate({}),
+    );
+
+    await scan({ yes: true });
+
+    expect(runtime.lines).toContain(
+      "Scan results: tested 5, tool ok 3, image ok 3, tool+image ok 2, image only 1",
+    );
+  });
 });

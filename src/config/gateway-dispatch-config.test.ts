@@ -132,7 +132,6 @@ it("loads only gateway credential shell env keys on explicit fallback", async ()
     enabled: true,
     env,
     expectedKeys: ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"],
-    logger: console,
     timeoutMs: 123,
   });
   expect(config.gateway?.auth).toMatchObject({ mode: "token", token: "shell-token" });

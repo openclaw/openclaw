@@ -8,16 +8,12 @@ import { markPluginRegistryActive } from "../../plugins/registry-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import * as sessions from "./session-accessor.js";
-import {
-  agentId,
-  sessionKey,
-  useSessionMessageCutFixtures,
-} from "./session-accessor.sqlite-message-cut.test-support.js";
+import { useSessionMessageCutFixtures } from "./session-accessor.sqlite-message-cut.test-support.js";
 
 const { createSession } = useSessionMessageCutFixtures();
 
 async function nativeOwner() {
-  const { env, scope } = await createSession();
+  const { scope, params: cutParams } = await createSession();
   let binding: string | undefined = "native-history-before-cut";
   let finalized = false;
   const registry = createEmptyPluginRegistry();
@@ -58,12 +54,12 @@ async function nativeOwner() {
     read: () => ({ entry: sessions.loadSessionEntry(scope), binding, finalized }),
     run: (mode: "rewind" | "switch" | "fork", entryId = "user-2") =>
       withPluginRuntimeRegistryScope(registry, () => {
-        const params = { agentId, env, sessionKey, entryId };
+        const params = { ...cutParams, entryId };
         return mode === "rewind"
           ? sessions.rewindSessionToMessage(params)
           : mode === "switch"
             ? sessions.switchSessionBranch({ ...params, leafEntryId: entryId })
-            : sessions.forkSessionAtMessage({ ...params, targetKey: `${sessionKey}:fork` });
+            : sessions.forkSessionAtMessage({ ...params, targetKey: `${params.sessionKey}:fork` });
       }),
   };
 }

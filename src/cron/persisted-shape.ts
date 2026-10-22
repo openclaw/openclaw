@@ -5,10 +5,13 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import { assertCronActiveHours } from "./active-hours.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { decodePluginCommandSchedule } from "./plugin-command-schedule.js";
+import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "./plugin-command-schedule.types.js";
 import { isCronEventSchedule } from "./source-schedule.js";
 import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
-import { isSystemOwnedCronPayloadKind, type CronJobState } from "./types.js";
+import type { CronJobState } from "./types.js";
 
 const CRON_STATE_TIMESTAMP_FIELDS = [
   "nextRunAtMs",
@@ -44,6 +47,11 @@ function getInvalidCronJobStateTimestampField(state: unknown): string | undefine
 
 /** Rejects caller-authored state timestamps that cannot round-trip through Date and SQLite. */
 export function assertCronJobStateTimestamps(state: Partial<CronJobState>): void {
+  if (Object.hasOwn(state, "pluginCommandRuns")) {
+    throw new Error(
+      "cron state.pluginCommandRuns is private launch accounting and cannot be authored",
+    );
+  }
   const invalidField = getInvalidCronJobStateTimestampField(state);
   if (invalidField) {
     throw new Error(
@@ -58,6 +66,8 @@ type InvalidPersistedCronJobReason =
   | "missing-schedule"
   | "invalid-schedule"
   | "invalid-state"
+  | "invalid-plugin-command"
+  | "invalid-execution-policy"
   | "unsatisfiable-schedule"
   | "invalid-trigger"
   | "missing-payload"
@@ -73,6 +83,31 @@ export function getInvalidPersistedCronJobReason(
   }
   if (getInvalidCronJobStateTimestampField(candidate.state)) {
     return "invalid-state";
+  }
+  if (candidate.pluginCommand !== undefined) {
+    try {
+      decodePluginCommandSchedule(candidate.pluginCommand);
+    } catch {
+      return "invalid-plugin-command";
+    }
+  }
+  if (candidate.idleOnly !== undefined && typeof candidate.idleOnly !== "boolean") {
+    return "invalid-execution-policy";
+  }
+  if (candidate.activeHours !== undefined) {
+    const { start, end, timezone } = asRecord(candidate.activeHours);
+    if (
+      typeof start !== "string" ||
+      typeof end !== "string" ||
+      (timezone !== undefined && typeof timezone !== "string")
+    ) {
+      return "invalid-execution-policy";
+    }
+    try {
+      assertCronActiveHours({ start, end, timezone });
+    } catch {
+      return "invalid-execution-policy";
+    }
   }
   const schedule = candidate.schedule;
   if (!schedule || Array.isArray(schedule)) {
@@ -192,12 +227,26 @@ export function getInvalidPersistedCronJobReason(
   }
   const payloadRecord = payload as Record<string, unknown>;
   const payloadKind = payloadRecord.kind;
+  if (payloadKind === "pluginCommand" || candidate.pluginCommand !== undefined) {
+    // Stored form `pluginCommand`; the decoded runtime form is the reserved agentTurn sentinel.
+    const stored =
+      payloadKind === "pluginCommand" &&
+      Object.keys(payloadRecord).every((key) => key === "kind" || key === "toolsAllow");
+    const decoded =
+      payloadKind === "agentTurn" && payloadRecord.message === PLUGIN_COMMAND_SCHEDULE_MESSAGE;
+    return candidate.pluginCommand !== undefined &&
+      (stored || decoded) &&
+      Array.isArray(payloadRecord.toolsAllow) &&
+      payloadRecord.toolsAllow.every((tool) => typeof tool === "string") &&
+      scheduleKind !== "event"
+      ? null
+      : "invalid-payload";
+  }
   if (
     payloadKind !== "systemEvent" &&
     payloadKind !== "agentTurn" &&
     payloadKind !== "command" &&
-    payloadKind !== "script" &&
-    !isSystemOwnedCronPayloadKind(payloadKind)
+    payloadKind !== "script"
   ) {
     return "invalid-payload";
   }
@@ -216,6 +265,14 @@ export function getInvalidPersistedCronJobReason(
     return "invalid-payload";
   }
   if (scheduleKind === "event" && payloadKind !== "agentTurn") {
+    return "invalid-payload";
+  }
+  if (
+    payloadKind === "agentTurn" &&
+    ["skipIfScratchEmpty", "includeReasoning"].some(
+      (field) => payloadRecord[field] !== undefined && typeof payloadRecord[field] !== "boolean",
+    )
+  ) {
     return "invalid-payload";
   }
   if (payloadKind === "command") {

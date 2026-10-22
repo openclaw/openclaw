@@ -177,6 +177,7 @@ export function SidebarFile(props: {
                       scopeKey={[
                         props.runtime?.sessionKey,
                         props.content.path,
+                        props.content.sessionFileSource?.messageEntryId,
                         props.runtime?.connectionEpoch,
                       ].join("\0")}
                       download={(signal) => download()(signal)}

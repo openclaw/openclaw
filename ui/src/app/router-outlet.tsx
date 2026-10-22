@@ -1,7 +1,7 @@
 import { Dynamic, type JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import type { SolidRouteProps } from "../app-route-types.ts";
+import type { SolidRouteProps } from "../app-route-types.tsx";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { createMcpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-error.tsx";

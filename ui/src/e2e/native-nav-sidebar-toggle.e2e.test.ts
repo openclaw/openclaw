@@ -157,6 +157,120 @@ suite.define(() => {
     await page.keyboard.press("Escape");
   });
 
+  it.each([1280, 900])(
+    "animates sidebar clicks but settles shortcut toggles before the next frame at %ipx",
+    async (viewportWidth) => {
+      const page = await openPage({
+        nativeNav: false,
+        width: viewportWidth,
+        scenario: {
+          historyMessages: [
+            { role: "user", content: [{ type: "text", text: "Review the navigation changes." }] },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
+                },
+              ],
+            },
+          ],
+          methodResponses: { "sessions.list": chatSessionListResponse() },
+        },
+      });
+      await page
+        .getByText(
+          "The sidebar is ready. Use its button or keyboard shortcut to open and close it.",
+          { exact: true },
+        )
+        .waitFor();
+      await page.locator(".chat-pane--history-loading").waitFor({ state: "hidden" });
+      let sampleIndex = 0;
+      const sampleToggle = async (input: "click" | "shortcut") => {
+        const sampled = await page.evaluate(async (interaction) => {
+          const shell = document.querySelector<HTMLElement>(".shell")!;
+          const navigation = document.querySelector<HTMLElement>(".shell-nav")!;
+          const mobile = shell.classList.contains("shell--mobile-nav");
+          const width = () =>
+            mobile
+              ? navigation.getBoundingClientRect().right
+              : navigation.getBoundingClientRect().width;
+          const backdrop = shell.querySelector<HTMLElement>(".shell-nav-backdrop")!;
+          const animations = () =>
+            [shell, navigation, backdrop].flatMap((element) => element.getAnimations());
+          for (const animation of animations()) {
+            animation.finish();
+          }
+          const start = width();
+          if (interaction === "shortcut") {
+            const mac = navigator.platform.startsWith("Mac");
+            document.dispatchEvent(
+              new KeyboardEvent("keydown", {
+                key: "b",
+                code: "KeyB",
+                metaKey: mac,
+                ctrlKey: !mac,
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+          } else {
+            const toggle = mobile
+              ? shell.classList.contains("shell--nav-drawer-open")
+                ? backdrop
+                : [...document.querySelectorAll<HTMLElement>('[aria-label="Expand sidebar"]')].find(
+                    (element) => element.checkVisibility(),
+                  )!
+              : document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!;
+            toggle.click();
+          }
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
+          const firstFrame = width();
+          const current = animations();
+          const moving = current.some((animation) => animation.playState === "running");
+          for (const animation of current) {
+            animation.pause();
+          }
+          return { start, firstFrame, moving };
+        }, input);
+        if (railProofDir) {
+          await page.screenshot({ path: path.join(railProofDir, `${sampleIndex++}-${input}.png`) });
+        }
+        const end = await page.locator(".shell").evaluate((shell) => {
+          const navigation = shell.querySelector(".shell-nav")!;
+          const backdrop = shell.querySelector<HTMLElement>(".shell-nav-backdrop")!;
+          for (const element of [shell, navigation, backdrop]) {
+            for (const animation of element.getAnimations()) {
+              animation.finish();
+            }
+          }
+          const bounds = navigation.getBoundingClientRect();
+          return shell.classList.contains("shell--mobile-nav") ? bounds.right : bounds.width;
+        });
+        return { ...sampled, end };
+      };
+
+      for (const input of ["click", "shortcut", "shortcut", "click"] as const) {
+        const sample = await sampleToggle(input);
+        expect(Math.abs(sample.end - sample.start)).toBeGreaterThan(100);
+        if (input === "shortcut") {
+          expect.soft(sample.firstFrame).toBe(sample.end);
+          expect.soft(sample.moving).toBe(false);
+        } else {
+          expect(sample.moving).toBe(true);
+          expect(Math.abs(sample.firstFrame - sample.end)).toBeGreaterThan(1);
+        }
+      }
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      const reduced = await sampleToggle("click");
+      expect(reduced.firstFrame).toBe(reduced.end);
+      expect(reduced.moving).toBe(false);
+    },
+  );
+
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
     const toggle = page.locator('[data-navigation-view="sessions"]');
@@ -339,16 +453,19 @@ suite.define(() => {
     );
     const inbox = attention;
     await inbox.hover();
-    expect(await inbox.evaluate((button) => getComputedStyle(button).backgroundColor)).not.toBe(
-      "rgba(0, 0, 0, 0)",
-    );
+    await expect
+      .poll(() => inbox.evaluate((button) => getComputedStyle(button).backgroundColor))
+      .not.toBe("rgba(0, 0, 0, 0)");
     // Home is unavailable in this narrow feature catalog; enter Inbox from the profile button.
     await rail.locator(".sidebar-identity-card").focus();
     await page.keyboard.press("Shift+Tab");
     await expect
       .poll(() => inbox.evaluate((button) => button.matches(":focus-visible")))
       .toBe(true);
-    expect(await inbox.evaluate((button) => getComputedStyle(button).boxShadow)).not.toBe("none");
+    await expectStyles(inbox, { "outline-style": "solid", "outline-width": "2px" });
+    expect(await inbox.evaluate((button) => getComputedStyle(button).outlineColor)).not.toBe(
+      "rgba(0, 0, 0, 0)",
+    );
     await page.keyboard.press("Enter");
     await visible(page.locator("#sidebar-issues-panel"));
     await page.keyboard.press("Escape");

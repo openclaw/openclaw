@@ -1,4 +1,4 @@
-import { createMemo, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -48,10 +48,12 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
     profileAvatarUrl: props.user?.avatarUrl,
   }));
   const presentation = createIdentityAvatarPresentation(view);
+  const fallbackColor = () => `hsl(${view().fallback.colorSeed % 360} 48% 42%)`;
   return (
     <Show when={props.user}>
       <span
         data-avatar-state={presentation.state()}
+        style={{ "--viewer-avatar-color": fallbackColor() }}
         class={[
           "viewer-avatar",
           `viewer-avatar--${props.variant ?? "session"}`,
@@ -69,7 +71,7 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
         </Show>
         <span
           class={view().imageUrl ? "viewer-avatar__fallback" : undefined}
-          style={{ background: `hsl(${view().fallback.colorSeed % 360} 48% 42%)` }}
+          style={{ background: fallbackColor() }}
         >
           <span class="viewer-avatar__initials">{view().fallback.initials}</span>
         </span>
@@ -296,8 +298,10 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
   "openclaw-viewer-facepile",
   (props, host) => {
     host.style.display = "contents";
-    mountedFacepiles.set(host, host);
-    onCleanup(() => mountedFacepiles.delete(host));
+    onSettled(() => {
+      mountedFacepiles.set(host, host);
+      return () => mountedFacepiles.delete(host);
+    });
     return <ViewerFacepileContent {...props} />;
   },
   {

@@ -1,7 +1,12 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../src/infra/session-cost-usage-totals.js";
+import { buildAggregatesFromSessions } from "../pages/usage/view.test-support.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installUsageOverviewGateway } from "./usage-overview-fixture.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Usage server overview",
@@ -9,6 +14,94 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("preserves a quoted label when selecting a provider", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        timezoneId: "UTC",
+        viewport: { width: 1440, height: 1100 },
+        serviceWorkers: "block",
+      },
+      async ({ page }) => {
+        await page.clock.setFixedTime(new Date("2026-08-07T12:00:00Z"));
+        const sessions = ["Team Planning", "Research Review", "Team Quarterly Planning"].map(
+          (label, index) => {
+            const tokens = [100, 300, 200][index]!;
+            return {
+              key: `agent:main:quote-${index}`,
+              label,
+              agentId: "main",
+              modelProvider: index === 1 ? "anthropic" : "openai",
+              updatedAt: Date.parse("2026-08-07T12:00:00Z") - index,
+              usage: {
+                ...createEmptyCostUsageTotals(),
+                firstActivity: Date.parse("2026-08-07T12:00:00Z"),
+                input: tokens,
+                totalTokens: tokens,
+                inputCost: tokens / 100,
+                totalCost: tokens / 100,
+              },
+            };
+          },
+        );
+        const gateway = await installUsageOverviewGateway(page, {
+          methodResponses: {
+            "sessions.usage": {
+              updatedAt: Date.parse("2026-08-07T12:00:00Z"),
+              startDate: "2026-08-07",
+              endDate: "2026-08-07",
+              totals: {
+                ...createEmptyCostUsageTotals(),
+                input: 600,
+                totalTokens: 600,
+                inputCost: 6,
+                totalCost: 6,
+              },
+              sessions,
+              aggregates: buildAggregatesFromSessions(sessions),
+            },
+            "usage.status": { updatedAt: 1, providers: [] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}usage`);
+        const query = page.locator(".usage-query-input");
+        const rows = page.locator(".sessions-card .session-bar-title");
+        await expect.poll(() => rows.count()).toBe(3);
+        await query.fill('"label:Team Planning"');
+        await query.press("Enter");
+        await expect.poll(() => rows.allTextContents()).toEqual(["Team Planning"]);
+        const previous = (await gateway.getRequests("sessions.usage")).length;
+        const trigger = page.locator('[id="usage-filter-provider:trigger"]');
+        await trigger.click();
+        await page
+          .locator('[id="usage-filter-provider:content"] [data-value="option:openai"]')
+          .click();
+        const request = await gateway.waitForRequest("sessions.usage", { after: previous });
+        // Wait for the returned projection before capturing the base or repaired UI.
+        const submitted = request.params as { query: string };
+        await expect.poll(() => rows.count()).toBe(submitted.query.startsWith('"') ? 1 : 2);
+        await trigger.click();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await query.scrollIntoViewIfNeeded();
+          await fs.writeFile(
+            path.join(suite.artifactDir, "quoted-filter.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".usage-page"), [
+              query,
+              page.locator(".usage-metric-badge").first(),
+            ]),
+          );
+        }
+        expect(await query.inputValue()).toBe('"label:Team Planning" provider:openai ');
+        expect(await rows.allTextContents()).toEqual(["Team Planning"]);
+        expect(await page.locator(".usage-metric-badge").allTextContents()).toEqual([
+          "100 Tokens",
+          "$1.00 Cost",
+          "1 session",
+        ]);
+      },
+    );
+  });
+
   it("keeps all-session totals while paging and requests filters before rendering their results", async () => {
     await suite.withPage(
       {

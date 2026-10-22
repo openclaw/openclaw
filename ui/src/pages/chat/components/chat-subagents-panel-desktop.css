@@ -155,7 +155,7 @@
   overflow: hidden;
   font-weight: 500;
   line-height: 18px;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 

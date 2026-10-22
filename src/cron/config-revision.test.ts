@@ -1,7 +1,9 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
+import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -13,20 +15,16 @@ const { makeStorePath } = setupCronServiceSuite({ prefix: "cron-config-revision-
 const message = "Summarize the day";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
-  return {
+  return cronTestJob({
     id: "job-1",
     name: "daily report",
-    enabled: true,
     createdAtMs: 1_000,
     updatedAtMs: 2_000,
     schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message },
     delivery: { mode: "announce", channel: "telegram", to: "chat-1" },
-    state: {},
     ...overrides,
-  };
+  });
 }
 
 it.each([
@@ -145,12 +143,12 @@ it("matches SQLite normalization across optional fields, schedules, payloads, tr
     }),
   ];
   await saveCronStore(storePath, { version: 1, jobs });
-  const sandboxRow = loadCronRows(openOpenClawStateDatabase().db, cronStoreKey(storePath)).find(
-    (row) => row.job_id === "sandbox-stream",
+  const sandboxRow = expectDefined(
+    loadCronRows(openOpenClawStateDatabase().db, cronStoreKey(storePath)).find(
+      (row) => row.job_id === "sandbox-stream",
+    ),
+    "persisted sandbox stream row",
   );
-  if (!sandboxRow) {
-    throw new Error("expected persisted sandbox stream row");
-  }
   expect(JSON.parse(sandboxRow.job_json)).toMatchObject({
     schedule: { kind: "sandbox-stream", command: ["watch-source"] },
     streamSandbox: makeCronStreamSandboxTarget(),
@@ -163,10 +161,7 @@ it("matches SQLite normalization across optional fields, schedules, payloads, tr
   ).toMatchObject({ reason: "invalid-state", job: { schedule: { kind: "sandbox-stream" } } });
   const reloadedById = new Map((await loadCronStore(storePath)).jobs.map((job) => [job.id, job]));
   for (const job of jobs) {
-    const reloaded = reloadedById.get(job.id);
-    if (!reloaded) {
-      throw new Error(`expected persisted cron job ${job.id} to reload`);
-    }
+    const reloaded = expectDefined(reloadedById.get(job.id), `persisted cron job ${job.id}`);
     expect(resolveCronJobConfigRevision(reloaded), job.id).toBe(resolveCronJobConfigRevision(job));
   }
 });

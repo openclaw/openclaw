@@ -178,25 +178,20 @@ it("reveals newly added children while preserving a manual collapse through ordi
   expect(projection.children.isFullyShown(parent.key)).toBe(true);
 });
 
-it("keeps existing children collapsed when the list replaces a route placeholder", () => {
-  project([sessionRow("parent")], { listLoaded: false });
-  const parent = parentRow("first", "second");
-  project([parent]);
-  expect(projection.children.isExpanded(parent.key)).toBe(false);
-
-  project([parentRow("first", "second", "third")]);
-  expect(projection.children.isExpanded(parent.key)).toBe(true);
-});
-
-it("baselines restored collapsed children before revealing later additions", () => {
-  const parent = parentRow("first");
-  projection.children.restore([{ key: parent.key, childrenDisplayMode: "collapsed-by-user" }]);
-  project([parent]);
-  expect(projection.children.isExpanded(parent.key)).toBe(false);
-
-  project([parentRow("first", "second")]);
-  expect(projection.children.isExpanded(parent.key)).toBe(true);
-});
+it.each(["route placeholder", "restored collapse"])(
+  "baselines children from a %s before revealing additions",
+  (origin) => {
+    if (origin === "route placeholder") {
+      project([sessionRow("parent")], { listLoaded: false });
+    } else {
+      projection.children.restore([{ key: "parent", childrenDisplayMode: "collapsed-by-user" }]);
+    }
+    project([parentRow("first")]);
+    expect(projection.children.isExpanded("parent")).toBe(false);
+    project([parentRow("first", "second")]);
+    expect(projection.children.isExpanded("parent")).toBe(true);
+  },
+);
 
 it("preserves restored expansion through the live handoff but clears it on a later connection", () => {
   const rows = [
@@ -244,39 +239,30 @@ it("forgets expansion when a session disappears before returning", () => {
   expect(projection.children.isExpanded(parent.key)).toBe(false);
 });
 
-it("holds the subtitle across a run-id rotation while the session stays running", () => {
-  // Live repro: queued->running rotates activeRunIds; the row must not blank.
-  const running = runningRow();
-  narrate(running, "Pre-rotation activity");
-  const rotated = runningRow({ activeRunIds: ["run-two"] });
-  project([rotated]);
-  expect(subtitle(rotated).subtitle).toBe("Pre-rotation activity");
-});
-
-it("floors ambient subtitle replacement at the minimum display time", () => {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-  const running = runningRow();
-  narrate(running, "First activity");
-
-  clock.mockReturnValue(500);
-  narrate(running, "Second activity");
-  expect(subtitle(running).subtitle).toBe("First activity");
-
-  clock.mockReturnValue(2_500);
-  narrate(running, "Second activity");
-  expect(subtitle(running).subtitle).toBe("Second activity");
-});
-
-it("lets operator-critical text replace a held subtitle immediately", () => {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
-  const running = runningRow();
-  narrate(running, "Ambient activity");
-
-  clock.mockReturnValue(200);
-  const needsInput = runningRow({ agentStatusNote: "Blocked on operator input" });
-  project([needsInput]);
-  expect(subtitle(needsInput).subtitle).toBe("Blocked on operator input");
-});
+it.each([
+  ["run-id rotation", { activeRunIds: ["run-two"] }, undefined, "First activity"],
+  ["ambient replacement", {}, "Second activity", "First activity"],
+  ["operator-critical replacement", { agentStatusNote: "Blocked" }, undefined, "Blocked"],
+] satisfies [string, Partial<SidebarRecentSession>, string | undefined, string][])(
+  "holds subtitles through %s according to urgency",
+  (_name, fields, nextLine, expected) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+    narrate(runningRow(), "First activity");
+    const next = runningRow(fields);
+    clock.mockReturnValue(200);
+    if (nextLine) {
+      narrate(next, nextLine);
+    } else {
+      project([next]);
+    }
+    expect(subtitle(next).subtitle).toBe(expected);
+    if (nextLine) {
+      clock.mockReturnValue(2_500);
+      narrate(next, nextLine);
+      expect(subtitle(next).subtitle).toBe(nextLine);
+    }
+  },
+);
 
 it("clears held narration when the user disables live activity", () => {
   const running = runningRow();

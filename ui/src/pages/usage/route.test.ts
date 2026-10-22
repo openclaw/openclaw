@@ -10,7 +10,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "../../app/gateway-store.test-support.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { page } from "./route.ts";
+import { page } from "./route.tsx";
 import type { UsageRouteData } from "./types.ts";
 
 const totals = {

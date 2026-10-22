@@ -24,6 +24,7 @@ import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
+  historyMessage,
   readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventCount,
   useHistoryEventScope,
@@ -61,10 +62,6 @@ function expectHistory(
     ...fields,
     events: ids.map((id, index) => ({ event: { id }, seq: seqs[index] })),
   });
-}
-
-function historyMessage(id: string, parentId: string | null, content: unknown, role = "user") {
-  return { type: "message", id, parentId, message: { role, content } };
 }
 
 function historyPage(

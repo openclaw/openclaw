@@ -10,6 +10,7 @@ import { NewSessionModelControl } from "./model-control.ts";
 
 type ViewProps = Parameters<typeof NewSessionModelControlView>[0];
 const views = new WeakMap<NewSessionModelControl, ReturnType<typeof mountSolid<ViewProps>>>();
+const openedPickers = new WeakSet<HTMLDetailsElement>();
 const subscribe =
   <T>(listeners: Set<T>) =>
   (listener: T) => {
@@ -95,18 +96,23 @@ export function renderControl(
   let view = views.get(control);
   if (view) {
     view.update(props);
-    return view.container;
+  } else {
+    const container = document.body.appendChild(document.createElement("div"));
+    view = mountSolid(NewSessionModelControlView, props, container);
+    views.set(control, view);
+    onTestFinished(() => {
+      views.delete(control);
+      container.remove();
+    });
   }
-  const container = document.body.appendChild(document.createElement("div"));
-  view = mountSolid(NewSessionModelControlView, props, container);
-  views.set(control, view);
-  onTestFinished(() => {
-    views.delete(control);
-    container.remove();
-  });
+  const container = view.container;
   for (const picker of container.querySelectorAll<HTMLDetailsElement>(
-    ".chat-controls__model-picker, .chat-controls__effort-picker",
+    ".chat-controls__model-picker[data-chat-native-picker], .chat-controls__effort-picker[data-chat-native-picker]",
   )) {
+    if (openedPickers.has(picker)) {
+      continue;
+    }
+    openedPickers.add(picker);
     picker.open = true;
     picker.dispatchEvent(new Event("toggle"));
     flush();

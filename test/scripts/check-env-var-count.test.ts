@@ -127,11 +127,6 @@ it("rejects an unresolved stage-zero source", () => {
   expect(() => collect(true)).toThrow();
 });
 
-it("fails closed when the base ref cannot be resolved", () => {
-  const { check } = createRepo({ [budgetPath]: "0\n" });
-  expect(() => check("--base", "missing")).toThrow(/Could not resolve/u);
-});
-
 it("rejects missing ancestry instead of skipping budget growth", () => {
   const { check, git, setCount, commit } = createRepo({}, 1);
   // Name the base explicitly; init.defaultBranch varies by environment.

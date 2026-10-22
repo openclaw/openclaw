@@ -8,6 +8,9 @@ import { configFor, modelDefinition } from "../../agents/model-auth.fixtures.tes
 import type * as ModelRuntimeChoice from "../../agents/model-runtime-choice.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -77,19 +80,35 @@ it.each([
       const key = `agent:main:dashboard:native-create-${admin}`;
       const respond = vi.fn<RespondFn>();
       try {
-        await coreGatewayHandlers["sessions.create"]!({
-          req: { type: "req", id: "native-create", method: "sessions.create" },
-          params: {
-            key,
-            agentId: "main",
-            model: "acp-opencode/selected",
-            agentRuntime: "acp-opencode",
+        await withPluginRuntimeGenerationScope(
+          {
+            // Runtime registration and selection use the same prepared plugin inventory.
+            metadataSnapshot: createPluginMetadataSnapshotFixture({
+              plugins: [
+                {
+                  id: "acpx",
+                  enabledByDefault: true,
+                  activation: { onAgentHarnesses: ["acp-opencode"] },
+                },
+              ],
+            }),
+            pluginRegistry: requireActivePluginRegistry(),
           },
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => true,
-        });
+          () =>
+            coreGatewayHandlers["sessions.create"]!({
+              req: { type: "req", id: "native-create", method: "sessions.create" },
+              params: {
+                key,
+                agentId: "main",
+                model: "acp-opencode/selected",
+                agentRuntime: "acp-opencode",
+              },
+              client,
+              context,
+              respond,
+              isWebchatConnect: () => true,
+            }),
+        );
         expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
         const entry = loadSessionEntry({ agentId: "main", sessionKey: key });
         expect([entry?.nativeRuntimeConsent, entry?.permissionMode, entry?.sandboxMode]).toEqual(

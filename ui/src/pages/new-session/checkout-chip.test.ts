@@ -1,11 +1,13 @@
 import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resolveCheckoutChip } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
 import type { DraftRepositoryState } from "./discovery.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
+import type { DraftRepositoryRead } from "./draft-repository-state.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 type CheckoutFixture = {
@@ -19,6 +21,8 @@ type CheckoutFixture = {
   repositoryUnavailable?: boolean;
   branches: Omit<Extract<DraftRepositoryState, { kind: "git" }>, "kind"> | null;
   branchesLoading: boolean;
+  repositoryRead?: DraftRepositoryRead<unknown>;
+  checkoutRead?: DraftRepositoryRead<unknown>;
   baseRef: string;
   worktreeName: string;
   submitting: boolean;
@@ -33,6 +37,53 @@ type CheckoutFixture = {
   onConfirm: () => void;
 };
 
+function keydown(element: Element, key: string) {
+  return element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+}
+
+function afterHide(container: Element) {
+  container
+    .querySelector(".new-session-page__checkout-popover")!
+    .dispatchEvent(new CustomEvent("overlay-after-hide"));
+}
+
+function waitForOpen(container: Element) {
+  return waitForSolid(() =>
+    expect(
+      container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
+    ).toBe("open"),
+  );
+}
+
+function checkoutFixture(overrides: Partial<CheckoutFixture> = {}): CheckoutFixture {
+  return {
+    state: { label: "New worktree from main" },
+    remotePlacement: false,
+    folderLabel: "OpenClaw",
+    worktree: true,
+    worktreeAvailable: true,
+    branches: {
+      repoRoot: "/repo",
+      branches: [{ name: "main", kind: "local" }],
+      headBranch: "main",
+    },
+    branchesLoading: false,
+    baseRef: "main",
+    worktreeName: "",
+    submitting: false,
+    pendingPlacement: false,
+    popoverOpen: true,
+    onPopoverShow: vi.fn(),
+    onPopoverHide: vi.fn(),
+    onPopoverAfterHide: vi.fn(),
+    onSelectWorktree: vi.fn(),
+    onBaseRefInput: vi.fn(),
+    onWorktreeNameInput: vi.fn(),
+    onConfirm: vi.fn(),
+    ...overrides,
+  };
+}
+
 function mountCheckout(initial: CheckoutFixture) {
   const [params, setParams] = createSignal(initial);
   const { state: place, browser, gateway } = createRepositoryFixture();
@@ -45,6 +96,9 @@ function mountCheckout(initial: CheckoutFixture) {
       get: () => (params().repository ? { url: "https://example.com/repo.git" } : undefined),
     },
     currentCheckoutUnavailableReason: { get: () => params().currentCheckoutUnavailableReason },
+    repositoryState: {
+      get: () => ({ repositoryRead: params().repositoryRead, checkoutRead: params().checkoutRead }),
+    },
     repository: {
       get: () => {
         const current = params();
@@ -107,108 +161,60 @@ function mountCheckout(initial: CheckoutFixture) {
 describe("Checkout chip state", () => {
   it.each([
     ...([false, true] as const).flatMap((repository) =>
-      (["main", "release", ""] as const).map((baseRef) => ({
-        destination: "cloud" as const,
-        repository,
-        worktree: !repository,
-        baseRef,
-        label: baseRef ? `From ${baseRef}` : "Starting branch",
-      })),
+      (["main", "release", ""] as const).map(
+        (baseRef) =>
+          [
+            "cloud",
+            repository,
+            !repository,
+            baseRef,
+            undefined,
+            baseRef ? `From ${baseRef}` : "Starting branch",
+          ] as const,
+      ),
     ),
-    {
-      destination: "remote",
-      repository: true,
-      worktree: false,
-      baseRef: "release",
-      label: "Remote checkout from release",
+    ["remote", true, false, "release", undefined, "Remote checkout from release"],
+    ["remote", true, false, "", undefined, "Remote checkout"],
+    ["remote", false, true, "", undefined, "New worktree"],
+    ["local", false, false, "main", "feature", "feature"],
+    ["local", false, false, "main", undefined, "Current checkout"],
+    ["local", false, true, "main", "feature", "New worktree from main"],
+    ["local", false, true, "", undefined, "New worktree"],
+  ] as const)(
+    "%s repository=%s worktree=%s base=%s head=%s: %s",
+    (destination, repository, worktree, baseRef, headBranch, label) => {
+      expect(
+        resolveCheckoutChip({
+          destination,
+          repository,
+          worktree,
+          baseRef,
+          headBranch,
+          worktreeName: "",
+        }),
+      ).toEqual({ label });
     },
-    {
-      destination: "remote",
-      repository: true,
-      worktree: false,
-      baseRef: "",
-      label: "Remote checkout",
-    },
-    {
-      destination: "remote",
-      worktree: true,
-      baseRef: "",
-      label: "New worktree",
-    },
-    {
-      destination: "local",
-      worktree: false,
-      headBranch: "feature",
-      baseRef: "main",
-      label: "feature",
-    },
-    {
-      destination: "local",
-      worktree: false,
-      baseRef: "main",
-      label: "Current checkout",
-    },
-    {
-      destination: "local",
-      worktree: true,
-      headBranch: "feature",
-      baseRef: "main",
-      label: "New worktree from main",
-    },
-    {
-      destination: "local",
-      worktree: true,
-      baseRef: "",
-      label: "New worktree",
-    },
-  ] as const)("$destination worktree=$worktree: $label", ({ label, ...params }) => {
-    expect(resolveCheckoutChip({ worktreeName: "", ...params })).toEqual({ label });
-  });
+  );
 
   it.each([
-    {
-      destination: "local",
-      worktree: true,
-      name: " release-proof ",
-      label: "Worktree · release-proof",
-    },
-    {
-      destination: "remote",
-      worktree: true,
-      name: "release-proof",
-      label: "Worktree · release-proof",
-    },
-    { destination: "local", worktree: true, name: "   ", label: "New worktree from main" },
-    { destination: "local", worktree: false, name: "release-proof", label: "main" },
-    {
-      destination: "cloud",
-      worktree: true,
-      name: "release-proof",
-      label: "Worktree · release-proof",
-    },
-    {
-      destination: "cloud",
-      worktree: true,
-      repository: true,
-      name: "release-proof",
-      label: "From main",
-    },
-    {
-      destination: "remote",
-      worktree: false,
-      repository: true,
-      name: "release-proof",
-      label: "Remote checkout from main",
-    },
+    ["local", true, false, " release-proof ", "Worktree · release-proof"],
+    ["remote", true, false, "release-proof", "Worktree · release-proof"],
+    ["local", true, false, "   ", "New worktree from main"],
+    ["local", false, false, "release-proof", "main"],
+    ["cloud", true, false, "release-proof", "Worktree · release-proof"],
+    ["cloud", true, true, "release-proof", "From main"],
+    ["remote", false, true, "release-proof", "Remote checkout from main"],
   ] as const)(
-    "labels $destination checkout with name=$name: $label",
-    ({ name, label, ...params }) => {
+    "labels %s checkout with worktree=%s, repository=%s, name=%s: %s",
+    (destination, worktree, repository, name, label) => {
       expect(
         resolveCheckoutChip({
           headBranch: "main",
           baseRef: "main",
           worktreeName: name,
-          ...params,
+          destination,
+          worktree,
+          repository,
         }),
       ).toEqual({ label });
     },
@@ -239,46 +245,31 @@ describe("Checkout chip state", () => {
       const onBaseRefInput = vi.fn();
       const onWorktreeNameInput = vi.fn();
       const onConfirm = vi.fn();
-      const { container } = mountCheckout({
-        state: { label: worktree ? "New worktree from main" : "feature" },
-        remotePlacement,
-        currentCheckoutUnavailableReason,
-        repository,
-        folderLabel: "OpenClaw",
-        worktree,
-        worktreeAvailable: true,
-        branches: {
-          repoRoot: "/repo",
-          branches: emptyBranches
-            ? []
-            : [
-                { name: "main", kind: "local" },
-                { name: "release/next", kind: "local" },
-              ],
-          headBranch: "feature",
-        },
-        branchesLoading: false,
-        baseRef: "main",
-        worktreeName: "",
-        submitting: false,
-        pendingPlacement: false,
-        popoverOpen: true,
-        onPopoverShow: () => undefined,
-        onPopoverHide: () => undefined,
-        onPopoverAfterHide: () => undefined,
-        onSelectWorktree,
-        onBaseRefInput,
-        onWorktreeNameInput,
-        onConfirm,
-      });
-
-      await waitForSolid(() =>
-        expect(
-          container
-            .querySelector(".new-session-page__checkout-popover")
-            ?.getAttribute("data-phase"),
-        ).toBe("open"),
+      const { container } = mountCheckout(
+        checkoutFixture({
+          state: { label: worktree ? "New worktree from main" : "feature" },
+          remotePlacement,
+          currentCheckoutUnavailableReason,
+          repository,
+          worktree,
+          branches: {
+            repoRoot: "/repo",
+            branches: emptyBranches
+              ? []
+              : [
+                  { name: "main", kind: "local" },
+                  { name: "release/next", kind: "local" },
+                ],
+            headBranch: "feature",
+          },
+          onSelectWorktree,
+          onBaseRefInput,
+          onWorktreeNameInput,
+          onConfirm,
+        }),
       );
+
+      await waitForOpen(container);
 
       if (worktree || repository) {
         const baseRef = container.querySelector("input")!;
@@ -302,10 +293,8 @@ describe("Checkout chip state", () => {
         inputs[0]!.value = "release/next";
         inputs[0]!.dispatchEvent(new Event("input", { bubbles: true }));
         expect(onBaseRefInput).toHaveBeenCalledWith("release/next");
-        inputs[0]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-        container
-          .querySelector(".new-session-page__checkout-popover")!
-          .dispatchEvent(new CustomEvent("overlay-after-hide"));
+        keydown(inputs[0]!, "Enter");
+        afterHide(container);
         expect(onConfirm).toHaveBeenCalledOnce();
         expect(container.textContent).toContain(
           "Clones OpenClaw on the selected runner. No Gateway checkout is created.",
@@ -360,8 +349,8 @@ describe("Checkout chip state", () => {
           "main",
           "release/next",
         ]);
-        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        keydown(baseRef, "ArrowDown");
+        keydown(baseRef, "ArrowDown");
         expect(baseRef.getAttribute("aria-activedescendant")).toBe(
           "new-session-worktree-branch-suggestion-1",
         );
@@ -373,32 +362,22 @@ describe("Checkout chip state", () => {
           expect(name.hasAttribute("aria-activedescendant")).toBe(false);
           expect(suggestions[1]!.getAttribute("aria-selected")).toBe("true");
         }
-        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        keydown(baseRef, "Enter");
         expect(onBaseRefInput).toHaveBeenLastCalledWith("release/next");
         expect(onConfirm).not.toHaveBeenCalled();
         (suggestions[1] as HTMLButtonElement).click();
         expect(onBaseRefInput).toHaveBeenLastCalledWith("release/next");
-        name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-        container
-          .querySelector(".new-session-page__checkout-popover")!
-          .dispatchEvent(new CustomEvent("overlay-after-hide"));
+        keydown(name, "Enter");
+        afterHide(container);
         expect(onConfirm).toHaveBeenCalledOnce();
         container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!.click();
-        await waitForSolid(() =>
-          expect(
-            container
-              .querySelector(".new-session-page__checkout-popover")
-              ?.getAttribute("data-phase"),
-          ).toBe("open"),
-        );
-        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+        await waitForOpen(container);
+        keydown(baseRef, "ArrowDown");
         const branchWrites = onBaseRefInput.mock.calls.length;
         name.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Enter", cancelable: true, bubbles: true }),
         );
-        container
-          .querySelector(".new-session-page__checkout-popover")!
-          .dispatchEvent(new CustomEvent("overlay-after-hide"));
+        afterHide(container);
         expect(onBaseRefInput).toHaveBeenCalledTimes(branchWrites);
         expect(onConfirm).toHaveBeenCalledTimes(2);
         expect(container.textContent).toContain(
@@ -413,43 +392,100 @@ describe("Checkout chip state", () => {
     },
   );
 
-  it("keeps suggestion identities current and only confirms valid input", async () => {
-    const onConfirm = vi.fn();
-    const onPopoverShow = vi.fn();
-    const onPopoverHide = vi.fn();
-    const onPopoverAfterHide = vi.fn();
+  it("preserves editable fields through repository discovery failure and retry", async () => {
+    const initial = createDeferred();
+    const initialRead = { completed: initial.promise };
     const params: CheckoutFixture = {
-      state: { label: "New worktree from main" },
+      state: { label: "New worktree" },
       remotePlacement: false,
-      folderLabel: "OpenClaw",
+      folderLabel: "Fixture project",
       worktree: true,
-      worktreeAvailable: true,
-      branches: {
-        repoRoot: "/repo",
-        branches: [{ name: "main", kind: "local" }],
-        headBranch: "main",
-      },
-      branchesLoading: false,
-      baseRef: "main",
-      worktreeName: "picker-fixes",
+      worktreeAvailable: false,
+      branches: null,
+      branchesLoading: true,
+      repositoryRead: initialRead,
+      checkoutRead: initialRead,
+      currentCheckoutUnavailableReason: "Checking fixture checkout",
+      baseRef: "typed-branch",
+      worktreeName: "typed-name",
       submitting: false,
       pendingPlacement: false,
       popoverOpen: true,
-      onPopoverShow,
-      onPopoverHide,
-      onPopoverAfterHide,
+      onPopoverShow: vi.fn(),
+      onPopoverHide: vi.fn(),
+      onPopoverAfterHide: vi.fn(),
       onSelectWorktree: vi.fn(),
       onBaseRefInput: vi.fn(),
       onWorktreeNameInput: vi.fn(),
-      onConfirm,
+      onConfirm: vi.fn(),
     };
     const { container, update } = mountCheckout(params);
-    const renderNamed = (worktreeName: string) => update({ ...params, worktreeName });
     await waitForSolid(() =>
       expect(
         container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
       ).toBe("open"),
     );
+    const branch = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
+    const name = container.querySelector<HTMLInputElement>("[data-worktree-name]")!;
+    name.focus();
+    expect(branch.placeholder).toBe("Loading…");
+    expect(container.querySelector<HTMLButtonElement>('[data-value="checkout"]')?.disabled).toBe(
+      true,
+    );
+    initial.reject(new Error("Fixture branch lookup failed"));
+    update({
+      ...params,
+      branchesLoading: false,
+      repositoryUnavailable: true,
+      currentCheckoutUnavailableReason: "Fixture checkout unavailable",
+    });
+    await waitForSolid(() => expect(branch.placeholder).toBe("From"));
+    expect(container.querySelector("#new-session-worktree-base-ref")).toBe(branch);
+    expect(container.querySelector("[data-worktree-name]")).toBe(name);
+    expect(document.activeElement).toBe(name);
+    expect([branch.value, name.value]).toEqual(["typed-branch", "typed-name"]);
+
+    const retry = createDeferred();
+    const retryRead = { completed: retry.promise };
+    update({ ...params, repositoryRead: retryRead, checkoutRead: retryRead });
+    const branches = { repoRoot: "/fixture", branches: [{ name: "main", kind: "local" as const }] };
+    update({
+      ...params,
+      repositoryRead: retryRead,
+      checkoutRead: retryRead,
+      currentCheckoutUnavailableReason: undefined,
+      branchesLoading: false,
+      branches,
+      worktreeAvailable: true,
+    });
+    retry.resolve();
+    await waitForSolid(() =>
+      expect(container.querySelector('[data-worktree-suggestion="main"]')).not.toBeNull(),
+    );
+    expect(container.querySelector("#new-session-worktree-base-ref")).toBe(branch);
+    expect(container.querySelector("[data-worktree-name]")).toBe(name);
+    expect(document.activeElement).toBe(name);
+    expect([branch.value, name.value]).toEqual(["typed-branch", "typed-name"]);
+    expect(container.querySelector<HTMLButtonElement>('[data-value="checkout"]')?.disabled).toBe(
+      false,
+    );
+  });
+
+  it("keeps suggestion identities current and only confirms valid input", async () => {
+    const onConfirm = vi.fn();
+    const onPopoverShow = vi.fn();
+    const onPopoverHide = vi.fn();
+    const onPopoverAfterHide = vi.fn();
+    const params = checkoutFixture({
+      worktreeName: "picker-fixes",
+      onPopoverShow,
+      onPopoverHide,
+      onPopoverAfterHide,
+      onConfirm,
+    });
+    const { container, update } = mountCheckout(params);
+    const renderNamed = (worktreeName: string) => update({ ...params, worktreeName });
+    await waitForOpen(container);
     onPopoverShow.mockClear();
 
     const trigger = container.querySelector<HTMLButtonElement>("#new-session-checkout-trigger")!;
@@ -461,11 +497,7 @@ describe("Checkout chip state", () => {
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     trigger.click();
     flush();
-    await waitForSolid(() =>
-      expect(
-        container.querySelector(".new-session-page__checkout-popover")?.getAttribute("data-phase"),
-      ).toBe("open"),
-    );
+    await waitForOpen(container);
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
     expect(onPopoverShow).toHaveBeenCalledOnce();
     expect(onPopoverAfterHide).not.toHaveBeenCalled();
@@ -482,22 +514,16 @@ describe("Checkout chip state", () => {
     expect(onPopoverShow).not.toHaveBeenCalled();
     expect(onPopoverHide).not.toHaveBeenCalled();
     expect(onPopoverAfterHide).not.toHaveBeenCalled();
-    container
-      .querySelectorAll("input")[1]!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    keydown(container.querySelectorAll("input")[1]!, "Enter");
     suggestionPopup.dispatchEvent(
       new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }),
     );
     expect(onConfirm).not.toHaveBeenCalled();
-    container
-      .querySelector(".new-session-page__checkout-popover")!
-      .dispatchEvent(new CustomEvent("overlay-after-hide"));
+    afterHide(container);
     expect(onConfirm).toHaveBeenCalledOnce();
 
     renderNamed("Not Valid");
-    container
-      .querySelectorAll("input")[1]!
-      .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    keydown(container.querySelectorAll("input")[1]!, "Enter");
     expect(onConfirm).toHaveBeenCalledOnce();
 
     const renderBranches = (names: string[]) =>
@@ -509,15 +535,14 @@ describe("Checkout chip state", () => {
         },
       });
     const baseRef = container.querySelector<HTMLInputElement>("#new-session-worktree-base-ref")!;
-    const keydown = (key: string) =>
-      baseRef.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    const pressBranch = (key: string) => keydown(baseRef, key);
     renderBranches(["main", "release"]);
-    keydown("ArrowDown");
+    pressBranch("ArrowDown");
     renderBranches(["release", "main"]);
-    keydown("Enter");
+    pressBranch("Enter");
     expect(params.onBaseRefInput).toHaveBeenLastCalledWith("main");
 
-    keydown("ArrowDown");
+    pressBranch("ArrowDown");
     const retired = container.querySelector<HTMLButtonElement>(
       '[data-worktree-suggestion="release"]',
     )!;
@@ -526,9 +551,9 @@ describe("Checkout chip state", () => {
     vi.mocked(params.onBaseRefInput).mockClear();
     retired.click();
     expect(params.onBaseRefInput).not.toHaveBeenCalled();
-    keydown("ArrowDown");
-    keydown("ArrowDown");
-    keydown("Enter");
+    pressBranch("ArrowDown");
+    pressBranch("ArrowDown");
+    pressBranch("Enter");
     expect(params.onBaseRefInput).toHaveBeenCalledExactlyOnceWith("next");
   });
 });

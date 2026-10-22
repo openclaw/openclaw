@@ -1,7 +1,6 @@
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { updateExecutorEntrypoints } from "../cli/cli-entrypoint.test-support.js";
@@ -12,8 +11,8 @@ import {
   createManagedHandoffTempDirTracker,
   readManagedHandoffArtifacts,
 } from "./update-managed-service-handoff-artifacts.test-support.js";
+import { createReadyManagedServiceChild } from "./update-managed-service-handoff-command.test-support.js";
 import { createManagedServiceBoundaryCleanup } from "./update-managed-service-handoff-process.test-support.js";
-import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const leaseCleanups = new Set<() => void>();
@@ -40,24 +39,9 @@ afterEach(async () => {
 });
 
 beforeEach(() => {
-  spawnMock.mockImplementation((_command: string, args: string[]) => {
-    const child = Object.assign(new EventEmitter(), {
-      pid: process.pid,
-      exitCode: null,
-      signalCode: null,
-      stdin: new PassThrough(),
-      stdout: new PassThrough(),
-      unref: vi.fn(),
-    });
-    process.nextTick(() =>
-      signalMockManagedUpdateHandoffReady({
-        child,
-        paramsPath: readManagedHandoffArtifacts(args).paramsPath,
-        cleanups: leaseCleanups,
-      }),
-    );
-    return child;
-  });
+  spawnMock.mockImplementation((_command: string, args: string[]) =>
+    createReadyManagedServiceChild(args, leaseCleanups),
+  );
 });
 
 it.runIf(process.platform !== "win32").each([

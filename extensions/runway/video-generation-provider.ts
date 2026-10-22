@@ -4,12 +4,10 @@ import {
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
-  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperationJson,
-  postJsonRequest,
-  readProviderJsonObjectResponse,
+  postJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderApiKeyHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -255,7 +253,7 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         timeoutMs: req.timeoutMs,
         label: "Runway video generation",
       });
-      const { response, release } = await postJsonRequest({
+      const submitted = await postJsonResponse({
         url: `${baseUrl}${endpoint}`,
         headers,
         body: requestBody,
@@ -266,81 +264,74 @@ export function buildRunwayVideoGenerationProvider(): VideoGenerationProvider {
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
+        errorLabel: "Runway video generation failed",
+        objectResponse: true,
       });
-      try {
-        await assertOkOrThrowHttpError(response, "Runway video generation failed");
-        const submitted = await readProviderJsonObjectResponse(
-          response,
-          "Runway video generation failed",
-        );
-        const taskId = normalizeOptionalString(submitted.id);
-        if (!taskId) {
-          throw new Error("Runway video generation response missing task id");
-        }
-        const completed = await pollProviderOperationJson<RunwayTaskDetailResponse>({
-          url: `${baseUrl}/v1/tasks/${taskId}`,
-          headers,
-          deadline:
-            deadline.deadlineAtMs === undefined
-              ? createProviderOperationDeadline({
-                  timeoutMs: DEFAULT_TIMEOUT_MS,
-                  label: `Runway video generation task ${taskId}`,
-                })
-              : { ...deadline, label: `Runway video generation task ${taskId}` },
-          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-          fetchFn,
-          ssrfPolicy: { allowPrivateNetwork },
-          dispatcherPolicy,
-          maxAttempts: MAX_POLL_ATTEMPTS,
-          pollIntervalMs: POLL_INTERVAL_MS,
-          requestFailedMessage: "Runway video status request failed",
-          timeoutMessage: `Runway video generation task ${taskId} did not finish in time`,
-          isComplete: (payload) => readRunwayTaskStatus(payload) === "SUCCEEDED",
-          getFailureMessage: (payload) => {
-            const status = readRunwayTaskStatus(payload);
-            return status === "FAILED" || status === "CANCELLED"
-              ? readRunwayFailureMessage(payload.failure) ||
-                  `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`
-              : undefined;
-          },
-        });
-        const outputUrls = readRunwayOutputUrls(completed);
-        const timeoutMs = createProviderOperationTimeoutResolver({
-          deadline,
-          defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-        });
-        const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
-        const videos: GeneratedVideoAsset[] = [];
-        for (const [index, url] of outputUrls.entries()) {
-          videos.push(
-            await downloadGeneratedVideoAsset({
-              url,
-              timeoutMs,
-              defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-              fetchFn,
-              provider: "runway",
-              label: "Runway generated video download",
-              requestFailedMessage: "Runway generated video download failed",
-              index,
-              maxBytes,
-              validateBinaryResponse: true,
-              metadata: { sourceUrl: url },
-            }),
-          );
-        }
-        return {
-          videos,
-          model: normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL,
-          metadata: {
-            taskId,
-            status: normalizeOptionalString(completed.status),
-            endpoint,
-            outputUrls,
-          },
-        };
-      } finally {
-        await release();
+      const taskId = normalizeOptionalString(submitted.id);
+      if (!taskId) {
+        throw new Error("Runway video generation response missing task id");
       }
+      const completed = await pollProviderOperationJson<RunwayTaskDetailResponse>({
+        url: `${baseUrl}/v1/tasks/${taskId}`,
+        headers,
+        deadline:
+          deadline.deadlineAtMs === undefined
+            ? createProviderOperationDeadline({
+                timeoutMs: DEFAULT_TIMEOUT_MS,
+                label: `Runway video generation task ${taskId}`,
+              })
+            : { ...deadline, label: `Runway video generation task ${taskId}` },
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+        fetchFn,
+        ssrfPolicy: { allowPrivateNetwork },
+        dispatcherPolicy,
+        maxAttempts: MAX_POLL_ATTEMPTS,
+        pollIntervalMs: POLL_INTERVAL_MS,
+        requestFailedMessage: "Runway video status request failed",
+        timeoutMessage: `Runway video generation task ${taskId} did not finish in time`,
+        isComplete: (payload) => readRunwayTaskStatus(payload) === "SUCCEEDED",
+        getFailureMessage: (payload) => {
+          const status = readRunwayTaskStatus(payload);
+          return status === "FAILED" || status === "CANCELLED"
+            ? readRunwayFailureMessage(payload.failure) ||
+                `Runway video generation ${normalizeLowercaseStringOrEmpty(status)}`
+            : undefined;
+        },
+      });
+      const outputUrls = readRunwayOutputUrls(completed);
+      const timeoutMs = createProviderOperationTimeoutResolver({
+        deadline,
+        defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+      });
+      const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "video");
+      const videos: GeneratedVideoAsset[] = [];
+      for (const [index, url] of outputUrls.entries()) {
+        videos.push(
+          await downloadGeneratedVideoAsset({
+            url,
+            timeoutMs,
+            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+            fetchFn,
+            provider: "runway",
+            label: "Runway generated video download",
+            requestFailedMessage: "Runway generated video download failed",
+            index,
+            maxBytes,
+            validateBinaryResponse: true,
+            metadata: { sourceUrl: url },
+          }),
+        );
+      }
+      return {
+        videos,
+        model: normalizeOptionalString(req.model) ?? DEFAULT_RUNWAY_MODEL,
+        metadata: {
+          taskId,
+          status: normalizeOptionalString(completed.status),
+          endpoint,
+          outputUrls,
+        },
+      };
     },
   };
 }

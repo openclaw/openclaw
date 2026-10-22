@@ -25,6 +25,7 @@ import { seedClawPackageBootstrap } from "./bootstrap.js";
 import {
   ClawCronInstallError,
   clawCronGatewayJobConfigRevision,
+  clawCronGatewayJobMatchesRef,
   installClawCronJobsStateless,
   type ClawCronGateway,
   type PersistedClawCronRef,
@@ -64,7 +65,10 @@ export type StatelessClawAddOptions = {
   skillConsent?: ClawSkillInstallConsent;
   reloadPlugins?: PluginInstallBatchReload;
   runtimeBatch?: ClawPluginRuntimeOptions["runtimeBatch"];
-  cronGateway?: Pick<ClawCronGateway, "add" | "list" | "waitUntilAgentAvailable"> &
+  cronGateway?: Pick<
+    ClawCronGateway,
+    "add" | "list" | "waitUntilAgentAvailable" | "writeScratch" | "enable"
+  > &
     Partial<Pick<ClawCronGateway, "get" | "remove">>;
   commitConfig?: ConfigCommit;
   configWriteOptions?: ConfigWriteOptions;
@@ -253,6 +257,11 @@ export async function stageClawAddHostRequirementsStateless(
               throw new Error("Gateway automation rollback is unavailable");
             }
             const live = await options.cronGateway.get(ref.schedulerJobId);
+            if (!clawCronGatewayJobMatchesRef(plan.agent.finalId, ref, live)) {
+              throw new Error(
+                "Agent automations changed during Claw Add; rollback left it intact.",
+              );
+            }
             const revision = clawCronGatewayJobConfigRevision(live);
             if (!revision) {
               throw new Error(`Automation ${ref.schedulerJobId} has no rollback revision`);
@@ -426,6 +435,13 @@ export async function stageClawAddHostRequirementsStateless(
           } catch (error) {
             if (error instanceof ClawCronInstallError) {
               cronJobs = error.cronJobs;
+              if (error.code === "cron_scratch_import_incomplete") {
+                // A scratch conflict or lost write acknowledgement may contain user edits.
+                return result("partial", {
+                  code: error.code,
+                  message: `${error.message} The new agent and its automations were kept. Inspect their scratch and enabled state before retrying.`,
+                });
+              }
             }
             return await fail(
               error,

@@ -6,7 +6,7 @@ import { createFakeRestClient } from "./test-builders.test-support.js";
 const messageId = "18446744073709551615";
 const paddedId = ` ${messageId} `;
 const messagePath = `/channels/c1/messages/${messageId}`;
-const pinPath = `/channels/c1/pins/${messageId}`;
+const pinPath = `/channels/c1/messages/pins/${messageId}`;
 const emoji = "%F0%9F%91%8D";
 const reactionPath = `${messagePath}/reactions/${emoji}`;
 

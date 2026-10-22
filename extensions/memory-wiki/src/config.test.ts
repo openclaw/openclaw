@@ -78,7 +78,7 @@ describe("resolveMemoryWikiConfig", () => {
     expect(resolved.vault.path).toBe(path.join(expectedRoot, "support"));
   });
 
-  describe.each([
+  it.each([
     {
       name: "unsafe-local access",
       config: { vaultMode: "unsafe-local", vault: { scope: "agent" } },
@@ -92,16 +92,12 @@ describe("resolveMemoryWikiConfig", () => {
       message: "obsidian.useOfficialCli cannot be enabled with vault.scope=agent",
     },
   ])("rejects $name for agent-scoped vaults", ({ config, issuePath, message }) => {
-    it("rejects through the runtime schema with an actionable issue", () => {
-      expect(memoryWikiConfigSchema.safeParse?.(config)).toMatchObject({
-        success: false,
-        error: {
-          issues: expect.arrayContaining([expect.objectContaining({ path: issuePath, message })]),
-        },
-      });
+    expect(memoryWikiConfigSchema.safeParse?.(config)).toMatchObject({
+      success: false,
+      error: {
+        issues: expect.arrayContaining([expect.objectContaining({ path: issuePath, message })]),
+      },
     });
-    it("rejects through the manifest schema", () => {
-      expect(validateManifestConfig(config)).toBe(false);
-    });
+    expect(validateManifestConfig(config)).toBe(false);
   });
 });

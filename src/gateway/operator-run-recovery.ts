@@ -13,6 +13,7 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -28,7 +29,10 @@ import {
   captureGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
 } from "./device-revocation.js";
-import { resumeGatewayOperatorAccessGrant } from "./operator-access-policy.js";
+import {
+  GatewayOperatorAccessDeniedError,
+  resumeGatewayOperatorAccessGrant,
+} from "./operator-access-policy.js";
 import {
   onOperatorRolePolicyChanged,
   resolveOperatorRolePolicyForAssignment,
@@ -117,7 +121,11 @@ async function restoreGatewayOperatorSnapshot(params: {
   const signal = new AbortController();
   const revoke = (cause?: unknown) =>
     signal.abort(
-      new Error("Restart recovery operator authority changed; start a new user turn.", { cause }),
+      cause instanceof GatewayOperatorRecoveryAuthorizationError
+        ? new GatewayOperatorRecoveryAuthorizationError(undefined, { cause })
+        : new Error("Restart recovery operator authority changed; start a new user turn.", {
+            cause,
+          }),
     );
   const assertLifetime = () => {
     if (references === 0) {
@@ -159,7 +167,11 @@ async function restoreGatewayOperatorSnapshot(params: {
         throw new Error("Restart recovery authentication owner changed; start a new user turn.");
       }
       subscriptions.push(
-        generationOwner.onInvalidated(snapshot.sharedGeneration, revoke, snapshot.authPolicy),
+        generationOwner.onInvalidated(
+          snapshot.sharedGeneration,
+          () => revoke(new GatewayOperatorRecoveryAuthorizationError()),
+          snapshot.authPolicy,
+        ),
       );
     }
     const device = captureGatewayDeviceRevocation(
@@ -184,16 +196,22 @@ async function restoreGatewayOperatorSnapshot(params: {
       );
       if (
         !device.isCurrent() ||
+        (snapshot.sharedGeneration !== undefined &&
+          context.sharedGatewaySessionGenerationState !== generationOwner)
+      ) {
+        throw new Error("Restart recovery operator source policy changed.");
+      }
+      if (
         !isOperatorRoleSourcePolicyCurrent(
           snapshot.rolePolicy,
           sourceRolePolicy(role),
           snapshot.scopes,
         ) ||
-        !isGatewayAuthGrantCurrent(authPolicy, cfg) ||
-        (snapshot.sharedGeneration !== undefined &&
-          context.sharedGatewaySessionGenerationState !== generationOwner)
+        !isGatewayAuthGrantCurrent(authPolicy, cfg)
       ) {
-        throw new Error("Restart recovery operator source policy changed.");
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Restart recovery operator source policy changed.",
+        );
       }
       // Retain this config's issued policy only after validating the original grant.
       authPolicy = captureGatewayAuthPolicy(cfg, authPolicy);
@@ -218,7 +236,7 @@ async function restoreGatewayOperatorSnapshot(params: {
     subscriptions.push(
       onOperatorRolePolicyChanged((change) => {
         if (change.kind === "assignment" && change.profileId === snapshot.profileId) {
-          revoke();
+          revoke(new GatewayOperatorRecoveryAuthorizationError());
         } else if (change.kind === "config" && change.context === gatewayOwner) {
           recheck();
         }
@@ -237,7 +255,9 @@ async function restoreGatewayOperatorSnapshot(params: {
         (profile.githubLogin ?? null) !== snapshot.githubLogin ||
         githubAccountIds?.some((accountId) => !profile.githubAccountIds?.includes(accountId))
       ) {
-        throw new Error("Restart recovery operator identity changed.");
+        throw new GatewayOperatorRecoveryAuthorizationError(
+          "Restart recovery operator identity changed.",
+        );
       }
       githubAccountIds ??= profile.githubAccountIds ?? [];
       return { cfg, profile };
@@ -263,8 +283,14 @@ async function restoreGatewayOperatorSnapshot(params: {
         // A policy callback can change committed identity/config synchronously.
         return assertFacts().cfg;
       } catch (error) {
-        revoke(error);
-        throw error;
+        const failure =
+          signal.signal.reason instanceof GatewayOperatorRecoveryAuthorizationError
+            ? signal.signal.reason
+            : error instanceof GatewayOperatorAccessDeniedError
+              ? new GatewayOperatorRecoveryAuthorizationError(error.message, { cause: error })
+              : error;
+        revoke(failure);
+        throw failure;
       }
     };
     subscriptions.push(onUserProfilesChanged(recheck));
@@ -274,7 +300,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       if (
         !isPairedDeviceTokenIdentityCurrent(paired, "operator", snapshot.device, snapshot.scopes)
       ) {
-        revoke();
+        revoke(new GatewayOperatorRecoveryAuthorizationError());
       }
     }
     assertRecoveryCurrent();

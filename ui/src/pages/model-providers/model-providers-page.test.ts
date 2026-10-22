@@ -328,7 +328,7 @@ describe("ModelProvidersPage agent scope", () => {
       );
       await drainPageUpdates(page);
       expect(page.view.props.authStatus).toBeNull();
-      expect(page.view.props.refreshing).toBe(false);
+      expect(page.view.props.coreReceipt).toBeNull();
       expect(page.renderRoot.textContent).not.toContain("retired@example.test");
 
       request.mockImplementation(originalRequest);
@@ -496,6 +496,8 @@ describe("ModelProvidersPage agent scope", () => {
     });
     await page.updateComplete;
     expect(page.renderRoot.textContent).toContain(page.view.props.messages.openai?.warning);
+    expect(page.view.props.error).toBeNull();
+    expect(page.querySelector(".model-providers__provider-list .provider-usage-error")).toBeNull();
   });
 
   it("removes stored API keys through the rendered action and retains its warning", async () => {
@@ -703,12 +705,30 @@ describe("ModelProvidersPage agent scope", () => {
       updatedAt: 1,
     });
     await page.updateComplete;
-    request.mockRejectedValueOnce(new Error("Priority could not be saved"));
+    const original = request.getMockImplementation()!;
+    let rejectOrder = true;
+    request.mockImplementation(async (method, ...args) => {
+      if (method === "models.authOrderSet" && rejectOrder) {
+        rejectOrder = false;
+        throw new Error("Priority could not be saved");
+      }
+      return original(method, ...args);
+    });
     page
       .querySelector<HTMLButtonElement>(
         '[data-profile-id="openai:two"] .model-providers__profile-grip',
       )!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.authOrderSet", {
+        provider: "openai",
+        profileIds: ["openai:two", "openai:one"],
+        agentId: "main",
+      }),
+    );
+    await vi.waitFor(() => expect(toast.toast?.message).toBe("Priority could not be saved"));
+    await toast.updateComplete;
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(toast.querySelector('[role="status"]')?.textContent).toContain(
         "Priority could not be saved",

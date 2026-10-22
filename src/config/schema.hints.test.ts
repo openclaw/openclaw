@@ -29,11 +29,13 @@ it("accounts for every root config section", () => {
 
 it("describes omitted settings without adding them to authored config", () => {
   const { uiHints } = buildConfigSchemaCore();
-  const config = OpenClawSchema.parse({ cron: {}, plugins: {} });
+  const config = OpenClawSchema.parse({ cron: { triggers: {} }, plugins: {} });
   for (const section of ["cron", "plugins"] as const) {
     expect(uiHints[`${section}.enabled`]).toMatchObject({ placeholder: "Default: On" });
     expect(config[section]).not.toHaveProperty("enabled");
   }
+  expect(uiHints["cron.triggers.enabled"]).toMatchObject({ placeholder: "Default: On" });
+  expect(config.cron?.triggers).not.toHaveProperty("enabled");
 });
 
 it("maps sensitive fields through every structural Zod type", () => {

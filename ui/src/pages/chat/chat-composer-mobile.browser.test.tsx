@@ -28,8 +28,7 @@ it("keeps mobile editing, field and caret while the native composer menu owns fo
     capabilityMenu: {
       basePath: "",
       skills: [],
-      skillsLoading: false,
-      skillsError: false,
+      skillsRead: null,
       mcpServers: [],
       toolsEffectiveResult: null,
       toolsEffectiveLoading: false,

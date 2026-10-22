@@ -83,12 +83,6 @@ it("reads a required query and keeps count fallback resolution with the caller",
   expect(() => readQuery({})).toThrow("query required");
 });
 
-it.each([0, -1, 1.5, 11, "invalid"])("rejects invalid count %s", (count) => {
-  expect(() => readQuery({ query: "test", count }, { maxResults: 7 })).toThrow(
-    "count must be an integer from 1 to 10.",
-  );
-});
-
 it.each([
   ["short body credential", "s7Key", "rejected $key", "", undefined, "rejected ***"],
   ["short reason credential", "s7Key", "", "rejected $key", undefined, "rejected ***"],

@@ -1,5 +1,21 @@
 import type { PluginApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach } from "vitest";
+import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+export function useSlackInstallations() {
+  const registrations: Array<ReturnType<typeof registerSlackInstallationState>> = [];
+  afterEach(() => {
+    for (const registration of registrations.splice(0)) {
+      registration.release();
+    }
+  });
+  return (...args: Parameters<typeof registerSlackInstallationState>) => {
+    const registration = registerSlackInstallationState(...args);
+    registrations.push(registration);
+    return registration;
+  };
+}
 
 export function buildConfig(
   overrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>>,

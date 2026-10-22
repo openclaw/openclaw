@@ -11,6 +11,7 @@ import { personActivityRouting } from "../../components/person-activity-link.ts"
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   projectPresenceViewers,
@@ -47,11 +48,11 @@ import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import { projectSubagentStatus } from "./chat-subagent-wait.ts";
+import { countRunningSubagents } from "./chat-subagent-wait.ts";
 import { isChatRunWorking } from "./components/chat-composer.tsx";
 import type { ChatDetails, ChatDetailsViewProps } from "./components/chat-details.tsx";
-import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import "./components/chat-header-session-menu.ts";
+import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import type {
   HeaderMenuAction,
   HeaderMenuActionKind,
@@ -74,6 +75,8 @@ import {
   type SidebarLayout,
   type SidebarSlotId,
 } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 type PaneControls = Pick<
   ReturnType<typeof createChatPaneRails>,
@@ -226,7 +229,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         })
       : null;
     const renameDisabledReason = !renameAccess
-      ? t("sessionsView.actionRequiresConnection")
+      ? sharingSnapshot.phase !== "connected"
+        ? t("sessionsView.actionRequiresConnection")
+        : undefined
       : renameAccess.allowed
         ? undefined
         : renameAccess.reason;
@@ -234,7 +239,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       agentsList: this.context.agents.state.agentsList,
       hello: this.context.gateway.snapshot.hello,
     });
-    const archiveAllowed = Boolean(row && this.canArchiveHeaderSession(row));
     const deleteAllowed = Boolean(
       row &&
       !isNativeCatalogAdoptionSessionKey(row.key) &&
@@ -541,14 +545,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       panelMenuActions,
       layoutMenuActions,
       dashboardWidgetMenu: boardWidgetMenu,
-      runningSubagentCount: projectSubagentStatus(
-        {
-          ...this.projectChildRoster(this.resolveChatReadTarget()),
-          selectedSession: row,
-          messages: this.state?.chatMessages ?? [],
-        },
-        false,
-      ).running,
+      runningSubagentCount: countRunningSubagents({
+        ...this.projectChildRoster(this.resolveChatReadTarget()),
+        selectedSession: row,
+      }),
       sidebarLayout: currentLayout,
       panelDefinitions,
       onLayoutChange: (layout, options) => this.state?.updateSidebarLayout(layout, options),
@@ -629,11 +629,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 this.context.runtimeConfig.canPatch === false,
               compact: this.narrow,
               mobile: this.mergedChrome,
-              prewarm:
-                this.presented &&
-                this.state.connected &&
-                !this.state.chatLoading &&
-                (!this.boardProviderLease || this.boardProviderLease.provider.hasLoadedSnapshot),
               copyMarkdownAllowed: canCopySessionMarkdown(this.context.gateway.snapshot),
               splitAllowed: canSplitSessionView(),
               settings: this.state.settings,
@@ -658,7 +653,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               actionDisabledReasons,
               forkDisabled: this.state.sessionsLoading || row.modelSelectionLocked === true,
               forkFromLastCompleted: row.hasActiveRun === true,
-              archiveAllowed,
+              archiveAllowed: this.canArchiveHeaderSession(row),
               archiveShortcut: this.active && this.presented && !this.onboarding,
               deleteAllowed,
               onOpen: this.onHeaderMenuOpen,

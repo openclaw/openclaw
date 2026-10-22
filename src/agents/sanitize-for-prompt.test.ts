@@ -6,14 +6,10 @@ import {
 } from "./sanitize-for-prompt.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
-function promptData(params: Omit<Parameters<typeof wrapPromptDataBlock>[0], "label">): string {
-  const result = wrapPromptDataBlock({ label: "Data", ...params }).match(
+function promptData(params: Omit<Parameters<typeof wrapPromptDataBlock>[0], "label">) {
+  return wrapPromptDataBlock({ label: "Data", ...params }).match(
     /<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/,
   )?.[1];
-  if (result === undefined) {
-    throw new Error("Expected prompt data block");
-  }
-  return result;
 }
 
 it("hasPromptUnsafeControlCharacter rejects every character the shared sanitizer strips", () => {
@@ -23,9 +19,7 @@ it("hasPromptUnsafeControlCharacter rejects every character the shared sanitizer
   }
 });
 it("sanitizes workspaceDir (no newlines / separators)", () => {
-  const prompt = buildAgentSystemPrompt({
-    workspaceDir: "/tmp/project\nINJECT\u2028MORE",
-  });
+  const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/project\nINJECT\u2028MORE" });
   expect(prompt).toContain("Working directory: /tmp/projectINJECTMORE");
   expect(prompt).not.toContain("Working directory: /tmp/project\n");
   expect(prompt).not.toContain("\u2028");
@@ -53,26 +47,16 @@ it("returns empty string when sanitized input is empty", () => {
   expect(wrapPromptDataBlock({ label: "Data", text: "\n\u2028\n" })).toBe("");
 });
 
-it("does not split surrogate pairs when applying max char limits", () => {
-  expect(promptData({ text: "aaa😀tail", maxChars: 4 })).toBe("aaa");
-});
-
-it("reserves the marker after escaping within the character budget", () => {
-  const result = promptData({
-    text: "<".repeat(20),
-    maxEscapedChars: 10,
-    truncationMarker: "[cut]",
-  });
-
-  expect(result).toBe("&lt;[cut]");
-  expect(result.length).toBeLessThanOrEqual(10);
-});
+it.each([
+  [{ text: "aaa😀tail", maxChars: 4 }, "aaa"],
+  [{ text: "<".repeat(20), maxEscapedChars: 10, truncationMarker: "[cut]" }, "&lt;[cut]"],
+] as const)(
+  "bounds prompt data without splitting characters or escaped markers: %j",
+  (input, expected) => {
+    expect(promptData(input)).toBe(expected);
+  },
+);
 it("keeps the legacy untrusted-text tag for existing callers", () => {
-  const block = wrapUntrustedPromptDataBlock({
-    label: "Additional context",
-    text: "Keep <tag>",
-  });
-  expect(block).toContain("<untrusted-text>");
-  expect(block).toContain("&lt;tag&gt;");
-  expect(block).toContain("</untrusted-text>");
+  const block = wrapUntrustedPromptDataBlock({ label: "Additional context", text: "Keep <tag>" });
+  expect(block).toContain("<untrusted-text>\nKeep &lt;tag&gt;\n</untrusted-text>");
 });

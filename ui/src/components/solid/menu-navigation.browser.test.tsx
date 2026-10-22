@@ -99,6 +99,30 @@ describe("Solid menu navigation", () => {
     const [revision, setRevision] = createSignal(0);
     mountMenu(() => {
       const controls = createMenuControls();
+      const agentItems = (): MenuEntry[] => [
+        {
+          id: "alpha",
+          label: "Alpha",
+          as: "div",
+          content: (
+            <>
+              Alpha
+              <button
+                ref={controls.ref()}
+                data-form-control
+                tabindex="-1"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  pins += 1;
+                }}
+              >
+                Pin Alpha
+              </button>
+            </>
+          ),
+        },
+        { id: "beta", label: revision() ? "Beta refreshed" : "Beta" },
+      ];
       return {
         controls,
         get items(): MenuEntry[] {
@@ -112,31 +136,8 @@ describe("Solid menu navigation", () => {
             {
               kind: "group",
               id: "agents",
-              render: (children) => <div class="agent-list">{children}</div>,
-              items: [
-                {
-                  id: "alpha",
-                  label: "Alpha",
-                  as: "div",
-                  content: (
-                    <>
-                      Alpha
-                      <button
-                        ref={controls.ref()}
-                        data-form-control
-                        tabindex="-1"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          pins += 1;
-                        }}
-                      >
-                        Pin Alpha
-                      </button>
-                    </>
-                  ),
-                },
-                { id: "beta", label: revision() ? "Beta refreshed" : "Beta" },
-              ],
+              render: (renderItems) => <div class="agent-list">{renderItems(agentItems)}</div>,
+              items: agentItems(),
             },
             {
               id: "footer",

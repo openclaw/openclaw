@@ -252,6 +252,12 @@ describe("chat transcript invalidation", () => {
     async function renderPreview() {
       render(renderChatThread(props, transcript), container);
       transcript.update();
+      await vi.dynamicImportSettled();
+      if (props.transcriptVisible !== false) {
+        await waitForSolid(() =>
+          expect(find(container, ".chat-video-preview__content")).not.toBeNull(),
+        );
+      }
       await flushDeferredRowPrune();
     }
 
@@ -740,9 +746,12 @@ describe("chat transcript invalidation", () => {
     render(renderChatThread(props, transcript), container);
     transcript.start();
     transcript.update();
+    await vi.dynamicImportSettled();
     await flushDeferredRowPrune();
 
-    expect(find(container, '[data-content-kind="mcp-app"]')).not.toBeNull();
+    await waitForSolid(() =>
+      expect(find(container, '[data-content-kind="mcp-app"]')).not.toBeNull(),
+    );
     expect(find(container, "[data-pin-widget]")).toBeNull();
 
     for (const canPin of [true, false]) {

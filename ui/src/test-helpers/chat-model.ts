@@ -12,7 +12,6 @@ const catalogModel = (id: string, name: string, provider = "openai"): ModelCatal
 });
 
 export const OPENAI_GPT5_MINI_MODEL = catalogModel("gpt-5-mini", "GPT-5 Mini");
-export const DEEPSEEK_CHAT_MODEL = catalogModel("deepseek-chat", "DeepSeek Chat", "deepseek");
 
 export const DEFAULT_CHAT_MODEL_CATALOG = [
   catalogModel("gpt-5", "GPT-5"),

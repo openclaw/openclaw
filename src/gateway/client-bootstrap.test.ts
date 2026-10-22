@@ -60,10 +60,6 @@ function inspectLocalCertificate() {
   });
 }
 
-function expectCertificateInspection(inspect: boolean) {
-  expect(mocks.certificate.mock.calls).toEqual(inspect ? [[TLS_CONFIG]] : []);
-}
-
 function localTlsExpectation(source: string) {
   return { url: LOCAL_URL, source, pin: LOCAL_PIN, inspect: true, scope: undefined };
 }
@@ -188,11 +184,13 @@ it("selects local credentials for a hosted Gateway port with a remote primary", 
     env: { OPENCLAW_GATEWAY_URL: "wss://environment.example" },
   });
 
-  expect(result.url).toBe("ws://127.0.0.1:19876");
-  expect(result.auth.token).toBe("local-token");
-  expect(result.urlOverrideSource).toBeUndefined();
-  expect(result.deviceAuthScope).toBeUndefined();
-  expect(result.sshTunnel).toBeUndefined();
+  expect(result).toMatchObject({
+    url: "ws://127.0.0.1:19876",
+    auth: { token: "local-token" },
+  });
+  for (const field of ["urlOverrideSource", "deviceAuthScope", "sshTunnel"] as const) {
+    expect(result[field]).toBeUndefined();
+  }
   expect(mocks.details).toHaveBeenCalledWith({
     config,
     url: undefined,
@@ -227,12 +225,9 @@ it.each([
 ])("selects TLS ownership for $name", async ({ url, source, config, pin, scope, inspect }) => {
   mocks.details.mockReturnValue(connection(url, source));
   inspectLocalCertificate();
-  const result = await bootstrap({
-    config,
-    gatewayUrl: source === "cli --url" ? url : undefined,
-  });
+  const result = await bootstrap({ config, gatewayUrl: source === "cli --url" ? url : undefined });
   expect(result.tlsFingerprint).toBe(pin);
-  expectCertificateInspection(inspect);
+  expect(mocks.certificate.mock.calls).toEqual(inspect ? [[TLS_CONFIG]] : []);
   if (scope) {
     expect(result.deviceAuthScope).toBe(scope);
     expect(result.sshTunnel).toBeUndefined();
@@ -268,7 +263,7 @@ it.each([
     });
     expect(result.auth.token).toBe(explicit ? "explicit-token" : "configured-token");
     expect(result.tlsFingerprint).toBe(pin);
-    expectCertificateInspection(Boolean(pin));
+    expect(mocks.certificate.mock.calls).toEqual(pin ? [[TLS_CONFIG]] : []);
   },
 );
 

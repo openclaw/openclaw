@@ -237,12 +237,6 @@ export async function runMantisBeforeAfter(
           directoryPath: worktreeDir,
           repoRoot,
         });
-        assertMantisCommandNotAborted({
-          command: "git",
-          args: worktreeAddArgs,
-          execution: worktreeAddExecution,
-          lane,
-        });
         await runMantisCommand({
           command: "git",
           args: worktreeAddArgs,

@@ -5,9 +5,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { Message, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
-  adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  peekAdjustedParamsForToolCall,
   preExecutionBlockedToolCallIds,
+  recordAdjustedParamsForToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
   resetAdjustedParamsByToolCallIdForTests,
@@ -308,10 +309,7 @@ describe("tool terminal outcome observer", () => {
     const runId = "run-2";
     const toolCallId = "call-1";
     recordToolExecutionTracked(toolCallId, runId);
-    adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), {
-      action: "send",
-      to: "channel:adjusted",
-    });
+    recordAdjustedParamsForToolCall(toolCallId, { action: "send", to: "channel:adjusted" }, runId);
 
     const resolution = createToolTerminalObserver(runId)({
       toolCallId,
@@ -328,7 +326,7 @@ describe("tool terminal outcome observer", () => {
       sideEffectEvidence: false,
       lastToolError: { mutatingAction: false },
     });
-    expect(adjustedParamsByToolCallId.get(buildAdjustedParamsKey({ runId, toolCallId }))).toEqual({
+    expect(peekAdjustedParamsForToolCall(toolCallId, runId)).toEqual({
       action: "send",
       to: "channel:adjusted",
     });
@@ -338,10 +336,7 @@ describe("tool terminal outcome observer", () => {
     const runId = "run-racing-timeout";
     const toolCallId = "call-racing-timeout";
     recordToolExecutionStarted(toolCallId, runId);
-    adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), {
-      action: "send",
-      to: "channel:adjusted",
-    });
+    recordAdjustedParamsForToolCall(toolCallId, { action: "send", to: "channel:adjusted" }, runId);
 
     const resolution = createToolTerminalObserver(runId)({
       toolCallId,

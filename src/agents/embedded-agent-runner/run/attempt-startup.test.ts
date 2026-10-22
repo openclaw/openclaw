@@ -15,6 +15,11 @@ const mocks = vi.hoisted(() => ({
   applySkillEnvOverridesFromSnapshot: vi.fn(),
   mapSandboxSkillEntriesForPrompt: vi.fn(),
   prepareInstalledSkillCatalog: vi.fn(),
+  resolveEmbeddedRunSkillEntries: vi.fn(() => ({
+    shouldLoadSkillEntries: true,
+    skillEntries: [],
+    loadSkillEntries: vi.fn(() => []),
+  })),
 }));
 
 vi.mock("../../installed-skill-runtime.js", () => ({
@@ -26,12 +31,9 @@ vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverridesFromSnapshot: mocks.applySkillEnvOverridesFromSnapshot,
 }));
 
+// mock-isolation: inject skill entries without filesystem discovery while testing startup cleanup.
 vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
-  resolveEmbeddedRunSkillEntries: vi.fn(() => ({
-    shouldLoadSkillEntries: true,
-    skillEntries: [],
-    loadSkillEntries: vi.fn(() => []),
-  })),
+  resolveEmbeddedRunSkillEntries: mocks.resolveEmbeddedRunSkillEntries,
 }));
 
 vi.mock("../sandbox-skills.js", async (importOriginal) => ({
@@ -41,6 +43,9 @@ vi.mock("../sandbox-skills.js", async (importOriginal) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.prepareInstalledSkillCatalog.mockReset().mockReturnValue([]);
+  mocks.applySkillEnvOverrides.mockReturnValue(() => {});
+  mocks.applySkillEnvOverridesFromSnapshot.mockReturnValue(() => {});
 });
 
 it.each([false, true])(
@@ -72,4 +77,57 @@ it("does not load skills or apply their environment during settled finalization"
   for (const mock of Object.values(mocks)) {
     expect(mock).not.toHaveBeenCalled();
   }
+});
+
+it.each([{ modelRun: true }, { promptMode: "none" as const }])(
+  "does not discover skills or apply their environment for a detached tool-free raw run: %j",
+  async (rawMode) => {
+    const prepared = await prepare({
+      ...rawMode,
+      sessionPersistence: "detached",
+      disableTools: true,
+      config: {},
+    });
+
+    expect(prepared.skillsPrompt).toBe("");
+    expect(prepared.skillsSnapshotForRun).toBeUndefined();
+    expect(prepared.codeModeSkills).toEqual([]);
+    expect(mocks.resolveEmbeddedRunSkillEntries).not.toHaveBeenCalled();
+    expect(mocks.applySkillEnvOverrides).not.toHaveBeenCalled();
+    expect(mocks.applySkillEnvOverridesFromSnapshot).not.toHaveBeenCalled();
+    expect(mocks.prepareInstalledSkillCatalog).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  {
+    label: "durable raw",
+    sessionPersistence: "durable" as const,
+    modelRun: true,
+    disableTools: true,
+  },
+  {
+    label: "detached ordinary",
+    sessionPersistence: "detached" as const,
+    modelRun: false,
+    disableTools: true,
+  },
+  {
+    label: "detached tool-capable raw",
+    sessionPersistence: "detached" as const,
+    modelRun: true,
+    disableTools: false,
+  },
+])("preserves skill preparation for $label runs", async ({ label: _label, ...mode }) => {
+  const prepared = await prepare({
+    ...mode,
+    config: {},
+    skillsSnapshot: { prompt: "skills prompt", skills: [] },
+  });
+  prepared.restoreSkillEnv();
+
+  expect(prepared.skillsPrompt).toBe("skills prompt");
+  expect(mocks.resolveEmbeddedRunSkillEntries).toHaveBeenCalledOnce();
+  expect(mocks.applySkillEnvOverridesFromSnapshot).toHaveBeenCalledOnce();
+  expect(mocks.prepareInstalledSkillCatalog).toHaveBeenCalledOnce();
 });

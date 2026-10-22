@@ -352,11 +352,13 @@ it("renders and clears mutation errors on only the affected add-on", async () =>
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected");
   expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
+  expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false);
   expect(element.textContent).toContain("Could not update Active memory");
   expect(element.textContent).not.toContain("Could not update Memory wiki");
 
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected", false);
+  await waitText(element, "Could not update Active memory", false);
   retry.resolve(committed("active-memory", false));
 });
 

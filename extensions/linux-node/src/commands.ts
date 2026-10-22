@@ -452,14 +452,7 @@ export function createLinuxNodeCommands(
         isCapabilityEnabledForHost(context, "location") &&
         findWhereAmI(context.env) !== null,
       handle: async (paramsJSON) => {
-        if (platform !== "linux") {
-          throw new Error("LOCATION_DISABLED: Linux node host required");
-        }
-        if (!config.location.enabled) {
-          throw new Error(
-            "LOCATION_DISABLED: enable plugins.entries.linux-node.config.location.enabled and restart the node service",
-          );
-        }
+        assertLinuxCapability("location", "LOCATION_DISABLED");
         const whereAmI = findWhereAmI();
         if (!whereAmI) {
           throw new Error("LOCATION_UNAVAILABLE: where-am-i not found");

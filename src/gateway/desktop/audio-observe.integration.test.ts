@@ -50,13 +50,11 @@ it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
     const authenticated = createDeferred();
     const stopped = createDeferred();
     const pcm = new PassThrough();
-    const start = vi.fn(async () => ({
-      stream: pcm,
-      stop: async () => {
-        pcm.destroy();
-        stopped.resolve();
-      },
-    }));
+    const stop = vi.fn(async () => {
+      pcm.destroy();
+      stopped.resolve();
+    });
+    const start = vi.fn(async (_signal: AbortSignal) => ({ stream: pcm, stop }));
     registry = {
       claimStream: () => gatewayStream,
       attachObserver: () => (outcome === "stale-owner" ? undefined : { release() {} }),
@@ -130,5 +128,7 @@ it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
     await audioClosed;
     await stopped.promise;
     expect(pcm.destroyed).toBe(true);
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(start.mock.calls[0]?.[0].aborted).toBe(true);
   },
 );

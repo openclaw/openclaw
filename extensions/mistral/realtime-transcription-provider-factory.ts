@@ -37,11 +37,6 @@ const MISTRAL_REALTIME_DEFAULT_MODEL = "voxtral-mini-transcribe-realtime-2602";
 const MISTRAL_REALTIME_DEFAULT_SAMPLE_RATE = 8000;
 const MISTRAL_REALTIME_DEFAULT_ENCODING: MistralRealtimeTranscriptionEncoding = "pcm_mulaw";
 const MISTRAL_REALTIME_DEFAULT_DELAY_MS = 800;
-const MISTRAL_REALTIME_CONNECT_TIMEOUT_MS = 10_000;
-const MISTRAL_REALTIME_CLOSE_TIMEOUT_MS = 5_000;
-const MISTRAL_REALTIME_MAX_RECONNECT_ATTEMPTS = 5;
-const MISTRAL_REALTIME_RECONNECT_DELAY_MS = 1000;
-const MISTRAL_REALTIME_MAX_QUEUED_BYTES = 2 * 1024 * 1024;
 const MISTRAL_REALTIME_SPEECH_CONTENT = /[\p{L}\p{N}]/u;
 const MISTRAL_REALTIME_MAX_PARTIAL_TRANSCRIPT_BYTES = 256 * 1024;
 const MISTRAL_REALTIME_PARTIAL_TRANSCRIPT_OVERFLOW_MESSAGE =
@@ -205,11 +200,6 @@ export function buildMistralRealtimeTranscriptionProvider({
           return url.toString();
         },
         headers: { Authorization: `Bearer ${apiKey}` },
-        connectTimeoutMs: MISTRAL_REALTIME_CONNECT_TIMEOUT_MS,
-        closeTimeoutMs: MISTRAL_REALTIME_CLOSE_TIMEOUT_MS,
-        maxReconnectAttempts: MISTRAL_REALTIME_MAX_RECONNECT_ATTEMPTS,
-        reconnectDelayMs: MISTRAL_REALTIME_RECONNECT_DELAY_MS,
-        maxQueuedBytes: MISTRAL_REALTIME_MAX_QUEUED_BYTES,
         connectTimeoutMessage: "Mistral realtime transcription connection timeout",
         reconnectLimitMessage: "Mistral realtime transcription reconnect limit reached",
         sendAudio: (audio, transport) => {

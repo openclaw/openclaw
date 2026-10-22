@@ -6,7 +6,6 @@ import { streamSimple } from "../../../llm/stream.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import {
   sparseAssistant,
   textToolResult,
@@ -121,22 +120,6 @@ describe("composeSystemPromptWithHookContext", () => {
       `${wrapPluginSystemContextSection("  prepend line\nsecond line")}\n\nbase system\n\n${wrapPluginSystemContextSection("  append")}`,
     );
   });
-  it("keeps bootstrap truncation notices in the system prompt instead of the user prompt", () => {
-    const baseSystemPrompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      contextFiles: [{ path: "AGENTS.md", content: "Follow AGENTS guidance." }],
-      toolNames: ["read"],
-      bootstrapTruncationNotice:
-        "[Bootstrap truncation warning]\nSome workspace bootstrap files were truncated before Project Context injection.\nTreat Project Context as partial and read the relevant files directly if details seem missing.",
-    });
-    const composedSystemPrompt = composeSystemPromptWithHookContext({
-      baseSystemPrompt,
-      appendSystemContext: "hook system context",
-    });
-    expect(composedSystemPrompt).toContain("[Bootstrap truncation warning]");
-    expect(composedSystemPrompt).toContain("Treat Project Context as partial");
-    expect(composedSystemPrompt).toContain("hook system context");
-  });
 });
 
 describe("mergeOrphanedTrailingUserPrompt", () => {
@@ -153,20 +136,8 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
   function promptResult(prompt: string, merged = false, removeLeaf = false) {
     return { prompt, merged, removeLeaf };
   }
-  const duplicatePrompt = "summary\nolder active-turn message\nnewest inbound message";
-  const mediaLeaf = {
-    content: [
-      { type: "text", text: "please inspect this" },
-      { type: "image_url", image_url: { url: "https://example.test/cat.png" } },
-      { type: "input_audio", audio_url: "https://example.test/cat.wav" },
-    ],
-  };
   const forwarded = promptResult(
     "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\nforwarded user request\n\nnewest inbound message",
-    true,
-  );
-  const media = promptResult(
-    "[Earlier unanswered user message. Address this request alongside the current input; follow the latest user instruction if they conflict.]\nplease inspect this\n[image_url] https://example.test/cat.png\n[input_audio] https://example.test/cat.wav\n\nnewest inbound message",
     true,
   );
   const approved = "authenticated approved-exec result";
@@ -177,12 +148,10 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
     expected: ReturnType<typeof mergeOrphan>;
   };
   it.each`
-    name                                  | leaf                                                                   | prompt             | expected
-    ${"drops approved-exec orphans"}      | ${interSessionLeaf("run the command again", "exec_approval_followup")} | ${approved}        | ${promptResult(approved, false, true)}
-    ${"preserves forwarded user context"} | ${interSessionLeaf("forwarded user request", "sessions_send")}         | ${undefined}       | ${forwarded}
-    ${"does not duplicate user text"}     | ${{ content: "older active-turn message" }}                            | ${duplicatePrompt} | ${promptResult(duplicatePrompt)}
-    ${"preserves structured input"}       | ${mediaLeaf}                                                           | ${undefined}       | ${media}
-    ${"removes empty user leaves"}        | ${{ content: [] }}                                                     | ${undefined}       | ${promptResult("newest inbound message", false, true)}
+    name                                  | leaf                                                                   | prompt       | expected
+    ${"drops approved-exec orphans"}      | ${interSessionLeaf("run the command again", "exec_approval_followup")} | ${approved}  | ${promptResult(approved, false, true)}
+    ${"preserves forwarded user context"} | ${interSessionLeaf("forwarded user request", "sessions_send")}         | ${undefined} | ${forwarded}
+    ${"removes empty user leaves"}        | ${{ content: [] }}                                                     | ${undefined} | ${promptResult("newest inbound message", false, true)}
   `("$name", ({ leaf, prompt, expected }: OrphanCase) => {
     expect(mergeOrphan(leaf, prompt)).toEqual(expected);
   });

@@ -146,19 +146,35 @@ describe("together video generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("downloads immediately completed submissions without polling", async () => {
+  it.each([
+    { video_url: "https://example.com/completed.mp4" },
+    { url: "https://example.com/completed.mp4" },
+    {
+      video_url: " https://example.com/completed.mp4 ",
+      url: "https://example.com/secondary.mp4",
+    },
+    [
+      { video_url: " ", url: " " },
+      { url: "https://example.com/completed.mp4" },
+      { video_url: "https://example.com/secondary.mp4" },
+    ],
+  ])("downloads completed output %j without polling", async (outputs) => {
     const release = mockSubmission({
       id: "video_completed",
       model,
       status: "completed",
-      outputs: { video_url: "https://example.com/completed.mp4" },
+      outputs,
     });
     fetchWithTimeoutMock.mockResolvedValueOnce(videoResponse("completed-video", "mp4"));
     const result = await generateVideo();
     expect(fetchWithTimeoutMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       model,
-      metadata: { status: "completed", videoId: "video_completed" },
+      metadata: {
+        status: "completed",
+        videoId: "video_completed",
+        videoUrl: "https://example.com/completed.mp4",
+      },
     });
     expect(release).toHaveBeenCalledOnce();
   });

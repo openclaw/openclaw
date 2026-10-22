@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import { request, type IncomingMessage, type ServerResponse } from "node:http";
 import { connect, createServer, type ListenOptions, type Socket } from "node:net";
@@ -240,7 +241,13 @@ function makeWsClient(
   params: { role?: "node" | "operator"; mode?: "node" | "webchat"; expiresAtMs?: number } = {},
 ): GatewayWsClient {
   return {
-    socket: {} as unknown as WebSocket,
+    socket: Object.assign(new EventEmitter(), {
+      readyState: WebSocket.OPEN,
+      bufferedAmount: 0,
+      send: vi.fn(),
+      close: vi.fn(),
+      terminate: vi.fn(),
+    }),
     connect: {
       role: params.role ?? "node",
       client: { mode: params.mode ?? "node" },

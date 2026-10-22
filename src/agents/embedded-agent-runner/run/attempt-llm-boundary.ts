@@ -353,10 +353,10 @@ export function installRuntimeContextMessageForPrompt(params: {
 function transformUserTextContent(
   content: unknown,
   transform: (text: string) => string | undefined,
-): { content: unknown; changed: boolean } {
+): unknown {
   if (typeof content === "string") {
     const replacement = transform(content);
-    return { content: replacement ?? content, changed: replacement !== undefined };
+    return replacement ?? content;
   }
   let changed = false;
   const projected = Array.isArray(content)
@@ -369,7 +369,7 @@ function transformUserTextContent(
         return Object.assign({}, block, { text });
       })
     : content;
-  return { content: changed ? projected : content, changed };
+  return changed ? projected : content;
 }
 
 /** The model-facing text of a prompt before any recorded projection. */
@@ -668,15 +668,11 @@ function normalizeUserMessagesForLlmBoundary(
 
     // Stamp only the first text block; preserve all later blocks verbatim.
     let processedFirstText = false;
-    const transformed = transformUserTextContent(
-      canonicalizeTextOnlyUserContent(content),
-      (text) => {
-        const nextText = processedFirstText ? text : transformText(text);
-        processedFirstText = true;
-        return nextText === text ? undefined : nextText;
-      },
-    );
-    let nextContent = transformed.content;
+    let nextContent = transformUserTextContent(canonicalizeTextOnlyUserContent(content), (text) => {
+      const nextText = processedFirstText ? text : transformText(text);
+      processedFirstText = true;
+      return nextText === text ? undefined : nextText;
+    });
     if (Array.isArray(nextContent) && !processedFirstText && injectMediaText) {
       const withPlaceholder = nextContent.slice();
       withPlaceholder.unshift({ type: "text", text: transformText("") });

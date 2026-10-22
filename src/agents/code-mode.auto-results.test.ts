@@ -47,6 +47,20 @@ function expectUnretained(output: Record<string, unknown>, reason: string) {
   expect(output.value).not.toHaveProperty("reference");
 }
 
+const closedObject = (properties: Parameters<typeof Type.Object>[0]) =>
+  Type.Object(properties, { additionalProperties: false });
+
+function actionApi(
+  variants: Parameters<typeof defineToolOutputSchema>[0]["variants"],
+  name = "records",
+) {
+  return createCodeModeToolApiFile(name, {
+    source: "openclaw",
+    parameters: Type.Object({ kind: Type.String() }),
+    outputSchema: defineToolOutputSchema({ inputProperty: "kind", variants }),
+  });
+}
+
 it("keeps a usable network reference after output exhaustion and wait", async () => {
   const cap = 1024;
   const context = 4096;
@@ -184,15 +198,12 @@ it("infers literal and union selectors while keeping dynamic and missing inputs 
   const tool = pluginToolWithExecute("records", "Read records or status", async (_id, input) =>
     jsonResult(isRecord(input) && input.kind === "list" ? { rows: ["one", "two"] } : { total: 2 }),
   );
-  tool.parameters = Type.Object(
-    { kind: Type.Optional(Type.String()) },
-    { additionalProperties: false },
-  );
+  tool.parameters = closedObject({ kind: Type.Optional(Type.String()) });
   tool.outputSchema = defineToolOutputSchema({
     inputProperty: "kind",
     variants: {
-      list: Type.Object({ rows: Type.Array(Type.String()) }, { additionalProperties: false }),
-      status: Type.Object({ total: Type.Number() }, { additionalProperties: false }),
+      list: closedObject({ rows: Type.Array(Type.String()) }),
+      status: closedObject({ total: Type.Number() }),
     },
   });
   const { run } = createCatalogCodeModeHarness([tool]);
@@ -248,41 +259,24 @@ it("keeps a large set of action declarations within the complete output allowanc
   const variants = Object.fromEntries(
     Array.from({ length: 64 }, (_, index) => [
       `action_${index}`,
-      Type.Object({ ...fields, tag: Type.Literal(index) }, { additionalProperties: false }),
+      closedObject({ ...fields, tag: Type.Literal(index) }),
     ]),
   );
-  const file = await createCodeModeToolApiFile("bounded_records", {
-    source: "openclaw",
-    parameters: Type.Object({ kind: Type.String() }),
-    outputSchema: defineToolOutputSchema({ inputProperty: "kind", variants }),
-  });
+  const file = await actionApi(variants, "bounded_records");
   expect(file.content.length).toBeLessThan(34_000);
   expect(file.content).toContain("Promise<unknown>");
 });
 
 it("preserves changed fields, requiredness, and root constraints when reusing object declarations", async () => {
-  const base = Type.Object({ value: Type.String() }, { additionalProperties: false });
-  const extended = Type.Object(
-    { ...base.properties, receipt: Type.String() },
-    { additionalProperties: false },
-  );
-  const file = await createCodeModeToolApiFile("records", {
-    source: "openclaw",
-    parameters: Type.Object({ kind: Type.String() }),
-    outputSchema: defineToolOutputSchema({
-      inputProperty: "kind",
-      variants: {
-        empty: Type.Object({}, { additionalProperties: false }),
-        base,
-        extended,
-        changed: Type.Object(
-          { ...extended.properties, value: Type.Number() },
-          { additionalProperties: false },
-        ),
-        optional: { ...extended, required: ["receipt"] },
-        constrained: { ...extended, allOf: [{ maxProperties: 1 }] },
-      },
-    }),
+  const base = closedObject({ value: Type.String() });
+  const extended = closedObject({ ...base.properties, receipt: Type.String() });
+  const file = await actionApi({
+    empty: closedObject({}),
+    base,
+    extended,
+    changed: closedObject({ ...extended.properties, value: Type.Number() }),
+    optional: { ...extended, required: ["receipt"] },
+    constrained: { ...extended, allOf: [{ maxProperties: 1 }] },
   });
   expect(
     typeCheckSources({

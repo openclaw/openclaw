@@ -161,7 +161,7 @@ export type UserGitHubRefreshMutation = {
   result:
     | { kind: "rotated"; tokens: UserGitHubTokenPair; receivedAtMs: number }
     | { kind: "materialized"; login: string }
-    | { kind: "failed"; failure: "failed" | "expired" };
+    | { kind: "failed"; failure: "failed" | "expired"; restore?: boolean };
 };
 
 export type UserGitHubConnectionEntry = { owner: string; connection: UserGitHubConnection };

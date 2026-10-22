@@ -20,6 +20,7 @@ import {
   waitForRequestCount,
 } from "./appearance-prefs.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectRequestCounts, expectText } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Appearance defaults mocked Gateway E2E",
@@ -37,6 +38,7 @@ const contextOptions = {
   colorScheme: "dark",
   viewport: { height: 1000, width: 1440 },
 } satisfies Parameters<typeof suite.browser.newContext>[0];
+const noPreferenceWrites = { "config.patch": 0, "users.prefs.set": 0, "sessions.patch": 0 };
 
 async function openAppearance(page: Page, gateway: MockGatewayControls) {
   const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
@@ -95,16 +97,6 @@ function expectAttribute(locator: Locator, name: string, value: string) {
 
 function expectPressed(locator: Locator, value = "true") {
   return expectAttribute(locator, "aria-pressed", value);
-}
-
-function expectText(locator: Locator, text: string) {
-  return expect.poll(() => locator.textContent()).toContain(text);
-}
-
-async function expectNoWrites(gateway: MockGatewayControls, ...methods: string[]) {
-  for (const method of methods) {
-    expect(await gateway.getRequests(method)).toHaveLength(0);
-  }
 }
 
 function themeCard(page: Page, theme: string) {
@@ -253,11 +245,11 @@ suite.define(() => {
       await expectPressed(
         textSizeSection.locator(".settings-text-scale__btn", { hasText: "110%" }),
       );
-      await expect.poll(() => languageRow.textContent()).toContain("Default: System");
-      await expect.poll(() => themeSection.textContent()).toContain("Default: Claw");
-      await expect.poll(() => colorModeRow.textContent()).toContain("Default: System");
-      await expect.poll(() => textSizeSection.textContent()).toContain("Default: 100%");
-      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+      await expectText(languageRow, "Default: System");
+      await expectText(themeSection, "Default: Claw");
+      await expectText(colorModeRow, "Default: System");
+      await expectText(textSizeSection, "Default: 100%");
+      await expectAttribute(page.locator("html"), "data-theme-mode", "dark");
 
       await page.evaluate(() => window.scrollTo(0, 0));
       await captureViewport(page, "01-explicit-overrides.png");
@@ -297,7 +289,7 @@ suite.define(() => {
         await expect.poll(() => section.textContent()).not.toContain("Using default:");
       }
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
-      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
+      await expectAttribute(page.locator("html"), "data-theme-mode", "dark");
 
       await page.evaluate(() => window.scrollTo(0, 0));
       await captureViewport(page, "03-inherited-defaults.png");
@@ -371,7 +363,7 @@ suite.define(() => {
         hash: "appearance-accent-3",
         remainingPrefs: { accent: "theme" },
       });
-      await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("dark");
+      await expectAttribute(page.locator("html"), "data-theme", "dark");
       await expect.poll(() => readAccentPresentation(page)).toMatchObject({ accent: "#ff5c5c" });
       await expect.poll(() => readPersistedSettings(page)).toMatchObject({ accent: "theme" });
       await expectPressed(mintPreset, "false");
@@ -426,14 +418,14 @@ suite.define(() => {
         accent: "theme",
       });
       await expectPressed(themeCard(page, "knot"));
-      await expect.poll(() => themeDescription.textContent()).toContain("Default: Claw");
+      await expectText(themeDescription, "Default: Claw");
       await expectText(themeDescription, "Stored in this browser only");
 
       await rejectPreference(gateway, () => selectPickerValue(languageSelect, "fr"), 2, {
         locale: "fr",
       });
       await expect.poll(() => pickerValue(languageSelect)).toBe("fr");
-      await expect.poll(() => languageRow.textContent()).toContain("Par défaut : Anglais");
+      await expectText(languageRow, "Par défaut : Anglais");
       await expectText(languageRow, "Stocké uniquement dans ce navigateur");
 
       await rejectPreference(gateway, () => followUpSelect.selectOption("steer"), 3, {
@@ -481,10 +473,8 @@ suite.define(() => {
 
       await themeSection.locator(".settings-theme-card--knot").click();
       await expectPressed(themeCard(page, "knot"));
-      await expect.poll(() => themeDescription.textContent()).toContain("Default: Claw");
-      await expect
-        .poll(() => themeDescription.textContent())
-        .not.toContain("Stored in this browser only");
+      await expectText(themeDescription, "Default: Claw");
+      await expectText(themeDescription, "Stored in this browser only", true);
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
@@ -496,9 +486,7 @@ suite.define(() => {
       );
       const viewItem = viewMenu.getByRole("menuitem", { name: "View", exact: true });
       await viewItem.hover();
-      await expect
-        .poll(() => viewMenu.locator('[role="note"]').textContent())
-        .toContain("Stored in this browser only");
+      await expectText(viewMenu.locator('[role="note"]'), "Stored in this browser only");
       const reasoning = viewMenu.getByRole("menuitemcheckbox", { name: "Reasoning" });
       await expect.poll(() => reasoning.isVisible()).toBe(true);
       await reasoning.click();
@@ -522,21 +510,13 @@ suite.define(() => {
       await expect
         .poll(() => readPersistedSettings(page))
         .toMatchObject({ railShortcuts: [...pinsBefore, "route:usage"] });
-      await expectNoWrites(gateway, "config.patch", "users.prefs.set", "sessions.patch");
+      await expectRequestCounts(gateway, noPreferenceWrites);
 
       await page.reload();
       await viewMenuTrigger.click();
       await viewItem.hover();
-      await expect
-        .poll(() => viewMenu.locator('[role="note"]').textContent())
-        .toContain("Stored in this browser only");
-      await expect
-        .poll(() =>
-          viewMenu
-            .getByRole("menuitemcheckbox", { name: "Reasoning" })
-            .getAttribute("aria-checked"),
-        )
-        .toBe("false");
+      await expectText(viewMenu.locator('[role="note"]'), "Stored in this browser only");
+      await expectAttribute(reasoning, "aria-checked", "false");
 
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
@@ -546,7 +526,7 @@ suite.define(() => {
       await expect
         .poll(() => readPersistedSettings(page))
         .toMatchObject({ railShortcuts: [...pinsBefore, "route:usage"] });
-      await expectNoWrites(gateway, "config.patch", "users.prefs.set", "sessions.patch");
+      await expectRequestCounts(gateway, noPreferenceWrites);
     });
   });
 
@@ -673,15 +653,6 @@ suite.define(() => {
           ...afterClear,
           message: "Custom theme removed.",
         });
-        console.info(
-          `[control-ui-e2e] THEME_IMPORT_RACE_VERDICT ${JSON.stringify({
-            scenario: "delayed-replace-then-clear",
-            beforeReplace,
-            afterClear,
-            afterDelayedResponse,
-            pass: true,
-          })}`,
-        );
         await captureViewport(page, "06-custom-theme-clear-remains-final.png");
       } finally {
         releaseReplacement();

@@ -30,7 +30,7 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
   };
   const options = (
     fastMode: true | "ultrafast",
-    serviceTierObservation?: ModelCatalogEntry["serviceTierObservation"],
+    serviceTierObservations?: ModelCatalogEntry["serviceTierObservations"],
   ): Parameters<typeof ChatEffortPicker>[0] => ({
     disabled: false,
     thinkingDisabled: false,
@@ -41,7 +41,7 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
       sessionsResult: null,
     }),
     fastMode: resolveChatFastModeSelectState({
-      catalog: [{ ...model, serviceTierObservation }],
+      catalog: [{ ...model, serviceTierObservations }],
       connected: true,
       currentModelOverride: "openai/model",
       fastModeTarget: { model: "model", modelProvider: "openai", fastMode },
@@ -55,23 +55,32 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
   const view = mountSolid(ChatEffortPicker, options("ultrafast"), host);
   const show = (
     fastMode: true | "ultrafast",
-    observation?: ModelCatalogEntry["serviceTierObservation"],
+    observations?: ModelCatalogEntry["serviceTierObservations"],
   ) => {
-    view.update(options(fastMode, observation));
+    view.update(options(fastMode, observations));
     return host.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!;
   };
   const observation = { requestedTier: "ultrafast", responseTier: "priority" };
   openPicker();
-  const ultrafast = show("ultrafast", observation);
+  const ultrafast = show("ultrafast", [observation]);
   expect([ultrafast.disabled, ultrafast.getAttribute("aria-checked")]).toEqual([false, "true"]);
   expect(summary().title).toContain("Ultrafast requested, currently served as priority");
 
-  show("ultrafast", { requestedTier: "ultrafast" });
+  show("ultrafast", [{ requestedTier: "ultrafast" }]);
   expect(summary().title).toContain("Ultrafast requested, currently unavailable");
 
-  show(true, observation).click();
+  show(true, [observation]).click();
   expect(onFastModeSelect).toHaveBeenCalledWith("ultrafast", "tier-observation");
   expect(summary().title).not.toContain("requested");
+
+  const independent = [
+    { requestedTier: "priority", responseTier: "fast" },
+    { requestedTier: "ultrafast", responseTier: "fast" },
+  ];
+  show(true, independent);
+  expect(summary().title).toContain("Fast requested, currently served as fast");
+  show("ultrafast", independent);
+  expect(summary().title).toContain("Ultrafast requested, currently served as fast");
 
   expect(show("ultrafast").getAttribute("aria-checked")).toBe("true");
   expect(summary().title).toBe("Speed: Ultrafast");

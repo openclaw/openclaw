@@ -382,7 +382,8 @@ work; the native owner explicitly authorizes startup after publication.
 When enabled, the native updater drains through the Gateway suspension owner,
 stops the old service, publishes `current` under a fenced activation record,
 starts the selected generation, and verifies its process, build, authenticated
-health, HTTP readiness, plugins, and channels. Build and install work stay outside
+health, core HTTP readiness, and plugins. Channel-only outages remain named
+warnings while `/readyz` retains its actual HTTP status. Build and install work stay outside
 cutover. Startup responses with `status: "starting"`, including agent database
 inspection, keep the readiness wait open within its bounded budget. An
 inconclusive check retains the recovery record; it does not establish failure.

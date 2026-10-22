@@ -581,14 +581,18 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
       if (!version) {
         throw new Error("Package rollback version is unavailable");
       }
-      for (const entry of observed) {
-        if (
-          !packageStatUnchanged(
-            entry.stat,
-            await read(() => fs.lstat(entry.file, { bigint: true })),
-          )
-        ) {
-          throw new Error("Package rollback tree changed during verification");
+      for (let start = 0; start < observed.length; start += 32) {
+        const results = await Promise.allSettled(
+          observed.slice(start, start + 32).map(async ({ file, stat }) => {
+            if (!packageStatUnchanged(stat, await read(() => fs.lstat(file, { bigint: true })))) {
+              throw new Error("Package rollback tree changed during verification");
+            }
+          }),
+        );
+        // Preserve traversal-order refusals, even when a later read times out first.
+        const failure = results.find((result) => result.status === "rejected");
+        if (failure) {
+          throw failure.reason;
         }
       }
       if (legacy) {

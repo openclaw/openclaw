@@ -32,11 +32,13 @@ beforeEach(async () => {
     connected: true,
     allowed: true,
     list: { sessions: [meetingEntry], nextCursor: null },
+    listRead: () => {},
     listLoading: false,
     listError: null,
     reader: {
       summary: structuredClone(meetingPage),
       pages: [{ ...meetingPage, utterances: [speech] }],
+      read: () => {},
       loading: false,
       error: null,
     },

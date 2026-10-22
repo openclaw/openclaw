@@ -3,6 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
 import { hasBuildArtifactAffectingChange } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
@@ -214,6 +215,8 @@ describe("CI changed Node test plan", () => {
         "src/agents/command/delivery.settle-reset.integration.test.ts",
         "src/auto-reply/reply/commands-acp.owner.test.ts",
         "src/auto-reply/reply/commands-allowlist.owner.test.ts",
+        "src/auto-reply/reply/commands-plugin.native-subagents.test.ts",
+        "src/auto-reply/reply/commands-plugin.scheduled-turns.test.ts",
         "src/gateway/operator-run-recovery.test.ts",
         "src/gateway/server.mcp-session-owner.test.ts",
       ],
@@ -840,6 +843,7 @@ describe("CI changed Node test plan", () => {
       job.groups.filter((group) => group.configs.includes(config)),
     );
     expect(owners.length).toBeGreaterThan(1);
+    const envScratch = argvTempDirs.make("changed-command-owner-env-");
     const expectCanonicalCommands = (shards: ReturnType<typeof createChangedNodeTestShards>) => {
       expect(shards).not.toBeNull();
       const groups = fallbackGroups(shards ?? []);
@@ -871,20 +875,55 @@ describe("CI changed Node test plan", () => {
           ),
           "canonical selected commands job",
         );
+        const ownerGroup = expectDefined(
+          ownerJob.groups.find((candidate) => candidate.shard_name === group.shard_name),
+          "canonical selected commands group",
+        );
         const selectedJob = expectDefined(
           shards?.find((job) => job.groups?.includes(group)),
           "selected commands job",
         );
-        expect(selectedJob.runner).toBe(ownerJob.runner);
-        const singleton = selectedJob.groups?.length === 1 && ownerJob.planConcurrency === 2;
-        expect(selectedJob.env).toEqual(
-          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-            ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
-            : ownerJob.env,
+        for (const key of [
+          "runner",
+          "pretestBuildMode",
+          "requiresDist",
+          "timeoutMinutes",
+        ] as const) {
+          expect(selectedJob[key], `${group.shard_name} job ${key}`).toEqual(ownerJob[key]);
+        }
+        expect(
+          Object.fromEntries(
+            Object.entries(selectedJob.env ?? {}).filter(
+              ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+            ),
+          ),
+          `${group.shard_name} job environment`,
+        ).toEqual(
+          Object.fromEntries(
+            Object.entries(ownerJob.env ?? {}).filter(
+              ([key]) => key !== "OPENCLAW_VITEST_MAX_WORKERS",
+            ),
+          ),
         );
-        expect(selectedJob.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
-        expect(selectedJob.pretestBuildMode).toBe(ownerJob.pretestBuildMode);
-        expect(selectedJob.timeoutMinutes).toBe(ownerJob.timeoutMinutes);
+        const childWorkers = buildChildEnv(
+          { kind: "group", name: group.shard_name, plan: group },
+          {
+            OPENCLAW_VITEST_MAX_WORKERS: selectedJob.planConcurrency === 1 ? "8" : "2",
+            ...selectedJob.env,
+          },
+          envScratch,
+          0,
+        ).OPENCLAW_VITEST_MAX_WORKERS;
+        const ownerChildWorkers = buildChildEnv(
+          { kind: "group", name: ownerGroup.shard_name, plan: ownerGroup },
+          {
+            OPENCLAW_VITEST_MAX_WORKERS: ownerJob.planConcurrency === 1 ? "8" : "2",
+            ...ownerJob.env,
+          },
+          envScratch,
+          0,
+        ).OPENCLAW_VITEST_MAX_WORKERS;
+        expect(childWorkers, `${group.shard_name} child worker ceiling`).toBe(ownerChildWorkers);
       }
       const configs = groups.flatMap((group) => group.configs);
       expect(configs).not.toContain("test/vitest/vitest.cron.config.ts");

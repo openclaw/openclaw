@@ -30,6 +30,7 @@ let cache: Awaited<ReturnType<typeof loadApi>>;
 async function loadReplyCache(options?: { preservePersistentState?: boolean }) {
   cache = await loadApi(options);
 }
+const directChat = { chatGuid: "any;-;+12069106512", chatIdentifier: "+12069106512" };
 
 function remember(
   messageId: string,
@@ -56,9 +57,7 @@ afterEach(() => {
 
 describe("imessage short message id resolution", () => {
   it("requires chat scope when a privileged short id is unknown", async () => {
-    await expect(cache.resolve("9999", { requireKnownShortId: true })).rejects.toThrow(
-      "requires a chat scope",
-    );
+    await expect(cache.resolve("9999")).rejects.toThrow("requires a chat scope");
   });
 
   it("rejects short ids from another chat", async () => {
@@ -66,7 +65,6 @@ describe("imessage short message id resolution", () => {
 
     await expect(
       cache.resolve("1", {
-        requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;other" },
       }),
     ).rejects.toThrow("MessageSidFull from another chat is rejected");
@@ -75,7 +73,6 @@ describe("imessage short message id resolution", () => {
   it("recommends the full id when a short id has expired in the current chat", async () => {
     await expect(
       cache.resolve("9999", {
-        requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chat0000" },
       }),
     ).rejects.toThrow("is no longer available. Use MessageSidFull");
@@ -92,8 +89,7 @@ describe("imessage short message id resolution", () => {
   it("recognizes only cached outbound message ids as own messages", async () => {
     const chat = {
       accountId: "default",
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
       chatId: 3,
     };
     await remember("outbound-guid", { ...chat, isFromMe: true });
@@ -118,7 +114,6 @@ describe("requireFromMe (edit / unsend authorization)", () => {
 
     await expect(
       cache.resolve(entry.shortId, {
-        requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chatA" },
         requireFromMe: true,
       }),
@@ -130,7 +125,6 @@ describe("requireFromMe (edit / unsend authorization)", () => {
 
     expect(
       await cache.resolve(entry.shortId, {
-        requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;chatA" },
         requireFromMe: true,
       }),
@@ -141,11 +135,10 @@ describe("requireFromMe (edit / unsend authorization)", () => {
 describe("findLatestIMessageEntryForChat", () => {
   it("returns the latest entry for the matching chat scope", async () => {
     await remember("older", {
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
       timestamp: Date.now() - 1000,
     });
-    await remember("newest", { chatGuid: "any;-;+12069106512", chatIdentifier: "+12069106512" });
+    await remember("newest", directChat);
 
     const result = cache.latest({
       accountId: "default",
@@ -230,7 +223,6 @@ describe("SQLite reply-cache hydration", () => {
     for (const entry of [...entries, issued]) {
       expect(
         await cache.resolve(entry.shortId, {
-          requireKnownShortId: true,
           chatContext: { chatId: context.chatId },
         }),
       ).toBe(entry.messageId);
@@ -247,8 +239,7 @@ describe("current-message chat binding", () => {
     });
     await remember("any-guid", {
       accountId: "work",
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
     });
 
     expect(
@@ -278,8 +269,7 @@ describe("current-message chat binding", () => {
     const chatContext = { chatIdentifier: "+12069106512" };
     const entry = await remember("current-guid", {
       accountId: "work",
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
       chatId: 42,
     });
 
@@ -290,8 +280,7 @@ describe("current-message chat binding", () => {
   it("fails closed for wrong accounts, chats, and unknown current messages", async () => {
     await remember("current-guid", {
       accountId: "work",
-      chatGuid: "any;-;+12069106512",
-      chatIdentifier: "+12069106512",
+      ...directChat,
       chatId: 42,
     });
 

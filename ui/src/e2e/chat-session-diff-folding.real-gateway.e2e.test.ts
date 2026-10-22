@@ -94,7 +94,7 @@ const suite = createControlUiE2eSuite({
       await writeSources(true);
       await owner.state.writeConfig({
         agents: {
-          defaults: { workspace, skipBootstrap: true, heartbeat: { every: "0m" } },
+          defaults: { workspace, skipBootstrap: true },
           entries: { main: { workspace, name: "Folding proof" } },
         },
         gateway: {

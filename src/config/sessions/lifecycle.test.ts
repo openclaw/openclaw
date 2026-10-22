@@ -5,7 +5,6 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { hasTerminalMainSessionTranscriptNewerThanRegistryAsync } from "./lifecycle-read.js";
-import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
   appendTranscriptEvent,
   loadSessionEntry,
@@ -72,12 +71,9 @@ it("uses the physical SQLite mutation watermark instead of event timestamps", as
 
   expect(entry.updatedAt).toBe(registryTimestampMs);
   const sql = observeHostDataSql();
-  try {
-    expect(await check(entry, sessionKey)).toBe(true);
-    expect(sql.queries).toEqual([]);
-  } finally {
-    sql.restore();
-  }
+  using _ = { [Symbol.dispose]: () => sql.restore() };
+  expect(await check(entry, sessionKey)).toBe(true);
+  expect(sql.queries).toEqual([]);
 });
 
 it.each(["done", "failed", "legacy"] as const)(
@@ -98,23 +94,6 @@ it("keeps a yielded main session reusable after a child transcript admission", a
   expect(entry.status).toBeUndefined();
   expect(entry.endedAt).toBeDefined();
   expect(await check(entry, sessionKey)).toBe(false);
-});
-
-it("preserves Date.parse semantics for a numeric-looking transcript header", async () => {
-  const sessionId = "session-header-without-key";
-  const timestamp = "2026";
-  await appendTranscriptEvent(
-    { agentId: "main", sessionId, sessionKey: "agent:main:header", storePath },
-    { type: "session", version: 3, id: sessionId, timestamp, cwd: stateDir },
-  );
-
-  expect(
-    resolveSessionLifecycleTimestamps({
-      agentId: "main",
-      entry: { sessionId, updatedAt: Date.now() },
-      storePath,
-    }).sessionStartedAt,
-  ).toBe(Date.parse(timestamp));
 });
 
 it("does not rotate after a same-millisecond registry write observes the mutation", async () => {

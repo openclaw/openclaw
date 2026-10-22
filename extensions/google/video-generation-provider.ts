@@ -4,6 +4,7 @@ import {
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
@@ -400,14 +401,14 @@ export const googleVideoGenerationProvider: VideoGenerationProvider = {
           | { videoBytes?: string; uri?: string; mimeType?: string }
           | undefined;
         if (inline?.videoBytes) {
+          if (estimateBase64DecodedBytes(inline.videoBytes) > maxVideoBytes) {
+            throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
+          }
           const canonicalVideo = canonicalizeGoogleProviderBase64(inline.videoBytes);
           if (!canonicalVideo) {
             throw new Error("Google video generation returned malformed base64 video data");
           }
           const buffer = Buffer.from(canonicalVideo, "base64");
-          if (buffer.length > maxVideoBytes) {
-            throw new Error(`Google generated video download exceeds ${maxVideoBytes} bytes`);
-          }
           return {
             buffer,
             mimeType: normalizeOptionalString(inline.mimeType) || "video/mp4",

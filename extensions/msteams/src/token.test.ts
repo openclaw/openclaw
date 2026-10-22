@@ -421,15 +421,24 @@ describe("resolveDelegatedAccessToken", () => {
     oauthTokenMocks.refreshMSTeamsDelegatedTokens.mockResolvedValueOnce(refreshed);
     const writing = createDeferred<void>();
     const releaseWrite = createDeferred<void>();
-    const saveTokens = delegatedState.saveMSTeamsDelegatedTokens;
-    vi.spyOn(delegatedState, "saveMSTeamsDelegatedTokens").mockImplementationOnce(
-      async (tokens) => {
-        writing.resolve();
-        await releaseWrite.promise;
-        if (failWrite) {
-          throw new Error("synthetic storage failure");
+    const claimRefresh = delegatedState.claimMSTeamsDelegatedTokenRefresh;
+    vi.spyOn(delegatedState, "claimMSTeamsDelegatedTokenRefresh").mockImplementationOnce(
+      async (...args) => {
+        const claim = await claimRefresh(...args);
+        if (!claim) {
+          throw new Error("expected real delegated claim");
         }
-        await saveTokens(tokens);
+        return {
+          ...claim,
+          async settle(tokens) {
+            writing.resolve();
+            await releaseWrite.promise;
+            if (failWrite) {
+              throw new Error("synthetic storage failure");
+            }
+            return await claim.settle(tokens);
+          },
+        };
       },
     );
     let completed = false;
@@ -450,13 +459,24 @@ describe("resolveDelegatedAccessToken", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     expect((await delegatedState.loadMSTeamsDelegatedTokens())?.accessToken).toBe(
-      failWrite ? "stale-access" : refreshed.accessToken,
+      failWrite ? delegatedTokens.accessToken : refreshed.accessToken,
     );
+    if (failWrite) {
+      // Microsoft keeps the old grant reusable; publication failure must not strand it.
+      oauthTokenMocks.refreshMSTeamsDelegatedTokens.mockResolvedValueOnce(refreshed);
+      expect(await resolveDelegatedAccessToken(tokenParams)).toBe(refreshed.accessToken);
+      expect(oauthTokenMocks.refreshMSTeamsDelegatedTokens).toHaveBeenLastCalledWith(
+        expect.objectContaining({ refreshToken: delegatedTokens.refreshToken }),
+      );
+      expect((await delegatedState.loadMSTeamsDelegatedTokens())?.accessToken).toBe(
+        refreshed.accessToken,
+      );
+    }
   });
 
   it("propagates a delegated token read failure without attempting refresh", async () => {
     const error = new Error("synthetic storage read failure");
-    vi.spyOn(delegatedState, "loadMSTeamsDelegatedTokens").mockRejectedValueOnce(error);
+    vi.spyOn(delegatedState, "loadMSTeamsDelegatedTokenState").mockRejectedValueOnce(error);
 
     await expect(
       resolveDelegatedAccessToken({

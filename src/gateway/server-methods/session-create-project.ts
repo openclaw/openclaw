@@ -543,7 +543,14 @@ export async function prepareSessionWorkspaceForRun(params: {
           runSetupScript: !cfg.cloudWorkers?.requiredProfile && params.runSetupScript,
           signal,
           commitGuard: assertProjectCurrent,
-          onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
+          onProgress: (stage) =>
+            status(
+              stage === "base"
+                ? "preparing_worktree_base"
+                : stage === "setup"
+                  ? "running_setup"
+                  : "creating_worktree",
+            ),
           acceptedSource: pending.source,
           onPromptReady: params.onPromptReady
             ? async (promptWorkspace) => {

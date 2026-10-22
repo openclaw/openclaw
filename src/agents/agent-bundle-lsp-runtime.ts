@@ -534,6 +534,7 @@ export async function createBundleLspToolRuntime(params: {
       try {
         const child = await spawnLspServerProcess(launchConfig, {
           abortSignal: params.abortSignal,
+          serverName,
         });
         session = {
           serverName,

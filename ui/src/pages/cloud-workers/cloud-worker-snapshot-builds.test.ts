@@ -68,6 +68,31 @@ it("rebuilds the selected local repository and shows capacity failures", async (
     projectPath: "/projects/app",
   });
 });
+
+it("admits one rebuild when native clicks arrive before the next render", async () => {
+  const preparation = createDeferred<unknown>();
+  const { page, request } = mountTestPage(methods, {
+    result: localSnapshot(),
+    response: (method) => (method === "environments.prepare" ? preparation.promise : undefined),
+  });
+  const rebuild = await waitForSolid(() => {
+    const control = button(sheet(page), "Rebuild");
+    expect(control.disabled).toBe(false);
+    return control;
+  });
+  try {
+    rebuild.click();
+    rebuild.click();
+    expect(request.mock.calls.filter(([method]) => method === "environments.prepare")).toHaveLength(
+      1,
+    );
+    await waitForSolid(() => expect(rebuild.disabled).toBe(true));
+  } finally {
+    preparation.resolve({ reused: false });
+  }
+  await waitForSolid(() => expect(rebuild.disabled).toBe(false));
+});
+
 it("refreshes rebuild eligibility after a machine configuration save", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   let enabled = false;

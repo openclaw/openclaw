@@ -57,7 +57,9 @@ function managedDeps(version = CODEX_APP_SERVER_VERSION) {
       commandSource: "resolved-managed" as const,
     })),
     resolveNativeCommand,
-    runVersionCommand: vi.fn(async () => `codex-cli ${version}\n`),
+    runVersionCommand: vi
+      .spyOn(managedBinary, "runCodexVersionCommand")
+      .mockResolvedValue(`codex-cli ${version}\n`),
   };
 }
 
@@ -83,10 +85,11 @@ function createCheck(deps: Parameters<typeof registerCodexManagedAppServerDoctor
 }
 
 function nativeCheck(command: string) {
+  const deps = managedDeps();
+  deps.runVersionCommand.mockRestore();
   return createCheck({
-    ...managedDeps(),
+    ...deps,
     resolveNativeCommand: () => command,
-    runVersionCommand: undefined,
   });
 }
 
@@ -310,7 +313,7 @@ it("ignores managed commands for agents whose effective runtime is not Codex", a
   const deps = managedDeps();
   await expect(createCheck(deps).detect(context(cfg))).resolves.toEqual([]);
   expect(deps.resolveStartOptions).toHaveBeenCalledTimes(2);
-  expect(deps.runVersionCommand).toHaveBeenCalledExactlyOnceWith("/candidate/plugin/codex-native");
+  expect(deps.runVersionCommand.mock.calls).toEqual([["/candidate/plugin/codex-native", {}]]);
 });
 
 it("still validates a package fallback selected after desktop-first resolution", async () => {
@@ -326,5 +329,5 @@ it("still validates a package fallback selected after desktop-first resolution",
     path: "/candidate/plugin/codex-native",
     message: `Managed Codex app-server version mismatch: expected ${CODEX_APP_SERVER_VERSION}, detected 0.146.0.`,
   });
-  expect(deps.runVersionCommand).toHaveBeenCalledWith("/candidate/plugin/codex-native");
+  expect(deps.runVersionCommand).toHaveBeenCalledWith("/candidate/plugin/codex-native", {});
 });

@@ -1,8 +1,11 @@
 import { t } from "../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { HeaderPanelAction } from "./components/chat-header-panel-actions.tsx";
 import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
+
+registerChatSessionEnglish();
 
 type PanelControls = {
   openPanelSlot: (slot: SidebarSlotId) => void;

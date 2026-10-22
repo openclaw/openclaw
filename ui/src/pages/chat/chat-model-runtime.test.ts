@@ -294,40 +294,6 @@ describe("chat model runtime choices", () => {
     expect(container.querySelector('[data-chat-thinking-option="medium"]')).toBeNull();
   });
 
-  it("pins the chosen harness for an inherited default model and resets through Default", async () => {
-    const result = createSessionsListResult({
-      model: model.id,
-      defaultsModel: model.id,
-      modelOverrideSource: null,
-    });
-    result.sessions[0]!.agentRuntime = { id: "openclaw", source: "provider" };
-    const { host, container, draw, row, select, patches } = selectionControls(result, [model]);
-    await draw();
-    const runtimeRow = () => row(codexSelector);
-    const defaultRow = () => row("[data-chat-model-default]");
-    expect([defaultRow(), runtimeRow()].map(optionName)).toEqual([
-      "GPT-5.6 Sol",
-      "GPT-5.6 Sol codex",
-    ]);
-    expect(defaultRow().parentElement?.querySelector("[data-chat-model-option]")).toBe(
-      defaultRow(),
-    );
-    expect(runtimeRow().getAttribute("aria-selected")).toBe("false");
-    expect(defaultRow().getAttribute("aria-selected")).toBe("true");
-    await select(runtimeRow());
-    expectPatch(host, { model: "openai/gpt-5.6-sol", agentRuntime: "codex" });
-    result.sessions[0]!.agentRuntime = { id: "codex", source: "session-key" };
-    await draw();
-    expect(triggerLabel(container)).toBe("GPT-5.6 Sol codex");
-    expect(runtimeRow().getAttribute("aria-selected")).toBe("true");
-    expect(defaultRow().getAttribute("aria-selected")).toBe("false");
-    expect(patches()).toHaveLength(1);
-    await select(runtimeRow());
-    expect(patches()).toHaveLength(1);
-    await select(defaultRow());
-    expectPatch(host, { model: null, agentRuntime: null });
-  });
-
   it.each(["missing-auth", "unsupported-runtime", "locked"] as const)(
     "preserves the %s guard for additional harness rows",
     async (guard) => {

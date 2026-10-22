@@ -84,6 +84,7 @@ openclaw-chat-summary-automations
   display: flex;
   border-radius: 50%;
   background: var(--bg);
+  color: var(--text-strong);
 }
 
 .chat-summary__automation-paused svg {

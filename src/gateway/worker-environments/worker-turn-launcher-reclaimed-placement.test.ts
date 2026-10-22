@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
@@ -24,11 +24,11 @@ import {
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
   completeTurn,
+  installLauncherTest,
   createLauncher,
   environmentForTunnel,
   expectUncalled,
@@ -42,19 +42,14 @@ import {
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
   placements,
   root,
   seedActivePlacement,
   seedReclaimedPlacement,
-  setupWorkerTurnLauncherTest,
   turn,
   unusedEnvironments,
   type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
-
-afterAll(closeStateDatabaseForTest);
 
 function queuedWorkerRun(runId: string) {
   let lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -97,9 +92,7 @@ function queuedWorkerRun(runId: string) {
 }
 
 describe("worker turn launcher reclaimed placement", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
-
+  installLauncherTest();
   it.each([
     ["agent id", { agentId: "other", sessionKey: SESSION_KEY }],
     ["session key", { agentId: "main", sessionKey: "agent:main:other" }],
@@ -175,9 +168,8 @@ describe("worker turn launcher reclaimed placement", () => {
         }),
       ),
     });
-    const provider = createWorkerSessionTurnPlacementProvider({
+    const provider = createLauncher({
       environments,
-      placements,
       redispatchPlacement,
     });
     const runLocal = vi.fn(localResult);
@@ -248,7 +240,7 @@ describe("worker turn launcher reclaimed placement", () => {
     const { globalLane, waiting } = queued;
     const environments = unusedEnvironments();
     environments.get = vi.fn(() => attachedEnvironment());
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const provider = createLauncher({ environments });
     const uninstall = installSessionPlacementAdmissionProvider(provider);
     const local = vi.fn(localResult);
     // Global capacity is separate from the admitted per-session controller operation.
@@ -299,9 +291,8 @@ describe("worker turn launcher reclaimed placement", () => {
           return await claimTurn(...args);
         });
       }
-      const provider = createWorkerSessionTurnPlacementProvider({
+      const provider = createLauncher({
         environments,
-        placements,
         resolveWorkspace: async () => {
           workspaceResolutionStarted.resolve();
           await resumeWorkspaceResolution.promise;

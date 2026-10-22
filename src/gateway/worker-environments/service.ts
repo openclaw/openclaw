@@ -7,6 +7,7 @@ import type { WorkerExecutionMode, WorkerProvider } from "../../plugins/types.js
 import { isGatewayWorkAdmissionClosed } from "../../process/gateway-work-admission.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { createPendingPromiseTracker } from "../../shared/pending-promises.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { measureGatewayCloseStep, measureGatewayRestartTrace } from "../restart-trace.js";
 import { workerBootstrapOperationTimeoutMs } from "./bootstrap-timeouts.js";
@@ -90,12 +91,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const isReconciliationPaused = () => stopping || isGatewayWorkAdmissionClosed();
   let maintenanceInFlight: Promise<void> | undefined;
 
-  const trackOperation = <T>(operation: Promise<T>) => {
-    activeOperations.add(operation);
-    const release = () => activeOperations.delete(operation);
-    void operation.then(release, release);
-    return operation;
-  };
+  const trackOperation = createPendingPromiseTracker(activeOperations);
 
   const withLock = <T>(environmentId: string, task: () => Promise<T>) =>
     trackOperation(operations.enqueue(environmentId, task));

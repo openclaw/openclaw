@@ -29,8 +29,10 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import {
   prepareCronRunContinuationCleanup,
+  prepareScheduledAutomationStart,
   resolveScheduledSessionReplyOptions,
   settleSessionAutomationTurn,
+  type ScheduledAutomationAdmission,
 } from "./session-event-automation.js";
 import {
   buildSessionEventContext,
@@ -159,6 +161,7 @@ export function enqueueSessionEventForHost(
   let started = false;
   let admissionStarted = false;
   let deferred = false;
+  const automationAdmission: ScheduledAutomationAdmission = { admissionDeferred: false };
   let adopted = false;
   // A policy publication rejected this occurrence's stale-config execution; finish()
   // re-admits it under the current policy when it never started.
@@ -271,15 +274,25 @@ export function enqueueSessionEventForHost(
     if (started) {
       return;
     }
+    options.scheduledAutomation?.onStarted?.();
     ownership.start();
     started = true;
     accept();
   };
   const prepareStart = async (runId?: string) => {
     await prepareCurrent();
-    if (runId) {
-      start();
+    if (started) {
+      return;
     }
+    const startSignal = operation ? AbortSignal.any([signal, operation.abortSignal]) : signal;
+    await prepareScheduledAutomationStart({
+      automation: options.scheduledAutomation,
+      operation: () => operation,
+      signal: startSignal,
+      prepareCurrent,
+      admission: automationAdmission,
+      onReady: runId ? start : undefined,
+    });
   };
   const finish = () => {
     if (settlement) {
@@ -387,10 +400,12 @@ export function enqueueSessionEventForHost(
         deliveryAmbiguous,
         deliveryError,
         deliverySuppressionReason,
+        admissionDeferredReason: !started ? automationAdmission.admissionDeferredReason : undefined,
         admissionDeferred:
           !started &&
-          operation?.result?.kind === "aborted" &&
-          operation.result.code === "aborted_for_supersession",
+          (automationAdmission.admissionDeferred ||
+            (operation?.result?.kind === "aborted" &&
+              operation.result.code === "aborted_for_supersession")),
         summary,
         nextCheckMs,
         sourceDeliveryOutcome,
@@ -430,6 +445,10 @@ export function enqueueSessionEventForHost(
     }
     const deliverReply = await prepareSessionEventDelivery(route, assertCurrent);
     deliveryAttempted = true;
+    const assertDeliveryCurrent = () => {
+      assertEffectCurrent();
+      options.scheduledAutomation?.assertDeliveryCurrent?.();
+    };
     const result = await deliverReply({
       cfg: getSessionEventRuntimeConfig(),
       agentId,
@@ -439,9 +458,9 @@ export function enqueueSessionEventForHost(
       abortSignal: signal,
       beforeDeliver: async () => {
         await options.scheduledAutomation?.beforeDeliver?.();
-        assertEffectCurrent();
+        assertDeliveryCurrent();
       },
-      assertCurrent: assertEffectCurrent,
+      assertCurrent: assertDeliveryCurrent,
     });
     delivered ||= result.delivered;
     deliveryAmbiguous ||= result.ambiguous === true;
@@ -556,9 +575,12 @@ export function enqueueSessionEventForHost(
                       throw new Error("Session event lost its original generation owner");
                     }
                     const assertCreationCurrent = generationLease.bindCreation(creation);
+                    const assertNoticeCreationCurrent =
+                      options.scheduledAutomation?.bindSessionCreation?.(creation);
                     return () => {
                       assertOwnerCurrent();
                       assertCreationCurrent();
+                      assertNoticeCreationCurrent?.();
                     };
                   },
                 }
@@ -590,9 +612,15 @@ export function enqueueSessionEventForHost(
                   automation: options.scheduledAutomation,
                   runId,
                   deliveryEvidence,
+                  cfg,
+                  scope: preparedBinding
+                    ? { agentId, sessionKey, storePath, ...preparedBinding }
+                    : undefined,
+                  assertCurrent,
                   prepareCurrent,
                   outcome,
                 });
+                summary = automationOutcome.summary ?? summary;
                 nextCheckMs = automationOutcome.nextCheckMs;
                 sourceDeliveryOutcome = automationOutcome.sourceDeliveryOutcome;
                 automationResult = automationOutcome.automationResult;

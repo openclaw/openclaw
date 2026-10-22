@@ -147,19 +147,24 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-cold-load.ts \
   --network-latency-ms 35 --download-kbps 10000 --cpu-throttle 4
 ```
 
-The report includes document TTFB, the asset waterfall and transfer sizes, and
-first visible transcript and enabled-composer timings. Visibility is sampled at
-animation frames; it is not a compositor-paint timestamp. Composer focus is
+The report includes document TTFB, the asset waterfall and transfer sizes, boot
+RPC request/response timings, and first visible transcript and enabled-composer
+timings. Visibility is sampled at animation frames; it is not a compositor-paint timestamp. Composer focus is
 recorded only if it occurs. HTTP uses the real Gateway; bootstrap, WebSocket
 replies and fixture media remain synthetic. The benchmark fetches the public
-`/chat` document, then selects the synthetic session before app imports; real
-session-entry authorization is outside this measurement. The fixture mirrors
+`/chat` document, then selects the synthetic session before app imports. Use
+`--boot-route new` to fetch `/new` and measure its composer instead; this preserves
+the Gateway's route-specific preload selection. Real session-entry authorization
+is outside this measurement. Each run also saves `run-N.requests.json`, including
+browser request initiators, to distinguish parser preloads from chained imports.
+Font loading completions are recorded separately from composer and transcript
+readiness. The fixture mirrors
 the Gateway's terminal policy to preserve the document's CSP contract.
 `--first-load` skips the benchmark's normal warm-up navigation. Restart the
 isolated Gateway before each sample to reset its asset and HTML compression
 caches, and interleave at
-least five baseline and candidate samples. Use the same bundle identity and
-fixture time for both sides. Run `--cpu-profile` separately for source-mapped CPU
+least ten baseline and candidate samples on a busy host. Use the same bundle
+identity and fixture time for both sides. Run `--cpu-profile` separately for source-mapped CPU
 diagnostics; profiled timings are not comparable with untraced samples.
 
 For a standalone preview with synthetic data, use:

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -9,6 +8,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { holdForeignWriter } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "./update-run-driver.js";
@@ -40,13 +40,10 @@ vi.mock("./sqlite-worker-operation-admission.js", async (importOriginal) => {
     },
   };
 });
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    admission.created = admission.beforeGrant = undefined;
-    await closeOpenClawStateDatabaseAsync();
-    cleanup();
-  }),
-);
+afterEach(() => {
+  admission.created = admission.beforeGrant = undefined;
+});
+const tempDirs = useStateDatabaseTempDirs();
 function fixture(input: Parameters<typeof updateRunFixture>[1]) {
   const options = { env: { OPENCLAW_STATE_DIR: tempDirs.make("update-reconciliation-") } };
   const run = updateRunFixture(options, input);
@@ -154,14 +151,11 @@ it.each(["history", "reconciliation"] as const)(
         status: "failed",
         reason: "legacy-driver-expired",
       });
+      expect(await run.readAsync()).toEqual(reconciled);
       nativeCalls = sql.count();
     } finally {
       sql.restore();
     }
-    expect(await run.readAsync()).toMatchObject({
-      status: "failed",
-      reason: "legacy-driver-expired",
-    });
     expect(nativeCalls).toBe(0);
   },
 );

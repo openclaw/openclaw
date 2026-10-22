@@ -2,7 +2,7 @@ import { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SlackActionContext } from "./action-runtime.js";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { sendSlackMessage as sendSlackMessageThroughPublicOwner } from "./actions.js";
@@ -93,11 +93,21 @@ const trustedContext = {
   currentChannelId: "team:T123:channel:C123",
   requesterAccountId: "default",
 };
+const installations: Array<ReturnType<typeof registerSlackInstallationState>> = [];
+function installEnterprise() {
+  installations.push(registerSlackInstallationState("default", "enterprise"));
+}
+afterEach(() => {
+  for (const installation of installations.splice(0)) {
+    installation.release();
+  }
+});
+const scopedOptions = () => ({ cfg, teamId: "T123" });
 
 it("reads normalized pins from the trusted current workspace", async () => {
   listSlackPins.mockResolvedValueOnce([{ message: { ts: "1712345678.123456", text: "pin" } }]);
   const result = await act({ action: "listPins", channelId: "C123" }, trustedContext);
-  expect(listSlackPins).toHaveBeenCalledWith("C123", { cfg, teamId: "T123" });
+  expect(listSlackPins).toHaveBeenCalledWith("C123", scopedOptions());
   expect(result.details).toMatchObject({
     ok: true,
     pins: [{ message: { ts: "1712345678.123456", text: "pin", timestampMs: 1712345678123 } }],
@@ -105,15 +115,11 @@ it("reads normalized pins from the trusted current workspace", async () => {
 });
 
 it("rejects a bare detached target for an authenticated Enterprise install", async () => {
-  const installationState = registerSlackInstallationState("default", "enterprise");
-  try {
-    await expect(act({ action: "react", ...message, emoji: "thumbsup" })).rejects.toThrow(
-      "unsupported_enterprise_slack_delivery",
-    );
-    expect(reactSlackMessage).not.toHaveBeenCalled();
-  } finally {
-    installationState.release();
-  }
+  installEnterprise();
+  await expect(act({ action: "react", ...message, emoji: "thumbsup" })).rejects.toThrow(
+    "unsupported_enterprise_slack_delivery",
+  );
+  expect(reactSlackMessage).not.toHaveBeenCalled();
 });
 
 it("reads the current requester from the trusted current workspace", async () => {
@@ -121,12 +127,9 @@ it("reads the current requester from the trusted current workspace", async () =>
   getSlackMemberInfo.mockResolvedValueOnce(info);
   const result = await act(
     { action: "memberInfo", userId: "U123" },
-    {
-      ...trustedContext,
-      requesterSenderId: "U123",
-    },
+    { ...trustedContext, requesterSenderId: "U123" },
   );
-  expect(getSlackMemberInfo).toHaveBeenCalledWith("U123", { cfg, teamId: "T123" });
+  expect(getSlackMemberInfo).toHaveBeenCalledWith("U123", scopedOptions());
   expect(result.details).toEqual({ ok: true, info });
 });
 
@@ -140,26 +143,14 @@ it.each([
     },
   },
 ])("rejects Enterprise metadata reads with $name", async ({ context }) => {
-  const installationState = registerSlackInstallationState("default", "enterprise");
-  try {
-    for (const action of ["memberInfo", "emojiList"]) {
-      await expect(
-        act(
-          { action, userId: "U123" },
-          {
-            ...context,
-            currentChannelProvider: "slack",
-            requesterAccountId: "default",
-            requesterSenderId: "U123",
-          },
-        ),
-      ).rejects.toThrow("unsupported_enterprise_slack_delivery");
-    }
-    expect(getSlackMemberInfo).not.toHaveBeenCalled();
-    expect(listSlackEmojis).not.toHaveBeenCalled();
-  } finally {
-    installationState.release();
+  installEnterprise();
+  for (const action of ["memberInfo", "emojiList"]) {
+    await expect(
+      act({ action, userId: "U123" }, { ...trustedContext, ...context, requesterSenderId: "U123" }),
+    ).rejects.toThrow("unsupported_enterprise_slack_delivery");
   }
+  expect(getSlackMemberInfo).not.toHaveBeenCalled();
+  expect(listSlackEmojis).not.toHaveBeenCalled();
 });
 
 it("scopes every message and pin write to the trusted current workspace", async () => {
@@ -175,12 +166,11 @@ it("scopes every message and pin write to the trusted current workspace", async 
     "team:T123:channel:C123",
   );
   expect(editSlackMessage).toHaveBeenCalledWith("C123", "123.456", "updated", {
-    cfg,
-    teamId: "T123",
+    ...scopedOptions(),
     blocks: undefined,
   });
   for (const operation of [deleteSlackMessage, pinSlackMessage, unpinSlackMessage]) {
-    expect(operation).toHaveBeenCalledWith("C123", "123.456", { cfg, teamId: "T123" });
+    expect(operation).toHaveBeenCalledWith("C123", "123.456", scopedOptions());
   }
 });
 
@@ -206,8 +196,7 @@ it("scopes history, file, reaction, and emoji reads to the trusted workspace", a
   await act({ action: "downloadFile", channelId: "C123", fileId: "F123" }, trustedContext);
   await act({ action: "emojiList" }, trustedContext);
   expect(readSlackMessages).toHaveBeenCalledWith("C123", {
-    cfg,
-    teamId: "T123",
+    ...scopedOptions(),
     limit: 20,
     before: undefined,
     after: undefined,
@@ -221,16 +210,15 @@ it("scopes history, file, reaction, and emoji reads to the trusted workspace", a
     hasMore: false,
     messages: [{ ts: "1712345678.123456", timestampMs: 1712345678123 }],
   });
-  expect(listSlackReactions).toHaveBeenCalledWith("C123", "123.456", { cfg, teamId: "T123" });
+  expect(listSlackReactions).toHaveBeenCalledWith("C123", "123.456", scopedOptions());
   expect(downloadSlackFile).toHaveBeenCalledWith(
     "F123",
     expect.objectContaining({
-      cfg,
-      teamId: "T123",
+      ...scopedOptions(),
       channelId: "C123",
     }),
   );
-  expect(listSlackEmojis).toHaveBeenCalledWith({ cfg, teamId: "T123" });
+  expect(listSlackEmojis).toHaveBeenCalledWith(scopedOptions());
 });
 
 function createReplyToFirstContext(
@@ -324,7 +312,6 @@ beforeEach(() => {
   cfg = slackConfig();
   vi.clearAllMocks();
   resolveSlackConversationName.mockReset().mockResolvedValue(undefined);
-  resolveSlackConversationInfo.mockClear();
   Object.assign(slackActionRuntime, originalSlackActionRuntime, {
     deleteSlackMessage,
     downloadSlackFile,
@@ -346,21 +333,13 @@ beforeEach(() => {
 });
 
 it("qualifies a bare reaction target from the trusted current conversation", async () => {
-  const installationState = registerSlackInstallationState("default", "enterprise");
-  try {
-    const result = await act(
-      { action: "react", channelId: "channel:c08gqh53ejm", messageId: "123.456", emoji: "✅" },
-      { ...trustedContext, currentChannelId: "team:T123:channel:C08GQH53EJM" },
-    );
-
-    expect(result.details).toEqual({ ok: true, added: "✅" });
-    expect(reactSlackMessage).toHaveBeenCalledWith("C08GQH53EJM", "123.456", "✅", {
-      cfg,
-      teamId: "T123",
-    });
-  } finally {
-    installationState.release();
-  }
+  installEnterprise();
+  const result = await act(
+    { action: "react", channelId: "channel:c08gqh53ejm", messageId: "123.456", emoji: "✅" },
+    { ...trustedContext, currentChannelId: "team:T123:channel:C08GQH53EJM" },
+  );
+  expect(result.details).toEqual({ ok: true, added: "✅" });
+  expect(reactSlackMessage).toHaveBeenCalledWith("C08GQH53EJM", "123.456", "✅", scopedOptions());
 });
 
 it.each([
@@ -368,13 +347,7 @@ it.each([
   ["account", { requesterAccountId: "other" }],
   ["workspace", { currentMessagingTarget: "team:T456:channel:C123" }],
 ] as const)("does not infer a workspace from conflicting %s context", async (_, patch) => {
-  await act(
-    { action: "react", ...message, emoji: "✅" },
-    {
-      ...trustedContext,
-      ...patch,
-    },
-  );
+  await act({ action: "react", ...message, emoji: "✅" }, { ...trustedContext, ...patch });
   expect(reactSlackMessage).toHaveBeenCalledWith("C123", "123.456", "✅", { cfg });
 });
 
@@ -389,10 +362,7 @@ it.each([
 ])("removes $name", async ({ channelId, emoji, remove }) => {
   await act({ action: "react", channelId, messageId: "123.456", emoji, remove });
   if (remove) {
-    expect(removeSlackReaction).toHaveBeenCalledWith("C123", "123.456", "✅", {
-      cfg,
-      teamId: "T123",
-    });
+    expect(removeSlackReaction).toHaveBeenCalledWith("C123", "123.456", "✅", scopedOptions());
   } else {
     expect(removeOwnSlackReactions).toHaveBeenCalledWith("C1", "123.456", { cfg });
   }
@@ -422,9 +392,7 @@ it("authorizes a context-only download and reports unavailable attachments", asy
   cfg = slackConfig({ groupPolicy: "allowlist", channels: { C_ALLOWED: { enabled: true } } });
   const result = await act(
     { action: "downloadFile", fileId: "F123" },
-    {
-      currentChannelId: "C_ALLOWED",
-    },
+    { currentChannelId: "C_ALLOWED" },
   );
   expect(downloadSlackFile).toHaveBeenCalledWith(
     "F123",

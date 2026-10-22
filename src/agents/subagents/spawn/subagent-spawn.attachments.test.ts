@@ -21,8 +21,12 @@ let configOverride: Record<string, unknown> = createSubagentSpawnTestConfig();
 let workspaceDirOverride = "";
 let stateDirOverride = "";
 let subagentSpawnModule: Awaited<ReturnType<typeof loadSubagentSpawnModuleForTest>>;
-const tempDir = (label: string) =>
-  fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-subagent-${label}-`));
+const tempDirs: string[] = [];
+function tempDir(label: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `openclaw-subagent-${label}-`));
+  tempDirs.push(dir);
+  return dir;
+}
 
 beforeAll(async () => {
   subagentSpawnModule = await loadSubagentSpawnModuleForTest({
@@ -46,10 +50,8 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
-  for (const dir of [workspaceDirOverride, stateDirOverride]) {
-    if (dir) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
   workspaceDirOverride = stateDirOverride = "";
   vi.unstubAllEnvs();
@@ -97,19 +99,20 @@ function getChildSystemPrompt(): string {
   return agentCall?.params?.extraSystemPrompt ?? "";
 }
 
-function resolveStagedDir(relDir: string, childSessionKey: string): string {
+function stagedDir(result: Awaited<ReturnType<typeof spawn>>): string {
   return path.join(
     resolveSubagentSessionAttachmentRootDir({
       agentId: "main",
-      childSessionKey,
+      childSessionKey: result.childSessionKey as string,
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDirOverride },
     }),
-    path.basename(relDir),
+    path.basename(result.attachments?.relDir ?? ""),
   );
 }
 
-const stagedDir = (result: Awaited<ReturnType<typeof spawn>>) =>
-  resolveStagedDir(result.attachments?.relDir ?? "", result.childSessionKey as string);
+function expectAttachmentError(result: Awaited<ReturnType<typeof spawn>>, error: string) {
+  expect(result).toMatchObject({ status: "error", error: expect.stringContaining(error) });
+}
 
 it.each([
   ["empty", ""],
@@ -126,20 +129,14 @@ it.each([
     },
   });
   const result = await spawn([attachment("file.bin", content)]);
-  expect(result).toMatchObject({
-    status: "error",
-    error: expect.stringContaining("attachments_invalid_base64_or_too_large"),
-  });
+  expectAttachmentError(result, "attachments_invalid_base64_or_too_large");
 });
 
 it.each(["foo/bar", "..", ".manifest.json", "receipt<final>.jpg", "", "foo\nbar"])(
   "rejects invalid attachment name %j",
   async (name) => {
     const result = await spawnWithName(name);
-    expect(result).toMatchObject({
-      status: "error",
-      error: expect.stringMatching(/attachments_invalid_name/),
-    });
+    expectAttachmentError(result, "attachments_invalid_name");
     if (name.includes("\n")) {
       expect(result.error).not.toContain(name);
       expect(result.error).not.toMatch(/[\u0085\u009B\u2028\u2029\u202E]/);
@@ -150,17 +147,13 @@ it.each(["foo/bar", "..", ".manifest.json", "receipt<final>.jpg", "", "foo\nbar"
 it("rejects a raw-valid path list whose wrapped prompt exceeds the budget", async () => {
   // Raw path stays under 4096; wrapper label/tags push the rendered block over.
   const result = await spawnWithName(`${"n".repeat(4000)}.bin`);
-  expect(result).toMatchObject({
-    status: "error",
-    error: expect.stringMatching(/attachments_prompt_paths_exceeded/),
-  });
+  expectAttachmentError(result, "attachments_prompt_paths_exceeded");
   expect(result.error).toContain("maxChars=4096");
 });
 
 it("duplicate name returns attachments_duplicate_name", async () => {
   const result = await spawn([attachment("file.txt"), attachment("file.txt")]);
-  expect(result.status).toBe("error");
-  expect(result.error).toMatch(/attachments_duplicate_name/);
+  expectAttachmentError(result, "attachments_duplicate_name");
 });
 
 it("renders sandbox paths from the reserved read-only mount", async () => {
@@ -230,14 +223,9 @@ it("ignores a symlinked workspace attachment parent", async () => {
   fs.symlinkSync(escapedDir, path.join(attachmentParent, "attachments"));
   fs.writeFileSync(path.join(escapedDir, "sentinel.txt"), "must-survive");
 
-  try {
-    const result = await spawnWithName("marker.txt");
-
-    expect(result).toMatchObject({ status: "accepted" });
-    expect(fs.existsSync(path.join(stagedDir(result), "marker.txt"))).toBe(true);
-    expect(fs.existsSync(path.join(escapedDir, "marker.txt"))).toBe(false);
-    expect(fs.readFileSync(path.join(escapedDir, "sentinel.txt"), "utf8")).toBe("must-survive");
-  } finally {
-    fs.rmSync(escapedDir, { recursive: true, force: true });
-  }
+  const result = await spawnWithName("marker.txt");
+  expect(result).toMatchObject({ status: "accepted" });
+  expect(fs.existsSync(path.join(stagedDir(result), "marker.txt"))).toBe(true);
+  expect(fs.existsSync(path.join(escapedDir, "marker.txt"))).toBe(false);
+  expect(fs.readFileSync(path.join(escapedDir, "sentinel.txt"), "utf8")).toBe("must-survive");
 });

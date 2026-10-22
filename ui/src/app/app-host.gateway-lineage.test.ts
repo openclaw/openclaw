@@ -312,6 +312,8 @@ describe("Control UI Gateway target lineage", () => {
           },
         ).unmount;
         flush();
+        await vi.dynamicImportSettled();
+        flush();
         if (!sameOwner) {
           await handleSendChat(state, captured.draftText, {
             resumeQueuedMessageEditId: captured.id,

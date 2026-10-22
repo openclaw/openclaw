@@ -172,7 +172,7 @@
     font-weight: 500;
     color: var(--text-strong);
     overflow: hidden;
-    text-overflow: ellipsis;
+    text-overflow: clip;
     white-space: nowrap;
 
     /* Selected PR is the sole two-line heading exception. Keep the header height. */
@@ -180,6 +180,7 @@
       display: -webkit-box;
       -webkit-box-orient: vertical;
       -webkit-line-clamp: 2;
+      text-overflow: ellipsis;
       font-size: 16px;
       line-height: 20px;
       white-space: normal;

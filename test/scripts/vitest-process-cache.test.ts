@@ -14,15 +14,13 @@ const tsxPreload = pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm
 
 async function run(spec: Parameters<typeof spawnOwnedVitestProcess>[0]) {
   const { child, completion } = spawnOwnedVitestProcess(spec);
-  let stdout = "";
-  let stderr = "";
-  child.stdout?.on("data", (chunk: Buffer) => {
-    stdout += chunk.toString();
-  });
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
-  return { result: await completion, stdout, stderr };
+  const output = { stdout: "", stderr: "" };
+  for (const stream of ["stdout", "stderr"] as const) {
+    child[stream]?.on("data", (chunk: Buffer) => {
+      output[stream] += chunk.toString();
+    });
+  }
+  return { result: await completion, ...output };
 }
 
 it.each([

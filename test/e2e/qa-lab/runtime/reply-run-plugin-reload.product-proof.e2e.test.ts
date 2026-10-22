@@ -4,23 +4,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
-import {
-  createQaBusState,
-  createQaChannelTransport,
-  startQaBusServer,
-} from "../../../../extensions/qa-lab/api.js";
-import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../../src/config/config.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { useChannelProductProof } from "./channel-product-proof.test-support.js";
 
 const CHANNEL_ID = "qa-channel";
 const PEER_ID = "reload-peer";
 const CLI_MODEL = "claude-cli/claude-opus-5";
 const TURN_MS = Number(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF_TURN_MS ?? 340_000);
 
-let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
-let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
+const proof = useChannelProductProof();
 
 const FAKE_CLAUDE = String.raw`#!/usr/bin/env node
 const fs = require("node:fs");
@@ -105,30 +98,11 @@ function readLog(file: string): string {
 const waitForFile = (file: string, timeout: number, interval = 500) =>
   waitFor(file, () => (fs.existsSync(file) ? true : undefined), timeout, interval);
 
-afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const stop of [
-    () => gatewayOwner && stopQaGatewayFixture(gatewayOwner),
-    () => bus?.stop(),
-  ]) {
-    try {
-      await stop();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  gatewayOwner = undefined;
-  bus = undefined;
-  vi.unstubAllEnvs();
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "reload repro cleanup failed");
-  }
-});
-
 it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
   "delivers a claude-cli reply across forced plugin reload (#144809)",
   { timeout: 1_200_000 },
   async () => {
+    proof.cleanup(() => vi.unstubAllEnvs());
     const fakeRoot = process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF_DIR ?? os.tmpdir();
     fs.mkdirSync(fakeRoot, { recursive: true });
     const fakeDir = fs.mkdtempSync(path.join(fakeRoot, "fake-claude-"));
@@ -137,17 +111,7 @@ it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
     vi.stubEnv("FAKE_CLAUDE_DIR", fakeDir);
     vi.stubEnv("FAKE_CLAUDE_TURN_MS", String(TURN_MS));
 
-    const state = createQaBusState();
-    bus = await startQaBusServer({ state });
-    gatewayOwner = createQaLiveLaneGateway();
-    const { gateway } = await gatewayOwner.start({
-      repoRoot: process.cwd(),
-      providerMode: "mock-openai",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      transport: createQaChannelTransport(state),
-      transportBaseUrl: bus.baseUrl,
-      controlUiEnabled: false,
+    const { gateway, state } = await proof.start({
       mutateConfig: (config) => {
         const plugins = (config.plugins ??= {});
         plugins.allow = [...new Set([...(plugins.allow ?? []), "anthropic"])];
@@ -292,14 +256,7 @@ it.runIf(process.env.OPENCLAW_E2E_PLUGIN_RELOAD_PROOF === "1")(
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound")
       .map((message) => message.text);
-    const interesting = readGatewayLogs()
-      .split("\n")
-      .filter((line) =>
-        /authority snapshot|\[reload\]|cli turn|cli-backend|Embedded agent|failed before|aborted|reply run|stopping qa-channel|restarting qa-channel|channel reload/i.test(
-          line,
-        ),
-      )
-      .map((line) => line.replace(/\[[0-9;]*m/g, "").slice(0, 400));
+    const interesting = readGatewayLogs().split("\n").map(stripAnsi);
 
     expect(finished).toBe(true);
     const cliTurnLine = interesting.find((line) => line.includes("] cli turn: "));

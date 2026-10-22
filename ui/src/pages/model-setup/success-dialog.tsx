@@ -2,7 +2,7 @@ import {
   hasProviderBrandIcon,
   providerIdFromModelRef,
 } from "../../components/provider-icon-data.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";

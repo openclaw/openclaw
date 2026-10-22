@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CliBackendConfig } from "../plugins/cli-backend.types.js";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import type {
   CliOutput,
   CliTerminalFailure,
@@ -15,16 +16,13 @@ export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
-function isGeminiCliProvider(providerId: string): boolean {
-  return normalizeLowercaseStringOrEmpty(providerId) === "google-gemini-cli";
-}
-
 export function isGeminiStreamJsonDialect(params: {
   backend: CliBackendConfig;
   providerId: string;
 }): boolean {
   return (
-    params.backend.jsonlDialect === "gemini-stream-json" || isGeminiCliProvider(params.providerId)
+    params.backend.jsonlDialect === "gemini-stream-json" ||
+    normalizeLowercaseStringOrEmpty(params.providerId) === "google-gemini-cli"
   );
 }
 
@@ -268,32 +266,6 @@ const CLAUDE_TURN_STOP_REASONS = new Set([
   "budget_exhausted",
 ]);
 
-function readClaudeTurnStop(
-  parsed: Record<string, unknown>,
-): { terminalReason: string; stopReason?: string } | undefined {
-  const terminalReason =
-    typeof parsed.terminal_reason === "string"
-      ? normalizeCliTerminalReason(parsed.terminal_reason)
-      : "";
-  // Only a reply-less result counts: a turn that still delivered text is a
-  // normal answer. A backgrounded turn continues and reports later, and a
-  // result that already carries an explicit CLI error keeps that error's own
-  // classification (an API failure must stay failover-able, not terminal).
-  if (
-    parsed.type !== "result" ||
-    !CLAUDE_TURN_STOP_REASONS.has(terminalReason) ||
-    unwrapNestedCliResultText(collectCliText(parsed.result)).trim() ||
-    collectExplicitCliErrorText(parsed)
-  ) {
-    return undefined;
-  }
-  const stopReason =
-    typeof parsed.stop_reason === "string" ? normalizeCliTerminalReason(parsed.stop_reason) : "";
-  // Both fields reach operator- and model-visible failure text, so cap the
-  // CLI-controlled strings here rather than injecting unbounded backend text.
-  return { terminalReason, ...(stopReason ? { stopReason } : {}) };
-}
-
 function readClaudeTerminalFailure(
   parsed: Record<string, unknown>,
 ): CliTerminalFailure | undefined {
@@ -301,8 +273,31 @@ function readClaudeTerminalFailure(
   const terminalReason =
     typeof parsed.terminal_reason === "string" ? parsed.terminal_reason.trim() : "";
   if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
-    const stop = readClaudeTurnStop(parsed);
-    return stop ? { reason: "turn_stopped", ...stop } : undefined;
+    const stopTerminalReason =
+      typeof parsed.terminal_reason === "string"
+        ? normalizeCliTerminalReason(parsed.terminal_reason)
+        : "";
+    // Only a reply-less result counts: a turn that still delivered text is a
+    // normal answer. A backgrounded turn continues and reports later, and a
+    // result that already carries an explicit CLI error keeps that error's own
+    // classification (an API failure must stay failover-able, not terminal).
+    if (
+      parsed.type !== "result" ||
+      !CLAUDE_TURN_STOP_REASONS.has(stopTerminalReason) ||
+      unwrapNestedCliResultText(collectCliText(parsed.result)).trim() ||
+      collectExplicitCliErrorText(parsed)
+    ) {
+      return undefined;
+    }
+    const stopReason =
+      typeof parsed.stop_reason === "string" ? normalizeCliTerminalReason(parsed.stop_reason) : "";
+    // Both fields reach operator- and model-visible failure text, so cap the
+    // CLI-controlled strings here rather than injecting unbounded backend text.
+    return {
+      reason: "turn_stopped",
+      terminalReason: stopTerminalReason,
+      ...(stopReason ? { stopReason } : {}),
+    };
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
   for (const error of errors) {
@@ -362,13 +357,7 @@ export function pickCliSessionId(
     "conversation_id",
     "conversationId",
   ];
-  for (const field of fields) {
-    const value = parsed[field];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return readTrimmedStringAlias(parsed, fields);
 }
 
 // Claude Code forwards subagent (Agent tool) traffic with `parent_tool_use_id`
@@ -464,16 +453,6 @@ export function pickCliResumeCheckpointId(params: {
   return checkpointId || undefined;
 }
 
-function hasExplicitCliErrorPayload(parsed: Record<string, unknown>): boolean {
-  if (typeof parsed.error === "string") {
-    return Boolean(parsed.error.trim());
-  }
-  if (isRecord(parsed.error)) {
-    return Boolean(readNestedErrorMessage(parsed.error));
-  }
-  return false;
-}
-
 export function parseCliJson(
   raw: string,
   backend: CliBackendConfig,
@@ -506,7 +485,9 @@ export function parseCliJson(
       (parsed.type === "result" &&
         (subtype.startsWith("error_") ||
           parsed.status === "error" ||
-          hasExplicitCliErrorPayload(parsed)));
+          (typeof parsed.error === "string"
+            ? Boolean(parsed.error.trim())
+            : isRecord(parsed.error) && Boolean(readNestedErrorMessage(parsed.error)))));
     const errorText = shouldClassifyError ? collectExplicitCliErrorText(parsed) : "";
     if (errorText) {
       return { text: "", sessionId, usage, errorText };

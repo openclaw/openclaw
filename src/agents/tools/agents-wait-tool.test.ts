@@ -777,4 +777,87 @@ describe("agents_wait", () => {
   ])("rejects invalid batches: $error", async ({ error, ...params }) => {
     await expect(createMainSessionWaitTool().execute("call", params)).rejects.toThrow(error);
   });
+
+  function observeRead() {
+    const read = createDeferred();
+    registryEvents.read.mockImplementation(async (ids) => {
+      read.resolve();
+      return preparedRuns(() => selectRuns(records, ids));
+    });
+    return read.promise;
+  }
+
+  it.each(["cell", "nested"])(
+    "keeps sibling results owned with %s awaitResults until every completion arrives",
+    async (mode) => {
+      onTestFinished(resetCodeModeTestState);
+      const first = addRun("first-required", { status: "done" });
+      const second = addRun("second-required");
+      const read = observeRead();
+      const h = createCodeModeHarness();
+      applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createMainSessionWaitTool()] });
+      const result = expectDefined(h.tools[0], "exec").execute("required-child-results", {
+        title: "Collect required child results",
+        awaitResults: mode === "cell",
+        code: `return await agents_wait({ids:["first-required", "second-required"]${mode === "nested" ? ", awaitResults: true" : ""}});`,
+      });
+      const complete = () => {
+        second.collectorCompletion = { status: "failed" };
+        publishChanges();
+      };
+      try {
+        await read;
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await vi.advanceTimersByTimeAsync(60_000);
+        const pending = Symbol("pending");
+        expect(await Promise.race([result, Promise.resolve(pending)])).toBe(pending);
+        expect(registryEvents.read).toHaveBeenCalledOnce();
+        second.completion = { required: false, resultText: "child failure evidence" };
+        complete();
+        vi.useRealTimers();
+        expect((await result).details).toMatchObject({
+          status: "completed",
+          value: {
+            pending: [],
+            completed: [
+              { runId: first.runId, status: "done" },
+              { runId: second.runId, status: "failed", result: "child failure evidence" },
+            ],
+          },
+        });
+        expect(registryEvents.read).toHaveBeenCalledTimes(2);
+        expect(registryEvents.listeners.size).toBe(0);
+      } finally {
+        vi.useRealTimers();
+        complete();
+        await result;
+      }
+    },
+  );
+
+  it("cancels required collection without borrowing another requester's child", async () => {
+    const entry = addRun("foreign-required", undefined, {}, "agent:other:main");
+    const tool = createMainSessionWaitTool();
+    await expect(
+      tool.execute("foreign", { ids: [entry.runId], awaitResults: true }),
+    ).resolves.toMatchObject({
+      details: { success: false, errors: [{ runId: entry.runId, error: "not_owner" }] },
+    });
+    entry.swarmRequesterSessionKey = MAIN;
+    const read = observeRead();
+    const abort = new AbortController();
+    const result = tool.execute(
+      "required-abort",
+      { ids: [entry.runId], awaitResults: true },
+      abort.signal,
+    );
+    const rejected = expect(result).rejects.toThrow("agents_wait aborted");
+    await read;
+    abort.abort();
+    await rejected;
+    expect(registryEvents.listeners.size).toBe(0);
+    await expect(
+      tool.execute("ambiguous-wait", { ids: [entry.runId], awaitResults: true, timeoutSeconds: 1 }),
+    ).rejects.toThrow("cannot also specify");
+  });
 });

@@ -695,7 +695,7 @@ export function createAgentDatabaseNativeGeneration(
               stopped: nativeStopped,
               assertOwned: assertCleanupOwned,
               lease,
-              refusedBeforeAgentOpen: readOpenRefused?.(),
+              readOpenRefused,
               closed: () =>
                 storeClosed
                   ? readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease)

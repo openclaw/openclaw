@@ -483,6 +483,7 @@ export async function resolveReplyDirectives(params: {
   const resolvedVerboseLevel =
     directives.verboseLevel ??
     (targetSessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+    agentEntry?.verboseDefault ??
     agentCfg?.verboseDefault;
   const configuredReasoningDefault = agentEntry?.reasoningDefault ?? agentCfg?.reasoningDefault;
   const canUseReasoningState =

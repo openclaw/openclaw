@@ -46,6 +46,7 @@ import {
   selectedFiles,
   expectCanonicalGroupedConcurrency,
   expectProtectedOwnerExpansion,
+  expectProjectedNodeTestResources,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -151,7 +152,7 @@ it.each(
   [
     [],
     ["ui/src/pages/activity/deleted.test.ts"],
-    ["ui/src/pages/activity/activity-page.test.ts", "ui/src/pages/activity/activity-page.ts"],
+    ["ui/src/pages/activity/activity-page.test.ts", "ui/src/pages/activity/activity-page.tsx"],
     ["ui/src/test-helpers/control-ui-e2e.test.ts"],
     ["ui/src/app/gateway-store.test-support.ts"],
     ["ui/src/styles/cursor-policy.browser.test.ts"],
@@ -1017,6 +1018,7 @@ describe("CI changed Node test plan", () => {
   it.each(["blacksmith", "github", "hybrid"])(
     "retains precise process ownership and independent timing keys (%s)",
     (runnerBackend) => {
+      const envScratch = argvTempDirs.make("changed-owner-env-");
       const targets = [
         "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
         "src/agents/embedded-agent-runner/run/attempt-transcript-helpers.presence.test.ts",
@@ -1046,11 +1048,7 @@ describe("CI changed Node test plan", () => {
             expect(group.configs).toEqual([buildVitestRunPlans([target])[0]?.config]);
           }
           expect(group.runner).toBe(owner.runner);
-          expect(job.planConcurrency).toBe(
-            job.groups?.length === 1 && ownerJob.planConcurrency === 2
-              ? 1
-              : ownerJob.planConcurrency,
-          );
+          expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
           for (const key of ["pretestBuildMode", "timeoutMinutes"] as const) {
             expect(job[key], key).toEqual(ownerJob[key]);
           }
@@ -1137,13 +1135,7 @@ describe("CI changed Node test plan", () => {
               "minTotalMemoryBytes",
               "pretestBuildMode",
             ]);
-            const singleton = job.groups.length === 1 && ownerJob.planConcurrency === 2;
-            expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
-            expect(job.env).toEqual(
-              singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-                ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
-                : ownerJob.env,
-            );
+            expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
             expectSameFields(job, ownerJob, ["runner", "timeoutMinutes"]);
           }
         }
@@ -1369,6 +1361,7 @@ describe("CI changed Node test plan", () => {
     });
     const selectedJobs = shards?.filter((shard) => shard.groups?.length) ?? [];
     expect(selectedJobs.length).toBeGreaterThan(0);
+    const envScratch = argvTempDirs.make("changed-wide-owner-env-");
     for (const job of selectedJobs) {
       for (const group of job.groups ?? []) {
         const ownerJob = expectDefined(
@@ -1385,14 +1378,9 @@ describe("CI changed Node test plan", () => {
         expect(group.env).toEqual(owner.env);
         expect(group.fallbackMaxWorkers).toBe(owner.fallbackMaxWorkers);
         expect(group.minTotalMemoryBytes).toBe(owner.minTotalMemoryBytes);
-        const singleton = job.groups?.length === 1 && ownerJob.planConcurrency === 2;
-        expect(job.env).toEqual(
-          singleton && owner.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined
-            ? { ...ownerJob.env, OPENCLAW_VITEST_MAX_WORKERS: "2" }
-            : ownerJob.env,
-        );
+        const childEnv = expectProjectedNodeTestResources(job, group, ownerJob, owner, envScratch);
+        expect(childEnv.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
         expect(job.runner).toBe(ownerJob.runner);
-        expect(job.planConcurrency).toBe(singleton ? 1 : ownerJob.planConcurrency);
       }
     }
     const cheapFiles = vi

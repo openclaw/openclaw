@@ -130,10 +130,11 @@ pr_read_current_workflow_request() {
       *) return 2 ;;
     esac
   done
-  [ "$current" = true ] && [ -n "$PR_WORKFLOW_RECOVERY_HEAD" ] && [ "$admin" = "$confirmed" ]
+  [ "$current" = true ] && [ "$admin" = "$confirmed" ] &&
+    { [ -n "$PR_WORKFLOW_RECOVERY_HEAD" ] || [ "$admin" = true ]; }
 }
 pr_read_current_workflow_request "$@" || {
-  echo "--current-workflow requires confirmed merge-recover with an exact outcome and replacement head." >&2
+  echo "--current-workflow requires confirmed merge-recover with an exact outcome and either a replacement head or confirmed same-head admin recovery." >&2
   exit 2
 }
 
@@ -200,7 +201,7 @@ try {
       if (symbolicAnchor.error || symbolicAnchor.signal || symbolicAnchor.status !== 1) {
         throw new Error("Refusing symbolic or unreadable current workflow anchor");
       }
-      if (!current || !oid.test(outcome) || !oid.test(replacementHead) ||
+      if (!current || !oid.test(outcome) || (replacementHead !== "" && !oid.test(replacementHead)) ||
           source !== run(["rev-parse", "--verify", `${anchor}^{commit}`]) ||
           !["https://github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw.git",
             "git@github.com:openclaw/openclaw.git", "ssh://git@github.com/openclaw/openclaw.git"].includes(run(["config", "--get", "remote.origin.url"]))) {
@@ -214,10 +215,18 @@ try {
         throw new Error("Current workflow recovery outcome changed");
       }
       const record = JSON.parse(run(["show", `${outcome}:outcome.json`]));
+      const cancelledAuto = replacementHead !== "" && record.route === "auto" &&
+        record.cancellation?.state === "confirmed";
+      // This admits current trusted code, not another dispatch. The existing
+      // provider-rejection owner must still qualify exact HTTP 405 capture bytes
+      // and revalidate the unchanged head and live admin authority before writing.
+      const rejectedAdmin = replacementHead === "" && record.route === "admin" &&
+        record.accepted === false &&
+        record.priorCiAdmin?.dispatchTransport === "rest";
       if (record.version !== 1 || record.pr !== Number(revision) ||
-          record.base !== "main" || record.phase !== "intent" || record.route !== "auto" ||
-          record.method !== "squash" || record.landed !== null || record.cancellation?.state !== "confirmed") {
-        throw new Error("Current workflow recovery requires a confirmed cancelled nonqueue auto outcome");
+          record.base !== "main" || record.phase !== "intent" ||
+          record.method !== "squash" || record.landed !== null || !(cancelledAuto || rejectedAdmin)) {
+        throw new Error("Current workflow recovery requires a confirmed cancelled nonqueue auto outcome or an unaccepted same-head REST admin intent");
       }
     };
     if (operation === "workflow-recovery-select" || operation === "workflow-recovery-provenance") {
@@ -914,7 +923,7 @@ Usage:
     Exact evidence is required; branch-caused failures, security checks, and enforced reviews remain blocking.
     This requires --confirmed-operator-admin and immediate squash without auto-merge.
     Repeated merge-run reconciles retained outcomes; it never retries an uncertain dispatch.
-  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> [--auto-merge | --current-workflow]] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
+  scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery [--replacement-head <SHA> [--auto-merge]] [--current-workflow] [--merged-head <SHA>] [--cancel-auto [--observed-head <SHA>]] [--body-file <path>] [--legacy-refusal <evidence-directory>] [--pre-dispatch-refusal <evidence-directory>] [--admin-evidence <path> --confirmed-operator-admin]
     Explicitly authorize one new attempt after inspecting the retained outcome and remote history.
     Defaults to the retained head; replacement requires an explicitly selected full lowercase 40-character SHA,
     freshly authored exact-head review/preparation and completed CI proof. Standing landing authority covers
@@ -923,6 +932,8 @@ Usage:
     Paired admin flags permit an explicitly selected head after confirmed auto cancellation, including the retained SHA.
     They also permit same-head recovery without --replacement-head for the complete known prior-CI REST base-modified HTTP 405 rejection.
     This reruns current admin admission and retains the original captures; other admin failures remain fenced.
+    --current-workflow explicitly selects current official main for either cancelled-auto replacement or
+    same-head qualified HTTP 405 admin recovery; the retained binding remains unchanged.
     --replacement-head <SHA> --auto-merge retires an unaccepted prior-CI REST admin intent fenced by a different
     exact current head, then requests ordinary current-head auto-merge. It requires exact-head github_pending
     preparation and all normal required-check gates; it never reuses prior admin evidence.

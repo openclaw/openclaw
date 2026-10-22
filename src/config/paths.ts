@@ -66,7 +66,7 @@ export function isDefaultStateDir(
 ): boolean {
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (!override) {
-    return true;
+    return !normalizeProfileName(env.OPENCLAW_PROFILE);
   }
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
   return (

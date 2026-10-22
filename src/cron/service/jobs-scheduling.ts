@@ -29,9 +29,6 @@ import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications 
 import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
-/** Skip reason recorded when a main-session heartbeat run is disabled. */
-export const HEARTBEAT_SKIP_DISABLED = "disabled";
-
 /** A new timer receipt owns continuation; never reopen the interrupted occurrence. */
 export function resolveCronRestartRetryAtMs(
   job: CronJob,
