@@ -1,10 +1,10 @@
 /** Validates and normalizes provider plugin definitions before registry registration. */
+import { omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   isPluginManifestOnboardingScope,
   normalizeProviderAssistantVisibility,
-  omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -66,7 +66,7 @@ function buildNormalizedWizardSetup(
   setup: ProviderWizardSetup,
   methodId: string | undefined,
 ): ProviderWizardSetup {
-  return omitUndefinedManifestFields({
+  return omitUndefinedFields({
     choiceId: normalizeOptionalString(setup.choiceId),
     modelTarget: setup.modelTarget === "utility" ? ("utility" as const) : undefined,
     choiceLabel: normalizeOptionalString(setup.choiceLabel),
@@ -100,7 +100,7 @@ function buildNormalizedModelPicker(
   modelPicker: ProviderWizardModelPicker,
   methodId: string | undefined,
 ): ProviderWizardModelPicker {
-  return omitUndefinedManifestFields({
+  return omitUndefinedFields({
     label: normalizeOptionalString(modelPicker.label),
     hint: normalizeOptionalString(modelPicker.hint),
     methodId,

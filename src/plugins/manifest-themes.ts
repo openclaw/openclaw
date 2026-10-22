@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import type { Expression, Property } from "acorn";
 import {
   isThemeId,
@@ -11,7 +11,6 @@ import {
   THEME_BRAND_ICON_IDS,
   THEME_CRITTER_IDS,
 } from "../../packages/gateway-protocol/src/theme.ts";
-import { omitUndefinedManifestFields } from "./manifest-capability-normalizers.js";
 import type { PluginManifestTheme } from "./manifest-types.js";
 
 const MAX_PLUGIN_THEMES = 32;
@@ -142,7 +141,7 @@ function normalizeCritter(metadata: unknown, label: string) {
   ) {
     throw new Error(`${label}.crossMs must be an integer from 5000 to 90000`);
   }
-  return omitUndefinedManifestFields({
+  return omitUndefinedFields({
     source: normalizeArtworkPath(source, `${label}.source`),
     title,
     crossMs,
@@ -226,7 +225,7 @@ export function normalizeManifestThemes(
         name: name.trim(),
         description: description.trim(),
         source: relativePath,
-        ...omitUndefinedManifestFields({
+        ...omitUndefinedFields({
           icons: normalizeArtworkEntries(
             icons,
             `themes[${index}].icons`,
