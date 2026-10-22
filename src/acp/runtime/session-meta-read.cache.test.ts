@@ -1,10 +1,7 @@
 import path from "node:path";
-import { type DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
-import {
-  observeSqliteReadSql,
-  trackSqliteStatementExecutions,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
@@ -17,7 +14,6 @@ import { assertSupportedStateSchemaVersion } from "../../state/openclaw-state-db
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import {
   buildAcpDatabaseSessionKey,
-  deleteAcpSessionMetaRows,
   readPublishedAcpSessionRows,
   upsertAcpSessionMetaRow,
 } from "./session-meta-keys.js";
@@ -84,37 +80,6 @@ function fixture() {
   return { writer, pathname, read, withReader };
 }
 
-it("reuses admitted ACP rows and committed postimages without rereading metadata", () => {
-  const { writer, pathname, read } = fixture();
-  expect(read().rows).toEqual([null]);
-  const observation = observeSqliteReadSql(StatementSync.prototype);
-  restorers.push(observation.restore);
-  expect(read().rows).toEqual([null]);
-  insert(writer, "first");
-  expectName(readPublishedAcpSessionRows(pathname, command.entries)?.[0], "first");
-  const rows = read().rows;
-  expectName(rows[0], "first");
-  if (rows[0] && "runtime_session_name" in rows[0]) {
-    rows[0].runtime_session_name = "caller-mutated";
-  }
-  expectName(read().rows[0], "first");
-  expect(
-    read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
-  ).toEqual([null]);
-  writer.prepare("INSERT INTO config_machine_state VALUES ('unrelated', '{}', 1)").run();
-  expectName(read().rows[0], "first");
-  insert(writer, "second");
-  expectName(read().rows[0], "second");
-  deleteAcpSessionMetaRows(writer, [key]);
-  expect(read().rows).toEqual([null]);
-  expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
-  expect(
-    observation.queries.filter((sql) =>
-      /^select\b.*(?:from|join) "acp_sessions"|data_version/isu.test(sql),
-    ),
-  ).toEqual([]);
-});
-
 it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
   const { writer, pathname, read, withReader } = fixture();
   insert(writer, "before");
@@ -156,7 +121,7 @@ it("invalidates admitted ACP rows after local native writes and reader retiremen
 });
 
 it("publishes decoded set and clear postimages without rereading metadata after either write", () => {
-  const { writer, read } = fixture();
+  const { writer, pathname, read } = fixture();
   const input = {
     agentId: "main",
     storageSessionKey: "agent:main:acp:cache",
@@ -188,12 +153,21 @@ it("publishes decoded set and clear postimages without rereading metadata after 
   const mutate = (decision: Parameters<typeof applyAcpSessionMutation>[1]["decision"]) =>
     applyAcpSessionMutation(writer, { ...input, decision });
   expect(mutate({ kind: "set", meta })).toEqual({ ...result, acp: meta });
-  expect(read().rows[0]).toMatchObject({
+  const row = read().rows[0];
+  expect(row).toMatchObject({
     runtime_session_name: "returned-row",
     runtime_options_json: JSON.stringify(meta.runtimeOptions),
     last_error: meta.lastError,
   });
+  if (row && "runtime_session_name" in row) {
+    row.runtime_session_name = "caller-mutated";
+  }
+  expectName(read().rows[0], "returned-row");
+  expect(
+    read({ ...command, entries: [{ keys: [key], entry: { sessionId: "successor" } }] }).rows,
+  ).toEqual([null]);
   expect(mutate({ kind: "clear" })).toEqual({ ...result, acp: null });
   expect(counter.counts).toEqual({ read: 0, write: 2 });
   expect(read().rows).toEqual([null]);
+  expect(readPublishedAcpSessionRows(pathname, command.entries)).toEqual([null]);
 });

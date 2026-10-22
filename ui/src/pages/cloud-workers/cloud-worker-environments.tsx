@@ -182,7 +182,10 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     // Config and permission receipts invalidate the inventory at their synchronous owners.
     const stop = runtime.subscribe(syncInventoryInputs);
     syncInventoryInputs();
-    return stop;
+    return () => {
+      stop();
+      activeConfirmation?.abort();
+    };
   });
 
   const canCall = (method: string) =>

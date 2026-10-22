@@ -4,6 +4,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/pro
 import { hasErrnoCode } from "../../infra/errno.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createAnchorFixture } from "./anchor-protocol.test-support.js";
+import { waitForAnchorClosure } from "./service-child-group-anchor.preparation.test-support.js";
 import type { ServiceChildAnchorMessage, ServiceChildStart } from "./service-child-protocol.js";
 
 it
@@ -18,20 +19,7 @@ it
     const { child, generation, messages, send, exited, onMessage } = createAnchorFixture({
       preload: probe,
     });
-    const disconnected = createDeferredCore();
-    child.once("disconnect", () => disconnected.resolve());
-    const closed = Promise.all([
-      exited,
-      disconnected.promise,
-      ...child.stdio
-        .filter((stream) => stream != null)
-        .map(
-          (stream) =>
-            new Promise<void>((resolve) => {
-              stream.once("close", resolve);
-            }),
-        ),
-    ]).then(([result]) => result);
+    const closed = waitForAnchorClosure(child, exited);
     const inputProbe = child.stdio.at(6);
     const ready = createDeferredCore();
     const inputEof = createDeferredCore();

@@ -57,6 +57,8 @@ async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
     canEditConfig: true,
     configBusy: false,
     configSchemaLoading: false,
+    configRead: undefined,
+    configSchemaRead: undefined,
     configError: null,
     onConfigPatch: vi.fn(),
     onConfigRemove: vi.fn(),
@@ -126,6 +128,8 @@ describe("grouped plugin settings", () => {
           canEditConfig
           configBusy={false}
           configSchemaLoading={false}
+          configRead={undefined}
+          configSchemaRead={undefined}
           configError={null}
           onConfigPatch={onPatch}
           onConfigRemove={vi.fn()}

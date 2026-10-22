@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createEffect, createMemo, onCleanup, onSettled } from "solid-js";
+import { For, Show, createEffect, createMemo, onSettled } from "solid-js";
 import { hostDesktopSetupCopy } from "../../components/desktop/host-desktop-setup.ts";
 import "../../components/sparkline-tile.tsx";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
@@ -431,10 +431,14 @@ function SystemsWorkspace(props: {
               )
             : t("systems.accessHint");
   const Desktop = () => {
-    onCleanup(() => props.onDesktopPanel(undefined));
+    let panel!: HTMLElementTagNameMap["openclaw-desktop-panel"];
+    onSettled(() => {
+      props.onDesktopPanel(panel);
+      return () => props.onDesktopPanel(undefined);
+    });
     return (
       <openclaw-desktop-panel
-        ref={(panel) => props.onDesktopPanel(panel)}
+        ref={(element) => (panel = element)}
         embedded
         data-chat-autotype-exempt
         prop:client={controller().context.gateway.snapshot.client}

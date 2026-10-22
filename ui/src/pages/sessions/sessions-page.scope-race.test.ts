@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -26,6 +25,7 @@ import {
   createGateway,
   createRenderedPage,
   createSessions,
+  withNotifyingAgentSelection,
 } from "./sessions-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -35,27 +35,6 @@ afterEach(() => {
   vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
-
-function withNotifyingAgentSelection(context: ApplicationContext, initialScopeId: string | null) {
-  const listeners = new Set<() => void>();
-  const state = context.agentSelection.state;
-  state.scopeId = initialScopeId;
-  const changeScope = (scopeId: string | null) => {
-    if (state.scopeId === scopeId) {
-      return;
-    }
-    state.scopeId = scopeId;
-    listeners.forEach((listener) => listener());
-  };
-  Object.assign(context.agentSelection, {
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    setScope: changeScope,
-  });
-  return { context, changeScope };
-}
 
 async function setupArchivedPageWithSelection(
   scopeId: string | null,

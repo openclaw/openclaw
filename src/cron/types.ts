@@ -16,6 +16,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import type { CronCompletionStatus } from "./completion-status.js";
+import type { PluginCommandSchedule } from "./plugin-command-schedule.types.js";
 import type { CronRuntimeAuthority } from "./runtime-authority.js";
 import type {
   CronScheduledToolCallerOrigin,
@@ -322,6 +323,8 @@ export type CronJobState = Omit<
   pacedNextRunAtMs?: number;
   /** Exact occurrence retained across a manual run; authored one-shots survive pause. */
   forcePreservedNextRunAtMs?: number;
+  /** Store-private, monotonic launch attempts for a requester-admitted plugin command. */
+  pluginCommandRuns?: number;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
@@ -425,6 +428,8 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = Omit<CronJob, "streamExecutionHost"> & {
+  /** Immutable host-captured scheduled command invocation; never public create/patch input. */
+  pluginCommand?: PluginCommandSchedule;
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
   operatorSource?: {
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
@@ -469,6 +474,7 @@ type CronJobStateInput = Partial<
     | "sourceIdentity"
     | "runningReceiptId"
     | "runningScheduleChangeId"
+    | "pluginCommandRuns"
   >
 >;
 

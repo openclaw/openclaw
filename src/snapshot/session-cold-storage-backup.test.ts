@@ -127,21 +127,17 @@ it.each(backupKinds)("%s restores exact events without the source archive", asyn
   });
   await fs.unlink(fixture.archivePath);
   await restoreSessionColdTranscript({ ...fixture.scope, storePath: restoredPath });
-  const restored = new DatabaseSync(restoredPath, { readOnly: true });
-  try {
-    expect(fixture.snapshot(restored).events).toEqual(fixture.original.events);
-    expect(
-      restored
-        .prepare(
-          "SELECT message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'Preserved'",
-        )
-        .all(),
-    ).toEqual([{ message_id: "history-assistant" }]);
-    expect(restored.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
-    expect(restored.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-  } finally {
-    restored.close();
-  }
+  using restored = new DatabaseSync(restoredPath, { readOnly: true });
+  expect(fixture.snapshot(restored).events).toEqual(fixture.original.events);
+  expect(
+    restored
+      .prepare(
+        "SELECT message_id FROM session_transcript_fts WHERE session_transcript_fts MATCH 'Preserved'",
+      )
+      .all(),
+  ).toEqual([{ message_id: "history-assistant" }]);
+  expect(restored.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+  expect(restored.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
 });
 
 it.each(["full archive capture", "SQLite snapshot"] as const)(

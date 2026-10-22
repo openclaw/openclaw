@@ -212,18 +212,18 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       );
     };
 
-    const renderDocument = (_input: ReturnType<typeof sourceInput>) => {
-      const client = context?.gateway.snapshot.client;
-      if (!context || !client || context.gateway.snapshot.phase !== "connected") {
+    const renderDocument = (input: ReturnType<typeof sourceInput>) => {
+      const client = input[6];
+      if (!context || !client || !input[7]) {
         binding = undefined;
         return <ErrorNotice message={t("chat.attachments.previewUnavailable")} />;
       }
       const current: PreviewBinding = {
         client,
-        html: host.html,
-        sourceIdentity: host.sourceIdentity,
+        html: input[0],
+        sourceIdentity: input[1],
         sessionFileSource: host.sessionFileSource && { ...host.sessionFileSource },
-        generation: getCanvasWidgetFrameConnectionGeneration(),
+        generation: input[8],
       };
       const view = createMemo<PreviewView | undefined>(
         async () => {
@@ -234,6 +234,11 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             }
           });
           try {
+            // Native bridge bindings settle in the render flush; discard superseded defaults.
+            await Promise.resolve();
+            if (!isCurrent(current)) {
+              return undefined;
+            }
             const document = await client.request<CanvasDocumentViewResult>(
               "canvas.document.preview",
               { html: current.html },

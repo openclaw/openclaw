@@ -2,6 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
+import { buildChildEnv } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   createChangedNodeTestShards as createChangedNodeTestShardsWithSmoke,
   resolveChangedNodeTestTargets,
@@ -92,15 +93,39 @@ export function selectedFiles(shards: FileSelection) {
   );
 }
 
-export function isSerialNodeTestProjection(
-  groups: readonly { shard_name: string }[] | undefined,
-  owner: Pick<CompactNodeTestShard, "planConcurrency">,
-): boolean {
-  if (owner.planConcurrency !== 2 || !groups) {
-    return false;
-  }
-  // Selected-plan packing normalizes only a canonical two-plan singleton to serial admission.
-  return groups.length === 1;
+type NodeTestJobResources = Pick<CompactNodeTestShard, "planConcurrency" | "env">;
+
+export function expectProjectedNodeTestResources(
+  job: NodeTestJobResources,
+  group: CompactNodeTestShard["groups"][number],
+  ownerJob: NodeTestJobResources,
+  owner: CompactNodeTestShard["groups"][number],
+  scratchDir: string,
+) {
+  // Repacking may serialize a parallel owner, but cannot add concurrency or workers.
+  expect(job.planConcurrency ?? 1, `${group.shard_name} plan concurrency`).toBeLessThanOrEqual(
+    ownerJob.planConcurrency ?? 1,
+  );
+  const childEnv = (row: NodeTestJobResources, entry: CompactNodeTestShard["groups"][number]) =>
+    buildChildEnv(
+      { kind: "group", name: entry.shard_name, plan: entry },
+      {
+        // A wide serial CI host can admit eight workers; parallel plans admit two.
+        OPENCLAW_VITEST_MAX_WORKERS: row.planConcurrency === 1 ? "8" : "2",
+        ...row.env,
+      },
+      scratchDir,
+      0,
+    );
+  const projected = childEnv(job, group);
+  // Callers assert selected files separately; the include-file handoff is not a resource limit.
+  const { OPENCLAW_VITEST_INCLUDE_FILE: _projectedIncludes, ...projectedResources } = projected;
+  const { OPENCLAW_VITEST_INCLUDE_FILE: _ownerIncludes, ...ownerResources } = childEnv(
+    ownerJob,
+    owner,
+  );
+  expect(projectedResources, `${group.shard_name} child environment`).toEqual(ownerResources);
+  return projected;
 }
 
 export function expectCanonicalGroupedConcurrency(shards: Shards, runnerBackend?: string) {

@@ -141,15 +141,21 @@ export class CommandPaletteState {
     loadedAt?: number;
   };
   private modelItems: readonly CommandPaletteItem[] = [];
-  private readonly modelReader = new ModelCatalogReader(() => {
-    const snapshot = this.modelReader.snapshot;
-    if (snapshot.hasSnapshot) {
-      this.settledModels = snapshot;
-      // Project accepted catalog publications, not every rendering/selection read.
-      this.modelItems = getCommandPaletteModelItems(snapshot);
-    }
-    this.changed();
-  });
+  private modelSearchRead: { promise: Promise<unknown> } | undefined;
+  private readonly modelReader = new ModelCatalogReader(
+    () => {
+      const snapshot = this.modelReader.snapshot;
+      if (snapshot.hasSnapshot) {
+        this.settledModels = snapshot;
+        // Project accepted catalog publications, not every rendering/selection read.
+        this.modelItems = getCommandPaletteModelItems(snapshot);
+      }
+      this.changed();
+    },
+    {
+      onRead: (read) => (this.modelSearchRead = { promise: read.catch(() => undefined) }),
+    },
+  );
   private settledModels = this.modelReader.snapshot;
   private readonly gateway: GatewayPageBinding;
 
@@ -190,6 +196,7 @@ export class CommandPaletteState {
         this.sessionSearchRead = undefined;
         this.catalogLoad = undefined;
         this.modelReader.clear();
+        this.modelSearchRead = undefined;
         if (change.identityChanged) {
           this.clearSessionSearch();
           this.clearCatalogSearch();
@@ -406,6 +413,7 @@ export class CommandPaletteState {
 
   private clearCatalogSearch() {
     this.modelReader.clear();
+    this.modelSearchRead = undefined;
     this.modelItems = [];
     this.settledModels = this.modelReader.snapshot;
     this.catalogLoad = undefined;
@@ -468,7 +476,7 @@ export class CommandPaletteState {
             this.pluginIcons.load(pluginId);
           }
         }
-        this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
+        this.catalogLoad.loadedAt = Date.now();
         this.changed();
       }
     });
@@ -699,11 +707,8 @@ export class CommandPaletteState {
         ...this.modelItems,
       ],
       sessionSearchRead: this.sessionSearchRead,
-      catalogSearchPending: Boolean(
-        normalizeOptionalString(this.searchQuery) &&
-        !this.promptMode &&
-        ((this.catalogLoad && this.catalogLoad.loadedAt === undefined) || this.modelReader.pending),
-      ),
+      catalogSearchRead: this.catalogLoad,
+      modelSearchRead: this.modelSearchRead,
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIndexing: this.sessionSearchIndexing,

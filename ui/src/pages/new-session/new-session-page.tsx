@@ -538,9 +538,14 @@ defineSolidBridge<
   propertyChanged: (host) => {
     const owner = pageOwners.get(host);
     owner?.retireSubmissionPresentation();
+    owner?.browser.close();
     owner?.changed();
   },
-  disconnected: (host) => pageOwners.get(host)?.retireSubmissionPresentation(),
+  disconnected: (host) => {
+    const owner = pageOwners.get(host);
+    owner?.retireSubmissionPresentation();
+    owner?.browser.close();
+  },
   methods: {
     focusComposer: (host) => pageOwners.get(host)?.focusComposer(),
   },

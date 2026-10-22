@@ -18,11 +18,6 @@ import {
   withTestChannelRegistry,
 } from "./host-ingress.test-support.js";
 
-export function createCommandOwnerTestGateway(cfg: OpenClawConfig) {
-  // SAFETY: Ingress authority only consumes runtime config from this synthetic Gateway.
-  return { getRuntimeConfig: () => cfg } as GatewayRequestContext;
-}
-
 export const createCommandOwnerTestRoles = (): NonNullable<OpenClawConfig["gateway"]>["roles"] => ({
   default: "member",
   definitions: {
@@ -123,7 +118,9 @@ export async function createAdminIngressFixture(
     gateway: host.gateway,
     context,
     replaceGatewayContext: (replacement?: GatewayRequestContext) => {
-      host.replaceGatewayContext(replacement ?? createCommandOwnerTestGateway(cfg));
+      host.replaceGatewayContext(
+        replacement ?? ({ getRuntimeConfig: () => cfg } as GatewayRequestContext),
+      );
     },
     unregister: host.retire,
     retire: host.retire,

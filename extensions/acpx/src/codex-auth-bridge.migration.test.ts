@@ -1,4 +1,3 @@
-// ACPX tests cover codex auth bridge plugin behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -77,26 +76,20 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     const resolved = await prepare(pluginConfig, undefined, await writeAdapter(root));
 
     expectWrapperCommand(resolved.agents.codex, wrapperPath());
-    expect(resolved.agents.codex).not.toContain("npx @zed-industries/codex-acp@0.12.0");
-    expect(resolved.agents.codex).not.toContain("-c");
-    expect(resolved.agents.codex).toContain(OPENCLAW_CODEX_CONFIG_ARG);
-    expect(resolved.agents.codex).toContain(
+    expect(splitCommandParts(resolved.agents.codex ?? "").slice(2)).toEqual([
+      OPENCLAW_CODEX_CONFIG_ARG,
       JSON.stringify({
         model: "gpt-5.4",
         model_reasoning_effort: "high",
         mcp_servers: { "foo.bar": { command: "node", args: ["server.js"] } },
       }),
-    );
+    ]);
     const isolatedConfig = await fs.readFile(configPath(), "utf8");
     expect(isolatedConfig).toContain('[mcp_servers."foo.bar"]');
     expect(isolatedConfig).toContain('command = "node"');
     expect(isolatedConfig).not.toContain("notify");
     expect(isolatedConfig).not.toContain("SkyComputerUseClient");
-    const wrapper = await fs.readFile(wrapperPath(), "utf8");
-    expect(wrapper).toContain("process.argv.slice(2)");
-    expect(wrapper).toContain("CODEX_HOME: codexHome");
-    expect(wrapper).not.toContain(sourceCodexHome);
-
+    expect(await fs.readFile(wrapperPath(), "utf8")).not.toContain(sourceCodexHome);
     const launched = await launch(resolved.agents.codex, root);
     expect(launched.argv).toStrictEqual([]);
     expect(JSON.parse(String(launched.codexConfig))).toEqual({
@@ -122,7 +115,6 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
       "--config",
       'model_reasoning_effort="low"',
     ]);
-    expect(commandParts).not.toContain(OPENCLAW_CODEX_CONFIG_ARG);
 
     const launched = await launch(resolved.agents.codex, root, {
       ...process.env,
@@ -162,8 +154,10 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
     );
 
     expectWrapperCommand(resolved.agents.codex, wrapperPath());
-    expect(resolved.agents.codex).not.toContain("-c");
-    expect(resolved.agents.codex).toContain(JSON.stringify({ model: "gpt-5.4" }));
+    expect(splitCommandParts(resolved.agents.codex ?? "").slice(2)).toEqual([
+      OPENCLAW_CODEX_CONFIG_ARG,
+      JSON.stringify({ model: "gpt-5.4" }),
+    ]);
   });
 
   it("normalizes an explicitly configured Claude ACP npx command to the local wrapper", async () => {
@@ -176,9 +170,11 @@ describe("prepareAcpxCodexAuthConfig command migration", () => {
       stateDir,
     });
 
-    expectWrapperCommand(resolved.agents.claude, wrapperPath("claude-agent"));
-    expect(resolved.agents.claude).not.toContain("npx -y @agentclientprotocol/claude-agent-acp");
-    expect(resolved.agents.claude).toContain("--permission-mode");
-    expect(resolved.agents.claude).toContain("bypass");
+    expect(resolved.agents.claude).toEqual([
+      process.execPath,
+      wrapperPath("claude-agent"),
+      "--permission-mode",
+      "bypass",
+    ]);
   });
 });

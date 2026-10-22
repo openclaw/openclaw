@@ -1,78 +1,63 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { collectBrowserSecurityAuditFindings } from "./security-audit.js";
 
-const collectFindings = (
-  config: Parameters<typeof collectBrowserSecurityAuditFindings>[0]["config"],
-) =>
-  collectBrowserSecurityAuditFindings({
+type Config = Parameters<typeof collectBrowserSecurityAuditFindings>[0]["config"];
+function finding(config: Config, id: string) {
+  return collectBrowserSecurityAuditFindings({
     config,
     sourceConfig: config,
     env: {},
     stateDir: "/tmp/openclaw-state",
     configPath: "/tmp/openclaw.json",
-  });
+  }).find((entry) => entry.checkId === `browser.${id}`);
+}
 
-const expectFinding = (
-  findings: ReturnType<typeof collectBrowserSecurityAuditFindings>,
-  checkId: string,
-  expected: Partial<ReturnType<typeof collectBrowserSecurityAuditFindings>[number]>,
-) => expect(findings.find((candidate) => candidate.checkId === checkId)).toMatchObject(expected);
-
-describe("browser security audit collector", () => {
-  it("warns while legacy extension relay auth remains enabled", () => {
-    const findings = collectFindings({
-      browser: { extensionRelay: { allowLegacyAuth: true } },
-    });
-    expectFinding(findings, "browser.extension_relay_legacy_auth", {
+it.each([true, false])("reports legacy relay authentication only when enabled=%s", (enabled) => {
+  const result = finding(
+    { browser: { extensionRelay: { allowLegacyAuth: enabled } } },
+    "extension_relay_legacy_auth",
+  );
+  if (enabled) {
+    expect(result).toMatchObject({
       severity: "warn",
       remediation: expect.stringContaining("allowLegacyAuth=false"),
     });
-  });
+  } else {
+    expect(result).toBeUndefined();
+  }
+});
 
-  it("does not warn when legacy extension relay auth is disabled", () => {
-    const findings = collectFindings({
-      browser: { extensionRelay: { allowLegacyAuth: false } },
-    });
-    expect(
-      findings.some((finding) => finding.checkId === "browser.extension_relay_legacy_auth"),
-    ).toBe(false);
-  });
-
-  it("flags browser control without auth", () => {
-    const findings = collectFindings({
-      gateway: { controlUi: { enabled: false }, auth: {} },
-      browser: { enabled: true },
-    });
-    expectFinding(findings, "browser.control_no_auth", { severity: "critical" });
-  });
-
-  it("warns on remote http CDP profiles", () => {
-    const findings = collectFindings({
-      browser: {
-        profiles: {
-          remote: { cdpUrl: "http://example.com:9222", color: "#0066CC" },
-        },
+it("flags browser control without auth", () => {
+  expect(
+    finding(
+      {
+        gateway: { controlUi: { enabled: false }, auth: {} },
+        browser: { enabled: true },
       },
-    });
-    expectFinding(findings, "browser.remote_cdp_http", { severity: "warn" });
-  });
+      "control_no_auth",
+    ),
+  ).toMatchObject({ severity: "critical" });
+});
 
-  it("redacts private-host CDP URLs in findings", () => {
-    const findings = collectFindings({
+it.each<[string, string, string?]>([
+  ["http://example.com:9222", "remote_cdp_http", undefined],
+  [
+    "http://169.254.169.254:9222/json/version?token=supersecrettokenvalue1234567890",
+    "remote_cdp_private_host",
+    "token=supers…7890",
+  ],
+])("warns about remote CDP %s without exposing secrets", (cdpUrl, id, redacted) => {
+  const result = finding(
+    {
       browser: {
-        ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-        profiles: {
-          remote: {
-            cdpUrl:
-              "http://169.254.169.254:9222/json/version?token=supersecrettokenvalue1234567890",
-            color: "#0066CC",
-          },
-        },
+        ...(redacted ? { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } } : {}),
+        profiles: { remote: { cdpUrl, color: "#0066CC" } },
       },
-    });
-    expectFinding(findings, "browser.remote_cdp_private_host", {
-      severity: "warn",
-      detail: expect.stringContaining("token=supers…7890"),
-    });
+    },
+    id,
+  );
+  expect(result).toMatchObject({
+    severity: "warn",
+    ...(redacted ? { detail: expect.stringContaining(redacted) } : {}),
   });
 });
