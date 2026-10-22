@@ -1,12 +1,5 @@
 import type { MarkdownIt, Token } from "markdown-it";
-import { parseGitHubLinkTarget } from "./github-link-target.ts";
-import {
-  markdownGitHubAliases,
-  type MarkdownGitHubAliases,
-  type MarkdownGitHubRepository,
-} from "./markdown-github-repositories.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
-import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
 
 // Keep item numbers aligned with parseGitHubItemPath; short numbers need a keyword.
@@ -26,58 +19,6 @@ function qualifiedRepository(prefix: string) {
     repository: { owner: match[1]!, repo: match[2]! },
     length: match[1]!.length + match[2]!.length + 1,
   };
-}
-
-function knownAlias(prefix: string, aliases: MarkdownGitHubAliases, latestStart = prefix.length) {
-  const normalized = prefix.toLowerCase();
-  const lastStart = prefix.slice(0, latestStart).toLowerCase().length;
-  return aliases
-    .filter(([alias]) => {
-      const start = normalized.lastIndexOf(alias);
-      return (
-        start >= 0 &&
-        start <= lastStart &&
-        /^[,:\])]*$/u.test(normalized.slice(start + alias.length)) &&
-        !/[\p{L}\p{N}_./-]/u.test(normalized[start - 1] ?? "")
-      );
-    })
-    .toSorted(([left], [right]) => right.length - left.length)[0];
-}
-
-function referenceRepository(
-  prefix: string,
-  aliases: MarkdownGitHubAliases,
-  fallback?: MarkdownGitHubRepository | null,
-): MarkdownGitHubRepository | null | undefined {
-  const raw = prefix.trimEnd();
-  const tail = raw.replace(/[,:\])]+$/u, "").trimEnd();
-  const quotes = /(?:^|[\s([{])(?:"(.*)"|'(.*)'|“(.*)”|‘(.*)’)$/u.exec(tail);
-  const quoted = quotes?.slice(1).find((value) => value !== undefined);
-  const introduced = /\b(?:repo(?:sitory)?|project)\s*[:=]?\s+([^;!?]+)$/iu.exec(raw)?.[1];
-  const name = quoted ?? introduced;
-  const qualifier = (name ?? tail).trim();
-  const explicit = qualifiedRepository(qualifier);
-  if (explicit && (name === undefined || explicit.length === qualifier.length)) {
-    return explicit.repository;
-  }
-  // Prefer complete known names before treating their punctuation as a wrapper.
-  // A known suffix inside a quoted/introduced unknown name is not that identity.
-  const latestStart =
-    quoted !== undefined
-      ? tail.length - quoted.length - 2
-      : introduced !== undefined
-        ? raw.length - introduced.length
-        : raw.length;
-  const rawMatch = knownAlias(raw, aliases, latestStart);
-  if (rawMatch) {
-    return rawMatch[1];
-  }
-  if (name !== undefined) {
-    return aliases.find(([alias]) => alias === qualifier.toLowerCase())?.[1] ?? null;
-  }
-  // Syntactic identifiers claim a repository, unlike ordinary Original/Follow-up prose.
-  const lastWord = qualifier.match(/[^\s([{]+$/u)?.[0] ?? "";
-  return /[a-z][A-Z]|\w[._]\w|\/|["'’”]$/u.test(lastWord) ? null : fallback;
 }
 
 function referenceTextContexts(children: readonly Token[]) {
@@ -105,38 +46,8 @@ function referenceTextContexts(children: readonly Token[]) {
   return contexts;
 }
 
-function linkedItemRepositories(children: readonly Token[]) {
-  const repositories = new Map<string, MarkdownGitHubRepository | null>();
-  // Only explicit links in this inline block lend context. Do not carry a
-  // repository across paragraphs, quoted examples, or streamed block boundaries.
-  for (const token of children) {
-    if (token.type !== "link_open") {
-      continue;
-    }
-    const href = token.attrGet("href");
-    const target = typeof href === "string" ? parseGitHubLinkTarget(href) : null;
-    if (!target) {
-      continue;
-    }
-    const key = `${target.kind}:${target.number}`;
-    const repository = { owner: target.owner.toLowerCase(), repo: target.repo.toLowerCase() };
-    const previous = repositories.get(key);
-    repositories.set(
-      key,
-      previous === undefined ||
-        (previous?.owner === repository.owner && previous.repo === repository.repo)
-        ? repository
-        : null,
-    );
-  }
-  return repositories;
-}
-
 export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
   markdownParser.core.ruler.before("web-link-classes", "github-item-refs", (state) => {
-    // SAFETY: markdown.ts supplies normalized render options as markdown-it's untyped env.
-    const env = state.env as Partial<MarkdownRenderEnv> | undefined;
-    const aliases = markdownGitHubAliases(env?.githubRepositories, env?.githubRepo);
     let inHeading = false;
     for (const blockToken of state.tokens) {
       if (blockToken.type === "heading_open") {
@@ -149,7 +60,6 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
         continue;
       }
       const contexts = referenceTextContexts(children);
-      const linkedRepositories = linkedItemRepositories(children);
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
         if (!token) {
@@ -196,17 +106,21 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
                 return null;
               }
               const kind = keyword && /^(?:pr|pull)/i.test(keyword) ? "pull" : "issue";
-              const linkedKey = `${kind}:${number}`;
-              const fallback = linkedRepositories.has(linkedKey)
-                ? linkedRepositories.get(linkedKey)
-                : env?.githubRepo;
               const repository =
                 direct?.repository ??
                 (keyword
-                  ? referenceRepository(preceding.slice(0, -prefix![0].length), aliases, fallback)
-                  : fallback);
+                  ? qualifiedRepository(preceding.slice(0, -prefix![0].length).trimEnd())
+                      ?.repository
+                  : undefined);
               if (!repository) {
-                return null;
+                if (!keyword) {
+                  return null;
+                }
+                const reference = new state.Token("text", "", 0);
+                reference.content = match[0];
+                // Preserve the reference's meaning for later inline decorators.
+                reference.meta = { githubItemReference: true };
+                return [reference];
               }
               const base = `https://github.com/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
               const path = kind === "pull" ? "pull" : "issues";
