@@ -738,9 +738,9 @@ suite.define(() => {
       code: "UNAVAILABLE",
       message: "Publication response was lost.",
     });
+    await openChatPublication(page);
     await pollCount(page.getByRole("button", { name: "Retry publication" })).toBe(1);
 
-    await openChatPublication(page);
     requestCount = (await gateway.getRequests("sessions.github.publish")).length;
     await page.getByRole("button", { name: "Retry publication" }).click();
     const second = await gateway.waitForRequest("sessions.github.publish", {
