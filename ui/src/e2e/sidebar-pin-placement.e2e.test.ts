@@ -17,6 +17,78 @@ const suite = createSessionManagementE2eSuite(true);
 const key = "agent:main:reliability";
 
 suite.define(() => {
+  it.for(["operator.admin", "operator.sessions.read"])(
+    "reorders personal pins without changing rail shortcuts or shared groups (%s)",
+    async (scope) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const keys = [key, "agent:main:release", "agent:main:research"];
+        const gateway = await installMockGateway(page, {
+          sessionKey: key,
+          operatorScopes: [scope],
+          methodResponses: {
+            "sessions.list": sessionsListResponse(
+              keys.map((sessionKey, index) =>
+                createControlUiSessionRow(
+                  sessionKey,
+                  ["Reliability Tracker", "Release checklist", "Research notes"][index]!,
+                  Date.now() - index * 1000,
+                ),
+              ),
+            ),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const row = (sessionKey: string) =>
+          sidebar.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+        for (const sessionKey of keys) {
+          await row(sessionKey).hover();
+          await row(sessionKey).getByRole("button", { name: "Pin session", exact: true }).click();
+          await row(sessionKey)
+            .getByRole("button", { name: "Unpin session", exact: true })
+            .waitFor();
+        }
+        const pinned = sidebar.locator('[data-session-section="pinned"]');
+        const pinOrder = () =>
+          pinned
+            .locator(".sidebar-recent-session")
+            .evaluateAll((rows) => rows.map((element) => element.getAttribute("data-session-key")));
+        await expect.poll(pinOrder).toEqual(keys);
+        const rail = sidebar.locator(".sidebar-rail__pins");
+        await row(key).dragTo(rail);
+        const shortcut = rail.locator(`[data-sidebar-entry="session-rail:${key}"]`);
+        await shortcut.waitFor();
+        await row(keys[2]!).dragTo(row(key), { targetPosition: { x: 80, y: 4 } });
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const dir = createControlUiE2eArtifactDir(
+            "pin-reorder",
+            process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR,
+          );
+          await captureFrame(
+            dir,
+            process.env.OPENCLAW_PIN_PROOF_STAGE + "-" + scope + ".png",
+            page.locator(".shell"),
+            [pinned, sidebar.locator(".sidebar-rail")],
+          );
+          console.log("Pin reorder proof: " + dir);
+        }
+        await expect.poll(pinOrder).toEqual([keys[2], key, keys[1]]);
+        const target = row(keys[1]!);
+        const height = await target.evaluate((element) => element.getBoundingClientRect().height);
+        await row(key).dragTo(target, { targetPosition: { x: 80, y: height - 4 } });
+        const expected = [keys[2], keys[1], key];
+        await expect.poll(pinOrder).toEqual(expected);
+        // Dropping on itself must not bubble to a container and append the pin.
+        await row(keys[2]!).dragTo(row(keys[2]!), { targetPosition: { x: 80, y: 4 } });
+        expect(await pinOrder()).toEqual(expected);
+        await page.reload();
+        await expect.poll(pinOrder).toEqual(expected);
+        expect(await shortcut.count()).toBe(1);
+        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+        expect(await gateway.getRequests("sessions.groups.put")).toEqual([]);
+      });
+    },
+  );
   it.for(["operator.admin", "operator.read"])(
     "personal pins and rail drags (%s)",
     async (scope) => {
