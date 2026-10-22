@@ -5116,7 +5116,6 @@
 ["src/gateway/plugin-icon-http.test.ts","../plugins/management-service.js","6c519bd45fc6fc03a90ba8cb1e54ede68f40c14bf2234ef3de18db7c290755d7",1]
 ["src/gateway/plugin-icon-http.test.ts","./http-utils.js","b4cd8c730ecd1e7c9bbc71b45326eccd1e372371d8696f2c46c7579c3b22e9f1",1]
 ["src/gateway/plugin-theme-art-http.test.ts","./http-utils.js","7dbb23cde3cde5b22f0db42aea9b71a6dc16decdd4b3c22045b875864fb2729f",1]
-["src/gateway/portals/portal-service.ingress.test.ts","../../infra/tailscale.js","a13213ca0243dc94913e14f541b700302911ca7009de9d67e038d50c4f1bab3a",1]
 ["src/gateway/probe.device-auth-scope.test.ts","../../packages/gateway-client/src/websocket.js","f9987bbca361139e99813a5782f4a8609e2784f2dc9b483bd96bfcd22f87404d",1]
 ["src/gateway/probe.device-auth-scope.test.ts","../cli/daemon-cli/diagnostic-readiness.js","2961131a17693f771e8097114340c039ded02f792054ad3bcfb44ebf6d6694bf",1]
 ["src/gateway/probe.test.ts","../../packages/gateway-client/src/event-loop-ready.js","9035ed62c4058047e3876ab10b82c122467d5f68d08f715265138059cf1a8656",1]
