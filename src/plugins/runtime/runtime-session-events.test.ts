@@ -5,7 +5,7 @@ import type {
 } from "../../auto-reply/reply/session-event-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
-import { createRuntimeSystem } from "./runtime-system.js";
+import { createRuntimeBase } from "./runtime-base.js";
 
 const host = vi.hoisted(() => ({
   capture: vi.fn<(...args: unknown[]) => Promise<SessionEventTarget>>(),
@@ -31,7 +31,7 @@ beforeEach(() => {
 
 describe("plugin session-event boundary", () => {
   it("forwards only public fields and fixes the event source", async () => {
-    const system = createRuntimeSystem();
+    const system = createRuntimeBase().system;
     const expectedTarget = await system.captureSessionEventTarget("main", "agent:main:main");
     expect(Object.isFrozen(expectedTarget)).toBe(true);
     expect(Object.keys(expectedTarget)).toEqual([]);
@@ -69,11 +69,11 @@ describe("plugin session-event boundary", () => {
   });
 
   it("redeems handles across runtime copies and rejects copied handles", async () => {
-    const system = createRuntimeSystem();
+    const system = createRuntimeBase().system;
     const expectedTarget = await system.captureSessionEventTarget("main", "agent:main:main");
     vi.resetModules();
-    const { createRuntimeSystem: createDuplicate } = await import("./runtime-system.js");
-    createDuplicate().enqueueSessionEvent("Completed", {
+    const { createRuntimeBase: createDuplicate } = await import("./runtime-base.js");
+    createDuplicate().system.enqueueSessionEvent("Completed", {
       agentId: "main",
       sessionKey: "agent:main:main",
       expectedTarget,
@@ -106,7 +106,7 @@ describe("plugin session-event boundary", () => {
           }
         },
       },
-      () => createRuntimeSystem().captureSessionEventTarget("main", "agent:main:main"),
+      () => createRuntimeBase().system.captureSessionEventTarget("main", "agent:main:main"),
     );
     active = false;
     pending.resolve(target);
@@ -125,7 +125,7 @@ describe("plugin session-event boundary", () => {
         },
       },
       () =>
-        createRuntimeSystem().enqueueSessionEvent("Completed", {
+        createRuntimeBase().system.enqueueSessionEvent("Completed", {
           agentId: "main",
           sessionKey: "agent:main:main",
         }),

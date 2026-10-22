@@ -380,19 +380,21 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       { includePersistedAuthState: false },
     );
     const catalog = buildChannelUiCatalog(plugins);
-    expect([catalog.byId["external-chat"], catalog.byId["sibling-chat"]]).toEqual([
-      {
-        id: "external-chat",
-        label: "External Chat Manifest",
-        detailLabel: "Package Chat Bot",
-        systemImage: "bubble.left",
-      },
-      {
-        id: "sibling-chat",
-        label: "External Chat Manifest",
-        detailLabel: "External Chat Manifest",
-      },
-    ]);
+    expect(catalog.entries).toEqual(
+      expect.arrayContaining([
+        {
+          id: "external-chat",
+          label: "External Chat Manifest",
+          detailLabel: "Package Chat Bot",
+          systemImage: "bubble.left",
+        },
+        {
+          id: "sibling-chat",
+          label: "External Chat Manifest",
+          detailLabel: "External Chat Manifest",
+        },
+      ]),
+    );
     expectMarkers(setupMarker, fullMarker);
   });
 

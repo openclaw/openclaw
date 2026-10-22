@@ -28,9 +28,12 @@ function resolveHeartbeatSummaryJobs(
 }
 
 /** Missing state is empty; unreadable or unmigrated state remains an explicit failure. */
-export async function readHeartbeatSummarySnapshot(cfg: OpenClawConfig): Promise<CronJob[]> {
+export async function readHeartbeatSummarySnapshot(
+  cfg: OpenClawConfig,
+  storePath?: string,
+): Promise<CronJob[]> {
   const { readDefaultProactiveJobsAsync } = await import("../cron/proactive-job-receipt.js");
-  const jobs = await readDefaultProactiveJobsAsync(undefined, listAgentIds(cfg));
+  const jobs = await readDefaultProactiveJobsAsync(storePath, listAgentIds(cfg));
   return resolveHeartbeatSummaryJobs(cfg, jobs);
 }
 

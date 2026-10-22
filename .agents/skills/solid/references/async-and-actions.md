@@ -431,6 +431,10 @@ Workboard delete feedback keep the read live; their held-retry tests verify that
 the old alert clears before the replacement operation settles. A local error string written by each completion
 would lose that ordering and require a second request-generation guard.
 
+For dismissible command feedback, key each outcome by its admitted completion
+promise. Message text or a shared draft identity can suppress an identical failure
+on a later attempt.
+
 The user-action outcome also owns lazy dialog import, registration, and preparation.
 A catch that starts after `await showConfirmDialog(...)` or `showInputDialog(...)`
 leaves preparation failures unobserved by a void event caller. Keep those awaits

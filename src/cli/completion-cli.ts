@@ -373,7 +373,11 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     }
 
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
-        $element = $commandElements[$i].Extent.Text
+        $element = if ($commandElements[$i] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+            $commandElements[$i].Value
+        } else {
+            $commandElements[$i].Extent.Text
+        }
         if ($i -eq $commandElements.Count - 1 -and $wordToComplete -ne "") { break }
         if ($element -like "-*") {
             $flag = ($element -split '=', 2)[0]

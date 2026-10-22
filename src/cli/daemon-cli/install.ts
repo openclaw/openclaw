@@ -80,9 +80,8 @@ function resolveGatewayInstallBindMode(cfg: OpenClawConfig): GatewayBindMode {
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
-  platform?: NodeJS.Platform;
 }): NodeJS.ProcessEnv {
-  const platform = params.platform ?? process.platform;
+  const platform = process.platform;
   const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
   const currentEnv: NodeJS.ProcessEnv = {};
   for (const [rawKey, rawValue] of Object.entries(

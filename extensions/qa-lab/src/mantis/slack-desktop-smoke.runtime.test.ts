@@ -149,13 +149,15 @@ describe("mantis Slack desktop smoke runtime", () => {
       env: runtimeEnv,
       freshPr: "openclaw/openclaw#85141",
       now: () => new Date("2026-05-04T13:00:00.000Z"),
-      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop-test",
       primaryModel: "openai/gpt-5.4",
       scenarioIds: ["slack-canary"],
       slackUrl: "https://app.slack.com/client/T123/C123",
     });
 
     expect(result.status).toBe("pass");
+    expect(result.outputDir).toBe(
+      path.join(repoRoot, ".artifacts/qa-e2e/mantis/slack-desktop-2026-05-04T13-00-00-000Z"),
+    );
     const warmupArgs = commands.find((entry) => entry.args[0] === "warmup")?.args ?? [];
     expect(warmupArgs[warmupArgs.indexOf("--class") + 1]).toBe("beast");
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual([

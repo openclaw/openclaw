@@ -1157,7 +1157,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "src/infra/telemetry.test.ts",
     watchGlobs: [
       "src/infra/sqlite-store.worker.ts",
-      "src/infra/telemetry-store.kernel.ts",
       "src/infra/telemetry-store.worker.ts",
       "src/state/openclaw-state.worker.ts",
     ],

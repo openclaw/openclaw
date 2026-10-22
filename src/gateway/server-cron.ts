@@ -354,7 +354,7 @@ export function buildGatewayCronService(params: {
     const revision = ++legacyProjectionRevision;
     const cfg = getRuntimeConfig();
     try {
-      const jobs = await readHeartbeatSummarySnapshot(cfg);
+      const jobs = await readHeartbeatSummarySnapshot(cfg, storePath);
       if (
         legacyProjectionClosed ||
         revision !== legacyProjectionRevision ||
@@ -376,7 +376,7 @@ export function buildGatewayCronService(params: {
       await Promise.all([
         reconcileExitWatchers(),
         reconcileStreamWatchers(),
-        refreshLegacyMonitorProjection(),
+        started ? refreshLegacyMonitorProjection() : undefined,
       ]);
     },
     isExecutionIdle: (job, ownSessionKey, ownReplyOperation) => {

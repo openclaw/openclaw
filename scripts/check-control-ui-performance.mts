@@ -56,8 +56,8 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 27,
   newBootJsRequests: 22,
-  // Narrow metadata imports: 1,441,290 B Chat and 961,749 B New Session,
-  // retaining the previous relative headroom for each route.
+  // Narrow metadata imports: 1,441,525 B Chat and 962,148 B New Session.
+  // Keep the stricter existing caps after refreshing the main integration.
   chatBootJsGzipBytes: 1_498_208,
   newBootJsGzipBytes: 977_485,
   startupCssRequests: 1,

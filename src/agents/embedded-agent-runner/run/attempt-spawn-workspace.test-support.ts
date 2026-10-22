@@ -99,7 +99,7 @@ type AttemptSpawnWorkspaceHoisted = {
   isWorkspaceBootstrapPendingMock: Mock<(workspaceDir: string) => Promise<boolean>>;
   resolveContextInjectionModeMock: Mock<() => "always" | "continuation-skip">;
   hasCompletedBootstrapTurnMock: Mock<() => Promise<boolean>>;
-  resolveEmbeddedRunSkillEntriesMock: UnknownMock;
+  prepareWorkspaceSkillsMock: Mock<(...args: unknown[]) => Promise<unknown[]>>;
   resolveSkillsPromptForRunMock: UnknownMock;
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
   getGlobalHookRunnerMock: Mock<typeof getGlobalHookRunner>;

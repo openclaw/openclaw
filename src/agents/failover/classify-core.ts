@@ -275,6 +275,17 @@ export function classifyFailoverSignalCore(
       errorType: signal.errorType,
     };
     providerPluginReason = classifyProviderError?.(context) ?? null;
+    // Native transports can keep provider prose only in the bounded body
+    // details. Let the same owner interpret it before generic HTTP policy.
+    if (!providerPluginReason) {
+      for (const detail of signal.details ?? []) {
+        providerPluginReason =
+          classifyProviderError?.({ ...context, errorMessage: detail }) ?? null;
+        if (providerPluginReason) {
+          break;
+        }
+      }
+    }
   }
   const tlsCertificateError = inspectTlsCertificateError(signal);
   if (!providerPluginReason && tlsCertificateError && inferredStatus === undefined) {
