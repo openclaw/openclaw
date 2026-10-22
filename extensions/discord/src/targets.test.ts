@@ -10,27 +10,19 @@ const config = (discord: NonNullable<OpenClawConfig["channels"]>["discord"]): Op
   channels: { discord },
 });
 
-describe("parseDiscordTarget", () => {
-  it("parses channel targets", () => {
-    const cases = [
-      { input: "channel:555", id: "555", normalized: "channel:555" },
-      { input: "discord:channel:555", id: "555", normalized: "channel:555" },
-      { input: "general", id: "general", normalized: "channel:general" },
-    ] as const;
-    for (const { input, id, normalized } of cases) {
-      expect(parseDiscordTarget(input)).toMatchObject({ kind: "channel", id, normalized });
-    }
+it("parses provider-prefixed channel targets", () => {
+  expect(parseDiscordTarget("discord:channel:555")).toMatchObject({
+    kind: "channel",
+    id: "555",
+    normalized: "channel:555",
   });
+});
 
-  it("rejects invalid parse targets", () => {
-    const cases = [
-      { input: "123", expectedMessage: /Ambiguous Discord recipient/ },
-      { input: "@bob", expectedMessage: /Discord DMs require a user id/ },
-    ] as const;
-    for (const { input, expectedMessage } of cases) {
-      expect(() => parseDiscordTarget(input), input).toThrow(expectedMessage);
-    }
-  });
+it.each([
+  ["123", /Ambiguous Discord recipient/],
+  ["@bob", /Discord DMs require a user id/],
+] as const)("rejects invalid parse target %s", (input, message) => {
+  expect(() => parseDiscordTarget(input)).toThrow(message);
 });
 
 it("resolveDiscordChannelId strips channel: prefix and accepts raw ids", () => {
@@ -39,36 +31,26 @@ it("resolveDiscordChannelId strips channel: prefix and accepts raw ids", () => {
 });
 
 describe("resolveDiscordTarget", () => {
-  const cfg = config({});
+  const account = { cfg: config({}), accountId: "default" };
+  const jane = { kind: "user", id: "user:999", name: "Jane" } as const;
 
   beforeEach(() => {
     vi.restoreAllMocks();
     clearDiscordDirectoryCacheForTest();
   });
 
-  it("returns a resolved user for usernames", async () => {
-    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
-      { kind: "user", id: "user:999", name: "Jane" } as const,
-    ]);
-
-    expect(await resolveDiscordTarget("jane", { cfg, accountId: "default" })).toMatchObject({
-      kind: "user",
-      id: "999",
-      normalized: "user:999",
-    });
-  });
-
   it("falls back to parsing when lookup misses", async () => {
     vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([]);
-    expect(await resolveDiscordTarget("general", { cfg, accountId: "default" })).toMatchObject({
+    expect(await resolveDiscordTarget("general", account)).toMatchObject({
       kind: "channel",
       id: "general",
+      normalized: "channel:general",
     });
   });
 
   it("does not call directory lookup for explicit user ids", async () => {
     const listPeers = vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive");
-    expect(await resolveDiscordTarget("user:123", { cfg, accountId: "default" })).toMatchObject({
+    expect(await resolveDiscordTarget("user:123", account)).toMatchObject({
       kind: "user",
       id: "123",
     });
@@ -76,22 +58,20 @@ describe("resolveDiscordTarget", () => {
   });
 
   it("uses account allowFrom before inherited root allowFrom for bare numeric ids", async () => {
-    const cfgValue = config({
-      allowFrom: ["123"],
-      accounts: { work: { allowFrom: ["456"] } },
-    });
-    const account = { cfg: cfgValue, accountId: "work" };
-
-    expect(await resolveDiscordTarget("456", account, { defaultKind: "channel" })).toMatchObject({
-      kind: "user",
-      id: "456",
-      normalized: "user:456",
-    });
-    expect(await resolveDiscordTarget("123", account, { defaultKind: "channel" })).toMatchObject({
-      kind: "channel",
-      id: "123",
-      normalized: "channel:123",
-    });
+    const scoped = {
+      cfg: config({ allowFrom: ["123"], accounts: { work: { allowFrom: ["456"] } } }),
+      accountId: "work",
+    };
+    for (const [id, kind] of [
+      ["456", "user"],
+      ["123", "channel"],
+    ] as const) {
+      expect(await resolveDiscordTarget(id, scoped, { defaultKind: "channel" })).toMatchObject({
+        kind,
+        id,
+        normalized: `${kind}:${id}`,
+      });
+    }
   });
 
   it("caches username lookups under the configured default account when accountId is omitted", async () => {
@@ -100,9 +80,7 @@ describe("resolveDiscordTarget", () => {
       accounts: { work: { token: "discord-work" } },
     });
 
-    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([
-      { kind: "user", id: "user:999", name: "Jane" } as const,
-    ]);
+    vi.spyOn(directoryLive, "listDiscordDirectoryPeersLive").mockResolvedValueOnce([jane]);
 
     expect(await resolveDiscordTarget("jane", { cfg: cfgLocal })).toMatchObject({
       kind: "user",

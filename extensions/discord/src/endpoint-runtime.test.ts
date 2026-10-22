@@ -1,14 +1,13 @@
 import assert from "node:assert/strict";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getDiscordEndpointRuntime,
   resolveDiscordEndpointAttachmentGuard,
   resolveDiscordEndpointMediaGuard,
 } from "./endpoint-runtime.js";
+import { closeServer, listenLoopback } from "./http.test-support.js";
 import type { Message } from "./internal/discord.js";
 import { RequestClient } from "./internal/rest.js";
 import { resolveMediaList } from "./monitor/message-media.js";
@@ -18,9 +17,7 @@ const DISCORD_API_URL_ENV = "DISCORD_API_URL";
 
 afterEach(async () => {
   delete process.env[DISCORD_API_URL_ENV];
-  if (server) {
-    await promisify(server.close.bind(server))();
-  }
+  await closeServer(server);
   server = undefined;
   vi.restoreAllMocks();
 });
@@ -38,10 +35,7 @@ async function startEndpointServer() {
       response.writeHead(200, { "content-type": "application/json" }).end('{"ok":true}');
     });
   });
-  await once(server.listen(0, "127.0.0.1"), "listening");
-  const address = server.address();
-  assert(address && typeof address !== "string", "expected endpoint server address");
-  const baseUrl = `http://127.0.0.1:${address.port}`;
+  const baseUrl = await listenLoopback(server);
   configureLoopbackEndpoint(baseUrl);
   return { baseUrl, requests };
 }

@@ -1,22 +1,11 @@
 import type { ResolverContext } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { describe, expect, it } from "vitest";
 import {
-  collectRuntimeConfigAssignments,
+  collectRuntimeConfigAssignments as collect,
   secretTargetRegistryEntries,
 } from "./secret-config-contract.js";
 
 const secretRef = (id: string) => ({ source: "env", provider: "default", id }) as const;
-
-function createContext(): ResolverContext {
-  return {
-    sourceConfig: {},
-    env: {},
-    cache: {},
-    warnings: [],
-    warningKeys: new Set(),
-    assignments: [],
-  };
-}
 
 function voice(keys: Record<string, string>, mode?: "stt-tts") {
   const providers = Object.fromEntries(
@@ -30,18 +19,19 @@ function collectVoiceAssignments(
   work: ReturnType<typeof voice>,
   accountId = "Work",
 ) {
-  const context = createContext();
-  collectRuntimeConfigAssignments({
-    config: {
-      channels: {
-        discord: {
-          voice: root,
-          accounts: { inherited: { enabled: true }, [accountId]: { enabled: true, voice: work } },
-        },
-      },
-    },
-    context,
-  });
+  const context: ResolverContext = {
+    sourceConfig: {},
+    env: {},
+    cache: {},
+    warnings: [],
+    warningKeys: new Set(),
+    assignments: [],
+  };
+  const discord = {
+    voice: root,
+    accounts: { inherited: { enabled: true }, [accountId]: { enabled: true, voice: work } },
+  };
+  collect({ config: { channels: { discord } }, context });
   return context;
 }
 

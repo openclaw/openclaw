@@ -33,7 +33,7 @@ function hook(name: Parameters<typeof getRequiredHookHandler>[1]) {
   return getRequiredHookHandler(handlers, name);
 }
 
-async function resolveSubagentDeliveryTargetForTest(
+async function deliveryTarget(
   overrides: { channel?: string; to?: string; threadId?: string } = {},
 ) {
   return await hook("subagent_delivery_target")(
@@ -78,7 +78,6 @@ describe("discord subagent hook handlers", () => {
     const ending = Promise.resolve(hook("subagent_ended")(event, {})).then(() => {
       settled = true;
     });
-
     try {
       await unbindEntered.promise;
       await Promise.resolve();
@@ -87,8 +86,7 @@ describe("discord subagent hook handlers", () => {
       unbinding.resolve();
       await ending;
     }
-    expect(hookMocks.unbindThreadBindingsBySessionKeyAsync).toHaveBeenCalledTimes(1);
-    expect(hookMocks.unbindThreadBindingsBySessionKeyAsync).toHaveBeenCalledWith(event);
+    expect(hookMocks.unbindThreadBindingsBySessionKeyAsync).toHaveBeenCalledExactlyOnceWith(event);
   });
 
   it("waits for asynchronous binding lookup before routing a completion", async () => {
@@ -99,7 +97,7 @@ describe("discord subagent hook handlers", () => {
       return ready.promise;
     });
     let settled = false;
-    const delivery = resolveSubagentDeliveryTargetForTest({ threadId: "777" }).then((result) => {
+    const delivery = deliveryTarget({ threadId: "777" }).then((result) => {
       settled = true;
       return result;
     });
@@ -121,12 +119,7 @@ describe("discord subagent hook handlers", () => {
   });
 
   it("does not restore Discord bindings for another channel's completion", async () => {
-    expect(
-      await resolveSubagentDeliveryTargetForTest({
-        channel: "telegram",
-        to: "chat:123",
-      }),
-    ).toBeUndefined();
+    expect(await deliveryTarget({ channel: "telegram", to: "chat:123" })).toBeUndefined();
     expect(hookMocks.listThreadBindingsBySessionKeyAsync).not.toHaveBeenCalled();
   });
 
@@ -135,6 +128,6 @@ describe("discord subagent hook handlers", () => {
       { accountId: "work", threadId: "777" },
       { accountId: "work", threadId: "888" },
     ]);
-    expect(await resolveSubagentDeliveryTargetForTest()).toBeUndefined();
+    expect(await deliveryTarget()).toBeUndefined();
   });
 });

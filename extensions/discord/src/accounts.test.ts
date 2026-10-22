@@ -17,6 +17,7 @@ afterEach(() => vi.unstubAllEnvs());
 function config(discord: DiscordConfig): OpenClawConfig {
   return { channels: { discord } };
 }
+const enabledIds = (cfg: OpenClawConfig) => listEnabledDiscordAccounts(cfg).map((a) => a.accountId);
 
 describe("Discord accounts", () => {
   it("createDiscordActionGate uses configured defaultAccount when accountId is omitted", () => {
@@ -39,80 +40,70 @@ describe("Discord accounts", () => {
 
     expect(listDiscordAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultDiscordAccountId(cfg)).toBe("default");
-    expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual([
-      "default",
-    ]);
+    expect(enabledIds(cfg)).toEqual(["default"]);
   });
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {
-    const resolved = resolveDiscordAccount({
-      cfg: config({
-        accounts: {
-          default: { allowFrom: ["default"], token: "token-default" },
-          work: { token: "token-work" },
-        },
-      }),
-      accountId: "work",
+    const cfg = config({
+      accounts: {
+        default: { allowFrom: ["default"], token: "token-default" },
+        work: { token: "token-work" },
+      },
     });
-
-    expect(resolved.config.allowFrom).toBeUndefined();
+    expect(resolveDiscordAccount({ cfg, accountId: "work" }).config.allowFrom).toBeUndefined();
   });
   it.each([
     ["prefers explicit runtime over merged config", "default", { maxLinesPerMessage: 55 }, 55],
     ["uses per-account value over root when runtime omits it", "work", {}, 80],
   ] as const)("maxLinesPerMessage %s", (_name, accountId, discordConfig, expected) => {
-    const resolved = resolveDiscordMaxLinesPerMessage({
-      cfg: config({
-        maxLinesPerMessage: 120,
-        accounts: { [accountId]: { token: `token-${accountId}`, maxLinesPerMessage: 80 } },
+    expect(
+      resolveDiscordMaxLinesPerMessage({
+        cfg: config({
+          maxLinesPerMessage: 120,
+          accounts: { [accountId]: { token: `token-${accountId}`, maxLinesPerMessage: 80 } },
+        }),
+        discordConfig,
+        accountId,
       }),
-      discordConfig,
-      accountId,
-    });
-
-    expect(resolved).toBe(expected);
+    ).toBe(expected);
   });
-  it("keeps the config-token account over default env fallback when tokens collide", () => {
-    vi.stubEnv("DISCORD_BOT_TOKEN", "same-token");
-    const accountId = "work";
-    const duplicateId = "default";
-    const expectedReason = 'duplicate bot token; using account "work"';
-    const cfg = config({ accounts: { work: { token: "same-token" } } });
-    const enabledAccount = resolveDiscordAccount({ cfg, accountId });
-    const duplicateAccount = resolveDiscordAccount({ cfg, accountId: duplicateId });
-
-    expect(isDiscordAccountEnabledForRuntime(duplicateAccount, cfg)).toBe(false);
-    expect(resolveDiscordAccountDisabledReason(duplicateAccount, cfg)).toBe(expectedReason);
-    expect(inspectDiscordAccount({ cfg, accountId: duplicateId })).toMatchObject({
-      enabled: false,
-      configured: true,
-      stateReason: expectedReason,
-    });
-    expect(inspectDiscordAccount({ cfg, accountId })).toMatchObject({
+  it.each([
+    {
+      name: "prefers config token over default env fallback",
+      cfg: config({ accounts: { work: { token: "same-token" } } }),
+      active: "work",
+      inactive: "default",
+      reason: 'duplicate bot token; using account "work"',
+      env: "same-token",
+    },
+    {
+      name: "ignores disabled duplicate-token accounts",
+      cfg: config({
+        accounts: {
+          disabled: { enabled: false, token: "same-token" },
+          active: { token: "same-token" },
+        },
+      }),
+      active: "active",
+      inactive: "disabled",
+      reason: "disabled",
+      env: "",
+    },
+  ])("$name", ({ cfg, active, inactive, reason, env }) => {
+    vi.stubEnv("DISCORD_BOT_TOKEN", env);
+    const activeAccount = resolveDiscordAccount({ cfg, accountId: active });
+    const inactiveAccount = resolveDiscordAccount({ cfg, accountId: inactive });
+    expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
+    expect(isDiscordAccountEnabledForRuntime(inactiveAccount, cfg)).toBe(false);
+    expect(resolveDiscordAccountDisabledReason(inactiveAccount, cfg)).toBe(reason);
+    expect(inspectDiscordAccount({ cfg, accountId: active })).toMatchObject({
       enabled: true,
       configured: true,
     });
-    expect(isDiscordAccountEnabledForRuntime(enabledAccount, cfg)).toBe(true);
-    expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual([
-      accountId,
-    ]);
-  });
-
-  it("does not let disabled duplicate-token accounts suppress enabled accounts", () => {
-    const cfg = config({
-      accounts: {
-        disabled: { enabled: false, token: "same-token" },
-        active: { token: "same-token" },
-      },
-    });
-
-    const activeAccount = resolveDiscordAccount({ cfg, accountId: "active" });
-
-    expect(isDiscordAccountEnabledForRuntime(activeAccount, cfg)).toBe(true);
-    expect(inspectDiscordAccount({ cfg, accountId: "active" }).enabled).toBe(true);
-    expect(inspectDiscordAccount({ cfg, accountId: "disabled" })).toMatchObject({
+    expect(inspectDiscordAccount({ cfg, accountId: inactive })).toMatchObject({
       enabled: false,
-      stateReason: "disabled",
+      configured: true,
+      stateReason: reason,
     });
-    expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual(["active"]);
+    expect(enabledIds(cfg)).toEqual([active]);
   });
 });

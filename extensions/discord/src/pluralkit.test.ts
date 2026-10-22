@@ -1,7 +1,7 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
+import { closeServer, listenLoopback } from "./http.test-support.js";
 import { fetchPluralKitMessageInfo } from "./pluralkit.js";
 
 function lookup(
@@ -32,28 +32,21 @@ afterEach(() => vi.useRealTimers());
 describe("fetchPluralKitMessageInfo", () => {
   it("returns null when disabled", async () => {
     const fetcher = vi.fn();
-    const result = await lookup(fetcher, { config: { enabled: false } });
-    expect(result).toBeNull();
+    expect(await lookup(fetcher, { config: { enabled: false } })).toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
   });
 
   it("returns null on 404", async () => {
     const tracked = cancelTrackedTextResponse("missing", { status: 404 });
-    const fetcher = vi.fn(async () => tracked.response);
-    const result = await lookup(fetcher);
-    expect(result).toBeNull();
+    expect(await lookup(async () => tracked.response)).toBeNull();
     expect(tracked.wasCanceled()).toBe(true);
   });
 
   it("returns payload and sends token when configured", async () => {
-    let receivedHeaders: Record<string, string> | undefined;
-    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
-      receivedHeaders = init?.headers as Record<string, string> | undefined;
-      return Response.json({ member: { id: "mem_1" } });
-    });
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ member: { id: "mem_1" } }));
     const result = await lookup(fetcher, { config: { enabled: true, token: "pk_test" } });
     expect(result?.member?.id).toBe("mem_1");
-    expect(receivedHeaders?.Authorization).toBe("pk_test");
+    expect(fetcher.mock.calls[0]?.[1]?.headers).toEqual({ Authorization: "pk_test" });
   });
 
   it("aborts PluralKit response body reads that exceed the lookup timeout", async () => {
@@ -112,16 +105,11 @@ describe("fetchPluralKitMessageInfo", () => {
     const server = createServer((request, response) => {
       authorization = request.headers.authorization;
       requestUrl = request.url;
-      response.writeHead(502, { "content-type": "text/plain" });
-      response.end(`proxy failure Authorization: ${authorization}; request rejected`);
+      response
+        .writeHead(502, { "content-type": "text/plain" })
+        .end(`proxy failure Authorization: ${authorization}; request rejected`);
     });
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected an ephemeral loopback address");
-    }
-    const origin = `http://127.0.0.1:${address.port}`;
+    const origin = await listenLoopback(server);
     const fetcher: typeof fetch = async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : input);
       return fetch(new URL(`${url.pathname}${url.search}`, origin), init);
@@ -132,16 +120,11 @@ describe("fetchPluralKitMessageInfo", () => {
         lookup(fetcher, { messageId: "boom", config: { enabled: true, token } }),
       );
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((closeError) => (closeError ? reject(closeError) : resolve()));
-      });
+      await closeServer(server);
     }
     expect(requestUrl).toBe("/v2/messages/boom");
     expect(authorization).toBe(token);
-    expect(caught?.message).toContain("PluralKit API failed (502)");
-    expect(caught?.message).toContain("proxy failure");
-    expect(caught?.message).toContain("Authorization:");
-    expect(caught?.message).not.toContain(token);
+    expect(caught?.message).toMatch(/PluralKit API failed \(502\).*proxy failure.*Authorization:/);
     expect(caught?.message).not.toContain(uniqueSecret);
   });
 
@@ -151,8 +134,7 @@ describe("fetchPluralKitMessageInfo", () => {
       headers: { "content-type": "text/plain" },
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    const fetcher = vi.fn(async () => tracked.response);
-    const caught = await rejection(lookup(fetcher));
+    const caught = await rejection(lookup(async () => tracked.response));
     expect(caught?.message).toContain("PluralKit API failed (500): plural failure");
     expect(caught?.message).not.toContain("tail");
     expect(caught?.message.length).toBeLessThan(8_400);

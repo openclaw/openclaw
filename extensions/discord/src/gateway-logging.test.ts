@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 
 // Suite runs isolate=false: a partial factory here poisons the shared module
@@ -21,8 +21,7 @@ let cleanup: () => void;
 
 describe("attachDiscordGatewayLogging", () => {
   beforeAll(async () => {
-    const { logVerbose: loadedLogVerbose } = await import("openclaw/plugin-sdk/runtime-env");
-    logVerbose = loadedLogVerbose;
+    ({ logVerbose } = await import("openclaw/plugin-sdk/runtime-env"));
     ({ attachDiscordGatewayLogging } = await import("./gateway-logging.js"));
   });
 
@@ -32,43 +31,38 @@ describe("attachDiscordGatewayLogging", () => {
     runtime = createRuntimeSpies();
     cleanup = attachDiscordGatewayLogging({ emitter, runtime });
   });
+  afterEach(() => cleanup());
   it("logs debug events and promotes reconnect/close to info", () => {
-    emitter.emit("debug", "Gateway websocket opened");
-    emitter.emit("debug", "Gateway websocket closed: 1001");
-    emitter.emit("debug", "Gateway reconnect scheduled in 1000ms (close, resume=true)");
-    emitter.emit("debug", "Gateway forcing fresh IDENTIFY after 3 failed resume attempts");
-
+    const messages = [
+      "Gateway websocket closed: 1001",
+      "Gateway reconnect scheduled in 1000ms (close, resume=true)",
+      "Gateway forcing fresh IDENTIFY after 3 failed resume attempts",
+    ];
+    for (const message of ["Gateway websocket opened", ...messages]) {
+      emitter.emit("debug", message);
+    }
     expect(logVerbose).toHaveBeenCalledTimes(4);
-    expect(runtime.log.mock.calls).toEqual([
-      ["discord gateway: Gateway websocket closed: 1001"],
-      ["discord gateway: Gateway reconnect scheduled in 1000ms (close, resume=true)"],
-      ["discord gateway: Gateway forcing fresh IDENTIFY after 3 failed resume attempts"],
-    ]);
-
-    cleanup();
+    expect(runtime.log.mock.calls).toEqual(
+      messages.map((message) => [`discord gateway: ${message}`]),
+    );
   });
 
   it("promotes warnings", () => {
     emitter.emit("warning", "High latency detected: 1200ms");
-
     expect(logVerbose).toHaveBeenCalledTimes(1);
     expect(runtime.log).toHaveBeenCalledWith(
       "warn:discord gateway warning: High latency detected: 1200ms",
     );
-
-    cleanup();
   });
 
   it("removes listeners on cleanup", () => {
     cleanup();
 
-    const logVerboseMock = vi.mocked(logVerbose);
-    logVerboseMock.mockClear();
-
+    vi.mocked(logVerbose).mockClear();
     emitter.emit("debug", "Gateway websocket closed: 1001");
     emitter.emit("warning", "High latency detected: 1200ms");
 
-    expect(logVerboseMock).not.toHaveBeenCalled();
+    expect(logVerbose).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
   });
 });
