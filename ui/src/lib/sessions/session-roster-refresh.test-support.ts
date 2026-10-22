@@ -10,23 +10,24 @@ import { createSessionCapability } from "./index.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionGateway, SessionListScope } from "./session-capability.ts";
 
+type PendingList = ReturnType<typeof createDeferred<SessionsListResult>>;
+type Cleanup = () => unknown;
+
 export function ownRoster(
   gateway: SessionGateway,
   bootstrap?: ReturnType<typeof createConnectionBootstrapCoordinator>,
 ) {
+  const selection = { state: { selectedId: "main" }, subscribe: () => () => undefined };
   const sessions = createSessionCapability(
     gateway,
-    {
-      state: { selectedId: "main" },
-      subscribe: () => () => undefined,
-    },
+    selection,
     bootstrap ? { connectionBootstrap: bootstrap } : undefined,
   );
-  const stops: Array<() => unknown> = [];
-  const before: Array<() => unknown> = [];
-  const after: Array<() => unknown> = [];
+  const stops: Cleanup[] = [];
+  const pending: Array<[PendingList, SessionsListResult]> = [];
+  const after: Cleanup[] = [];
   onTestFinished(async () => {
-    before.forEach((resolve) => resolve());
+    pending.forEach(([deferred, result]) => deferred.resolve(result));
     stops.forEach((stop) => stop());
     sessions.dispose();
     bootstrap?.reset();
@@ -42,13 +43,10 @@ export function ownRoster(
       stops.push(stop);
       return stop;
     },
-    resolveOnCleanup(
-      this: void,
-      ...pending: Array<[ReturnType<typeof createDeferred<SessionsListResult>>, SessionsListResult]>
-    ) {
-      pending.forEach(([deferred, result]) => before.push(() => deferred.resolve(result)));
+    resolveOnCleanup: (...entries: typeof pending) => {
+      entries.forEach(([deferred, result]) => pending.push([deferred, result]));
     },
-    settle(this: void, run: () => unknown) {
+    settle: (run: Cleanup) => {
       after.push(run);
     },
     listResult: (query: SessionListScope) => sessions.listSnapshot(query).result,
@@ -67,9 +65,7 @@ export function rosterFixture(
   return { ...harness, ...ownRoster(harness.gateway) };
 }
 
-export function queuedLists(
-  lists: Record<string, ReturnType<typeof createDeferred<SessionsListResult>>>,
-) {
+export function queuedLists(lists: Record<string, PendingList>) {
   const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
     expect(method).toBe("sessions.list");
     const pending = params?.agentId ? lists[params.agentId] : undefined;
@@ -118,15 +114,12 @@ export function listParams(method: string, params: unknown) {
   return params;
 }
 
-export function delay(ms: number) {
-  return new Promise<void>((resolve) => {
+export const delay = (ms: number) =>
+  new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
-}
 
-export function advance(ms = 0) {
-  return vi.advanceTimersByTimeAsync(ms);
-}
+export const advance = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
 
 export function ownerCountsFixture(row: GatewaySessionRow, fullRows?: GatewaySessionRow[]) {
   const counts = { open: 8, running: 0 };

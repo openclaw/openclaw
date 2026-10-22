@@ -9,6 +9,7 @@ const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function fixture(options?: Parameters<typeof createAudioFixture>[1]) {
@@ -67,7 +68,7 @@ describe("managed Linux private audio", () => {
       const f = fixture(missing ? { missing } : { silentServer: true });
       if (!missing) {
         await f.serverSpawned.promise;
-        await vi.advanceTimersByTimeAsync(101);
+        await vi.advanceTimersByTimeAsync(5_001);
       }
       const audio = await f.owner.ready;
       expect(audio.source).toBeUndefined();
@@ -143,7 +144,7 @@ describe("managed Linux private audio", () => {
       if (failure === "timeout" || failure === "abort") {
         await f.captureSpawned.promise;
         if (failure === "timeout") {
-          await vi.advanceTimersByTimeAsync(101);
+          await vi.advanceTimersByTimeAsync(5_001);
         } else {
           controller.abort();
           f.captureAdmission.resolve();

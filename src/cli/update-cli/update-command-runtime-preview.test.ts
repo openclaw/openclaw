@@ -12,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
+import { runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
@@ -92,13 +93,9 @@ it.each([
             : null,
       }),
     );
-    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation(async (node) => ({
-      status: "supported",
-      version: compatible || node === "/current/node" ? "26.1.0" : "24.16.0",
-      sqliteVersion: "3.53.0",
-      nodeSharedSqlite: false,
-      sqliteProbe: { available: true, version: "3.53.0", text: true, blob: true, json: true },
-    }));
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation(async (node) =>
+      runtimeFixture(compatible || node === "/current/node" ? "26.1.0" : "24.16.0", "3.53.0"),
+    );
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
       ...targetMetadata,
       nodeEngine: ">=26.1.0",

@@ -200,3 +200,15 @@ export function stubScreenshotMedia(): void {
     }),
   );
 }
+
+// Open the native action menu before querying its lazy entries.
+export async function openBrowserActions(panel: HTMLElement) {
+  const trigger = panel.querySelector<HTMLButtonElement>(
+    '.bp-toolbar button[aria-haspopup="menu"]',
+  )!;
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    trigger.click();
+    await flushBrowserResponses();
+  }
+  return document.getElementById(trigger.getAttribute("aria-controls")!)!;
+}

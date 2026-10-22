@@ -272,7 +272,9 @@ export async function streamAgentResponse(
       apiKey: resolvedApiKey,
       signal: requestSignal,
       onActiveResponse: steering.onActiveResponse,
-      asyncToolExecution: true,
+      // Async results reach the model only when it calls sessions_yield, the result
+      // collector. Without it (cron runs) the model would answer before any result.
+      asyncToolExecution: llmContext.tools?.some((tool) => tool.name === "sessions_yield") === true,
     });
 
     return await runAgentCoreStream(

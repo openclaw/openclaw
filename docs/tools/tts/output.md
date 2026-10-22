@@ -25,8 +25,9 @@ synthesis or a proven pre-send delivery step fails, OpenClaw sends the visible
 text instead. When that fallback follows an immediate delivery result, it comes
 before later replies from the same turn. Channels that buffer sends until the
 turn settles may send the fallback after their buffered replies. `tagged` mode
-keeps its normal streaming behavior, and text
-inside a `[[tts:text]]` block remains audio-only.
+keeps its normal streaming behavior. Speech inside a `[[tts:text]]` block remains
+audio-only and is delivered after the streamed text, including when a separate
+final reply remains and when `tts.mode` is `"all"`.
 
 Visible captions and their text fallbacks preserve whitespace inside code blocks.
 

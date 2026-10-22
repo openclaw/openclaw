@@ -8,11 +8,16 @@ import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
 import { updateRegistryWorktree } from "../agents/worktrees/registry.js";
-import { IDLE_GC_MS, ManagedWorktreeService } from "../agents/worktrees/service.js";
+import {
+  IDLE_GC_MS,
+  managedWorktrees,
+  ManagedWorktreeService,
+} from "../agents/worktrees/service.js";
 import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
@@ -29,7 +34,7 @@ import {
   createSessionMutationTestClient,
   createSessionMutationTestContext,
 } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
-import { createWorktreesHandlers } from "../gateway/server-methods/worktrees.js";
+import { worktreesHandlers } from "../gateway/server-methods/worktrees.js";
 import { startWorktreeMaintenance } from "../gateway/worktree-maintenance.js";
 import {
   acquireGatewayLock,
@@ -151,10 +156,12 @@ describe("same-root local mutation routing", () => {
   const maintenanceClock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(maintenanceClock.clock);
   let maintenance: ReturnType<typeof startWorktreeMaintenance>;
+  let worktreeGc: { mockRestore: () => void };
   let mode: "normal" | "old" | "refused" | "lost-reply" = "normal";
   const requests: string[] = [];
   const methods: string[] = [];
   const failures: unknown[] = [];
+  const rpcLifetime = createFixtureLifetime();
   const acquireOwner = () =>
     acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
   const run = (args: string[]) => runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env });
@@ -204,12 +211,13 @@ describe("same-root local mutation routing", () => {
     repoFingerprint = (await service.resolveRepositoryIdentity(repo)).fingerprint;
     owner = await acquireOwner();
     expect(owner).not.toBeNull();
-    const handlers = createWorktreesHandlers(service);
     const context = createSessionMutationTestContext(cfg);
+    worktreeGc = vi
+      .spyOn(managedWorktrees, "gc")
+      .mockImplementation(() => service.gc(createManagedWorktreeOwnerPolicy(cfg)));
     maintenance = startWorktreeMaintenance({
       scheduler,
       getRuntimeConfig: context.getRuntimeConfig,
-      runGc: () => service.gc(createManagedWorktreeOwnerPolicy(cfg)),
       onComplete: () => {},
       onError: (error) => failures.push(error),
     });
@@ -220,60 +228,65 @@ describe("same-root local mutation routing", () => {
       let authenticated = false;
       sendMinimalGatewayConnectChallenge(ws);
       ws.on("message", (data) => {
-        void (async () => {
-          const frame = parseMinimalGatewayRequestFrame(data);
-          if (!frame.id) {
-            return;
-          }
-          if (frame.method === "connect") {
-            authenticated = frame.params?.auth?.token === token;
+        void rpcLifetime.track(
+          (async () => {
+            const frame = parseMinimalGatewayRequestFrame(data);
+            if (!frame.id) {
+              return;
+            }
+            if (frame.method === "connect") {
+              authenticated = frame.params?.auth?.token === token;
+              expect(authenticated).toBe(true);
+              const hello = buildMinimalGatewayHelloOkPayload({
+                methods: Object.keys(worktreesHandlers),
+                auth: { role: "operator", scopes: ["operator.admin"] },
+                snapshot: {
+                  stateDir: env.OPENCLAW_STATE_DIR,
+                  configPath: env.OPENCLAW_CONFIG_PATH,
+                },
+              });
+              sendMinimalGatewayResponse(ws, frame.id, {
+                ...hello,
+                features: {
+                  ...hello.features,
+                  capabilities: mode === "old" ? [] : Object.values(GATEWAY_SERVER_CAPS),
+                },
+              });
+              return;
+            }
             expect(authenticated).toBe(true);
-            const hello = buildMinimalGatewayHelloOkPayload({
-              methods: Object.keys(handlers),
-              auth: { role: "operator", scopes: ["operator.admin"] },
-              snapshot: { stateDir: env.OPENCLAW_STATE_DIR, configPath: env.OPENCLAW_CONFIG_PATH },
-            });
-            sendMinimalGatewayResponse(ws, frame.id, {
-              ...hello,
-              features: {
-                ...hello.features,
-                capabilities: mode === "old" ? [] : Object.values(GATEWAY_SERVER_CAPS),
+            const method = frame.method!;
+            expect(worktreesHandlers[method]).toBeTypeOf("function");
+            methods.push(method);
+            if (method === "worktrees.create") {
+              requests.push(String(frame.params?.name));
+            }
+            await worktreesHandlers[method]!({
+              req: { type: "req", id: frame.id, method, params: frame.params },
+              params: {
+                ...frame.params,
+                ...(mode === "refused" ? { expectedOwnerId: "retired-owner" } : {}),
+              },
+              client,
+              context,
+              isWebchatConnect: () => false,
+              hasCurrentClientAuthority: () => authenticated,
+              respond: (ok, payload, error) => {
+                if (mode === "lost-reply" && ok) {
+                  ws.close(
+                    1011,
+                    "lost reply ws://fixture-user:fixture-pass@gw.invalid/?token=fixture-secret",
+                  );
+                } else {
+                  ws.send(JSON.stringify({ type: "res", id: frame.id, ok, payload, error }));
+                }
               },
             });
-            return;
-          }
-          expect(authenticated).toBe(true);
-          const method = frame.method!;
-          expect(handlers[method]).toBeTypeOf("function");
-          methods.push(method);
-          if (method === "worktrees.create") {
-            requests.push(String(frame.params?.name));
-          }
-          await handlers[method]!({
-            req: { type: "req", id: frame.id, method, params: frame.params },
-            params: {
-              ...frame.params,
-              ...(mode === "refused" ? { expectedOwnerId: "retired-owner" } : {}),
-            },
-            client,
-            context,
-            isWebchatConnect: () => false,
-            hasCurrentClientAuthority: () => authenticated,
-            respond: (ok, payload, error) => {
-              if (mode === "lost-reply" && ok) {
-                ws.close(
-                  1011,
-                  "lost reply ws://fixture-user:fixture-pass@gw.invalid/?token=fixture-secret",
-                );
-              } else {
-                ws.send(JSON.stringify({ type: "res", id: frame.id, ok, payload, error }));
-              }
-            },
-          });
-        })().catch((error: unknown) => {
-          failures.push(error);
-          ws.terminate();
-        });
+          })().catch((error: unknown) => {
+            failures.push(error);
+            ws.terminate();
+          }),
+        );
       });
     });
     await once(server, "listening");
@@ -282,12 +295,18 @@ describe("same-root local mutation routing", () => {
   beforeEach(() => {
     mode = "normal";
     stubHome(env, root, true);
+    // mock-isolation: The loopback owner still executes its real task-scoped Git service.
+    vi.spyOn(managedWorktrees, "create").mockImplementation(service.create.bind(service));
+    vi.spyOn(managedWorktrees, "remove").mockImplementation(service.remove.bind(service));
   });
 
   afterAll(async () => {
     await maintenance.stop();
     await scheduler.stop();
+    worktreeGc.mockRestore();
     await closeMinimalGatewayServer(server);
+    await rpcLifetime.cleanup();
+    vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     await owner?.release();
     await claim.release();

@@ -6,6 +6,7 @@ import {
   reconnectMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
@@ -73,9 +74,7 @@ async function openPeople(
   const gateway = await installMockGateway(page, options);
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
   if (touch) {
-    const toggle = page
-      .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-      .first();
+    const toggle = navigationDrawerToggle(page);
     await toggle[touch]();
   }
   const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
@@ -448,7 +447,7 @@ suite.define(() => {
         await pollCount(card).toBe(0);
       },
     ));
-  it("keeps colliding people, watches, owner exclusion and open cards separate through updates", () =>
+  it("keeps colliding people, watches, owner presence and open cards separate through updates", () =>
     withPage({ colorScheme: "light", serviceWorkers: "block" }, async ({ page }) => {
       const actor = {
         type: "human" as const,
@@ -489,7 +488,15 @@ suite.define(() => {
       await expectCount(link(rawCard, /^Profile watch(?:\s|$)/), 0);
       await expectCount(link(rawCard, "View activity"), 0);
       const headerFaces = page.locator(".chat-pane__presence [data-viewer-id]");
-      await expect.poll(() => headerFaces.getAttribute("aria-label")).toBe(raw.name);
+      await expect
+        .poll(() =>
+          headerFaces.evaluateAll((faces) =>
+            faces
+              .map((face) => face.getAttribute("aria-label") ?? "")
+              .toSorted((a, b) => a.localeCompare(b)),
+          ),
+        )
+        .toEqual([profile.name, raw.name].toSorted((a, b) => a.localeCompare(b)));
       const rawLink = link(rawCard, /^Raw watch(?:\s|$)/);
       await rawLink.focus();
       await emitPresence(gateway, [

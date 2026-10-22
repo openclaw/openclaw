@@ -341,7 +341,6 @@ it("preserves custom settings and reports a typed warning for missing load paths
     slots: { memory: "custom-memory" },
   });
   config.channels = { "custom-channel": { enabled: true, retained: "verbatim" } };
-  config.agents!.defaults!.heartbeat = { target: "custom-channel" };
   config.agents!.defaults!.model = { primary: "custom-provider/model" };
   config.agents!.defaults!.models = { "custom-provider/model": {} };
   config.tools = { web: { search: { provider: "custom-search" } } };

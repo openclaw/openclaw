@@ -25,7 +25,6 @@ export function resolvePluginConfigContractsById(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  fallbackToBundledMetadata?: boolean;
   fallbackToBundledMetadataForResolvedBundled?: boolean;
   fallbackBundledPluginIds?: readonly string[];
   pluginIds: readonly string[];
@@ -106,57 +105,55 @@ export function resolvePluginConfigContractsById(params: {
     });
   }
 
-  if (params.fallbackToBundledMetadata ?? true) {
-    for (const pluginId of pluginIds) {
-      const existing = matches.get(pluginId);
-      const shouldHydrateBundledMatch =
-        existing &&
-        ((params.fallbackToBundledMetadataForResolvedBundled && existing.origin === "bundled") ||
-          (!params.manifestRegistry && fallbackBundledPluginIds.has(pluginId)));
-      if (shouldHydrateBundledMatch) {
-        const bundledConfigContracts = findBundledConfigContracts(pluginId);
-        if (bundledConfigContracts) {
-          // Bundled metadata can carry richer contract declarations than installed registry entries;
-          // installed declarations still win except for bundled secret input coverage.
-          matches.set(pluginId, {
-            origin: fallbackBundledPluginIds.has(pluginId) ? "bundled" : existing.origin,
-            configContracts: {
-              ...bundledConfigContracts,
-              ...existing.configContracts,
-              ...(bundledConfigContracts.secretInputs
-                ? { secretInputs: bundledConfigContracts.secretInputs }
-                : {}),
-            },
-          });
-        }
-        continue;
-      }
-      if (matches.has(pluginId)) {
-        continue;
-      }
-      const resolvedOrigin = resolvedPluginOrigins.get(pluginId);
-      if (
-        resolvedOrigin &&
-        !(params.fallbackToBundledMetadataForResolvedBundled && resolvedOrigin === "bundled") &&
-        !fallbackBundledPluginIds.has(pluginId)
-      ) {
-        continue;
-      }
-      if (params.manifestRegistry && resolvedOrigin && resolvedOrigin !== "bundled") {
-        continue;
-      }
-      if (params.manifestRegistry && !fallbackBundledPluginIds.has(pluginId)) {
-        continue;
-      }
+  for (const pluginId of pluginIds) {
+    const existing = matches.get(pluginId);
+    const shouldHydrateBundledMatch =
+      existing &&
+      ((params.fallbackToBundledMetadataForResolvedBundled && existing.origin === "bundled") ||
+        (!params.manifestRegistry && fallbackBundledPluginIds.has(pluginId)));
+    if (shouldHydrateBundledMatch) {
       const bundledConfigContracts = findBundledConfigContracts(pluginId);
-      if (!bundledConfigContracts) {
-        continue;
+      if (bundledConfigContracts) {
+        // Bundled metadata can carry richer contract declarations than installed registry entries;
+        // installed declarations still win except for bundled secret input coverage.
+        matches.set(pluginId, {
+          origin: fallbackBundledPluginIds.has(pluginId) ? "bundled" : existing.origin,
+          configContracts: {
+            ...bundledConfigContracts,
+            ...existing.configContracts,
+            ...(bundledConfigContracts.secretInputs
+              ? { secretInputs: bundledConfigContracts.secretInputs }
+              : {}),
+          },
+        });
       }
-      matches.set(pluginId, {
-        origin: "bundled",
-        configContracts: bundledConfigContracts,
-      });
+      continue;
     }
+    if (matches.has(pluginId)) {
+      continue;
+    }
+    const resolvedOrigin = resolvedPluginOrigins.get(pluginId);
+    if (
+      resolvedOrigin &&
+      !(params.fallbackToBundledMetadataForResolvedBundled && resolvedOrigin === "bundled") &&
+      !fallbackBundledPluginIds.has(pluginId)
+    ) {
+      continue;
+    }
+    if (params.manifestRegistry && resolvedOrigin && resolvedOrigin !== "bundled") {
+      continue;
+    }
+    if (params.manifestRegistry && !fallbackBundledPluginIds.has(pluginId)) {
+      continue;
+    }
+    const bundledConfigContracts = findBundledConfigContracts(pluginId);
+    if (!bundledConfigContracts) {
+      continue;
+    }
+    matches.set(pluginId, {
+      origin: "bundled",
+      configContracts: bundledConfigContracts,
+    });
   }
 
   return matches;

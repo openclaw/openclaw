@@ -48,6 +48,7 @@ export function prepareInstantThreadHandoff(options: {
           options.message,
           options.composer,
           params.displayName,
+          params.category,
         )
       : undefined;
   };
@@ -83,6 +84,7 @@ export class InstantThreadHandoff {
     message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"],
     composer?: CreationComposer,
     displayName?: string,
+    category?: string,
   ) {
     this.creation = { sessionKey: key, admitted: false };
     this.client = context.gateway.snapshot.client;
@@ -119,6 +121,7 @@ export class InstantThreadHandoff {
       message,
       composer,
       displayName,
+      category,
       // This transaction owns live identity/navigation authority. The display store
       // consumes that decision instead of maintaining a second authentication snapshot.
       canDisplay: () => this.canDisplay(),

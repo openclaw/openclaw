@@ -154,6 +154,12 @@ Startup activates only runs with unfinished execution, cleanup, or requester
 obligations. Settled history stays available for listing and result reads without
 reserving completion sources or resuming it. Retention still prunes finished Swarm
 groups, including when no runs need activation.
+Activation waits for source restoration and ordered completion reservations.
+Interrupted child settlement then runs in the background, with at most eight
+recoveries in flight across requester groups. Shutdown waits for accepted recovery
+work; a failed attempt remains available to the normal sweep. Startup trace
+subspans sum work across requester groups and can exceed activation wall time;
+`background.subagent-interrupted` reports the separate settlement work.
 Durably completed cleanup does not replay interrupted child-session effects on restart.
 The saved interruption still rejects late child results, and pending requester wakes
 continue through their existing settlement owner.

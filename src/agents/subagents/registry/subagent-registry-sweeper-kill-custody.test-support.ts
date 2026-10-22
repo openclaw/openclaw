@@ -7,6 +7,31 @@ import {
   mockSubagentSweeperChildLookup,
   createSubagentSweeperRun as run,
 } from "./subagent-registry-sweeper.test-support.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+export function createSubagentKillFixture() {
+  const killIntent: NonNullable<ReturnType<typeof run>["killIntent"]> = {
+    requestedAt: Date.now(),
+    reason: "killed",
+    sessionId: "session-id",
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    sessionLifecycleRevision: "session-revision",
+  };
+  const entry = { ...run(), killIntent };
+  const runs = new Map<string, SubagentRunRecord>([[entry.runId, entry]]);
+  const childLookup = mockSubagentSweeperChildLookup(runs);
+  const options = {
+    runId: entry.runId,
+    entry,
+    runs,
+    getRunsForChildSession: childLookup,
+    completeSubagentRunWithRecovery: vi.fn(async () => {}),
+    retireSupersededRun: vi.fn(),
+    retireObligations: vi.fn(async () => {}),
+    warn: vi.fn(),
+  };
+  return { ...options, childLookup, reconcile: () => reconcileDurableSubagentKillIntent(options) };
+}
 
 export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
   current: { sessionId: string; lifecycleRevision?: string; updatedAt: number } | undefined;
@@ -14,16 +39,8 @@ export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
   it.each(["same run id", "newer generation", "session revision", "existing successor"] as const)(
     "fences a durable kill when a %s replaces its owner",
     async (change) => {
-      const entry = run();
-      entry.killIntent = {
-        requestedAt: Date.now(),
-        reason: "killed",
-        sessionId: "session-id",
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        sessionLifecycleRevision: "session-revision",
-      };
-      const runs = new Map([[entry.runId, entry]]);
-      const childLookup = mockSubagentSweeperChildLookup(runs);
+      const h = createSubagentKillFixture();
+      const { entry, runs } = h;
       const addSuccessor = () => {
         const newer = {
           ...run(),
@@ -49,23 +66,10 @@ export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
         await prepared.promise;
         return prepare(...args);
       });
-      const completeSubagentRunWithRecovery = vi.fn();
-      const retireSupersededRun = vi.fn();
-      const pending = reconcileDurableSubagentKillIntent({
-        runId: entry.runId,
-        entry,
-        runs,
-        getRunsForChildSession: childLookup,
-        retireObligations: vi.fn(async () => {}),
-        completeSubagentRunWithRecovery,
-        retireSupersededRun,
-        warn: vi.fn(),
-      });
+      const pending = h.reconcile();
 
       try {
-        if (change === "existing successor") {
-          await pending;
-        } else {
+        if (change !== "existing successor") {
           await entered.promise;
           if (change === "same run id") {
             runs.set(entry.runId, run());
@@ -82,30 +86,27 @@ export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
       } finally {
         prepared.resolve();
         await pending;
-        childLookup.mockRestore();
+        h.childLookup.mockRestore();
         vi.mocked(prepareSubagentKillSession).mockImplementation(prepare);
       }
 
       await expect(pending).resolves.toBe(
         change === "session revision" || change === "existing successor",
       );
-      if (change === "session revision") {
-        expect(completeSubagentRunWithRecovery).toHaveBeenCalledWith(
-          expect.objectContaining({
-            runId: entry.runId,
-            expectedEntry: entry,
-            suppressSessionEffects: true,
-          }),
-          "sweeper-retired-kill-intent",
-        );
-      } else {
-        expect(completeSubagentRunWithRecovery).not.toHaveBeenCalled();
-      }
-      if (change === "existing successor") {
-        expect(retireSupersededRun).toHaveBeenCalledWith(entry.runId, entry);
-      } else {
-        expect(retireSupersededRun).not.toHaveBeenCalled();
-      }
+      const completion = [
+        expect.objectContaining({
+          runId: entry.runId,
+          expectedEntry: entry,
+          suppressSessionEffects: true,
+        }),
+        "sweeper-retired-kill-intent",
+      ];
+      expect(h.completeSubagentRunWithRecovery.mock.calls).toEqual(
+        change === "session revision" ? [completion] : [],
+      );
+      expect(h.retireSupersededRun.mock.calls).toEqual(
+        change === "existing successor" ? [[entry.runId, entry]] : [],
+      );
     },
   );
 }

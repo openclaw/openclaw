@@ -24,12 +24,10 @@ import {
   groupJid,
 } from "./runtime.test-support.js";
 import { whatsappScenarioImplementations } from "./scenario-implementations.js";
-import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import { buildWhatsAppQaConfig, parseWhatsAppQaCredentialPayload } from "./whatsapp-live.config.js";
 import {
   resolveWhatsAppQaMessageTargets,
   type WhatsAppQaScenarioImplementation,
-  type WhatsAppQaScenarioMetadata,
   type WhatsAppQaScenarioRun,
 } from "./whatsapp-live.contracts.js";
 import { isTransientWhatsAppQaDriverError } from "./whatsapp-live.driver.js";
@@ -42,7 +40,7 @@ import { runWhatsAppStructuredInboundChecks } from "./whatsapp-live.media.js";
 import { waitForScenarioObservedMessage } from "./whatsapp-live.observations.js";
 import { unpackWhatsAppAuthArchive } from "./whatsapp-live.setup.js";
 
-type Scenario = WhatsAppQaScenarioMetadata & WhatsAppQaScenarioImplementation;
+type Scenario = WhatsAppQaScenarioImplementation & { id: string; timeoutMs: number };
 type MessageRun = Exclude<WhatsAppQaScenarioRun, { kind: "approval" }>;
 type Context = Parameters<NonNullable<MessageRun["afterSend"]>>[0];
 type WhatsAppQaConfigBase = Parameters<typeof buildWhatsAppQaConfig>[0];
@@ -183,7 +181,6 @@ describe("WhatsApp QA live runtime", () => {
       const archiveBase64 = await createArchive(tempRoot, entries);
       const authDir = await unpackWhatsAppAuthArchive({
         archiveBase64,
-        clearSignalSessions: true,
         label: "driver",
         parentDir: tempRoot,
       });
@@ -958,65 +955,6 @@ describe("WhatsApp QA live runtime", () => {
     );
 
     expect(waitCallCount).toBe(2);
-  });
-
-  it("targets group approval reactions at the approval prompt participant", async () => {
-    const scenario = getWhatsAppScenario("whatsapp-approval-exec-group-reaction-native");
-    const run = scenario.buildRun();
-    if (run.kind !== "approval") {
-      throw new Error("expected approval scenario run");
-    }
-    const sendReaction = vi.fn(async () => ({ messageId: "reaction-1" }));
-    let approvalId = "";
-    let waitCount = 0;
-    const driver = createDriver({
-      sendReaction,
-      waitForMessage: async ({ match }) => {
-        waitCount += 1;
-        const isPending = waitCount === 1;
-        const message = observedMessage(isPending ? "approval-message-1" : "approval-resolved-1", {
-          fromJid: "12345@g.us",
-          observedAt: isPending ? "2026-06-28T02:00:00.000Z" : "2026-06-28T02:00:01.000Z",
-          participantJid: "999@lid",
-          text: isPending
-            ? `Exec approval required\nID: ${approvalId}\n` +
-              `Pending command:\nprintf '%s\\n' '${run.token}'\n\n` +
-              "React with:\n\n👍 Allow Once\n👎 Deny"
-            : `✅ Exec approval allow-once. ID: ${approvalId}`,
-        });
-        if (!match(message)) {
-          throw new Error(`approval test message ${waitCount} did not match`);
-        }
-        return message;
-      },
-    });
-    const gateway = {
-      call: async (method: string, payload: { id?: string }) => {
-        if (method === "exec.approval.request") {
-          approvalId = payload.id ?? "";
-          return { id: approvalId, status: "accepted" };
-        }
-        if (method === "exec.approval.waitDecision") {
-          return { decision: "allow-once" };
-        }
-        throw new Error(`unexpected gateway call ${method}`);
-      },
-    } as Parameters<typeof runWhatsAppApprovalScenario>[0]["gateway"];
-
-    await runWhatsAppApprovalScenario({
-      driver,
-      gateway,
-      run,
-      scenario,
-      sutAccountId: "work",
-      sutPhoneE164: phones.sutPhoneE164,
-      turnSourceTo: "12345@g.us",
-    });
-
-    expect(sendReaction).toHaveBeenCalledWith("12345@g.us", "approval-message-1", "👍", {
-      fromMe: false,
-      participant: "999@lid",
-    });
   });
 
   it("enables WhatsApp native exec and plugin approval delivery for approval scenarios", () => {

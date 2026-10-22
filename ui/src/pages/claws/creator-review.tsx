@@ -59,7 +59,7 @@ function OptionalSection(props: {
                 <span>{item().label}</span>
               </label>
               <details>
-                <summary>{t("clawsDraft.inspect")}</summary>
+                <summary>{t("clawsDraft.view")}</summary>
                 <pre>{item().detail}</pre>
               </details>
             </div>
@@ -91,11 +91,11 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
             <span>{t("clawsDraft.name")}</span>
             <input
               class="settings-input"
-              value={choices()?.name ?? ""}
+              value={choices()?.displayName ?? ""}
               onInput={(event) => {
                 const current = choices();
                 if (current) {
-                  props.flow.updateChoices({ ...current, name: event.currentTarget.value });
+                  props.flow.updateChoices({ ...current, displayName: event.currentTarget.value });
                 }
               }}
             />
@@ -115,12 +115,6 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
             />
           </label>
         </div>
-        <p class="claw-creator__publisher">
-          {t("clawsDraft.publisher", {
-            publisher: review().publisher.replace(/^@/, ""),
-            version: review().version,
-          })}
-        </p>
         <section class="claw-creator__section">
           <h3>{t("clawsDraft.behavior")}</h3>
           <details class="claw-creator__summary">
@@ -172,7 +166,7 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
           <button type="button" class="btn" onClick={() => props.flow.close()}>
             {t("clawsDraft.askChanges")}
           </button>
-          <Show when={!state().reviewCurrent && state().busy !== "reviewing"}>
+          <Show when={!state().reviewCurrent && state().busy === null}>
             <button type="button" class="btn" onClick={() => props.flow.retryReview()}>
               {t("clawsDraft.refreshReview")}
             </button>
@@ -181,8 +175,12 @@ function ClawReviewDialog(props: { flow: ClawCreatorFlow; view: CreatorView }) {
             type="button"
             class="btn primary"
             disabled={!state().reviewCurrent || state().busy !== null}
+            aria-busy={state().busy === "publishing" ? "true" : undefined}
             onClick={() => void props.flow.publish()}
           >
+            <Show when={state().busy === "publishing"}>
+              <span class="btn__spinner" aria-hidden="true" />
+            </Show>
             {t(state().busy === "publishing" ? "clawsDraft.publishing" : "clawsDraft.publish")}
           </button>
         </openclaw-modal-actions>
@@ -202,22 +200,6 @@ export function ClawCreatorReview(props: { context: ApplicationContext }) {
     <>
       <Show when={view().read().modalOpen && view().read().review}>
         <ClawReviewDialog flow={flow()} view={view()} />
-      </Show>
-      <Show when={view().read().publication}>
-        {(result) => (
-          <div class="claw-creator__notice" role="status">
-            <strong>
-              {t(
-                result().publicationStatus === "published"
-                  ? "clawsDraft.published"
-                  : "clawsDraft.pending",
-              )}
-            </strong>
-            <a href={result().url} target="_blank" rel="noopener noreferrer">
-              {t("clawsDraft.viewPublication")}
-            </a>
-          </div>
-        )}
       </Show>
       <Show
         when={

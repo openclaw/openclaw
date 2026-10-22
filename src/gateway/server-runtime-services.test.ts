@@ -17,6 +17,7 @@ import {
 import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
@@ -31,6 +32,8 @@ import { clearGatewayMaintenanceHandles } from "./server-maintenance-lifecycle.j
 import { registerGatewayCronStartupTests } from "./server-runtime-services.cron.test-support.js";
 import {
   createLog,
+  createTestCronReconciliation,
+  createTestCronState,
   createMaintenanceHandles,
   runtimeServiceMocks as hoisted,
   resetRuntimeServiceMocks,
@@ -65,10 +68,10 @@ describe("server-runtime-services", () => {
   it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
     "keeps channel health recovery disabled when %s suppresses startup",
     (envKey) => {
+      vi.stubEnv(envKey, "1");
       const monitor = startGatewayChannelHealthMonitor({
         scheduler: createTestGatewayScheduler(),
         channelManager: {} as never,
-        env: { [envKey]: "1" },
       });
 
       expect(monitor).toBeNull();
@@ -112,6 +115,34 @@ describe("server-runtime-services", () => {
   });
 
   registerGatewayCronStartupTests(startGatewayCronWithLogging);
+
+  it("keeps refused cron startup quiet until a fresh lifecycle admits it", async () => {
+    vi.useFakeTimers();
+    const cron = { start: vi.fn(async () => {}) };
+    const cronReconciliation = createTestCronReconciliation();
+    const logCron = { error: vi.fn() };
+    const params = {
+      cronState: createTestCronState(cron),
+      cronReconciliation,
+      reason: "startup" as const,
+      config: {},
+      logCron,
+    };
+    markGatewayRestartDraining("stop (SIGTERM)");
+    startGatewayCronWithLogging(params);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cron.start).not.toHaveBeenCalled();
+    expect(cronReconciliation.complete).not.toHaveBeenCalled();
+    expect(logCron.error).not.toHaveBeenCalled();
+
+    resetGatewayWorkAdmission();
+    startGatewayCronWithLogging(params);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cron.start).toHaveBeenCalledOnce();
+    expect(cronReconciliation.complete).toHaveBeenCalledOnce();
+    expect(logCron.error).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
 
   it.each(["restore", "shutdown"] as const)(
     "holds restart session deliveries until subagent sources settle: %s",
@@ -325,34 +356,40 @@ describe("server-runtime-services", () => {
     services.heartbeatRunner.stop();
   });
 
-  it("stops unadmitted session recovery without reopening the restart fence", async () => {
-    vi.useFakeTimers();
-    const fence = beginGatewayRestartSignalAdmission();
-    if (!fence) {
-      throw new Error("Expected restart signal admission fence");
-    }
-    const { services, log } = activateScheduledServicesForTest();
-    let stopping: Promise<void> | undefined;
-    try {
-      await vi.advanceTimersByTimeAsync(1_250);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      let stopped = false;
-      stopping = services.stopDeliveryRecovery().then(() => {
-        stopped = true;
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(true);
-      expect(hoisted.startSessionDeliveryRuntime).not.toHaveBeenCalled();
-      expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
-      expect(log.error).not.toHaveBeenCalled();
-    } finally {
-      fence.rollback();
-      services.heartbeatRunner.stop();
-      await services.stopDeliveryRecovery();
-      await stopping;
-      await vi.advanceTimersByTimeAsync(0);
-    }
-  });
+  it.for(["signal fence", "hard drain"])(
+    "stops unadmitted session recovery quietly during %s",
+    async (reason) => {
+      vi.useFakeTimers();
+      const fence = beginGatewayRestartSignalAdmission();
+      if (!fence) {
+        throw new Error("Expected restart signal admission fence");
+      }
+      if (reason === "hard drain") {
+        markGatewayRestartDraining("stop (SIGTERM)");
+      }
+      const { services, log } = activateScheduledServicesForTest();
+      let stopping: Promise<void> | undefined;
+      try {
+        await vi.advanceTimersByTimeAsync(1_250);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        let stopped = false;
+        stopping = services.stopDeliveryRecovery().then(() => {
+          stopped = true;
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(stopped).toBe(true);
+        expect(hoisted.startSessionDeliveryRuntime).not.toHaveBeenCalled();
+        expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
+        expect(log.error).not.toHaveBeenCalled();
+      } finally {
+        fence.rollback();
+        services.heartbeatRunner.stop();
+        await services.stopDeliveryRecovery();
+        await stopping;
+        await vi.advanceTimersByTimeAsync(0);
+      }
+    },
+  );
 
   it("resumes pending session recovery when the restart fence rolls back", async () => {
     vi.useFakeTimers();

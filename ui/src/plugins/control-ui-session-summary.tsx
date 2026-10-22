@@ -1,7 +1,18 @@
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { For, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  createSignal,
+  createStore,
+  isPending,
+  onCleanup,
+  onSettled,
+} from "solid-js";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../components/markdown.ts";
@@ -48,10 +59,15 @@ type SummaryScope = {
 };
 
 function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
-  const [history, setHistory] = createSignal<ChatHistoryResult | null>(null);
-  const [error, setError] = createSignal(false);
+  const [read, setRead] = createSignal<Promise<ChatHistoryResult | null> | null>(null);
+  const history = createMemo(() => read() ?? null);
+  // The stable progress card keeps metadata from the last accepted history read.
+  const [metadata, setMetadata] = createStore<{
+    sessionInfo: ChatHistoryResult["sessionInfo"];
+  }>({ sessionInfo: undefined }, { shallow: true });
   let alive = true;
   let snapshot: ChatHistoryResult | null = null;
+  let cursor: string | undefined;
   const current = () =>
     alive &&
     !scope.signal.aborted &&
@@ -62,71 +78,76 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
     scope.gateway.connectionRevision === scope.revision &&
     props.session?.sessionKey === scope.session.sessionKey &&
     props.session?.agentId === scope.session.agentId;
-  onCleanup(() => {
-    alive = false;
-  });
   const store = sessionProgressCardsForGateway(scope.gateway);
   const progress = projectProgressCard(() => ({
     store,
     target: scope.session,
     options: { admitAutomaticRead: current },
   }));
-  const refresh = async () => {
+  const refresh = () => {
     if (!current()) {
-      return;
+      return Promise.resolve();
     }
-    setError(false);
-    const request = (cursor?: string) =>
+    const pending = readHistory();
+    void setRead(pending);
+    // The coordinator serializes admitted reads; the boundary presents their errors.
+    return pending.then(
+      () => undefined,
+      () => undefined,
+    );
+  };
+  const readHistory = async (): Promise<ChatHistoryResult | null> => {
+    let previous = snapshot;
+    const request = (requestCursor?: string) =>
       scope.client.request<ChatHistoryResponse>("chat.history", {
         ...scope.session,
-        cursor,
+        cursor: requestCursor,
         toolResultMaxChars: 2_000,
         limit: 20,
         maxChars: 12000,
       });
-    try {
-      let result = await request(snapshot?.deltaCursor);
+    let result = await request(cursor);
+    if (!current()) {
+      return null;
+    }
+    if ("kind" in result && result.kind === "reset") {
+      // Retire the wire cursor without discarding metadata from the last successful read.
+      cursor = undefined;
+      previous = null;
+      result = await request();
       if (!current()) {
-        return;
-      }
-      if ("kind" in result && result.kind === "reset") {
-        snapshot = null;
-        result = await request();
-        if (!current()) {
-          return;
-        }
-      }
-      if ("kind" in result) {
-        if (result.kind === "reset") {
-          throw new Error("History tail returned a reset");
-        }
-        let projection = createSessionProjection({}, snapshot?.messages ?? []);
-        for (const envelope of result.messages) {
-          if (!isRecord(envelope)) {
-            continue;
-          }
-          projection = reduceSessionProjection(projection, {
-            type: "messagePersisted",
-            message: envelope.message,
-            envelope,
-          });
-        }
-        snapshot = { ...result, messages: projection.messages.slice(-20) };
-      } else {
-        snapshot = { ...result, messages: result.messages?.slice(-20) };
-      }
-      setHistory(snapshot);
-      onSettled(hydrateIdentities);
-    } catch {
-      if (current()) {
-        setError(true);
+        return null;
       }
     }
+    if ("kind" in result) {
+      if (result.kind === "reset") {
+        throw new Error("History tail returned a reset");
+      }
+      let projection = createSessionProjection({}, previous?.messages ?? []);
+      for (const envelope of result.messages) {
+        if (!isRecord(envelope)) {
+          continue;
+        }
+        projection = reduceSessionProjection(projection, {
+          type: "messagePersisted",
+          message: envelope.message,
+          envelope,
+        });
+      }
+      snapshot = { ...result, messages: projection.messages.slice(-20) };
+    } else {
+      snapshot = { ...result, messages: result.messages?.slice(-20) };
+    }
+    cursor = snapshot.deltaCursor;
+    setMetadata((draft) => {
+      draft.sessionInfo = snapshot?.sessionInfo;
+    });
+    onSettled(hydrateIdentities);
+    return snapshot;
   };
   const refreshes = createSessionEventRefreshCoordinator({ active: true, refresh });
-  onCleanup(() => refreshes.dispose());
-  onCleanup(
-    scope.gateway.subscribeEvents((event) => {
+  onSettled(() => {
+    const stop = scope.gateway.subscribeEvents((event) => {
       if (event.event !== "sessions.changed" && event.event !== "session.message") {
         return;
       }
@@ -146,13 +167,16 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
       ) {
         refreshes.schedule();
       }
-    }),
-  );
-  onSettled(() => {
+    });
     refreshes.scheduleRetry(0);
+    return () => {
+      alive = false;
+      stop();
+      refreshes.dispose();
+    };
   });
-  const messages = createMemo(() =>
-    (history()?.messages ?? []).slice(-20).flatMap((message) => {
+  const summarize = (value: ChatHistoryResult | null) =>
+    (value?.messages ?? []).slice(-20).flatMap((message) => {
       if (!isRecord(message) || (message.role !== "user" && message.role !== "assistant")) {
         return [];
       }
@@ -190,12 +214,11 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
           : null;
       const time = timestamp && Number.isFinite(timestamp.getTime()) ? timestamp : null;
       return [{ text, label, sender, agentId, agent, time, role: message.role }];
-    }),
-  );
+    });
   const hydrateIdentities = () => {
     if (current()) {
       void props.agentIdentity?.ensure(
-        messages().flatMap((message) =>
+        summarize(snapshot).flatMap((message) =>
           !message.sender && message.agentId ? [message.agentId] : [],
         ),
       );
@@ -218,6 +241,82 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
         })
       : null;
   });
+  function SummaryView(view: { history: ChatHistoryResult | null; unavailable?: boolean }) {
+    const messages = createMemo(() => summarize(view.history));
+    return (
+      <>
+        <section
+          class="plugin-session-summary__history"
+          aria-label={t("pluginUi.sessionRecentMessages")}
+        >
+          <h3>{t("pluginUi.sessionRecentMessages")}</h3>
+          {view.unavailable ? (
+            <p role="alert">{t("pluginUi.sessionHistoryUnavailable")}</p>
+          ) : !view.history ? (
+            <p>{t("common.loading")}</p>
+          ) : (
+            <For
+              keyed={false}
+              each={messages()}
+              fallback={<p>{t("pluginUi.sessionHistoryEmpty")}</p>}
+            >
+              {(message) => (
+                <article class="plugin-session-summary__message">
+                  <header class="plugin-session-summary__message-header">
+                    <span class="plugin-session-summary__avatar">
+                      {message().sender ? (
+                        <ChatAuthorAvatar sender={message().sender} />
+                      ) : message().agentId ? (
+                        <AgentAvatar
+                          option={{
+                            value: message().agentId!,
+                            label: message().label,
+                            agent: message().agent ?? { id: message().agentId! },
+                          }}
+                          identity={identities()?.read().get(message().agentId) ?? null}
+                        />
+                      ) : (
+                        <span class="plugin-session-summary__unknown" aria-hidden="true">
+                          <Icon name={message().role === "user" ? "users" : "bot"} />
+                        </span>
+                      )}
+                    </span>
+                    <strong class="plugin-session-summary__role">{message().label}</strong>
+                    <Show when={message().time}>
+                      {(time) => (
+                        <time datetime={time().toISOString()} title={time().toLocaleString()}>
+                          {time().toLocaleTimeString(undefined, {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </time>
+                      )}
+                    </Show>
+                  </header>
+                  <SanitizedHtml
+                    tag="div"
+                    class="sidebar-markdown"
+                    html={toSanitizedMarkdownHtml(message().text)}
+                  />
+                </article>
+              )}
+            </For>
+          )}
+        </section>
+        <Show when={view.unavailable || progress.read().error}>
+          <button
+            class="btn"
+            onClick={() => {
+              refreshes.scheduleRetry(0);
+              void store.load(scope.session).catch(() => undefined);
+            }}
+          >
+            {t("common.retry")}
+          </button>
+        </Show>
+      </>
+    );
+  }
   return (
     <div class="plugin-session-summary">
       <Show when={progress.read().error || progress.read().card !== null}>
@@ -230,83 +329,21 @@ function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
             <SessionProgressCard
               card={progress.read().card}
               placement="board"
-              sessionStatus={history()?.sessionInfo?.status}
-              startedAt={history()?.sessionInfo?.startedAt}
-              endedAt={history()?.sessionInfo?.endedAt}
-              hasActiveRun={history()?.sessionInfo?.hasActiveRun === true}
+              sessionStatus={metadata.sessionInfo?.status}
+              startedAt={metadata.sessionInfo?.startedAt}
+              endedAt={metadata.sessionInfo?.endedAt}
+              hasActiveRun={metadata.sessionInfo?.hasActiveRun === true}
             />
           )}
         </section>
       </Show>
-      <section
-        class="plugin-session-summary__history"
-        aria-label={t("pluginUi.sessionRecentMessages")}
+      <Errored
+        fallback={() => <SummaryView history={snapshot} unavailable={!isPending(history)} />}
       >
-        <h3>{t("pluginUi.sessionRecentMessages")}</h3>
-        {error() ? (
-          <p role="alert">{t("pluginUi.sessionHistoryUnavailable")}</p>
-        ) : !history() ? (
-          <p>{t("common.loading")}</p>
-        ) : (
-          <For
-            keyed={false}
-            each={messages()}
-            fallback={<p>{t("pluginUi.sessionHistoryEmpty")}</p>}
-          >
-            {(message) => (
-              <article class="plugin-session-summary__message">
-                <header class="plugin-session-summary__message-header">
-                  <span class="plugin-session-summary__avatar">
-                    {message().sender ? (
-                      <ChatAuthorAvatar sender={message().sender} />
-                    ) : message().agentId ? (
-                      <AgentAvatar
-                        option={{
-                          value: message().agentId!,
-                          label: message().label,
-                          agent: message().agent ?? { id: message().agentId! },
-                        }}
-                        identity={identities()?.read().get(message().agentId) ?? null}
-                      />
-                    ) : (
-                      <span class="plugin-session-summary__unknown" aria-hidden="true">
-                        <Icon name={message().role === "user" ? "users" : "bot"} />
-                      </span>
-                    )}
-                  </span>
-                  <strong class="plugin-session-summary__role">{message().label}</strong>
-                  <Show when={message().time}>
-                    {(time) => (
-                      <time datetime={time().toISOString()} title={time().toLocaleString()}>
-                        {time().toLocaleTimeString(undefined, {
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
-                      </time>
-                    )}
-                  </Show>
-                </header>
-                <SanitizedHtml
-                  tag="div"
-                  class="sidebar-markdown"
-                  html={toSanitizedMarkdownHtml(message().text)}
-                />
-              </article>
-            )}
-          </For>
-        )}
-      </section>
-      <Show when={error() || progress.read().error}>
-        <button
-          class="btn"
-          onClick={() => {
-            refreshes.scheduleRetry(0);
-            void store.load(scope.session).catch(() => undefined);
-          }}
-        >
-          {t("common.retry")}
-        </button>
-      </Show>
+        <Loading fallback={<SummaryView history={snapshot} />}>
+          <SummaryView history={history()} />
+        </Loading>
+      </Errored>
     </div>
   );
 }

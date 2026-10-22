@@ -13,7 +13,6 @@ import {
 } from "../config/sessions/targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { observeOwnedDirectory } from "../infra/owned-directory-observation.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
@@ -132,9 +131,7 @@ function observeSourcePath(memo: SourceMemo, pathname: string, used: Set<string>
 /** Retain discovery facts and watches; ordinary reads refresh invalidated facts in place. */
 export async function prepareGatewaySessionStoreReadSourcesAsync(
   params: SourcePreparationParams,
-  signal?: AbortSignal,
 ): Promise<{ request: GatewaySessionStoreSourceRequest | undefined }> {
-  signal?.throwIfAborted();
   const routing = captureSessionStoreRouting(params.cfg);
   const env = captureSessionTranscriptStorageEnvironment(params.env);
   const registryOptions = { env, path: path.resolve(params.registryPath) };
@@ -192,12 +189,7 @@ export async function prepareGatewaySessionStoreReadSourcesAsync(
       retireSourcePreparation(oldestKey, oldest);
     }
   }
-  const request = await racePromiseWithAbortSignal(
-    memo.prepared,
-    signal,
-    (aborted) => aborted.reason,
-  );
-  signal?.throwIfAborted();
+  const request = await memo.prepared;
   if (!memo.current) {
     throw storeChanged();
   }

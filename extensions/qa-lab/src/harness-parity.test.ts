@@ -4,7 +4,6 @@ import {
   type HarnessRuntimeParityCell,
   type RuntimeParitySystemPromptReport,
 } from "./harness-parity.js";
-import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
 type CellOverrides = Partial<HarnessRuntimeParityCell>;
 const ASSISTANT = '{"message":{"role":"assistant"}}\n';
@@ -49,15 +48,10 @@ function makeCell(overrides: CellOverrides = {}): HarnessRuntimeParityCell {
   };
 }
 
-function classify(
-  left: CellOverrides,
-  right: CellOverrides,
-  comparisonMode?: RuntimeParityComparisonMode,
-) {
+function classify(left: CellOverrides, right: CellOverrides) {
   return classifyHarnessParityDrift({
     left: makeCell(left),
     right: makeCell(right),
-    ...(comparisonMode ? { comparisonMode } : {}),
   });
 }
 
@@ -132,33 +126,7 @@ describe("harness parity", () => {
     ).toBe("failure-mode");
   });
 
-  it("honors native workspace comparison mode for outcome-only harness proofs", () => {
-    expect(
-      classify(
-        {
-          transcriptBytes:
-            '{"message":{"role":"assistant","content":"same"}}\n' +
-            '{"message":{"role":"tool","content":"same result"}}\n',
-          toolCalls: [{ tool: "bash", argsHash: "sed-160", resultHash: "same-result" }],
-        },
-        {
-          transcriptBytes: '{"message":{"role":"assistant","content":"same"}}\n',
-          toolCalls: [{ tool: "bash", argsHash: "sed-200", resultHash: "same-result" }],
-        },
-        "codex-native-workspace",
-      ),
-    ).toBe("none");
-
-    expect(
-      classify(
-        { toolCalls: [{ tool: "bash", argsHash: "a", resultHash: "r1" }] },
-        { toolCalls: [{ tool: "bash", argsHash: "b", resultHash: "r2" }] },
-        "outcome-only",
-      ),
-    ).toBe("none");
-  });
-
-  it("keeps prompt and tool surface checks strict under native workspace comparison mode", () => {
+  it("keeps prompt and tool surface checks ahead of behavioral drift", () => {
     expect(
       classify(
         {},
@@ -168,7 +136,6 @@ describe("harness parity", () => {
           }),
           toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
         },
-        "codex-native-workspace",
       ),
     ).toBe("system-prompt");
     expect(
@@ -183,7 +150,6 @@ describe("harness parity", () => {
           }),
           toolCalls: [{ tool: "bash", argsHash: "changed", resultHash: "changed" }],
         },
-        "outcome-only",
       ),
     ).toBe("tool-description");
   });

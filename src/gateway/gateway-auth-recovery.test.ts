@@ -51,7 +51,6 @@ function gatewayConfig(gateway: OpenClawTestInstance, modelRef: string) {
       defaults: {
         workspace: gateway.state.workspaceDir,
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         model: { primary: modelRef, fallbacks: [] },
       },
     },

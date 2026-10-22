@@ -239,25 +239,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const handlePost = createMattermostPostHandler(monitor);
   const handleReactionEvent = createMattermostReactionHandler(monitor);
 
-  const debouncer = core.channel.debounce.createInboundDebouncer<{
+  type DebounceEntry = {
     post: MattermostIngressPost;
     payload: MattermostEventPayload;
     turnAdoptionLifecycle: MattermostIngressLifecycle;
-  }>({
+  };
+  const pendingPosts = new Set<DebounceEntry>();
+  const cancellationSettlements: Promise<void>[] = [];
+  const shutdown = new AbortController();
+  const buildDebounceKey = (entry: DebounceEntry) => {
+    const channelId =
+      entry.post.channel_id ??
+      entry.payload.data?.channel_id ??
+      entry.payload.broadcast?.channel_id;
+    return channelId && entry.post.user_id ? `mattermost:${account.accountId}:${channelId}` : null;
+  };
+  const debouncer = core.channel.debounce.createInboundDebouncer<DebounceEntry>({
     debounceMs: resolveDebounceMs(),
     resolveDebounceMs,
-    buildKey: (entry) => {
-      const channelId =
-        entry.post.channel_id ??
-        entry.payload.data?.channel_id ??
-        entry.payload.broadcast?.channel_id;
-      if (!channelId || !entry.post.user_id) {
-        return null;
-      }
-      const threadId = normalizeOptionalString(entry.post.root_id);
-      // Cross-sender merging would apply only the final post's identity during access checks.
-      return `mattermost:${account.accountId}:${channelId}:${threadId ? `thread:${threadId}` : "channel"}:${entry.post.user_id}`;
+    buildKey: buildDebounceKey,
+    // One channel reserves admission order; only contiguous same-sender/thread posts merge.
+    canAppend: (entry, pending) => {
+      const last = pending.at(-1);
+      return (
+        last?.post.user_id === entry.post.user_id &&
+        normalizeOptionalString(last.post.root_id) === normalizeOptionalString(entry.post.root_id)
+      );
     },
+    serializeImmediate: true,
     shouldDebounce: (entry) => {
       // Typed posts are dropped downstream; batching would let their text or type affect a user post.
       if (normalizeOptionalString(entry.post.type) !== undefined || entry.post.file_ids?.length) {
@@ -271,44 +280,63 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       );
     },
     onFlush: (entries, createFlush) => {
+      for (const entry of entries) {
+        pendingPosts.delete(entry);
+      }
       const last = entries.at(-1);
-      const { lifecycle, settle } = fanInChannelIngressLifecycles(
+      const { lifecycle, settle, cancel } = fanInChannelIngressLifecycles(
         entries.map((entry) => entry.turnAdoptionLifecycle),
       );
       return createFlush({
         lifecycle,
         dispatch: async (admissionLifecycle) => {
+          if (shutdown.signal.aborted || admissionLifecycle.abortSignal.aborted) {
+            await cancel();
+            return;
+          }
           if (!last) {
             return;
           }
-          try {
-            const mergedPost =
-              entries.length === 1
-                ? last.post
-                : {
-                    ...last.post,
-                    message: entries
-                      .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
-                      .filter(Boolean)
-                      .join("\n"),
-                    file_ids: [],
-                  };
+          if (entries.length === 1) {
+            await handlePost(last.post, last.payload, admissionLifecycle);
+          } else {
+            const mergedPost: MattermostIngressPost = {
+              ...last.post,
+              message: entries
+                .map((entry) => normalizeOptionalString(entry.post.message) ?? "")
+                .filter(Boolean)
+                .join("\n"),
+              file_ids: [],
+            };
             await handlePost(
               mergedPost,
               last.payload,
               admissionLifecycle,
               entries.length > 1 ? entries.map((entry) => entry.post.id) : undefined,
             );
+          }
+          if (shutdown.signal.aborted || admissionLifecycle.abortSignal.aborted) {
+            await cancel();
+          } else {
             await settle();
-          } catch (error) {
-            await admissionLifecycle.onAbandoned();
-            throw error;
           }
         },
       });
     },
     onError: (err) => {
       runtime.error?.(`mattermost debounce flush failed: ${String(err)}`);
+    },
+    onCancel: (entries) => {
+      for (const entry of entries) {
+        pendingPosts.delete(entry);
+      }
+      const settlement = fanInChannelIngressLifecycles(
+        entries.map((entry) => entry.turnAdoptionLifecycle),
+      ).cancel();
+      cancellationSettlements.push(settlement);
+      void settlement.catch((error: unknown) => {
+        runtime.error?.(`mattermost ingress cancellation failed: ${String(error)}`);
+      });
     },
   });
   const ingress = createMattermostIngressMonitor({
@@ -318,7 +346,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     dispatch: async (post, payload, turnAdoptionLifecycle) => {
       // Deferred claims settle through lifecycle callbacks, so terminal flush
       // errors spend the drain's bounded retry budget before dead-lettering.
-      await debouncer.enqueue({ post, payload, turnAdoptionLifecycle });
+      if (shutdown.signal.aborted || turnAdoptionLifecycle.abortSignal.aborted) {
+        await fanInChannelIngressLifecycles([turnAdoptionLifecycle]).cancel();
+        return { kind: "deferred" };
+      }
+      const entry = { post, payload, turnAdoptionLifecycle };
+      pendingPosts.add(entry);
+      try {
+        await debouncer.enqueue(entry);
+      } catch (error) {
+        pendingPosts.delete(entry);
+        throw error;
+      }
       return { kind: "deferred" };
     },
   });
@@ -360,6 +399,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     }
   }
 
+  let connectionFailure: { error: unknown } | undefined;
+  let shutdownFailures: unknown[] = [];
   try {
     await runWithReconnect(connectOnce, {
       abortSignal: opts.abortSignal,
@@ -371,9 +412,34 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         runtime.log?.(`mattermost reconnecting in ${Math.round(delayMs / 1000)}s`);
       },
     });
+  } catch (error) {
+    connectionFailure = { error };
   } finally {
-    await ingress.stop();
-    unregisterInteractions();
+    shutdown.abort();
+    const pendingKeys = new Set([...pendingPosts].map(buildDebounceKey));
+    for (const key of pendingKeys) {
+      if (key) {
+        debouncer.cancelKey(key);
+      }
+    }
+    try {
+      const stopped = await Promise.allSettled([ingress.stop(), debouncer.drain()]);
+      // Reserved immediate tasks can report cancellation while the collector drains.
+      const cancelled = await Promise.allSettled(cancellationSettlements);
+      shutdownFailures = [...stopped, ...cancelled].flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+    } finally {
+      unregisterInteractions();
+    }
   }
   await Promise.resolve(slashShutdownCleanup);
+  if (shutdownFailures.length > 0) {
+    throw new AggregateError(shutdownFailures, "Mattermost monitor shutdown failed.", {
+      cause: connectionFailure?.error,
+    });
+  }
+  if (connectionFailure) {
+    throw connectionFailure.error;
+  }
 }

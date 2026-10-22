@@ -78,9 +78,8 @@ export function isCanvasBoardWidgetName(value: unknown): value is string {
   return typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(value);
 }
 
-function coerceCanvasPreview(
-  record: Record<string, unknown> | undefined,
-): CanvasPreview | undefined {
+export function extractCanvasFromRecord(value: unknown): CanvasPreview | undefined {
+  const record = asOptionalRecord(value);
   if (!record) {
     return undefined;
   }
@@ -149,7 +148,7 @@ function coerceCanvasPreview(
 /** Extracts an MCP App Canvas preview from sanitized tool-result details. */
 export function extractCanvasFromDetails(value: unknown): CanvasPreview | undefined {
   const details = asOptionalRecord(value);
-  return coerceCanvasPreview(asOptionalRecord(details?.mcpAppPreview));
+  return extractCanvasFromRecord(details?.mcpAppPreview);
 }
 
 function parseCanvasAttributes(raw: string): Record<string, string> {
@@ -194,7 +193,7 @@ function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | un
 /** Extracts a canvas preview from a JSON-shaped tool or assistant payload. */
 export function extractCanvasFromText(outputText: string | undefined): CanvasPreview | undefined {
   const parsed = outputText ? safeParseJsonRecord(outputText) : undefined;
-  return coerceCanvasPreview(parsed);
+  return extractCanvasFromRecord(parsed);
 }
 
 /** Extracts [embed ...] shortcodes outside Markdown code and returns stripped text. */

@@ -72,26 +72,6 @@ export async function resolveModelAuthProfileRemoval(
   return { shared, agents };
 }
 
-export function excludeSurvivingModelAuthProfiles(
-  planned: ModelAuthProfileRemoval,
-  surviving: ModelAuthProfileRemoval,
-): ModelAuthProfileRemoval {
-  return {
-    shared: new Set([...planned.shared].filter((id) => !surviving.shared.has(id))),
-    agents: new Map(
-      [...planned.agents]
-        .map(
-          ([agentId, ids]) =>
-            [
-              agentId,
-              new Set([...ids].filter((id) => !surviving.agents.get(agentId)?.has(id))),
-            ] as const,
-        )
-        .filter(([, ids]) => ids.size > 0),
-    ),
-  };
-}
-
 /** Release only deleted account selections; model choices and unrelated accounts survive. */
 export function removeModelAuthProfileSelections(
   cfg: OpenClawConfig,

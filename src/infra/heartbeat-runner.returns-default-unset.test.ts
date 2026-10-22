@@ -24,7 +24,6 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import {
   bindHeartbeatReply,
@@ -39,11 +38,7 @@ import {
   seedHeartbeatScratchForTest,
   seedSessionStore,
 } from "./heartbeat-runner.test-utils.js";
-import {
-  resolveHeartbeatDeliveryTarget,
-  resolveHeartbeatDeliveryTargetWithSessionRoute,
-  resolveHeartbeatSenderContext,
-} from "./outbound/targets.js";
+import { resolveHeartbeatSenderContext } from "./outbound/targets.js";
 import { telegramMessagingForTest } from "./outbound/targets.test-helpers.js";
 import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
@@ -321,109 +316,6 @@ afterAll(async () => {
   if (previousRegistry) {
     setActivePluginRegistry(previousRegistry);
   }
-});
-
-describe("resolveHeartbeatDeliveryTarget", () => {
-  const baseEntry = {
-    sessionId: "sid",
-    updatedAt: Date.now(),
-  };
-  const entryWithDelivery = (channel: string, to: string) => ({
-    ...baseEntry,
-    delivery: normalizeSessionDeliveryState({ context: { channel, to } }),
-  });
-
-  it("resolves target variants across route and allowlist rules", async () => {
-    const targetConfig = (target: string, to?: string, allowFrom?: string[]): OpenClawConfig => ({
-      agents: { defaults: { heartbeat: { target, to } } },
-      ...(allowFrom ? { channels: { whatsapp: { allowFrom } } } : {}),
-    });
-    const check = async (
-      cfg: OpenClawConfig,
-      entry: typeof baseEntry & { delivery?: ReturnType<typeof normalizeSessionDeliveryState> },
-      expected: Record<string, unknown>,
-    ) =>
-      expect(await resolveHeartbeatDeliveryTarget({ cfg, entry })).toMatchObject({
-        accountId: undefined,
-        lastAccountId: undefined,
-        lastChannel:
-          entry.delivery?.kind === "external" ? entry.delivery.context.channel : undefined,
-        ...expected,
-      });
-    await check(targetConfig("none"), baseEntry, { channel: "none", reason: "target-none" });
-    await check(
-      {
-        commands: { ownerAllowFrom: ["+15555550166"] },
-        channels: { whatsapp: { allowFrom: ["+15555550166"] } },
-      },
-      entryWithDelivery("whatsapp", "120363401234567890@g.us"),
-      { channel: "whatsapp", to: "+15555550166" },
-    );
-    await check({}, baseEntry, { channel: "none", reason: "no-route" });
-    await check(targetConfig("whatsapp", "whatsapp:120363401234567890@G.US", ["*"]), baseEntry, {
-      channel: "whatsapp",
-      to: "120363401234567890@g.us",
-    });
-    await check({}, entryWithDelivery("webchat", "web"), {
-      channel: "none",
-      reason: "no-route",
-      lastChannel: undefined,
-    });
-    await check(
-      targetConfig("whatsapp", "+1999", ["120363401234567890@g.us", "+1666"]),
-      entryWithDelivery("whatsapp", "+1222"),
-      { channel: "none", reason: "no-target" },
-    );
-    await check(
-      targetConfig("last", undefined, ["120363401234567890@g.us"]),
-      entryWithDelivery("whatsapp", "whatsapp:120363401234567890@G.US"),
-      { channel: "whatsapp", to: "120363401234567890@g.us" },
-    );
-    await check(targetConfig("telegram", "-100123"), baseEntry, {
-      channel: "telegram",
-      to: "-100123",
-      chatType: "group",
-    });
-    await check(targetConfig("discord", "channel:123"), baseEntry, {
-      channel: "discord",
-      to: "channel:123",
-      chatType: "channel",
-    });
-    await check(targetConfig("last"), entryWithDelivery("telegram", "5232990709"), {
-      channel: "telegram",
-      to: "5232990709",
-      chatType: "direct",
-    });
-    await check(
-      { agents: { defaults: { heartbeat: { target: "last", directPolicy: "block" } } } },
-      entryWithDelivery("telegram", "5232990709"),
-      { channel: "none", reason: "dm-blocked" },
-    );
-  });
-
-  it.each([
-    { name: "topic suffix", to: "-100111:topic:42", expectedTo: "-100111", expectedThreadId: 42 },
-    { name: "plain chat id", to: "-100111", expectedTo: "-100111", expectedThreadId: undefined },
-  ])(
-    "parses optional telegram :topic: threadId suffix through session route: $name",
-    async ({ to, expectedTo, expectedThreadId }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            heartbeat: { target: "telegram", to },
-          },
-        },
-      };
-      const result = await resolveHeartbeatDeliveryTargetWithSessionRoute({
-        cfg,
-        agentId: "heartbeat-agent",
-        entry: baseEntry,
-      });
-      expect(result.channel).toBe("telegram");
-      expect(result.to).toBe(expectedTo);
-      expect(result.threadId).toBe(expectedThreadId);
-    },
-  );
 });
 
 describe("resolveHeartbeatSenderContext", () => {

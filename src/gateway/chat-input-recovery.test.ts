@@ -22,6 +22,7 @@ import { resumeChatInput } from "./chat-input-recovery.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createPendingInputRecoveryTrace } from "./pending-input-recovery-trace.js";
+import { createRestartSafeChatRequest } from "./server-methods/chat-restart-recovery.js";
 import {
   createChatInputRecovery,
   normalizeChatSendRequest,
@@ -42,18 +43,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+async function normalize(params: Parameters<typeof normalizeChatSendRequest>[0]) {
+  const result = await normalizeChatSendRequest(params);
+  if (!result.ok) {
+    throw new Error(result.error);
+  }
+  return result.value;
+}
+
 async function withInput(
   run: (input: Awaited<ReturnType<typeof prepareInput>>) => Promise<void>,
   approvedText = "Approved redacted input",
   withOptions = false,
+  originalText = "Original private input",
 ) {
   return withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
-    const input = await prepareInput(stateDir, approvedText, withOptions);
+    const input = await prepareInput(stateDir, approvedText, withOptions, originalText);
     await run(input);
   });
 }
 
-async function prepareInput(stateDir: string, approvedText: string, withOptions: boolean) {
+async function prepareInput(
+  stateDir: string,
+  approvedText: string,
+  withOptions: boolean,
+  originalText: string,
+) {
   await loadOrCreateDeviceIdentityAsync();
   const profile = ensureProfileForEmail("input-recovery@example.test");
   const fixture = await createOperatorRecoveryFixture({
@@ -63,13 +78,13 @@ async function prepareInput(stateDir: string, approvedText: string, withOptions:
     sessionKey: "recovery-input",
     profileId: profile.id,
   });
-  const request = await normalizeChatSendRequest({
+  const request = await normalize({
     client: fixture.client,
     params: {
       sessionKey: fixture.target.sessionKey,
       sessionId: fixture.target.sessionId,
       idempotencyKey: fixture.target.sourceRunId,
-      message: "Original private input",
+      message: originalText,
       fastMode: true,
       timeoutMs: 42_000,
       queueMode: "followup",
@@ -82,12 +97,9 @@ async function prepareInput(stateDir: string, approvedText: string, withOptions:
         : {}),
     },
   });
-  if (!request.ok) {
-    throw new Error(request.error);
-  }
   const recovery = expectDefined(
     createChatInputRecovery({
-      request: request.value,
+      request,
       source: fixture.entry.restartRecoveryOperatorSource,
     }),
     "recoverable chat metadata",
@@ -99,10 +111,7 @@ async function prepareInput(stateDir: string, approvedText: string, withOptions:
     idempotencyKey: `${fixture.target.sourceRunId}:user`,
     __openclaw: {
       chatInputRecovery: recovery,
-      chatRequestIdentity: expectDefined(
-        request.value.requestIdentity,
-        "original request identity",
-      ),
+      chatRequestIdentity: expectDefined(request.requestIdentity, "original request identity"),
       media: [{ url: "media://inbound/synthetic.png", contentType: "image/png" }],
     },
   };
@@ -132,6 +141,41 @@ async function prepareInput(stateDir: string, approvedText: string, withOptions:
 }
 
 describe("interrupted chat input recovery", () => {
+  it.each([
+    { body: "hello ! poll", literal: true, restartSafe: true },
+    {
+      body: "![diagram](https://example.com/diagram.png)",
+      literal: true,
+      restartSafe: true,
+    },
+    { body: "! poll", literal: false, restartSafe: false },
+    { body: "!poll", literal: false, restartSafe: false },
+    { body: "hello /status", literal: false, restartSafe: false },
+  ])("preserves command interpretation and recovery for $body", ({ body, literal, restartSafe }) =>
+    withInput(
+      async ({ fixture, target, options }) => {
+        const restartRequest = await createRestartSafeChatRequest({
+          cfg: fixture.context.getRuntimeConfig(),
+          eligible: true,
+          message: body,
+          senderIsOwner: true,
+        });
+        expect(Boolean(restartRequest)).toBe(restartSafe);
+        dispatch.mockImplementation(async (_method, params, requestOptions) => {
+          const normalized = await normalize({ params, client: requestOptions.client });
+          expect(normalized).toMatchObject({
+            rawMessage: body,
+            suppressCommandInterpretation: literal,
+          });
+        });
+        await resumeChatInput(fixture.context, target, options);
+        expect(dispatch).toHaveBeenCalledOnce();
+      },
+      body,
+      false,
+      body,
+    ),
+  );
   it("leaves provider-review continuations with their process-bound acknowledgment owner", () =>
     withInput(async ({ fixture }) => {
       const reviewTarget = {
@@ -162,7 +206,7 @@ describe("interrupted chat input recovery", () => {
         assertCurrent() {},
       });
       try {
-        const normalized = await normalizeChatSendRequest({
+        const request = await normalize({
           client: fixture.client,
           params: {
             sessionKey: fixture.target.sessionKey,
@@ -172,12 +216,9 @@ describe("interrupted chat input recovery", () => {
           },
           providerReviewAcknowledgment: acknowledgment,
         });
-        if (!normalized.ok) {
-          throw new Error(normalized.error);
-        }
         expect(
           createChatInputRecovery({
-            request: normalized.value,
+            request,
             source: fixture.entry.restartRecoveryOperatorSource,
           }),
         ).toBeUndefined();
@@ -216,18 +257,15 @@ describe("interrupted chat input recovery", () => {
             requestFingerprint: "original-request-fingerprint",
           });
           expect(requestOptions.client.connect.client).toEqual(fixture.client.connect.client);
-          const normalized = await normalizeChatSendRequest({
+          const normalized = await normalize({
             params,
             client: requestOptions.client,
           });
           expect(normalized).toMatchObject({
-            ok: true,
-            value: {
-              requestIdentity: message["__openclaw"]?.chatRequestIdentity,
-              systemInputProvenance: externalProvenance,
-              systemProvenanceReceipt: sourceReceipt,
-              reconnectResumeRequested: true,
-            },
+            requestIdentity: message["__openclaw"]?.chatRequestIdentity,
+            systemInputProvenance: externalProvenance,
+            systemProvenanceReceipt: sourceReceipt,
+            reconnectResumeRequested: true,
           });
           requestOptions.sessionMutationCommitGuard();
           expect(requestOptions.client.internal.operatorRunAuthority.profileId).toBe(
@@ -275,18 +313,15 @@ describe("interrupted chat input recovery", () => {
       withInput(async ({ fixture, target, options }) => {
         dispatch.mockImplementation(async (_method, params, requestOptions) => {
           expect(params.suppressCommandInterpretation).toBeUndefined();
-          const normalized = await normalizeChatSendRequest({
+          const normalized = await normalize({
             params,
             client: requestOptions.client,
           });
           expect(normalized).toMatchObject({
-            ok: true,
-            value: {
-              rawMessage: approvedText,
-              stopCommand: false,
-              turnKind: "main",
-              suppressCommandInterpretation: true,
-            },
+            rawMessage: approvedText,
+            stopCommand: false,
+            turnKind: "main",
+            suppressCommandInterpretation: true,
           });
         });
         await resumeChatInput(fixture.context, target, options);

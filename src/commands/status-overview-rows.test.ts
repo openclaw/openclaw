@@ -36,6 +36,70 @@ function backup(createdAt: number, kind: "git" | "archive", status: "ok" | "fail
   return { id: "fixture", archivePath: "", createdAt, kind, status };
 }
 
+it("counts recent activity in the status-all agent overview", () => {
+  const rows = buildStatusAllOverviewRows({
+    ...params,
+    configPath: "/fixture/openclaw.json",
+    secretDiagnosticsCount: 0,
+    agentStatus: {
+      bootstrapPendingCount: 2,
+      totalSessions: 3,
+      agents: [
+        { id: "main", lastActiveAgeMs: 5_000 },
+        { id: "ops", lastActiveAgeMs: 11 * 60_000 },
+        { id: "idle", lastActiveAgeMs: null },
+      ],
+    },
+  });
+  expect(findRowValue(rows, "Agents")).toBe("3 total · 2 bootstrapping · 1 active · 3 sessions");
+  expect(findRowValue(rows, "Secrets")).toBe("none");
+  expect(
+    findRowValue(
+      buildStatusAllOverviewRows({
+        ...params,
+        configPath: "/fixture/openclaw.json",
+        secretDiagnosticsCount: 1,
+      }),
+      "Secrets",
+    ),
+  ).toBe("1 diagnostic");
+});
+
+it("reports events, skipped probes and distinct incompatible plugins", () => {
+  params.health = undefined;
+  params.pluginCompatibility = ["a", "a", "b"].map((pluginId) => ({
+    pluginId,
+    code: "hook-only",
+    severity: "warn",
+    message: "fixture",
+  }));
+  const rows = buildStatusCommandOverviewRows(params);
+  expect(findRowValue(rows, "Events")).toBe("2 queued");
+  expect(findRowValue(rows, "Checks")).toBe("muted(skipped (use --deep))");
+  expect(findRowValue(rows, "Plugin compatibility")).toBe("warn(3 notices · 2 plugins)");
+  params.summary.queuedSystemEvents = [];
+  params.pluginCompatibility = [];
+  const emptyRows = buildStatusCommandOverviewRows(params);
+  expect(findRowValue(emptyRows, "Events")).toBe("none");
+  expect(findRowValue(emptyRows, "Plugin compatibility")).toBe("ok(none)");
+});
+
+it("reports stored sessions, default context and multiple or absent stores", () => {
+  params.summary.sessions = { ...params.summary.sessions, paths: ["store.json", "other.json"] };
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Sessions")).toBe(
+    "2 stored · default gpt-5.5 (12k ctx) · 2 stores",
+  );
+  params.summary.sessions = {
+    ...params.summary.sessions,
+    count: 0,
+    paths: [],
+    defaults: { model: null, contextTokens: null },
+  };
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Sessions")).toBe(
+    "0 stored · default unknown · unknown",
+  );
+});
+
 it("keeps default status concise and reports configured family choices without secrets", () => {
   expect(
     findRowValue(buildStatusCommandOverviewRows(params), "Database engines (configured)"),
@@ -133,6 +197,34 @@ it("marks skipped memory inspection as not checked in fast status output", () =>
   );
 });
 
+it("renders native provider health without legacy index counters", () => {
+  params.memory = {
+    agentId: "main",
+    provider: "records",
+    health: { status: "degraded", message: "warming" },
+  };
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Memory")).toBe(
+    "plugin records · warn(degraded) · warming",
+  );
+});
+
+it.each([
+  { every: "1m", everyMs: 60_000 },
+  { every: "scheduled", everyMs: null },
+])(
+  "shows supported remediation for an enabled $every automation without a route",
+  ({ every, everyMs }) => {
+    params.summary.heartbeat = {
+      defaultAgentId: "main",
+      agents: [{ agentId: "main", enabled: true, every, everyMs, waitingForRoute: true }],
+    };
+    const value = findRowValue(buildStatusCommandOverviewRows(params), "Heartbeat");
+    expect(value).toContain(`${every} (main; waiting for delivery route`);
+    expect(value).toContain('commands.ownerAllowFrom=["telegram:123456789"]');
+    expect(value).toContain("edit the automation delivery channel and recipient");
+  },
+);
+
 it("shows managed host desktop coordinates", () => {
   params.summary.hostDesktop = {
     enabled: true,
@@ -146,6 +238,24 @@ it("shows managed host desktop coordinates", () => {
 
   expect(findRowValue(rows, "Host desktop")).toBe(
     "managed · running · display :99 · 127.0.0.1:46001 · security VncAuth",
+  );
+});
+
+it("shows utility model capability warnings in normal and full status", () => {
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Utility model")).toBeUndefined();
+  params.summary.utilityModelWarnings = [
+    { path: "agents.defaults.utilityModel", message: "fixture-cli/small cannot disable tools." },
+  ];
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Utility model")).toBe(
+    "warn(agents.defaults.utilityModel: fixture-cli/small cannot disable tools.)",
+  );
+  const rows = buildStatusAllOverviewRows({
+    ...params,
+    configPath: "/fixture/openclaw.json",
+    secretDiagnosticsCount: 0,
+  });
+  expect(findRowValue(rows, "Utility model")).toBe(
+    "agents.defaults.utilityModel: fixture-cli/small cannot disable tools.",
   );
 });
 
@@ -203,7 +313,8 @@ it("builds status-all overview rows from the shared surface", () => {
     "Update restart": "restart pending health verification",
     Security: "Run: openclaw security audit --deep",
     "Secret egress proxy": "Check OpenSSL, then retry the request.",
-    "Degraded secrets": "1 degraded · capability:tts",
+    "Degraded secrets":
+      "1 degraded · cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
     "Degraded plugins": "1 configured-unavailable · discord",
     "Model reasoning": "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning:true.",
     Secrets: "2 diagnostics",

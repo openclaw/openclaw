@@ -26,7 +26,7 @@ The macOS app deliberately uses the native permission flow instead of browser pu
 
 ## Enable browser notifications
 
-The Control UI asks for notification permission automatically the first time you send a chat message. That includes sends from **New Session** or **Start in background**. The prompt appears once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
+The Control UI asks for notification permission automatically the first time you send a chat message when your current Gateway access permits browser notification setup. That includes sends from **New Session** or **Start in background**. The prompt appears once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
 
 1. Open the Control UI in a browser that supports service workers, `PushManager`, and notifications.
 2. Make sure the Control UI is connected to the Gateway.
@@ -108,7 +108,9 @@ This is the **New Session** background-start flow, not a native notification for
 
 ### Enable is unavailable
 
-Either the browser lacks the required Web Push APIs or the Control UI is not connected to the Gateway. Try a current browser, check the Gateway connection, and reload the page.
+Check **Browser support**, the Gateway connection, and **Gateway access** separately. Notification setup and preference changes require broad `operator.write` access; session-only guest scopes do not permit them. The page shows **Unavailable** and does not ask for browser permission when this access is missing.
+
+A connection with only `operator.read` can read preferences for an existing subscription, but cannot change them or enable notifications. **Unsubscribe** still removes an existing local browser subscription when remote removal is denied. Browser permission is independent and remains unchanged.
 
 ### Browser permission is blocked
 

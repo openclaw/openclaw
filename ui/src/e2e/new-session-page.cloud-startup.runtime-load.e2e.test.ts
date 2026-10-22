@@ -300,8 +300,9 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
       await button(alert, discardStarts).click();
     }
   } else {
-    documentReachable = true;
+    // Keep automatic recovery from replacing the document before Retry receives the click.
     await button(alert, "Retry").click();
+    documentReachable = true;
   }
   expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
     params: { key: sessionKey, message, idempotencyKey: messageId },

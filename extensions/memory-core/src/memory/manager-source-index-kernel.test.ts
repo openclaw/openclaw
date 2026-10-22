@@ -34,6 +34,7 @@ let conn: DatabaseSync;
 function select(table: string, columns: string, suffix = "") {
   return conn.prepare(`SELECT ${columns} FROM memory_index_${table} ${suffix}`);
 }
+const all = (sql: string, ...params: SQLInputValue[]) => conn.prepare(sql).all(...params);
 const sourceTables = ["sources", "chunks", "chunks_fts", "paths_fts"];
 const metadataTables = ["chunk_recall_metadata", "chunk_provenance"];
 const derivedTables = [...metadataTables, "chunks_vec"];
@@ -101,22 +102,17 @@ function replacement(path: string, hash = "original", chunkCount = 1): Replaceme
 
 function write(value: Replacement) {
   return runSqliteImmediateTransactionSync(conn, () =>
-    new MemorySourceIndexKernel(conn, store).replaceRows(
-      value,
-      value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] })),
-    ),
+    new MemorySourceIndexKernel(conn, store).replaceRows(value, replacementRows(value)),
   );
 }
-
+const replacementRows = (value: Replacement) =>
+  value.chunks.map((chunk, index) => ({ chunk, embedding: value.embeddings[index] ?? [] }));
 function writeGroup(values: Replacement[]) {
   return runSqliteImmediateTransactionSync(conn, () =>
     new MemorySourceIndexKernel(conn, store).replaceGroup(
       values.map((value) => ({
         header: value,
-        rows: value.chunks.map((chunk, index) => ({
-          chunk,
-          embedding: value.embeddings[index] ?? [],
-        })),
+        rows: replacementRows(value),
       })),
     ),
   );
@@ -237,23 +233,71 @@ describe("memory source index native kernel", () => {
     },
   );
 
-  it.each([2, 129])("keeps the last embedding for repeated IDs across %s rows", async (rows) => {
-    const value = replacement("memory/current.md");
-    write(value);
-    markMemoryVectorIndexClean(conn);
-    const chunk = value.chunks[0];
-    assert.ok(chunk);
-    write({
-      ...value,
-      chunks: Array.from({ length: rows }, () => chunk),
-      embeddings: Array.from({ length: rows }, (_, index) =>
-        index === rows - 1 ? [1, 0, 0] : [0, 1, 0],
-      ),
-    });
-    expect(select("chunks_vec", "hex(embedding) AS embedding").all()).toEqual([
-      { embedding: embeddingHex([1, 0, 0]) },
-    ]);
-  });
+  it.each([
+    { count: 2, retainedLast: false },
+    { count: 129, retainedLast: false },
+    { count: 2, retainedLast: true },
+  ])(
+    "keeps last-write values for repeated IDs ($count, retained=$retainedLast)",
+    ({ count, retainedLast }) => {
+      const value = replacement("memory/current.md");
+      write(value);
+      markMemoryVectorIndexClean(conn);
+      const chunk = value.chunks[0];
+      assert.ok(chunk);
+      const rows: MemorySourceIndexRow[] = Array.from({ length: count }, (_, index) => {
+        const last = index === count - 1;
+        return {
+          chunk: {
+            ...chunk,
+            text: last ? "latest text" : "earlier text",
+            importance: last ? 9 : 1,
+            triggers: last ? "latest" : "earlier",
+            projectKey: last ? "latest-project" : "earlier-project",
+            provenance: {
+              originClass: last ? "owner" : "untrusted",
+              sessionKind: last ? "interactive" : "unknown",
+              observedAt: last ? 200 : 100,
+              supersedesKey: last ? "latest-source" : "earlier-source",
+            },
+          },
+          embedding: last && !retainedLast ? [1, 0, 0] : [0, 1, 0],
+          ...(last && retainedLast ? { retained: true } : {}),
+        };
+      });
+      runSqliteImmediateTransactionSync(conn, () =>
+        new MemorySourceIndexKernel(conn, store).replaceRows({ ...value, now: 200 }, rows),
+      );
+      expect(
+        conn
+          .prepare(`SELECT c.text, hex(c.embedding) AS embedding, c.updated_at,
+      m.importance, m.triggers, m.project_key, p.origin_class, p.session_kind,
+      p.observed_at, p.supersedes_key
+      FROM memory_index_chunks c
+      JOIN memory_index_chunk_recall_metadata m ON m.chunk_id = c.id
+      JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id`)
+          .all(),
+      ).toEqual([
+        {
+          text: retainedLast ? "earlier text" : "latest text",
+          embedding: retainedLast
+            ? "0000000000000000000000000000F03F0000000000000000"
+            : "000000000000F03F00000000000000000000000000000000",
+          updated_at: 200,
+          importance: 9,
+          triggers: "latest",
+          project_key: "latest-project",
+          origin_class: "owner",
+          session_kind: "interactive",
+          observed_at: 200,
+          supersedes_key: "latest-source",
+        },
+      ]);
+      expect(select("chunks_vec", "hex(embedding) AS embedding").all()).toEqual([
+        { embedding: embeddingHex(retainedLast ? [0, 1, 0] : [1, 0, 0]) },
+      ]);
+    },
+  );
 
   it.each(["unverified", "incomplete"])(
     "repairs stale same-ID vectors in a %s index",
@@ -380,17 +424,13 @@ describe("memory source index native kernel", () => {
     expect(inserts).toBe(3);
     expect(savepoints).toEqual([]);
     expect(
-      conn
-        .prepare(
-          `SELECT c.path, c.source, c.model, c.text, c.updated_at,
+      all(`SELECT c.path, c.source, c.model, c.text, c.updated_at,
                   r.importance, r.triggers, r.project_key,
                   p.origin_class, p.session_kind, p.observed_at
            FROM memory_index_chunks c
            JOIN memory_index_chunk_recall_metadata r ON r.chunk_id = c.id
            JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id
-           ORDER BY c.path`,
-        )
-        .all(),
+           ORDER BY c.path`),
     ).toEqual(
       Array.from({ length: 8 }, (_, index) => ({
         path: `memory/group-${index}.md`,
@@ -407,18 +447,15 @@ describe("memory source index native kernel", () => {
       })),
     );
     expect(
-      conn
-        .prepare("SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
-        .all("topic3"),
+      select("chunks_fts", "path", "WHERE memory_index_chunks_fts MATCH ?").all("topic3"),
     ).toEqual([{ path: "memory/group-3.md" }]);
     expect(
-      conn
-        .prepare(
-          `SELECT c.path, v.distance FROM memory_index_chunks_vec v
+      all(
+        `SELECT c.path, v.distance FROM memory_index_chunks_vec v
            JOIN memory_index_chunks c ON c.id = v.id
            WHERE v.embedding MATCH ? AND k = 8 ORDER BY c.path`,
-        )
-        .all(Buffer.from(new Float32Array([1, 0, 0]).buffer)),
+        Buffer.from(new Float32Array([1, 0, 0]).buffer),
+      ),
     ).toEqual(
       Array.from({ length: 8 }, (_, index) => ({
         path: `memory/group-${index}.md`,
@@ -450,37 +487,28 @@ describe("memory source index native kernel", () => {
       ]),
     );
     expect(
-      conn
-        .prepare(
-          `SELECT c.text, c.updated_at, r.importance FROM memory_index_chunks c
+      all(
+        `SELECT c.text, c.updated_at, r.importance FROM memory_index_chunks c
            JOIN memory_index_chunk_recall_metadata r ON r.chunk_id = c.id
            WHERE c.path = ?`,
-        )
-        .all(initial.entry.path),
+        initial.entry.path,
+      ),
     ).toEqual([{ text: "searchable indexed text", updated_at: 300, importance: 9 }]);
     expect(
-      conn
-        .prepare("SELECT path FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
-        .all("discarded OR original OR searchable"),
+      select("chunks_fts", "path", "WHERE memory_index_chunks_fts MATCH ?").all(
+        "discarded OR original OR searchable",
+      ),
     ).toEqual([{ path: initial.entry.path }]);
     expect(
-      conn
-        .prepare(
-          `SELECT c.path, hex(v.embedding) AS embedding FROM memory_index_chunks_vec v
-           JOIN memory_index_chunks c ON c.id = v.id ORDER BY c.path`,
-        )
-        .all(),
+      all(`SELECT c.path, hex(v.embedding) AS embedding FROM memory_index_chunks_vec v
+           JOIN memory_index_chunks c ON c.id = v.id ORDER BY c.path`),
     ).toEqual(
       [sibling.entry.path, initial.entry.path].map((path) => ({
         path,
-        embedding: Buffer.from(new Float32Array([0, 1, 0]).buffer)
-          .toString("hex")
-          .toUpperCase(),
+        embedding: embeddingHex([0, 1, 0]),
       })),
     );
-    expect(conn.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
-      count: 2,
-    });
+    expectCounts(["chunks_vec"], 2);
   });
 
   it("applies later removals to chunks published by an intermediate removal flush", async () => {
@@ -506,23 +534,13 @@ describe("memory source index native kernel", () => {
         { chunk: survivor, embedding: [0, 1, 0] },
       ]),
     );
-    expect(conn.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-      { text: "survivor indexed text" },
-    ]);
+    expect(select("chunks", "text").all()).toEqual([{ text: "survivor indexed text" }]);
     expect(
-      conn
-        .prepare("SELECT text FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?")
-        .all("temporary OR obsolete OR survivor"),
+      select("chunks_fts", "text", "WHERE memory_index_chunks_fts MATCH ?").all(
+        "temporary OR obsolete OR survivor",
+      ),
     ).toEqual([{ text: "survivor indexed text" }]);
-    for (const table of [
-      "memory_index_chunk_recall_metadata",
-      "memory_index_chunk_provenance",
-      "memory_index_chunks_vec",
-    ]) {
-      expect(conn.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
-        count: 1,
-      });
-    }
+    expectCounts(derivedTables, 1);
   });
 
   it("rolls back grouped sources and vectors when a buffered provenance write fails", async () => {

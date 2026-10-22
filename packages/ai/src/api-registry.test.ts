@@ -1,31 +1,20 @@
-// LLM Runtime tests cover api registry behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createApiRegistry,
-  createAssistantMessageEventStream,
-  createLlmRuntime,
-  type Model,
-} from "./index.js";
+import { createApiRegistry, createAssistantMessageEventStream, createLlmRuntime } from "./index.js";
 import {
   defaultApiRegistry,
   streamSimple as streamSimpleDefault,
 } from "./internal/default-runtime.js";
+import { anthropicModel } from "./provider-transport-parity.test-support.js";
 
 const TEST_SOURCE_ID = "test:llm-runtime-api-registry";
 const emptyStream = () => createAssistantMessageEventStream();
+const makeProvider = (api = "test-api", streamSimple = emptyStream) => ({
+  api,
+  stream: emptyStream,
+  streamSimple,
+});
 
-const model = {
-  id: "test-model",
-  name: "Test Model",
-  api: "test-api",
-  provider: "test-provider",
-  baseUrl: "https://example.invalid",
-  input: ["text"],
-  reasoning: false,
-  contextWindow: 1000,
-  maxTokens: 100,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-} satisfies Model;
+const model = { ...anthropicModel, api: "test-api" };
 
 describe("LLM API registry", () => {
   afterEach(() => {
@@ -34,14 +23,7 @@ describe("LLM API registry", () => {
 
   it("rejects mismatched model API calls", () => {
     const registry = createApiRegistry();
-    registry.registerApiProvider(
-      {
-        api: "test-api",
-        stream: emptyStream,
-        streamSimple: emptyStream,
-      },
-      TEST_SOURCE_ID,
-    );
+    registry.registerApiProvider(makeProvider(), TEST_SOURCE_ID);
 
     const provider = registry.getApiProvider("test-api");
     expect(() => provider?.streamSimple({ ...model, api: "other-api" }, { messages: [] })).toThrow(
@@ -52,7 +34,7 @@ describe("LLM API registry", () => {
   it("isolates providers between runtime instances", () => {
     const first = createLlmRuntime();
     const second = createLlmRuntime();
-    const streamSimple = vi.fn(() => createAssistantMessageEventStream());
+    const streamSimple = vi.fn(emptyStream);
     first.registry.registerApiProvider({ api: "test-api", stream: streamSimple, streamSimple });
 
     first.streamSimple(model, { messages: [] });
@@ -72,11 +54,7 @@ describe("LLM API registry", () => {
     )) as typeof import("./internal/default-runtime.js");
     const streamSimple = vi.fn(emptyStream);
     duplicateRuntime.defaultApiRegistry.registerApiProvider(
-      {
-        api: "test-api",
-        stream: emptyStream,
-        streamSimple,
-      },
+      makeProvider("test-api", streamSimple),
       TEST_SOURCE_ID,
     );
 
@@ -88,14 +66,7 @@ describe("LLM API registry", () => {
   it("unregisters every provider owned by one source", () => {
     const registry = createApiRegistry();
     for (const api of ["test-api", "test-api-2"] as const) {
-      registry.registerApiProvider(
-        {
-          api,
-          stream: emptyStream,
-          streamSimple: emptyStream,
-        },
-        TEST_SOURCE_ID,
-      );
+      registry.registerApiProvider(makeProvider(api), TEST_SOURCE_ID);
     }
 
     registry.unregisterApiProviders(TEST_SOURCE_ID);

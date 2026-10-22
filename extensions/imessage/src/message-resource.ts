@@ -61,7 +61,6 @@ export async function resolveAuthorizedIMessageReplyReference(params: {
   }
   const chatContext = chatContextFromIMessageTarget(params.target, params.service);
   const messageId = await resolveIMessageMessageId(rawReplyToId, {
-    requireKnownShortId: true,
     chatContext,
   });
   await authorizeIMessageResourceReference({

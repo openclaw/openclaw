@@ -1,5 +1,12 @@
 import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-bridge";
 
+export function dashboardPaintMarkerHtml(html: string): string {
+  return html.replace(
+    "</head>",
+    "<style>html,body{background:transparent!important;color:CanvasText!important}:root{color-scheme:light dark}section{background:Canvas;border-color:GrayText}.chart i{background:rgb(239,18,205)}svg{color:rgb(239,18,205)}</style></head>",
+  );
+}
+
 export function dashboardMcpAppHtml(stylesheetUrl: string): string {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Team dashboard</title>
 <link rel="stylesheet" href="${stylesheetUrl}"></head><body>

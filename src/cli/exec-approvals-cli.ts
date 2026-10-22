@@ -42,6 +42,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   EXEC_APPROVALS_STDIN_MAX_BYTES,
@@ -107,9 +108,8 @@ async function readApprovalsFile(filePath: string): Promise<string> {
   // special files. Pin that opened target while bounding the bytes consumed.
   const handle = await fs.open(filePath, "r");
   try {
-    return (await readFileDescriptorBounded(handle.fd, EXEC_APPROVALS_STDIN_MAX_BYTES)).toString(
-      "utf8",
-    );
+    const bytes = await readFileDescriptorBounded(handle.fd, EXEC_APPROVALS_STDIN_MAX_BYTES);
+    return decodeUtf8Input(bytes, "Exec approvals file");
   } finally {
     await handle.close();
   }
@@ -1019,7 +1019,7 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts) {
 type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
   trimmedPattern: string;
 };
-type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>;
+type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean;
 
 function registerAllowlistMutationCommand(params: {
   allowlist: Command;
@@ -1037,7 +1037,7 @@ function registerAllowlistMutationCommand(params: {
       await runApprovalsAction(opts, async () => {
         const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
         const context = await loadWritableAllowlistAgent(opts);
-        const shouldSave = await params.mutate({ ...context, trimmedPattern });
+        const shouldSave = params.mutate({ ...context, trimmedPattern });
         if (!shouldSave) {
           if (opts.json) {
             defaultRuntime.writeJson(redactExecApprovals(context.snapshot), 0);

@@ -64,6 +64,29 @@ afterEach(() => {
 });
 
 describe("createCopilotClientPool", () => {
+  it("preserves an absolute Windows drive root as the SDK base directory", async () => {
+    vi.resetModules();
+    vi.doMock("node:path", async (importOriginal) => {
+      const path = await importOriginal<typeof import("node:path")>();
+      return { ...path, resolve: path.win32.resolve, sep: path.win32.sep };
+    });
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    try {
+      const { createCopilotClientPool: createWindowsPool } = await import("./runtime.js");
+      const { sdk } = setup();
+      const pool = createWindowsPool({ sdkFactory: sdk.fake });
+      const handle = await pool.acquire(makeKey(), makeOptions({ copilotHome: "C:\\" }));
+      expect(handle.key.copilotHome).toBe("c:\\");
+      expect(sdk.ctorCalls[0]?.baseDirectory).toBe("c:\\");
+      await pool.dispose();
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+      vi.doUnmock("node:path");
+      vi.resetModules();
+    }
+  });
+
   it("keeps hardened empty-mode clients separate from normal clients", async () => {
     const { sdk, acquire } = setup();
     const normal = await acquire();

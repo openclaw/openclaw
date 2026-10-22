@@ -169,6 +169,16 @@ describe("terminal PTY spawn diagnostics", () => {
         vi.stubGlobal("Bun", bunRuntime);
       }
       try {
+        const aborted = AbortSignal.abort();
+        await expect(
+          spawnTerminalPty(
+            { file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 },
+            { abortSignal: aborted },
+          ),
+        ).rejects.toThrow("PTY construction aborted");
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        expect(mocks.spawnBunTerminalPty).not.toHaveBeenCalled();
+        expect(mocks.spawnNodeTerminalPty).not.toHaveBeenCalled();
         await withChildProcessOperation("agent.exec", () =>
           spawnTerminalPty({ file: "/bin/bash", args: ["-c", "synthetic"], cols: 80, rows: 24 }),
         );

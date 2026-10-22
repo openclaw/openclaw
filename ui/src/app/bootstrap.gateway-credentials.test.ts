@@ -44,7 +44,7 @@ function mockBrowserHandoff() {
   return fetchMock;
 }
 function rejectAuth(store: ReturnType<typeof useGateway>, code: string) {
-  store.current().opts.onClose?.({
+  store.current().testOptions.onClose?.({
     code: 4008,
     reason: "connect failed",
     willRetry: false,
@@ -237,7 +237,7 @@ describe("pending Gateway credentials", () => {
 
       if (retryUnavailable) {
         const revision = store.gateway.connectionRevision;
-        store.current().opts.onClose?.({
+        store.current().testOptions.onClose?.({
           code: 4008,
           reason: "connect failed",
           error: { code: "UNAVAILABLE", message: "Gateway temporarily unavailable" },
@@ -268,7 +268,7 @@ describe("pending Gateway credentials", () => {
           redirect: "error",
         }),
       );
-      expect(store.current().opts.bootstrapProfile).toBe("owner");
+      expect(store.current().testOptions.bootstrapProfile).toBe("owner");
       expect(window.location.href).toBe(initialUrl);
     },
   );
@@ -368,7 +368,7 @@ describe("pending Gateway credentials", () => {
     });
 
     try {
-      client.opts.onHello?.({
+      client.testOptions.onHello?.({
         type: "hello-ok",
         protocol: 1,
         auth: { role: "operator", scopes: ["operator.admin"], deviceToken: "fixture-device-token" },

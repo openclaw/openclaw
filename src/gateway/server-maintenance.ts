@@ -1,7 +1,6 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
-import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -121,7 +120,6 @@ export function startGatewayMaintenanceTimers(params: {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   isNixMode?: boolean;
   getRuntimeConfig: () => OpenClawConfig;
-  runWorktreeGc?: () => Promise<ManagedWorktreeGcResult | void>;
   runDeliveryQueueMediaGc?: () => Promise<unknown>;
   runManagedOutgoingMediaGc?: () => Promise<unknown>;
 }): {
@@ -377,7 +375,6 @@ export function startGatewayMaintenanceTimers(params: {
   const worktreeMaintenance = startWorktreeMaintenance({
     scheduler: params.scheduler,
     getRuntimeConfig: params.getRuntimeConfig,
-    runGc: params.runWorktreeGc,
     onComplete: (result) => {
       const message = formatWorktreeGcResult(result);
       if (result.outcome === "partial") {

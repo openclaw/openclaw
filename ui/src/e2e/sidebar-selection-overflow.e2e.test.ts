@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { waitForControlUiInitialRoster } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForSessionRosterHydration } from "./session-management.test-support.ts";
 
@@ -38,10 +39,7 @@ suite.define(() => {
         content: ".sidebar-shell__body { scrollbar-width: auto; scrollbar-color: auto; }",
       });
       if (width === 390) {
-        await page
-          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-          .first()
-          .click();
+        await navigationDrawerToggle(page).click();
         // Navigation skips the closed drawer; geometry needs its full roster after opening.
         await waitForControlUiInitialRoster(page);
       }

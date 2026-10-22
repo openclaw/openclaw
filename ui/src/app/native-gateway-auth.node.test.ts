@@ -233,7 +233,7 @@ describe("native authenticated Control UI", () => {
       search: "",
       hash: window.location.hash,
     });
-    gateway = createApplicationGateway(startup.settings, "", "", undefined, {
+    gateway = createApplicationGateway(startup.settings, "", "", {
       persistDefaultConnectionSettings: false,
       clientOptions: startup.nativeClient ?? undefined,
     });
@@ -470,9 +470,8 @@ describe("native authenticated Control UI", () => {
       );
       const first = connect();
       if (failure.startsWith("silent bridge")) {
-        await vi.advanceTimersByTimeAsync(
-          DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS / (failure === "silent bridge stopped" ? 1 : 2),
-        );
+        // Stop at the authorization deadline, before the local close's retry fires.
+        await vi.advanceTimersByTimeAsync(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS / 2);
       }
       await expectRejected(first);
       expect(gateway!.snapshot.lastError).toBeTruthy();
@@ -480,6 +479,7 @@ describe("native authenticated Control UI", () => {
         expect(gateway!.snapshot.lastError).toContain("did not authorize");
       }
       if (failure === "silent bridge stopped") {
+        expect(wsInstances).toHaveLength(1);
         await stopWithoutRetry(1);
         return;
       }

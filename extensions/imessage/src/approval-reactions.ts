@@ -26,7 +26,6 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
-  clearIMessageApprovalReactionPollTargetsForTest,
   deleteIMessageApprovalReactionPollTargets,
   recordIMessageApprovalReactionPollTarget,
   resolveIMessageApprovalReactionPollExpiry,
@@ -516,10 +515,4 @@ export async function handleIMessageApprovalReaction(params: {
     logVerboseMessage: logVerbose,
   });
   return { handled: true, stopPolling: settlement !== "denied" };
-}
-
-export function clearIMessageApprovalReactionTargetsForTest(): void {
-  imessageApprovalReactionTargets.clearForTest();
-  clearIMessageApprovalReactionPollTargetsForTest();
-  loadResolveApprovalOverGateway.clear();
 }

@@ -92,7 +92,10 @@ interface NormalizedEvidence {
   current: ParentTuple;
   directRoot: boolean;
   evidenceReuse: Record<string, unknown> | null;
-  qualificationAdmission?: { coverage: { children: { key: string }[] } };
+  qualificationAdmission?: {
+    request?: { candidateSha: string; qualificationSha: string };
+    coverage: { children: { key: string }[] };
+  };
   manifest: Record<string, unknown>;
   releaseProfile: string;
   repository: string;
@@ -645,7 +648,7 @@ function runResolver(args: {
         }),
         FAKE_QUALIFICATION_REUSE: args.qualificationAdmission
           ? JSON.stringify({
-              candidateSha: args.targetSha,
+              candidateSha: args.workflowSha ?? verifierSha,
               qualificationSha: args.workflowSha ?? verifierSha,
               workflowRef: args.workflowRef ?? "main",
               descriptor: args.qualificationAdmission,
@@ -703,6 +706,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         tuple.workflowRefProof = "candidate-owned-admission-v1";
       }
       record.qualificationAdmission = {
+        request: { candidateSha: priorSha, qualificationSha: priorSha },
         coverage: { children: record.children.map(({ role }) => ({ key: role })) },
       };
       const options = {
@@ -722,6 +726,55 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
         qualificationInputs: undefined,
       });
       expect(parseOutput(missingAdmission.stdout)).toMatchObject({ reuse: "false" });
+    },
+  );
+
+  it.each([
+    { changedPaths: ["CHANGELOG/2026.7.1.md", "CHANGELOG/records/2026.7.1.md"], reuse: "true" },
+    { changedPaths: ["CHANGELOG/2026.7.1.md", "index.ts"], reuse: "false" },
+  ])(
+    "carries candidate-owned qualification across a classified descendant ($reuse)",
+    ({ changedPaths, reuse }) => {
+      const { origin, priorSha } = createRepo({ version: "2026.7.1" });
+      mkdirSync(join(origin, "CHANGELOG/records"), { recursive: true });
+      commitFile(origin, "CHANGELOG/2026.7.1.md", "## 2026.7.1\n", "docs: release entry");
+      const changedPath = changedPaths[1];
+      expect(changedPath).toBeDefined();
+      const targetSha = commitFile(
+        origin,
+        changedPath!,
+        changedPath!.startsWith("CHANGELOG/") ? "Contributors.\n" : "export const value = 2;\n",
+        "docs: finish release notes",
+      );
+      const record = normalizedEvidence({
+        targetSha: priorSha,
+        producerSha: priorSha,
+        validationInputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" },
+        workflowRef: `release-ci/${priorSha.slice(0, 12)}-122`,
+      });
+      record.producerOnTrustedMainLineage = false;
+      for (const tuple of [record.current, record.root]) {
+        tuple.producerOnTrustedMainLineage = false;
+        tuple.workflowRefProof = "candidate-owned-admission-v1";
+      }
+      record.qualificationAdmission = {
+        request: { candidateSha: priorSha, qualificationSha: priorSha },
+        coverage: { children: record.children.map(({ role }) => ({ key: role })) },
+      };
+      const result = resolveEvidence(record, {
+        compareBaseSha: priorSha,
+        compareFiles: changedPaths,
+        inputs: { ...DEFAULT_INPUTS, targetVersion: "2026.7.1" },
+        repoDir: cloneHead(origin),
+        targetSha,
+        workflowSha: targetSha,
+        workflowRef: `release-ci/${targetSha.slice(0, 12)}-123`,
+        qualificationAdmission: { workflowSha: VERIFIER_SHA, artifactId: 789 },
+        qualificationInputs: { ref: targetSha, expected_sha: targetSha },
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(parseOutput(result.stdout).reuse, result.stderr).toBe(reuse);
     },
   );
 

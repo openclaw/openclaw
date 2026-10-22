@@ -21,6 +21,7 @@ import {
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "./helpers/fixture-lifetime.js";
 import { NODE_RELEASE_VERSION_CASES } from "./helpers/node-version-cases.js";
+import { stageLauncherFixture } from "./helpers/openclaw-launcher-fixture.js";
 
 // Node version fixtures must enter Node admission even when Vitest runs under Bun.
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -50,31 +51,6 @@ function maintenanceObserver(setup: string, onStart: string) {
         };
         syncBuiltinESMExports();
       `;
-}
-
-async function makeLauncherFixture(
-  fixtures: ReturnType<typeof createFixtureLifetime>,
-): Promise<string> {
-  const fixtureRoot = fixtures.createTempDir("openclaw-launcher-");
-  for (const name of [
-    "openclaw.mjs",
-    "cli-invocation.mjs",
-    "node-host-launcher.mjs",
-    "node-compile-cache.mjs",
-    "node-version.mjs",
-    "node-runtime-update.mjs",
-    "node-runtime-recovery.mjs",
-    "cli-parent-lifetime.mjs",
-    "node-runtime-env.mjs",
-    "cli-root-options.mjs",
-    "gateway-run-argv.mjs",
-    "gateway-shutdown-budget.mjs",
-    "node-sqlite.mjs",
-  ]) {
-    await fs.copyFile(path.resolve(name), path.join(fixtureRoot, name));
-  }
-  await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
-  return fixtureRoot;
 }
 
 async function addCompiledMjsEntryFixture(fixtureRoot: string): Promise<void> {
@@ -267,7 +243,8 @@ describe("openclaw launcher", () => {
   }
 
   beforeEach(async () => {
-    root = await makeLauncherFixture(fixtures);
+    root = fixtures.createTempDir("openclaw-launcher-");
+    await stageLauncherFixture(root);
   });
   afterEach(() => fixtures.cleanup());
 
@@ -1054,6 +1031,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
 
   it.each([
     { args: ["tasks", "--help"], env: {}, echoArgs: false },
+    ...[["--help"], ["nodes", "--help"]].map((args) => ({
+      args,
+      env: { OPENCLAW_PROFILE: "work" },
+      echoArgs: false,
+    })),
     ...[
       ["--profile", "work", "nodes", "--help"],
       ["--profile=work", "nodes", "--help"],

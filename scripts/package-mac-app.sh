@@ -325,6 +325,9 @@ else
     echo "📦 SKIP_TSC no longer skips the app's private runtime; using the content-checked build cache"
   fi
   echo "📦 Building JS (pnpm build)"
+  # The private app runtime consumes JavaScript, not the published SDK declarations.
+  # Keep an explicit zero available for developers who also need the typed build.
+  export OPENCLAW_RUN_NODE_SKIP_DTS_BUILD="${OPENCLAW_RUN_NODE_SKIP_DTS_BUILD:-1}"
   run_pnpm build
 fi
 

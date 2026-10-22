@@ -364,6 +364,11 @@ it.each([
         gatewayCaller.createAdmittedGatewayToolCallerIdentity({
           ...parentScope,
           admittedRunContext: admitted,
+          requesterOrigin: {
+            sessionKey: parentSessionKey,
+            operatorProfileId: "selected-user",
+            delegatedCreatorProfileId: "causal-human",
+          },
         }),
         () =>
           tool!.execute!("pending-acp", {
@@ -384,7 +389,11 @@ it.each([
         "ACP spawn settled before runtime initialization",
       );
       expect(subagentRuns.size).toBe(0);
-      expect(readChild(childSessionKey)).toBeDefined();
+      expect(readChild(childSessionKey)?.createdActor).toMatchObject({
+        type: "agent",
+        id: "main",
+        delegatedBy: { type: "human", source: "profile", id: "causal-human" },
+      });
       if (closure === "abort") {
         const reply = vi.fn();
         const request = { sessionKey: parentSessionKey, runId: parentRunId };

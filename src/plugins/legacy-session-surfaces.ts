@@ -143,14 +143,11 @@ function loadLegacySessionSurface(params: {
 export function prepareLegacySessionSurfaces(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  context?: PluginRuntimeLoadContext;
 }): PreparedLegacySessionSurfaces {
-  const context =
-    params.context ??
-    resolvePluginRuntimeLoadContext({
-      config: params.config,
-      env: params.env,
-    });
+  const context = resolvePluginRuntimeLoadContext({
+    config: params.config,
+    env: params.env,
+  });
   const manifestRecords = (context.manifestRegistry?.plugins ?? []).filter(
     (record) => record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
   );

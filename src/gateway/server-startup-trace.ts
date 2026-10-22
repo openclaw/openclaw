@@ -72,7 +72,6 @@ const RECOVERY_TIMINGS = new Map([
   ["sidecars.subagent-requesters", "registryActivationRequestersMs"],
   ["sidecars.subagent-reserve", "registryActivationReserveMs"],
   ["sidecars.subagent-resume", "registryActivationResumeMs"],
-  ["sidecars.subagent-interrupted", "registryActivationInterruptedMs"],
 ]);
 
 const RECOVERY_DETAILS = [

@@ -242,6 +242,21 @@ export const stateEngineSchema: StoreSchema = {
       schema: statePostgresSchema,
       sql: runtime.clientCredentialV29Sql,
     },
+    {
+      version: 30,
+      fromSchema: statePostgresSchema,
+      schema: statePostgresSchema,
+      sql: `UPDATE schema_meta
+        SET schema_version = 30,
+          app_version = '${VERSION.replaceAll("'", "''")}',
+          updated_at = CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)
+        WHERE meta_key = 'primary';
+        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
+        VALUES ('state.schema.contentVersion', '30',
+          CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint))
+        ON CONFLICT (state_key) DO UPDATE
+          SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`,
+    },
   ],
 };
 

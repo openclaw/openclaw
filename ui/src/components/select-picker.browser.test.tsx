@@ -93,6 +93,47 @@ function menuCase(
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
+  it("keeps the scroll position when the pointer highlights a clipped edge row", async () => {
+    const { userEvent, role } = await browser(1280);
+    const { picker } = await mountModel(numberedModels(60), "width:240px;margin:24px");
+    await role("button", "Model: Model 0").click();
+    const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+    const rows = [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
+    await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
+    const rowHeight = rows[1]!.offsetTop - rows[0]!.offsetTop;
+    const settle = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+    for (const edge of ["bottom", "top"] as const) {
+      // Leave half a row clipped at each edge, as a wheel or trackpad scroll does.
+      list.scrollTop = rowHeight * 10 + Math.round(rowHeight / 2);
+      list.dispatchEvent(new Event("scroll"));
+      await settle();
+      const top = list.scrollTop;
+      const bounds = list.getBoundingClientRect();
+      const clipped = rows.find((row) => {
+        const rect = row.getBoundingClientRect();
+        return edge === "bottom"
+          ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
+          : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
+      })!;
+      expect(clipped, edge).toBeDefined();
+      const rect = clipped.getBoundingClientRect();
+      // Hover the list at the clipped row's visible sliver; hovering the row
+      // itself would let Playwright scroll it into view before moving.
+      const sliver = (Math.max(rect.top, bounds.top) + Math.min(rect.bottom, bounds.bottom)) / 2;
+      await userEvent.hover(list, { position: { x: 24, y: Math.round(sliver - bounds.top) } });
+      await expect.poll(() => clipped.hasAttribute("data-active")).toBe(true);
+      await settle();
+      expect(list.scrollTop, edge).toBe(top);
+    }
+    // Keyboard navigation after a pointer highlight still reveals the next row.
+    const top = list.scrollTop;
+    await userEvent.keyboard("{ArrowUp}");
+    await expect.poll(() => list.scrollTop).toBeLessThan(top);
+  });
+
   it("reveals keyboard highlights without untracked reactive reads", async () => {
     const warning = vi.spyOn(console, "warn");
     onTestFinished(() => warning.mockRestore());

@@ -30,6 +30,12 @@ type TerminalPanelUploadHost = {
   isCurrent: (tab: TerminalUploadTab) => boolean;
   fileInput: () => HTMLInputElement | null;
   setError: (message: string | null) => void;
+  /** An embedded composer may retain editable arguments; never submit them here. */
+  stagePaths?: (
+    tab: TerminalUploadTab,
+    paths: readonly string[],
+    files: readonly File[],
+  ) => boolean;
 };
 
 type TerminalUploadBatch = {
@@ -269,8 +275,10 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
     }
     // Ghostty preserves bracketed-paste mode. This produces editable input,
     // never Enter, so adding a file cannot execute a shell command.
-    batch.tab.controller.terminal.paste(batch.paths.join(" "));
-    batch.tab.controller.terminal.focus();
+    if (!host.stagePaths?.(batch.tab, batch.paths, batch.files)) {
+      batch.tab.controller.terminal.paste(batch.paths.join(" "));
+      batch.tab.controller.terminal.focus();
+    }
     activeBatch = null;
     notifyBatch();
   }

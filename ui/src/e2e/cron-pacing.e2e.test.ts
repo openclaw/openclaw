@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { applyJobPatch } from "../../../src/cron/service/jobs.js";
 import type { CronStoredJob } from "../../../src/cron/types.js";
@@ -7,6 +5,7 @@ import { createRequireRecord } from "../../../test/helpers/record.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Automation pacing browser proof",
@@ -27,15 +26,7 @@ const source = {
   delivery: { mode: "none" },
   state: {},
 } satisfies CronStoredJob;
-const list = {
-  jobs: [{ ...source, configRevision: "source-revision" }],
-  snapshotRevision: "pacing-proof",
-  total: 1,
-  offset: 0,
-  limit: 50,
-  hasMore: false,
-  nextOffset: null,
-};
+const list = cronList([{ ...source, configRevision: "source-revision" }], "pacing-proof");
 
 suite.define(() => {
   it.each(["duplicate", "once"])("preserves valid pacing through %s", async (action) => {
@@ -64,49 +55,29 @@ suite.define(() => {
         await page.locator('[data-test-id="cron-submit"]').click();
         const request = await gateway.waitForRequest(method);
         const params = record(request.params);
-        let error: string | undefined;
         if (action === "once") {
           const patch = record(params.patch);
+          expect(patch.pacing).toBeNull();
           const schedule = record(patch.schedule);
-          try {
+          expect(() => {
             applyJobPatch(structuredClone(source), {
               schedule: { kind: "at", at: String(schedule.at) },
               ...(patch.pacing === null ? { pacing: null } : {}),
             });
-          } catch (failure) {
-            error = String(failure);
-          }
-          if (error) {
-            await gateway.rejectDeferred(method, { code: "INVALID_REQUEST", message: error });
-            await page.locator(".cron-error-banner").waitFor();
-          } else {
-            await gateway.resolveDeferred(method, {
-              ...source,
-              schedule: patch.schedule,
-              pacing: undefined,
-              configRevision: "saved-revision",
-            });
-            await expect
-              .poll(() => page.locator('[data-test-id="cron-submit"]').isEnabled())
-              .toBe(true);
-          }
+          }).not.toThrow();
+          await gateway.resolveDeferred(method, {
+            ...source,
+            schedule: patch.schedule,
+            pacing: undefined,
+            configRevision: "saved-revision",
+          });
+          await expect
+            .poll(() => page.locator('[data-test-id="cron-submit"]').isEnabled())
+            .toBe(true);
         } else {
+          expect(params.pacing).toEqual(source.pacing);
           await gateway.resolveDeferred(method, { id: "paced-copy" });
           await page.locator('[data-test-id="cron-new-task"]').waitFor();
-        }
-        if (action === "once") {
-          await page.locator(".cron-detail-title").scrollIntoViewIfNeeded();
-        }
-        await page.screenshot({ path: path.join(suite.artifactDir, `${action}.png`) });
-        await writeFile(
-          path.join(suite.artifactDir, `${action}.json`),
-          JSON.stringify({ request, error }, null, 2),
-        );
-        if (action === "duplicate") {
-          expect(params.pacing).toEqual(source.pacing);
-        } else {
-          expect(error).toBeUndefined();
-          expect(record(params.patch).pacing).toBeNull();
         }
       },
     );

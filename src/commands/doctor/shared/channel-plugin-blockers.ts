@@ -141,16 +141,73 @@ export function scanConfiguredChannelPluginBlockers(
           (rawChannelId) => normalizeOptionalLowercaseString(rawChannelId) === channelId,
         ),
       )
-      .map((plugin) =>
-        resolveConfiguredChannelOwnerState({
-          plugin,
-          channelId,
-          sourceConfig: activationSourceConfig,
-          sourcePluginsConfig,
-          effectiveConfig: cfg,
-          effectivePluginsConfig,
-        }),
-      );
+      .map((plugin): ChannelOwnerState => {
+        const resolveBase = (
+          config: OpenClawConfig,
+          normalizedConfig: ReturnType<typeof normalizePluginsConfig>,
+        ) => {
+          const bundledChannelConfigured =
+            plugin.origin === "bundled" && hasExplicitChannelConfig({ config, channelId });
+          const workspaceSlot =
+            plugin.origin === "workspace" && normalizedConfig.slots.contextEngine === plugin.id;
+          return {
+            bundledChannelConfigured,
+            workspaceSlot,
+            block: resolveManifestOwnerBasePolicyBlock({
+              plugin,
+              normalizedConfig,
+              allowRestrictiveAllowlistBypass: bundledChannelConfigured || workspaceSlot,
+            }),
+          };
+        };
+        const source = resolveBase(activationSourceConfig, sourcePluginsConfig);
+        const sourceBaseBlock = source.block;
+        const sourceExternalTrusted =
+          plugin.origin === "bundled" ||
+          hasExplicitManifestOwnerTrust({ plugin, normalizedConfig: sourcePluginsConfig }) ||
+          source.workspaceSlot;
+        const sourceBundledActivated =
+          plugin.origin === "bundled" &&
+          (source.bundledChannelConfigured ||
+            isActivatedManifestOwner({
+              plugin,
+              normalizedConfig: sourcePluginsConfig,
+              rootConfig: activationSourceConfig,
+            }));
+        const sourceBundledNeedsExplicitEnablement =
+          plugin.origin === "bundled" &&
+          !isPluginEnabledByDefaultForPlatform(plugin) &&
+          sourcePluginsConfig.entries[plugin.id]?.enabled !== true;
+
+        const effective = resolveBase(cfg, effectivePluginsConfig);
+        const available =
+          effective.block === null &&
+          sourceExternalTrusted &&
+          (effective.bundledChannelConfigured ||
+            isActivatedManifestOwner({
+              plugin,
+              normalizedConfig: effectivePluginsConfig,
+              rootConfig: cfg,
+            }));
+        return {
+          pluginId: plugin.id,
+          available,
+          reason: available
+            ? undefined
+            : plugin.origin === "bundled" &&
+                sourceBaseBlock === "not-in-allowlist" &&
+                sourceBundledNeedsExplicitEnablement
+              ? "not enabled and not in allowlist"
+              : (mapManifestOwnerBlockerReason(sourceBaseBlock) ??
+                (!sourceExternalTrusted && sourceBaseBlock === null
+                  ? "missing explicit enablement"
+                  : plugin.origin === "bundled" &&
+                      sourceBaseBlock === null &&
+                      !sourceBundledActivated
+                    ? "not enabled"
+                    : undefined)),
+        };
+      });
 
   for (const channelId of genericChannelIds) {
     const ownerStates = resolveChannelOwnerStates(channelId);
@@ -225,86 +282,6 @@ type ChannelOwnerState = {
   available: boolean;
   reason?: ChannelPluginBlockerHit["reason"];
 };
-
-function resolveConfiguredChannelOwnerState(params: {
-  plugin: PluginManifestRecord;
-  channelId: string;
-  sourceConfig: OpenClawConfig;
-  sourcePluginsConfig: ReturnType<typeof normalizePluginsConfig>;
-  effectiveConfig: OpenClawConfig;
-  effectivePluginsConfig: ReturnType<typeof normalizePluginsConfig>;
-}): ChannelOwnerState {
-  const resolveBase = (
-    config: OpenClawConfig,
-    normalizedConfig: ReturnType<typeof normalizePluginsConfig>,
-  ) => {
-    const bundledChannelConfigured =
-      params.plugin.origin === "bundled" &&
-      hasExplicitChannelConfig({ config, channelId: params.channelId });
-    const workspaceSlot =
-      params.plugin.origin === "workspace" &&
-      normalizedConfig.slots.contextEngine === params.plugin.id;
-    return {
-      bundledChannelConfigured,
-      workspaceSlot,
-      block: resolveManifestOwnerBasePolicyBlock({
-        plugin: params.plugin,
-        normalizedConfig,
-        allowRestrictiveAllowlistBypass: bundledChannelConfigured || workspaceSlot,
-      }),
-    };
-  };
-  const source = resolveBase(params.sourceConfig, params.sourcePluginsConfig);
-  const sourceBaseBlock = source.block;
-  const sourceExternalTrusted =
-    params.plugin.origin === "bundled" ||
-    hasExplicitManifestOwnerTrust({
-      plugin: params.plugin,
-      normalizedConfig: params.sourcePluginsConfig,
-    }) ||
-    source.workspaceSlot;
-  const sourceBundledActivated =
-    params.plugin.origin === "bundled" &&
-    (source.bundledChannelConfigured ||
-      isActivatedManifestOwner({
-        plugin: params.plugin,
-        normalizedConfig: params.sourcePluginsConfig,
-        rootConfig: params.sourceConfig,
-      }));
-  const sourceBundledNeedsExplicitEnablement =
-    params.plugin.origin === "bundled" &&
-    !isPluginEnabledByDefaultForPlatform(params.plugin) &&
-    params.sourcePluginsConfig.entries[params.plugin.id]?.enabled !== true;
-
-  const effective = resolveBase(params.effectiveConfig, params.effectivePluginsConfig);
-  const available =
-    effective.block === null &&
-    sourceExternalTrusted &&
-    (effective.bundledChannelConfigured ||
-      isActivatedManifestOwner({
-        plugin: params.plugin,
-        normalizedConfig: params.effectivePluginsConfig,
-        rootConfig: params.effectiveConfig,
-      }));
-  return {
-    pluginId: params.plugin.id,
-    available,
-    reason: available
-      ? undefined
-      : params.plugin.origin === "bundled" &&
-          sourceBaseBlock === "not-in-allowlist" &&
-          sourceBundledNeedsExplicitEnablement
-        ? "not enabled and not in allowlist"
-        : (mapManifestOwnerBlockerReason(sourceBaseBlock) ??
-          (!sourceExternalTrusted && sourceBaseBlock === null
-            ? "missing explicit enablement"
-            : params.plugin.origin === "bundled" &&
-                sourceBaseBlock === null &&
-                !sourceBundledActivated
-              ? "not enabled"
-              : undefined)),
-  };
-}
 
 function mapManifestOwnerBlockerReason(
   reason: ManifestOwnerBasePolicyBlockReason | null,

@@ -36,6 +36,7 @@ import {
   withPluginDiagnosticsReport,
 } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { SECRET_DEGRADATION_RETRY_HINT } from "../secrets/runtime-degraded-state.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { buildWorkspaceSkillReadiness } from "../skills/discovery/status.js";
 import { getRemoteSkillEligibility } from "../skills/runtime/remote.js";
@@ -55,7 +56,7 @@ import {
 import { appendStatusReportHeading, appendStatusReportTable } from "./status-all/text-report.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import { buildStatusAllOverviewRows } from "./status-overview-rows.ts";
-import { countActiveStatusAgents } from "./status-overview-values.js";
+import { buildStatusSecretDiagnostics, countActiveStatusAgents } from "./status-overview-values.js";
 import {
   reportStatusScanFailure,
   resolveStatusServiceSummaries,
@@ -249,7 +250,6 @@ async function resolveStatusAllLocalDiagnosis(params: {
     diagnosis: {
       snap,
       remoteUrlMissing: overview.gatewaySnapshot.remoteUrlMissing,
-      secretDiagnostics: overview.secretDiagnostics,
       sentinel,
       lastErr,
       port,
@@ -357,12 +357,16 @@ export async function statusAllCommand(
       nodeOnlyGateway,
       databaseEngines,
     };
+    const secretDiagnostics = buildStatusSecretDiagnostics(
+      summary.degradedSecretOwners ?? [],
+      overview.secretDiagnostics,
+    );
     const overviewRows = buildStatusAllOverviewRows({
       surface: overviewSurface,
       osLabel: overview.osSummary.label,
       configPath,
       summary,
-      secretDiagnosticsCount: overview.secretDiagnostics.length,
+      secretDiagnosticsCount: secretDiagnostics.length,
       updateRows,
       agentStatus,
     });
@@ -478,14 +482,13 @@ export async function statusAllCommand(
     }
 
     emitCheck(
-      `Secret diagnostics (${diagnosis.secretDiagnostics.length})`,
-      diagnosis.secretDiagnostics.length === 0 ? "ok" : "warn",
+      `Secret diagnostics (${secretDiagnostics.length})`,
+      secretDiagnostics.length === 0 ? "ok" : "warn",
     );
-    emitLimited(
-      diagnosis.secretDiagnostics,
-      10,
-      (diagnostic) => `  - ${muted(redactStatusSecrets(diagnostic))}`,
-    );
+    emitLimited(secretDiagnostics, 10, (diagnostic) => `  - ${muted(diagnostic)}`);
+    if (summary.degradedSecretOwners?.length) {
+      emitDetail(`Retry: ${SECRET_DEGRADATION_RETRY_HINT}`);
+    }
 
     if (diagnosis.sentinel?.payload) {
       emitCheck("Restart sentinel present", "warn");

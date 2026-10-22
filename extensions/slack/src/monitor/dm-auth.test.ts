@@ -1,4 +1,3 @@
-// Slack tests cover dm auth plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "./context.js";
 import { authorizeSlackDirectMessage } from "./dm-auth.js";
@@ -10,19 +9,11 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
   upsertChannelPairingRequest: upsertChannelPairingRequestMock,
 }));
 
-function makeCtx(dmPolicy: SlackMonitorContext["dmPolicy"]): SlackMonitorContext {
-  return {
-    allowNameMatching: false,
-    dmEnabled: true,
-    dmPolicy,
-  } as SlackMonitorContext;
-}
-
 function makeParams(
   dmPolicy: SlackMonitorContext["dmPolicy"],
 ): Parameters<typeof authorizeSlackDirectMessage>[0] {
   return {
-    ctx: makeCtx(dmPolicy),
+    ctx: { allowNameMatching: false, dmEnabled: true, dmPolicy } as SlackMonitorContext,
     accountId: "workspace",
     senderId: "U123",
     allowFromLower: [],
@@ -91,29 +82,25 @@ describe("authorizeSlackDirectMessage", () => {
         return { code, created: true };
       },
     );
-    const first = makeParams("pairing");
-    first.eventScope = { teamId: "T11111111", client: {} as never };
-    const second = makeParams("pairing");
-    second.eventScope = { teamId: "T22222222", client: {} as never };
-
-    await expect(
-      Promise.all([authorizeSlackDirectMessage(first), authorizeSlackDirectMessage(second)]),
-    ).resolves.toEqual([false, false]);
-
-    expect(upsertChannelPairingRequestMock).toHaveBeenNthCalledWith(1, {
-      channel: "slack",
-      id: "team:T11111111:user:U123",
-      accountId: "workspace",
-      meta: { name: "Alice", teamId: "T11111111", senderId: "U123" },
+    const teams = ["T11111111", "T22222222"];
+    const requests = teams.map((teamId) => ({
+      ...makeParams("pairing"),
+      eventScope: { teamId, client: {} as never },
+    }));
+    await expect(Promise.all(requests.map(authorizeSlackDirectMessage))).resolves.toEqual([
+      false,
+      false,
+    ]);
+    requests.forEach((params, index) => {
+      const teamId = teams[index];
+      expect(upsertChannelPairingRequestMock).toHaveBeenNthCalledWith(index + 1, {
+        channel: "slack",
+        id: `team:${teamId}:user:U123`,
+        accountId: "workspace",
+        meta: { name: "Alice", teamId, senderId: "U123" },
+      });
+      expect(params.sendPairingReply).toHaveBeenCalledTimes(1);
     });
-    expect(upsertChannelPairingRequestMock).toHaveBeenNthCalledWith(2, {
-      channel: "slack",
-      id: "team:T22222222:user:U123",
-      accountId: "workspace",
-      meta: { name: "Alice", teamId: "T22222222", senderId: "U123" },
-    });
-    expect(first.sendPairingReply).toHaveBeenCalledTimes(1);
-    expect(second.sendPairingReply).toHaveBeenCalledTimes(1);
     expect(pendingCodes.size).toBe(2);
   });
 });

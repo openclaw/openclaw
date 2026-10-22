@@ -1,6 +1,6 @@
 // Load the shared migration mocks before their production consumers.
 // oxfmt-ignore
-import { useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
+import { mockPluginProviders, useDoctorLegacyConfigFixture } from "./doctor/shared/legacy-config-fixture.test-support.js";
 // Doctor legacy config migration tests cover shipped migration recipes and validation outcomes.
 import { describe, expect, it } from "vitest";
 import { listAgentEntries } from "../agents/agent-roster.js";
@@ -45,7 +45,7 @@ function normalizeSkills(entries: unknown) {
 }
 
 describe("normalizeCompatibilityConfigValues", () => {
-  useDoctorLegacyConfigFixture();
+  const fixture = useDoctorLegacyConfigFixture();
 
   it("drops reserved MCP server names without touching sibling servers", () => {
     const raw: unknown = JSON.parse(
@@ -280,6 +280,7 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("repairs agent model refs whose configured provider was deleted", () => {
+    mockPluginProviders(["plugin-provider"]);
     const result = repairStaleAgentModelRefs(
       {
         models: {
@@ -307,8 +308,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       },
       {
-        pluginProviderIds: new Set(["plugin-provider"]),
-        persistedProviderIdsByAgentId: new Map(),
+        env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
       },
     );
 
@@ -337,6 +337,8 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("preserves plugin-owned CLI providers and agent-local models.json providers", () => {
+    fixture.seedProviderCatalog("worker");
+    mockPluginProviders(["anthropic", "my-cli"]);
     const result = repairStaleAgentModelRefs(
       {
         agents: {
@@ -348,8 +350,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       },
       {
-        pluginProviderIds: new Set(["anthropic", "my-cli"]),
-        persistedProviderIdsByAgentId: new Map([["worker", new Set(["agent-local"])]]),
+        env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
       },
     );
 
@@ -377,7 +378,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     const result = repairStaleAgentModelRefs(config, {
       pluginMetadataSnapshot,
-      persistedProviderIdsByAgentId: new Map(),
+      env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
     });
 
     expect(result.changes).toEqual([]);
@@ -385,12 +386,13 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("preserves model refs backed by a configured installable provider", () => {
+    mockPluginProviders();
     const result = repairStaleAgentModelRefs(
       {
         plugins: { allow: ["mistral"], entries: { mistral: { enabled: true } } },
         agents: { defaults: { model: { primary: "mistral/mistral-large-latest" } } },
       },
-      { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
+      { env: { OPENCLAW_STATE_DIR: fixture.oauthDir } },
     );
 
     expect(result.changes).toEqual([]);
@@ -400,6 +402,8 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("evaluates and repairs every canonical keyed agent", () => {
+    fixture.seedProviderCatalog("main");
+    mockPluginProviders();
     const result = repairStaleAgentModelRefs(
       {
         agents: {
@@ -408,11 +412,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       },
       {
-        pluginProviderIds: new Set(),
-        persistedProviderIdsByAgentId: new Map([
-          ["main", new Set(["agent-local"])],
-          ["worker", new Set()],
-        ]),
+        env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
       },
     );
 
@@ -424,9 +424,10 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("keeps a repaired model allowlist restrictive", () => {
+    mockPluginProviders();
     const result = repairStaleAgentModelRefs(
       { agents: { defaults: { model: "deleted/main", models: { "deleted/main": {} } } } },
-      { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
+      { env: { OPENCLAW_STATE_DIR: fixture.oauthDir } },
     );
 
     expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
@@ -457,8 +458,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         },
       },
       {
-        pluginProviderIds: new Set(["plugin-provider"]),
-        persistedProviderIdsByAgentId: new Map(),
+        env: { OPENCLAW_STATE_DIR: fixture.oauthDir },
       },
     );
 
@@ -487,7 +487,7 @@ describe("normalizeCompatibilityConfigValues", () => {
         list: [{ id: "reviewer", model: "codex/gpt-5.6-sol" }],
       },
     });
-    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config, shouldRepair: true });
+    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.6-sol",
@@ -527,7 +527,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     };
 
-    const repaired = maybeRepairCodexRoutes({ cfg: input, shouldRepair: true });
+    const repaired = maybeRepairCodexRoutes({ cfg: input });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.5",
@@ -580,7 +580,6 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
     const repaired = maybeRepairCodexRoutes({
       cfg: normalized.config,
-      shouldRepair: true,
       blockedProviderPlan,
     });
 
@@ -635,7 +634,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       migration.apply(migrated, migrationChanges);
     }
     const normalized = normalizeCompatibilityConfigValues(migrated);
-    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config, shouldRepair: true });
+    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config });
 
     expect(repaired.cfg.agents?.defaults?.model).toEqual({
       primary: "openai/gpt-5.6-sol",

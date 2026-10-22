@@ -230,7 +230,7 @@ suite.define(() => {
     });
   });
 
-  it("labels the lifecycle status on the account icon and retries through its menu", async () => {
+  it("labels the lifecycle status on the account icon during automatic recovery", async () => {
     await withFooter(
       async ({ gateway, page, sidebar }) => {
         const footer = sidebar.locator(".sidebar-footer-bar");
@@ -294,24 +294,16 @@ suite.define(() => {
         // Offline mock sockets stay connecting until their attempt explicitly fails.
         await gateway.closeLatest(1006, "synthetic failed attempt");
         await expectRailConnectionStatus(footer, "reconnecting", "Reconnecting…");
-        await connectionStatus
-          .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
-          .waitFor();
+        expect(await connectionStatus.getByRole("button").count()).toBe(0);
         expect(await footer.getByText("Offline", { exact: true }).count()).toBe(0);
-
-        const socketCount = await gateway.getSocketCount();
         await footer
           .getByRole("button", {
             name: "Identity and app menu for Riley: Reconnecting…",
             exact: true,
           })
           .click();
-        const retry = sidebar.locator('[data-value="command:retry-connect"]');
-        await retry.waitFor();
-        await retry.click();
-        await expect
-          .poll(() => gateway.getSocketCount(), { timeout: 10_000 })
-          .toBeGreaterThan(socketCount);
+        expect(await sidebar.locator('[data-value="command:retry-connect"]').count()).toBe(0);
+        await page.keyboard.press("Escape");
 
         await gateway.setOnline(true);
         await page.clock.resume();

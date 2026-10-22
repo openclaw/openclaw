@@ -19,10 +19,11 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentMemoryPanel } from "./memory/memory-panel.tsx";
+import { AgentCron } from "./panel-cron.tsx";
 import { AgentFiles } from "./panels-files.tsx";
 import { AgentOverview } from "./panels-overview.tsx";
 import { AgentSkills } from "./panels-skills.tsx";
-import { AgentChannels, AgentCron } from "./panels-status-files.tsx";
+import { AgentChannels } from "./panels-status-files.tsx";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -47,7 +48,6 @@ export type AgentsProps = Omit<
     Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">>;
   onOpenMemoryImport?: AgentsPageView["onOpenMemoryImport"];
   onOpenMemorySettings?: AgentsPageView["onOpenMemorySettings"];
-  onCreateClaw?: (agentId: string) => void;
 };
 
 export function AgentsPageHeader() {
@@ -124,16 +124,6 @@ export function Agents(props: AgentsProps) {
             <Show when={selectedAgent()}>
               {(agent) => (
                 <>
-                  <Show when={props.onCreateClaw}>
-                    <button
-                      type="button"
-                      class="btn btn--sm btn--ghost"
-                      title={t("clawsDraft.railHint")}
-                      onClick={() => props.onCreateClaw?.(agent().id)}
-                    >
-                      {t("clawsDraft.title")}
-                    </button>
-                  </Show>
                   <Show when={agent().id} keyed>
                     {(id) => {
                       let label!: HTMLSpanElement;
@@ -184,7 +174,7 @@ export function Agents(props: AgentsProps) {
           </div>
         </div>
         <Show when={props.error}>
-          <div class="callout danger" style={{ "margin-top": "8px" }}>
+          <div class="callout danger" role="alert" style={{ "margin-top": "8px" }}>
             {props.error}
           </div>
         </Show>

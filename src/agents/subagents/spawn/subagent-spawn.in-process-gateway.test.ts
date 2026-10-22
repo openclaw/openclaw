@@ -52,7 +52,7 @@ import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publi
 import { observeRootWork } from "../registry/subagent-registry.browser-cleanup.test-support.js";
 import { markSubagentRunTerminated } from "../registry/subagent-registry.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
-import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import "./subagent-spawn-model.mocks.shared.js";
 import { makeGatewayContext } from "./subagent-spawn.in-process-gateway.test-support.js";
@@ -68,6 +68,7 @@ vi.mock("../registry/subagent-registry-persistence.js", { spy: true });
 
 const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
 let stateDir = "";
+let schedulerWork: ReturnType<typeof observeSwarmSchedulerWork>;
 const persistRegistryRows = vi.fn<MockSubagentRegistryRows>();
 
 function externalCliClient(): GatewayRequestOptions["client"] {
@@ -104,8 +105,8 @@ async function waitForAssertion(assertion: () => void, timeoutMs = 2_000): Promi
 
 describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   beforeEach(async () => {
+    schedulerWork = observeSwarmSchedulerWork();
     resetGatewayWorkAdmission();
-    swarmSchedulerTesting.reset();
     await resetSubagentRegistryForTests({ persist: false });
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -134,8 +135,8 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
   });
 
   afterEach(async () => {
+    await schedulerWork.close();
     resetGatewayWorkAdmission();
-    swarmSchedulerTesting.reset();
     await resetSubagentRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     persistRegistryRows.mockReset();

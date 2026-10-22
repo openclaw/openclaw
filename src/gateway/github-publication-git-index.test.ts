@@ -356,21 +356,39 @@ describe("GitHub publication index update", () => {
     expect((await fs.stat(f.file(".git", "index.lock"))).size).toBeGreaterThan(0);
   });
 
-  it("removes its owned lock after a definite ref CAS rejection", async () => {
-    await rejects(
-      f.update({
-        updateRef: async () => {
-          const result = await runCommandBuffered(
-            ["git", "update-ref", "refs/heads/main", f.headCommit, "f".repeat(40)],
-            { cwd: f.cwd },
-          );
-          assertGitHubPublicationRefCasCompleted(result);
-        },
-      }),
-      "workspace branch changed before commit",
-    );
+  it.each([false, true])(
+    "settles a definite ref CAS rejection (custody revoked: %s)",
+    async (revoked) => {
+      let current = true;
+      await rejects(
+        f.update({
+          assertCustody() {
+            if (!current) {
+              throw new Error("Publication custody revoked");
+            }
+          },
+          updateRef: async () => {
+            const result = await runCommandBuffered(
+              ["git", "update-ref", "refs/heads/main", f.headCommit, "f".repeat(40)],
+              { cwd: f.cwd },
+            );
+            current = !revoked;
+            assertGitHubPublicationRefCasCompleted(result);
+          },
+        }),
+        "workspace branch changed before commit",
+      );
 
-    await expect(fs.stat(f.file(".git", "index.lock"))).rejects.toThrow();
-    expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
-  });
+      if (revoked) {
+        await expect(fs.stat(f.file(".git", "index.lock"))).resolves.toBeDefined();
+      } else {
+        await expect(fs.stat(f.file(".git", "index.lock"))).rejects.toThrow();
+      }
+      const recoveries = (await fs.readdir(f.file(".git"))).filter((name) =>
+        name.startsWith("index.openclaw-"),
+      );
+      expect(recoveries).toHaveLength(revoked ? 1 : 0);
+      expect(await f.git("rev-parse", "HEAD")).toBe(f.previousHead);
+    },
+  );
 });

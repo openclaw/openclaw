@@ -111,10 +111,7 @@ const hoisted = vi.hoisted(() => {
   const disposeMonitorEvents = vi.fn(() => {
     callOrder.push("dispose-monitor-events");
   });
-  const acquireSharedMatrixClientImpl = async (params: { startClient?: boolean }) => {
-    if (params.startClient !== false) {
-      throw new Error("Matrix monitor must acquire its lease before startup");
-    }
+  const acquireSharedMatrixClientImpl = async () => {
     callOrder.push("prepare-client");
     return lease;
   };

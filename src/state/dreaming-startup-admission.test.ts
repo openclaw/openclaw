@@ -521,22 +521,16 @@ it.for([
             assert(manager?.sync, result.error ?? "Startup did not acquire a memory manager");
             expect(logger.warn).not.toHaveBeenCalled();
             expect(subscriptions).toHaveLength(1);
-            const indexed = createDeferredCore();
-            const sync = manager.sync.bind(manager);
-            vi.spyOn(manager, "sync").mockImplementation((params) => {
-              const work = sync(params);
-              if (params?.reason === "watch") {
-                indexed.resolve(work);
-              }
-              return work;
-            });
             await fs.promises.mkdir(state.workspaceDir, { recursive: true });
             await fs.promises.writeFile(
               path.join(state.workspaceDir, "MEMORY.md"),
               "Violet cranes nest beside the lagoon.",
             );
             subscriptions[0]!.notify();
-            await withinTest(indexed.promise, signal);
+            await instance.waitForRetainedWork(signal, {
+              includeConsumers: false,
+              includeCalls: true,
+            });
             expect(manager.status().chunks).toBeGreaterThan(0);
             expect(acquisition).toHaveBeenCalledTimes(1);
             await service.stop?.(context);

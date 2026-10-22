@@ -1,15 +1,9 @@
 import { createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsFilesListResult, SkillStatusReport } from "../../api/types.ts";
+import type { AgentsFilesListResult } from "../../api/types.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  beginPanelRefresh,
-  completePanelRefresh,
-  createPanelRefreshStatus,
-  failPanelRefresh,
-} from "../../components/panel-refresh-status.ts";
 import { createGitHubIdentity } from "../../features/github-connections/github-identity.ts";
 import { t } from "../../i18n/index.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
@@ -24,13 +18,7 @@ import {
 } from "../../lib/agents/index.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import {
-  createInitialCronState,
-  loadCronJobsPage,
-  loadCronScopeStats,
-  loadCronStatus,
-  runCronJob,
-} from "../../lib/cron/index.ts";
+import { createInitialCronState } from "../../lib/cron/index.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
@@ -44,6 +32,7 @@ import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { createAgentConfigActions } from "./agent-config-actions.ts";
+import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import type { GeneratedAvatar } from "./avatar-picker.tsx";
 import {
   loadAgentFileContent,
@@ -70,20 +59,17 @@ import {
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { createAgentSelectionDrafts } from "./selection-drafts.ts";
-import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
+import { clearAgentSkillFilter, createAgentSkillsReader, type AgentSkillsState } from "./skills.ts";
 
 type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError"> &
-  AgentFilesState & {
-    chatModelCatalogStatus: ReturnType<typeof createPanelRefreshStatus>;
+  AgentFilesState &
+  AgentSkillsState & {
+    chatModelCatalogRead: Promise<void> | null;
     agentFilesList: AgentsFilesListResult | null;
     agentFileActive: string | null;
     identityDraft: AgentIdentityDraft;
     identitySaving: boolean;
     identityError: string | null;
-    agentSkillsLoading: boolean;
-    agentSkillsError: string | null;
-    agentSkillsReport: SkillStatusReport | null;
-    agentSkillsAgentId: string | null;
     cron: CronState;
     sessionKey: string;
     agentsPanel: AgentsPanel;
@@ -126,7 +112,7 @@ export function createAgentsPageState(
     toolsEffectiveResultKey: null,
     toolsEffectiveError: null,
     toolsEffectiveResult: null,
-    chatModelCatalogStatus: createPanelRefreshStatus(),
+    chatModelCatalogRead: null,
     agentFilesLoading: false,
     agentFilesError: null,
     agentFilesList: null,
@@ -137,8 +123,8 @@ export function createAgentsPageState(
     identityDraft: { name: null, emoji: null, avatar: null },
     identitySaving: false,
     identityError: null,
-    agentSkillsLoading: false,
-    agentSkillsError: null,
+    agentSkillsRead: null,
+    agentSkillsUpdateError: null,
     agentSkillsReport: null,
     agentSkillsAgentId: null,
     cron: createInitialCronState(),
@@ -175,30 +161,33 @@ export function createAgentsPageState(
     "channelsSnapshot" | "channelsLoading" | "channelsError" | "channelsLastSuccess"
   > = channels.read;
   const publish = observation.invalidate;
+  const cron = createAgentCronPresenter({
+    currentState: () => state.cron,
+    readState: () => readData().cron,
+    canCall: (method, scope) => active && canCall(method, scope),
+    publish,
+  });
   const selectionDrafts = createAgentSelectionDrafts(state, resetSelectionState);
   let identitySaves = selectionDrafts.bindContext(context);
   let identityAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
+  const skills = createAgentSkillsReader(state);
   let catalogRecoveryPending = false;
-  const modelReader = new ModelCatalogReader(
-    () => {
-      if (modelReader.pending) {
-        state.chatModelCatalogStatus = beginPanelRefresh(state.chatModelCatalogStatus);
-      }
-      publish();
+  let catalogNeedsRecovery = false;
+  const modelReader = new ModelCatalogReader(publish, {
+    onRead: (read) => {
+      const completion = read.then((result) => {
+        const error = result && modelCatalogRefreshError(result);
+        if (error) {
+          throw new Error(error);
+        }
+      });
+      // The notice can be absent while another agent panel is selected.
+      void completion.catch(() => undefined);
+      state.chatModelCatalogRead = completion;
     },
-    {
-      onResult: (result) => {
-        const error = modelCatalogRefreshError(result);
-        settleModelCatalog(
-          error
-            ? failPanelRefresh(completePanelRefresh(), new Error(error), gateway.snapshot)
-            : completePanelRefresh(),
-        );
-      },
-      onError: (error) =>
-        settleModelCatalog(failPanelRefresh(state.chatModelCatalogStatus, error, gateway.snapshot)),
-    },
-  );
+    onResult: (result) => settleModelCatalog(Boolean(modelCatalogRefreshError(result))),
+    onError: () => settleModelCatalog(true),
+  });
   let routeDataInitialized = false;
   let applyingRouteSelection = false;
   let routeSelectionSuperseded = false;
@@ -254,6 +243,7 @@ export function createAgentsPageState(
     if (state.cron.client !== state.client || state.cron.connected !== state.connected) {
       // In-flight cron loaders mutate their captured state; same-client
       // snapshots must retain it or loading never clears in the visible state.
+      cron.retire();
       state.cron = { ...state.cron, client: state.client, connected: state.connected };
     }
   }
@@ -320,10 +310,11 @@ export function createAgentsPageState(
     state.agentFilesLoading = false;
     state.agentFileSaving = false;
     state.identitySaving = false;
-    state.agentSkillsLoading = false;
+    skills.reset();
     state.toolsCatalogLoading = false;
     state.toolsCatalogLoadingAgentId = null;
     resetToolsEffectiveState(state);
+    cron.retire();
     state.cron = {
       ...state.cron,
       cronLoading: false,
@@ -443,7 +434,7 @@ export function createAgentsPageState(
       return;
     }
     if (state.agentsPanel === "skills" && state.agentSkillsAgentId !== agentId) {
-      void loadAgentSkills(state, agentId);
+      skills.refresh(agentId);
       return;
     }
     if (state.agentsPanel === "tools") {
@@ -461,6 +452,7 @@ export function createAgentsPageState(
     }
     if (state.agentsPanel === "cron") {
       if (state.cron.cronAgentId !== agentId) {
+        cron.retire();
         state.cron = createInitialCronState({
           client: state.client,
           connected: state.connected,
@@ -468,7 +460,7 @@ export function createAgentsPageState(
         state.cron.cronAgentId = agentId;
       }
       if (!state.cron.cronLoading && !state.cron.cronStatus) {
-        void refreshCron();
+        cron.onRefresh();
       }
     }
   }
@@ -505,11 +497,12 @@ export function createAgentsPageState(
   function resetModelCatalog() {
     modelReader.clear();
     catalogRecoveryPending = false;
-    state.chatModelCatalogStatus = createPanelRefreshStatus();
+    catalogNeedsRecovery = false;
+    state.chatModelCatalogRead = null;
   }
 
-  function settleModelCatalog(status: ReturnType<typeof createPanelRefreshStatus>) {
-    state.chatModelCatalogStatus = status;
+  function settleModelCatalog(needsRecovery: boolean) {
+    catalogNeedsRecovery = needsRecovery;
     if (catalogRecoveryPending) {
       catalogRecoveryPending = false;
       recoverModelCatalog();
@@ -517,8 +510,7 @@ export function createAgentsPageState(
   }
 
   function recoverModelCatalog() {
-    const status = state.chatModelCatalogStatus;
-    if (isGatewayAvailable(context.gateway.snapshot) && (status.awaitingGateway || status.error)) {
+    if (isGatewayAvailable(context.gateway.snapshot) && catalogNeedsRecovery) {
       ensureModelCatalog({ refresh: true });
     }
   }
@@ -529,9 +521,13 @@ export function createAgentsPageState(
       return;
     }
     if (modelReader.bind(context.gateway, { agentId })) {
-      state.chatModelCatalogStatus = createPanelRefreshStatus();
+      catalogNeedsRecovery = false;
+      state.chatModelCatalogRead = null;
     }
-    if (!modelReader.pending && (options.refresh || !state.chatModelCatalogStatus.hasLoaded)) {
+    if (
+      !modelReader.pending &&
+      (options.refresh || !state.chatModelCatalogRead || modelReader.failed)
+    ) {
       void modelReader.read();
     }
   }
@@ -563,38 +559,6 @@ export function createAgentsPageState(
     }
     if (isCurrentRequest(client, generation, agentId, { agents })) {
       await selectDefaultAgentFile(agentId, force);
-    }
-  }
-
-  async function refreshCron() {
-    const cronState = state.cron;
-    if (
-      !cronState.connected ||
-      !cronState.client ||
-      cronState.cronLoading ||
-      !canCall("cron.list", "operator.read")
-    ) {
-      return;
-    }
-    await Promise.all([
-      runCronTask(loadCronStatus),
-      runCronTask(loadCronScopeStats),
-      runCronTask((current) => loadCronJobsPage(current, { tableFilters: true })),
-    ]);
-  }
-
-  async function runCronTask<T>(task: (cronState: CronState) => Promise<T>): Promise<T> {
-    const cronState = state.cron;
-    try {
-      const result = task(cronState);
-      if (state.cron === cronState) {
-        publish();
-      }
-      return await result;
-    } finally {
-      if (state.cron === cronState) {
-        publish();
-      }
     }
   }
 
@@ -681,8 +645,8 @@ export function createAgentsPageState(
     resetModelCatalog();
     resetAgentFiles(state);
     state.agentSkillsReport = null;
-    state.agentSkillsLoading = false;
-    state.agentSkillsError = null;
+    skills.reset();
+    state.agentSkillsUpdateError = null;
     state.agentSkillsAgentId = null;
     resetIdentityDraft(state);
     state.toolsCatalogResult = null;
@@ -690,6 +654,7 @@ export function createAgentsPageState(
     state.toolsCatalogLoading = false;
     state.toolsCatalogLoadingAgentId = null;
     resetToolsEffectiveState(state);
+    cron.retire();
     state.cron = createInitialCronState({
       client: state.client,
       connected: state.connected,
@@ -786,23 +751,13 @@ export function createAgentsPageState(
         return;
       }
       if (!updated) {
-        state.agentSkillsError =
+        state.agentSkillsUpdateError =
           runtimeConfig.state.lastError ?? t("agents.skillsPanel.updateError");
         return;
       }
-      state.agentSkillsError = null;
-      void loadAgentSkills(state, agentId);
+      state.agentSkillsUpdateError = null;
+      skills.refresh(agentId);
     });
-  }
-
-  function runCronJobNow(jobId: string) {
-    if (
-      !canCall("cron.run", "operator.admin") ||
-      !state.cron.cronJobs.some((entry) => entry.id === jobId)
-    ) {
-      return;
-    }
-    void runCronTask((cronState) => runCronJob(cronState, jobId, "force"));
   }
 
   function viewProps() {
@@ -838,12 +793,10 @@ export function createAgentsPageState(
         onRefresh: () => void context.channels.refresh(false),
       },
       cron: {
-        onRefresh: () => void refreshCron(),
-        onLoadMore: () =>
-          void runCronTask((cronState) =>
-            loadCronJobsPage(cronState, { append: true, tableFilters: true }),
-          ),
-        onRunNow: (jobId: string) => runCronJobNow(jobId),
+        read: cron.read,
+        onRefresh: cron.onRefresh,
+        onLoadMore: cron.onLoadMore,
+        onRunNow: cron.onRunNow,
       },
       agentFiles: {
         agentFilesError: state.agentFilesError ?? agentFilesListError,
@@ -892,6 +845,8 @@ export function createAgentsPageState(
         decisionModels: modelCatalog.decisionModels ?? [],
         modelSelectionPolicy: modelCatalog.modelSelectionPolicy,
         modelCatalogRetired: modelCatalog.retired,
+        modelCatalogHasSnapshot: modelCatalog.hasSnapshot,
+        modelCatalogGateway: context.gateway.snapshot,
         onIdentityFieldChange: (field: "name" | "emoji", value: string) => {
           if (canEditIdentity()) {
             setIdentityDraftField(state, field, value);
@@ -944,7 +899,7 @@ export function createAgentsPageState(
         },
         onRefresh: () => {
           if (selectedAgentId) {
-            void loadAgentSkills(state, selectedAgentId);
+            skills.refresh(selectedAgentId);
           }
         },
         ...configActions.skills,
@@ -1033,6 +988,7 @@ export function createAgentsPageState(
       selectionDrafts.retainCurrentIdentity();
       clearIdentityAutosave();
       active = false;
+      cron.retire();
       observation.dispose();
       for (const stop of stops) {
         stop();

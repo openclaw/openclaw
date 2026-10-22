@@ -7,7 +7,7 @@ import { scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
-import { resolveChatPaneParentSession } from "./components/chat-pane-header.ts";
+import { resolveChatPaneParentSession } from "./components/chat-pane-header-identity.tsx";
 
 export function chatSessionPresentationTitle(
   state: Pick<ChatPageHost, "sessions" | "sessionKey" | "hello"> | undefined,

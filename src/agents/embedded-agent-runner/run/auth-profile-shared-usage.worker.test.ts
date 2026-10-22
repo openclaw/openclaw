@@ -42,7 +42,7 @@ import type {
 } from "../../auth-profiles/types.js";
 import { isProfileInCooldown } from "../../auth-profiles/usage-state.js";
 import { markEmbeddedRunAuthProfileSuccess } from "./auth-profile-success.js";
-import { createEmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
+import { createRetryController } from "./failover-retry-controller.test-support.js";
 
 const provider = "anthropic";
 const sharedId = "anthropic:used";
@@ -137,22 +137,10 @@ async function fixture(
   const scope = owner === "personal" ? "personal" : "shared";
   const runId = `${scope}-usage-run`;
   const sessionId = `${scope}-usage-session`;
-  const controller = createEmbeddedRunFailoverRetryController({
-    runInput: {
-      runParams: {
-        runId,
-        sessionId,
-        sessionFile: state.path("synthetic-session.jsonl"),
-        workspaceDir: state.workspaceDir,
-        prompt: `synthetic ${scope}-account failure`,
-        timeoutMs: 60_000,
-        config,
-      },
-      globalLane: `${scope}-usage-test`,
-      agentDir,
-      fallbackConfigured: false,
-    },
-    preparedRuntime: {
+  const controller = createRetryController({
+    agentDir,
+    runParams: { runId, sessionId, workspaceDir: state.workspaceDir, config },
+    runtime: {
       provider: accountProvider,
       modelId: "synthetic-model",
       profileFailureStore: store,
@@ -161,10 +149,7 @@ async function fixture(
         pluginHarnessOwnsTransport: false,
         agentHarness: { id: "embedded" },
       }),
-      getApiKeyInfo: () => null,
-      advanceAttemptAuthProfile: async () => false,
     },
-    getSessionId: () => sessionId,
   });
   return {
     controller,

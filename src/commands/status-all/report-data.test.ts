@@ -38,6 +38,59 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 describe("statusAllCommand report data", () => {
   setupStatusAllReportTest();
 
+  it("reconciles runtime secret owners and local diagnostics in the complete report", async () => {
+    const rows = await vi.importActual<typeof import("../status-overview-rows.ts")>(
+      "../status-overview-rows.ts",
+    );
+    mocks.buildStatusAllOverviewRows.mockImplementationOnce(rows.buildStatusAllOverviewRows);
+    const scan = createStatusScanResultFixture();
+    const output = (
+      await runStatusAllReport({
+        overview: {
+          ...scan,
+          gatewaySnapshot: baseStatusGatewaySnapshot,
+          runtimeDegradation: {
+            degradedSecretOwners: [
+              {
+                ownerKind: "capability",
+                ownerId: "tts",
+                state: "unavailable",
+                degradationState: "cold",
+                paths: ["tts.providers.elevenlabs.apiKey"],
+                reason: "secret reference was not found",
+              },
+              {
+                ownerKind: "provider",
+                ownerId: "openai",
+                state: "unavailable",
+                degradationState: "stale",
+                paths: ["models.providers.openai.apiKey"],
+                reason: "secret provider failed",
+              },
+            ],
+            degradedPlugins: [],
+          },
+          secretDiagnostics: [
+            "status --all: tts.providers.elevenlabs.apiKey is unavailable in this command path; continuing with degraded read-only config.",
+            "channels.discord.accounts.ops.token: token=synthetic-secret",
+          ],
+        },
+      })
+    ).join("\n");
+    expect(output).toContain("Secrets: 3 diagnostics");
+    expect(output).toContain("! Secret diagnostics (3)");
+    expect(output).toContain(
+      "cold capability:tts (tts.providers.elevenlabs.apiKey): secret reference was not found",
+    );
+    expect(output).toContain(
+      "stale provider:openai (models.providers.openai.apiKey): secret provider failed",
+    );
+    expect(output).toContain("channels.discord.accounts.ops.token: ***");
+    expect(output).toContain("Retry: openclaw secrets reload");
+    expect(output).not.toContain("synthetic-secret");
+    expect(output).not.toContain("✓ Secret diagnostics (0)");
+  });
+
   const success = "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).";
   const runLine = `Update run: ${success}`,
     restartLine = `Update restart: ${success}`;

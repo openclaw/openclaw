@@ -54,7 +54,7 @@ type SqliteNativeRuntimeAdmission = {
   format: 1;
   runtime: ReturnType<typeof sqliteNativeRuntimeIdentity>;
   version: string;
-  storageIdentity?: string;
+  storageIdentity?: { sourceId: string; compileOptions: string };
   extensionLoadingSupported: boolean;
   iteratorBehavior: SqliteIteratorBehavior;
 };
@@ -81,7 +81,15 @@ function parseSqliteNativeRuntimeAdmission(
     format: 1,
     runtime,
     version: value.version,
-    storageIdentity: typeof value.storageIdentity === "string" ? value.storageIdentity : undefined,
+    storageIdentity:
+      isRecord(value.storageIdentity) &&
+      typeof value.storageIdentity.sourceId === "string" &&
+      typeof value.storageIdentity.compileOptions === "string"
+        ? {
+            sourceId: value.storageIdentity.sourceId,
+            compileOptions: value.storageIdentity.compileOptions,
+          }
+        : undefined,
     extensionLoadingSupported: value.extensionLoadingSupported,
     iteratorBehavior: {
       nextAfterDoneIsTerminal: value.iteratorBehavior.nextAfterDoneIsTerminal,
@@ -134,7 +142,7 @@ export function assertSafeSqliteRuntime(
   // reports, so query the loaded library before callers open real state databases.
   const database = new sqlite.DatabaseSync(":memory:");
   let version: string;
-  let storageIdentity: string | undefined;
+  let storageIdentity: SqliteNativeRuntimeAdmission["storageIdentity"];
   let extensions: boolean;
   let iteratorBehavior: SqliteIteratorBehavior;
   try {
@@ -153,13 +161,7 @@ export function assertSafeSqliteRuntime(
       row.sourceId &&
       typeof row.compileOptions === "string"
     ) {
-      storageIdentity = JSON.stringify([
-        version,
-        row.sourceId,
-        row.compileOptions,
-        process.versions.node,
-        process.versions.bun ?? null,
-      ]);
+      storageIdentity = { sourceId: row.sourceId, compileOptions: row.compileOptions };
     }
     extensions = row?.omitted === 0;
     iteratorBehavior = probeSqliteIteratorBehavior(statement);

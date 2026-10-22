@@ -2,10 +2,7 @@
 
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestCheckDetails,
-} from "../../../../../src/gateway/control-ui-contract.js";
+import type { ControlUiSessionPullRequestCheckDetails } from "../../../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
@@ -13,10 +10,12 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatCiDetailsElement } from "./chat-ci-details.ts";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
+import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import {
   paintChatPullRequests,
   clearChatPullRequests,
   publication,
+  pullRequest,
   sessionBranch,
 } from "./chat-pull-requests.test-support.ts";
 import {
@@ -25,26 +24,6 @@ import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
 } from "./chat-pull-requests.ts";
-import type { ChatPullRequestsProps } from "./chat-pull-requests.tsx";
-
-function pullRequest(
-  overrides: Partial<ControlUiSessionPullRequest> = {},
-): ControlUiSessionPullRequest {
-  return {
-    number: 103469,
-    owner: "openclaw",
-    repo: "openclaw",
-    branch: "claude/browser-tabs-tighter-header",
-    title: "fix(macos): tighten the link-browser tab header",
-    url: "https://github.com/openclaw/openclaw/pull/103469",
-    state: "open",
-    additions: 4,
-    deletions: 3,
-    checks: { state: "passing", passed: 5, failed: 0, skipped: 1, running: 0 },
-    checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
-    ...overrides,
-  };
-}
 
 describe("ChatPullRequests", () => {
   let container: HTMLDivElement;

@@ -36,6 +36,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 // mock-isolation: Drive exact GC windows without starting a native observer.
 vi.mock("../infra/gc-observer.js", () => ({
   getOldGenerationAfterGcBytes: () => undefined,
+  flushGcSamples: () => {},
   observeGcSamples: (observe: (samples: GcSample[]) => void) => {
     fixture.observe = observe;
     return () => {};
@@ -75,7 +76,7 @@ it("warns through the memory port with parked-cell attribution, bounded cadence,
   trackNativeWorkerForCpu(worker, new URL("./code-mode-node.worker.ts", import.meta.url));
   const parent = new MessageChannel();
   const attached = once(parent.port1, "message");
-  const close = serveWorkerMemorySamples(parent.port2);
+  const { close } = serveWorkerMemorySamples(parent.port2);
   const [message] = await attached;
   const initial = once(message.port, "message");
   receiveWorkerMemoryPort(worker, message);

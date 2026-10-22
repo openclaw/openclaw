@@ -25,6 +25,7 @@ import {
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
   MAX_SESSION_PARTICIPANTS,
 } from "../config/sessions/session-entry-provenance.js";
@@ -40,6 +41,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionCommunicationPolicy } from "../sessions/communication-policy.js";
 import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { deriveSessionUnread } from "../shared/session-unread.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { resolveActiveFallbackState } from "../status/fallback-notice-state.js";
@@ -383,7 +385,7 @@ function projectSessionRowProfiles(
   );
   return {
     createdActor: projectSessionActor(
-      entry?.createdActor,
+      resolveSessionCreatorActor(entry?.createdActor),
       userProfileIdentityById,
       cfg,
       Boolean(sessionCreatorProfileId(entry?.createdActor)),
@@ -402,7 +404,7 @@ function projectSessionRowProfiles(
 }
 
 export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
-  Object.assign(materialized.row, projectSessionRowProfiles(materialized.source));
+  return replaceSessionRowFacts(materialized, projectSessionRowProfiles(materialized.source));
 }
 
 export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
@@ -586,9 +588,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       Reflect.deleteProperty(row, field);
     }
   }
-  return {
-    row,
-    source: {
+  return Object.freeze({
+    row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(row),
+    source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
       cfg,
       entry,
@@ -608,9 +610,25 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
       subagentRunInputs: input.subagentRunInputs,
       lastMessagePreview: input.lastMessagePreview,
       lastAssistantMessage: input.lastAssistantMessage,
-      childLinks: projectSessionRowChildLinks(input.childLinks),
-    },
-  };
+      childLinks: freezeTrustedJsonSnapshot<
+        Readonly<ReturnType<typeof projectSessionRowChildLinks>>
+      >(projectSessionRowChildLinks(input.childLinks)),
+    }),
+  });
+}
+
+/** Writers replace published facts; config and live indexes keep their own owners. */
+export function replaceSessionRowFacts(
+  materialized: ReturnType<typeof materializeSessionRow>,
+  row?: Partial<GatewaySessionRow>,
+  source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
+): ReturnType<typeof materializeSessionRow> {
+  const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
+  freezeTrustedJsonSnapshot(nextSource.childLinks);
+  return Object.freeze({
+    row: row ? freezeTrustedJsonSnapshot({ ...materialized.row, ...row }) : materialized.row,
+    source: Object.freeze(nextSource),
+  });
 }
 
 export function presentSessionRow(

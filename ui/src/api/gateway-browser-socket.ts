@@ -79,7 +79,6 @@ export function createBrowserGatewaySocket(
   const listeners = new AbortController();
   const listenerOptions = { signal: listeners.signal };
   let opening = true;
-  let openingTimeoutReason: string | undefined;
   let openingTimer: ReturnType<typeof setTimeout> | undefined;
   const finishOpening = () => {
     opening = false;
@@ -87,6 +86,15 @@ export function createBrowserGatewaySocket(
       clearTimeout(openingTimer);
       openingTimer = undefined;
     }
+  };
+  const finishClose = (code: number, reason: string) => {
+    if (listeners.signal.aborted) {
+      return;
+    }
+    finishOpening();
+    // The protocol owner can reconnect synchronously from this terminal callback.
+    listeners.abort();
+    handlers.close(code, reason);
   };
 
   socket.addEventListener(
@@ -104,22 +112,14 @@ export function createBrowserGatewaySocket(
   );
   socket.addEventListener(
     "close",
-    (event) => {
-      finishOpening();
-      // The protocol owner can reconnect synchronously from this terminal callback.
-      listeners.abort();
-      // Browsers erase locally initiated close reasons before the handshake finishes.
-      handlers.close(event.code, event.reason || openingTimeoutReason || "");
-    },
+    (event) => finishClose(event.code, event.reason),
     listenerOptions,
   );
   socket.addEventListener(
     "error",
     () => {
       finishOpening();
-      if (!openingTimeoutReason) {
-        handlers.error(new Error("websocket error"));
-      }
+      handlers.error(new Error("websocket error"));
     },
     listenerOptions,
   );
@@ -132,16 +132,17 @@ export function createBrowserGatewaySocket(
       return;
     }
     opening = false;
-    openingTimeoutReason = `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`;
+    const reason = `gateway websocket opening timed out after ${DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS}ms`;
     try {
-      handlers.error(new Error(openingTimeoutReason));
+      handlers.error(new Error(reason));
     } finally {
       socket.close();
+      finishClose(1006, reason);
     }
   }, DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
 
   return {
-    isOpen: () => socket.readyState === WebSocket.OPEN,
+    isOpen: () => !listeners.signal.aborted && socket.readyState === WebSocket.OPEN,
     send: (data) => {
       const limit = maxPayloadBytes?.();
       if (limit !== undefined && new TextEncoder().encode(data).byteLength > limit) {
@@ -150,9 +151,15 @@ export function createBrowserGatewaySocket(
       socket.send(data);
     },
     close: (code, reason) => {
+      if (listeners.signal.aborted) {
+        return;
+      }
       finishOpening();
       // Browser-initiated closes reject the shared protocol's 1008 policy code.
       socket.close(code === 1008 ? 4008 : code, reason);
+      // A dead peer may never finish the native closing handshake. Retire locally,
+      // preserving the owner's code rather than the browser-only wire translation.
+      finishClose(code ?? 1000, reason ?? "");
     },
   };
 }

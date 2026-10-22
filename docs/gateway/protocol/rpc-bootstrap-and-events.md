@@ -206,7 +206,13 @@ or retractions; this final flush is exempt from the two-second interval.
 Newer tool activity or a change of run discards pending older text, so a delayed
 snapshot cannot replace a newer tool line or switch the sidebar back to an older run.
 Lifecycle, status, tool, final, abort, and error events retain their existing
-delivery. Raw thinking streams and in-progress preamble or answer-candidate text
+delivery. Narration-only tool events retain identity, phase, error and visibility
+metadata, but omit `args`, input `diff`, `partialResult`, and `result` bodies.
+Tool progress still arrives through activity items. Opening the session admits
+full streams before fetching history; persisted tool cards retrieve complete
+output on demand through `chat.message.get`. Full subscribers and clients that
+omit narration mode retain the existing tool payloads.
+Raw thinking streams and in-progress preamble or answer-candidate text
 are omitted; item completion and answer selection still arrive. Approval events
 still require `includeApprovals: true` and the normal
 approval authority. Queued narration is discarded on unsubscribe, mode changes,

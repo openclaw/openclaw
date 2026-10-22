@@ -67,7 +67,6 @@ type SharedMatrixClientParams = {
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   auth?: MatrixAuth;
-  startClient?: boolean;
   accountId?: string | null;
   abortSignal?: AbortSignal;
   role?: MatrixClientLeaseRole;
@@ -176,9 +175,7 @@ async function ensureSharedClientStarted(
     state.started = true;
   })();
   const guardedStart = startPromise.finally(() => {
-    if (state.startPromise === guardedStart) {
-      state.startPromise = null;
-    }
+    state.startPromise = null;
   });
   state.startPromise = guardedStart;
   await awaitMatrixStartupWithAbort(guardedStart, abortSignal);
@@ -525,16 +522,7 @@ export async function acquireSharedMatrixClient(
     }
     throwIfMatrixStartupAborted(abortSignal);
   }
-  const lease = createSharedMatrixClientLease(state, params.role ?? "transient");
-  if (params.startClient !== false) {
-    try {
-      await lease.start(abortSignal);
-    } catch (error) {
-      await lease.release({ mode: "stop" }).catch(() => undefined);
-      throw error;
-    }
-  }
-  return lease;
+  return createSharedMatrixClientLease(state, params.role ?? "transient");
 }
 
 async function forceRetireState(state: SharedMatrixClientState): Promise<void> {

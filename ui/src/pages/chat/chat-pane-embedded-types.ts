@@ -21,19 +21,37 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view-frame.ts";
 import type { ChatModelControlsProps } from "./components/chat-model-controls.tsx";
 import type { SessionWorkspaceState } from "./components/chat-session-workspace-types.ts";
-import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
-import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
+import type {
+  SessionDiffProps,
+  SidebarSelection,
+} from "./components/chat-sidebar-content-types.ts";
+import type {
+  ChatDetailPanelProps,
+  SessionWorkspaceProps,
+} from "./components/chat-sidebar-view-types.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
 export type ChatDetailSlotProps = {
+  active?: boolean;
+  presentation?: "desktop" | "mobile";
+  fileBack?: ChatDetailPanelProps["fileBack"];
+  fileWorkspace?: ChatDetailPanelProps["fileWorkspace"];
+  onOpenMobilePage?: SessionDiffProps["onOpenMobilePage"];
+  filePresentation?: ChatDetailPanelProps["filePresentation"];
+  onFileInteraction?: ChatDetailPanelProps["onFileInteraction"];
+  onFileDraftChange?: ChatDetailPanelProps["onFileDraftChange"];
   chat: ChatProps;
   content: SidebarSelection;
   host: ChatPageHost;
+  onWorkspaceIntent?: () => void;
 };
 
 export type SidebarPanelDefinitionParams = {
+  onScrollPortRef?: ChatProps["onScrollPortRef"];
+  presentation?: "desktop" | "mobile";
   panePresentation?: PresentationValue;
+  detailPresented?: PresentationValue;
   state: ChatPageHost;
   paneId: string;
   panePresentationId: string;
@@ -60,6 +78,8 @@ export type SidebarPanelDefinitionParams = {
   preferredBrowserTab?: BrowserTabSelection;
   sessionBrowserTabs?: BrowserTabTarget[];
   desktopPresented: PresentationValue;
+  desktopExpanded?: boolean;
+  onToggleDesktopExpanded?: () => void;
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   desktopSource: string | null;
@@ -71,6 +91,7 @@ export type SidebarPanelDefinitionParams = {
   ) => void;
   dashboard: Parameters<typeof ChatBoardPanel>[0] | null;
   workspace: SessionWorkspaceProps | undefined;
+  workspacePresented?: PresentationValue;
   detail: Omit<ChatDetailSlotProps, "content">;
   digest: SessionObserverDigest | null;
   activeRunId: string | null;
@@ -83,8 +104,7 @@ export type SidebarPanelDefinitionParams = {
   onCompanionDraftChange: (draft: string) => void;
   onCompanionAttachmentsChange?: (attachments: ChatAttachment[]) => boolean | void;
   connected: boolean;
-  onClearCompanion: () => void;
-  onCreateClaw?: () => void;
+  onClearCompanion: () => Promise<boolean>;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;

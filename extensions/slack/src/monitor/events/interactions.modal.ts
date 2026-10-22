@@ -9,7 +9,7 @@ import type { SlackMessageEvent } from "../../types.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
-import { resolveSlackMonitorEventScope, type SlackEventScope } from "../event-scope.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import { enqueueSlackInteractionEvent } from "./interaction-event.js";
 import { summarizeSlackViewState } from "./modal-input-summary.js";
 
@@ -37,21 +37,6 @@ type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown } & 
 
 const OPENCLAW_MODAL_CALLBACK_PREFIX = "openclaw:";
 
-function resolveSlackModalPluginInteractiveData(params: {
-  callbackId: string;
-  metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
-}): string | undefined {
-  const metadataData = params.metadata.pluginInteractiveData;
-  if (metadataData) {
-    return metadataData;
-  }
-  if (!params.callbackId.startsWith(OPENCLAW_MODAL_CALLBACK_PREFIX)) {
-    return undefined;
-  }
-  const callbackData = params.callbackId.slice(OPENCLAW_MODAL_CALLBACK_PREFIX.length).trim();
-  return callbackData || undefined;
-}
-
 function resolveSlackPluginSystemEventPayload(
   result: SlackInteractiveHandlerResult,
 ): Record<string, unknown> | undefined {
@@ -65,238 +50,6 @@ function resolveSlackPluginSystemEventPayload(
     ...(systemEvent.data ? { data: systemEvent.data } : {}),
   };
   return Object.keys(output).length > 0 ? output : undefined;
-}
-
-async function resolveModalSessionRouting(params: {
-  ctx: SlackMonitorContext;
-  metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
-  userId?: string;
-  eventScope?: SlackEventScope;
-}): Promise<{ agentId: string; sessionKey: string; channelId?: string; channelType?: string }> {
-  const metadata = params.metadata;
-  const metadataAgentId = metadata.sessionKey
-    ? resolveAgentIdFromSessionKey(metadata.sessionKey)
-    : undefined;
-  if (metadata.sessionKey && metadataAgentId && !params.eventScope) {
-    return {
-      agentId: metadataAgentId,
-      sessionKey: metadata.sessionKey,
-      channelId: metadata.channelId,
-      channelType: metadata.channelType,
-    };
-  }
-  const routing = {
-    ...(await params.ctx.resolveSlackSystemEventRoute({
-      ...(metadata.channelId
-        ? { channelId: metadata.channelId, channelType: metadata.channelType }
-        : { channelType: "im" }),
-      senderId: params.userId,
-      eventScope: params.eventScope,
-    })),
-    ...(metadata.channelId
-      ? { channelId: metadata.channelId, channelType: metadata.channelType }
-      : { channelType: params.eventScope ? "im" : undefined }),
-  };
-  if (
-    metadata.sessionKey &&
-    (metadata.sessionKey === routing.sessionKey ||
-      metadata.sessionKey.startsWith(`${routing.sessionKey}:thread:`))
-  ) {
-    // Preserve an exact thread only after its base is bound to this Enterprise workspace.
-    return { ...routing, sessionKey: metadata.sessionKey };
-  }
-  return routing;
-}
-
-async function emitSlackModalLifecycleEvent(params: {
-  ctx: SlackMonitorContext;
-  body: SlackModalBody;
-  metadata: ReturnType<typeof parseSlackModalPrivateMetadata>;
-  eventScope?: SlackEventScope;
-  teamId?: string;
-  interactionType: SlackModalInteractionKind;
-}): Promise<void> {
-  const { metadata } = params;
-  const callbackId = params.body.view?.callback_id ?? "unknown";
-  const userId = params.body.user?.id ?? "unknown";
-  const viewId = params.body.view?.id;
-  const inputs = summarizeSlackViewState(params.body.view?.state?.values);
-  const sessionRouting = await resolveModalSessionRouting({
-    ctx: params.ctx,
-    metadata,
-    userId,
-    eventScope: params.eventScope,
-  });
-  const stateValues = params.body.view?.state?.values;
-  const payload = {
-    actionId: `view:${callbackId}`,
-    callbackId,
-    viewId,
-    userId,
-    teamId: params.teamId,
-    rootViewId: params.body.view?.root_view_id,
-    previousViewId: params.body.view?.previous_view_id,
-    externalId: params.body.view?.external_id,
-    viewHash: params.body.view?.hash,
-    isStackedView: Boolean(params.body.view?.previous_view_id),
-    privateMetadata: params.body.view?.private_metadata,
-    routedChannelId: sessionRouting.channelId,
-    routedChannelType: sessionRouting.channelType,
-    inputs,
-  };
-  const pluginInteractiveData = resolveSlackModalPluginInteractiveData({
-    callbackId,
-    metadata,
-  });
-  const isViewClosed = params.interactionType === "view_closed";
-  const isCleared = params.body.is_cleared === true;
-  const eventPayload = {
-    interactionType: params.interactionType,
-    ...payload,
-    ...(isViewClosed ? { isCleared } : {}),
-  };
-
-  if (isViewClosed) {
-    params.ctx.runtime.log?.(
-      `slack:interaction view_closed callback=${callbackId} user=${userId} cleared=${isCleared}`,
-    );
-  } else {
-    params.ctx.runtime.log?.(
-      `slack:interaction view_submission callback=${callbackId} user=${userId} inputs=${payload.inputs.length}`,
-    );
-  }
-
-  const dispatchPlugin = async (
-    isAuthorizedSender: boolean,
-    channelType?: NonNullable<SlackMessageEvent["channel_type"]>,
-  ) => {
-    try {
-      if (!pluginInteractiveData) {
-        return undefined;
-      }
-
-      const interactionId = [
-        params.interactionType,
-        payload.callbackId,
-        payload.viewId,
-        payload.userId,
-      ]
-        .filter(Boolean)
-        .join(":");
-      const result = await dispatchSlackPluginInteractiveHandler({
-        data: pluginInteractiveData,
-        interactionId,
-        teamId: params.eventScope?.teamId,
-        channelType,
-        ctx: {
-          accountId: params.ctx.accountId,
-          interactionId,
-          conversationId: sessionRouting.channelId ?? "",
-          parentConversationId: undefined,
-          threadId: undefined,
-          senderId: payload.userId,
-          senderUsername: undefined,
-          auth: { isAuthorizedSender },
-          interaction: {
-            kind: params.interactionType,
-            callbackId: payload.callbackId,
-            viewId: payload.viewId,
-            rootViewId: payload.rootViewId,
-            previousViewId: payload.previousViewId,
-            externalId: payload.externalId,
-            isStackedView: payload.isStackedView,
-            isCleared: isViewClosed ? params.body.is_cleared === true : undefined,
-            inputs: payload.inputs,
-            stateValues,
-            triggerId: params.body.trigger_id,
-          },
-        },
-        respond: {
-          acknowledge: async () => {},
-          reply: async () => {},
-          followUp: async () => {},
-          editMessage: async () => {},
-        },
-      });
-      return {
-        ...result,
-        namespace: result.matched ? pluginInteractiveData.split(":", 1)[0] : undefined,
-        systemEvent: result.matched
-          ? resolveSlackPluginSystemEventPayload(result.result)
-          : undefined,
-      };
-    } catch (error) {
-      params.ctx.runtime.log?.(
-        `slack:interaction modal plugin dispatch failed callback=${callbackId} error=${error instanceof Error ? error.message : String(error)}`,
-      );
-      return undefined;
-    }
-  };
-
-  if (!metadata.userId) {
-    if (pluginInteractiveData) {
-      await dispatchPlugin(false);
-    }
-    params.ctx.runtime.log?.(
-      `slack:interaction drop modal callback=${callbackId} user=${userId} reason=missing-expected-user`,
-    );
-    return;
-  }
-
-  const auth = await authorizeSlackSystemEventSender({
-    ctx: params.ctx,
-    eventScope: params.eventScope,
-    senderId: userId,
-    channelId: sessionRouting.channelId,
-    channelType: sessionRouting.channelType,
-    expectedSenderId: metadata.userId,
-    interactiveEvent: true,
-  });
-  if (!auth.allowed) {
-    params.ctx.runtime.log?.(
-      `slack:interaction drop modal callback=${callbackId} user=${userId} reason=${auth.reason ?? "unauthorized"}`,
-    );
-    return;
-  }
-
-  const pluginDispatch = await dispatchPlugin(auth.allowed, auth.channelType);
-
-  const pluginEventFields =
-    pluginDispatch?.matched === true
-      ? {
-          pluginHandled: pluginDispatch.handled,
-          pluginNamespace: pluginDispatch.namespace,
-          pluginDuplicate: pluginDispatch.duplicate || undefined,
-          pluginSystemEvent: pluginDispatch.systemEvent,
-        }
-      : {};
-
-  const targetKind = auth.channelType === "im" ? "user" : "channel";
-  const targetId = targetKind === "user" ? userId : sessionRouting.channelId;
-  const deferredTarget = targetId
-    ? resolveSlackDeferredActionTarget({
-        eventScope: params.eventScope,
-        kind: targetKind,
-        id: targetId,
-      })
-    : undefined;
-
-  enqueueSlackInteractionEvent({ ...eventPayload, ...pluginEventFields }, sessionRouting, {
-    contextKey: [
-      isViewClosed ? "slack:interaction:view-closed" : "slack:interaction:view",
-      params.teamId,
-      callbackId,
-      viewId,
-      userId,
-    ]
-      .filter(Boolean)
-      .join(":"),
-    deliveryContext: {
-      channel: "slack",
-      ...(deferredTarget ? { to: deferredTarget.target } : {}),
-      accountId: params.ctx.accountId,
-    },
-  });
 }
 
 export function registerModalLifecycleHandler(params: {
@@ -335,13 +88,224 @@ export function registerModalLifecycleHandler(params: {
         return;
       }
       params.trackEvent?.();
-      await emitSlackModalLifecycleEvent({
-        ctx: await params.ctx.readRuntimeContext(),
-        body: typedBody,
-        metadata,
+      const runtimeCtx = await params.ctx.readRuntimeContext();
+      const teamId = args.context.teamId;
+      const interactionType = params.interactionType;
+      const callbackId = typedBody.view?.callback_id ?? "unknown";
+      const userId = typedBody.user?.id ?? "unknown";
+      const viewId = typedBody.view?.id;
+      const inputs = summarizeSlackViewState(typedBody.view?.state?.values);
+      const resolveModalSessionRouting = async (): Promise<{
+        agentId: string;
+        sessionKey: string;
+        channelId?: string;
+        channelType?: string;
+      }> => {
+        const metadataAgentId = metadata.sessionKey
+          ? resolveAgentIdFromSessionKey(metadata.sessionKey)
+          : undefined;
+        if (metadata.sessionKey && metadataAgentId && !eventScope) {
+          return {
+            agentId: metadataAgentId,
+            sessionKey: metadata.sessionKey,
+            channelId: metadata.channelId,
+            channelType: metadata.channelType,
+          };
+        }
+        const routing = {
+          ...(await runtimeCtx.resolveSlackSystemEventRoute({
+            ...(metadata.channelId
+              ? { channelId: metadata.channelId, channelType: metadata.channelType }
+              : { channelType: "im" }),
+            senderId: userId,
+            eventScope,
+          })),
+          ...(metadata.channelId
+            ? { channelId: metadata.channelId, channelType: metadata.channelType }
+            : { channelType: eventScope ? "im" : undefined }),
+        };
+        if (
+          metadata.sessionKey &&
+          (metadata.sessionKey === routing.sessionKey ||
+            metadata.sessionKey.startsWith(`${routing.sessionKey}:thread:`))
+        ) {
+          // Preserve an exact thread only after its base is bound to this Enterprise workspace.
+          return { ...routing, sessionKey: metadata.sessionKey };
+        }
+        return routing;
+      };
+
+      const sessionRouting = await resolveModalSessionRouting();
+      const stateValues = typedBody.view?.state?.values;
+      const payload = {
+        actionId: `view:${callbackId}`,
+        callbackId,
+        viewId,
+        userId,
+        teamId,
+        rootViewId: typedBody.view?.root_view_id,
+        previousViewId: typedBody.view?.previous_view_id,
+        externalId: typedBody.view?.external_id,
+        viewHash: typedBody.view?.hash,
+        isStackedView: Boolean(typedBody.view?.previous_view_id),
+        privateMetadata: typedBody.view?.private_metadata,
+        routedChannelId: sessionRouting.channelId,
+        routedChannelType: sessionRouting.channelType,
+        inputs,
+      };
+      const pluginInteractiveData =
+        metadata.pluginInteractiveData ||
+        (callbackId.startsWith(OPENCLAW_MODAL_CALLBACK_PREFIX)
+          ? callbackId.slice(OPENCLAW_MODAL_CALLBACK_PREFIX.length).trim() || undefined
+          : undefined);
+      const isViewClosed = interactionType === "view_closed";
+      const isCleared = typedBody.is_cleared === true;
+      const eventPayload = {
+        interactionType,
+        ...payload,
+        ...(isViewClosed ? { isCleared } : {}),
+      };
+
+      if (isViewClosed) {
+        runtimeCtx.runtime.log?.(
+          `slack:interaction view_closed callback=${callbackId} user=${userId} cleared=${isCleared}`,
+        );
+      } else {
+        runtimeCtx.runtime.log?.(
+          `slack:interaction view_submission callback=${callbackId} user=${userId} inputs=${payload.inputs.length}`,
+        );
+      }
+
+      const dispatchPlugin = async (
+        isAuthorizedSender: boolean,
+        channelType?: NonNullable<SlackMessageEvent["channel_type"]>,
+      ) => {
+        try {
+          if (!pluginInteractiveData) {
+            return undefined;
+          }
+
+          const interactionId = [
+            interactionType,
+            payload.callbackId,
+            payload.viewId,
+            payload.userId,
+          ]
+            .filter(Boolean)
+            .join(":");
+          const result = await dispatchSlackPluginInteractiveHandler({
+            data: pluginInteractiveData,
+            interactionId,
+            teamId: eventScope?.teamId,
+            channelType,
+            ctx: {
+              accountId: runtimeCtx.accountId,
+              interactionId,
+              conversationId: sessionRouting.channelId ?? "",
+              parentConversationId: undefined,
+              threadId: undefined,
+              senderId: payload.userId,
+              senderUsername: undefined,
+              auth: { isAuthorizedSender },
+              interaction: {
+                kind: interactionType,
+                callbackId: payload.callbackId,
+                viewId: payload.viewId,
+                rootViewId: payload.rootViewId,
+                previousViewId: payload.previousViewId,
+                externalId: payload.externalId,
+                isStackedView: payload.isStackedView,
+                isCleared: isViewClosed ? typedBody.is_cleared === true : undefined,
+                inputs: payload.inputs,
+                stateValues,
+                triggerId: typedBody.trigger_id,
+              },
+            },
+            respond: {
+              acknowledge: async () => {},
+              reply: async () => {},
+              followUp: async () => {},
+              editMessage: async () => {},
+            },
+          });
+          return {
+            ...result,
+            namespace: result.matched ? pluginInteractiveData.split(":", 1)[0] : undefined,
+            systemEvent: result.matched
+              ? resolveSlackPluginSystemEventPayload(result.result)
+              : undefined,
+          };
+        } catch (error) {
+          runtimeCtx.runtime.log?.(
+            `slack:interaction modal plugin dispatch failed callback=${callbackId} error=${error instanceof Error ? error.message : String(error)}`,
+          );
+          return undefined;
+        }
+      };
+
+      if (!metadata.userId) {
+        if (pluginInteractiveData) {
+          await dispatchPlugin(false);
+        }
+        runtimeCtx.runtime.log?.(
+          `slack:interaction drop modal callback=${callbackId} user=${userId} reason=missing-expected-user`,
+        );
+        return;
+      }
+
+      const auth = await authorizeSlackSystemEventSender({
+        ctx: runtimeCtx,
         eventScope,
-        teamId: args.context.teamId,
-        interactionType: params.interactionType,
+        senderId: userId,
+        channelId: sessionRouting.channelId,
+        channelType: sessionRouting.channelType,
+        expectedSenderId: metadata.userId,
+        interactiveEvent: true,
+      });
+      if (!auth.allowed) {
+        runtimeCtx.runtime.log?.(
+          `slack:interaction drop modal callback=${callbackId} user=${userId} reason=${auth.reason ?? "unauthorized"}`,
+        );
+        return;
+      }
+
+      const pluginDispatch = await dispatchPlugin(auth.allowed, auth.channelType);
+
+      const pluginEventFields =
+        pluginDispatch?.matched === true
+          ? {
+              pluginHandled: pluginDispatch.handled,
+              pluginNamespace: pluginDispatch.namespace,
+              pluginDuplicate: pluginDispatch.duplicate || undefined,
+              pluginSystemEvent: pluginDispatch.systemEvent,
+            }
+          : {};
+
+      const targetKind = auth.channelType === "im" ? "user" : "channel";
+      const targetId = targetKind === "user" ? userId : sessionRouting.channelId;
+      const deferredTarget = targetId
+        ? resolveSlackDeferredActionTarget({
+            eventScope,
+            kind: targetKind,
+            id: targetId,
+          })
+        : undefined;
+
+      enqueueSlackInteractionEvent({ ...eventPayload, ...pluginEventFields }, sessionRouting, {
+        contextKey: [
+          isViewClosed ? "slack:interaction:view-closed" : "slack:interaction:view",
+          teamId,
+          callbackId,
+          viewId,
+          userId,
+        ]
+          .filter(Boolean)
+          .join(":"),
+        deliveryContext: {
+          channel: "slack",
+          ...(deferredTarget ? { to: deferredTarget.target } : {}),
+          accountId: runtimeCtx.accountId,
+        },
       });
     },
   );

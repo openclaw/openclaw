@@ -24,9 +24,6 @@ type PreparedClawToolPolicy =
 const preparedClawToolPolicies = new WeakMap<object, PreparedClawToolPolicy>();
 let preparedCandidates: ClawToolPolicyCandidate[] = [];
 let preparedStateOptions: OpenClawStateDatabaseOptions = {};
-const uninitializedStateError = new Error(
-  "OpenClaw state database has not initialized Claw consent provenance.",
-);
 
 export function markFrozenClawToolAllowPolicy(policy: object | undefined): void {
   if (policy) {
@@ -47,7 +44,7 @@ function applyPreparedClawToolPolicyConsent(
     if (snapshot.kind === "uninitialized") {
       preparedClawToolPolicies.set(candidate.tools, {
         kind: "state-error",
-        error: uninitializedStateError,
+        error: new Error("OpenClaw state database has not initialized Claw consent provenance."),
       });
       continue;
     }

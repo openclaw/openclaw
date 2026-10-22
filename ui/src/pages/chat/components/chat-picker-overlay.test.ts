@@ -11,6 +11,11 @@ import {
 } from "../../../test-helpers/modal-dialog.ts";
 import "../../../components/modal-dialog.ts";
 import {
+  modelOption,
+  mountModelPicker,
+  waitForModelMenu,
+} from "./chat-model-picker.test-support.tsx";
+import {
   createChatPickerOverlay,
   installChatComposerPickerDismissal,
   registerChatComposerInvocationMenu,
@@ -167,27 +172,28 @@ it.each([
   },
 );
 
-it("lets the native owner clear search before closing and returning focus", () => {
-  const composer = composerWith(
-    '<div class="chat-controls__model-settings"><details class="chat-controls__model-picker"><summary>Model</summary></details></div>',
-  );
-  const { picker, trigger, surface, search } = pickerIn(
-    composer.querySelector<HTMLElement>(".chat-controls__model-settings")!,
-  );
-  picker.className = "chat-controls__inline-select chat-controls__effort-picker";
+it("lets the native owner clear search before closing and returning focus", async () => {
+  const composer = composerWith("");
   onTestFinished(installChatComposerPickerDismissal(document));
-  bindPicker(picker);
+  mountModelPicker({ modelOptions: [modelOption("fixture", "current")] }, { container: composer });
+  const picker = composer.querySelector("details")!;
+  const trigger = picker.querySelector("summary")!;
+  const surface = picker.querySelector<HTMLElement>("[data-anchored-overlay]")!;
   expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
   expect(trigger.getAttribute("aria-controls")).toBe(surface.id);
   expect(document.getElementById(surface.getAttribute("aria-labelledby")!)).toBe(trigger);
   expect(surface.getAttribute("role")).toBe("dialog");
   expect(trigger.getAttribute("aria-expanded")).toBe("false");
-  picker.open = true;
-  picker.dispatchEvent(new Event("toggle"));
+  trigger.click();
+  await waitForModelMenu(composer);
+  const search = picker.querySelector("input")!;
   search.value = "beta";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
   search.focus();
   const escape = () => search.dispatchEvent(escapeEvent());
   escape();
+  flush();
   expect(search.value).toBe("");
   expect(picker.open).toBe(true);
   expect(trigger.getAttribute("aria-expanded")).toBe("true");

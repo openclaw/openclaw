@@ -1,23 +1,22 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
-import { LegacyContextEngine } from "../../../context-engine/legacy.js";
-import {
-  registerContextEngineInRegistry,
-  resolveContextEngine,
-} from "../../../context-engine/registry.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
-import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
-import { retireInspectionInstances } from "../../../plugins/registry-inspection.test-support.js";
-import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import type { SubagentRegistrationScope } from "../registry/subagent-registry.types.js";
 import {
   loadSubagentSpawnModuleForTest,
   createSubagentSpawnTestConfig,
   createSubagentRegistrationScopeForTest,
 } from "./subagent-spawn.test-helpers.js";
+
+let LegacyContextEngine: typeof import("../../../context-engine/legacy.js").LegacyContextEngine;
+let registerContextEngineInRegistry: typeof import("../../../context-engine/registry.js").registerContextEngineInRegistry;
+let resolveContextEngine: typeof import("../../../context-engine/registry.js").resolveContextEngine;
+let createEmptyPluginRegistry: typeof import("../../../plugins/registry-empty.js").createEmptyPluginRegistry;
+let PluginRegistryInspectionResources: typeof import("../../../plugins/registry-inspection-resources.js").PluginRegistryInspectionResources;
+let retireInspectionInstances: typeof import("../../../plugins/registry-inspection.test-support.js").retireInspectionInstances;
+let withPluginRuntimeRegistryScope: typeof import("../../../plugins/runtime/gateway-request-scope.js").withPluginRuntimeRegistryScope;
+let AsyncWorkScope: typeof import("../../../shared/async-work-scope.js").AsyncWorkScope;
 
 function createGate() {
   const entered = createDeferred();
@@ -113,7 +112,7 @@ describe("spawn context-engine resource custody", () => {
   });
   let spawn: typeof import("./subagent-spawn.js").spawnSubagentDirect;
   let scheduler: typeof import("../swarm/swarm-scheduler.js");
-  let resetScheduler: () => void;
+  let expectedCloseFailure: unknown;
   let GatewayDrainingError: typeof import("../../../process/gateway-work-admission.js").GatewayDrainingError;
   type Request = { method?: string; params?: Record<string, unknown> };
   function handleAgent(handle: (request: Request) => Promise<unknown>) {
@@ -130,7 +129,8 @@ describe("spawn context-engine resource custody", () => {
   const spawnChild = (groupId?: string) =>
     spawn({ task: "synthetic child", ...(groupId ? { collect: true, groupId } : {}) }, requester);
 
-  beforeAll(async () => {
+  beforeEach(async () => {
+    expectedCloseFailure = undefined;
     ({ spawnSubagentDirect: spawn } = await loadSubagentSpawnModuleForTest({
       callGatewayMock: callGateway,
       resolveContextEngineMock: resolveEngine,
@@ -141,9 +141,17 @@ describe("spawn context-engine resource custody", () => {
       getRuntimeConfig: () => config,
     }));
     scheduler = await import("../swarm/swarm-scheduler.js");
-    ({
-      testing: { reset: resetScheduler },
-    } = await import("../swarm/swarm-scheduler.test-support.js"));
+    ({ LegacyContextEngine } = await import("../../../context-engine/legacy.js"));
+    ({ registerContextEngineInRegistry, resolveContextEngine } =
+      await import("../../../context-engine/registry.js"));
+    ({ createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js"));
+    ({ PluginRegistryInspectionResources } =
+      await import("../../../plugins/registry-inspection-resources.js"));
+    ({ retireInspectionInstances } =
+      await import("../../../plugins/registry-inspection.test-support.js"));
+    ({ withPluginRuntimeRegistryScope } =
+      await import("../../../plugins/runtime/gateway-request-scope.js"));
+    ({ AsyncWorkScope } = await import("../../../shared/async-work-scope.js"));
     ({ GatewayDrainingError } = await import("../../../process/gateway-work-admission.js"));
   });
 
@@ -154,15 +162,24 @@ describe("spawn context-engine resource custody", () => {
     completeLaunchCleanup.mockReset();
     settleLaunchFailure.mockReset();
     registerRun.mockReset();
-    resetScheduler();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   });
 
-  afterEach(() => {
-    resetScheduler();
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    try {
+      try {
+        await scheduler.closeSwarmScheduler();
+      } catch (error) {
+        if (expectedCloseFailure === undefined) {
+          throw error;
+        }
+        expect(error).toEqual(expectedCloseFailure);
+      }
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
   });
 
   it.each(["registration", "claim"] as const)(
@@ -343,12 +360,18 @@ describe("spawn context-engine resource custody", () => {
           expect(callGateway.mock.calls.map(([request]) => request.method)).toEqual(["agent"]);
           expect(scheduler.releaseSwarmRun(result.runId!)).toBe(true);
         }
-        await expect(scheduler.closeSwarmScheduler()).rejects.toThrow(
-          "Swarm launch cleanup failed",
-        );
-        await expect(scheduler.closeSwarmScheduler()).rejects.toThrow(
-          "Swarm launch cleanup failed",
-        );
+        await expect(
+          scheduler.closeSwarmScheduler().catch((error: unknown) => {
+            expectedCloseFailure = error;
+            throw error;
+          }),
+        ).rejects.toThrow("Swarm launch cleanup failed");
+        await expect(
+          scheduler.closeSwarmScheduler().catch((error: unknown) => {
+            expectedCloseFailure = error;
+            throw error;
+          }),
+        ).rejects.toThrow("Swarm launch cleanup failed");
       } finally {
         nativeCleanup.release();
         await scheduler.closeSwarmScheduler().catch(() => {});
@@ -426,7 +449,12 @@ describe("spawn context-engine resource custody", () => {
         await release;
       } else if (mode === "shutdown-disposal-failure") {
         closing = scheduler.closeSwarmScheduler();
-        await expect(closing).rejects.toThrow("Swarm launch cleanup failed");
+        await expect(
+          closing.catch((error: unknown) => {
+            expectedCloseFailure = error;
+            throw error;
+          }),
+        ).rejects.toThrow("Swarm launch cleanup failed");
         expect(launches).toBe(0);
         expect(settleLaunchFailure).not.toHaveBeenCalled();
       } else {

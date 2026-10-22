@@ -117,7 +117,7 @@ it.for([
     const counts = { active: 0, maximumActive: 0, released: 0 };
     const disposed = vi.fn<() => void>();
     let disposal: Promise<void> | undefined;
-    const completeModel = vi.fn((params: { abortSignal: AbortSignal }) =>
+    const completeModel = vi.fn((params: { abortSignal?: AbortSignal }) =>
       runWithAsyncWorkResources(async (onAcquired) => {
         onAcquired({
           release: () => {
@@ -126,7 +126,7 @@ it.for([
         });
         const request = createDeferred<Message>();
         pending.push(request);
-        signals.push(params.abortSignal);
+        signals.push(params.abortSignal!);
         counts.active += 1;
         counts.maximumActive = Math.max(counts.maximumActive, counts.active);
         if (pending.length === 7) {

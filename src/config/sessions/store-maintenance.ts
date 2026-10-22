@@ -90,7 +90,7 @@ function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | n
     return DEFAULT_SESSION_MAX_DISK_BYTES;
   }
   try {
-    const bytes = parseByteSize(normalized, { defaultUnit: "b" });
+    const bytes = parseByteSize(normalized);
     // A zero or negative budget is not a usable cap; treat it the same as an
     // explicit disable so maintenance does not delete every session artifact.
     if (bytes <= 0) {
@@ -121,7 +121,7 @@ function resolveHighWaterBytes(
     return defaultHighWaterBytes;
   }
   try {
-    const parsed = parseByteSize(normalized, { defaultUnit: "b" });
+    const parsed = parseByteSize(normalized);
     // A zero target cannot stop cleanup while any bytes remain, so use the
     // default instead of evicting every unprotected session and archive.
     return parsed > 0 ? Math.min(parsed, maxDiskBytes) : defaultHighWaterBytes;
@@ -223,6 +223,7 @@ export function pruneStaleEntries(
   overrideMaxAgeMs?: number,
   opts: {
     log?: boolean;
+    nowMs?: number;
     onPruned?: (params: { key: string; entry: SessionEntry }) => void;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
@@ -233,7 +234,7 @@ export function pruneStaleEntries(
   if (maxAgeMs <= 0) {
     return 0;
   }
-  const now = Date.now();
+  const now = opts.nowMs ?? Date.now();
   const cutoffMs = now - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
@@ -269,6 +270,7 @@ export function pruneStaleModelRunEntries(
   overrideMaxAgeMs?: number | null,
   opts: {
     log?: boolean;
+    nowMs?: number;
     onPruned?: (params: { key: string; entry: SessionEntry }) => void;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
@@ -277,7 +279,7 @@ export function pruneStaleModelRunEntries(
   if (overrideMaxAgeMs == null || overrideMaxAgeMs <= 0) {
     return 0;
   }
-  const cutoffMs = Date.now() - overrideMaxAgeMs;
+  const cutoffMs = (opts.nowMs ?? Date.now()) - overrideMaxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
     if (shouldPreserveMaintenanceEntry({ key, entry, ...opts })) {
@@ -433,6 +435,7 @@ type SessionMaintenanceEntryParams = {
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
   preserveRecentMs?: number | null;
+  nowMs?: number;
 };
 
 function shouldPreserveNonArchivedMaintenanceEntry(params: SessionMaintenanceEntryParams): boolean {
@@ -475,6 +478,7 @@ function selectSessionEntryCapVictims(
   maxEntries: number,
   preserveKeys?: ReadonlySet<string>,
   preserveRecentMs?: number | null,
+  nowMs?: number,
 ): string[] {
   const keys = Object.keys(store).filter((key) => store[key]?.archivedAt === undefined);
   const overflow = keys.length - Math.max(0, maxEntries);
@@ -492,6 +496,7 @@ function selectSessionEntryCapVictims(
         entry: store[key],
         preserveKeys,
         preserveRecentMs,
+        nowMs,
       }),
   );
   // Rank the whole eligible roster by its latest activity signal so the sessions untouched for
@@ -530,6 +535,7 @@ export function capEntryCount(
     maxEntries,
     opts.preserveKeys,
     opts.preserveRecentMs,
+    opts.nowMs,
   );
   if (victims.length === 0) {
     return 0;

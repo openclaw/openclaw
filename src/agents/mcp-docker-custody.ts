@@ -463,9 +463,8 @@ export async function prepareMcpDockerLaunch(
               changed();
             });
             while (!id) {
-              const event = new Promise<void>((resolve) => {
-                onChange = resolve;
-              });
+              const { promise: event, resolve } = Promise.withResolvers<void>();
+              onChange = resolve;
               if (watchError) {
                 throw watchError;
               }

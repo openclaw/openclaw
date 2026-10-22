@@ -13,13 +13,12 @@ import {
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { scanSessionTranscriptTree } from "../../config/sessions/transcript-tree.js";
 import type { SessionEntry as StoredSessionEntry } from "../../config/sessions/types.js";
-import { FsSafeError } from "../../infra/fs-safe.js";
+import { FsSafeError, isPathInside, root, type Root } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
   parseExportCommandOutputPath,
   resolveExportCommandSessionTarget,
 } from "./commands-export-common.js";
-import { writeSessionExportFile } from "./commands-export-session-file.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -37,6 +36,45 @@ interface SessionData {
 
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
+
+const MAX_DEFAULT_FILENAME_ATTEMPTS = 100;
+
+function addCollisionSuffix(filePath: string, suffix: number): string {
+  const ext = path.extname(filePath);
+  const baseName = path.basename(filePath, ext);
+  return path.join(path.dirname(filePath), `${baseName}-${suffix}${ext}`);
+}
+
+async function createUnusedFile(
+  workspaceRoot: Root,
+  filePath: string,
+  contents: string,
+): Promise<string> {
+  for (let suffix = 1; suffix <= MAX_DEFAULT_FILENAME_ATTEMPTS; suffix++) {
+    const candidate = suffix === 1 ? filePath : addCollisionSuffix(filePath, suffix);
+    try {
+      await workspaceRoot.create(candidate, contents, { encoding: "utf-8" });
+      return candidate;
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "already-exists") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Could not find an unused export filename near ${filePath}`);
+}
+
+function normalizeWorkspaceAliasPath(workspaceRoot: Root, requestedPath: string): string {
+  if (!path.isAbsolute(requestedPath)) {
+    return requestedPath;
+  }
+  const normalizedRequest = path.resolve(requestedPath);
+  if (!isPathInside(workspaceRoot.rootDir, normalizedRequest)) {
+    return requestedPath;
+  }
+  return path.relative(workspaceRoot.rootDir, normalizedRequest) || requestedPath;
+}
 
 async function hasPersistedAcpSession(params: {
   cfg: HandleCommandsParams["cfg"];
@@ -240,13 +278,20 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
   let displayPath: string;
   try {
-    const written = await writeSessionExportFile({
-      workspaceDir: params.workspaceDir,
-      requestedPath: args.outputPath,
-      defaultFileName,
-      contents: html,
-    });
-    displayPath = written.displayPath;
+    const workspaceRoot = await root(params.workspaceDir, { mkdir: true, mode: 0o600 });
+    let writtenPath: string;
+    if (args.outputPath) {
+      // Explicit regular files retain overwrite behavior. Rebase only lexical workspace
+      // aliases onto the canonical Root; nested aliases, symlinks, and outside paths
+      // still reach fs-safe unchanged and are blocked.
+      writtenPath = normalizeWorkspaceAliasPath(workspaceRoot, args.outputPath);
+      await workspaceRoot.write(writtenPath, html, { encoding: "utf-8" });
+    } else {
+      writtenPath = await createUnusedFile(workspaceRoot, defaultFileName, html);
+    }
+    const absolutePath = await workspaceRoot.resolve(writtenPath);
+    const relativePath = path.relative(workspaceRoot.rootReal, absolutePath);
+    displayPath = relativePath.startsWith("..") ? absolutePath : relativePath;
   } catch (error) {
     if (error instanceof FsSafeError && error.category === "policy") {
       return { text: "❌ Output path must be a regular file inside the workspace." };

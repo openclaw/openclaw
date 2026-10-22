@@ -44,6 +44,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
 import { formatCliCommand } from "../command-format.js";
+import { getGatewayChannelWarnings } from "../daemon-cli/restart-health-diagnostics.js";
 import {
   confirmGatewayReachable,
   resolveGatewayRestartProbeContext,
@@ -58,7 +59,7 @@ import {
   resolveTargetVersion,
   type UpdateFinalizeOptions,
 } from "./shared.js";
-import { updateFinalizeCommand } from "./update-command-finalize.js";
+import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { updateMaintenanceError } from "./update-maintenance-error.js";
@@ -267,6 +268,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   const [gateway, http, expectedVersion, expectedBuildId] = await Promise.all([
     confirmGatewayReachable({ port, ...context, env }),
     waitForGatewayHttpReadiness({
+      requireChannelHealth: false,
       config: context.config,
       port,
       attempts: 1,
@@ -285,9 +287,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     gateway.gatewayVersion !== expectedVersion ||
     gateway.gatewayBuildId !== expectedBuildId ||
     gateway.activatedPluginErrors.length ||
-    gateway.channelProbeErrors.length ||
-    http.healthz !== 200 ||
-    http.readyz !== 200
+    !(http.coreReady ?? (http.healthz === 200 && http.readyz === 200))
   ) {
     return await finalizeRepair();
   }
@@ -333,7 +333,16 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   const message = reconciled.length
     ? `Gateway is healthy. Reconciled ${reconciled.length} abandoned update run${reconciled.length === 1 ? "" : "s"}. No maintenance or service restart was needed.`
     : "Gateway is healthy. Abandoned update runs are already reconciled. No maintenance or service restart was needed.";
-  reportRepairResult(opts, acknowledged, message, retained);
+  const warnings = getGatewayChannelWarnings(gateway, http).map(({ id }) => id);
+  reportRepairResult(
+    opts,
+    acknowledged,
+    message +
+      (warnings.length
+        ? ` Channel health warnings: ${warnings.join(", ")}. Run openclaw channels status --probe.`
+        : ""),
+    retained,
+  );
 }
 
 function reportRepairResult(
@@ -345,6 +354,7 @@ function reportRepairResult(
   if (opts.json) {
     defaultRuntime.writeJson({
       status: retained ? "warning" : "ok",
+      coreUpdate: (retained ? "pending" : "completed") satisfies UpdateCoreCompletion,
       mode: "repair",
       restart: false,
       reconciledRuns,

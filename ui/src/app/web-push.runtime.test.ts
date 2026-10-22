@@ -102,7 +102,10 @@ describe("web push service worker readiness", () => {
     const { client } = gatewayClient([4, 1, 2, 3]);
 
     for (let i = 0; i < 3; i += 1) {
-      await expect(subscribeToWebPush(client)).resolves.toEqual({ state: "registered" });
+      await expect(subscribeToWebPush(client, () => {})).resolves.toEqual({
+        state: "registered",
+        subscription,
+      });
       expect(vi.getTimerCount()).toBe(0);
     }
   });
@@ -112,7 +115,7 @@ describe("web push service worker readiness", () => {
     installServiceWorkerReady(new Promise<ServiceWorkerRegistration>(() => {}));
     vi.stubGlobal("Notification", { requestPermission: vi.fn().mockResolvedValue("granted") });
 
-    const subscription = subscribeToWebPush(gatewayClient([4, 1, 2, 3]).client);
+    const subscription = subscribeToWebPush(gatewayClient([4, 1, 2, 3]).client, () => {});
     const rejection = expect(subscription).rejects.toThrow("Service worker not ready (timed out)");
     await vi.advanceTimersByTimeAsync(10_000);
 
@@ -161,8 +164,9 @@ describe("web push Gateway identity", () => {
     vi.stubGlobal("Notification", { requestPermission: vi.fn().mockResolvedValue("granted") });
     const { client, request } = gatewayClient([4, 1, 2, 3]);
 
-    await expect(subscribeToWebPush(client)).resolves.toEqual({
+    await expect(subscribeToWebPush(client, () => {})).resolves.toEqual({
       state: "registered",
+      subscription,
     });
     expect(request).toHaveBeenNthCalledWith(1, "push.web.vapidPublicKey", {});
     expect(request).toHaveBeenNthCalledWith(2, "push.web.subscribe", {

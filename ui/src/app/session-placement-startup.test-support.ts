@@ -1,10 +1,7 @@
 import { expect, vi } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import {
-  type SessionPlacementRecovery,
-  writeSessionPlacementRecovery,
-} from "../lib/sessions/session-placement-recovery.ts";
+import { writeSessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import createApplicationPlacementStartupRuntime from "./session-placement-startup.runtime.ts";
@@ -41,11 +38,7 @@ export function createPlacementStartupHarness(
   } = {},
 ) {
   const sessionKey = "agent:cloud:startup";
-  const client = {
-    request,
-    recoveryScope: "principal-a",
-    recoveryScopeReady: true,
-  };
+  const client = { request, recoveryScope: "principal-a", recoveryScopeReady: true };
   const gateway = {
     connectionRevision: 0,
     connection: { gatewayUrl: "ws://gateway.example" },
@@ -58,9 +51,7 @@ export function createPlacementStartupHarness(
   } as GatewaySessionRow;
   const state = { result: { sessions: [row] } as SessionsListResult };
   const sessions = {
-    get state() {
-      return state;
-    },
+    state,
     describe: ((params, describeOptions) => {
       if (!describeOptions?.client) {
         throw new Error("placement describe requires its captured client");
@@ -71,7 +62,7 @@ export function createPlacementStartupHarness(
     refresh: vi.fn(async () => undefined),
     subscribe: vi.fn(() => () => undefined),
   } as unknown as SessionCapability;
-  const recovery: SessionPlacementRecovery = {
+  const recovery: Parameters<typeof writeSessionPlacementRecovery>[0] = {
     sessionKey,
     messageId: "message-stable",
     message: "fix the cloud task",
@@ -97,10 +88,8 @@ export function createPlacementStartupHarness(
     startup,
     input: { recovery, persistRecovery: true, mode: "dispatch" as const, createdAt: 1_000 },
     client,
-    gateway,
-    sessions,
+    ...dependencies,
     state,
-    chatSubmissions,
     dependencies,
   };
 }

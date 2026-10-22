@@ -18,13 +18,9 @@ import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import type { HookContext } from "./agent-tools.before-tool-call.types.js";
-import {
-  rewrapToolWithBeforeToolCallHook,
-  wrapToolWithBeforeToolCallHook,
-} from "./agent-tools.before-tool-call.wrapper.js";
+import { rewrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isToolWrappedWithBeforeToolCallHook } from "./before-tool-call-metadata.js";
 
 type ToolDescriptor = Pick<AnyAgentTool, "name" | "description" | "parameters" | "outputSchema">;
 type PreparedDescriptor = {
@@ -180,6 +176,10 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     emitDiagnostics: options.emitBeforeToolCallDiagnostics,
     ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
   };
+  const hookContext =
+    options.hookContext.config || !options.config
+      ? options.hookContext
+      : { ...options.hookContext, config: options.config };
   const withHooks =
     options.wrapBeforeToolCallHook === false
       ? normalized
@@ -187,9 +187,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
           typeof options.wrapBeforeToolCallHook === "function" &&
           !options.wrapBeforeToolCallHook(tool)
             ? tool
-            : isToolWrappedWithBeforeToolCallHook(tool)
-              ? rewrapToolWithBeforeToolCallHook(tool, options.hookContext, hookOptions)
-              : wrapToolWithBeforeToolCallHook(tool, options.hookContext, hookOptions),
+            : rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
         );
   options.recordToolPrepStage?.("tool-hooks");
   const abortSignal = options.abortSignal;

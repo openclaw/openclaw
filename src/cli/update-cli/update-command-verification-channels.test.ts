@@ -23,8 +23,12 @@ import { recordUpdatePackageCompletion } from "./update-command-terminal.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 let server: Server;
-async function listen() {
-  server = createServer((_req, res) => res.writeHead(200).end());
+async function listen(readiness?: { ready: false; coreReady?: boolean; failing: string[] }) {
+  server = createServer((req, res) =>
+    res
+      .writeHead(req.url === "/readyz" && readiness ? 503 : 200)
+      .end(readiness ? JSON.stringify(readiness) : undefined),
+  );
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -58,6 +62,7 @@ async function verifyHealth(
   health: NonNullable<Parameters<typeof gatewayHealthResponse>[0]>["health"],
   recovery = false,
   json = true,
+  readiness?: { ready: false; coreReady?: boolean; failing: string[] },
 ) {
   const version = recovery ? "2026.9.8" : "2026.10.3";
   const service = makeGatewayService(
@@ -82,18 +87,38 @@ async function verifyHealth(
     result,
     opts: { json },
     serviceEnv: { HOME: "/synthetic-home" },
-    gatewayPort: await listen(),
+    gatewayPort: await listen(readiness),
     expectedVersion: version,
     expectedBuildId: "candidate",
     ...(recovery
       ? ({ purpose: "recovery", waitForStartup: false } as const)
       : { requireRunningService: true, onVerified }),
+    ...(readiness ? { purpose: "recovery", waitForStartup: false } : {}),
   });
   return { result, onVerified, validation };
 }
 
 const reportFor = (result: UpdateRunResult) =>
   renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown;
+
+it.each([true, false, undefined])(
+  "completes an update during a channel outage only with core readiness (%s)",
+  async (coreReady) => {
+    const { result, validation } = await verifyHealth(
+      { channels: { telegram: { configured: true, running: false } } },
+      false,
+      true,
+      { ready: false, coreReady, failing: ["telegram"] },
+    );
+    expect(validation.ok).toBe(coreReady === true);
+    expect(result.verification).toMatchObject({ readyz: false, channelsReady: false });
+    if (coreReady === true) {
+      expect(result.steps[0]).toMatchObject({ exitCode: 0 });
+      expect(reportFor(result)).toContain("telegram");
+      expect(result.verification).toMatchObject({ coreReady: true, settled: true });
+    }
+  },
+);
 
 it.each(["channel probe", "plugin load"] as const)(
   "completes verified activation with a named warning (%s)",

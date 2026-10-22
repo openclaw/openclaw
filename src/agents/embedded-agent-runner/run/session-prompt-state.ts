@@ -154,6 +154,10 @@ export async function createEmbeddedRunSessionPromptState(input: {
   const onUserMessagePersisted: NonNullable<
     RunEmbeddedAgentParamsWithSessionFile["onUserMessagePersisted"]
   > = (message) => {
+    // A persisted internal prompt replays its compaction instruction from history.
+    if (activePrompt.internal) {
+      clearCompactionContinuation();
+    }
     const messageMetadata = message as {
       __openclaw?: { beforeAgentRunBlocked?: unknown };
     };

@@ -28,88 +28,6 @@ function isDeployCommandsPath(path: string): boolean {
   return path.startsWith("/applications/") && path.includes("/commands");
 }
 
-function wrapDeployRestMethod(params: {
-  method: RestMethodName;
-  original: RestMethodMap;
-  timeoutMs?: number;
-}) {
-  return async (path: string, data?: never, query?: never) => {
-    if (!isDeployCommandsPath(path)) {
-      return params.original[params.method](path, data, query);
-    }
-    const startedAt = Date.now();
-    const body = readDeployRequestBody(data);
-    try {
-      return await params.original[params.method](path, data, query);
-    } catch (err) {
-      const requestMs = Date.now() - startedAt;
-      attachDiscordDeployRequestBody(err, body);
-      attachDiscordDeployRestContext(err, {
-        method: params.method,
-        path,
-        requestMs,
-        timeoutMs: params.timeoutMs,
-      });
-      throw err;
-    }
-  };
-}
-
-function installDeployRestErrorContext(params: { rest: RequestClient }): () => void {
-  const original: RestMethodMap = {
-    get: params.rest.get.bind(params.rest),
-    post: params.rest.post.bind(params.rest),
-    put: params.rest.put.bind(params.rest),
-    patch: params.rest.patch.bind(params.rest),
-    delete: params.rest.delete.bind(params.rest),
-  };
-  for (const method of Object.keys(original) as RestMethodName[]) {
-    params.rest[method] = wrapDeployRestMethod({
-      method,
-      original,
-      timeoutMs: params.rest.options.timeout,
-    }) as RequestClient[typeof method];
-  }
-  return () => {
-    Object.assign(params.rest, original);
-  };
-}
-
-async function deployDiscordCommands(params: {
-  client: Client;
-  runtime: RuntimeEnv;
-  accountId: string;
-}) {
-  const { accountId } = params;
-  const restoreDeployRestErrorContext = installDeployRestErrorContext({
-    rest: params.client.rest,
-  });
-  try {
-    await params.client.deployCommands();
-  } catch (err) {
-    if (isDiscordDeployDailyCreateLimit(err)) {
-      params.runtime.log?.(
-        warn(
-          `[${accountId}] slash command deploy skipped: daily application command create limit reached. Existing slash commands stay active until Discord resets the quota; message send/receive is unaffected.`,
-        ),
-      );
-      return;
-    }
-    const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
-    if (rateLimitWarning) {
-      params.runtime.log?.(warn(rateLimitWarning));
-      return;
-    }
-    params.runtime.log?.(
-      warn(
-        `[${accountId}] slash command deploy failed (message send/receive unaffected): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
-      ),
-    );
-  } finally {
-    restoreDeployRestErrorContext();
-  }
-}
-
 export function runDiscordCommandDeployInBackground(params: {
   client: Client;
   runtime: RuntimeEnv;
@@ -119,7 +37,60 @@ export function runDiscordCommandDeployInBackground(params: {
   if (!params.enabled) {
     return;
   }
-  void deployDiscordCommands(params).catch((err: unknown) => {
+  async function deployDiscordCommands() {
+    const { accountId } = params;
+    const rest = params.client.rest;
+    const original: RestMethodMap = {
+      get: rest.get.bind(rest),
+      post: rest.post.bind(rest),
+      put: rest.put.bind(rest),
+      patch: rest.patch.bind(rest),
+      delete: rest.delete.bind(rest),
+    };
+    for (const method of Object.keys(original) as RestMethodName[]) {
+      const timeoutMs = rest.options.timeout;
+      rest[method] = (async (path: string, data?: never, query?: never) => {
+        if (!isDeployCommandsPath(path)) {
+          return original[method](path, data, query);
+        }
+        const startedAt = Date.now();
+        const body = readDeployRequestBody(data);
+        try {
+          return await original[method](path, data, query);
+        } catch (err) {
+          const requestMs = Date.now() - startedAt;
+          attachDiscordDeployRequestBody(err, body);
+          attachDiscordDeployRestContext(err, { method, path, requestMs, timeoutMs });
+          throw err;
+        }
+      }) as RequestClient[typeof method];
+    }
+    try {
+      await params.client.deployCommands();
+    } catch (err) {
+      if (isDiscordDeployDailyCreateLimit(err)) {
+        params.runtime.log?.(
+          warn(
+            `[${accountId}] slash command deploy skipped: daily application command create limit reached. Existing slash commands stay active until Discord resets the quota; message send/receive is unaffected.`,
+          ),
+        );
+        return;
+      }
+      const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
+      if (rateLimitWarning) {
+        params.runtime.log?.(warn(rateLimitWarning));
+        return;
+      }
+      params.runtime.log?.(
+        warn(
+          `[${accountId}] slash command deploy failed (message send/receive unaffected): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
+        ),
+      );
+    } finally {
+      Object.assign(rest, original);
+    }
+  }
+  void deployDiscordCommands().catch((err: unknown) => {
     params.runtime.log?.(
       warn(
         `[${params.accountId}] slash command deploy failed in background (message send/receive unaffected): ${formatErrorMessage(err)}`,

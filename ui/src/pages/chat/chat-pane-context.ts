@@ -5,7 +5,7 @@ import type { ExecApprovalDecision } from "../../app/exec-approval.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import {
-  isBrowserPanelSurfaceAvailable,
+  browserPanelSurfaceUnavailableReason,
   isDesktopPanelAvailable,
 } from "../../app/panel-availability.ts";
 import { canUseQuestionPrompts } from "../../app/question-prompt-client.ts";
@@ -17,6 +17,7 @@ import {
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
+import type { SessionPlacementPresentation } from "../../components/session-placement-move-dialog.tsx";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -35,7 +36,6 @@ import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { invalidateChatAvatarCache } from "./chat-avatar.ts";
 import { commitCurrentChatHistorySnapshot } from "./chat-history-snapshot.ts";
 import {
-  chatHistoryRequests,
   getChatHistoryLoadState,
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
@@ -56,6 +56,7 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import type { HumanMentionAccess } from "./components/chat-composer-mention-menu.tsx";
 import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
 import { retireChatPairingQr } from "./history-merge.ts";
@@ -65,7 +66,7 @@ import {
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
 import { cancelChatScroll } from "./scroll.ts";
-import { currentSessionApprovalReplay } from "./session-approval-projection.ts";
+import { currentInlineSessionApproval } from "./session-approval-projection.ts";
 import {
   clearChatMessagesFromCache,
   readChatSessionSnapshot,
@@ -77,6 +78,18 @@ import { resetToolStream } from "./tool-stream-state.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
+  private registeredHumanMentionAccess?: HumanMentionAccess;
+  protected readonly getHumanMentionAccess = () => this.registeredHumanMentionAccess;
+  protected readonly registerHumanMentionAccess = (access: HumanMentionAccess) => {
+    this.registeredHumanMentionAccess = access;
+    return () => {
+      if (this.registeredHumanMentionAccess !== access) {
+        return;
+      }
+      this.registeredHumanMentionAccess = undefined;
+    };
+  };
+
   protected transcriptSessionProps(selectedSession: GatewaySessionRow | undefined) {
     const state = this.state;
     if (!state || parseCatalogSessionKey(state.sessionKey)) {
@@ -141,6 +154,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   }
 
   override dispose() {
+    this.registeredHumanMentionAccess = undefined;
     if (this.state) {
       retireChatPairingQr(this.state);
       retireCachedPairingQr(this.state.chatMessagesBySession);
@@ -156,6 +170,8 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   protected async changeHeaderPlacement(
     row: GatewaySessionRow,
     mode: "move" | "recover" | "reclaim",
+    presentation?: SessionPlacementPresentation,
+    machineName?: string,
   ): Promise<void> {
     const scope = this.captureConnectionScope();
     if (!scope) {
@@ -194,6 +210,11 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       const { reclaimChatPanePlacement } = await import("./chat-pane-placement.runtime.ts");
       await reclaimChatPanePlacement({
         ...params,
+        currentRow: () => {
+          const current = this.state ? selectedChatSessionRow(this.state) : undefined;
+          return current?.key === row.key ? current : undefined;
+        },
+        machineName,
         reclaimingKey: pendingKey,
         placementStartup,
         onReclaimingChange: onPendingChange,
@@ -204,6 +225,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       await changeSessionPlacement({
         ...params,
         mode,
+        presentation,
         pendingKey,
         requiredProfile: () =>
           scope.context.agents.state.agentsList?.sessionPlacement?.requiredProfile?.id,
@@ -342,9 +364,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     const questions = visible
       ? listQuestionPrompts(this.questionPromptState).filter(matchesConversation)
       : [];
-    const approvalReplay = visible ? currentSessionApprovalReplay(state, agentId) : undefined;
-    const pendingReplay = chatHistoryRequests(state).pendingApprovalReplay;
-    const isPending = (id: string) => pendingReplay?.events.get(id)?.phase !== "terminal";
     // Question records mutate in place; their revisions own transcript-cache invalidation.
     if (
       questions.length !== this.questionProjection.prompts.length ||
@@ -360,23 +379,16 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       };
     }
     const overlays = this.context.overlays;
-    // Only a complete pending replay supersedes the global queue. Live
-    // events and partial pending reads cannot prove another request absent.
+    const snapshot = overlays?.snapshot;
     const inlineApproval = visible
-      ? (state.chatSessionApprovalQueue?.find((approval) => isPending(approval.id)) ??
-        (approvalReplay?.complete
-          ? null
-          : overlays?.snapshot?.approvalQueue?.find(
-              (approval) => isPending(approval.id) && matchesConversation(approval.request),
-            )) ??
-        null)
+      ? currentInlineSessionApproval(state, agentId, snapshot?.approvalQueue, matchesConversation)
       : null;
     return {
       gatewayQuestionPrompts: this.questionProjection.prompts,
       inlineApproval,
-      approvalBusy: overlays?.snapshot?.approvalBusy,
-      approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
-      approvalErrors: overlays?.snapshot?.approvalErrors,
+      approvalBusy: snapshot?.approvalBusy,
+      approvalCanGrant: snapshot?.approvalCanGrant ?? false,
+      approvalErrors: snapshot?.approvalErrors,
       onApprovalDecision:
         overlays && visible
           ? (approvalId: string, decision: ExecApprovalDecision) =>
@@ -588,7 +600,9 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       snapshot,
       this.context.config.current.terminalEnabled,
     );
-    state.browserPanelAvailable = isBrowserPanelSurfaceAvailable(snapshot);
+    const browserUnavailableReason = browserPanelSurfaceUnavailableReason(snapshot);
+    state.browserPanelUnavailableReason = browserUnavailableReason;
+    state.browserPanelAvailable = browserUnavailableReason === null;
     const desktopPanelAvailable = isDesktopPanelAvailable(snapshot);
     const sidebarSessionKey = canonicalUiSessionKeyForPersistence(state, state.sessionKey);
     const sidebarKeyChanged = sidebarSessionKey !== previousSidebarSessionKey;

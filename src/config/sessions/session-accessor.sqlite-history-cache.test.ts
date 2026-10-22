@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { renameSync } from "node:fs";
 import { backup } from "node:sqlite";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -23,6 +24,7 @@ import { readSessionTranscriptHistoryEventPage } from "./session-accessor.sqlite
 import { readRecentSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history-events.test-support.js";
 import {
   historyEventId,
+  historyMessage,
   readSessionTranscriptHistoryEventById,
   readSessionTranscriptHistoryEventCount,
   useHistoryEventScope,
@@ -60,10 +62,6 @@ function expectHistory(
     ...fields,
     events: ids.map((id, index) => ({ event: { id }, seq: seqs[index] })),
   });
-}
-
-function historyMessage(id: string, parentId: string | null, content: unknown, role = "user") {
-  return { type: "message", id, parentId, message: { role, content } };
 }
 
 function historyPage(
@@ -151,6 +149,14 @@ describe("SQLite transcript history cache", () => {
     const first = read();
     const parse = vi.spyOn(JSON, "parse");
     const second = read();
+    expect(parse.mock.calls.filter(([json]) => json.includes("cache-window-original"))).toEqual([]);
+    channel("openclaw.memory.critical").publish(undefined);
+    expect(read()).toEqual(first);
+    expect(
+      parse.mock.calls.filter(([json]) => json.includes("cache-window-original")),
+    ).toHaveLength(1);
+    parse.mockClear();
+    expect(read()).toEqual(first);
     expect(parse.mock.calls.filter(([json]) => json.includes("cache-window-original"))).toEqual([]);
     parse.mockRestore();
     for (const page of [first, second]) {

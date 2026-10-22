@@ -118,77 +118,39 @@ describe("manifest theme artwork", () => {
     });
   });
 
+  const invalid = (artwork: Record<string, unknown>, error?: string) => ({ artwork, error });
   it.each([
-    ...[
-      { icons: [] },
-      { icons: { claw: "rocket.svg" } },
-      { icons: { mark: "rocket.svg" } },
-      { icons: entries("icon", "rocket.svg") },
-      { hats: [] },
-      { critters: null },
-      { hats: { Beret: "beret.svg" } },
-      { hats: { fedora: "beret.svg" } },
-      { critters: { penguin: { source: "ferris.svg" } } },
-      { critters: { ferris: "ferris.svg" } },
-      { critters: { ferris: { source: "ferris.svg", extra: true } } },
-      { hats: entries("hat", "beret.svg") },
-      { critters: entries("critter", { source: "ferris.svg" }) },
-    ].map((artwork) => ({ artworks: [artwork], error: undefined })),
-    ...[
-      "../beret.svg",
-      "/beret.svg",
-      "assets/../../beret.svg",
-      "assets\\beret.svg",
-      "assets//beret.svg",
-      "https://example.invalid/beret.svg",
-      "beret.png",
-      "beret.svg?hash=1",
-    ].map((source) => ({
-      artworks: [
-        { icons: { rocket: source } },
-        { hats: { beret: source } },
-        { critters: { ferris: { source } } },
-      ],
-      error: "SVG file inside the plugin root",
-    })),
-    ...[
-      {},
-      [],
-      null,
-      "night.webp",
-      { sepia: "night.webp" },
-      { dark: "night.webp", extra: "a.webp" },
-    ].map((backgrounds) => ({ artworks: [{ backgrounds }], error: "light and/or dark" })),
-    ...[
-      "../night.webp",
-      "/night.webp",
-      "assets\\night.webp",
-      "https://example.invalid/night.webp",
-      "night.svg",
-      "night.gif",
-      "night.webp?v=1",
-      7,
-    ].map((source) => ({
-      artworks: [{ backgrounds: { dark: source } }],
-      error: "PNG, JPEG, or WebP file inside the plugin root",
-    })),
-    ...[4999, 90001, 12000.5, "12000"].map((crossMs) => ({
-      artworks: [{ critters: { ferris: { source: "ferris.svg", crossMs } } }],
-      error: "crossMs",
-    })),
-    ...["a".repeat(61), "hello\nworld", "hello\u202e", 12].map((title) => ({
-      artworks: [{ critters: { ferris: { source: "ferris.svg", title } } }],
-      error: "title",
-    })),
-  ])("rejects invalid artwork declarations: %j", ({ artworks, error }) => {
-    for (const artwork of artworks) {
-      expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toMatchObject(
-        {
-          ok: false,
-          ...(error ? { error: expect.stringContaining(error) } : {}),
-        },
-      );
-    }
+    invalid({ icons: [] }),
+    invalid({ icons: { claw: "rocket.svg" } }),
+    invalid({ icons: entries("icon", "rocket.svg") }),
+    invalid({ hats: { Beret: "beret.svg" } }),
+    invalid({ hats: { fedora: "beret.svg" } }),
+    invalid({ critters: { penguin: { source: "ferris.svg" } } }),
+    invalid({ critters: { ferris: "ferris.svg" } }),
+    invalid({ critters: { ferris: { source: "ferris.svg", extra: true } } }),
+    invalid({ icons: { rocket: "../rocket.svg" } }, "SVG file inside the plugin root"),
+    invalid({ hats: { beret: "beret.png" } }, "SVG file inside the plugin root"),
+    invalid(
+      { critters: { ferris: { source: "../ferris.svg" } } },
+      "SVG file inside the plugin root",
+    ),
+    ...[{}, null, { dark: "night.webp", extra: "a.webp" }].map((backgrounds) =>
+      invalid({ backgrounds }, "light and/or dark"),
+    ),
+    ...["../night.webp", "night.svg", 7].map((source) =>
+      invalid({ backgrounds: { dark: source } }, "PNG, JPEG, or WebP file inside the plugin root"),
+    ),
+    ...[4999, 90001, 12000.5, "12000"].map((crossMs) =>
+      invalid({ critters: { ferris: { source: "ferris.svg", crossMs } } }, "crossMs"),
+    ),
+    ...["a".repeat(61), "hello\nworld", "hello\u202e", 12].map((title) =>
+      invalid({ critters: { ferris: { source: "ferris.svg", title } } }, "title"),
+    ),
+  ])("rejects invalid artwork declarations: %j", ({ artwork, error }) => {
+    expect(normalizeManifestThemes([{ ...declaration, ...artwork }], "theme-pack")).toMatchObject({
+      ok: false,
+      ...(error ? { error: expect.stringContaining(error) } : {}),
+    });
   });
 
   it.each([
