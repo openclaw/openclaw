@@ -64,7 +64,7 @@ it.each<
   expect(projection.text).toBe(expectedPath ? `[media attached: ${expectedPath}]` : undefined);
 });
 
-it.each<[string, PersistedUserTurnMediaInput | undefined, unknown]>([
+it.each<[string, PersistedUserTurnMediaInput | undefined, unknown?]>([
   ["zero attachments", undefined, undefined],
   ["bare kind", { kind: "image" }, { kind: "image" }],
   [
@@ -75,13 +75,8 @@ it.each<[string, PersistedUserTurnMediaInput | undefined, unknown]>([
   [
     "transcribed attachment",
     { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
-    { path: "/tmp/voice.ogg", contentType: "audio/ogg", transcribed: true },
   ],
-  [
-    "probed video metadata",
-    { path: "/tmp/clip.mp4", contentType: "video/mp4", ...videoMetadata },
-    { path: "/tmp/clip.mp4", contentType: "video/mp4", ...videoMetadata },
-  ],
+  ["probed video metadata", { path: "/tmp/clip.mp4", contentType: "video/mp4", ...videoMetadata }],
   [
     "workspace-relative attachment",
     { path: "media/inbound/a.png", ...workspaceMedia },
@@ -93,22 +88,20 @@ it.each<[string, PersistedUserTurnMediaInput | undefined, unknown]>([
   [
     "hydration-suppressed attachment",
     { path: "/tmp/described.png", contentType: "image/png", hydrationSuppressed: true },
-    {
-      path: "/tmp/described.png",
-      contentType: "image/png",
-      hydrationSuppressed: true,
-    },
   ],
-])("persists %s as canonical facts without legacy fields", (_name, media, expectedMedia) => {
-  const message = buildPersistedUserTurnMessage({
-    text: "inspect",
-    timestamp: 123,
-    media: media && [media],
-  });
-  expect(message).toMatchObject({ role: "user", content: "inspect", timestamp: 123 });
-  expect(message).not.toHaveProperty("MediaPath");
-  expect(message).not.toHaveProperty("MediaPaths");
-  expect(message).not.toHaveProperty("MediaType");
-  expect(message).not.toHaveProperty("MediaTypes");
-  expect(message["__openclaw"]?.media).toEqual(expectedMedia && [expectedMedia]);
-});
+])(
+  "persists %s as canonical facts without legacy fields",
+  (_name, media, expectedMedia = media) => {
+    const message = buildPersistedUserTurnMessage({
+      text: "inspect",
+      timestamp: 123,
+      media: media && [media],
+    });
+    expect(message).toMatchObject({ role: "user", content: "inspect", timestamp: 123 });
+    expect(message).not.toHaveProperty("MediaPath");
+    expect(message).not.toHaveProperty("MediaPaths");
+    expect(message).not.toHaveProperty("MediaType");
+    expect(message).not.toHaveProperty("MediaTypes");
+    expect(message["__openclaw"]?.media).toEqual(expectedMedia && [expectedMedia]);
+  },
+);

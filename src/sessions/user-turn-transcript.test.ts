@@ -54,6 +54,8 @@ describe("user turn transcript persistence", () => {
     "openclaw-user-turn-persist-",
   );
   beforeEach(() => setRuntimeConfigSnapshot({}));
+  const makeTarget = (sessionId?: string, dir = sessionDirs.make()) =>
+    createSqliteTranscriptTarget({ dir, sessionId });
   const unusedRecorderTarget = {
     agentId: "main",
     sessionEntry: undefined,
@@ -83,9 +85,30 @@ describe("user turn transcript persistence", () => {
     ]);
   }
 
+  async function startLateMedia(input: UserTurnInput, options: Parameters<typeof record>[2] = {}) {
+    const dir = sessionDirs.make();
+    const target = makeTarget(undefined, dir);
+    const resolverStarted = createDeferred();
+    const mediaInput = createDeferred<UserTurnInput>();
+    const committedEntries: string[] = [];
+    const recorder = record(input, target, {
+      onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
+      resolveInput: async () => {
+        resolverStarted.resolve();
+        return await mediaInput.promise;
+      },
+      ...options,
+    });
+    const persistence = recorder.persistFallback();
+    await resolverStarted.promise;
+    const admitted = await persistUserTurnTranscript({ ...target, input });
+    expect(admitted).toBeDefined();
+    return { dir, target, recorder, persistence, admitted, mediaInput, committedEntries };
+  }
+
   describe("trusted human transcript ownership", () => {
     it("keeps producer requester custody through staging, replay, and collection", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const requesterOrigin = {
         sessionKey: "agent:main:telegram:group:requesters",
@@ -312,46 +335,9 @@ describe("user turn transcript persistence", () => {
     },
   );
 
-  describe("persistUserTurnTranscript", () => {
-    it("resolves the session file and persists the user turn", async () => {
-      const dir = sessionDirs.make();
-      const target = createSqliteTranscriptTarget({ dir });
-      const sessionStore = {
-        [target.sessionKey]: {
-          sessionId: target.sessionId,
-          sessionFile: target.sqliteMarker,
-          updatedAt: 1,
-        },
-      };
-
-      const persisted = await persistUserTurnTranscript({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionEntry: sessionStore[target.sessionKey],
-        sessionStore,
-        storePath: target.storePath,
-        agentId: target.agentId,
-        cwd: dir,
-        input: {
-          text: "hello",
-          timestamp: 123,
-        },
-        updateMode: "none",
-      });
-
-      expect(persisted?.sessionFile).toBe(target.sessionKey);
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "hello",
-        }),
-      ]);
-    });
-  });
-
   describe("createUserTurnTranscriptRecorder", () => {
     it("adopts a prepared projection only after commitment and reuses it from another recorder", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const input = userInput("original", "shared-projection");
       const first = record(input, target);
       const second = record(input, target);
@@ -394,7 +380,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("freezes the original prompt after initial steering and across reopened recorders", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const input = userInput("original prompt", "projection:user");
       const recorder = record(input, target);
       await recorder.persistApproved();
@@ -426,7 +412,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("preserves capture, dispatch, and replay bytes despite logging patterns", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const input = userInput("private", "fidelity:user");
       const loggingTarget = { ...target, config: { logging: { redactPatterns: ["private"] } } };
       const recorder = record(input, { ...target, config: { logging: { redactPatterns: [] } } });
@@ -455,7 +441,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("rechecks authority after pending persistence before capturing a projection", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const recorder = record({ text: "original" }, target);
       await recorder.persistApproved();
       const pending = createDeferred();
@@ -477,7 +463,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("never attaches an uncaptured projection to a sent or replaced user turn", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const recorder = record({ text: "original" }, target);
       await recorder.persistApproved();
       await replaceTranscriptEvents(target, [
@@ -505,7 +491,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("persists fallback user turns only once", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const persistedMessages: unknown[] = [];
       const recorder = record(userInput("hello from fallback", "chat-run-1:user"), target, {
         updateMode: "none",
@@ -534,38 +520,17 @@ describe("user turn transcript persistence", () => {
     it.each(["capture", "dispatch"] as const)(
       "appends #99495 media during %s without changing the admitted turn",
       async (timing) => {
-        const dir = sessionDirs.make();
-        const target = createSqliteTranscriptTarget({ dir });
         const admittedInput = {
           text: "describe @Ada",
           timestamp: 123,
           idempotencyKey: "chat-run-late:user",
           mentions: [{ profileId: "ada", start: 9, end: 13 }],
         };
-        const committedEntries: string[] = [];
-        const resolverStarted = createDeferred();
-        const mediaInput = createDeferred<UserTurnInput>();
-        const recorder = createUserTurnTranscriptRecorder({
-          input: admittedInput,
-          onOriginalInputCommitted: ({ anchor }) => committedEntries.push(anchor.entryId),
-          resolveInput: async () => {
-            resolverStarted.resolve();
-            return await mediaInput.promise;
-          },
-          beforeMessageWrite: ({ message }) =>
-            castAgentMessage({
-              ...(message as unknown as Record<string, unknown>),
-              __openclaw: { hookOwned: true },
-            }),
-          target,
-        });
-        const persistence = recorder.persistFallback();
-        await resolverStarted.promise;
-        const admitted = await persistUserTurnTranscript({
-          ...target,
-          input: admittedInput,
-        });
-        expect(admitted).toBeDefined();
+        const { dir, target, recorder, persistence, admitted, mediaInput, committedEntries } =
+          await startLateMedia(admittedInput, {
+            beforeMessageWrite: ({ message }) =>
+              castAgentMessage({ ...message, __openclaw: { hookOwned: true } }),
+          });
         recorder.markRuntimePersisted(recorder.message, admitted?.admission, {
           appended: admitted?.appended === true,
         });
@@ -633,7 +598,7 @@ describe("user turn transcript persistence", () => {
       "retires the pending admission view when %s",
       async (state) => {
         const dir = sessionDirs.make();
-        const target = createSqliteTranscriptTarget({ dir });
+        const target = makeTarget(undefined, dir);
         const recorder = record(
           {
             text: "admit exactly once",
@@ -670,7 +635,7 @@ describe("user turn transcript persistence", () => {
     );
 
     it("adds confirmed steering provenance after runtime persistence", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const input = {
         text: "tighten the answer",
         idempotencyKey: "confirm-steer:user",
@@ -725,7 +690,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("waits for a deferred projection rebuild before returning admission identity", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const committedEntries: string[] = [];
       await replaceSessionEntry(
         { storePath: target.storePath, sessionKey: target.sessionKey },
@@ -761,22 +726,9 @@ describe("user turn transcript persistence", () => {
     });
 
     it("preserves distinct text supplied with late-resolved media", async () => {
-      const dir = sessionDirs.make();
-      const target = createSqliteTranscriptTarget({ dir });
       const admittedInput = userInput("describe this", "chat-run-late-caption:user");
-      const resolverStarted = createDeferred();
-      const mediaInput = createDeferred<UserTurnInput>();
-      const recorder = createUserTurnTranscriptRecorder({
-        input: admittedInput,
-        resolveInput: async () => {
-          resolverStarted.resolve();
-          return await mediaInput.promise;
-        },
-        target,
-      });
-      const persistence = recorder.persistFallback();
-      await resolverStarted.promise;
-      await persistUserTurnTranscript({ ...target, input: admittedInput });
+      const { dir, target, recorder, persistence, mediaInput } =
+        await startLateMedia(admittedInput);
       recorder.markRuntimePersisted(recorder.message);
       recorder.markSentToProvider?.();
       mediaInput.resolve({
@@ -800,7 +752,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("falls back to the admitted text message when lazy media resolution fails", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const errors: unknown[] = [];
       const recorder = record(userInput("keep the prompt", "chat-run-lazy-failed:user"), target, {
         resolveInput: async () => {
@@ -827,7 +779,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("does not fallback-persist after before_agent_run blocks the turn", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const recorder = record(userInput("raw blocked prompt"), target, {
         updateMode: "none",
       });
@@ -840,8 +792,8 @@ describe("user turn transcript persistence", () => {
 
     it("uses the runtime target supplied at approved persistence time", async () => {
       const dir = sessionDirs.make();
-      const staleTarget = createSqliteTranscriptTarget({ dir, sessionId: "stale-session" });
-      const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
+      const staleTarget = makeTarget("stale-session", dir);
+      const admittedTarget = makeTarget("admitted-session", dir);
       const recorder = record(userInput("persist me in the admitted session"), staleTarget, {
         updateMode: "none",
       });
@@ -860,7 +812,7 @@ describe("user turn transcript persistence", () => {
 
     it("keeps concurrent persistence retries single-flight", async () => {
       const dir = sessionDirs.make();
-      const admittedTarget = createSqliteTranscriptTarget({ dir, sessionId: "admitted-session" });
+      const admittedTarget = makeTarget("admitted-session", dir);
       let targetResolutionCount = 0;
       const recorder = createUserTurnTranscriptRecorder({
         input: userInput("persist me once after concurrent retries"),
@@ -887,7 +839,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("waits for runtime persistence before deciding fallback ownership", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const runtimePersistenceStarted = createDeferred();
       const recorder = record(userInput("pending runtime turn"), target, {
         updateMode: "none",
@@ -914,7 +866,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("fallback-persists when pending runtime persistence fails", async () => {
-      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const target = makeTarget();
       const errors: unknown[] = [];
       const runtimePersistence = createDeferred();
       const recorder = record(userInput("pending failed turn"), target, {

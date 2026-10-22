@@ -600,9 +600,14 @@ describe("persistUserTurnTranscript", () => {
   );
 
   it("returns the existing user turn when the idempotency key was already persisted", async () => {
+    const sessionEntry = {
+      sessionId: target.sessionId,
+      sessionFile: target.sqliteMarker,
+      updatedAt: 1,
+    };
     const first = await writeInput(
       { text: "hello once", timestamp: 123, idempotencyKey: "chat-run-1:user" },
-      { updateMode: "none" },
+      { updateMode: "none", sessionEntry, sessionStore: { [target.sessionKey]: sessionEntry } },
     );
     const second = await writeInput(
       { text: "hello once replayed", timestamp: 456, idempotencyKey: "chat-run-1:user" },
@@ -614,6 +619,7 @@ describe("persistUserTurnTranscript", () => {
       timestamp: 123,
       idempotencyKey: "chat-run-1:user",
     };
+    expect(first?.sessionFile).toBe(target.sessionKey);
     expect(second?.messageId).toBe(first?.messageId);
     expect(second?.message).toMatchObject(expected);
     await expect(readMessages()).resolves.toEqual([expect.objectContaining(expected)]);

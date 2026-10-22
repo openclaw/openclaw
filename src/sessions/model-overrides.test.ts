@@ -68,105 +68,88 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry).toEqual(unchanged);
   });
 
-  it("clears stale runtime model fields even when override selection is unchanged", () => {
-    const entry = makeEntry({
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      contextTokens: 160_000,
-      contextBudgetStatus: contextBudgetStatus(anthropic),
-    });
+  const runtime = {
+    modelProvider: anthropic.provider,
+    model: anthropic.model,
+    contextTokens: 160_000,
+    contextBudgetStatus: contextBudgetStatus(anthropic),
+  };
+  const override = { providerOverride: openai.provider, modelOverride: openai.model };
+  const runtimeFields = ["modelProvider", "model", "contextTokens", "contextBudgetStatus"] as const;
+  const overrideFields = [
+    "providerOverride",
+    "modelOverride",
+    "modelOverrideSource",
+    "modelOverrideRouteResolution",
+  ] as const;
 
-    const result = applyModelOverrideToSessionEntry({ entry, selection: openai });
-
-    expect(result.updated).toBe(true);
-    expect(entry).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-5.4" });
-    expectCleared(entry, "modelProvider", "model", "contextTokens", "contextBudgetStatus");
-    expect(entry.updatedAt).toBeGreaterThan(before);
-  });
-
-  it("clears stale contextTokens when switching back to the default model", () => {
-    const local = { provider: "local", model: "sunapi386/llama-3-lexi-uncensored:8b" };
-    const entry = makeEntry({
-      providerOverride: "local",
-      modelOverride: "sunapi386/llama-3-lexi-uncensored:8b",
-      modelOverrideRouteResolution: "resolved",
-      contextTokens: 4_096,
-      contextBudgetStatus: contextBudgetStatus(local, 4_096),
-    });
-
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: {
-        provider: "local",
-        model: "llama3.1:8b",
-        isDefault: true,
+  it.each([
+    {
+      name: "unchanged override with stale runtime fields",
+      fields: { ...override, ...runtime },
+      selection: openai,
+      cleared: runtimeFields,
+      expected: override,
+    },
+    {
+      name: "default replacing a local override",
+      fields: {
+        providerOverride: "local",
+        modelOverride: "sunapi386/llama-3-lexi-uncensored:8b",
+        modelOverrideRouteResolution: "resolved" as const,
+        contextTokens: 4_096,
+        contextBudgetStatus: contextBudgetStatus(
+          { provider: "local", model: "sunapi386/llama-3-lexi-uncensored:8b" },
+          4_096,
+        ),
       },
-    });
-
-    expect(result.updated).toBe(true);
-    expectCleared(entry, "providerOverride", "modelOverride", "modelOverrideSource");
-    expectCleared(entry, "modelOverrideRouteResolution", "contextTokens", "contextBudgetStatus");
-    expect((entry.updatedAt ?? 0) > before).toBe(true);
+      selection: { provider: "local", model: "llama3.1:8b", isDefault: true },
+      cleared: [...overrideFields, "contextTokens", "contextBudgetStatus"] as const,
+      expected: {},
+    },
+    {
+      name: "default with runtime-only fields and a pending live switch",
+      fields: { ...runtime, contextTokens: 200_000 },
+      selection: { ...openai, isDefault: true },
+      cleared: runtimeFields,
+      expected: { liveModelSwitchPending: true },
+      markLiveSwitchPending: true,
+    },
+    {
+      name: "profile-only pending switch",
+      fields: {
+        ...override,
+        authProfileOverride: "oldprofile",
+        authProfileOverrideSource: "user" as const,
+      },
+      selection: openai,
+      cleared: [],
+      expected: { authProfileOverride: "newprofile", liveModelSwitchPending: true },
+      profileOverride: "newprofile",
+      markLiveSwitchPending: true,
+    },
+  ])("updates $name", ({ name: _name, fields, selection, cleared, expected, ...options }) => {
+    const entry = makeEntry(fields);
+    expect(applyModelOverrideToSessionEntry({ entry, selection, ...options }).updated).toBe(true);
+    expect(entry).toMatchObject(expected);
+    expectCleared(entry, ...cleared);
+    expect(entry.updatedAt).toBeGreaterThan(before);
   });
 
   it("persists an explicit default selection and clears it on a user pin", () => {
     const entry = makeEntry({
-      updatedAt: 1,
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
+      providerOverride: anthropic.provider,
+      modelOverride: anthropic.model,
       modelOverrideSource: "user",
     });
-
     applyModelOverrideToSessionEntry({
       entry,
       selection: { ...openai, isDefault: true },
       explicitDefaultSelection: true,
     });
     expect(entry.modelOverrideSource).toBe("default");
-
     applyModelOverrideToSessionEntry({ entry, selection: anthropic });
     expect(entry.modelOverrideSource).toBe("user");
-  });
-
-  it("sets liveModelSwitchPending when switching to default with runtime-only fields", () => {
-    const entry = makeEntry({
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
-      contextTokens: 200_000,
-      contextBudgetStatus: contextBudgetStatus(anthropic),
-    });
-
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: { ...openai, isDefault: true },
-      markLiveSwitchPending: true,
-    });
-
-    expect(result.updated).toBe(true);
-    expectCleared(entry, "modelProvider", "model", "contextTokens", "contextBudgetStatus");
-    expect(entry.liveModelSwitchPending).toBe(true);
-  });
-
-  it("marks profile-only switches as pending when requested", () => {
-    const entry = makeEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-      authProfileOverride: "oldprofile",
-      authProfileOverrideSource: "user",
-    });
-
-    const result = applyModelOverrideToSessionEntry({
-      entry,
-      selection: openai,
-      profileOverride: "newprofile",
-      markLiveSwitchPending: true,
-    });
-
-    expect(result.updated).toBe(true);
-    expect(entry.authProfileOverride).toBe("newprofile");
-    expect(entry.liveModelSwitchPending).toBe(true);
   });
 
   it.each([
