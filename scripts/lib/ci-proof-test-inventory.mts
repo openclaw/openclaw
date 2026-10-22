@@ -4491,7 +4491,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "src/auto-reply/reply/commands-allowlist.owner.test.ts",
   "src/auto-reply/reply/session-hooks-context.test.ts",
   "src/auto-reply/reply/stage-sandbox-media.scp.test.ts",
-  "src/boards/board-generated-identity.test.ts",
   "src/boards/sqlite-board-store.worker.test.ts",
   "src/canvas/widget-tool.report.test.ts",
   "src/channels/message-access/operator-authority.test.ts",
