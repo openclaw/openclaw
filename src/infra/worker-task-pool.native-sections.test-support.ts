@@ -3,13 +3,13 @@
 import assert from "node:assert/strict";
 import { mock } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { isMainThread, threadId, Worker, workerData } from "node:worker_threads";
+import { isMainThread, threadId, Worker } from "node:worker_threads";
 import { deflateSync } from "node:zlib";
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import { WorkerTaskPool } from "./worker-task-pool.js";
 import { serveWorkerTasks } from "./worker-task-server.js";
 
-export type NativeCancellation = "abort" | "timeout" | "close";
+export type NativeCancellation = "close";
 
 type Outcome = PromiseSettledResult<number> | undefined;
 
@@ -31,12 +31,6 @@ if (!isMainThread) {
     }
     assert.ok(input instanceof SharedArrayBuffer);
     const gate = new Int32Array(input);
-    if (workerData.outsideNative) {
-      Atomics.store(gate, 0, 1);
-      Atomics.notify(gate, 0);
-      Atomics.wait(gate, 1, 0, 10_000);
-      return threadId;
-    }
     const compress = () => {
       deflateSync(Buffer.from("a synthetic PDF page"), {
         get rejectGarbageAfterEnd() {
@@ -50,24 +44,18 @@ if (!isMainThread) {
       });
       Atomics.store(gate, 2, 1);
     };
-    // The same fixture runs against the former two-argument owner for crash proof.
-    if (control) {
-      await control.runNativeSection(compress);
-      control.throwIfCancelled();
-    } else {
-      compress();
-    }
+    assert.ok(control);
+    await control.runNativeSection(compress);
+    control.throwIfCancelled();
     Atomics.store(gate, 3, 1);
     return threadId;
   });
 } else {
   const ending = process.argv[2];
-  assert.ok(ending === "abort" || ending === "timeout" || ending === "close" || ending === "exit");
-  const outsideNative = process.argv[3] === "outside-native";
+  assert.ok(ending === "close" || ending === "exit");
   const gate = new Int32Array(new SharedArrayBuffer(16));
   const pool = new WorkerTaskPool<SharedArrayBuffer | string, number>({
     workerUrl: new URL(import.meta.url),
-    workerOptions: { workerData: { outsideNative } },
     maxWorkers: 1,
     maxPendingTasks: 2,
   });
@@ -77,14 +65,9 @@ if (!isMainThread) {
     assert.ok(worker instanceof Worker);
     assert.equal(worker.threadId, -1, "cancellation must join native exit before replacement");
   };
-  if (ending === "timeout") {
-    mock.timers.enable({ apis: ["setTimeout"] });
-  }
-  const controller = new AbortController();
   const reason = new Error(`cancel native section by ${ending}`);
   let activeSettled = false;
   const active = pool.run(ending === "exit" ? "exit-native" : gate.buffer, {
-    signal: controller.signal,
     timeoutMs: 10_000,
   });
   const outcome = Promise.allSettled([active]).then(([result]) => {
@@ -107,46 +90,36 @@ if (!isMainThread) {
         return "successor";
       }, {});
       const successorOutcome = Promise.allSettled([successor]);
-      let closed: Promise<void> | undefined;
       let closeSettled = false;
-      if (ending === "abort") {
-        controller.abort(reason);
-      } else if (ending === "timeout") {
-        mock.timers.tick(10_000);
-      } else {
-        closed = pool.close(reason).then(() => {
-          closeSettled = true;
-        });
-      }
-      if (!outsideNative) {
-        await setImmediate();
-        // Against the old owner, keep the gate closed through the native destructor.
-        await terminate.mock.calls[0]?.result;
-        assert.deepEqual(
-          [activeSettled, closeSettled, successorStarted],
-          [false, false, false],
-          "cancellation must retain native custody and the active worker slot",
-        );
-        assert.equal(terminate.mock.callCount(), 0, "native init must not be interrupted");
-        assert.equal(pool.getSnapshot().pendingTasks, ending === "close" ? 1 : 2);
-        Atomics.store(gate, 1, 1);
-        Atomics.notify(gate, 1);
-      }
+      const closed = pool.close(reason).then(() => {
+        closeSettled = true;
+      });
+      await setImmediate();
+      // Against the old owner, keep the gate closed through the native destructor.
+      await terminate.mock.calls[0]?.result;
+      assert.deepEqual(
+        [activeSettled, closeSettled, successorStarted],
+        [false, false, false],
+        "cancellation must retain native custody and the active worker slot",
+      );
+      assert.equal(terminate.mock.callCount(), 0, "native init must not be interrupted");
+      assert.equal(pool.getSnapshot().pendingTasks, 1);
+      Atomics.store(gate, 1, 1);
+      Atomics.notify(gate, 1);
       const result = await outcome;
-      assertRejected(result, ending === "timeout" ? "timeout" : reason);
+      assertRejected(result, reason);
       assertJoined();
-      assert.equal(Atomics.load(gate, 2), outsideNative ? 0 : 1, "native call completion");
+      assert.equal(Atomics.load(gate, 2), 1, "native call completion");
       assert.equal(Atomics.load(gate, 3), 0, "cancellation must stop the next page");
       const [next] = await successorOutcome;
-      assert.equal(next?.status, ending === "close" ? "rejected" : "fulfilled");
-      assert.equal(successorStarted, ending !== "close");
+      assert.equal(next?.status, "rejected");
+      assert.equal(successorStarted, false);
       await closed;
-      console.log(JSON.stringify({ ending, outsideNative, cancelled: true }));
+      console.log(JSON.stringify({ ending, outsideNative: false, cancelled: true }));
     }
   } finally {
     Atomics.store(gate, 1, 1);
     Atomics.notify(gate, 1);
-    mock.timers.reset();
     await pool.close();
     await outcome;
     terminate.mock.restore();

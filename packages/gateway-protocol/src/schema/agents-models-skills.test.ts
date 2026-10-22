@@ -85,6 +85,7 @@ it("Models auth params schemas: accepts optional agent-scoped status and logout 
     ModelsAuthStatusParamsSchema,
     {},
     { refresh: true, agentId: "writer" },
+    { refreshUsage: true, agentId: "writer" },
     { agentId: "" },
   );
   expectAccepted(

@@ -117,7 +117,57 @@ describe("Claude migration provider", () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     await testWorkspace.cleanup();
+  });
+
+  it.each([
+    ["project", "project/.mcp.json", true],
+    [".claude", ".claude.json", true],
+    [".claude", "Library/Application Support/Claude/claude_desktop_config.json", true],
+    ["project", "project/.claude/settings.json", false],
+    ["project", "project/.claude/settings.local.json", false],
+    [".claude", ".claude/settings.json", false],
+    [".claude", ".claude/settings.local.json", false],
+  ])("refuses damaged JSON in %s/%s before importing and allows repair", async (dir, file, mcp) => {
+    vi.spyOn(os, "homedir").mockReturnValue(root);
+    const source = path.join(root, dir);
+    const sourceFile = path.join(root, file);
+    await fs.mkdir(source, { recursive: true });
+    await writeFile(sourceFile, "");
+    await writeFile(path.join(source, "CLAUDE.md"), "New instructions.\n");
+    const target = path.join(workspaceDir, "AGENTS.md");
+    await writeFile(target, "Existing instructions.\n");
+    const config: OpenClawConfig = { agents: { defaults: { workspace: workspaceDir } } };
+    const original = structuredClone(config);
+    const context = contextFor(source, { config, runtime: makeConfigRuntime(config), reportDir });
+    const malformed = Buffer.concat([
+      Buffer.from('{"mcpServers":{"proof":{"command":"node","args":["'),
+      Buffer.from([0xc3, 0x28]),
+      Buffer.from('"]}},"env":{"EXAMPLE":"value"}}'),
+    ]);
+    await fs.writeFile(sourceFile, malformed);
+
+    await expect(provider.apply(context)).rejects.toThrow(
+      `Claude configuration file is not valid UTF-8: ${sourceFile}`,
+    );
+    expect(config).toEqual(original);
+    expect(await readText(target)).toBe("Existing instructions.\n");
+    expect(await fs.readFile(sourceFile)).toEqual(malformed);
+    await expect(fs.access(reportDir)).rejects.toThrow();
+
+    const value = "中文 🦞 literal �";
+    await writeJson(sourceFile, {
+      mcpServers: { proof: { command: "node", args: [value] } },
+      env: { EXAMPLE: value },
+    });
+    const result = await provider.apply(context);
+    expect(result.summary.errors).toBe(0);
+    if (mcp) {
+      expect(config.mcp?.servers?.proof).toEqual({ command: "node", args: [value] });
+    } else {
+      expect(result.items.some((item) => item.kind === "manual")).toBe(true);
+    }
   });
 
   it.each(instructionSources)(

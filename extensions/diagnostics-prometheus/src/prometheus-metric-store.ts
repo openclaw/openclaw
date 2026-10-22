@@ -101,7 +101,7 @@ export function createPrometheusMetricStore(
     const count = familyCounts.get(name) ?? 0;
     const reserve = PROMETHEUS_FAMILY_RESERVES[name];
     if (
-      count >= MAX_PROMETHEUS_FAMILY_SERIES ||
+      count >= Math.max(MAX_PROMETHEUS_FAMILY_SERIES, reserve) ||
       (count >= reserve && sharedSeries >= SHARED_PROMETHEUS_SERIES)
     ) {
       droppedSeries++;

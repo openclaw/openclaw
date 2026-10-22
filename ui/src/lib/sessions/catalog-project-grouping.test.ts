@@ -31,19 +31,16 @@ describe("groupCatalogSessionsByProject", () => {
       { ...session("grouped", "/work/openclaw"), customGroup: "Release" },
     ]);
 
-    expect(result.groups).toMatchObject([
-      {
-        key: "custom:Release",
-        legacySectionKey: "custom:Release",
-        label: "Release",
-        sessions: [{ threadId: "grouped" }],
-      },
-      {
-        key: "project:/work/openclaw",
-        legacySectionKey: "/work/openclaw",
-        label: "openclaw",
-        sessions: [{ threadId: "project" }],
-      },
+    expect(
+      result.groups.map(({ key, legacySectionKey, label, sessions }) => [
+        key,
+        legacySectionKey,
+        label,
+        sessions.map((item) => item.threadId),
+      ]),
+    ).toEqual([
+      ["custom:Release", "custom:Release", "Release", ["grouped"]],
+      ["project:/work/openclaw", "/work/openclaw", "openclaw", ["project"]],
     ]);
   });
 

@@ -708,6 +708,7 @@ describe("append-only assistant errors with deferred display", () => {
       stopReason: "error",
       errorMessage: "provider rate limit",
     });
+    const expected = structuredClone(failed);
     manager.appendMessage(failed);
     manager.appendMessage(
       makeTextToolResult(toolCall.id, toolCall.name, "Persisted result", false, 1),
@@ -719,17 +720,8 @@ describe("append-only assistant errors with deferred display", () => {
     closeOpenClawAgentDatabasesForTest();
     const messages = persistedMessages();
     expect(messages).toMatchObject([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "I" }, toolCall],
-        stopReason: "error",
-        errorMessage: "provider rate limit",
-      },
-      {
-        role: "toolResult",
-        toolCallId: toolCall.id,
-        content: [{ type: "text", text: "Persisted result" }],
-      },
+      expected,
+      makeTextToolResult(toolCall.id, toolCall.name, "Persisted result", false, 1),
       assistantContent("Recovered"),
     ]);
     const normalized = normalizeAssistantReplayContent(messages);
@@ -757,22 +749,16 @@ describe("append-only assistant errors with deferred display", () => {
         media: [{ url: "https://example.invalid/report.pdf", contentType: "application/pdf" }],
       },
     };
-    manager.appendMessage({
+    const failed = {
       ...assistantText("Here", { stopReason: "error", errorMessage: "retry" }),
       ...facts,
-    });
+    };
+    const expected = structuredClone(failed);
+    manager.appendMessage(failed);
     owner.clear();
     manager.appendMessage(assistantText("Recovered"));
     owner.settle(false);
-    expect(messages()).toMatchObject([
-      {
-        ...assistantContent("Here"),
-        stopReason: "error",
-        errorMessage: "retry",
-        ...facts,
-      },
-      assistantContent("Recovered"),
-    ]);
+    expect(messages()).toMatchObject([expected, assistantContent("Recovered")]);
   });
 
   it("keeps one original terminal error without splitting text, tool facts, or usage", async () => {
@@ -791,22 +777,13 @@ describe("append-only assistant errors with deferred display", () => {
       openclawDisplayContent: [displayText, attachment],
     };
     failed.usage = { ...failed.usage, output: 7, totalTokens: 7 };
+    const expected = structuredClone(failed);
     manager.appendMessage(failed);
     manager.appendMessage(makeTextToolResult("call-terminal", "read", "Result", false, 1));
     owner.settle(true);
     owner.settle(true);
     expect(messages()).toMatchObject([
-      {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Partial answer" },
-          { type: "toolCall", id: "call-terminal" },
-        ],
-        openclawDisplayContent: [displayText, attachment],
-        usage: { output: 7 },
-        stopReason: "error",
-        errorMessage: "terminal failure",
-      },
+      expected,
       { role: "toolResult", toolCallId: "call-terminal" },
     ]);
   });

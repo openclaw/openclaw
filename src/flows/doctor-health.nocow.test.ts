@@ -17,7 +17,7 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
-const { mocks } = await import("./doctor-health.test-support.js");
+const { mocks, createDoctorConfig } = await import("./doctor-health.test-support.js");
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -51,13 +51,7 @@ it.skipIf(process.platform !== "linux")(
         const native =
           await vi.importActual<typeof import("node:child_process")>("node:child_process");
         const tools = createDoctorNoCowToolFixture(state.root, native.spawnSync);
-        const cfg = {
-          agents: {
-            ownership: "explicit" as const,
-            entries: { main: { workspace: state.workspaceDir } },
-          },
-          gateway: { mode: "local" as const },
-        };
+        const cfg = createDoctorConfig(state);
         await state.writeConfig(cfg);
         setRuntimeConfigSnapshot(cfg);
         mocks.config.mockReturnValue(cfg);

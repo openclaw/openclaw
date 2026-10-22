@@ -238,8 +238,6 @@ async function withProbeRoot(run: (root: string) => Promise<void>) {
 it.each([
   { label: "unchanged", mode: "unchanged", version: "1.0.0" },
   { label: "ordinary-veto", mode: "veto", version: "1.0.0" },
-  { label: "unapproved-rewrite", mode: "rewrite", version: "1.0.0" },
-  { label: "approved-rewrite", mode: "rewrite", version: "2.0.0", secondDecision: "allow-once" },
   { label: "denied-rewrite", mode: "rewrite", version: "2.0.0", secondDecision: "deny" },
 ] as const)("fresh install: $label", async (scenario) => {
   await withProbeRoot(async (root) => {

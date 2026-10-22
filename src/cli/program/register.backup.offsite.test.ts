@@ -37,6 +37,14 @@ async function expectRun(status: "ok" | "failed", fields: object = {}) {
   expect((await readBackupRuns(process.env))[0]).toMatchObject({ status, ...fields });
 }
 
+async function expectAbsent(file: string) {
+  await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
+async function expectListing(directory: string, entries: string[], partial = false) {
+  expect(await fs.readdir(directory)).toEqual(partial ? expect.arrayContaining(entries) : entries);
+}
+
 function archiveConfig(destination: string) {
   return {
     storage: {
@@ -91,7 +99,13 @@ function createCliHarness() {
     )) as OffsiteBackupResult;
   const from = (operation: string, namespace: string, ...args: string[]) =>
     run("backup", operation, ...args, "--from", "archive", "--namespace", namespace);
-  return { run, create, from, errors };
+  const reject = async (operation: Promise<unknown>, message: string, fields: object) => {
+    await expect(operation).rejects.toThrow();
+    expect(errors.mock.calls.flat().join(" ")).toContain(message);
+    await expectRun("failed", { target: "archive", error: message, ...fields });
+    errors.mockClear();
+  };
+  return { run, create, from, errors, reject };
 }
 
 describe("offsite backup CLI", () => {
@@ -171,8 +185,8 @@ describe("offsite backup CLI", () => {
       const create = () => fixture.create("test-host", "--only-config");
       await expect(create()).rejects.toThrow("CLI exit 1");
       expect(displaced).toBe(true);
-      expect(await fs.readdir(fixture.namespaceDir)).toEqual(before);
-      expect(await fs.readdir(fixture.scratchRoot)).toEqual([]);
+      await expectListing(fixture.namespaceDir, before);
+      await expectListing(fixture.scratchRoot, []);
       await expectRun("failed", {
         target: "archive",
         namespace: "test-host",
@@ -184,11 +198,9 @@ describe("offsite backup CLI", () => {
       fixture.useNewOwner();
       const created = await create();
       expect(created.verified).toBe(true);
-      expect(await fs.readdir(fixture.namespaceDir)).toEqual(
-        expect.arrayContaining([...before, created.location!.key]),
-      );
+      await expectListing(fixture.namespaceDir, [...before, created.location!.key], true);
       await expectRun("ok");
-      expect(await fs.readdir(fixture.scratchRoot)).toEqual([]);
+      await expectListing(fixture.scratchRoot, []);
     });
   });
 
@@ -242,14 +254,16 @@ describe("offsite backup CLI", () => {
       expect(deleted).toHaveLength(1);
       expect(ownerReadsAtDelete).toEqual([1]);
       expect(ownerReads).toBe(1);
-      expect(await fs.readdir(fixture.namespaceDir)).toEqual(
-        expect.arrayContaining(expired.filter((key) => !deleted.includes(key))),
+      await expectListing(
+        fixture.namespaceDir,
+        expired.filter((key) => !deleted.includes(key)),
+        true,
       );
       await expectRun("failed", {
         namespace: "test-host",
         error: expect.stringContaining("belongs to another OpenClaw installation"),
       });
-      expect(await fs.readdir(fixture.scratchRoot)).toEqual([]);
+      await expectListing(fixture.scratchRoot, []);
     });
   });
 
@@ -269,36 +283,25 @@ describe("offsite backup CLI", () => {
         path.join(state.workspaceDir, "workspace-note.txt"),
         "excluded workspace\n",
       );
-      const { run, create, from, errors } = createCliHarness();
+      const { run, create, from, reject } = createCliHarness();
       openOpenClawStateDatabase();
       await closeOpenClawStateDatabaseAsync();
       expect((await fs.stat(resolveOpenClawStateSqlitePath())).isFile()).toBe(true);
       const localCopy = state.path("retained.tar.gz");
-      await expect(
-        run("backup", "create", "--to", "archive", "--output", localCopy),
-      ).rejects.toThrow();
       const unavailableMessage =
         "Storage directory is unavailable. Reconnect the disk and check the configured path; storage init requires an existing directory.";
-      expect(errors.mock.calls.flat().join(" ")).toContain(unavailableMessage);
-      await expectRun("failed", {
+      const createLocal = () => run("backup", "create", "--to", "archive", "--output", localCopy);
+      await reject(createLocal(), unavailableMessage, {
         kind: "archive",
-        target: "archive",
         namespace: "default-host",
-        error: unavailableMessage,
       });
-      errors.mockClear();
       await fs.mkdir(destination);
-      await expect(
-        run("backup", "create", "--to", "archive", "--output", localCopy),
-      ).rejects.toThrow();
-      expect(errors.mock.calls.flat().join(" ")).toContain("openclaw storage init archive");
-      await expect(fs.stat(localCopy)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await fs.readdir(scratchRoot)).toEqual([]);
-      await expectRun("failed", {
+      await reject(createLocal(), "openclaw storage init archive", {
         kind: "archive",
-        target: "archive",
         error: expect.stringContaining("storage init archive"),
       });
+      await expectAbsent(localCopy);
+      await expectListing(scratchRoot, []);
 
       await run("storage", "init", "archive");
       const namespaceDir = path.join(destination, "backups", "test-host");
@@ -330,20 +333,17 @@ describe("offsite backup CLI", () => {
         );
       };
       await writeClaim(foreignClaim);
-      errors.mockClear();
-      await expect(
-        create("test-host", "--output", localCopy, "--keep-daily", "0"),
-      ).rejects.toThrow();
       const collisionMessage =
         'Backup namespace "test-host" in archive belongs to another OpenClaw installation (test-host, device another-inst). Pass --namespace <name> to use a separate namespace, or --claim-namespace to take it over deliberately (for example after moving to new hardware).';
-      expect(errors.mock.calls.flat().join(" ")).toContain(collisionMessage);
-      await expectRun("failed", {
-        target: "archive",
-        namespace: "test-host",
-        error: collisionMessage,
-      });
-      await expect(fs.stat(localCopy)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(await fs.readdir(scratchRoot)).toEqual([]);
+      await reject(
+        create("test-host", "--output", localCopy, "--keep-daily", "0"),
+        collisionMessage,
+        {
+          namespace: "test-host",
+        },
+      );
+      await expectAbsent(localCopy);
+      await expectListing(scratchRoot, []);
       expect(await fs.readdir(namespaceDir)).toContain(oldKey);
       const created = await create(
         "test-host",
@@ -358,14 +358,10 @@ describe("offsite backup CLI", () => {
         retention: { kept: 1, deleted: 1 },
       });
       expect(created.location?.storedBytes).toBeGreaterThan(created.location!.plaintextBytes);
-      expect(await fs.readdir(scratchRoot)).toEqual([]);
-      expect(await fs.readdir(namespaceDir)).toEqual(
-        expect.arrayContaining(["foreign.txt", created.location!.key]),
-      );
-      await expect(fs.stat(path.join(namespaceDir, oldKey))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(await fs.readdir(otherDir)).toEqual([oldKey]);
+      await expectListing(scratchRoot, []);
+      await expectListing(namespaceDir, ["foreign.txt", created.location!.key], true);
+      await expectAbsent(path.join(namespaceDir, oldKey));
+      await expectListing(otherDir, [oldKey]);
       for (const key of [created.location!.key, "owner.json"]) {
         expect((await fs.readFile(path.join(namespaceDir, key))).subarray(0, 8).toString()).toBe(
           "OCSTOR1\n",
@@ -388,12 +384,10 @@ describe("offsite backup CLI", () => {
           { namespace: "test-host-other" },
         ]),
       });
-      const listed = await from("list", "test-host");
-      expect(listed).toMatchObject({
+      expect(await from("list", "test-host")).toMatchObject({
         backups: [{ key: created.location!.key, sizeBytes: created.location!.plaintextBytes }],
       });
-      const verified = await from("verify", "test-host", "latest");
-      expect(verified).toMatchObject({ ok: true });
+      expect(await from("verify", "test-host", "latest")).toMatchObject({ ok: true });
       const target = state.path("staged");
       await from("restore", "test-host", "latest", "--target", target);
       const capturedState = created.assets.find((asset) => asset.kind === "state");
@@ -432,7 +426,7 @@ describe("offsite backup CLI", () => {
     });
   });
 
-  it("creates and verifies nested-TMPDIR backups while reclaiming abandoned scratch and preserving active scratch", async () => {
+  it("creates nested-TMPDIR backups, reclaims abandoned scratch, preserves active scratch and reports strays", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const { destination, nestedTmp, create, from } = await prepareNestedTmp(state);
       await fs.writeFile(state.statePath("operator-note.txt"), "preserved state\n");
@@ -443,6 +437,8 @@ describe("offsite backup CLI", () => {
       // with no live lifetime token; a concurrent run still holds its token.
       const abandoned = await createBackupScratchDirectory(fallbackRoot);
       const active = await createBackupScratchDirectory(fallbackRoot);
+      const stray = path.join(fallbackRoot, "openclaw-backup-strayf");
+      await fs.writeFile(stray, "not a scratch directory");
       for (const scratch of [abandoned, active]) {
         await fs.writeFile(path.join(scratch.directory, "archive.tar.gz"), "synthetic archive");
       }
@@ -452,6 +448,7 @@ describe("offsite backup CLI", () => {
         expect(created).toMatchObject({
           verified: true,
           localArchiveRetained: false,
+          warnings: expect.arrayContaining([expect.stringContaining(`${stray}: not a directory`)]),
           location: {
             name: "archive",
             namespace: "nested-tmp-host",
@@ -461,8 +458,10 @@ describe("offsite backup CLI", () => {
             /^storage:\/\/archive\/backups\/nested-tmp-host\/.+\.tar\.gz$/,
           ),
         });
-        expect(await fs.readdir(path.join(destination, "backups", "nested-tmp-host"))).toEqual(
-          expect.arrayContaining([created.location!.key, "owner.json"]),
+        await expectListing(
+          path.join(destination, "backups", "nested-tmp-host"),
+          [created.location!.key, "owner.json"],
+          true,
         );
         expect(await from("list", "nested-tmp-host")).toMatchObject({
           backups: [{ key: created.location!.key, sizeBytes: created.location!.plaintextBytes }],
@@ -470,38 +469,20 @@ describe("offsite backup CLI", () => {
         await expect(from("verify", "nested-tmp-host", "latest")).resolves.toMatchObject({
           ok: true,
         });
-        await expect(fs.stat(abandoned.directory)).rejects.toMatchObject({ code: "ENOENT" });
+        await expectAbsent(abandoned.directory);
         await expect(
           fs.readFile(path.join(active.directory, "archive.tar.gz"), "utf8"),
         ).resolves.toBe("synthetic archive");
-        expect(await scratchDirectories(fallbackRoot)).toEqual([path.basename(active.directory)]);
+        await expect(fs.readFile(stray, "utf8")).resolves.toBe("not a scratch directory");
+        expect((await scratchDirectories(fallbackRoot)).toSorted()).toEqual(
+          [path.basename(active.directory), path.basename(stray)].toSorted(),
+        );
         expect(await scratchDirectories(nestedTmp)).toEqual([]);
       } finally {
         await expect(finishBackupScratch(active, () => {})).resolves.toBeUndefined();
-      }
-      expect(await scratchDirectories(fallbackRoot)).toEqual([]);
-    });
-  });
-
-  it("reports fallback-root scratch maintenance warnings in the offsite archive JSON", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const { create } = await prepareNestedTmp(state);
-      const fallbackRoot = path.dirname(state.stateDir);
-
-      // A scratch-named non-directory at the fallback root is preserved with a
-      // warning by maintenance; that warning must reach the JSON result.
-      const stray = path.join(fallbackRoot, "openclaw-backup-strayf");
-      await fs.writeFile(stray, "not a scratch directory");
-      try {
-        const created = await create("nested-tmp-host", "--no-include-workspace");
-        expect(created).toMatchObject({ verified: true, localArchiveRetained: false });
-        expect(created.warnings).toEqual(
-          expect.arrayContaining([expect.stringContaining(`${stray}: not a directory`)]),
-        );
-        await expect(fs.readFile(stray, "utf8")).resolves.toBe("not a scratch directory");
-      } finally {
         await fs.rm(stray, { force: true });
       }
+      expect(await scratchDirectories(fallbackRoot)).toEqual([]);
     });
   });
 });

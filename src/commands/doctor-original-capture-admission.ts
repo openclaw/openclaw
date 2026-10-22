@@ -1,5 +1,6 @@
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import { withDoctorProgress } from "../flows/doctor-health-startup.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { DoctorMaintenanceParams } from "./doctor-maintenance-types.js";
@@ -13,6 +14,7 @@ export function createDoctorOriginalCaptureHook(
   > & {
     rehearsalRoot?: string;
     json?: boolean;
+    reportFindings: (findings: readonly HealthFinding[], warnings?: readonly string[]) => void;
   },
 ): NonNullable<DoctorMaintenanceParams["beforeStateMutation"]> {
   return async ({ env, signal }) => {
@@ -49,6 +51,8 @@ export function createDoctorOriginalCaptureHook(
             "Deferred schema rehearsal cannot authorize repair of agents outside this disposable namespace.",
           );
         }
+        // Canary state is disposable; external plugin data is deferred by its resource owner.
+        return;
       } catch (cause) {
         throw new DoctorMaintenanceRefusalError(
           `Doctor rehearsal admission refused: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -57,8 +61,8 @@ export function createDoctorOriginalCaptureHook(
         );
       }
     }
-    await withDoctorProgress(
-      "Back up original state",
+    const { findings, warnings } = await withDoctorProgress(
+      "Preserve original state",
       () =>
         measureGatewayBootstrapStep("doctor.maintenance.preserve-original-state", () =>
           preserveDoctorOriginalState({
@@ -73,5 +77,6 @@ export function createDoctorOriginalCaptureHook(
         ),
       params.json !== true,
     );
+    params.reportFindings(findings, warnings);
   };
 }

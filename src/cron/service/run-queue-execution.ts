@@ -4,6 +4,7 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { clearCronJobActive } from "../active-jobs.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { cronEventPayload } from "../event-source.js";
+import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
 import type { CronQueuedRun } from "../store/run-queue.types.js";
 import { hasUnstartedCronAdmission } from "./admission-deferred.js";
@@ -60,6 +61,12 @@ export async function launchCronRun(
     state.deps.isAgentAvailable?.(entry.runReceipt.agentId, {
       deletionBlocked: false,
     }) === false;
+  // The queue retires a command schedule while charging its final attempt. That attempt still
+  // launches unless the definition changed again after the charge, such as an operator disable.
+  const retiredByThisLaunch =
+    isPluginCommandCronJob(current ?? entry.job) &&
+    !isJobEnabled(entry.job) &&
+    current?.updatedAtMs === entry.job.updatedAtMs;
   // One final live owner/eligibility check; a disable may still race dispatch.
   if (
     state.stopped ||
@@ -68,7 +75,7 @@ export async function launchCronRun(
     unavailable ||
     current.state.runningReceiptId !== entry.runReceipt.receiptId ||
     (options.event && cronSourceIdentity(current) !== options.event.input.sourceIdentity) ||
-    (!force && (!isJobEnabled(current) || current.state.autoDisabled)) ||
+    (!force && ((!isJobEnabled(current) && !retiredByThisLaunch) || current.state.autoDisabled)) ||
     (options.streamScheduleKey !== undefined &&
       !ownsCronSource(current, options.streamScheduleKey, options.streamSourceIdentity ?? ""))
   ) {

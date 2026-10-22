@@ -1,6 +1,8 @@
 import type { ChildProcess } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { createBoundedChildOutput } from "../../test/helpers/bounded-child-output.js";
@@ -10,16 +12,19 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { logInfo } from "../logger.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { nodeHostConfigRuntimeEntrypoint } from "./config-runtime.test-support.js";
 import {
   configureNodeHost,
@@ -104,6 +109,7 @@ async function runConcurrentImplicitConfigures(
 
 describe("node-host SQLite config", () => {
   afterEach(async () => {
+    vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fixture.cleanup();
@@ -115,6 +121,7 @@ describe("node-host SQLite config", () => {
     return {
       env,
       stateDir,
+      databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
       configure: (overrides: Partial<Parameters<typeof configureNodeHost>[0]> = {}) =>
         configureNodeHost({ fallbackDisplayName: "node", gateway: {}, env, ...overrides }),
       load: () => loadNodeHostConfig(env),
@@ -152,13 +159,9 @@ describe("node-host SQLite config", () => {
       nowMs: 1_234,
     });
     expect(configured).toEqual(expected);
-    expect(readConfigMachineState<NodeHostConfig>(NODE_HOST_CONFIG_KEY, { env })).toEqual(
-      configured,
-    );
     expect(readConfigMachineStateWithMetadata(NODE_HOST_CONFIG_KEY, { env })?.updatedAtMs).toBe(
       1_234,
     );
-    expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).not.toHaveProperty("token");
     await closeOpenClawStateDatabaseAsync();
     await expect(load()).resolves.toEqual(configured);
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
@@ -166,11 +169,9 @@ describe("node-host SQLite config", () => {
     });
   });
 
-  it("keeps installed-app sharing disabled by default and persists an explicit enable", async () => {
+  it("persists an explicit installed-app sharing enable", async () => {
     const { configure, load } = makeTestEnv();
-    const initial = await configure({ nowMs: 1 });
-    expect(initial.installedAppsSharing).toBe(false);
-
+    await configure({ nowMs: 1 });
     const enabled = await configure({ installedAppsSharing: true, nowMs: 2 });
     expect(enabled.installedAppsSharing).toBe(true);
     await closeOpenClawStateDatabaseAsync();
@@ -240,10 +241,9 @@ describe("node-host SQLite config", () => {
   }, 30_000);
 
   it("preserves explicit custom ids and atomically clears omitted gateway fields", async () => {
-    const { env } = makeTestEnv();
-    await configureNodeHost({
+    const { configure, load } = makeTestEnv();
+    await configure({
       nodeId: "first-custom-id",
-      fallbackDisplayName: "node",
       gateway: {
         host: "old.example",
         port: 443,
@@ -251,14 +251,11 @@ describe("node-host SQLite config", () => {
         tlsFingerprint: fixtureDigest,
         contextPath: "/old",
       },
-      env,
       nowMs: 20,
     });
-    const configured = await configureNodeHost({
+    const configured = await configure({
       nodeId: "custom id with spaces inside",
-      fallbackDisplayName: "node",
       gateway: { host: "new.example", port: 18789, tls: false },
-      env,
       nowMs: 21,
     });
 
@@ -268,7 +265,7 @@ describe("node-host SQLite config", () => {
     });
     expect(configured.gateway?.tlsFingerprint).toBeUndefined();
     expect(configured.gateway?.contextPath).toBeUndefined();
-    await expect(loadNodeHostConfig(env)).resolves.toEqual(configured);
+    await expect(load()).resolves.toEqual(configured);
   });
 
   it("rejects corrupt canonical rows instead of rotating identity", async () => {
@@ -297,4 +294,95 @@ describe("node-host SQLite config", () => {
       await expect(configure()).rejects.toThrow("openclaw doctor --fix");
     },
   );
+  function seed(env: NodeJS.ProcessEnv) {
+    return configureNodeHost({
+      env,
+      nodeId: "fixture-node",
+      displayName: "Fixture Node",
+      fallbackDisplayName: "fallback",
+      gateway: { host: "gateway.example", port: 18443, tls: true, contextPath: "/gateway" },
+      commands: ["fixture.read", "fixture.list"],
+      installedAppsSharing: true,
+      nowMs: 1234,
+    });
+  }
+
+  async function withoutParentSql<T>(operation: () => Promise<T>): Promise<T> {
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
+    try {
+      const result = await operation();
+      expect(sql.count()).toBe(0);
+      return result;
+    } finally {
+      vi.restoreAllMocks();
+    }
+  }
+
+  it.each(["cached", "fresh"] as const)("loads %s config without parent SQL", async (mode) => {
+    expect(isMainThread).toBe(true);
+    const { env } = makeTestEnv();
+    const expected = await seed(env);
+    const source = openOpenClawStateDatabase({ env });
+    if (mode === "fresh") {
+      await closeOpenClawStateDatabaseAsync();
+    }
+    expect(await withoutParentSql(() => loadNodeHostConfig(env))).toEqual(expected);
+    expect(source.db.isOpen).toBe(mode === "cached");
+  });
+
+  it.each([false, true])("gates absent store reads on legacy=%s", async (legacy) => {
+    const { env, stateDir: root, databasePath } = makeTestEnv();
+    const execute = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    if (legacy) {
+      fsSync.writeFileSync(path.join(root, "node.json"), "{}\n");
+      await expect(loadNodeHostConfig(env)).rejects.toThrow("openclaw doctor --fix");
+      expect(execute).not.toHaveBeenCalled();
+    } else {
+      expect(await loadNodeHostConfig(env)).toBeNull();
+    }
+    expect(fsSync.existsSync(databasePath)).toBe(false);
+  });
+
+  const validRow = '{"version":1,"nodeId":"fixture-node"}';
+  it.each([
+    ["{", 1, SyntaxError, /JSON/u],
+    [validRow, -1, Error, /updated_at_ms must be a non-negative integer/u],
+  ] as const)("preserves row errors (%s, %s)", async (json, time, kind, message) => {
+    const { env } = makeTestEnv();
+    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockResolvedValue({
+      ok: true,
+      type: "nodeHost.config",
+      sourceAdmitted: true,
+      row: { value_json: json, updated_at_ms: time },
+    });
+    const failure = await loadNodeHostConfig(env).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(kind);
+    expect(failure).toMatchObject({ message: expect.stringMatching(message) });
+  });
+
+  it("configures without host SQL and refreshes previously read configuration", async () => {
+    const { env } = makeTestEnv();
+    const initial = await seed(env);
+    expect(await loadNodeHostConfig(env)).toEqual(initial);
+    await withoutParentSql(async () => {
+      const update = {
+        displayName: "Updated Node",
+        gateway: { host: "new.gateway.example", port: 19443, tls: true },
+        commands: ["fixture.updated"],
+      };
+      const configured = await configureNodeHost({
+        ...update,
+        env,
+        fallbackDisplayName: "fallback",
+        nowMs: 5678,
+      });
+      expect(configured).toMatchObject({
+        ...update,
+        nodeId: initial.nodeId,
+        installedAppsSharing: true,
+      });
+      expect(await loadNodeHostConfig(env)).toEqual(configured);
+    });
+  });
 });

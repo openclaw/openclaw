@@ -423,72 +423,63 @@ describe("verifyTwilioWebhook", () => {
     expect(result.reason).not.toContain("secret-turn-token");
   });
 
-  it("does not allow invalid signatures for ngrok free tier on loopback", () => {
+  it.each<{
+    name: string;
+    host: string;
+    forwarded: string;
+    url?: string;
+    proto?: "https";
+    options?: Parameters<typeof verifyTwilio>[1];
+    remoteAddress?: string;
+    expected: string;
+  }>([
+    {
+      name: "ngrok loopback still requires a valid signature",
+      host: "127.0.0.1:3334",
+      forwarded: "local.ngrok-free.app",
+      url: "http://127.0.0.1:3334/voice/webhook",
+      proto: "https",
+      options: { allowNgrokFreeTierLoopbackBypass: true },
+      remoteAddress: "127.0.0.1",
+      expected: "Invalid signature",
+    },
+    {
+      name: "forwarding requires explicit trust",
+      host: "legitimate.example.com",
+      forwarded: "attacker.evil.com",
+      expected: "https://legitimate.example.com/voice/webhook",
+    },
+    {
+      name: "forwarded host must be allowlisted",
+      host: "localhost:3000",
+      forwarded: "attacker.evil.com",
+      options: { allowedHosts: ["myapp.ngrok.io", "webhook.example.com"] },
+      expected: "https://localhost/voice/webhook",
+    },
+    {
+      name: "trusted proxy requires a remote IP",
+      host: "legitimate.example.com",
+      forwarded: "proxy.example.com",
+      proto: "https",
+      options: { trustForwardingHeaders: true, trustedProxyIPs: ["203.0.113.10"] },
+      expected: "https://legitimate.example.com/voice/webhook",
+    },
+  ])("$name", ({ host, forwarded, url, proto, options, remoteAddress, expected }) => {
     const result = verifyTwilio(
       {
         headers: {
-          host: "127.0.0.1:3334",
-          "x-forwarded-proto": "https",
-          "x-forwarded-host": "local.ngrok-free.app",
+          host,
+          ...(proto ? { "x-forwarded-proto": proto } : {}),
+          "x-forwarded-host": forwarded,
           "x-twilio-signature": "invalid",
         },
-        url: "http://127.0.0.1:3334/voice/webhook",
-        remoteAddress: "127.0.0.1",
+        url: url ?? "http://localhost:3000/voice/webhook",
+        ...(remoteAddress ? { remoteAddress } : {}),
       },
-      { allowNgrokFreeTierLoopbackBypass: true },
+      options,
     );
-
     expect(result.ok).toBe(false);
-    expect(result.reason).toMatch(/Invalid signature/);
-  });
-
-  it("ignores attacker X-Forwarded-Host without allowedHosts or trustForwardingHeaders", () => {
-    const result = verifyTwilio({
-      headers: {
-        host: "legitimate.example.com",
-        "x-forwarded-host": "attacker.evil.com",
-        "x-twilio-signature": "invalid",
-      },
-      url: "http://localhost:3000/voice/webhook",
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain("https://legitimate.example.com/voice/webhook");
-  });
-
-  it("rejects X-Forwarded-Host not in allowedHosts whitelist", () => {
-    const result = verifyTwilio(
-      {
-        headers: {
-          host: "localhost:3000",
-          "x-forwarded-host": "attacker.evil.com",
-          "x-twilio-signature": "invalid",
-        },
-        url: "http://localhost:3000/voice/webhook",
-      },
-      { allowedHosts: ["myapp.ngrok.io", "webhook.example.com"] },
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain("https://localhost/voice/webhook");
-  });
-
-  it("ignores forwarding headers when trustedProxyIPs are set but remote IP is missing", () => {
-    const result = verifyTwilio(
-      {
-        headers: {
-          host: "legitimate.example.com",
-          "x-forwarded-proto": "https",
-          "x-forwarded-host": "proxy.example.com",
-          "x-twilio-signature": "invalid",
-        },
-        url: "http://localhost:3000/voice/webhook",
-      },
-      { trustForwardingHeaders: true, trustedProxyIPs: ["203.0.113.10"] },
-    );
-
-    expect(result.ok).toBe(false);
-    expect(result.reason).toContain("https://legitimate.example.com/voice/webhook");
+    expect(result.reason).toContain(expected);
   });
   it("succeeds when Twilio signs URL without port but server URL has port", () => {
     const urlWithPort = "https://example.com:8443/voice/webhook";

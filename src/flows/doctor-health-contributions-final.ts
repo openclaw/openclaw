@@ -11,6 +11,7 @@ import {
 } from "./doctor-health-contribution-runners.config.js";
 import {
   runBrowserHealth,
+  runBundleLspEnvHealth,
   runDevicePairingHealth,
   runGatewayDaemonHealth,
   runGatewayServicesHealth,
@@ -34,7 +35,11 @@ import type {
   DoctorHealthContribution,
   DoctorHealthFlowContext,
 } from "./doctor-health-contribution-types.js";
-import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
+import {
+  recordDoctorHealthWarnings,
+  renderStructuredHealthFindings,
+  createDoctorHealthContribution,
+} from "./doctor-health-contribution.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
 import type { HealthCheck } from "./health-checks.js";
 
@@ -195,6 +200,10 @@ export function resolveFinalDoctorHealthContributions(params: {
       updateWork: { kind: "inspection", scope: "run" },
       run: runWebFetchProxyHealth,
     }),
+    createDoctorHealthContribution("doctor:bundle-lsp-env", "Bundle LSP environment", {
+      updateWork: { kind: "inspection", scope: "agent" },
+      run: runBundleLspEnvHealth,
+    }),
     createDoctorHealthContribution("doctor:github-projects", "GitHub projects", {
       updateWork: { kind: "standalone" },
       run: runGitHubProjectHealth,
@@ -277,13 +286,16 @@ export function resolveFinalDoctorHealthContributions(params: {
           cfg: ctx.cfg,
           options: ctx.options,
         });
-        const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
-        noteWorkspaceStatus(ctx.cfg, {
+        const { collectWorkspaceStatusHealthFindings } =
+          await import("../commands/doctor-workspace-status.js");
+        const findings = collectWorkspaceStatusHealthFindings(ctx.cfg, {
           pluginVersionReadiness,
           ...(ctx.runWithPluginMetadataSnapshot
             ? { runWithPluginMetadataSnapshot: ctx.runWithPluginMetadataSnapshot }
             : {}),
         });
+        recordDoctorHealthWarnings(ctx, findings);
+        renderStructuredHealthFindings(ctx, findings);
       },
     }),
     createDoctorHealthContribution("doctor:workspace-alias", "Workspace alias", {
@@ -301,13 +313,7 @@ export function resolveFinalDoctorHealthContributions(params: {
         const { collectRepointedWorkspaceAliasFindings } =
           await import("../commands/doctor-workspace-alias.js");
         const findings = await collectRepointedWorkspaceAliasFindings(ctx.cfg);
-        if (findings.length > 0) {
-          const { note } = await import("../../packages/terminal-core/src/note.js");
-          note(
-            findings.map((finding) => `${finding.message} ${finding.fixHint}`).join("\n"),
-            "Workspace",
-          );
-        }
+        renderStructuredHealthFindings(ctx, findings);
       },
     }),
     createDoctorHealthContribution("doctor:skills", "Skills", {

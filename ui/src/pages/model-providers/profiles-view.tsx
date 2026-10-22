@@ -53,6 +53,7 @@ export type ProviderProfilesViewProps = {
   usageAgentId?: string;
   registerAccountUsage?: (element: ModelAccountUsageElement) => () => void;
   busy: Record<string, boolean>;
+  logoutSaving?: Record<string, boolean>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   profileOrders: Record<string, string[]>;
@@ -638,7 +639,11 @@ function ProviderProfileRow(
             class="model-providers__profile-logout"
             aria-label={logoutLabel()}
             title={logoutBlocked()}
-            disabled={!props.canMutate || props.busy[`logout:${props.card.id}`]}
+            disabled={
+              props.logoutSaving?.[props.card.id] ||
+              !props.canMutate ||
+              props.busy[`logout:${props.card.id}`]
+            }
             onClick={() => {
               const targetProvider = logoutProvider();
               if (targetProvider) {

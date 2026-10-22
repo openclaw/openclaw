@@ -67,7 +67,7 @@ async function readAgentSkills(
   return report;
 }
 
-export async function clearAgentSkillFilter(
+async function clearAgentSkillFilter(
   runtimeConfig: RuntimeConfigCapability,
   agentId: string,
   canDispatch: () => boolean = () => true,

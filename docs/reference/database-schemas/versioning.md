@@ -187,6 +187,15 @@ writer's transaction. SQLite and PostgreSQL drop the triggers without changing
 retained rows or revision values. Older writers require the verified pre-upgrade
 backup because they rely on those triggers to invalidate readers.
 
+Shared-state [schema 31](/reference/database-schemas/state-schema-history#state-schema-31)
+stores local workspace baselines by path and checkpoints as recoverable deltas.
+The schema migration preserves legacy manifest documents and pending receipts;
+the existing projection owner converts each workspace atomically and resumes
+unfinished conversions from the retained input. Archives and publications keep
+their complete manifest format. This is a shared-state change only: the agent
+schema version is unchanged. Older checkpoint writers require the verified
+pre-upgrade backup for rollback.
+
 Target-release checks distinguish the target's schema support from the running
 inspector's capabilities. When shared state is too new for the target but still
 readable by the inspector, preflight continues checking agent stores and reports

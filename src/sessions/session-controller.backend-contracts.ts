@@ -1,6 +1,6 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { CurrentInboundPromptContext } from "../agents/internal-runtime-context.js";
-import type { ReplyExpectation } from "../agents/reply-completion.js";
+import type { ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../agents/subagents/announce/subagent-announce-handoff.js";
@@ -286,3 +286,38 @@ export type ReplyBackendHandle = {
    */
   isCompacting?: () => boolean;
 };
+
+export type ReplyMessageInjectionResolution =
+  | {
+      reason: ReplyMessageInjectionRejectionReason;
+      errorMessage?: string;
+      backend?: ReplyBackendHandle;
+      cancelPendingUserInput?: ReplyBackendHandle["cancelPendingUserInput"];
+    }
+  | {
+      backend: ReplyBackendHandle;
+      injection: ReplyBackendMessageInjection;
+      /** Internal FIFO preflight for a released synchronous sink. */
+      prepareQueueMessage?: () => Promise<void>;
+    };
+
+export type ReplyMessageInjectionRejectionReason =
+  | "no_active_run"
+  | "not_running"
+  | "stale_run"
+  | "injection_unavailable"
+  | "guarded_injection_unsupported"
+  | "requester_origin_mismatch"
+  | "audio_input_unsupported"
+  | "collaborative_steering_disabled"
+  | ReplyBackendQueueMessageMismatch
+  | "runtime_rejected";
+
+export type ReplyBackendQueueMessageMismatch =
+  | "transcript_commit_wait_unsupported"
+  | "input_visibility_mismatch"
+  | "tool_authority_mismatch"
+  | "image_input_unsupported"
+  | "source_reply_delivery_mode_mismatch"
+  | "reply_expectation_mismatch"
+  | "task_suggestion_delivery_mode_mismatch";

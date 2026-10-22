@@ -1,21 +1,23 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, omit } from "solid-js";
 import { resolveNodeIdFromCandidates } from "../../../../src/shared/node-match.js";
 import { SettingsRow, SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/devices.css";
 import { ExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.tsx";
-import { DeviceInventory } from "./view-inventory.tsx";
+import { DeviceInventory } from "./view-inventory-readiness.tsx";
 import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
 
 export function DevicesView(props: DevicesProps) {
-  const bindingState = createMemo(() => resolveBindingsState(props));
-  const approvalsState = createMemo(() => resolveExecApprovalsState(props));
+  const bindingState = createMemo(() => resolveBindingsState(omit(props, "inventorySaving")));
+  const approvalsState = createMemo(() =>
+    resolveExecApprovalsState(omit(props, "inventorySaving")),
+  );
   return (
     <SettingsPage wide={true}>
       <>

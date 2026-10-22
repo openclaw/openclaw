@@ -99,7 +99,6 @@ describe("Synology Chat durable ingress", () => {
       await interrupted.waitForIdle();
       expect(await queue.listClaims()).toHaveLength(1);
       await interrupted.stop();
-
       const recoveredDispatch = vi.fn(async (_event, lifecycle) => {
         await lifecycle.onAdopted();
       });
@@ -181,7 +180,6 @@ describe("Synology Chat durable ingress", () => {
       const ingress = start(dispatch);
       await ingress.receive(webhookEvent({ postId: "post-active" }));
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
-
       let stopped = false;
       const stopping = ingress.stop().then(() => {
         stopped = true;
@@ -190,7 +188,6 @@ describe("Synology Chat durable ingress", () => {
         setTimeout(resolve, 50);
       });
       expect(stopped).toBe(false);
-
       releaseDelivery();
       await stopping;
       expect(await queue.listClaims()).toHaveLength(0);
@@ -207,7 +204,6 @@ describe("Synology Chat durable ingress", () => {
       });
       await ingress.receive(webhookEvent({ postId: "post-double-stop" }));
       await ingress.waitForIdle();
-
       await expect(Promise.all([ingress.stop(), ingress.stop()])).resolves.toEqual([
         undefined,
         undefined,
