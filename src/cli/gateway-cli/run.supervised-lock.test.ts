@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { GatewayStateOwnerContentionError } from "../../infra/gateway-state-owner.js";
+import * as sleeping from "../../utils/sleep.js";
 import { testing } from "./run.test-support.js";
 
 const inspectGatewayTlsCertificateMock = vi.hoisted(() =>
@@ -30,9 +31,10 @@ function recover(params: Pick<RecoveryParams, "startLoop"> & Partial<RecoveryPar
 
 function createClock() {
   let elapsed = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsed);
   return {
     now: () => elapsed,
-    sleep: vi.fn(async (ms: number) => {
+    sleep: vi.spyOn(sleeping, "sleep").mockImplementation(async (ms: number) => {
       elapsed += ms;
     }),
     advanceTo: (deadline: number) => {
@@ -46,6 +48,8 @@ function rejectLoop(error: Error) {
 }
 
 describe("supervised gateway lock recovery", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   it("retries lifecycle contention without treating a healthy port as ownership", async () => {
     const error = new GatewayLockError(
       "failed to acquire gateway state ownership",
@@ -56,7 +60,8 @@ describe("supervised gateway lock recovery", () => {
       .mockRejectedValueOnce(error)
       .mockResolvedValueOnce();
     const probeHealth = vi.fn(async () => true);
-    await recover({ startLoop, probeHealth, ...createClock() });
+    createClock();
+    await recover({ startLoop, probeHealth });
     expect(startLoop).toHaveBeenCalledTimes(2);
     expect(probeHealth).not.toHaveBeenCalled();
   });
@@ -75,7 +80,7 @@ describe("supervised gateway lock recovery", () => {
       }
       throw error;
     });
-    await expect(recover({ startLoop, ...clock })).rejects.toBe(error);
+    await expect(recover({ startLoop })).rejects.toBe(error);
     expect(budgets).toEqual([300_000, 295_000]);
     expect(clock.now()).toBe(300_000);
     expect(clock.sleep).toHaveBeenCalledTimes(1);
@@ -141,7 +146,7 @@ describe("supervised gateway lock recovery", () => {
     const startLoop = rejectLoop(error);
     const probeHealth = vi.fn(async () => true);
     const clock = createClock();
-    await expect(recover({ startLoop, probeHealth, ...clock })).rejects.toBe(error);
+    await expect(recover({ startLoop, probeHealth })).rejects.toBe(error);
     expect(startLoop).toHaveBeenCalledOnce();
     expect(probeHealth).not.toHaveBeenCalled();
     expect(clock.sleep).not.toHaveBeenCalled();
@@ -150,22 +155,23 @@ describe("supervised gateway lock recovery", () => {
 
   it("bounds supervised retries when the existing gateway stays unhealthy", async () => {
     const clock = createClock();
-    const startLoop = rejectLoop(new GatewayLockError("gateway already running"));
+    const error = new GatewayLockError("gateway already running");
+    const startLoop = rejectLoop(error).mockImplementationOnce(async () => {
+      clock.advanceTo(288_000);
+      throw error;
+    });
     const failure = await recover({
       startLoop,
       probeHealth: vi.fn(async () => false),
-      ...clock,
-      retryMs: 5,
-      timeoutMs: 12,
-    }).catch((error: unknown) => error);
+    }).catch((cause: unknown) => cause);
 
     expect(failure).toMatchObject({
       message:
-        "gateway already running under systemd; existing gateway did not become healthy after 12ms",
+        "gateway already running under systemd; existing gateway did not become healthy after 300000ms",
     });
     expect(testing.resolveGatewayLockErrorExitCode(failure)).toBe(1);
     expect(startLoop).toHaveBeenCalledTimes(4);
-    expect(clock.sleep.mock.calls.slice(0, 3)).toEqual([[5], [5], [2]]);
+    expect(clock.sleep.mock.calls.slice(0, 3)).toEqual([[5000], [5000], [2000]]);
   });
 
   it("retries public certificate inspection while TLS material is unavailable", async () => {
