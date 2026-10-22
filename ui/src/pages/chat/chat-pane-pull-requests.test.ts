@@ -8,10 +8,8 @@ import {
   type ControlUiSessionPullRequest,
   type ControlUiSessionPullRequests,
 } from "../../../../src/gateway/control-ui-contract.js";
-import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { projectsForGateway } from "../../lib/projects.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
@@ -300,53 +298,9 @@ it.each(["unavailable", "rate-limited"] as const)(
 
     const replacement = { owner: "other", repo: "checkout" };
     push({ ...failure, repository: replacement });
-    expect(pane.githubRepo).toEqual(replacement);
     expect(pane.sessionPullRequests).toEqual([]);
     expect(pane.sessionPullRequestsBranch).toBeUndefined();
     expect(setPullRequestSummary).toHaveBeenLastCalledWith(key, undefined, epoch);
-  },
-);
-
-it.each(["ready", "rate-limited"] as const)(
-  "renders repository context only from a settled catalog (%s)",
-  async (status) => {
-    const { pane, request, context, state, emitGatewayEvent } = createPublicationPane();
-    pane.refreshSessionPullRequests();
-    await Promise.resolve();
-    emitSnapshot(emitGatewayEvent, state.sessionKey, {
-      repository,
-      pullRequests: [],
-      rateLimited: status === "rate-limited",
-      status,
-    });
-    pane.refreshSessionPullRequests();
-    const catalog = projectsForGateway(context.gateway);
-    if (status === "ready") {
-      const pending = createDeferred<{ projects: [] }>();
-      request.mockReturnValueOnce(pending.promise);
-      const read = catalog.refresh();
-      pane.render();
-      expect(pane.chatProps?.githubRepo).toBeNull();
-      pending.reject(new Error("Project catalog unavailable"));
-      await read;
-      pane.render();
-      expect(pane.chatProps?.githubRepo).toBeNull();
-      request.mockResolvedValueOnce({
-        projects: [{ id: "clawsweeper", displayName: "ClawSweeper", source: "cloned" }],
-      });
-    }
-    await catalog.refresh();
-    pane.render();
-    expect(pane.chatProps?.githubRepo).toEqual(repository);
-    expect(pane.chatProps?.pullRequestsStatus).toBe(status);
-    if (status === "ready") {
-      expect(pane.chatProps?.githubRepositories).toEqual([{ aliases: ["ClawSweeper"] }]);
-    }
-    state.sessionKey = "agent:main:another-checkout";
-    pane.refreshSessionPullRequests();
-    pane.render();
-    expect(pane.chatProps?.githubRepo).toBeNull();
-    expect(pane.chatProps?.pullRequestsStatus).toBe("ready");
   },
 );
 
@@ -490,7 +444,6 @@ it.each(["session switch", "disconnect", "branch switch"] as const)(
     });
     await Promise.resolve();
     expect(pane.sessionPullRequests).toHaveLength(1);
-    expect(pane.githubRepo).toEqual(repository);
     if (change === "disconnect") {
       pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "reconnecting" });
     } else {
@@ -508,7 +461,6 @@ it.each(["session switch", "disconnect", "branch switch"] as const)(
     }
     expect(pane.sessionPullRequests).toEqual([]);
     expect(pane.sessionPullRequestsBranch).toBeUndefined();
-    expect(pane.githubRepo).toBeNull();
     if (change === "branch switch") {
       expect(setPullRequestSummary).toHaveBeenLastCalledWith(
         "agent:main:current",

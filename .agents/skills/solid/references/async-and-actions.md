@@ -309,6 +309,32 @@ that memo under `Errored`. Do not silently discard rejections. Boundary reset
 retries a read, not a mutation; an explicit retry-save button must invoke the
 save action. Keep the user's draft on failure.
 
+### Local action errors beside retained controls
+
+When a component owns only a local operation's feedback, keep its rejected
+promise as the outcome instead of copying the error into a signal. A narrow
+`Errored` slot can show the failure without replacing the usable control:
+
+```tsx
+const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
+const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
+// The event handler records the action promise and consumes its rejection even
+// if this component retires before the error slot observes it.
+
+<Show when={!saving()}>
+  <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>{outcome()}</Errored>
+</Show>;
+```
+
+Here the co-written optimistic flag already presents progress. The explicit
+`loadingValue` lets the error observer read pending work without holding that
+affordance. Hiding the error slot while saving also clears the old failure on
+retry. Keep controls outside the slot, preserve the owner's admission and
+retirement checks, and consume the action promise in the handler; the memo is
+not a substitute for handling an event action's rejection. Chat speech and
+skill-review Undo use this pattern. Clear the recorded attempt when its target
+changes so a successor cannot inherit the previous operation's failure.
+
 ### Command errors without optimistic state
 
 Some plugin commands already expose their busy state through a shared owner.

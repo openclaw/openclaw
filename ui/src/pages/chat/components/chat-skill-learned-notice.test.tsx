@@ -61,9 +61,35 @@ describe("skill review notice", () => {
       expect(element.querySelector("[role='alert']")?.textContent).toContain("Learning is off."),
     );
     expect(undoButton(element)?.disabled).toBe(false);
-    request.mockReturnValueOnce(Promise.resolve({ status: "undone", changes: [] }));
-    undoButton(element)?.click();
+    const retry = createDeferred<{ status: "undone"; changes: [] }>();
+    request.mockReturnValueOnce(retry.promise);
+    const button = undoButton(element)!;
+    button.click();
+    await waitForSolid(() => expect(button.disabled).toBe(true));
+    expect(undoButton(element)).toBe(button);
+    expect(element.querySelector("[role='alert']")).toBeNull();
+    expect(element.textContent).toContain("Undoing");
+    retry.resolve({ status: "undone", changes: [] });
     await waitForSolid(() => expect(element.textContent).toContain("Undone"));
+  });
+
+  it("retains the admitted Undo failure when a duplicate click is ignored", async () => {
+    const response = createDeferred<unknown>();
+    const request = vi.fn(() => response.promise);
+    const element = mount(createContext(request, { methods: ["skills.workshop.undo"] }));
+    const button = undoButton(element)!;
+
+    button.click();
+    button.click();
+    expect(request).toHaveBeenCalledTimes(1);
+    response.reject(new Error("Unable to revert this review."));
+
+    await waitForSolid(() =>
+      expect(element.querySelector("[role='alert']")?.textContent).toContain(
+        "Unable to revert this review.",
+      ),
+    );
+    expect(button.disabled).toBe(false);
   });
 
   it("retires pending Undo feedback when a different review replaces the notice", async () => {

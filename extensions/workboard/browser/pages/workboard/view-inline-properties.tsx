@@ -5,14 +5,14 @@ import { AgentPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
 import { normalizeDraftLabels } from "../../lib/workboard/card-state.ts";
+import { updateWorkboardCardProperties } from "../../lib/workboard/mutations.ts";
+import { getWorkboardState } from "../../lib/workboard/runtime.ts";
 import {
-  getWorkboardState,
   WORKBOARD_PRIORITIES,
   type WorkboardCard,
   type WorkboardPriority,
   type WorkboardStatus,
-} from "../../lib/workboard/index.ts";
-import { updateWorkboardCardProperties } from "../../lib/workboard/mutations.ts";
+} from "../../lib/workboard/types.ts";
 import { buildAssignableAgentPickerOptions } from "./agent-filter.ts";
 import { moveCardToStatus } from "./view-card-actions.tsx";
 import {
