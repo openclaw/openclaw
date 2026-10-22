@@ -14,9 +14,6 @@ import {
   mocks,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
-  sessionBindingMocks,
-  sessionStoreMocks,
-  setDiscordTestRegistry,
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -33,8 +30,11 @@ import {
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
-import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import {
+  resetDeliverySettlementFixture,
+  resetDispatchSessionMocks,
+} from "./dispatch-from-config.test-support.js";
 import {
   createDispatchMemorySession,
   dispatchMemorySessionScope,
@@ -55,18 +55,14 @@ let runAfterReplyOperationClear: typeof import("../../sessions/session-controlle
 let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
 
 const REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS = 60_000;
+type PendingFinal = Extract<
+  NonNullable<Parameters<typeof createDispatchMemorySession>[0]["pendingFinalDelivery"]>,
+  { kind: "replayable" }
+>;
 
 function pendingFinalDelivery(
   text: string,
-  overrides: {
-    createdAt?: number;
-    context?: Record<string, unknown>;
-    deliveries?: Array<{
-      id: string;
-      state: "prepared" | "queued" | "delivered" | "suppressed" | "unknown";
-    }>;
-    intentId?: string;
-  } = {},
+  overrides: Partial<Pick<PendingFinal, "createdAt" | "context" | "deliveries" | "intentId">> = {},
 ) {
   return {
     kind: "replayable" as const,
@@ -76,10 +72,6 @@ function pendingFinalDelivery(
     deliveries: [{ id: "delivery-1", state: "prepared" as const }],
     ...overrides,
   };
-}
-
-function createInternalHookCtx(): FinalizedMsgContext {
-  return { ...createHookCtx(), InputProvenance: { kind: "internal_system" } };
 }
 
 function pendingFinalReply(
@@ -116,76 +108,80 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   beforeEach(() => {
     clearAgentHarnesses();
     resetSessionControllerForTest();
-    setDiscordTestRegistry();
     resetInboundDedupe();
+    resetDispatchSessionMocks();
+    acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
+    resetDeliverySettlementFixture();
     mocks.routeReply
       .mockReset()
       .mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
-    mocks.tryFastAbortFromMessage.mockReset().mockResolvedValue({
-      handled: false,
-      aborted: false,
-    });
-    hookMocks.runner.hasHooks.mockReset();
-    hookMocks.runner.hasHooks.mockImplementation(
-      (hookName?: string) => hookName === "reply_dispatch",
-    );
-    hookMocks.runner.runInboundClaim.mockReset().mockResolvedValue(undefined);
-    hookMocks.runner.runInboundClaimForPlugin.mockReset().mockResolvedValue(undefined);
+    hookMocks.runner.hasHooks
+      .mockReset()
+      .mockImplementation((hookName?: string) => hookName === "reply_dispatch");
+    for (const mock of [
+      hookMocks.runner.runInboundClaim,
+      hookMocks.runner.runInboundClaimForPlugin,
+      hookMocks.runner.runMessageReceived,
+      hookMocks.runner.runBeforeDispatch,
+      internalHookMocks.triggerInternalHook,
+    ]) {
+      mock.mockReset().mockResolvedValue(undefined);
+    }
     hookMocks.runner.runInboundClaimForPluginOutcome.mockReset().mockResolvedValue({
       status: "no_handler",
     });
-    hookMocks.runner.runMessageReceived.mockReset().mockResolvedValue(undefined);
-    hookMocks.runner.runBeforeDispatch.mockReset().mockResolvedValue(undefined);
-    hookMocks.runner.runReplyDispatch.mockReset().mockResolvedValue(undefined);
-    internalHookMocks.createInternalHookEvent.mockReset();
-    internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
-    internalHookMocks.triggerInternalHook.mockReset().mockResolvedValue(undefined);
-    acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
-    acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
-    acpMocks.upsertAcpSessionMeta.mockReset().mockResolvedValue(null);
-    acpMocks.requireAcpRuntimeBackend.mockReset();
-    sessionBindingMocks.listBySession.mockReset().mockReturnValue([]);
-    sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
-    sessionBindingMocks.touch.mockReset();
-    sessionStoreMocks.currentEntry = undefined;
-    sessionStoreMocks.loadSessionStoreEntry.mockReset();
-    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
-      () => sessionStoreMocks.currentEntry,
-    );
-    sessionStoreMocks.resolveSessionStorePathCore
+    internalHookMocks.createInternalHookEvent
       .mockReset()
-      .mockReturnValue("/tmp/mock-sessions.json");
-    sessionStoreMocks.updateSessionEntry.mockClear();
-    acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
-    acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
-      resolveSessionAsync: async () => ({ kind: "none" as const }),
-      getObservabilitySnapshot: () => ({
-        runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
-        turns: {
-          active: 0,
-          queueDepth: 0,
-          completed: 0,
-          failed: 0,
-          averageLatencyMs: 0,
-          maxLatencyMs: 0,
-        },
-        errorsByCode: {},
-      }),
-      runTurn: vi.fn(),
-    }));
-    agentEventMocks.emitAgentEvent.mockReset();
-    agentEventMocks.emitAgentAuditEvent.mockReset();
+      .mockImplementation(createInternalHookEventPayload);
     agentEventMocks.onAgentEvent.mockReset().mockImplementation(() => () => {});
-    diagnosticMocks.logMessageQueued.mockReset();
-    diagnosticMocks.logMessageProcessed.mockReset();
-    diagnosticMocks.logSessionStateChange.mockReset();
-    diagnosticMocks.markDiagnosticSessionProgress.mockReset();
-    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReset();
-    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
-      runtimePluginMocks.pluginRegistry,
-    );
+    for (const mock of [
+      diagnosticMocks.logMessageQueued,
+      diagnosticMocks.logMessageProcessed,
+      diagnosticMocks.logSessionStateChange,
+      diagnosticMocks.markDiagnosticSessionProgress,
+    ]) {
+      mock.mockReset();
+    }
+    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle
+      .mockReset()
+      .mockReturnValue(runtimePluginMocks.pluginRegistry);
     resetPluginTtsAndThreadMocks();
   });
+
+  function dispatch(options: Partial<Parameters<typeof dispatchReplyFromConfig>[0]>) {
+    return dispatchReplyFromConfig({
+      ctx: createHookCtx(),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      ...options,
+    });
+  }
+
+  function dispatchInMemory(
+    memory: Awaited<ReturnType<typeof createDispatchMemorySession>>,
+    dispatcher: ReturnType<typeof createReplyDispatcher>,
+    replies: ReplyPayload | ReplyPayload[],
+    ctx = createHookCtx(),
+  ) {
+    return memory.run(() =>
+      withReplyDispatcher({
+        dispatcher,
+        run: () =>
+          dispatch({
+            ctx: { ...ctx, SessionKey: memory.scope.sessionKey },
+            dispatcher,
+            replyResolver: async () => replies,
+          }),
+      }),
+    );
+  }
+
+  const createPendingSession = (pending: ReturnType<typeof pendingFinalDelivery>) =>
+    createDispatchMemorySession({
+      sessionId: "session-1",
+      updatedAt: 1,
+      pendingFinalDelivery: pending,
+    });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -248,10 +244,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           return null;
         },
         async () => {
-          const result = await dispatchReplyFromConfig({
+          const result = await dispatch({
             ctx: { ...createHookCtx(), SessionKey: sessionKey, AgentId: "qa" },
             cfg,
-            dispatcher: createDispatcher(),
             replyResolver: async () => ({ text: "selected owner reply" }),
           });
           expect(result.queuedFinal).toBe(true);
@@ -268,8 +263,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     } satisfies PluginHookReplyDispatchResult);
     const dispatcher = createDispatcher();
 
-    const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
+    const result = await dispatch({
       cfg: { ...emptyConfig, session: { sendPolicy: { default: "deny" } } },
       dispatcher,
       replyResolver: async () => ({ text: "model reply" }),
@@ -300,10 +294,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       return { text: "model reply" } satisfies ReplyPayload;
     });
 
-    await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
-      dispatcher: createDispatcher(),
+    await dispatch({
       replyOptions: { admittedSessionSettings },
       replyResolver,
     });
@@ -321,11 +312,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   }) {
     vi.useFakeTimers();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    const memory = await createDispatchMemorySession({
-      sessionId: "session-1",
-      updatedAt: 1,
-      pendingFinalDelivery: params.pending,
-    });
+    const memory = await createPendingSession(params.pending);
     const hookStarted = createDeferred();
     const deliver = vi.fn().mockResolvedValue(undefined);
     let hookCalls = 0;
@@ -340,18 +327,10 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       },
     });
     try {
-      const result = memory.run(() =>
-        withReplyDispatcher({
-          dispatcher,
-          run: () =>
-            dispatchReplyFromConfig({
-              ctx: { ...createInternalHookCtx(), SessionKey: memory.scope.sessionKey },
-              cfg: emptyConfig,
-              dispatcher,
-              replyResolver: async () => params.replies,
-            }),
-        }),
-      );
+      const result = dispatchInMemory(memory, dispatcher, params.replies, {
+        ...createHookCtx(),
+        InputProvenance: { kind: "internal_system" },
+      });
       await hookStarted.promise;
       await params.afterStall?.(memory);
       await vi.advanceTimersByTimeAsync(15_000);
@@ -428,11 +407,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
   ] as const)("reconciles pending final delivery after %s", async (name, error, preserve) => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     const pending = pendingFinalDelivery("recoverable final reply");
-    const memory = await createDispatchMemorySession({
-      sessionId: "session-1",
-      updatedAt: 1,
-      pendingFinalDelivery: pending,
-    });
+    const memory = await createPendingSession(pending);
     const dispatcher = createReplyDispatcher({
       deliver: async () => {
         throw error;
@@ -443,18 +418,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         }
       },
     });
-    await memory.run(() =>
-      withReplyDispatcher({
-        dispatcher,
-        run: () =>
-          dispatchReplyFromConfig({
-            ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
-            cfg: emptyConfig,
-            dispatcher,
-            replyResolver: async () => pendingFinalReply("recoverable final reply"),
-          }),
-      }),
-    );
+    await dispatchInMemory(memory, dispatcher, pendingFinalReply("recoverable final reply"));
     expect(memory.read()?.pendingFinalDelivery).toMatchObject({
       ...pending,
       deliveries: [{ id: "delivery-1", state: preserve ? "prepared" : "unknown" }],
@@ -465,13 +429,11 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     "clears %s final custody after pre-delivery cancellation",
     async (state) => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
-      const memory = await createDispatchMemorySession({
-        sessionId: "session-1",
-        updatedAt: 1,
-        pendingFinalDelivery: pendingFinalDelivery("policy-suppressed reply", {
+      const memory = await createPendingSession(
+        pendingFinalDelivery("policy-suppressed reply", {
           deliveries: [{ id: "delivery-1", state }],
         }),
-      });
+      );
       const deliver = vi.fn().mockResolvedValue(undefined);
       const dispatcher = createReplyDispatcher({
         deliver,
@@ -479,17 +441,10 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
           state === "delivered" && payload.text === "policy-suppressed reply" ? payload : null,
       });
 
-      const result = await memory.run(() =>
-        withReplyDispatcher({
-          dispatcher,
-          run: () =>
-            dispatchReplyFromConfig({
-              ctx: { ...createHookCtx(), SessionKey: memory.scope.sessionKey },
-              cfg: emptyConfig,
-              dispatcher,
-              replyResolver: async () => pendingFinalReply("policy-suppressed reply"),
-            }),
-        }),
+      const result = await dispatchInMemory(
+        memory,
+        dispatcher,
+        pendingFinalReply("policy-suppressed reply"),
       );
       const receipt = await dispatcher.waitForIdle();
       expect(memory.read()?.pendingFinalDelivery).toBeUndefined();
@@ -518,9 +473,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     const queued = createDeferred();
 
     try {
-      const result = await dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
+      const result = await dispatch({
         dispatcher,
         replyResolver: async () => {
           const operation = getSessionControllerOperation("agent:test:session");
@@ -552,8 +505,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       });
 
       expect(result.queuedFinal).toBe(true);
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(deliver).toHaveBeenCalledWith({ text: "first reply" }, { kind: "final" });
+      expect(deliver).toHaveBeenCalledExactlyOnceWith({ text: "first reply" }, { kind: "final" });
       await queued.promise;
       expect(queuedOperation).toBeDefined();
       expect(deliveryOrder).toEqual(["final", "followup"]);
@@ -579,9 +531,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
 
     try {
-      dispatchPromise = dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
+      dispatchPromise = dispatch({
         dispatcher,
         replyResolver: async (_ctx, options) => {
           source = readReplySourceInput(options);
@@ -650,9 +600,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     try {
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
+      const dispatchPromise = dispatch({
         dispatcher,
         replyResolver: async () => {
           const operation = getSessionControllerOperation("agent:test:session");
@@ -692,9 +640,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       channelData: { telegram: { parseMode: "MarkdownV2" } },
     } satisfies ReplyPayload;
 
-    const result = await dispatchReplyFromConfig({
-      ctx: createHookCtx(),
-      cfg: emptyConfig,
+    const result = await dispatch({
       dispatcher,
       replyResolver: async () => [
         replyPayload,
@@ -704,8 +650,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(result.queuedFinal).toBe(true);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(replyPayload);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(replyPayload);
   });
 
   it.each([
@@ -729,9 +674,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       hookMocks.runner.hasHooks.mockReturnValue(false);
       const dispatcher = createDispatcher();
 
-      const result = await dispatchReplyFromConfig({
-        ctx: createHookCtx(),
-        cfg: emptyConfig,
+      const result = await dispatch({
         dispatcher,
         replyResolver: async () => replies,
       });

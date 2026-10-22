@@ -39,10 +39,7 @@ let resetSessionControllerForTest: () => void;
 const REJECTED_MODEL = "openai/REJECTED_PRIVATE_TOKEN";
 const SESSION_KEY = "agent:main:session";
 const cfg: OpenClawConfig = {
-  diagnostics: {
-    enabled: true,
-    otel: { enabled: true, traces: true, captureContent: true },
-  },
+  diagnostics: { enabled: true, otel: { enabled: true, traces: true, captureContent: true } },
   messages: { visibleReplies: "automatic" },
 };
 
@@ -246,15 +243,12 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     );
   });
 
+  const skipped = (reason: "queue-cap" | "question-response-refused"): ReplyOperationRunState => ({
+    admission: { status: "skipped", reason },
+  });
   it.each<[string, ReplyOperationRunState, boolean, string, string?]>([
     ["agent failure", {}, true, "error"],
-    [
-      "queue cap",
-      { admission: { status: "skipped", reason: "queue-cap" } },
-      false,
-      "skipped",
-      "queue-cap",
-    ],
+    ["queue cap", skipped("queue-cap"), false, "skipped", "queue-cap"],
     [
       "injection abort",
       { messageInjectionAborted: true },
@@ -264,7 +258,7 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     ],
     [
       "question refusal",
-      { admission: { status: "skipped", reason: "question-response-refused" } },
+      skipped("question-response-refused"),
       false,
       "error",
       "question-response-refused",

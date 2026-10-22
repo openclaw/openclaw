@@ -1,6 +1,3 @@
-// A tool-authored source reply is mirrored into the transcript by delivery, after
-// the send, under the dispatching run's writer fence: a writer replaced after the
-// tool captured the reply cannot receive that assistant row.
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { buildPayloads } from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
@@ -10,7 +7,6 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { mirrorDeliveredReplyToTranscript } from "./dispatch-from-config.transcript.js";
@@ -22,20 +18,16 @@ const replyText = "Pedido SO1 creado. 18 botellas.";
 describe("tool-authored source reply transcript mirror", () => {
   const tempDirs = useSessionStoreTempDirs(afterAll, "tool-authored-mirror-");
   let storePath: string;
-  beforeEach(() => {
+  beforeEach(async () => {
     storePath = path.join(tempDirs.make(), "agents", "main", "sessions", "sessions.json");
-  });
-
-  async function seedSession() {
     await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, {
       sessionId,
       updatedAt: 1,
       lifecycleRevision: "rev-1",
       activeWriterRunId: "run-a",
     } as SessionEntry);
-  }
+  });
 
-  // The mirror metadata exactly as dispatch fences it for run "run-a".
   function fencedMirrorForCapturedReply() {
     const [payload] = buildPayloads({
       messagingToolSourceReplyPayloads: [
@@ -77,11 +69,9 @@ describe("tool-authored source reply transcript mirror", () => {
   }
 
   it("writes the assistant row once for the admitted writer", async () => {
-    await seedSession();
     const metadata = fencedMirrorForCapturedReply();
-
-    await mirrorDeliveredReplyToTranscript({ metadata, cfg: {} as OpenClawConfig });
-    await mirrorDeliveredReplyToTranscript({ metadata, cfg: {} as OpenClawConfig });
+    await mirrorDeliveredReplyToTranscript({ metadata, cfg: {} });
+    await mirrorDeliveredReplyToTranscript({ metadata, cfg: {} });
 
     const texts = await assistantTexts();
     expect(texts).toHaveLength(1);
@@ -89,14 +79,13 @@ describe("tool-authored source reply transcript mirror", () => {
   });
 
   it("writes nothing after the session writer is replaced", async () => {
-    await seedSession();
     const metadata = fencedMirrorForCapturedReply();
     await updateSessionEntry(
       { agentId: "main", sessionKey, storePath },
       async () => ({ activeWriterRunId: "run-b" }) as Partial<InternalSessionEntry>,
     );
 
-    await mirrorDeliveredReplyToTranscript({ metadata, cfg: {} as OpenClawConfig });
+    await mirrorDeliveredReplyToTranscript({ metadata, cfg: {} });
 
     expect(await assistantTexts()).toEqual([]);
   });
