@@ -1,3 +1,4 @@
+import type { Locator, Page } from "playwright";
 import { beforeAll, expect, it } from "vitest";
 import { readStyles, styleDocument, styleFixture } from "./style-fixture.test-support.ts";
 
@@ -35,6 +36,32 @@ const links = (prefix: string) => `<p>
   <a id="${prefix}from-text" class="markdown-file-link" data-file-kind="code" data-file-path="src/app.ts">app.ts</a>
   <a id="${prefix}from-code" class="markdown-file-link" data-file-kind="code" data-file-path="ui/app.ts"><code>app.ts</code></a>
   <code id="${prefix}plain-code">npm run dev</code></p>`;
+// Short references stay atomic; qualified labels may wrap within their chip.
+const LINK_FORMS = (
+  [
+    ["issue", "issue", "#123309", "then follow-up tracked in ", true],
+    ["pull", "pull", "#3434", "then the fix is in ", true],
+    ["repository-ref", "pull", "openclaw/openclaw#3434", "then see ", false],
+    ["bare-url", "", "text.css", "then the owning rule lives at ", true],
+    ["authored", "", "the sibling chip rule", "then see ", false],
+  ] as const
+).map(([id, kind, label, lead, bare]) => ({
+  id,
+  kind,
+  label,
+  lead,
+  className: [bare && "markdown-bare-url", "markdown-github-link", kind && "markdown-github-item"]
+    .filter(Boolean)
+    .join(" "),
+}));
+
+const githubMarkup = LINK_FORMS.map(
+  ({ className, kind, id, label, lead }) => `
+    <div class="chat-text" id="column-${id}">Reproduce the failing run and read the notes
+      first, ${lead}<a id="${id}" class="${className}" ${kind ? `data-github-kind="${kind}"` : ""} href="https://github.com/openclaw/openclaw"
+      >${label}</a> before landing the fix.</div>`,
+).join("");
+
 const presentationMarkup = `<div class="chat-text">${links("")}</div>
   <article class="sidebar-markdown">${links("panel-")}</article>`;
 
@@ -86,117 +113,119 @@ function wrapFixtureDocument(themeMode: "dark" | "light", container: WrapContain
       <p><a id="long-chip" class="markdown-file-link" data-file-kind="code"
         data-file-path="${LONG_CHIP_PATH}">${LONG_CHIP_PATH}</a></p>
       ${separationLinks}
-    </div>`,
+    </div>${githubMarkup}`,
     themeMode,
   );
 }
 
-// Sweep widths so changing fonts/prose cannot silently miss the wrap boundary.
+// One range probe owns the shared width sweep; each assertion keeps its own contract.
 async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) {
   return fixture.withPage(
-    `${themeMode}-${container}-wrap`,
+    `${themeMode}-${container}`,
     wrapFixtureDocument(themeMode, container),
-    async (page) => {
-      return await page.evaluate(
-        ({ caseIds, properties }) => {
+    (page) =>
+      page.evaluate(
+        ({ caseIds, githubIds, properties }) => {
           const resolve = (selector: string) => {
             const element = document.querySelector(selector);
             if (!(element instanceof HTMLElement)) {
-              throw new Error(`Missing wrap fixture element for ${selector}`);
+              throw new Error(`Missing link fixture: ${selector}`);
             }
             return element;
           };
           const read = (selector: string) => {
-            const computed = getComputedStyle(resolve(selector));
-            return Object.fromEntries(properties.map((property) => [property, computed[property]]));
+            const css = getComputedStyle(resolve(selector));
+            return Object.fromEntries(properties.map((property) => [property, css[property]]));
           };
           const glyph = (selector: string) => {
-            const computed = getComputedStyle(resolve(selector), "::before");
+            const css = getComputedStyle(resolve(selector), "::before");
             return {
-              fontSize: computed.fontSize,
-              height: computed.height,
-              maskImage: computed.maskImage,
-              paddingInlineStart: computed.paddingInlineStart,
-              position: computed.position,
-              width: computed.width,
+              fontSize: css.fontSize,
+              height: css.height,
+              maskImage: css.maskImage,
+              paddingInlineStart: css.paddingInlineStart,
+              position: css.position,
+              width: css.width,
             };
           };
-          const presentation = {
-            chatGlyph: glyph("#from-text"),
-            fromCode: read("#from-code > code"),
-            fromText: read("#from-text"),
-            panelFromCode: read("#panel-from-code > code"),
-            panelFromText: read("#panel-from-text"),
-            panelGlyph: glyph("#panel-from-text"),
-            plainCode: read("#plain-code"),
-          };
-
-          const column = resolve("#column");
-          const chip = resolve("#wrap-chip");
-          const longChip = resolve("#long-chip");
-          const separationChips = caseIds.map((caseId) => ({
-            caseId,
-            element: resolve(`#${caseId}`),
-          }));
-          const samples = [];
-          const separation = [];
-          for (let columnWidth = 220; columnWidth <= 900; columnWidth += 4) {
-            column.style.width = `${columnWidth}px`;
-            samples.push({
-              chipLineCount: chip.getClientRects().length,
-              chipTop: chip.getBoundingClientRect().top,
-              columnWidth,
-              longChipLineCount: longChip.getClientRects().length,
-              longChipWidth: longChip.getBoundingClientRect().width,
-            });
-          }
-          // Narrower widths force even short basenames to wrap.
-          for (let columnWidth = 40; columnWidth <= 320; columnWidth += 4) {
-            column.style.width = `${columnWidth}px`;
-            const columnRight = column.getBoundingClientRect().right;
-            for (const { caseId, element } of separationChips) {
-              const elementTop = element.getBoundingClientRect().top;
-              const labelTextNode = element.firstChild;
-              if (!labelTextNode) {
-                throw new Error(`Separation fixture ${caseId} has no label text node`);
-              }
-              const firstCharacterRange = document.createRange();
-              firstCharacterRange.setStart(labelTextNode, 0);
-              firstCharacterRange.setEnd(labelTextNode, 1);
-              const firstCharacterTop = firstCharacterRange.getBoundingClientRect().top;
-              const labelRange = document.createRange();
-              labelRange.selectNodeContents(labelTextNode);
-              const lineHeightPx = Number.parseFloat(getComputedStyle(element).lineHeight);
-              separation.push({
-                caseId,
-                columnWidth,
-                glyphToLabelGapPx: firstCharacterTop - elementTop,
-                lineHeightPx,
-                labelOverflowPx: labelRange.getBoundingClientRect().right - columnRight,
-                wrapped: element.getBoundingClientRect().height > lineHeightPx * 1.3,
+          const measure = (id: string, columnId: string, min: number, max: number) => {
+            const element = resolve("#" + id),
+              column = resolve("#" + columnId);
+            const text = element.firstChild;
+            if (!text) {
+              throw new Error(`Missing label: ${id}`);
+            }
+            const range = document.createRange(),
+              samples = [];
+            for (let width = min; width <= max; width += 4) {
+              column.style.width = `${width}px`;
+              const rect = element.getBoundingClientRect(),
+                first = element.getClientRects()[0]!;
+              range.setStart(text, 0);
+              range.setEnd(text, 1);
+              const labelTop = range.getBoundingClientRect().top;
+              range.selectNodeContents(element);
+              const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight);
+              samples.push({
+                fragments: element.getClientRects().length,
+                top: rect.top,
+                width: rect.width,
+                columnWidth: width,
+                labelFragments: range.getClientRects().length,
+                overflows: column.scrollWidth > column.clientWidth,
+                labelStartsMarkLine: Math.abs(labelTop - first.top) < 2,
+                markLineTop: Math.round(first.top),
+                glyphToLabelGapPx: labelTop - rect.top,
+                lineHeightPx: lineHeight,
+                labelOverflowPx:
+                  range.getBoundingClientRect().right - column.getBoundingClientRect().right,
+                wrapped: rect.height > lineHeight * 1.3,
               });
             }
-          }
-          return { samples, separation, presentation };
+            return samples;
+          };
+          return {
+            presentation: {
+              chatGlyph: glyph("#from-text"),
+              fromCode: read("#from-code > code"),
+              fromText: read("#from-text"),
+              panelFromCode: read("#panel-from-code > code"),
+              panelFromText: read("#panel-from-text"),
+              panelGlyph: glyph("#panel-from-text"),
+              plainCode: read("#plain-code"),
+            },
+            samples: measure("wrap-chip", "column", 220, 900),
+            long: measure("long-chip", "column", 220, 900),
+            separation: Object.fromEntries(
+              caseIds.map((id) => [id, measure(id, "column", 40, 320)] as const),
+            ),
+            github: Object.fromEntries(
+              githubIds.map((id) => [id, measure(id, "column-" + id, 200, 900)] as const),
+            ),
+          };
         },
-        { caseIds: SEPARATION_CASES.map((testCase) => testCase.id), properties: CHIP_PROPERTIES },
-      );
-    },
+        {
+          caseIds: SEPARATION_CASES.map((row) => row.id),
+          githubIds: LINK_FORMS.map((row) => row.id),
+          properties: CHIP_PROPERTIES,
+        },
+      ),
   );
 }
 
+const wrapping = new Map<string, Awaited<ReturnType<typeof probeWrap>>>();
+const observation = (theme: string, container = "chat-text") =>
+  wrapping.get(`${theme}/${container}`)!;
+beforeAll(async () => {
+  if (!fixture.available) {
+    return;
+  }
+  for (const { themeMode, container } of WRAP_CASES) {
+    wrapping.set(`${themeMode}/${container}`, await probeWrap(themeMode, container));
+  }
+});
+
 fixture.describe("chat file link presentation", () => {
-  const wrapping = new Map<string, Awaited<ReturnType<typeof probeWrap>>>();
-  const observation = (theme: string, container = "chat-text") =>
-    wrapping.get(`${theme}/${container}`)!;
-
-  beforeAll(async () => {
-    // The assertion families consume the same read-only observations.
-    for (const { themeMode, container } of WRAP_CASES) {
-      wrapping.set(`${themeMode}/${container}`, await probeWrap(themeMode, container));
-    }
-  });
-
   it.each(["light", "dark"] as const)(
     "renders code-authored and text-authored file links identically in %s",
     (themeMode) => {
@@ -252,8 +281,8 @@ fixture.describe("chat file link presentation", () => {
     ({ container, themeMode }) => {
       const { samples } = observation(themeMode, container);
       // Prove the sweep actually changes lines.
-      expect(new Set(samples.map((sample) => Math.round(sample.chipTop))).size).toBeGreaterThan(1);
-      const split = samples.filter((sample) => sample.chipLineCount !== 1);
+      expect(new Set(samples.map((sample) => Math.round(sample.top))).size).toBeGreaterThan(1);
+      const split = samples.filter((sample) => sample.fragments !== 1);
       expect(split).toEqual([]);
     },
   );
@@ -261,13 +290,13 @@ fixture.describe("chat file link presentation", () => {
   it.each(WRAP_CASES)(
     "keeps an unshortened file label inside the column in $container/$themeMode",
     ({ container, themeMode }) => {
-      const { samples, separation } = observation(themeMode, container);
-      const overflowing = samples.filter(
-        (sample) => sample.longChipWidth > sample.columnWidth + 0.5,
-      );
+      const { long, separation } = observation(themeMode, container);
+      const overflowing = long.filter((sample) => sample.width > sample.columnWidth + 0.5);
       expect(overflowing).toEqual([]);
-      expect(samples.every((sample) => sample.longChipLineCount === 1)).toBe(true);
-      const spilling = separation.filter((sample) => sample.labelOverflowPx > 0.5);
+      expect(long.every((sample) => sample.fragments === 1)).toBe(true);
+      const spilling = Object.values(separation)
+        .flat()
+        .filter((sample) => sample.labelOverflowPx > 0.5);
       expect(spilling).toEqual([]);
     },
   );
@@ -278,7 +307,7 @@ fixture.describe("chat file link presentation", () => {
     ({ container, themeMode }) => {
       const { separation } = observation(themeMode, container);
       for (const testCase of SEPARATION_CASES) {
-        const caseSamples = separation.filter((sample) => sample.caseId === testCase.id);
+        const caseSamples = separation[testCase.id]!;
         expect(caseSamples.length).toBeGreaterThan(0);
         // Each fixture must wrap; otherwise the attachment check is vacuous.
         expect(caseSamples.some((sample) => sample.wrapped)).toBe(true);
@@ -287,6 +316,119 @@ fixture.describe("chat file link presentation", () => {
         );
         expect(separated).toEqual([]);
       }
+    },
+  );
+});
+
+function withFixture<T>(theme: "dark" | "light", run: (page: Page) => Promise<T>) {
+  return fixture.withPage(theme, wrapFixtureDocument(theme, "chat-text"), run);
+}
+
+const interactionPaint = (chip: Locator) =>
+  chip.evaluate((element) => ({
+    background: getComputedStyle(element).backgroundColor,
+    decoration: getComputedStyle(element).textDecorationLine,
+  }));
+
+fixture.describe("chat GitHub link presentation", () => {
+  it.each(["light", "dark"] as const)(
+    "keeps GitHub icons with their labels and reference chips contained at every column width in %s",
+    async (themeMode) => {
+      const samples = observation(themeMode).github;
+      for (const { id, kind } of LINK_FORMS) {
+        const collected = samples[id] ?? [];
+        // Prove the sweep actually changes lines.
+        expect(new Set(collected.map((sample) => sample.markLineTop)).size).toBeGreaterThan(1);
+        const stranded = collected.filter((sample) => !sample.labelStartsMarkLine);
+        expect({ id, stranded }).toEqual({ id, stranded: [] });
+        if (kind) {
+          // Qualified labels may exceed the column; short references remain unbroken.
+          expect(
+            collected.filter(
+              (sample) =>
+                sample.fragments !== 1 ||
+                sample.overflows ||
+                (id !== "repository-ref" && sample.labelFragments !== 1),
+            ),
+          ).toEqual([]);
+        } else {
+          // Non-item links fill their starting line instead of moving whole.
+          expect({ id, splits: collected.some((sample) => sample.fragments > 1) }).toEqual({
+            id,
+            splits: true,
+          });
+        }
+      }
+    },
+  );
+
+  it.each(["ltr", "rtl"])(
+    "wraps oversized qualified chips without clipping in %s",
+    async (direction) => {
+      await withFixture("dark", async (page) => {
+        const geometry = await page.evaluate((dir) => {
+          const column = document.querySelector<HTMLElement>("#column-repository-ref")!;
+          const chip = document.querySelector<HTMLElement>("#repository-ref")!;
+          column.style.width = "280px";
+          column.style.fontSize = "28px";
+          column.dir = dir;
+          chip.textContent = "organization-with-a-long-name/repository-with-a-long-name#987654";
+          const label = document.createRange();
+          label.selectNodeContents(chip);
+          return {
+            width: column.clientWidth,
+            scrollWidth: column.scrollWidth,
+            chipWidth: chip.getBoundingClientRect().width,
+            fragments: label.getClientRects().length,
+          };
+        }, direction);
+        expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+        expect(geometry.chipWidth).toBeLessThanOrEqual(geometry.width);
+        expect(geometry.fragments).toBeGreaterThan(1);
+      });
+    },
+  );
+
+  it.each(["light", "dark"] as const)(
+    "paints distinct kind icons and visible hover and keyboard focus states in %s",
+    async (themeMode) => {
+      await withFixture(themeMode, async (page) => {
+        const masks: string[] = [];
+        for (const id of ["issue", "pull"]) {
+          const chip = page.locator(`#${id}`);
+          const idle = await chip.evaluate((element) => {
+            const style = getComputedStyle(element);
+            const icon = getComputedStyle(element, "::before");
+            return {
+              background: style.backgroundColor,
+              decoration: style.textDecorationLine,
+              iconColor: icon.backgroundColor,
+              color: style.color,
+              mask: icon.maskImage,
+            };
+          });
+          expect(idle).toMatchObject({
+            decoration: "none",
+            iconColor: idle.color,
+            mask: expect.stringContaining("data:image/svg+xml"),
+          });
+          masks.push(idle.mask);
+          await chip.hover();
+          const hover = await interactionPaint(chip);
+          expect(hover.background).not.toBe(idle.background);
+          expect(hover.decoration).toBe("underline");
+          await page.mouse.move(0, 0);
+          await page.keyboard.press("Tab");
+          await chip.focus();
+          expect(await chip.evaluate((element) => element.matches(":focus-visible"))).toBe(true);
+          expect(await interactionPaint(chip)).toEqual(hover);
+          await chip.evaluate((element) => element.blur());
+        }
+        const genericMask = await page
+          .locator("#authored")
+          .evaluate((element) => getComputedStyle(element, "::before").maskImage);
+        expect(new Set([...masks, genericMask]).size).toBe(3);
+      });
     },
   );
 });
