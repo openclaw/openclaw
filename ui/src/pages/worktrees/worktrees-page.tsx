@@ -241,6 +241,7 @@ export function renderWorktreesView(model: WorktreesModel, view: () => Worktrees
                         <button
                           class={["btn btn--sm", { danger: !record().removedAt }]}
                           title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
+                          aria-label={`${record().removedAt ? t("worktrees.restore") : t("common.delete")}: ${record().name}`}
                           disabled={
                             !model.gateway.connected ||
                             !view().operatorAccess.canAdmin ||

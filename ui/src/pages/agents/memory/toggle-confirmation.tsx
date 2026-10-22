@@ -78,15 +78,15 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
             <Loading>{result()}</Loading>
           </Errored>
           <openclaw-modal-actions class="exec-approval-actions">
+            <button class="btn" disabled={saving()} onClick={handleCancel}>
+              {t("common.cancel")}
+            </button>
             <button
               class={["btn", { primary: props.enabling, danger: !props.enabling }]}
               disabled={props.disabled || saving()}
               onClick={confirm}
             >
               {saving() ? t("dreaming.toggleConfirmation.saving") : confirmLabel()}
-            </button>
-            <button class="btn" disabled={saving()} onClick={handleCancel}>
-              {t("common.cancel")}
             </button>
           </openclaw-modal-actions>
         </div>

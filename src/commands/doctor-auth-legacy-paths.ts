@@ -249,7 +249,7 @@ export function inspectLegacyOAuthSidecarsBeforeConfigRecovery(params: {
   };
   const raw = readConfigFileIfPresent(context.deps, context.configPath);
   if (raw !== undefined) {
-    const parsed = parseConfigJson5(raw, context.deps.json5);
+    const parsed = parseConfigJson5(raw);
     if (parsed.ok) {
       collect(parsed.parsed);
       const included = resolveConfigIncludesForRead(

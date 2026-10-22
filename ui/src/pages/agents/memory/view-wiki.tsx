@@ -346,7 +346,6 @@ export function ImportedInsightsContent(props: {
   owner: DreamingProps;
   data: WikiImportInsights | null;
   selectedPage: number;
-  loading: boolean;
 }) {
   const cluster = createMemo(() => props.data?.clusters[props.selectedPage]);
   const returnedItems = createMemo(
@@ -383,8 +382,8 @@ export function ImportedInsightsContent(props: {
       when={cluster()}
       fallback={
         <DiaryEmpty
-          message={t(props.loading ? "dreaming.wiki.loadingInsights" : "dreaming.wiki.noInsights")}
-          hint={props.loading ? undefined : t("dreaming.wiki.noInsightsHint")}
+          message={t("dreaming.wiki.noInsights")}
+          hint={t("dreaming.wiki.noInsightsHint")}
         />
       }
     >
@@ -411,7 +410,6 @@ export function WikiOverviewContent(props: {
   owner: DreamingProps;
   data: WikiOverview | null;
   selectedPage: number;
-  loading: boolean;
 }) {
   const cluster = createMemo(() => props.data?.clusters[props.selectedPage]);
   const returnedItems = createMemo(
@@ -435,8 +433,8 @@ export function WikiOverviewContent(props: {
       when={cluster()}
       fallback={
         <DiaryEmpty
-          message={t(props.loading ? "dreaming.wiki.loadingWiki" : "dreaming.wiki.emptyWiki")}
-          hint={props.loading ? undefined : t("dreaming.wiki.emptyWikiHint")}
+          message={t("dreaming.wiki.emptyWiki")}
+          hint={t("dreaming.wiki.emptyWikiHint")}
         />
       }
     >

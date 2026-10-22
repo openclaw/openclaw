@@ -118,6 +118,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
     async (recovered) => {
       const { SqliteTranscriptMutationConflictError } =
         await import("../../config/sessions/session-mutation-conflict-error.js");
+      const { ReplaySafeTranscriptConflictError } = await import("./transcript-conflict.js");
       const error = new SqliteTranscriptMutationConflictError("conflicting-session");
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
@@ -129,15 +130,20 @@ describe("runEmbeddedAgent silent-error retry", () => {
         }),
       );
 
-      await expect(
-        runEmbeddedAgent({
-          ...createOverflowRunParams(state),
-          provider: "anthropic",
-          model: "claude-opus-4-8",
-          runId: "run-transcript-conflict",
-        }),
-      ).rejects.toBe(error);
+      const rejection = await runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+        runId: "run-transcript-conflict",
+      }).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
 
+      expect(rejection).toBeInstanceOf(ReplaySafeTranscriptConflictError);
+      expect((rejection as InstanceType<typeof ReplaySafeTranscriptConflictError>).cause).toBe(
+        error,
+      );
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       expect(mockedClassifyFailoverReason).not.toHaveBeenCalled();
       expect(mockedClassifyAssistantFailoverReason).not.toHaveBeenCalled();

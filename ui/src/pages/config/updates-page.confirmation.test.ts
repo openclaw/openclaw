@@ -55,6 +55,10 @@ it.each(["loading", "open"] as const)(
         updateBusy: false,
         statusRead: null,
         onCheckStatus: () => overlays.refreshUpdateStatus(),
+        captureCommandPresentation: () => ({
+          retired: new Promise<void>(() => {}),
+          isCurrent: () => true,
+        }),
       }),
     );
     const updateButton = () => {

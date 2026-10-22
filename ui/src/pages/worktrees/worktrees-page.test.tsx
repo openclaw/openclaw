@@ -198,6 +198,8 @@ describe("WorktreesPage lifecycle", () => {
     source.setScopes(["operator.admin"]);
     page.mount();
     await waitForSolid(() => expect(page.model.records).toHaveLength(2));
+    expect(page.query('button[aria-label="Delete: worktree-1"]')).toBe(page.button("Delete"));
+    expect(page.query('button[aria-label="Restore: removed"]')).toBe(page.button("Restore"));
     page.model.update({ createOpen: true, createRepoRoot: "/tmp/repo", createName: "local draft" });
     source.emit(false);
     await settle();

@@ -31,6 +31,11 @@ const dotenvKey = "OPENCLAW_TEST_DOTENV";
 const shellKey = "OPENCLAW_TEST_SHELL";
 const config = (vars: Record<string, string>): OpenClawConfig => ({ env: { vars } });
 const windows = () => vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+function applied(source: OpenClawConfig) {
+  const env = {};
+  applyConfigEnvVars(source, env);
+  return env;
+}
 
 function initialize(ownedEnv: Record<string, string> = {}) {
   for (const name of [key, dotenvKey, shellKey]) {
@@ -66,50 +71,44 @@ afterEach(() => {
 
 describe("config env vars", () => {
   it("blocks config-owned host controls and startup env vars", () => {
-    const env: NodeJS.ProcessEnv = {};
-    applyConfigEnvVars(
-      {
+    expect(
+      applied({
         env: {
           OpenClaw_Config_ReadOnly: "1",
           vars: {
-            OPENCLAW_CONFIG_READONLY: "1",
-            BASH_ENV: "/tmp/pwn.sh",
-            SHELL: "/tmp/evil-shell",
-            HOME: "/tmp/evil-home",
-            ZDOTDIR: "/tmp/evil-zdotdir",
-            OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-            openclaw_allow_older_binary_destructive_actions: "1",
-            OPENCLAW_INCLUDE_ROOTS: "/tmp/evil-include-root",
+            ...Object.fromEntries(
+              `OPENCLAW_CONFIG_READONLY BASH_ENV SHELL HOME ZDOTDIR
+               OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS
+               openclaw_allow_older_binary_destructive_actions OPENCLAW_INCLUDE_ROOTS`
+                .split(/\s+/)
+                .map((name) => [name, "/tmp/blocked"]),
+            ),
+            OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS: "0",
+            OPENCLAW_DISABLE_CRON_HOST_EXECUTION: "0",
             OPENCLAW_NIX_MODE: "1",
             VALID: "literal",
           },
         },
-      },
-      env,
-    );
-    expect(env).toEqual({ OPENCLAW_NIX_MODE: "1", VALID: "literal" });
+      }),
+    ).toEqual({ OPENCLAW_NIX_MODE: "1", VALID: "literal" });
   });
 
   it("ignores malformed config env entries", () => {
-    const env: NodeJS.ProcessEnv = {};
-    applyConfigEnvVars(
-      JSON.parse(`{
-      "env": {"NOT-PORTABLE": "bad", "vars": {
-        " BAD KEY": "bad", "PORT": 8080, "DEBUG": true, "EMPTY": "", "VALID": "literal"
-      }}
-    }`),
-      env,
-    );
-    expect(env).toEqual({ VALID: "literal" });
+    expect(
+      applied(
+        JSON.parse(
+          '{"env":{"NOT-PORTABLE":"bad","vars":{" BAD KEY":"bad","PORT":8080,"DEBUG":true,"EMPTY":"","VALID":"literal"}}}',
+        ),
+      ),
+    ).toEqual({ VALID: "literal" });
   });
 
   it("does not apply unresolved references with or without defaults", () => {
-    const env: NodeJS.ProcessEnv = {};
-    applyConfigEnvVars(
-      config({ BARE_REF: "${SOME_VAR}", DEFAULT_REF: "${SOME_VAR:-fallback}", VALID: "literal" }),
-      env,
-    );
-    expect(env).toEqual({ VALID: "literal" });
+    expect(
+      applied(
+        config({ BARE_REF: "${SOME_VAR}", DEFAULT_REF: "${SOME_VAR:-fallback}", VALID: "literal" }),
+      ),
+    ).toEqual({ VALID: "literal" });
   });
 
   it("prepares updates and removals without mutating the target or rescanning per key", () => {

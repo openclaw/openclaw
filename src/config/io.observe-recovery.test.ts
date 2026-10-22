@@ -3,7 +3,6 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import JSON5 from "json5";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareLegacyConfigMigrationRuntime } from "../commands/doctor/shared/legacy-config-migrate.test-support.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -158,7 +157,6 @@ describe("config observe recovery", () => {
     env.VITEST ??= "true";
     const ioOptions = {
       fs,
-      json5: JSON5,
       env,
       homedir: () => fixtureHome,
       configPath,
@@ -209,7 +207,6 @@ describe("config observe recovery", () => {
     return {
       deps: {
         fs,
-        json5: JSON5,
         env: {} as NodeJS.ProcessEnv,
         homedir: () => fixtureHome,
         logger: { warn },

@@ -223,6 +223,18 @@ async function stageDelegation(controller: Preview) {
 }
 
 describe("Discord draft preview REST lifecycle", () => {
+  it.each([undefined, "progress"] as const)(
+    "uses progress previews with normalized delivery settings (mode=%s)",
+    (mode) => {
+      const { controller } = createContinuationHarness({
+        discordConfig: {
+          streaming: { ...(mode ? { mode } : {}), block: { enabled: true } },
+        },
+      });
+      expect(controller.isProgressMode).toBe(true);
+    },
+  );
+
   it("keeps ambient room events private even with default progress", async () => {
     const { controller, visible } = createContinuationHarness({
       discordConfig: {},

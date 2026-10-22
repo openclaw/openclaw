@@ -383,14 +383,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const sessionExecCwd = requestedExecNode ? requestedCwd : undefined;
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
+    // Worktree creation validates its own source; the default may exist only on a worker.
     const preparedRoot =
-      repository || emptyWorkspace || deviceFolder
+      repository || emptyWorkspace || deviceFolder || p.worktree === true
         ? undefined
         : prepareSessionCreateFilesystemRoot({
             cfg,
-            enforceSandboxContainment: Boolean(
-              sessionCwd && !requestedExecNode && p.worktree !== true,
-            ),
+            enforceSandboxContainment: Boolean(sessionCwd && !requestedExecNode),
             requestedExecNode,
             requestedProjectId,
             sessionCwd,

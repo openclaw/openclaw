@@ -405,19 +405,19 @@ function PairingPromptContent(params: {
         <openclaw-modal-actions class="channels-pairing-dialog__actions">
           <button
             type="button"
-            class={["btn", approving() ? "primary" : "danger"]}
-            disabled={!params.props.channels.connected || busy()}
-            onClick={() => params.props.onPairingPromptConfirm()}
-          >
-            {t(`channels.pairing.${params.prompt.kind}`)}
-          </button>
-          <button
-            type="button"
             class="btn"
             disabled={busy()}
             onClick={() => params.props.onPairingPromptCancel()}
           >
             {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            class={["btn", approving() ? "primary" : "danger"]}
+            disabled={!params.props.channels.connected || busy()}
+            onClick={() => params.props.onPairingPromptConfirm()}
+          >
+            {t(`channels.pairing.${params.prompt.kind}`)}
           </button>
         </openclaw-modal-actions>
       </div>

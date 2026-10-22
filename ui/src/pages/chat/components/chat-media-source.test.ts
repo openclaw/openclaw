@@ -56,15 +56,9 @@ afterEach(() => {
 
 describe("ChatMediaSourceOwner", () => {
   it("normalizes and applies native playback immediately", () => {
-    const media = document.createElement("audio");
-    const controller = new ChatMediaSourceOwner();
-
-    expect(controller.sync(media, "  /media/native.mp3  ", "  media:native  ", "native")).toBe(
-      null,
-    );
-
-    expect(controller.readiness).toBe("ready");
-    expect(controller.readySource).toBe("/media/native.mp3");
+    const { media, controller, sync } = setup();
+    expect(sync("  /media/native.mp3  ", "  media:native  ", "native")).toBeNull();
+    expect(controller).toMatchObject({ readiness: "ready", readySource: "/media/native.mp3" });
     expect(media.getAttribute("src")).toBe("/media/native.mp3");
   });
 
@@ -109,18 +103,10 @@ describe("ChatMediaSourceOwner", () => {
     vi.stubGlobal("fetch", fetchMock);
     const { media, sync } = setup("video");
 
-    const oldRequest = sync(
-      "/media/old.avi?mediaTicket=old",
-      "media:old",
-      "transcode",
-      "old-token",
-    );
-    const newRequest = sync(
-      "/media/new.avi?mediaTicket=new",
-      "media:new",
-      "transcode",
-      "new-token",
-    );
+    const prepare = (id: string) =>
+      sync(`/media/${id}.avi?mediaTicket=${id}`, `media:${id}`, "transcode", `${id}-token`);
+    const oldRequest = prepare("old");
+    const newRequest = prepare("new");
     await newRequest;
     old.resolve(response());
     await oldRequest;
@@ -145,24 +131,13 @@ describe("ChatMediaSourceOwner", () => {
   });
 
   it("reports an unavailable rendition when there is no usable fallback", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
-    );
-    const media = document.createElement("audio");
-    const controller = new ChatMediaSourceOwner();
-    void controller.sync(media, "/media/voice.caf?mediaTicket=old", "media:voice", "native");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response(500)));
+    const { media, controller, sync } = setup();
+    void sync("/media/voice.caf?mediaTicket=old", "media:voice", "native");
     expect(controller.handleError(media)).toBe(false);
 
-    await controller.sync(
-      media,
-      "/media/voice.caf?mediaTicket=refresh",
-      "media:voice",
-      "transcode",
-    );
-
-    expect(controller.readiness).toBe("unavailable");
-    expect(controller.readySource).toBe("");
+    await sync("/media/voice.caf?mediaTicket=refresh", "media:voice", "transcode");
+    expect(controller).toMatchObject({ readiness: "unavailable", readySource: "" });
     expect(media.getAttribute("src")).toContain("mediaTicket=old");
   });
 

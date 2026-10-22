@@ -16,8 +16,6 @@ import {
 } from "./run/incomplete-turn-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-const REASONING_RETRY =
-  "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 const EMPTY_RETRY =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current state; do not restart from scratch.";
 const REJECTION = "Provider completed tool call with malformed JSON arguments";
@@ -70,16 +68,6 @@ function retryError(overrides: Partial<Assistant> = {}, attempt: Attempt = {}) {
 }
 
 describe("incomplete-turn retry classification", () => {
-  it("continues reasoning-only output for Gemini", () => {
-    expect(
-      resolveNonVisibleTurnRetryInstructions({
-        ...retryState({ lastAssistant: assistant({ content: thinking("signed") }) }),
-        provider: "google",
-        modelId: "gemini-2.5-pro",
-      })[0],
-    ).toBe(REASONING_RETRY);
-  });
-
   it.each([
     { provider: "ollama", modelId: "minimax-m2.7:cloud", output: 6, expected: EMPTY_RETRY },
     { provider: "ollama", modelId: "glm-5.1:cloud", output: 0, expected: null },
@@ -100,7 +88,6 @@ describe("incomplete-turn retry classification", () => {
   });
 
   const errorCases: Array<[string, boolean, Partial<Assistant>?, Attempt?]> = [
-    ["signed thinking", true, { errorMessage: undefined, content: thinking("signed") }],
     ["non-exact rejection message", false, { errorMessage: `${REJECTION} after dispatch` }],
     [
       "provider refusal",
@@ -196,32 +183,22 @@ describe("incomplete-turn payload resolution", () => {
   });
 
   it("allows a same-prompt retry only for replay-safe missing assistant turns", () => {
-    const state = retryState({ lastAssistant: undefined });
-    expect(shouldRetryMissingAssistantTurn(state)).toBe(true);
+    const attempts: Attempt[] = [
+      { lastAssistant: undefined },
+      { toolMetas: [{ toolName: "image_generate", asyncStarted: true }] },
+      { itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 } },
+    ];
     expect(
-      shouldRetryMissingAssistantTurn({
-        ...state,
-        attempt: makeEmbeddedRunnerAttempt({
-          toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
-        }),
-      }),
-    ).toBe(false);
-    expect(
-      shouldRetryMissingAssistantTurn({
-        ...state,
-        attempt: makeEmbeddedRunnerAttempt({
-          itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 },
-        }),
-      }),
-    ).toBe(false);
+      attempts.map((attempt) =>
+        shouldRetryMissingAssistantTurn(retryState({ lastAssistant: undefined, ...attempt })),
+      ),
+    ).toEqual([true, false, false]);
   });
 
   const payloadCases: Array<[string, Attempt, number, string]> = [
     [
       "unsigned thinking only (#89787)",
-      {
-        lastAssistant: assistant({ content: thinking() }),
-      },
+      { lastAssistant: assistant({ content: thinking() }) },
       1,
       "No answer was returned. Ask again if you still need one.",
     ],

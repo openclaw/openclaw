@@ -17,6 +17,10 @@ const retries = { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 } as const
 const staleOptions = { retries, stale: 10 } as const;
 const ownerOptions = { retries, stale: 60_000 } as const;
 const deadPid = 2 ** 30;
+const missing = (filePath: string) =>
+  expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+const timesOut = (lock: ReturnType<typeof acquireFileLock>) =>
+  expect(lock).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
 
 async function writeLock(lockPath: string, pid = deadPid, createdAt = "2000-01-01T00:00:00Z") {
   await fs.writeFile(lockPath, JSON.stringify({ pid, createdAt }), "utf8");
@@ -71,10 +75,7 @@ describe("acquireFileLock", () => {
       await fs.symlink(realDir, linkDir, "dir");
       const realPath = path.join(realDir, "state.json");
       const linkPath = path.join(linkDir, "state.json");
-      const options = {
-        ...ownerOptions,
-        reentrantOwner: "test-operation:alias",
-      } as const;
+      const options = { ...ownerOptions, reentrantOwner: "test-operation:alias" };
 
       const first = await acquireFileLock(realPath, options);
       const second = await acquireFileLock(linkPath, options);
@@ -83,7 +84,7 @@ describe("acquireFileLock", () => {
         await first.release();
         await fs.access(first.lockPath);
         await second.release();
-        await expect(fs.access(first.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+        await missing(first.lockPath);
       } finally {
         await first.release();
         await second.release();
@@ -95,20 +96,12 @@ describe("acquireFileLock", () => {
     ["different", "test-operation:second"],
     ["absent", undefined],
   ] as const)("makes a %s logical owner contend normally", async (_label, reentrantOwner) => {
-    const ownerPath = path.join(tempDir, "owner-isolation.json");
-    const first = await acquireFileLock(ownerPath, {
-      retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-      stale: 60_000,
+    const first = await acquireFileLock(filePath, {
+      ...ownerOptions,
       reentrantOwner: "test-operation:first",
     });
     try {
-      await expect(
-        acquireFileLock(ownerPath, {
-          retries: { retries: 0, factor: 1, minTimeout: 1, maxTimeout: 1 },
-          stale: 60_000,
-          reentrantOwner,
-        }),
-      ).rejects.toMatchObject({ code: FILE_LOCK_TIMEOUT_ERROR_CODE });
+      await timesOut(acquireFileLock(filePath, { ...ownerOptions, reentrantOwner }));
     } finally {
       await first.release();
     }
@@ -145,16 +138,14 @@ describe("acquireFileLock", () => {
       expect(JSON.parse(await fs.readFile(lockPath, "utf8")).pid).toBe(process.pid);
       await held.release();
     } else {
-      await expect(acquireFileLock(filePath, options)).rejects.toMatchObject({
-        code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-      });
+      await timesOut(acquireFileLock(filePath, options));
       expect(await fs.readFile(lockPath, "utf8")).toBe(bytes);
     }
   });
 
   it("does not grant stale removal for an unsupported JavaScript policy", async () => {
-    const bytes = JSON.stringify({ pid: 2 ** 30, createdAt: "2000-01-01T00:00:00Z" });
-    await fs.writeFile(`${filePath}.lock`, bytes);
+    const bytes = JSON.stringify({ pid: deadPid, createdAt: "2000-01-01T00:00:00Z" });
+    await fs.writeFile(lockPath, bytes);
     // JavaScript consumers are not constrained by the TypeScript option union.
     const runtimeOptions = JSON.parse('{"staleRecovery":"unsupported-runtime-policy"}');
     await expect(
@@ -163,7 +154,7 @@ describe("acquireFileLock", () => {
         ...runtimeOptions,
       }),
     ).rejects.toMatchObject({ code: FILE_LOCK_STALE_ERROR_CODE });
-    expect(await fs.readFile(`${filePath}.lock`, "utf8")).toBe(bytes);
+    expect(await fs.readFile(lockPath, "utf8")).toBe(bytes);
   });
 
   it("does not unlink an ownerless sidecar while its creator still holds it", async () => {
@@ -173,9 +164,7 @@ describe("acquireFileLock", () => {
       await owner.utimes(staleAt, staleAt);
       const before = await owner.stat();
 
-      await expect(acquireFileLock(filePath, staleOptions)).rejects.toMatchObject({
-        code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-      });
+      await timesOut(acquireFileLock(filePath, staleOptions));
 
       const after = await fs.stat(lockPath);
       expect({ dev: after.dev, ino: after.ino }).toEqual({ dev: before.dev, ino: before.ino });
@@ -202,7 +191,7 @@ describe("acquireFileLock", () => {
       }),
     ).rejects.toBe(guardError);
 
-    await expect(fs.access(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await missing(lockPath);
     const next = await acquireFileLock(filePath, ownerOptions);
     await next.release();
   });
@@ -225,17 +214,9 @@ describe("acquireFileLock", () => {
 
     // Inject the failure at the real JavaScript FileHandle write boundary.
     await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
-      await expect(
-        acquireFileLock(failurePath, {
-          retries: {
-            retries: 0,
-            factor: 1,
-            minTimeout: 1,
-            maxTimeout: 1,
-          },
-          stale: 100,
-        }),
-      ).rejects.toThrow(writeError);
+      await expect(acquireFileLock(failurePath, { retries, stale: 100 })).rejects.toThrow(
+        writeError,
+      );
     });
 
     expect(opened).toHaveLength(1);
@@ -251,7 +232,7 @@ describe("acquireFileLock", () => {
     await writeLock(retiredPath, deadPid, new Date().toISOString());
 
     await expect(reclaimDefinitelyStaleFileLock(retiredPath)).resolves.toBe("removed");
-    await expect(fs.access(retiredPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await missing(retiredPath);
     await expect(reclaimDefinitelyStaleFileLock(retiredPath)).resolves.toBe("missing");
   });
 

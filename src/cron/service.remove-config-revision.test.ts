@@ -36,7 +36,6 @@ it("preserves a job edited after its removal revision was reviewed", async () =>
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   try {

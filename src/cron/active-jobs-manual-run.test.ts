@@ -58,7 +58,6 @@ async function createManualRunHarness(
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: () => {},
-    requestHeartbeat: () => {},
     runIsolatedAgentJob: async () => {
       entered.resolve();
       return await release.promise;

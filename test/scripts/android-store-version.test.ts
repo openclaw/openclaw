@@ -26,34 +26,12 @@ const snapshot = (tracks: ReturnType<typeof track>[], uploadedVersionCodes = cod
   uploadedVersionCodes,
   tracks,
 });
-const legacyBaseline = (audience: string, build: string) => ({
-  audience,
-  build,
-  version: "2026.9.4",
-  sourceRef: `${prefix}/2026.9.4-2026090401`,
-});
 const publicTracks = (phone = 2026090401, wear = 2026090451) => [
   track("production", phone),
   track("wear:production", wear),
 ];
 
-it("migrates legacy uploads without changing notes identities or reusing codes", () => {
-  expectPlan({
-    snapshot: snapshot(publicTracks(), [2026041590, ...codes]),
-  }).toMatchObject({
-    schemaVersion: 2,
-    gatewayVersion: "2026.9.6",
-    revision: 0,
-    buildNumber: 1,
-    version: "2026.9.60",
-    versionCode: 2026090452,
-    wearVersionCode: 2026090453,
-    legacyMaxVersionCode: 2026090451,
-    releaseNotesBaselines: [
-      legacyBaseline("phone", "2026090401"),
-      legacyBaseline("wear", "2026090451"),
-    ],
-  });
+it("starts from pinned metadata without previous uploads", () => {
   expectPlan({ snapshot: snapshot([], []), refs: [] }).toMatchObject({
     versionCode: 2026080252,
     wearVersionCode: 2026080253,
@@ -126,10 +104,6 @@ it("refuses ambiguous identities, rollouts, downgrades, and exhausted store vers
     "Google Play production versionCode 2026090301 has no recorded source identity",
   );
   rejects({ gatewayVersion: "2026.9.3" }, "precedes");
-  rejects(
-    { snapshot: snapshot([track("production", 2026090401, "inProgress")]) },
-    "ambiguous public release state",
-  );
   rejects({ snapshot: snapshot([track("production", 2026090451)]) }, "different form factor");
   rejects(
     { refs: [...input.refs, marker, candidate, ref("v2/2026.9.6/1/1/2026090452-2026090453")] },

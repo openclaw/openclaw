@@ -1194,7 +1194,7 @@
     --chat-composer-send-size: var(--chat-mobile-row-plus-target-size);
   }
 
-  .agent-chat__input--mobile-toolbar svg {
+  :where(.agent-chat__input--mobile-toolbar) svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
     stroke-width: var(--chat-mobile-row-icon-stroke);

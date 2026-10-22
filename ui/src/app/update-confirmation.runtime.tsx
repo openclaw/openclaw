@@ -290,6 +290,17 @@ export async function confirmAndStartUpdateRuntime(
                   fallback={
                     <>
                       <button
+                        ref={(element) => {
+                          cancelButton = element;
+                        }}
+                        type="button"
+                        class="btn"
+                        autofocus
+                        onClick={finish}
+                      >
+                        {view.working ? t("common.close") : t("common.cancel")}
+                      </button>
+                      <button
                         type="button"
                         class={["btn danger", { "btn--busy": view.working || view.checkingStatus }]}
                         disabled={view.working || view.checkingStatus}
@@ -306,20 +317,32 @@ export async function confirmAndStartUpdateRuntime(
                           view.route.confirmLabel
                         )}
                       </button>
-                      <button
-                        ref={(element) => {
-                          cancelButton = element;
-                        }}
-                        type="button"
-                        class="btn"
-                        autofocus
-                        onClick={finish}
-                      >
-                        {view.working ? t("common.close") : t("common.cancel")}
-                      </button>
                     </>
                   }
                 >
+                  <button
+                    ref={(element) => {
+                      closeButton = element;
+                    }}
+                    type="button"
+                    class="btn"
+                    autofocus
+                    onClick={finish}
+                  >
+                    {t("common.close")}
+                  </button>
+                  <Show when={view.failed && params.onReviewUpdate}>
+                    <button
+                      type="button"
+                      class="btn"
+                      onClick={() => {
+                        finish();
+                        params.onReviewUpdate?.();
+                      }}
+                    >
+                      {t("updates.reviewUpdate")}
+                    </button>
+                  </Show>
                   <Show when={view.showRecovery && params.onCheckStatus}>
                     <button
                       type="button"
@@ -347,29 +370,6 @@ export async function confirmAndStartUpdateRuntime(
                       {t("updates.dialog.retryUpdate")}
                     </button>
                   </Show>
-                  <Show when={view.failed && params.onReviewUpdate}>
-                    <button
-                      type="button"
-                      class="btn"
-                      onClick={() => {
-                        finish();
-                        params.onReviewUpdate?.();
-                      }}
-                    >
-                      {t("updates.reviewUpdate")}
-                    </button>
-                  </Show>
-                  <button
-                    ref={(element) => {
-                      closeButton = element;
-                    }}
-                    type="button"
-                    class="btn"
-                    autofocus
-                    onClick={finish}
-                  >
-                    {t("common.close")}
-                  </button>
                 </Show>
               </openclaw-modal-actions>
             </div>

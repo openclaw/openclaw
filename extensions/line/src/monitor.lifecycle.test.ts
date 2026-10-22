@@ -153,6 +153,7 @@ async function expectWebhookResponse(
     marker: response.headers.get("x-openclaw-delivery-accepted"),
     body: await response.json(),
   }).toEqual({ status, marker, body });
+  expect(response.headers.get("content-type")).toBe("application/json");
 }
 
 describe("monitorLineProvider lifecycle", () => {
@@ -359,54 +360,30 @@ describe("monitorLineProvider lifecycle", () => {
     },
   );
 
-  it.each<{
-    name: string;
-    payload: ReplyPayload;
-    kind: "final" | "block";
-    replyToken?: string;
-    consumeToken?: boolean;
-    durable: boolean;
-  }>([
-    { name: "push-only text", payload: { text: "hello" }, kind: "final", durable: true },
-    {
-      name: "unused token",
-      payload: { text: "hello" },
-      kind: "final",
-      replyToken: "reply-token",
-      durable: false,
-    },
-    {
-      name: "consumed token",
-      payload: { text: "hello" },
-      kind: "final",
-      replyToken: "reply-token",
-      consumeToken: true,
-      durable: true,
-    },
-    {
-      name: "rich content",
-      payload: { text: "hello", channelData: { line: { quickReplies: ["One"] } } },
-      kind: "final",
-      consumeToken: true,
-      durable: false,
-    },
-    {
-      name: "media",
-      payload: { text: "photo", mediaUrl: "https://example.com/image.png" },
-      kind: "final",
-      consumeToken: true,
-      durable: false,
-    },
-    {
-      name: "non-final",
-      payload: { text: "hello" },
-      kind: "block",
-      consumeToken: true,
-      durable: false,
-    },
+  it.each<[string, ReplyPayload, "final" | "block", string | undefined, boolean, boolean]>([
+    ["push-only text", { text: "hello" }, "final", undefined, false, true],
+    ["unused token", { text: "hello" }, "final", "reply-token", false, false],
+    ["consumed token", { text: "hello" }, "final", "reply-token", true, true],
+    [
+      "rich content",
+      { text: "hello", channelData: { line: { quickReplies: ["One"] } } },
+      "final",
+      undefined,
+      true,
+      false,
+    ],
+    [
+      "media",
+      { text: "photo", mediaUrl: "https://example.com/image.png" },
+      "final",
+      undefined,
+      true,
+      false,
+    ],
+    ["non-final", { text: "hello" }, "block", undefined, true, false],
   ])(
-    "selects durable delivery for $name",
-    async ({ payload, kind, replyToken, consumeToken, durable }) => {
+    "selects durable delivery for %s",
+    async (_name, payload, kind, replyToken, consumeToken, durable) => {
       const resolvedTurn = await captureTurn();
       const monitor = await startMonitor();
       try {
