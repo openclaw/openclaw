@@ -169,34 +169,42 @@ describe("OpenClawChannelBridge", () => {
     expect(notification).toHaveBeenCalledTimes(2);
   });
   test.each([
-    { kind: "plugin", payload: { id: "approval-2", createdAtMs: 0 } },
-    { kind: "exec", payload: { id: "approval-3" } },
-  ])("expires $kind approvals with absent expiry metadata", async ({ kind, payload }) => {
-    await requestApproval(subject, payload, kind);
-    expect(subject.pendingApprovals.size).toBe(1);
-
-    vi.advanceTimersByTime(APPROVAL_DEFAULT_TTL_MS - ONE_MINUTE_MS);
-    expect(subject.pendingApprovals.size).toBe(1);
-
-    vi.advanceTimersByTime(SWEEP_INTERVAL_MS + ONE_MINUTE_MS);
-    expect(subject.pendingApprovals.size).toBe(0);
-  });
-
-  test("listPendingApprovals filters expired entries before the next sweep tick", async () => {
-    await requestApproval(subject, {
-      id: "approval-early-expiry",
-      createdAtMs: 0,
-      expiresAtMs: ONE_MINUTE_MS,
-    });
-    expect(subject.pendingApprovals.size).toBe(1);
-
-    vi.advanceTimersByTime(2 * ONE_MINUTE_MS);
-
-    expect(subject.listPendingApprovals()).toHaveLength(0);
-    expect(subject.pendingApprovals.size).toBe(0);
+    ["permission", ONE_HOUR_MS],
+    ["plugin", APPROVAL_DEFAULT_TTL_MS],
+    ["exec", APPROVAL_DEFAULT_TTL_MS],
+    ["early", ONE_MINUTE_MS],
+  ] as const)("expires %s state and restarts the idle sweeper", async (kind, ttl) => {
     expect(subject.pendingSweepInterval).toBeNull();
+    vi.advanceTimersByTime(SWEEP_INTERVAL_MS * 4);
+    expect(vi.getTimerCount()).toBe(0);
+    if (kind === "permission") {
+      await subject.handleClaudePermissionRequest(permissionRequest);
+    } else {
+      const payload =
+        kind === "early"
+          ? { id: "approval", createdAtMs: 0, expiresAtMs: Date.now() + ttl }
+          : kind === "plugin"
+            ? { id: "approval", createdAtMs: 0 }
+            : { id: "approval" };
+      await requestApproval(subject, payload, kind === "early" ? "exec" : kind);
+    }
+    const pending =
+      kind === "permission" ? subject.pendingClaudePermissions : subject.pendingApprovals;
+    expect(pending.size).toBe(1);
+    expect(subject.pendingSweepInterval).not.toBeNull();
+    vi.advanceTimersByTime(ttl - ONE_MINUTE_MS);
+    expect(pending.size).toBe(1);
+    vi.advanceTimersByTime(
+      kind === "early" ? 2 * ONE_MINUTE_MS : SWEEP_INTERVAL_MS + ONE_MINUTE_MS,
+    );
+    if (kind === "early") {
+      expect(subject.listPendingApprovals()).toHaveLength(0);
+    }
+    expectDrained(subject);
+    expect(vi.getTimerCount()).toBe(0);
+    await subject.handleClaudePermissionRequest({ ...permissionRequest, requestId: "fghij" });
+    expect(subject.pendingSweepInterval).not.toBeNull();
   });
-
   test("close drains pending state and prevents new requests from restarting it", async () => {
     await subject.handleClaudePermissionRequest(permissionRequest);
     await requestApproval(subject, { id: "approval-1", createdAtMs: 0, expiresAtMs: ONE_HOUR_MS });
@@ -223,23 +231,5 @@ describe("OpenClawChannelBridge", () => {
       "openclaw mcp: gateway event exec.approval.requested failed\n",
       "openclaw mcp: gateway event exec.approval.requested error: Error: handler boom\n",
     ]);
-  });
-
-  test("sweeper self-terminates once both maps drain, restoring lazy-init", async () => {
-    expect(subject.pendingSweepInterval).toBeNull();
-    vi.advanceTimersByTime(SWEEP_INTERVAL_MS * 4);
-    expect(vi.getTimerCount()).toBe(0);
-    await subject.handleClaudePermissionRequest(permissionRequest);
-    expect(subject.pendingSweepInterval).not.toBeNull();
-    expect(subject.pendingClaudePermissions.size).toBe(1);
-
-    vi.advanceTimersByTime(SWEEP_INTERVAL_MS);
-    expect(subject.pendingClaudePermissions.size).toBe(1);
-    vi.advanceTimersByTime(ONE_HOUR_MS);
-    expectDrained(subject);
-    expect(vi.getTimerCount()).toBe(0);
-
-    await subject.handleClaudePermissionRequest({ ...permissionRequest, requestId: "fghij" });
-    expect(subject.pendingSweepInterval).not.toBeNull();
   });
 });

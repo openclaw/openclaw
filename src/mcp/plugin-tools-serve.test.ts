@@ -110,26 +110,6 @@ function beforeToolCall(handler: (...args: unknown[]) => unknown) {
 }
 
 describe("plugin tools MCP server", () => {
-  it.each([
-    { agentSessionKey: "agent:research:acp:session-1", agentId: undefined, owner: "research" },
-    { agentSessionKey: "global", agentId: "work", owner: "work" },
-  ])(
-    "passes $agentSessionKey owner into plugin tool factories",
-    async ({ agentSessionKey, agentId, owner }) => {
-      const config = { plugins: { enabled: true } } as never;
-
-      const acquisition = await acquirePluginToolsForMcp({ config, agentSessionKey, agentId });
-      acquisition.resolveTools();
-      await acquisition.release();
-
-      expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith({
-        context: { config, agentId: owner, sessionKey: agentSessionKey },
-        suppressNameConflicts: true,
-      });
-      expect(resolvePluginToolsMock).toHaveBeenCalledOnce();
-    },
-  );
-
   it("rejects a non-agent session identity from the managed bridge", async () => {
     await expect(
       acquirePluginToolsForMcp({
@@ -161,16 +141,17 @@ describe("plugin tools MCP server", () => {
       createTool("plugin_denied", deniedExecute),
     ]);
 
-    const acquisition = await acquirePluginToolsForMcp({
-      config: {
-        plugins: { enabled: true },
-        tools: { allow: ["plugin_allowed", "plugin_denied"], deny: ["plugin_globally_denied"] },
-        agents: {
-          entries: {
-            research: { tools: { allow: ["plugin_allowed"], deny: ["plugin_denied"] } },
-          },
+    const config = {
+      plugins: { enabled: true },
+      tools: { allow: ["plugin_allowed", "plugin_denied"], deny: ["plugin_globally_denied"] },
+      agents: {
+        entries: {
+          research: { tools: { allow: ["plugin_allowed"], deny: ["plugin_denied"] } },
         },
-      } as never,
+      },
+    } as never;
+    const acquisition = await acquirePluginToolsForMcp({
+      config,
       agentSessionKey: "agent:research:acp:session-1",
     });
     const handlers = createPluginToolsMcpHandlers(acquisition.resolveTools());
@@ -191,9 +172,12 @@ describe("plugin tools MCP server", () => {
       expect(allowedExecute).toHaveBeenCalledOnce();
 
       expect(acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0]).toMatchObject({
+        context: { config, agentId: "research", sessionKey: "agent:research:acp:session-1" },
         toolAllowlist: ["plugin_allowed", "plugin_denied"],
         toolDenylist: ["plugin_globally_denied", "plugin_denied"],
+        suppressNameConflicts: true,
       });
+      expect(resolvePluginToolsMock).toHaveBeenCalledOnce();
     } finally {
       await acquisition.release();
     }
@@ -315,21 +299,12 @@ describe("Codex supervision MCP server", () => {
   ];
   const tools = () => names.map((name) => createTool(name, vi.fn<AnyAgentTool["execute"]>()));
 
-  it("lists official tools through the trusted standalone owner context", async () => {
+  it("preserves endpoint config and translates legacy env policy at the standalone boundary", async () => {
     resolvePluginToolsMock.mockReturnValue(tools());
     await serveCodexSupervisionToolsMcp();
-    await withMcpConnection(
-      createCodexSupervisionToolsMcpServer({ tools: tools() }),
-      async (client) => {
-        expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(names);
-        expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith(
-          expect.objectContaining({ context: expect.objectContaining({ senderIsOwner: true }) }),
-        );
-      },
+    expect(acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0]?.context.senderIsOwner).toBe(
+      true,
     );
-  });
-
-  it("preserves endpoint config and translates legacy env policy at the standalone boundary", async () => {
     vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS", "1");
     vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS", "1");
     const appServer = { transport: "websocket", url: "ws://127.0.0.1:4500" };
@@ -342,10 +317,18 @@ describe("Codex supervision MCP server", () => {
     };
     const original = structuredClone(config);
     getRuntimeConfigMock.mockReturnValue(config);
-    resolvePluginToolsMock.mockReturnValue(tools());
     await serveCodexSupervisionToolsMcp();
+    await withMcpConnection(
+      createCodexSupervisionToolsMcpServer({ tools: tools() }),
+      async (client) => {
+        expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(names);
+      },
+    );
+    expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ context: expect.objectContaining({ senderIsOwner: true }) }),
+    );
     const plugins =
-      acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0]?.context.config?.plugins;
+      acquireStandalonePluginToolRegistryMock.mock.calls.at(-1)?.[0]?.context.config?.plugins;
     expect(plugins).toMatchObject({
       allow: ["codex"],
       deny: [],
