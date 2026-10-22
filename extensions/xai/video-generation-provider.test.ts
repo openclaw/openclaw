@@ -72,6 +72,7 @@ const models15 = [
 ];
 
 function mockXaiVideoTask() {
+  mockXaiVideoRequest();
   mockPoll({ status: "done", video: { url: "https://cdn.x.ai/video.mp4" } });
   fetchWithTimeoutMock.mockResolvedValueOnce({
     headers: new Headers({ "content-type": "video/mp4" }),
