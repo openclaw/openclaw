@@ -25,12 +25,13 @@ import {
   clearWorkspaceTimer,
 } from "./components/chat-session-workspace-state.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
+import { markChatComposerEdit } from "./composer-draft-storage.ts";
 import {
   captureChatComposerOwner,
   isChatComposerOwnerCurrent,
   isIncognitoComposerScope,
 } from "./composer-persistence-state.ts";
-import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import {
   type AfterCommitEffect,
