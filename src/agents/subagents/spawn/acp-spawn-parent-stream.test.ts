@@ -1,5 +1,6 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { startAcpSpawnParentStreamRelay } from "./acp-spawn-parent-stream.js";
 
 const { enqueueSessionEventMock } = vi.hoisted(() => ({
@@ -14,8 +15,6 @@ vi.mock("../../../auto-reply/reply/session-event-handoff.js", () => ({
   enqueueSessionEventForHost: enqueueSessionEventMock,
 }));
 
-let emitAgentEvent: typeof import("../../../infra/agent-events.js").emitAgentEvent;
-
 const progressCommentaryDeliveryContext = {
   channel: "forum",
   to: "-1001234567890",
@@ -24,8 +23,8 @@ const progressCommentaryDeliveryContext = {
 };
 const relays: Array<ReturnType<typeof startAcpSpawnParentStreamRelay>> = [];
 
-function progressRelay(runId: string, acp?: OpenClawConfig["acp"]) {
-  return createRelay(runId, {
+function progressRelay(acp?: OpenClawConfig["acp"]) {
+  return createRelay({
     cfg: {
       ...(acp ? { acp } : {}),
       channels: { forum: { streaming: { mode: "progress", progress: { commentary: true } } } },
@@ -35,9 +34,9 @@ function progressRelay(runId: string, acp?: OpenClawConfig["acp"]) {
 }
 
 function createRelay(
-  runId: string,
   options: Partial<Omit<Parameters<typeof startAcpSpawnParentStreamRelay>[0], "runId">> = {},
 ) {
+  const runId = "run";
   const relay = startAcpSpawnParentStreamRelay({
     runId,
     requesterAgentId: "main",
@@ -60,6 +59,9 @@ function createRelay(
       emit("acp", { phase: "prompt_submitted", at: Date.now(), proxyEnvKeys }),
     status: (text: string, tag?: string) =>
       emit("acp", { phase: "runtime_event", eventType: "status", text, ...(tag ? { tag } : {}) }),
+    preamble: (progressText: string) =>
+      emit("item", { itemId: "preamble-1", kind: "preamble", progressText }),
+    end: (endedAt = 2_000) => emit("lifecycle", { phase: "end", startedAt: 1_000, endedAt }),
   };
 }
 
@@ -78,10 +80,6 @@ function expectFragments(present: string[], absent: string[] = []): void {
 }
 
 describe("startAcpSpawnParentStreamRelay", () => {
-  beforeAll(async () => {
-    ({ emitAgentEvent } = await import("../../../infra/agent-events.js"));
-  });
-
   beforeEach(() => {
     enqueueSessionEventMock.mockClear();
     vi.useFakeTimers();
@@ -95,7 +93,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
   it("relays assistant progress and completion to the parent session", () => {
     const deliveryContext = progressCommentaryDeliveryContext;
-    const relay = createRelay("run-1", {
+    const relay = createRelay({
       childSessionKey: "agent:codex:acp:child-1",
       deliveryContext,
     });
@@ -106,11 +104,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.assistant(" from child");
     vi.advanceTimersByTime(2_500);
 
-    relay.emit("lifecycle", {
-      phase: "end",
-      startedAt: 1_000,
-      endedAt: 3_100,
-    });
+    relay.end(3_100);
 
     expect(collectedTexts()).toEqual([
       "Started codex session agent:codex:acp:child-1. Streaming progress updates to parent session.",
@@ -120,7 +114,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expect(enqueueSessionEventMock.mock.calls.map(([, options]) => options)).toEqual(
       ["start", "progress", "done"].map((phase) =>
         expect.objectContaining({
-          contextKey: `acp-spawn:run-1:${phase}`,
+          contextKey: `acp-spawn:run:${phase}`,
           sessionKey: "agent:main:main",
           deliveryContext,
           agentId: "main",
@@ -132,7 +126,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it("remaps cron-run parent session keys while relaying stream events", () => {
-    const relay = createRelay("run-cron", {
+    const relay = createRelay({
       requesterAgentId: "ops",
       parentSessionKey: "agent:ops:cron:nightly:run:run-1:subagent:worker",
       eventRouting: { mainKey: "primary", sessionScope: "global" },
@@ -141,19 +135,20 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.assistant("hello from child");
     vi.advanceTimersByTime(2_500);
 
-    const progressEvent = enqueueSessionEventMock.mock.calls.find(
-      ([text]) => typeof text === "string" && text.includes("codex: hello from child"),
-    );
-    expect(progressEvent?.[0]).toContain("codex: hello from child");
-    expect(progressEvent?.[1]).toMatchObject({
-      contextKey: "acp-spawn:run-cron:progress",
-      agentId: "ops",
-      sessionKey: "global",
-    });
+    expect(enqueueSessionEventMock.mock.calls).toEqual([
+      [
+        "codex: hello from child",
+        expect.objectContaining({
+          contextKey: "acp-spawn:run:progress",
+          agentId: "ops",
+          sessionKey: "global",
+        }),
+      ],
+    ]);
   });
 
   it("emits a pre-prompt stall notice and a resumed notice when output returns", () => {
-    const relay = createRelay("run-2");
+    const relay = createRelay();
 
     vi.advanceTimersByTime(60_000);
     expectFragments(["no prompt submission was observed for 60s"]);
@@ -163,15 +158,12 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     expectFragments(["resumed output.", "codex: resumed output"]);
 
-    relay.emit("lifecycle", {
-      phase: "error",
-      error: "boom",
-    });
+    relay.emit("lifecycle", { phase: "error", error: "boom" });
     expectFragments(["run failed: boom"]);
   });
 
   it("classifies stalls after prompt submission but before the first runtime event", () => {
-    const relay = createRelay("run-prompt-stall");
+    const relay = createRelay();
 
     relay.prompt(["HTTPS_PROXY"]);
     vi.advanceTimersByTime(60_000);
@@ -183,7 +175,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it("classifies runtime activity without visible assistant output separately from input waits", () => {
-    const relay = createRelay("run-runtime-stall");
+    const relay = createRelay();
 
     relay.prompt();
     vi.advanceTimersByTime(45_000);
@@ -203,7 +195,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it("auto-disposes stale relays after max lifetime timeout", () => {
-    const relay = createRelay("run-3");
+    const relay = createRelay();
 
     vi.advanceTimersByTime(6 * 60 * 60 * 1000);
     expectFragments(["stream relay timed out after 21600s"]);
@@ -216,7 +208,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it("relays the latest replaceable assistant snapshot instead of superseded drafts", () => {
-    const relay = createRelay("run-replaceable-assistant");
+    const relay = createRelay();
 
     relay.emit("assistant", {
       text: "coordination draft",
@@ -229,18 +221,13 @@ describe("startAcpSpawnParentStreamRelay", () => {
       replace: true,
       replaceable: true,
     });
-    relay.emit("lifecycle", {
-      phase: "end",
-      startedAt: 1_000,
-      endedAt: 2_000,
-    });
+    relay.end();
 
     expectFragments(["codex: final answer"], ["coordination draft"]);
   });
 
   it.each(["final", "status"] as const)("flushes commentary before %s output", (boundary) => {
     const relay = progressRelay(
-      `run-commentary-${boundary}`,
       boundary === "status" ? { stream: { tagVisibility: { plan: true } } } : undefined,
     );
     relay.assistant("checking files", "commentary");
@@ -257,90 +244,46 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it.each([
-    {
-      name: "replaces buffered preamble item progress when snapshots change text",
-      first: "Checking config",
-      second: "Reading files",
-      flushFirst: false,
-      expected: ["codex: Reading files"],
-    },
-    {
-      name: "omits already flushed preamble item progress from later prefix snapshots",
-      first: "Checking",
-      second: "Checking the app-server stream",
-      flushFirst: true,
-      expected: ["codex: Checking", "codex: the app-server stream"],
-    },
-  ])("$name", ({ name, first, second, flushFirst, expected }) => {
-    const relay = progressRelay(name);
-
-    const preamble = (progressText: string) =>
-      relay.emit("item", { itemId: "preamble-1", kind: "preamble", progressText });
-    preamble(first);
+    ["replaces pending", "Checking", "Reading", false, ["codex: Reading"]],
+    ["omits flushed prefix", "Check", "Check files", true, ["codex: Check", "codex: files"]],
+  ] as const)("preamble %s", (_name, first, second, flushFirst, expected) => {
+    const relay = progressRelay();
+    relay.preamble(first);
     if (flushFirst) {
       vi.advanceTimersByTime(2_500);
     }
-    preamble(second);
+    relay.preamble(second);
     vi.advanceTimersByTime(2_500);
 
     expect(collectedTexts()).toEqual(expected);
   });
 
   type Streaming = { mode?: "progress" | "off"; progress?: { commentary: boolean } };
-  type CommentaryOptions = {
-    channel?: string;
-    streaming?: Streaming;
-    accountStreaming?: { mode?: "off"; progress?: { commentary: boolean } };
-    configuredAccount?: string;
-    accountId?: string;
-  };
   const progress: Streaming = { mode: "progress" };
   const on = { progress: { commentary: true } };
   const off = { progress: { commentary: false } };
-  it.each<[string, CommentaryOptions, "assistant" | "item", boolean]>([
-    ["Discord progress", { channel: "discord", streaming: progress }, "assistant", true],
-    ["Discord unset", { channel: "discord" }, "item", false],
-    ["commentary disabled", { streaming: { ...progress, ...off } }, "item", false],
+  it.each<
     [
-      "normalized account opt-out",
-      {
-        streaming: progress,
-        accountStreaming: off,
-        configuredAccount: "Carey Notifications",
-        accountId: "carey-notifications",
-      },
-      "item",
-      false,
-    ],
-    [
-      "account mode opt-out",
-      {
-        streaming: { ...progress, ...on },
-        accountStreaming: { mode: "off" },
-      },
-      "item",
-      false,
-    ],
-    ["account inherits mode", { streaming: progress, accountStreaming: on }, "assistant", true],
-    [
-      "channel mode off",
-      {
-        channel: "discord",
-        streaming: { mode: "off" },
-        accountStreaming: on,
-      },
-      "assistant",
-      false,
-    ],
-  ])("%s", (name, options, stream, visible) => {
-    const {
-      channel = "forum",
-      streaming,
-      accountStreaming,
-      configuredAccount = "work",
-      accountId = configuredAccount,
-    } = options;
-    const relay = createRelay(name, {
+      string,
+      string,
+      Streaming | undefined,
+      { mode?: "off"; progress?: { commentary: boolean } } | undefined,
+      "assistant" | "item",
+      boolean,
+      boolean?,
+    ]
+  >([
+    ["Discord progress", "discord", progress, undefined, "assistant", true],
+    ["Discord unset", "discord", undefined, undefined, "item", false],
+    ["commentary disabled", "forum", { ...progress, ...off }, undefined, "item", false],
+    ["normalized account opt-out", "forum", progress, off, "item", false, true],
+    ["account mode opt-out", "forum", { ...progress, ...on }, { mode: "off" }, "item", false],
+    ["account inherits mode", "forum", progress, on, "assistant", true],
+    ["channel mode off", "discord", { mode: "off" }, on, "assistant", false],
+  ])("%s", (_name, channel, streaming, accountStreaming, stream, visible, normalizeAccount) => {
+    const configuredAccount = normalizeAccount ? "Carey Notifications" : "work";
+    const accountId = normalizeAccount ? "carey-notifications" : configuredAccount;
+    const relay = createRelay({
       cfg: {
         channels: {
           [channel]: {
@@ -353,18 +296,17 @@ describe("startAcpSpawnParentStreamRelay", () => {
       },
       deliveryContext: { ...progressCommentaryDeliveryContext, channel, accountId },
     });
-    relay.emit(
-      stream,
-      stream === "assistant"
-        ? { delta: "Checking progress.", phase: "commentary" }
-        : { itemId: "preamble-1", kind: "preamble", progressText: "Checking progress." },
-    );
+    if (stream === "assistant") {
+      relay.assistant("Checking progress.", "commentary");
+    } else {
+      relay.preamble("Checking progress.");
+    }
     vi.advanceTimersByTime(2_500);
     expect(collectedTexts()).toEqual(visible ? ["codex: Checking progress."] : []);
   });
 
   it("does not relay ACP status tags hidden by default when progress commentary is enabled", () => {
-    const relay = progressRelay("run-status-commentary-default-hidden");
+    const relay = progressRelay();
 
     relay.status("plan: inspect the runtime handoff first", "plan");
     vi.advanceTimersByTime(2_500);
@@ -373,7 +315,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it("classifies opted-in commentary as visible output for stall notices", () => {
-    const relay = progressRelay("run-commentary-visible-stall");
+    const relay = progressRelay();
 
     relay.prompt();
     relay.status("connecting to upstream");
@@ -388,12 +330,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it("still relays final_answer assistant text after suppressed commentary", () => {
-    const relay = createRelay("run-final");
-
-    relay.assistant(
-      "checking thread context; then post a tight progress reply here.",
-      "commentary",
-    );
+    const relay = createRelay();
+    relay.assistant("checking thread context", "commentary");
     relay.assistant("final answer ready", "final_answer");
     vi.advanceTimersByTime(2_500);
 
@@ -401,18 +339,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
   });
 
   it.each([
-    {
-      name: "preview cutoff",
-      delta: `${"a".repeat(218)}😀tail`,
-      expected: `${"a".repeat(218)}…`,
-    },
-    {
-      name: "retained buffer start",
-      delta: `😀${"b".repeat(3_999)}`,
-      expected: `${"b".repeat(219)}…`,
-    },
-  ])("keeps $name on UTF-16 boundaries", ({ delta, expected }) => {
-    const relay = createRelay("run-utf16-safe");
+    ["preview cutoff", `${"a".repeat(218)}😀tail`, `${"a".repeat(218)}…`],
+    ["retained buffer start", `😀${"b".repeat(3_999)}`, `${"b".repeat(219)}…`],
+  ])("keeps %s on UTF-16 boundaries", (_name, delta, expected) => {
+    const relay = createRelay();
 
     relay.emit("assistant", { delta });
 

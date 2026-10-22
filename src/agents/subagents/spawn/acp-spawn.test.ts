@@ -167,11 +167,6 @@ vi.mock("../registry/subagent-registry-read.js", () => ({
 const { spawnAcpDirect } = await import("./acp-spawn.js");
 type SpawnRequest = Parameters<typeof spawnAcpDirect>[0];
 type SpawnContext = Parameters<typeof spawnAcpDirect>[1];
-type CrossAgentWorkspaceFixture = {
-  workspaceRoot: string;
-  mainWorkspace: string;
-  targetWorkspace: string;
-};
 
 function replaceSpawnConfig(next: OpenClawConfig): void {
   const current = hoisted.state.cfg as Record<string, unknown>;
@@ -192,6 +187,16 @@ function configureSubagentDefaults(
 const acpAgent = (agent = "codex", backend?: string): AgentEntryConfig => ({
   runtime: { type: "acp", acp: { agent, ...(backend ? { backend } : {}) } },
 });
+const sonnet = "anthropic/claude-sonnet-4-6";
+const gpt = "openai/gpt-5.4";
+const opaqueModel = "harness-only[context=272k,reasoning=medium,fast=false]";
+type RuntimeCase = [
+  string,
+  Partial<AgentEntryConfig>,
+  Partial<AgentDefaultsConfig>,
+  { model?: string; thinking?: ThinkLevel },
+  ThinkLevel?,
+];
 
 function expectRegisteredRun(expected: Parameters<typeof expectRegisteredSubagentRun>[1]) {
   expectRegisteredSubagentRun(hoisted.registerSubagentRunMock, expected, {
@@ -270,27 +275,25 @@ const requesterContext: SpawnContext = {
   agentThreadId: "1",
 };
 
-async function createCrossAgentWorkspaceFixture(options?: {
-  createTargetWorkspace?: boolean;
-}): Promise<CrossAgentWorkspaceFixture> {
+async function workspaceFixture(agent = "claude-code", exists = true) {
   const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-spawn-"));
   const mainWorkspace = path.join(workspaceRoot, "main");
   const targetWorkspace = path.join(workspaceRoot, "claude-code");
   await fs.mkdir(mainWorkspace, { recursive: true });
-  if (options?.createTargetWorkspace !== false) {
+  if (exists) {
     await fs.mkdir(targetWorkspace, { recursive: true });
   }
-  return { workspaceRoot, mainWorkspace, targetWorkspace };
-}
-
-function configureCrossAgentWorkspaceSpawn(fixture: CrossAgentWorkspaceFixture): void {
-  hoisted.state.cfg.acp = { ...hoisted.state.cfg.acp, allowedAgents: ["codex", "claude-code"] };
+  hoisted.state.cfg.acp = {
+    ...hoisted.state.cfg.acp,
+    allowedAgents: agent === "codex" ? [agent] : ["codex", agent],
+  };
   hoisted.state.cfg.agents = {
     entries: {
-      main: { workspace: fixture.mainWorkspace },
-      "claude-code": { workspace: fixture.targetWorkspace },
+      main: { workspace: mainWorkspace },
+      ...(agent === "codex" ? {} : { [agent]: { workspace: targetWorkspace } }),
     },
   };
+  return { workspaceRoot, mainWorkspace, targetWorkspace };
 }
 
 function gatewayRequests(): Array<{ method?: string; params?: Record<string, unknown> }> {
@@ -443,39 +446,55 @@ function trackActiveAcpTurn(sessionKey: string, ownerSessionKey: string) {
 
 describe("spawnAcpDirect", () => {
   it.each([
-    { agent: "codex", exists: true },
-    { agent: "claude-code", exists: true },
-    { agent: "claude-code", exists: false },
-  ])("resolves $agent ownership and workspace (exists=$exists)", async ({ agent, exists }) => {
-    const workspace = await createCrossAgentWorkspaceFixture({
-      createTargetWorkspace: exists,
-    });
-    const rawHarness = agent === "codex";
-    const owner = rawHarness ? "main" : agent;
-    const cfg = hoisted.state.cfg;
-    try {
-      cfg.acp = { ...cfg.acp, allowedAgents: rawHarness ? [agent] : ["codex", agent] };
-      cfg.agents = {
-        entries: {
-          main: { workspace: workspace.mainWorkspace },
-          ...(!rawHarness ? { [agent]: { workspace: workspace.targetWorkspace } } : {}),
-        },
-      };
-      const { childSessionKey } = expectAcceptedSpawn(await spawn({ agentId: agent, mode: "run" }));
-      expect(childSessionKey).toMatch(new RegExp(`^agent:${owner}:acp:`));
-      expectInitializeSessionFields({
-        agentId: owner,
-        agent,
-        cwd: rawHarness ? workspace.mainWorkspace : exists ? workspace.targetWorkspace : undefined,
-        sessionKey: childSessionKey,
-      });
-      if (rawHarness) {
-        expectRegisteredRun({ childSessionKey, childAgentId: "main", requesterAgentId: "main" });
+    { agent: "codex", exists: true, denied: false },
+    { agent: "claude-code", exists: true, denied: false },
+    { agent: "claude-code", exists: false, denied: false },
+    { agent: "claude-code", exists: true, denied: true },
+  ])(
+    "resolves $agent workspace access (exists=$exists, denied=$denied)",
+    async ({ agent, exists, denied }) => {
+      const workspace = await workspaceFixture(agent, exists);
+      const access = denied
+        ? vi
+            .spyOn(fs, "access")
+            .mockRejectedValueOnce(
+              Object.assign(new Error("permission denied"), { code: "EACCES" }),
+            )
+        : undefined;
+      const rawHarness = agent === "codex";
+      const owner = rawHarness ? "main" : agent;
+      try {
+        const result = await spawn({ agentId: agent, mode: "run" });
+        if (denied) {
+          expect(result).toEqual({
+            status: "error",
+            errorCode: "cwd_resolution_failed",
+            error: "permission denied",
+          });
+          expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
+          return;
+        }
+        const { childSessionKey } = expectAcceptedSpawn(result);
+        expect(childSessionKey).toMatch(new RegExp(`^agent:${owner}:acp:`));
+        expectInitializeSessionFields({
+          agentId: owner,
+          agent,
+          cwd: rawHarness
+            ? workspace.mainWorkspace
+            : exists
+              ? workspace.targetWorkspace
+              : undefined,
+          sessionKey: childSessionKey,
+        });
+        if (rawHarness) {
+          expectRegisteredRun({ childSessionKey, childAgentId: "main", requesterAgentId: "main" });
+        }
+      } finally {
+        access?.mockRestore();
+        await fs.rm(workspace.workspaceRoot, { recursive: true, force: true });
       }
-    } finally {
-      await fs.rm(workspace.workspaceRoot, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it("resumes through the configured ACP owner and backend", async () => {
     const cfg = hoisted.state.cfg;
@@ -688,34 +707,21 @@ describe("spawnAcpDirect", () => {
     expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
   });
 
-  it.each<
-    [
-      string,
-      Partial<AgentEntryConfig>,
-      Partial<AgentDefaultsConfig>,
-      { model?: string; thinking?: ThinkLevel },
-      ThinkLevel?,
-    ]
-  >([
+  it.each<RuntimeCase>([
     [
       "target-provider alias",
-      { model: "anthropic/claude-sonnet-4-6", subagents: { model: "opus", thinking: "low" } },
+      { model: sonnet, subagents: { model: "opus", thinking: "low" } },
       { models: { "claude-opus-4-6": { alias: "opus" } } },
       { model: "anthropic/claude-opus-4-6", thinking: "low" },
     ],
     ["explicit max", {}, { subagents: { thinking: "low" } }, { thinking: "max" }, "max"],
     [
       "configured model with global thinking default",
-      { model: "anthropic/claude-sonnet-4-6" },
+      { model: sonnet },
       { thinkingDefault: "off" },
-      { model: "anthropic/claude-sonnet-4-6", thinking: "off" },
+      { model: sonnet, thinking: "off" },
     ],
-    [
-      "opaque harness model",
-      { model: "harness-only[context=272k,reasoning=medium,fast=false]" },
-      {},
-      { model: "harness-only[context=272k,reasoning=medium,fast=false]" },
-    ],
+    ["opaque harness model", { model: opaqueModel }, {}, { model: opaqueModel }],
     [
       "owner thinking without model override",
       { thinkingDefault: "off" },
@@ -724,15 +730,15 @@ describe("spawnAcpDirect", () => {
     ],
     [
       "model-profile thinking default",
-      { model: "openai/gpt-5.4" },
-      { models: { "openai/gpt-5.4": { params: { thinking: "high" } } } },
-      { model: "openai/gpt-5.4", thinking: "high" },
+      { model: gpt },
+      { models: { [gpt]: { params: { thinking: "high" } } } },
+      { model: gpt, thinking: "high" },
     ],
   ])("resolves ACP runtime options: %s", async (_name, agent, defaults, expected, thinking) => {
     hoisted.state.cfg.agents = {
       entries: { "codex-acp": { ...acpAgent(), ...agent } },
       defaults: {
-        model: "openai/gpt-5.4",
+        model: gpt,
         ...defaults,
         subagents: {
           allowAgents: ["codex"],
@@ -974,30 +980,6 @@ describe("spawnAcpDirect", () => {
       },
       { to: "room:!Room:Example.org", threadId: "child-thread" },
     );
-  });
-
-  it("surfaces non-missing target workspace access failures instead of silently dropping cwd", async () => {
-    const fixture = await createCrossAgentWorkspaceFixture();
-    const accessSpy = vi.spyOn(fs, "access");
-    try {
-      configureCrossAgentWorkspaceSpawn(fixture);
-
-      accessSpy.mockRejectedValueOnce(
-        Object.assign(new Error("permission denied"), { code: "EACCES" }),
-      );
-
-      const result = await spawn({ agentId: "claude-code", mode: "run" });
-
-      expect(result).toEqual({
-        status: "error",
-        errorCode: "cwd_resolution_failed",
-        error: "permission denied",
-      });
-      expect(hoisted.initializeSessionMock).not.toHaveBeenCalled();
-    } finally {
-      accessSpy.mockRestore();
-      await fs.rm(fixture.workspaceRoot, { recursive: true, force: true });
-    }
   });
 
   it("refuses to hand the current conversation to a spawned worker", async () => {
