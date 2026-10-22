@@ -1,12 +1,89 @@
 import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { killPidIfAlive } from "../../test-utils/process-tree.js";
+import { ProcessOutputIncompleteError } from "../decoded-output.js";
+import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 import { createProcessSupervisor } from "./supervisor.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function parentPid(pid: number): number {
+  const match = /^PPid:\s+(\d+)$/mu.exec(readFileSync(`/proc/${pid}/status`, "utf8"));
+  if (!match) {
+    throw new Error(`Cannot determine parent PID for ${pid}`);
+  }
+  return Number(match[1]);
+}
+
+it.skipIf(process.platform !== "linux")(
+  "preserves exit code 23 when a real relay is stopped with output still open",
+  async () => {
+    const cwd = tempDirs.make("openclaw-real-relay-output-deadline-");
+    const writerPidPath = path.join(cwd, "writer.pid");
+    const script = `
+      const { spawn } = require("node:child_process");
+      const { writeFileSync } = require("node:fs");
+      const writer = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+        detached: true,
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+      writeFileSync(${JSON.stringify(writerPidPath)}, String(writer.pid));
+      writer.unref();
+      setTimeout(() => process.exit(23), 1000);
+    `;
+    const starting = createServiceChildRelayAdapter({
+      command: process.execPath,
+      args: ["-e", script],
+      cwd,
+      stdinMode: "pipe-closed",
+      oomScoreWrapperSelected: false,
+    });
+    const { adapter, ready } = await starting;
+    await ready;
+    adapter.onStdout(() => {});
+    adapter.onStderr(() => {});
+    expect(adapter.pid).toBeTypeOf("number");
+    const relayPid = parentPid(adapter.pid!);
+    const rootExit = createDeferredCore<{ code: number | null; signal: NodeJS.Signals | null }>();
+    adapter.onExit((code, signal) => {
+      try {
+        process.kill(relayPid, "SIGSTOP");
+        adapter.kill("SIGKILL");
+        rootExit.resolve({ code, signal });
+      } catch (error) {
+        rootExit.reject(error);
+      }
+    });
+    const outcome = adapter.wait().catch((error: unknown) => error);
+
+    try {
+      await expect(rootExit.promise).resolves.toEqual({ code: 23, signal: null });
+      const error = await outcome;
+      expect(error).toMatchObject({
+        name: "ProcessOutputIncompleteError",
+        outputComplete: false,
+        result: { code: 23, signal: null },
+        cause: { message: expect.stringContaining("hard deadline") },
+      });
+      expect(error).toBeInstanceOf(ProcessOutputIncompleteError);
+    } finally {
+      try {
+        process.kill(relayPid, "SIGCONT");
+      } catch {}
+      killPidIfAlive(relayPid);
+      if (existsSync(writerPidPath)) {
+        killPidIfAlive(Number(readFileSync(writerPidPath, "utf8")));
+      }
+      adapter.dispose();
+      await adapter.waitForExtinction().catch(() => undefined);
+    }
+  },
+  15_000,
+);
 
 it.skipIf(process.platform === "win32").each(["consume", "cancel"] as const)(
   "drains real relay output while private input is pending: %s",

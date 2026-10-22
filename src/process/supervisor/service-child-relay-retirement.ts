@@ -1,5 +1,6 @@
 import type { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
+import type { Readable } from "node:stream";
 import { toErrorObject } from "../../infra/errors.js";
 import type { ProcessCleanupResult } from "./types.js";
 
@@ -12,6 +13,17 @@ export function stopServiceChildOwner(child: ChildProcess, retainDescendantCusto
   } else {
     child.kill("SIGKILL");
   }
+}
+
+export function destroyServiceChildRelayChannels(
+  child: ChildProcess,
+  control: Readable | null,
+  lineage: Readable | null,
+): void {
+  control?.destroy();
+  lineage?.destroy();
+  child.stdout?.destroy();
+  child.stderr?.destroy();
 }
 
 /** The relay reaps its anchor before the host releases the retained relay handle. */

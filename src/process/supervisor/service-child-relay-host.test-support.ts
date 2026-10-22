@@ -44,6 +44,7 @@ export async function createRelayFixture(
   retainLineage: boolean,
   configureSpawn: (child: ChildProcess) => void,
   onCleanup: (cleanup: () => void) => void,
+  stdoutConsumption?: "awaited",
 ) {
   const groupProbe = vi.spyOn(process, "kill").mockImplementation(() => {
     throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
@@ -74,6 +75,7 @@ export async function createRelayFixture(
     args: [],
     stdinMode: "pipe-closed",
     oomScoreWrapperSelected: false,
+    stdoutConsumption,
     ...(platform === "win32" ? { windowsShellCommand: "synthetic-command" } : {}),
   });
   const start = firstMockArg(stub.sendMock, "service start");

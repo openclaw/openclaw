@@ -4,6 +4,18 @@ import { toErrorObject } from "../infra/errors.js";
 import { createWindowsOutputDecoder } from "../infra/windows-encoding.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
+export class ProcessOutputIncompleteError<Signal = unknown> extends Error {
+  readonly outputComplete = false;
+
+  constructor(
+    readonly result: { code: number | null; signal: Signal },
+    cause: Error,
+  ) {
+    super("process result observed but output did not complete", { cause });
+    this.name = "ProcessOutputIncompleteError";
+  }
+}
+
 export function onDecodedOutput(
   stream: Readable,
   listener: (chunk: string) => void,
@@ -154,6 +166,9 @@ export async function joinProcessCompletionAndOutput<T>(
 ): Promise<T> {
   const [outcome, consumed] = await Promise.allSettled([completion, output]);
   if (outcome.status === "rejected") {
+    if (outcome.reason instanceof ProcessOutputIncompleteError) {
+      throw outcome.reason;
+    }
     if (consumed.status === "rejected") {
       throw new AggregateError(
         [outcome.reason, consumed.reason],

@@ -4,7 +4,7 @@ import type { Duplex, Readable } from "node:stream";
 import { toErrorObject } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { sleep } from "../../utils/sleep.js";
-import { joinProcessCompletionAndOutput } from "../decoded-output.js";
+import { joinProcessCompletionAndOutput, ProcessOutputIncompleteError } from "../decoded-output.js";
 import { pipeProcessOutput } from "../pipe-output.js";
 import {
   createServiceChildControlSender,
@@ -30,6 +30,7 @@ import {
 } from "./service-child-relay-preparation.js";
 import {
   createServiceChildRelayRetirement,
+  destroyServiceChildRelayChannels,
   stopServiceChildOwner,
 } from "./service-child-relay-retirement.js";
 import type { AwaitedStdoutConsumer, ProcessAdapterStartup } from "./types.js";
@@ -232,21 +233,16 @@ export async function createServiceChildRelayAdapter(
         ),
       },
     );
-    // Extinction may already be confirmed while an output pipe remains open.
-    // Reject pending results before destroy can turn that missing tail into success.
-    resultError ??= error;
+    const lostOutput = !stdoutRelay.ended || !stderrRelay.ended;
+    resultError ??=
+      rootResult && lostOutput ? new ProcessOutputIncompleteError(rootResult, error) : error;
     startup.reject(error);
-    resultCompletion.reject(error);
+    resultCompletion.reject(resultError);
     cleanup.completion.reject(error);
     try {
       loseIdentity(error.message);
     } finally {
-      control?.destroy();
-      if (!params.ownedWorker) {
-        lineage?.destroy();
-      }
-      child.stdout?.destroy();
-      child.stderr?.destroy();
+      destroyServiceChildRelayChannels(child, control, params.ownedWorker ? null : lineage);
     }
   };
   const cleanupDeadline = createServiceChildCleanupDeadline({

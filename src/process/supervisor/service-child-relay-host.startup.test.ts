@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { ProcessOutputIncompleteError } from "../decoded-output.js";
 import { firstMockArg } from "./adapters/child.test-support.js";
 import { encodeServiceChildMessage } from "./service-child-protocol.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
@@ -13,8 +14,60 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 afterEach(() => {
+  vi.useRealTimers();
   mocks.spawn.mockReset();
   vi.restoreAllMocks();
+});
+
+it("rejects startup at the hard deadline even when a root result arrived before ready", async () => {
+  mockProcessPlatform("darwin");
+  const stub = createWritableRelayChild();
+  mocks.spawn.mockReturnValue(stub.child);
+  vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(new Error("process group is gone"), { code: "ESRCH" });
+  });
+  const { adapter, ready } = await createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-closed",
+    oomScoreWrapperSelected: false,
+  });
+  const start = firstMockArg(stub.sendMock, "service start");
+  if (!isRecord(start) || typeof start.generation !== "string") {
+    throw new Error("Expected the admitted service generation");
+  }
+  try {
+    stub.control.push(
+      encodeServiceChildMessage({
+        type: "root-result",
+        generation: start.generation,
+        sequence: 1,
+        code: 23,
+        signal: null,
+      }),
+    );
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    adapter.kill("SIGKILL");
+    await vi.advanceTimersByTimeAsync(5_000);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    await expect(ready).rejects.toThrow("hard deadline");
+    await expect(adapter.wait()).rejects.toMatchObject({
+      outputComplete: false,
+      result: { code: 23, signal: null },
+      cause: { message: expect.stringContaining("hard deadline") },
+    });
+    await expect(adapter.wait()).rejects.toBeInstanceOf(ProcessOutputIncompleteError);
+  } finally {
+    stub.control.destroy();
+    stub.stdout.destroy();
+    stub.stderr.destroy();
+    stub.lineage.destroy();
+    stub.disconnectMock();
+    stub.emitExit(0);
+    adapter.dispose();
+  }
 });
 
 it("joins failed POSIX startup cleanup before returning the original executable error", async () => {
