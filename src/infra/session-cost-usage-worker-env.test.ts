@@ -1,11 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it as test, vi } from "vitest";
+import { assert, expect, it as test, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as configEnv from "../config/config-env-vars.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { resolveSqliteTranscriptScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction as append } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import type { SessionExactEntriesWorkerResult } from "../config/sessions/session-entry-read.types.js";
+import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -13,6 +23,9 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction as write,
 } from "../state/openclaw-agent-db.js";
+import { createAgentCreationWitnessSource } from "../state/openclaw-agent-execution.creation-fixture.test-support.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   type OpenClawTestState,
   withOpenClawTestState,
@@ -67,8 +80,11 @@ async function expectSummary(sessionFile: string, config = {}, agentId = "main")
   const params = { agentId, config, sessions: [{ sessionFile }], requestRefresh: false };
   await expect(read(params)).resolves.toMatchObject({ summaries: [totals] });
 }
-function writeUsage(sessionFile: string) {
-  fs.writeFileSync(sessionFile, JSON.stringify(usageEvent) + "\n");
+function writeUsage(sessionFile: string, entry: unknown = usageEvent) {
+  return fs.promises.writeFile(sessionFile, JSON.stringify(entry) + "\n");
+}
+function preparing(request: operationAdmission.SqliteWorkerAdmissionRequest, kind: string) {
+  return request.stage === "prepare" && isRecord(request.facts) && request.facts.kind === kind;
 }
 
 test("refuses a foreign cache file appearing after its creating grant", async () => {
@@ -76,19 +92,14 @@ test("refuses a foreign cache file appearing after its creating grant", async ()
     const config = {};
     const agentId = "usage-foreign-creation";
     const sessionFile = state.path("usage.jsonl");
-    writeUsage(sessionFile);
+    await writeUsage(sessionFile);
     const prepared = prepare({ config, agentId, sessionFiles: [sessionFile] });
     const target = prepared.location.databasePath;
     fs.mkdirSync(path.dirname(target), { recursive: true });
     let injected = false;
     const observer = probe.admission(operationAdmission, (request, grant, authorize) => {
       authorize(request, () => {
-        if (
-          !injected &&
-          request.stage === "prepare" &&
-          isRecord(request.facts) &&
-          request.facts.kind === "shared-owner"
-        ) {
+        if (!injected && preparing(request, "shared-owner")) {
           fs.writeFileSync(target, "foreign file");
           injected = true;
         }
@@ -231,7 +242,7 @@ it("refreshes replaced store owners", async ({ usage: { state, scope } }) => {
   unregisterOpenClawAgentDatabase({ ...scope, path: databasePath });
   fs.unlinkSync(databasePath);
   open(scope, databasePath, "other");
-  writeUsage(sessionFile);
+  await writeUsage(sessionFile);
   await refreshed({ ...scope, storePath, maxFiles: 1 });
   await expectSummary(sessionFile, { session: { store: storePath } });
 });
@@ -251,7 +262,7 @@ it.extend({ layout: "split" })("captures Windows state", async ({ usage }) => {
   const { state } = usage;
   const scope = { agentId: "usage-env", env: state.env };
   const sessionFile = state.path("usage.jsonl");
-  writeUsage(sessionFile);
+  await writeUsage(sessionFile);
   const databasePath = resolveOpenClawAgentSqlitePath(scope);
   const laterRoot = state.path("later-state");
   const original = { env: process.env, platform: process.platform };
@@ -292,3 +303,145 @@ it.extend({ layout: "split" })("captures Windows state", async ({ usage }) => {
     clone.mockRestore();
   }
 });
+
+const changedTarget = "Agent database target changed before creating open";
+test("refreshes usage while the lifecycle owner is creating the agent database", async () => {
+  onTestFinished(clearRuntimeConfigSnapshot);
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    openOpenClawStateDatabase({ env: state.env });
+    const agentId = "main";
+    const sessionFile = state.path("pending-creation.jsonl");
+    await writeUsage(sessionFile, {
+      type: "message",
+      message: { role: "assistant", usage: { input: 3, output: 2, totalTokens: 5 } },
+    });
+    const creator = captureOpenClawAgentDatabaseExecution({ agentId, env: state.env });
+    let refreshing: Promise<"refreshed" | "busy"> | undefined;
+    try {
+      await creator.prepare(
+        createAgentCreationWitnessSource((request) => {
+          if (!refreshing && preparing(request, "shared-owner")) {
+            expect(creator.fileIdentity).toBeUndefined();
+            refreshing = refresh({ agentId, env: state.env, sessionFiles: [sessionFile] });
+            void refreshing.catch(() => {});
+          }
+        }),
+      );
+      expect(refreshing).toBeDefined();
+      await expect(refreshing).resolves.toBe("refreshed");
+      expect(
+        await read({ agentId, sessions: [{ sessionFile }], requestRefresh: false }),
+      ).toMatchObject({ summaries: [{ totalTokens: 5 }], cacheStatus: { status: "fresh" } });
+    } finally {
+      await refreshing?.catch(() => {});
+      await creator.release();
+    }
+  });
+});
+
+test.each(["none", "cleanup", "after-open", "during-open"] as const)(
+  "fences a cache creator's reader proof (failure=%s)",
+  async (failure) => {
+    onTestFinished(clearRuntimeConfigSnapshot);
+    const failCleanup = failure === "cleanup";
+    const failDuringOpen = failure === "during-open";
+    const failAfterOpen = failure === "after-open" || failDuringOpen;
+    const captureStage = failDuringOpen
+      ? "agent-registration-start"
+      : failAfterOpen
+        ? "agent-registration-committed"
+        : "shared-owner";
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      // Prepare shared schema while leaving the competing agent creation cold.
+      openOpenClawStateDatabase({ env: state.env });
+      const sessionFile = state.path("cache-creation.jsonl");
+      await writeUsage(sessionFile, {
+        type: "message",
+        id: "usage",
+        parentId: null,
+        message: { role: "assistant", usage: { input: 1, output: 1, totalTokens: 2 } },
+      });
+      const exercise = async () => {
+        const agentId = "main";
+        const sessionKey = "agent:main:competing-creation";
+        const entry = { sessionId: "competing-creation", label: "Preserved reader", updatedAt: 1 };
+        const releaseReader = createDeferred();
+        const readerHeld = createDeferred();
+        const cleanupFailure = new Error("Cache creator admission cleanup failed");
+        const refreshRefusal = new Error("Cache creator schema refresh refused after native open");
+        let refusedOpenRequests = 0;
+        let reading: Promise<SessionExactEntriesWorkerResult> | undefined;
+        const runReader = historyLane.pool.run.bind(historyLane.pool);
+        const reader = vi
+          .spyOn(historyLane.pool, "run")
+          .mockImplementation(async (input, options) => {
+            readerHeld.resolve();
+            await releaseReader.promise;
+            return runReader(input, options);
+          });
+        const admission = probe.admission(operationAdmission, (request, grant, authorize) => {
+          authorize(request, () => {
+            if (failAfterOpen && reading && request.stage === "open") {
+              refusedOpenRequests += 1;
+              throw refreshRefusal;
+            }
+            if (!reading && preparing(request, captureStage)) {
+              const database = openOpenClawAgentDatabase({ agentId, env: state.env });
+              replaceSessionEntrySync({ agentId, env: state.env, sessionKey }, entry);
+              // Hold a real peer receipt across the creator's refusal and complete cleanup.
+              reading = withSessionHistoryWorkerDatabase(database, (owner) =>
+                owner.readExactEntries({ env: state.env, sessionKeys: [sessionKey] }),
+              );
+              const granted = grant();
+              if (failCleanup) {
+                throw cleanupFailure;
+              }
+              return granted;
+            }
+            return grant();
+          });
+        });
+        try {
+          const refreshing = refresh({ agentId, env: state.env, sessionFiles: [sessionFile] });
+          if (failCleanup) {
+            await expect(refreshing).rejects.toMatchObject({
+              cause: expect.objectContaining({ message: changedTarget }),
+              errors: [expect.any(Error), expect.objectContaining({ errors: [cleanupFailure] })],
+            });
+          } else {
+            await expect(refreshing).rejects.toThrow(
+              failAfterOpen ? refreshRefusal.message : changedTarget,
+            );
+          }
+          expect(refusedOpenRequests).toBe(failAfterOpen ? 1 : 0);
+          assert(reading, "Cache creator did not reach the reader capture boundary");
+          await awaitGateBeforeSettlement(
+            readerHeld.promise,
+            reading,
+            "Reader completed without reaching its worker barrier",
+          );
+          releaseReader.resolve();
+          if (failCleanup || failAfterOpen) {
+            await expect(reading).rejects.toThrow(
+              "Session reader validation does not match its current physical owner",
+            );
+          } else {
+            await expect(reading).resolves.toMatchObject({ entries: [{ sessionKey, entry }] });
+          }
+        } finally {
+          releaseReader.resolve();
+          await reading?.catch(() => {});
+          reader.mockRestore();
+          admission.mockRestore();
+        }
+      };
+      if (failDuringOpen) {
+        await runWithAgentCreationClaim({ agentId: "main", env: state.env }, exercise);
+      } else {
+        await exercise();
+      }
+    });
+  },
+);

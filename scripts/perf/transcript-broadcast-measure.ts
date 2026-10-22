@@ -18,6 +18,7 @@ import { parseArgs } from "node:util";
 import { Value } from "typebox/value";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.ts";
 import { HelloOkSchema } from "../../packages/gateway-protocol/src/schema/frames.ts";
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema/sessions-patch.ts";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
@@ -56,7 +57,10 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
+    "worker-allocations": { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
+    "broadcast-timing": { type: "boolean", default: false },
+    "session-projection-source": { type: "string" },
     "transport-counts": { type: "boolean", default: false },
     compressed: { type: "boolean", default: false },
     "distinct-viewers": { type: "boolean", default: false },
@@ -109,6 +113,7 @@ const { values } = parseArgs({
     "duration-ms": { type: "string", default: "3600000" },
     "warmup-ms": { type: "string", default: "300000" },
     "round-interval-ms": { type: "string", default: "15000" },
+    "soak-rounds": { type: "string" },
     "memory-interval-ms": { type: "string", default: "60000" },
     "retained-profile-ms": { type: "string", default: "600000" },
     "reset-every-rounds": { type: "string", default: "20" },
@@ -159,6 +164,7 @@ if (
   ![
     "sessions.list",
     "sessions.describe",
+    "sessions.patch",
     "connect",
     "reconnect",
     "subscribe",
@@ -171,7 +177,7 @@ if (
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, or plugins.reload",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
@@ -234,14 +240,14 @@ if (
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
   !values["operator-access-policy"] &&
-  !(scenario === "sessions.list" && values["capture-responses"]) &&
+  !(["sessions.list", "sessions.patch"].includes(scenario) && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
   !retentionScenario &&
   !idleScenario &&
   !soakScenario
 ) {
   throw new Error(
-    "--scenario requires --allocations, --workload-cpu-profile, or --capture-responses for sessions.list",
+    "--scenario requires --allocations, --workload-cpu-profile, or --capture-responses for sessions.list/sessions.patch",
   );
 }
 const operations = integer(
@@ -318,6 +324,14 @@ const rounds = integer(values.rounds, "--rounds");
 const durationMs = integer(values["duration-ms"], "--duration-ms");
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
+const soakRounds =
+  values["soak-rounds"] === undefined ? undefined : integer(values["soak-rounds"], "--soak-rounds");
+if (soakRounds !== undefined && !soakScenario) {
+  throw new Error("--soak-rounds requires --scenario memory-soak");
+}
+if (values["worker-allocations"] && (!soakScenario || !values.allocations)) {
+  throw new Error("--worker-allocations requires memory-soak --allocations");
+}
 const memoryIntervalMs = integer(values["memory-interval-ms"], "--memory-interval-ms");
 const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-profile-ms", 0);
 const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
@@ -407,6 +421,31 @@ if (
 if (values["stream-start-allocations"] && (!turnScenario || values.allocations)) {
   throw new Error("--stream-start-allocations requires a turn scenario without --allocations");
 }
+if (
+  values["broadcast-timing"] &&
+  (!values.diagnostics || path.resolve(values.entry) !== path.resolve("src/entry.ts"))
+) {
+  throw new Error("--broadcast-timing requires --diagnostics --entry src/entry.ts");
+}
+if (
+  values["broadcast-timing"] &&
+  (values.allocations ||
+    values["stream-start-allocations"] ||
+    (soakScenario && retainedProfileMs > 0))
+) {
+  throw new Error(
+    "--broadcast-timing needs a separate pass without --allocations, --stream-start-allocations, or memory-soak retained heap capture (--retained-profile-ms 0)",
+  );
+}
+if (
+  values["session-projection-source"] &&
+  path.resolve(values.entry) !== path.resolve("src/entry.ts")
+) {
+  throw new Error("--session-projection-source requires --entry src/entry.ts");
+}
+const sessionProjectionSource = values["session-projection-source"]
+  ? realpathSync(path.resolve(values["session-projection-source"]))
+  : undefined;
 if (values["poll-seed"] !== undefined && !listIntervalMs) {
   throw new Error("--poll-seed requires --list-interval-ms");
 }
@@ -454,6 +493,17 @@ const output = path.join(root, `broadcast-measure-${Date.now()}`);
 mkdirSync(output);
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
+const patchKeys =
+  scenario === "sessions.patch"
+    ? Array.from({ length: fixtureSessionCount }, (_, index) => index)
+        .filter((index) => index % 5 !== 0)
+        .slice(0, clientCount)
+        .map((index) => `agent:main:team-shape-session-${index}`)
+    : [];
+if (scenario === "sessions.patch" && patchKeys.length !== clientCount) {
+  throw new Error("sessions.patch requires one unarchived fixture session per client");
+}
+const patchSequences = patchKeys.map(() => 0);
 if (values["mixed-rpc"] && fixtureSessionCount < 1) {
   throw new Error("--mixed-rpc requires retained fixture sessions for chat.history");
 }
@@ -479,7 +529,11 @@ const viewerIdentity = (index: number) =>
   `broadcast-viewer-${values["distinct-viewers"] ? index : 0}@example.invalid`;
 const viewerProfiles = new Set<string>();
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
-applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+applyMockOpenAiModelConfig(cfg, {
+  mockPort,
+  modelRef: "openai/gpt-4.1",
+  ...(scenario === "sessions.patch" ? { utilityModelRef: "openai/gpt-4.1-mini" } : {}),
+});
 if (verifyHistoryReplay) {
   for (const model of cfg.models.providers.openai.models) {
     // The synthetic provider must fit the seed plus turns accumulated across restarts.
@@ -1009,6 +1063,7 @@ let outputLimitResponses = 0;
 let recoveredResponses = 0;
 let imageRequests = 0;
 let reasoningResponses = 0;
+let reasoningResponseSequence = 0;
 let reasoningReplayRequests = 0;
 let historicalReplayRequests = 0;
 const sessionStoreValues = new Map<string, string>();
@@ -1074,8 +1129,10 @@ let cohort:
       arrivals: Set<number>;
       turns: Map<number, TurnTiming>;
       toolCallIds: Set<string>;
+      completedToolCallIds: Set<string>;
       outputLimited: Set<string>;
-      reasoningSignatures: Map<string, string>;
+      requestPhases: Map<string, string>;
+      reasoningSignatures: Map<string, Set<string>>;
       incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
@@ -1139,7 +1196,10 @@ const mock = createServer((req, res) => {
       : undefined;
     const index = facts.turnIndex;
     const toolOutputs =
-      Array.isArray(input) && cohort
+      Array.isArray(input) &&
+      cohort &&
+      facts.purpose !== "activity-recap" &&
+      facts.purpose !== "session-observer"
         ? input.filter(
             (item) =>
               item?.type === "function_call_output" && cohort?.toolCallIds.has(item.call_id),
@@ -1147,14 +1207,32 @@ const mock = createServer((req, res) => {
         : [];
     const toolOutput = toolOutputs.at(-1);
     const continuation = toolScenario && toolOutput !== undefined;
+    const primary =
+      cohort &&
+      facts.purpose === "benchmark-turn" &&
+      !facts.hasToolOutput &&
+      !continuation &&
+      index !== undefined &&
+      index >= 1 &&
+      index <= runCount &&
+      lastUser !== undefined &&
+      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
+        `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
+    const requestPhase = primary
+      ? `primary:${index}`
+      : continuation
+        ? `${retentionScenario && !cohort?.outputLimited.has(toolOutput.call_id) ? "limit" : "answer"}:${toolOutput.call_id}`
+        : undefined;
+    const firstRequestPhase =
+      requestPhase !== undefined && !cohort?.requestPhases.has(requestPhase);
     if (continuation) {
       if (reasoningScenario) {
-        const expectedSignature = cohort?.reasoningSignatures.get(toolOutput.call_id);
+        const expectedSignatures = cohort?.reasoningSignatures.get(toolOutput.call_id);
         if (
-          expectedSignature === undefined ||
+          expectedSignatures === undefined ||
           !Array.isArray(input) ||
           !input.some(
-            (item) => item?.type === "reasoning" && item.encrypted_content === expectedSignature,
+            (item) => item?.type === "reasoning" && expectedSignatures.has(item.encrypted_content),
           )
         ) {
           throw new Error("synthetic reasoning signature did not survive the provider request");
@@ -1168,7 +1246,9 @@ const mock = createServer((req, res) => {
         ) {
           throw new Error("reasoning-only output-limit signature was replayed during recovery");
         }
-        reasoningReplayRequests++;
+        if (firstRequestPhase) {
+          reasoningReplayRequests++;
+        }
       }
       if (
         toolOutputs.some(
@@ -1183,20 +1263,15 @@ const mock = createServer((req, res) => {
         );
       }
       if (!retentionScenario || !cohort?.outputLimited.has(toolOutput.call_id)) {
-        toolResults += toolOutputs.length;
+        // Provider history can replay a completed call in several requests.
+        for (const result of toolOutputs) {
+          if (cohort && !cohort.completedToolCallIds.has(result.call_id)) {
+            cohort.completedToolCallIds.add(result.call_id);
+            toolResults++;
+          }
+        }
       }
     }
-    const primary =
-      cohort &&
-      facts.purpose === "benchmark-turn" &&
-      !facts.hasToolOutput &&
-      !continuation &&
-      index !== undefined &&
-      index >= 1 &&
-      index <= runCount &&
-      lastUser !== undefined &&
-      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
-        `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
     if (verifyHistoryReplay && primary) {
       const expected = expectedHistoricalReasoning[index - 1]!;
       const replayed = new Set(
@@ -1237,7 +1312,13 @@ const mock = createServer((req, res) => {
       if (!hasImage) {
         throw new Error("synthetic inline image did not survive the provider request");
       }
-      imageRequests++;
+      if (firstRequestPhase) {
+        imageRequests++;
+      }
+    }
+    if (firstRequestPhase && requestPhase !== undefined) {
+      // Histories can repeat a completed call; count and sign each logical phase once.
+      cohort?.requestPhases.set(requestPhase, "");
     }
     activeStreams++;
     peakStreams = Math.max(peakStreams, activeStreams);
@@ -1358,7 +1439,7 @@ const mock = createServer((req, res) => {
             },
           ];
           answer = outputLimitAnswer;
-        } else {
+        } else if (firstRequestPhase) {
           recoveredResponses++;
         }
       }
@@ -1375,20 +1456,32 @@ const mock = createServer((req, res) => {
           "response" in event &&
           event.response !== undefined
         ) {
+          const encryptedContent =
+            (requestPhase !== undefined && cohort?.requestPhases.get(requestPhase)) ||
+            promptContent.update(Buffer.alloc(8192)).toString("hex");
+          if (firstRequestPhase && requestPhase !== undefined) {
+            reasoningResponses++;
+            cohort?.requestPhases.set(requestPhase, encryptedContent);
+          }
           const reasoning = {
             type: "reasoning",
-            id: `rs_${cohort?.id}_${index}_${reasoningResponses++}`,
+            id: `rs_${cohort?.id}_${index}_${reasoningResponseSequence++}`,
             status: "completed",
             summary: [],
-            encrypted_content: promptContent.update(Buffer.alloc(8192)).toString("hex"),
+            encrypted_content: encryptedContent,
           };
-          if (reasoningReplayKey) {
-            // Replay keeps completed reasoning and drops reasoning-only length stops.
-            const signatures =
-              event.type === "response.completed"
-                ? cohort?.reasoningSignatures
-                : cohort?.incompleteReasoningSignatures;
-            signatures?.set(reasoningReplayKey, reasoning.encrypted_content);
+          if (firstRequestPhase && reasoningReplayKey && cohort) {
+            // Accept any completed signature already issued for this call, never a length stop.
+            if (event.type === "response.completed") {
+              let signatures = cohort.reasoningSignatures.get(reasoningReplayKey);
+              if (!signatures) {
+                signatures = new Set();
+                cohort.reasoningSignatures.set(reasoningReplayKey, signatures);
+              }
+              signatures.add(encryptedContent);
+            } else {
+              cohort.incompleteReasoningSignatures.set(reasoningReplayKey, encryptedContent);
+            }
           }
           const output_index = event.response.output.length;
           for (const type of ["response.output_item.added", "response.output_item.done"]) {
@@ -1546,6 +1639,10 @@ const env = {
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
+  ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
+  ...(sessionProjectionSource
+    ? { OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE: sessionProjectionSource }
+    : {}),
   ...(values["worker-memory"] ? { OPENCLAW_BENCH_WORKER_MEMORY_DIR: output } : {}),
   ...(values["baseline-owners"] ? { OPENCLAW_BENCH_TRANSCRIPT_BASELINE_OWNERS: "1" } : {}),
   ...(values["github-observation-owner"]
@@ -2204,11 +2301,51 @@ function latencySummary(latenciesMs: number[]) {
     p50Ms: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
     p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
     p99Ms: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+    latenciesMs,
   };
 }
 function readPromotion(profilePath: string, operationCount: number) {
   const gcTrace = readGatewayGcTrace(path.join(output, "gateway.stdout.log"), profilePath);
   return { gcTrace, promotedBytesPerOperation: gcTrace.promotedBytes / operationCount };
+}
+function sessionPatchParams(index: number, sequence: number): SessionsPatchParams {
+  const changes: Omit<SessionsPatchParams, "key">[] = [
+    { label: `Synthetic patch ${index} ${sequence}` },
+    { statusNote: `Synthetic progress ${sequence}`, ttlMinutes: 5 },
+    { model: "openai/gpt-4.1-mini" },
+    { label: null },
+    { statusNote: null },
+    { model: null },
+  ];
+  return { key: patchKeys[index]!, ...changes[sequence % changes.length] };
+}
+function assertSessionPatch(params: SessionsPatchParams, result: unknown) {
+  if (
+    !isRecord(result) ||
+    result.ok !== true ||
+    result.key !== params.key ||
+    !isRecord(result.entry)
+  ) {
+    throw new Error("sessions.patch did not return the committed fixture session");
+  }
+  const entry = result.entry;
+  if ("label" in params && entry.label !== (params.label ?? undefined)) {
+    throw new Error("sessions.patch did not apply the requested label");
+  }
+  if ("statusNote" in params) {
+    const note = isRecord(entry.agentStatus) ? entry.agentStatus.note : undefined;
+    if (note !== (params.statusNote ?? undefined)) {
+      throw new Error("sessions.patch did not apply the requested status note");
+    }
+  }
+  if (
+    "model" in params &&
+    (!isRecord(result.resolved) ||
+      result.resolved.modelProvider !== "openai" ||
+      result.resolved.model !== (params.model ? "gpt-4.1-mini" : "gpt-4.1"))
+  ) {
+    throw new Error("sessions.patch did not apply the requested model selection");
+  }
 }
 function assertListPage(
   page: unknown,
@@ -2458,7 +2595,9 @@ async function runRound(
     arrivals: new Set(),
     turns: new Map(),
     toolCallIds: new Set(),
+    completedToolCallIds: new Set(),
     outputLimited: new Set(),
+    requestPhases: new Map(),
     reasoningSignatures: new Map(),
     incompleteReasoningSignatures: new Map(),
     phases: { admissionStartedAtEpochMs: epochNow() },
@@ -3354,6 +3493,9 @@ try {
               ) {
                 throw new Error("sessions.describe did not return the parent with seeded children");
               }
+            } else if (scenario === "sessions.patch") {
+              const params = sessionPatchParams(index, patchSequences[index]!++);
+              assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
             } else {
               const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
@@ -3435,6 +3577,7 @@ try {
     // Reading or stopping a V8 sampling profile forces GC; keep one window for the entire soak.
     await controlGatewayProfile(gateway, "heap", "start", soakAllocationPath, {
       samplingIntervalBytes: soakSamplingIntervalBytes,
+      includeWorkers: values["worker-allocations"],
     });
   }
   const measurementStartedAt = Date.now();
@@ -3529,7 +3672,9 @@ try {
   for (
     let round = 0;
     soakScenario
-      ? Date.now() - measurementStartedAt < durationMs
+      ? soakRounds === undefined
+        ? Date.now() - measurementStartedAt < durationMs
+        : round < soakRounds
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
@@ -3566,6 +3711,7 @@ try {
     recoveredResponses = 0;
     imageRequests = 0;
     reasoningResponses = 0;
+    reasoningResponseSequence = 0;
     reasoningReplayRequests = 0;
     historicalReplayRequests = 0;
     recapRequests = 0;
@@ -3864,6 +4010,12 @@ try {
     const diagnostics = finishGatewayDiagnostics
       ? { gateway: await finishGatewayDiagnostics(), controller: finishControllerDiagnostics?.() }
       : undefined;
+    const broadcastTimings = (allocation?.diagnostics ?? diagnostics?.gateway)?.groups.filter(
+      (group) => group.channel === "openclaw.benchmark.broadcast",
+    );
+    if (values["broadcast-timing"] && !broadcastTimings?.length) {
+      throw new Error("Broadcast timing observed no calls in the measured window");
+    }
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
@@ -4004,6 +4156,13 @@ try {
         ? { allocatedMbPerTurn: allocation.estimatedAllocatedBytesPerOperation / 1_000_000 }
         : {}),
       diagnostics,
+      ...(values["broadcast-timing"]
+        ? {
+            broadcastLatencyMs: Object.fromEntries(
+              (broadcastTimings ?? []).map((group) => [group.operation, group.metrics.durationMs]),
+            ),
+          }
+        : {}),
       streamStart,
       ...(values["mixed-rpc"]
         ? {
@@ -4087,6 +4246,14 @@ try {
         : null,
       estimatedAllocatedBytesPerSessionEvent:
         allocation && sourceEvents ? allocation.sampledAllocatedBytes / sourceEvents : null,
+      broadcastAllocatedBytesPerSessionEvent:
+        allocation && sourceEvents
+          ? allocation.broadcastAllocation.sampledBytes / sourceEvents
+          : null,
+      broadcastAllocatedBytesPerTurn:
+        allocation && turnScenario
+          ? allocation.broadcastAllocation.sampledBytes / sessionCount
+          : null,
       mainThreadMsPerSecond: (cpu.mainThread.totalMs / cpu.wallMs) * 1000,
       sessionEventsPerSecond: (sourceEvents / cpu.wallMs) * 1000,
     };
@@ -4171,6 +4338,10 @@ try {
     };
     console.log(`FINGERPRINT_RETENTION ${JSON.stringify(fingerprintRetention)}`);
   }
+  if (soakScenario && soakRounds !== undefined) {
+    // Keep equal work counts without shortening the continuous GC/allocation window.
+    await delay(Math.max(0, durationMs - (Date.now() - measurementStartedAt)));
+  }
   const wholeWorkloadDiagnostics = await finishWholeWorkloadDiagnostics?.();
   if (values["dashboard-rpc"] && dashboardFixtureRequests === 0) {
     throw new Error("Dashboard GitHub preview never reached the synthetic transport");
@@ -4197,6 +4368,9 @@ try {
       ...profile,
       completedTurns,
       allocatedMbPerTurn: profile.sampledAllocatedBytes / 1_000_000 / completedTurns,
+      ...(values["worker-allocations"]
+        ? { workerManifestPath: `${soakAllocationPath}.workers.json` }
+        : {}),
     };
   }
   let retainedProfile;
@@ -4268,6 +4442,16 @@ try {
   }
   // Capture filter/paging equivalence after the measured window, without warming its caches.
   const listResponses: Array<{ params: unknown; payload: unknown }> = [];
+  if (values["capture-responses"] && scenario === "sessions.patch") {
+    const responses: Array<{ params: SessionsPatchParams; payload: unknown }> = [];
+    for (let sequence = 0; sequence < 6; sequence++) {
+      const params = sessionPatchParams(0, sequence);
+      const payload = await rpc(sender, "sessions.patch", params);
+      assertSessionPatch(params, payload);
+      responses.push({ params, payload });
+    }
+    writeFileSync(path.join(output, "patch-responses.json"), JSON.stringify(responses));
+  }
   if (values["capture-responses"] && (scenario === "sessions.list" || soakScenario)) {
     // Fresh harness sessions contain random IDs and current clocks; compare the seeded roster.
     if (!historyTurns) {
@@ -4345,6 +4529,9 @@ try {
       "client request-to-response; handler and queue timings are in Gateway diagnostics",
     perEventResourceScope:
       "whole measured workload main-isolate CPU and sampled allocations divided by session publications or deliveries; not encode/send-only cost",
+    broadcastLatencyScope: values["broadcast-timing"]
+      ? "broadcastLatencyMs times synchronous broadcastInternal calls by event, including targeted and retained sends; chatDeltaDeliveryMs times Gateway chat timestamp to subscriber receipt"
+      : "chatDeltaDeliveryMs measures Gateway chat timestamp to subscriber receipt; no broadcastInternal duration timer is installed",
     connectionMeasurementScope: connectionScenario
       ? "owned socket replacement; handshake includes WebSocket open and connect; reconnect adds subscribe and list; events during intentional disconnection are not replayed"
       : undefined,
@@ -4423,6 +4610,8 @@ try {
     ...(values["mixed-rpc"] ? { diffEditControlVerified: true, diffEditVisibilityMs } : {}),
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
+    broadcastTiming: values["broadcast-timing"],
+    sessionProjectionSource,
     transportCounts: values["transport-counts"],
     compressed: proxyViewers,
     distinctViewers: values["distinct-viewers"],
@@ -4482,6 +4671,7 @@ try {
           durationMs,
           warmupMs,
           roundIntervalMs,
+          soakRounds,
           memoryIntervalMs,
           retainedProfileMs,
           resetEveryRounds,

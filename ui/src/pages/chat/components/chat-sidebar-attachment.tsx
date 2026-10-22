@@ -149,20 +149,25 @@ export function SidebarAttachment(props: SidebarAttachmentProps) {
 }
 
 function AttachmentPreview(props: SidebarAttachmentProps) {
-  const sourceChanged = () => void refresh(model);
-  let resolver: SidebarAttachmentProps["content"]["resolveSource"];
-  let identity: string | undefined;
-  const model = createMemo(() => {
-    const nextResolver = props.content.resolveSource;
-    const nextIdentity = props.content.sourceIdentity ?? props.content.src;
-    if (resolver !== nextResolver || identity !== nextIdentity) {
-      releaseChatMediaResourceOwner(sourceChanged);
-      resolver = nextResolver;
-      identity = nextIdentity;
-    }
-    return prepareAttachment(props, sourceChanged);
+  const sourceKey = createMemo(
+    () => ({
+      resolver: props.content.resolveSource,
+      identity: props.content.sourceIdentity ?? props.content.src,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.resolver === next.resolver && previous.identity === next.identity,
+    },
+  );
+  const sourceModel = createMemo(() => {
+    sourceKey();
+    const sourceChanged = () => void refresh(currentModel);
+    // Resource notifications refresh the model without retiring its subscription.
+    onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
+    const currentModel = createMemo(() => prepareAttachment(props, sourceChanged));
+    return currentModel;
   });
-  onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
+  const model = () => sourceModel()();
   const mediaProps = () => ({
     "prop:sourceIdentity": props.content.sourceIdentity ?? props.content.src ?? model().src ?? "",
     "prop:label": props.content.title,

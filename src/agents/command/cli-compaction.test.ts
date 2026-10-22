@@ -36,7 +36,6 @@ import {
   createPreparedRuntimeLease,
   defaultSettingsManager,
   prepareCompactionScenario as prepare,
-  prepareContextSuccessorScenario,
   recordCliCompactionInStoreImpl,
   resolveCliBackendConfig,
   resolveContextEngineFromRegistry,
@@ -50,6 +49,11 @@ type CompactResult = NonNullable<Awaited<ReturnType<ContextEngine["compact"]>>["
 const successfulCompaction = (result: CompactResult) => ({ ok: true, compacted: true, result });
 const expectCallContaining = (mock: unknown, expected: unknown) =>
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(expected));
+const expectNoCalls = (...mocks: unknown[]) => {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+};
 const staleBinding = { ok: false, compacted: false, reason: "thread not found: thread-1" };
 const resumeState = (ids: Record<string, string>, claudeCliSessionId?: string) => ({
   cliSessionIds: ids,
@@ -61,30 +65,9 @@ const resumeState = (ids: Record<string, string>, claudeCliSessionId?: string) =
 
 describe("runCliTurnCompactionLifecycle", () => {
   let tmpDir: string;
-  type ScenarioOptions = Omit<Parameters<typeof prepare>[0], "tmpDir" | "suffix"> & {
-    compact?: ContextEngine["compact"];
-  };
-  const prepareScenario = async (suffix: string, { compact, ...params }: ScenarioOptions = {}) => {
-    const scenario = await prepare({
-      tmpDir,
-      suffix,
-      ...params,
-      contextEngine: compact
-        ? (calls) => ({
-            ...buildContextEngine({ compactCalls: calls }),
-            compact: async (input) => {
-              calls.push(input);
-              return compact(input);
-            },
-          })
-        : params.contextEngine,
-    });
-    return {
-      ...scenario,
-      calls: scenario.compactCalls,
-      record: scenario.recordCliCompactionInStore,
-    };
-  };
+  type ScenarioOptions = Omit<Parameters<typeof prepare>[0], "tmpDir" | "suffix">;
+  const prepareScenario = (suffix: string, params: ScenarioOptions = {}) =>
+    prepare({ tmpDir, suffix, ...params });
   const prepareHarness = async (
     suffix: string,
     compact: NativeCompaction,
@@ -102,10 +85,21 @@ describe("runCliTurnCompactionLifecycle", () => {
   };
   const prepareSuccessor = async (
     suffix: string,
-    result: Parameters<typeof prepareContextSuccessorScenario>[0]["result"],
+    result: (
+      target: Pick<
+        Awaited<ReturnType<typeof prepareScenario>>,
+        "sessionId" | "sessionKey" | "storePath"
+      >,
+    ) => Awaited<ReturnType<ContextEngine["compact"]>> | ReturnType<ContextEngine["compact"]>,
   ) => {
-    const scenario = await prepareContextSuccessorScenario({ tmpDir, suffix, result });
-    return { ...scenario, record: scenario.recordCliCompactionInStore };
+    const scenario: Awaited<ReturnType<typeof prepareScenario>> = await prepareScenario(
+      `cli-successor-${suffix}`,
+      {
+        compact: async () => result(scenario),
+        recordCliCompactionInStore: vi.fn(async (input) => input.sessionStore[input.sessionKey]),
+      },
+    );
+    return scenario;
   };
 
   beforeEach(async () => {
@@ -438,8 +432,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
 
     await expect(scenario.run()).rejects.toThrow();
-    expect(scenario.maintenance).not.toHaveBeenCalled();
-    expect(scenario.record).not.toHaveBeenCalled();
+    expectNoCalls(scenario.maintenance, scenario.record);
   });
 
   it.each([
@@ -491,28 +484,21 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
     expect(await scenario.run()).toBe(scenario.sessionEntry);
     expect(scenario.calls).toHaveLength(1);
-    expect(scenario.maintenance).not.toHaveBeenCalled();
-    expect(scenario.record).not.toHaveBeenCalled();
+    expectNoCalls(scenario.maintenance, scenario.record);
   });
 
   it.each([
-    { suffix: "codex", ownsNative: false, ownsEngine: false, locked: true },
-    { suffix: "codex-with-ownership", ownsNative: true, ownsEngine: false, locked: false },
-    { suffix: "codex-owned-engine", ownsNative: false, ownsEngine: true, locked: false },
+    { suffix: "codex", ownsNative: false, locked: true },
+    { suffix: "codex-with-ownership", ownsNative: true, locked: false },
   ])(
     "routes native compaction without accepting native result ids as host successors ($suffix)",
-    async ({ suffix, ownsNative, ownsEngine, locked }) => {
-      const provider = ownsEngine ? "codex" : "openai";
+    async ({ suffix, ownsNative, locked }) => {
+      const provider = "openai";
       const authProfileId = locked ? "github-copilot:work" : undefined;
-      const tokensAfter = ownsEngine ? 42 : 100;
+      const tokensAfter = locked ? 42 : 100;
       const selection = { agentHarnessId: "codex", modelSelectionLocked: locked, authProfileId };
       const calls: CompactParams[] = [];
-      const contextEngine = {
-        ...buildContextEngine({ compactCalls: calls }),
-        ...(ownsEngine
-          ? { info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true } }
-          : {}),
-      };
+      const contextEngine = buildContextEngine({ compactCalls: calls });
       const resolveContextEngine = vi.fn(async () => contextEngine);
       const lease = createPreparedRuntimeLease({
         config: {},
@@ -527,7 +513,6 @@ describe("runCliTurnCompactionLifecycle", () => {
         expect(options?.pluginGeneration).toBe(pluginGeneration);
         return lease;
       });
-      const ensureHarness = vi.fn(async () => undefined);
       const guard = vi.fn(() => ({ supported: true, disabled: false }));
       const record = vi.fn(async () => ({
         sessionId: `session-${suffix}`,
@@ -537,14 +522,10 @@ describe("runCliTurnCompactionLifecycle", () => {
       const nativeResult = successfulCompaction({
         tokensBefore: 950,
         tokensAfter,
-        ...(ownsEngine
-          ? {
-              summary: "engine-owned",
-              firstKeptEntryId: "entry-1",
-              sessionId: "session-codex-owned-engine-rotated",
-              sessionFile: path.join(tmpDir, "session-codex-owned-engine-rotated.jsonl"),
-            }
-          : {}),
+        summary: "engine-owned",
+        firstKeptEntryId: "entry-1",
+        sessionId: "session-codex-owned-engine-rotated",
+        sessionFile: path.join(tmpDir, "session-codex-owned-engine-rotated.jsonl"),
       });
       const scenario = await prepareHarness(suffix, async () => nativeResult, {
         provider,
@@ -557,7 +538,6 @@ describe("runCliTurnCompactionLifecycle", () => {
         deps: {
           resolveContextEngine,
           acquirePreparedModelRuntime,
-          ensureSelectedAgentHarnessPlugin: ensureHarness,
           applyAgentAutoCompactionGuard: guard,
           resolveCliBackendConfig: () =>
             ownsNative
@@ -576,14 +556,6 @@ describe("runCliTurnCompactionLifecycle", () => {
         cliBackendId: ownsNative ? "codex" : undefined,
       });
       expect(resolveContextEngine).toHaveBeenCalledTimes(1);
-      expectCallContaining(guard, { contextEngineInfo: contextEngine.info });
-      expectCallContaining(ensureHarness, {
-        provider,
-        modelId: "gpt-5.5",
-        sessionKey,
-        agentHarnessRuntimeOverride: "codex",
-        pluginRegistry: lease.snapshot.pluginRegistry,
-      });
       expect(acquirePreparedModelRuntime).toHaveBeenCalledOnce();
       expect(guard.mock.invocationCallOrder[0] ?? 0).toBeLessThan(
         nativeCompact.mock.invocationCallOrder[0] ?? 0,
@@ -732,8 +704,7 @@ describe("runCliTurnCompactionLifecycle", () => {
 
     expect(nativeCompact).toHaveBeenCalledTimes(1);
     expect(calls).toHaveLength(1);
-    expect(maintenance).not.toHaveBeenCalled();
-    expect(record).not.toHaveBeenCalled();
+    expectNoCalls(maintenance, record);
     expect(updatedEntry?.compactionCount).toBeUndefined();
     expect(updatedEntry?.cliSessionBindings?.codex).toBeUndefined();
     expect(updatedEntry?.cliSessionIds?.codex).toBeUndefined();
@@ -824,8 +795,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]?.abortSignal).toBeInstanceOf(AbortSignal);
       expect(calls[0]?.abortSignal?.aborted).toBe(true);
-      expect(maintenance).not.toHaveBeenCalled();
-      expect(record).not.toHaveBeenCalled();
+      expectNoCalls(maintenance, record);
       expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
         "claude-session",
       );
@@ -870,9 +840,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     const { calls, record, sessionEntry } = scenario;
     const updatedEntry = await scenario.run();
 
-    expect(nativeCompact).not.toHaveBeenCalled();
+    expectNoCalls(nativeCompact, record);
     expect(calls).toHaveLength(0);
-    expect(record).not.toHaveBeenCalled();
     expect(updatedEntry).toBe(sessionEntry);
     expect(updatedEntry?.cliSessionBindings?.[provider]?.sessionId).toBe("native-session");
   });

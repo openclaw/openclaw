@@ -65,7 +65,7 @@ export function buildSessionEventContext(params: {
   text: string;
   options: Pick<
     SessionEventOptions,
-    "source" | "sourceTurnId" | "readmissionAttempt" | "scheduledAutomation"
+    "source" | "sourceTurnId" | "sourceRunId" | "readmissionAttempt" | "scheduledAutomation"
   >;
   occurrenceId: string;
   deliveryContext?: DeliveryContext;
@@ -83,7 +83,11 @@ export function buildSessionEventContext(params: {
     CommandBody: "",
     RawBody: "",
     CommandAuthorized: false,
-    InputProvenance: { kind: "internal_system", sourceTool: options.source },
+    InputProvenance: {
+      kind: "internal_system",
+      sourceTool: options.source,
+      ...(options.sourceRunId ? { runId: options.sourceRunId } : {}),
+    },
     ChatType: channelRouteTargetsMatchExact({
       left: deliveryContext,
       right: target.deliveryContext,

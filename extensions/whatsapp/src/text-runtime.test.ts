@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertWebChannel,
@@ -13,20 +13,14 @@ import {
   toWhatsappJidWithLid,
 } from "./targets-runtime.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function tempDir(mappings: Record<string, string> = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-text-"));
-  tempDirs.push(dir);
+  const dir = tempDirs.make("openclaw-text-");
   for (const [key, value] of Object.entries(mappings)) {
     writeMapping(dir, key, value);
   }
   return dir;
 }
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
 function writeMapping(dir: string, key: string, value: string) {
   fs.writeFileSync(path.join(dir, `lid-mapping-${key}.json`), JSON.stringify(value));
 }

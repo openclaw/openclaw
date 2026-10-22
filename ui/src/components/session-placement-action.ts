@@ -106,6 +106,7 @@ export async function moveSessionFromMenu(params: {
   fallbackAgentId: string;
   currentRow: () => GatewaySessionRow | undefined;
   isCurrent: () => boolean;
+  onAdmittedCommand?: (completion: Promise<void>) => void;
   publishError?: (error: unknown) => void;
 }): Promise<void> {
   const { context, row } = params;
@@ -131,6 +132,7 @@ export async function moveSessionFromMenu(params: {
     fallbackAgentId: params.fallbackAgentId,
     currentRow: params.currentRow,
     isCurrent,
+    onAdmittedCommand: params.onAdmittedCommand,
     onPendingChange: () => {},
     publishError: params.publishError ?? ((error) => showToast({ message: formatUiError(error) })),
     reconcileMutation: (agentId) => sessions.reconcileMutation(agentId),

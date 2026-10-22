@@ -23,7 +23,7 @@ export type PluginSkillPreviewState = {
   inventoryRequest: Promise<void>;
   result: PluginsSkillsReadResult | null;
   activePath: string;
-  fileRequests: Map<string, { promise: Promise<void>; active: boolean }>;
+  fileRequests: Map<string, { promise: Promise<void>; resolve: () => void; active: boolean }>;
 };
 
 export function createPluginPreview(
@@ -32,10 +32,17 @@ export function createPluginPreview(
 ) {
   let active: PluginSkillPreviewState | null = null;
   let toolAbort = new AbortController();
-  onSettled(() => () => {
+  let releaseInventory = () => {};
+  const retire = () => {
+    // Release presentation even when a retired transport read remains pending.
+    releaseInventory();
+    for (const request of active?.fileRequests.values() ?? []) {
+      request.resolve();
+    }
     toolAbort.abort();
     active = null;
-  });
+  };
+  onSettled(() => retire);
   const preview = {
     get state() {
       return active;
@@ -44,6 +51,7 @@ export function createPluginPreview(
       preview.close();
       const connection = gateway.capture();
       const receipt = Promise.withResolvers<void>();
+      releaseInventory = receipt.resolve;
       void receipt.promise.catch(() => {});
       const state: PluginSkillPreviewState = {
         request: { ...request },
@@ -111,7 +119,7 @@ export function createPluginPreview(
       }
       const receipt = Promise.withResolvers<void>();
       void receipt.promise.catch(() => {});
-      const request = { promise: receipt.promise, active: true };
+      const request = { promise: receipt.promise, resolve: receipt.resolve, active: true };
       state.fileRequests.set(path, request);
       onChange();
       const connection = gateway.capture();
@@ -163,9 +171,8 @@ export function createPluginPreview(
     },
     /** Dismissal, route changes and connection changes retire outstanding reads. */
     close(this: void): void {
-      toolAbort.abort();
+      retire();
       toolAbort = new AbortController();
-      active = null;
       onChange();
     },
   };

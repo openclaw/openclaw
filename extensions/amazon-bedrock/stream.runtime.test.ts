@@ -1,6 +1,5 @@
 import {
   BedrockRuntimeClient,
-  ConversationRole,
   StopReason as BedrockStopReason,
 } from "@aws-sdk/client-bedrock-runtime";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -12,6 +11,8 @@ import {
   expectDestroyedClient,
   mockResponse,
   mockStream,
+  png,
+  replayAssistant,
   startEvent as startMessage,
   stopEvent as stopMessage,
   streamBedrockForTest,
@@ -19,11 +20,10 @@ import {
   toolDelta,
   textDelta,
   userContext,
+  toolResult,
+  wireUser,
 } from "./bedrock.test-support.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
-function toolResult(toolCallId: string, toolName: string, content: unknown[]) {
-  return { role: "toolResult", toolCallId, toolName, content, isError: false };
-}
 const adaptiveFields = (effort: string) => ({
   thinking: { type: "adaptive", display: "summarized" },
   output_config: { effort },
@@ -97,8 +97,6 @@ it("rejects malformed base64 and decodes a valid PNG without Node Buffer", async
   const malformed = await streamBedrockForTest(model(), userImage("!!!not-base64!!!")).result();
   expect(malformed.errorMessage).toMatch(/Amazon Bedrock image content has malformed base64/);
 
-  const png =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
   const nodeBuffer = globalThis.Buffer;
   let input: Awaited<ReturnType<typeof captureCommandInput>>;
   try {
@@ -119,21 +117,15 @@ describe("Bedrock tool-result replay", () => {
       }),
       {
         messages: [
-          {
-            role: "assistant",
-            api: "bedrock-converse-stream",
-            provider: "amazon-bedrock",
-            model: "anthropic.claude-haiku-4-5-20251001-v1:0",
-            content: [
-              {
-                type: "thinking",
-                thinking: "[Reasoning redacted]",
-                thinkingSignature: "3q2+7w==",
-                redacted: true,
-              },
-              { type: "text", text: "Safe visible response" },
-            ],
-          },
+          replayAssistant("anthropic.claude-haiku-4-5-20251001-v1:0", [
+            {
+              type: "thinking",
+              thinking: "[Reasoning redacted]",
+              thinkingSignature: "3q2+7w==",
+              redacted: true,
+            },
+            { type: "text", text: "Safe visible response" },
+          ]),
         ],
       } as never,
     );
@@ -144,44 +136,44 @@ describe("Bedrock tool-result replay", () => {
   it("replays unsupported audio attachments as their canonical text placeholder", async () => {
     const input = await captureCommandInput(bedrockModel({ input: ["text", "image"] }), {
       messages: [
-        toolResult("call_audio", "listen", [
-          { type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" },
-        ]),
+        {
+          role: "toolResult",
+          toolCallId: "call_audio",
+          toolName: "listen",
+          isError: false,
+          content: [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
+        },
       ],
     } as never);
     const messages = input.messages;
 
     expect(messages).toHaveLength(1);
-    expect(messages?.[0]).toMatchObject({
-      role: ConversationRole.USER,
-      content: [
-        {
-          toolResult: {
-            toolUseId: "call_audio",
-            content: [{ text: "(see attached audio)" }],
-          },
+    expect(messages?.[0]).toMatchObject(
+      wireUser({
+        toolResult: {
+          toolUseId: "call_audio",
+          content: [{ text: "(see attached audio)" }],
         },
-      ],
-    });
+      }),
+    );
   });
 
   it("drops payload-less image husks from consecutive tool results", async () => {
     const input = await captureCommandInput(bedrockModel({ input: ["text", "image"] }), {
       messages: [
-        toolResult("call_husk", "screenshot", [{ type: "image", mimeType: "image/png", data: "" }]),
-        toolResult("call_text", "read", [{ type: "text", text: "actual tool output" }]),
+        toolResult("call_husk", [{ type: "image", mimeType: "image/png", data: "" }], "screenshot"),
+        toolResult("call_text", [{ type: "text", text: "actual tool output" }], "read"),
       ],
     } as never);
     const messages = input.messages;
 
     expect(messages).toHaveLength(1);
-    expect(messages?.[0]).toMatchObject({
-      role: ConversationRole.USER,
-      content: [
+    expect(messages?.[0]).toMatchObject(
+      wireUser(
         { toolResult: { toolUseId: "call_husk", content: [{ text: "(no output)" }] } },
         { toolResult: { toolUseId: "call_text", content: [{ text: "actual tool output" }] } },
-      ],
-    });
+      ),
+    );
     expect(JSON.stringify(messages)).not.toContain('"image"');
     expect(JSON.stringify(messages)).not.toContain("see attached image");
   });
@@ -191,22 +183,18 @@ it("normalizes invalid stored arguments at the Bedrock request boundary", async 
   const context = {
     messages: [
       {
-        role: "assistant",
-        provider: "amazon-bedrock",
-        api: "bedrock-converse-stream",
-        model: "amazon.nova-micro-v1:0",
-        content: [
+        ...replayAssistant("amazon.nova-micro-v1:0", [
           {
             type: "toolCall",
             id: "call_replay",
             name: "read",
             arguments: '{"path":',
           },
-        ],
+        ]),
         timestamp: 0,
       },
       {
-        ...toolResult("call_replay", "read", [{ type: "text", text: "existing result" }]),
+        ...toolResult("call_replay", [{ type: "text", text: "existing result" }], "read"),
         timestamp: 1,
       },
       { role: "user", content: "continue", timestamp: 2 },
@@ -440,11 +428,7 @@ describe("Bedrock Fable contract", () => {
     ({
       ...userContext("Reply briefly."),
       tools: [
-        {
-          name: "lookup",
-          description: "Lookup",
-          parameters: { type: "object", properties: {} },
-        },
+        { name: "lookup", description: "Lookup", parameters: { type: "object", properties: {} } },
       ],
     }) as never;
 
@@ -569,21 +553,11 @@ describe("Bedrock Fable contract", () => {
 });
 
 it.each([
-  {
-    canonicalModelId: "claude-opus-4-8",
-    reasoning: "xhigh" as const,
-    thinkingLevelMap: { xhigh: "xhigh" as const, max: "max" as const },
-    expectedEffort: "xhigh",
-  },
-  {
-    canonicalModelId: "claude-opus-4-6",
-    reasoning: "max" as const,
-    thinkingLevelMap: { xhigh: null, max: null },
-    expectedEffort: "high",
-  },
-])(
-  "uses adaptive thinking and omits temperature for $canonicalModelId aliases",
-  async ({ canonicalModelId, reasoning, thinkingLevelMap, expectedEffort }) => {
+  ["claude-opus-4-8", "xhigh", { xhigh: "xhigh", max: "max" }, "xhigh"],
+  ["claude-opus-4-6", "max", { xhigh: null, max: null }, "high"],
+] as const)(
+  "uses adaptive thinking and omits temperature for %s aliases",
+  async (canonicalModelId, reasoning, thinkingLevelMap, expectedEffort) => {
     const model = bedrockModel({
       id: "production-claude",
       name: "Production Claude",

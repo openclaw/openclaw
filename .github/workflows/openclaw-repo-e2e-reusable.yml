@@ -98,7 +98,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           install-bun: "true"
           build-all-cache-scope: full
       - name: Build dist for repo E2E
@@ -144,7 +144,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           install-bun: "true"
       - name: Download repo E2E build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2

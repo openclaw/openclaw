@@ -1,15 +1,13 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 
-const gates: ReturnType<typeof createControlUiPublicSessionRequestGate>[] = [];
+let gate: ReturnType<typeof createControlUiPublicSessionRequestGate>;
 const config = {};
-function createGate() {
-  const gate = createControlUiPublicSessionRequestGate();
-  gates.push(gate);
-  return gate;
-}
+beforeEach(() => {
+  gate = createControlUiPublicSessionRequestGate();
+});
 function request(index = 0) {
   return {
     kind: "transcript" as const,
@@ -20,16 +18,13 @@ function request(index = 0) {
   };
 }
 afterEach(() => {
-  for (const gate of gates.splice(0)) {
-    gate.dispose();
-  }
+  gate.dispose();
   vi.restoreAllMocks();
 });
 
 describe("public reader admission", () => {
   it("serves twenty readers behind one IP with one render, including later refreshes", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const gate = createGate();
     const render = createDeferred<string>();
     const work = vi.fn(() => render.promise);
     const pending = Array.from({ length: 20 }, () => {
@@ -63,7 +58,6 @@ describe("public reader admission", () => {
   });
 
   it("queues twenty cold threads while retaining the eight-build budget", async () => {
-    const gate = createGate();
     const release = createDeferred();
     let running = 0;
     let maximum = 0;
@@ -85,7 +79,6 @@ describe("public reader admission", () => {
   });
 
   it("bounds queued work and releases every waiter when its owner closes", async () => {
-    const gate = createGate();
     const release = createDeferred<string>();
     const work = vi.fn(() => release.promise);
     const pending = Array.from({ length: 34 }, (_, index) =>
@@ -103,7 +96,6 @@ describe("public reader admission", () => {
   });
 
   it("does not release stale content when publication changes during a build", async () => {
-    const gate = createGate();
     const release = createDeferred<string>();
     const pending = gate.run({ ...request(), work: () => release.promise });
     await Promise.resolve();
@@ -113,7 +105,6 @@ describe("public reader admission", () => {
   });
 
   it("keeps transcript builds current across run updates without sharing live card work", async () => {
-    const gate = createGate();
     const transcript = createDeferred<string>();
     const card = createDeferred<string>();
     const transcriptWork = vi.fn(() => transcript.promise);
@@ -144,7 +135,6 @@ describe("public reader admission", () => {
   });
 
   it("retains a late completion under byte pressure and evicts the least-recent result", async () => {
-    const gate = createGate();
     const release = createDeferred<Buffer>();
     const body = Buffer.alloc(9 * 1024 * 1024, "a");
     const slowWork = vi.fn(() => release.promise);
@@ -178,7 +168,6 @@ describe("public reader admission", () => {
 
   it("keeps client and publication rate budgets even for cached responses", async () => {
     vi.spyOn(Date, "now").mockReturnValue(1_000);
-    const gate = createGate();
     for (let index = 0; index < 120; index++) {
       expect(gate.admitClient("client").kind).toBe("ok");
     }

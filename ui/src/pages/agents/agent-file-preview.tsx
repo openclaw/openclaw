@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, flush, onSettled, type Accessor } from "solid-js";
-import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../../components/modal-dialog.tsx";
 import { listen } from "../../lib/reactive/listener.ts";
 
 type PreviewScope = readonly [agentId: string, fileName: string, loaded: boolean];

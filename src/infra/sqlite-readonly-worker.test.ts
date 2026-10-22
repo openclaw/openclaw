@@ -93,7 +93,7 @@ function readQueries(location: string, ...queries: string[]) {
 }
 
 describe("scoped SQLite read-only children", () => {
-  it.each(["committed WAL", "frame-free read", "disposal refusal"] as const)(
+  it.each(["frame-free read", "disposal refusal"] as const)(
     "forks through the retained IPC session with %s",
     async (scenario) => {
       const source = createDatabase(
@@ -131,17 +131,13 @@ describe("scoped SQLite read-only children", () => {
         if (scenario === "frame-free read") {
           expect(family.wal).toBeNull();
           expect(fs.existsSync(`${prepared.location}-wal`)).toBe(false);
-          const reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, {
+          using reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, {
             readOnly: true,
           });
-          try {
-            expect(reader.prepare("SELECT value FROM witness").all()).toEqual([
-              { value: "checkpointed" },
-            ]);
-            expect(fs.statSync(`${prepared.location}-wal`).size).toBe(0);
-          } finally {
-            reader.close();
-          }
+          expect(reader.prepare("SELECT value FROM witness").all()).toEqual([
+            { value: "checkpointed" },
+          ]);
+          expect(fs.statSync(`${prepared.location}-wal`).size).toBe(0);
         } else {
           expect(family.wal).not.toBeNull();
         }

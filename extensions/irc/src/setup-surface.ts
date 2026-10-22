@@ -74,8 +74,7 @@ function normalizeGroupEntry(raw: string): string | null {
 function parseAutoJoinChannels(value: string): string[] {
   return splitSetupEntries(value)
     .map(normalizeGroupEntry)
-    .filter((entry): entry is string => Boolean(entry && entry !== "*"))
-    .filter(isChannelTarget);
+    .filter((entry): entry is string => Boolean(entry && entry !== "*"));
 }
 
 const promptIrcAllowFrom = createPromptParsedAllowFromForAccount<CoreConfig>({

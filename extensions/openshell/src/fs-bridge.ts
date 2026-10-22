@@ -224,7 +224,7 @@ export class OpenShellFsBridge implements SandboxFsBridge {
     ];
   }
 
-  private containerMounts(readOnlyMounts = this.readOnlyMounts()) {
+  private containerMounts() {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
     const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
     const hasAgentMount = this.sandbox.workspaceAccess !== "none" && workspaceRoot !== agentRoot;
@@ -259,7 +259,7 @@ export class OpenShellFsBridge implements SandboxFsBridge {
         : []),
     ];
     containerMounts.unshift(
-      ...readOnlyMounts.map((mount) => ({
+      ...this.readOnlyMounts().map((mount) => ({
         remote: mount.containerPath,
         owner:
           resolveOpenShellWorkspaceRoot(containerMounts, mount.containerPath)?.owner ?? "workspace",
@@ -277,17 +277,10 @@ export class OpenShellFsBridge implements SandboxFsBridge {
 
   private resolveTarget(params: { filePath: string; cwd?: string }): ResolvedMountPath {
     const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
-    const agentRoot = path.resolve(this.sandbox.agentWorkspaceDir);
-    const hasAgentMount = this.sandbox.workspaceAccess !== "none" && workspaceRoot !== agentRoot;
-    const agentContainerRoot = (this.backend.remoteAgentWorkspaceDir || "/agent").replace(
-      /\\/g,
-      "/",
-    );
     const workspaceContainerRoot = this.sandbox.containerWorkdir.replace(/\\/g, "/");
     const input = params.filePath.trim();
-    const readOnlyMounts = this.readOnlyMounts();
 
-    const containerMounts = this.containerMounts(readOnlyMounts);
+    const containerMounts = this.containerMounts();
     const resolveContainerTarget = (containerPath: string): ResolvedMountPath | undefined => {
       const containerMount = resolveOpenShellWorkspaceRoot(containerMounts, containerPath);
       if (!containerMount) {
@@ -344,17 +337,13 @@ export class OpenShellFsBridge implements SandboxFsBridge {
 
     // Resolve protected host aliases before the writable workspace that contains
     // them; virtual mount shadows still resolve through the container table below.
-    for (const mount of [
-      ...readOnlyMounts,
-      { hostPath: workspaceRoot, containerPath: workspaceContainerRoot },
-      ...(hasAgentMount ? [{ hostPath: agentRoot, containerPath: agentContainerRoot }] : []),
-    ]) {
-      if (isPathInside(mount.hostPath, hostPath)) {
+    for (const mount of containerMounts) {
+      if (isPathInside(mount.value.hostRoot, hostPath)) {
         const relative = path
-          .relative(mount.hostPath, hostPath)
+          .relative(mount.value.hostRoot, hostPath)
           .split(path.sep)
           .join(path.posix.sep);
-        const target = resolveContainerTarget(path.posix.join(mount.containerPath, relative));
+        const target = resolveContainerTarget(path.posix.join(mount.remote, relative));
         if (!target) {
           throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
         }

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import * as outcome from "../channels/turn/agent-run-terminal-outcome.js";
@@ -34,6 +34,11 @@ const replyHooks = vi.hoisted(() => {
     rewriteText?: string;
   } = { enabled: false, events: [] };
   return state;
+});
+afterEach(() => {
+  replyHooks.enabled = false;
+  replyHooks.rewriteText = undefined;
+  replyHooks.events.length = 0;
 });
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -204,8 +209,6 @@ describe("agent group thread dispatch", () => {
     } finally {
       deliveryFinalization.resolve({ visibleReplySent: true });
       await run.done;
-      replyHooks.enabled = false;
-      replyHooks.rewriteText = undefined;
     }
   });
 
@@ -471,19 +474,14 @@ describe("agent group thread dispatch", () => {
   );
 
   it("attributes parallel reply hooks to each participant's own run and session", async () => {
-    replyHooks.events.length = 0;
     replyHooks.enabled = true;
-    try {
-      await held({
-        enableHooks: true,
-        reply: ({ ctx, replyOptions }) => {
-          replyOptions?.onAgentRunStart?.(`run-${ctx.AgentId}`);
-          return [`Answer from ${ctx.AgentId}.`];
-        },
-      });
-    } finally {
-      replyHooks.enabled = false;
-    }
+    await held({
+      enableHooks: true,
+      reply: ({ ctx, replyOptions }) => {
+        replyOptions?.onAgentRunStart?.(`run-${ctx.AgentId}`);
+        return [`Answer from ${ctx.AgentId}.`];
+      },
+    });
     expect(replyHooks.events).toMatchObject(
       ["alice", "bob"].map((id) => ({
         payload: { text: `Answer from ${id}.` },
@@ -535,7 +533,6 @@ describe("agent group thread dispatch", () => {
     ]);
   });
 });
-
 describe("group thread entry compatibility", () => {
   it("prefers a qualified WhatsApp entry and keeps unqualified arrays single-pass and WhatsApp-only", () => {
     const legacy: Config = { agents: roster, broadcast: { "1203@g.us": ["alice", "bob"] } };

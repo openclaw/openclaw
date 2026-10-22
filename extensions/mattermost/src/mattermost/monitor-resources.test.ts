@@ -46,14 +46,21 @@ function createResources(options: Partial<ResourceOptions> = {}) {
   });
 }
 
-it("omits an unusable unavailable attachment name", () => {
+it.each([
+  [
+    "unusable filename",
+    { kind: "document", fileName: "\u0000\u0001" },
+    "[mattermost attachment unavailable]",
+  ],
+  ["materialized media", { path: "/tmp/q1.pdf", contentType: "application/pdf" }, ""],
+] as const)("formats media-only text for %s", (_name, media, expected) => {
   expect(
     formatMattermostInboundMediaText({
       body: "",
       nativeMedia: [{}],
-      materializedMedia: [{ kind: "document", fileName: "\u0000\u0001" }],
+      materializedMedia: [media],
     }),
-  ).toBe("[mattermost attachment unavailable]");
+  ).toBe(expected);
 });
 
 it("bounds multiple unavailable attachment names without losing their count", () => {
@@ -70,16 +77,6 @@ it("bounds multiple unavailable attachment names without losing their count", ()
   expect(result).toContain("[mattermost 4 attachments unavailable]");
   expect(result).toContain('"first.pdf, ');
   expect(result.length).toBeLessThanOrEqual(560);
-});
-
-it("keeps successfully materialized media-only text empty", () => {
-  expect(
-    formatMattermostInboundMediaText({
-      body: "",
-      nativeMedia: [{}],
-      materializedMedia: [{ path: "/tmp/q1.pdf", contentType: "application/pdf" }],
-    }),
-  ).toBe("");
 });
 
 it("renders type-only attachment facts only in pending room text", () => {
@@ -104,12 +101,12 @@ afterEach(() => {
 });
 
 it("downloads media, preserves auth headers, and infers media kind", async () => {
-  const saveRemoteMedia = vi.fn(async () => ({
+  const saved = {
     path: "/tmp/file.png",
     contentType: "image/png",
     fileName: "original screenshot.png",
-  }));
-
+  };
+  const saveRemoteMedia = vi.fn(async () => saved);
   const resources = createResources({
     client: mediaClient,
     saveRemoteMedia,
@@ -117,12 +114,7 @@ it("downloads media, preserves auth headers, and infers media kind", async () =>
   });
 
   await expect(resources.resolveMattermostMedia([" file-1 "])).resolves.toEqual([
-    {
-      path: "/tmp/file.png",
-      contentType: "image/png",
-      fileName: "original screenshot.png",
-      kind: "image",
-    },
+    { ...saved, kind: "image" },
   ]);
 
   expect(saveRemoteMedia).toHaveBeenCalledWith({

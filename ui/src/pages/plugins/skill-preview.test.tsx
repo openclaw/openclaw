@@ -67,6 +67,29 @@ const selectedResult = (path: string): PluginsSkillsReadResult => ({
   ),
 });
 
+it.each([false, true])(
+  "releases preview readiness on close before the retired request settles (selected file: %s)",
+  async (selectedFile) => {
+    const { preview, request } = setup();
+    const response = createDeferred<PluginsSkillsReadResult>();
+    if (selectedFile) {
+      request.mockResolvedValueOnce(lazyResult);
+      await preview.open(params);
+    }
+    request.mockReturnValueOnce(response.promise);
+    const opened = selectedFile ? preview.select("a.md") : preview.open(params);
+    const ready = selectedFile
+      ? preview.state!.fileRequests.get("a.md")!.promise
+      : preview.state!.inventoryRequest;
+    preview.close();
+    await ready;
+    expect(preview.state).toBeNull();
+    response.resolve(selectedFile ? selectedResult("a.md") : result);
+    await opened;
+    expect(preview.state).toBeNull();
+  },
+);
+
 it("fetches only selected bodies, deduplicates pending reads and retains late sibling bodies without changing selection", async () => {
   const { preview, request } = setup();
   const a = createDeferred<PluginsSkillsReadResult>();

@@ -1714,7 +1714,6 @@ src/proxy-capture/child-transport.ts
 src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
-src/proxy-capture/paths.ts
 src/proxy-capture/runtime-cleanup.ts
 src/proxy-capture/runtime-deferral.ts
 src/proxy-capture/runtime-fetch-patch.ts
@@ -1800,6 +1799,7 @@ src/shared/listeners.ts
 src/shared/model-context-message.ts
 src/shared/model-key.ts
 src/shared/node-list-parse.ts
+src/shared/oauth-refresh-outcome.ts
 src/shared/path-array-index.ts
 src/shared/permit-pool.ts
 src/shared/pid-alive.ts
@@ -1984,6 +1984,7 @@ src/state/openclaw-state-db-schema-runtime.ts
 src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
+src/state/openclaw-state-db-schema-v31-workspace-manifests.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2439,6 +2440,7 @@ src/config/sessions/session-actor-memory-entry-guards.ts
 src/config/sessions/session-actor-memory-entry-install.ts
 src/config/sessions/session-actor-memory-entry.ts
 src/config/sessions/session-actor-memory-events.ts
+src/config/sessions/session-prior-workspace-boundary.ts
 src/config/sessions/session-actor-memory-fork.ts
 src/config/sessions/session-actor-memory-goals.ts
 src/config/sessions/session-actor-memory-history-anchors.ts

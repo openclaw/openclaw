@@ -15,13 +15,13 @@ import { admitModelTurn, completionConfig } from "../agents/bash-tools.lifecycle
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { buildPayloads } from "../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
-import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
+import {
+  expectComplete,
+  makeTerminalInput,
+  textAssistant,
+} from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import * as runtimePlugins from "../agents/runtime-plugins.js";
-import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -48,7 +48,6 @@ import { runHeartbeatOnce } from "./heartbeat-runner-run.js";
 import { startHeartbeatRunner } from "./heartbeat-runner-scheduler.js";
 import { bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { seedHeartbeatScratchForTest } from "./heartbeat-runner.test-utils.js";
-import { requestHeartbeat } from "./heartbeat-wake.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
@@ -116,7 +115,6 @@ it("runs a targeted manual next-heartbeat wake when recurring heartbeats are dis
         cronEnabled: true,
         log,
         enqueueSystemEvent,
-        requestHeartbeat: (request) => requestHeartbeat({ ...request, coalesceMs: 0 }),
         runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
         enqueueSessionEvent: createGatewayCronTargetResolver(state.env, log).enqueueSessionEvent,
       });
@@ -533,11 +531,10 @@ it.for(completionRoutingCases)(
           if (testCase.reply === "truncated") {
             const provider = expectDefined(params.provider, "admitted provider");
             const modelId = expectDefined(params.model, "admitted model");
-            const assistant = buildEmbeddedRunnerAssistant({
+            const assistant = textAssistant(answer, {
               provider,
               model: modelId,
               stopReason: "length",
-              content: [{ type: "text", text: answer }],
             });
             const resolved = await resolveEmbeddedRunTerminal(
               makeTerminalInput({
@@ -552,23 +549,18 @@ it.for(completionRoutingCases)(
                 activeErrorContext: { provider, model: modelId },
                 agentMeta: { sessionId: params.sessionId, provider, model: modelId },
                 reportedModelRef: { provider, model: modelId },
-                attempt: makeEmbeddedRunnerAttempt({
+                assistant,
+                attemptOverrides: {
                   assistantTexts: [answer],
-                  lastAssistant: assistant,
-                  currentAttemptAssistant: assistant,
                   currentAttemptReplayMetadata: {
                     hadPotentialSideEffects: false,
                     replaySafe: true,
                   },
-                }),
-                attemptAssistant: assistant,
+                },
                 payloadsWithToolMedia: [{ text: answer }],
               }),
             );
-            expect(resolved.action).toBe("complete");
-            if (resolved.action !== "complete") {
-              throw new Error("Truncated answer did not settle");
-            }
+            expectComplete(resolved);
             return resolved.result;
           }
           return {

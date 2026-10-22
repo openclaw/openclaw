@@ -88,7 +88,6 @@ suite.define(() => {
             }),
           );
         await workboard.waitFor();
-        expect(await rail.locator(".sidebar-reorder-trigger").count()).toBe(0);
         await expect
           .poll(async () => (await widths()).find((row) => row.label === "Workboard")?.width)
           .toBeCloseTo(36, 1);

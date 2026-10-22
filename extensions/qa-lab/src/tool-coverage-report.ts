@@ -86,7 +86,6 @@ function summarizeRuntimeToolCalls(
 export function buildQaToolCoverageReport(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
   summary?: QaParitySuiteSummary;
-  runtimePair?: [RuntimeId, RuntimeId];
   generatedAt?: string;
 }) {
   const results = new Map(
@@ -193,7 +192,7 @@ export function buildQaToolCoverageReport(params: {
     : [];
   const requiredTools = rows.filter((row) => row.required).length;
   return {
-    runtimePair: normalizeRuntimePair(params.runtimePair ?? params.summary?.run?.runtimePair),
+    runtimePair: normalizeRuntimePair(params.summary?.run?.runtimePair),
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     evaluated,
     totalTools: rows.length,

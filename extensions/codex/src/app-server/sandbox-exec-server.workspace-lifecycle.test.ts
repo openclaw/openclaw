@@ -1,5 +1,3 @@
-import { ChildProcess } from "node:child_process";
-import { PassThrough } from "node:stream";
 import { useIsolatedStateGuard } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 
@@ -27,19 +25,13 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   };
 });
 import { createSessionExecServer } from "./sandbox-exec-server-session.test-support.js";
-import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
+import { createSandboxChild, createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import { httpRequest } from "./sandbox-exec-server/http.js";
 import { startProcess, terminateProcess, writeProcess } from "./sandbox-exec-server/processes.js";
 import type { ManagedProcess } from "./sandbox-exec-server/types.js";
 
 function createFixture(overrides: Parameters<typeof createSandboxContext>[0] = {}) {
-  const child = Object.assign(new ChildProcess(), {
-    stdin: new PassThrough(),
-    stdout: new PassThrough(),
-    stderr: new PassThrough(),
-    pid: 42_424,
-    kill: vi.fn(() => true),
-  });
+  const child = createSandboxChild();
   let current = true;
   const assertCurrent = () => {
     if (!current) {

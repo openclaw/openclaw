@@ -1,3 +1,4 @@
+import { createRouter, definePage } from "@openclaw/uirouter";
 import { createSignal } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
@@ -117,6 +118,9 @@ export function createContext(
   const selectionListeners = new Set<(state: typeof selectionState) => void>();
   return {
     basePath: "",
+    router: createRouter({
+      routes: [definePage({ id: "cron", path: "/cron", component: () => ({}) })],
+    }),
     gateway,
     agentIdentity: createAgentIdentityCapability(gateway),
     agents: {

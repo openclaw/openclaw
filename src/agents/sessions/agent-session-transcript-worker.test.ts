@@ -46,8 +46,7 @@ import { getSteeringMessageIdentity } from "./steering-message-identity.js";
 
 registerAgentSessionLoopTestLifecycle();
 
-const assistantText = (value: string) =>
-  createAssistant(testModel, [{ type: "text", text: value }]);
+const assistantText = (value: string) => createAssistant(testModel, value);
 const call = (ids: string[], name = "read", args: Record<string, unknown> = {}) =>
   createAssistant(
     testModel,
@@ -79,7 +78,7 @@ it("propagates transcript conflicts without synthesizing an assistant provider e
     return append(message, options);
   });
   streamMocks.streamSimple.mockImplementation((model: Model) =>
-    createAssistantResultStream(createAssistant(model, [{ type: "text", text: "Done." }])),
+    createAssistantResultStream(createAssistant(model, "Done.")),
   );
   const events: AgentSessionEvent[] = [];
   session.subscribe((event) => events.push(event));

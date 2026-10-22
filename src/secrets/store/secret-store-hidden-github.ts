@@ -17,6 +17,7 @@ import { assertSecretStoreValueLength } from "./secret-store-value.js";
 export async function writeHiddenGitHubSecretRecord(params: {
   name: string;
   value: string;
+  expectedValue?: string;
   updatedBy?: string | null;
   database?: OpenClawStateDatabaseOptions;
 }): Promise<void> {
@@ -30,6 +31,7 @@ export async function writeHiddenGitHubSecretRecord(params: {
         input: {
           name: params.name,
           value: params.value,
+          expectedValue: params.expectedValue,
           updatedBy: params.updatedBy,
           now: Date.now(),
         },

@@ -27,6 +27,7 @@ import {
   prepareClientCredentialMigration,
   recoverClientCredentialStore,
 } from "./client-credential-migration.js";
+import { openMigrationCredentials } from "./client-credential-migration.test-support.js";
 import {
   readClientCredentialReceipt,
   writeClientCredentialReceipt,
@@ -34,11 +35,11 @@ import {
 import type { ClientCredentialReceipt } from "./client-credential-receipt.js";
 import { prepareRestoredClientCredentials } from "./client-credential-restore.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
 import {
-  openClientCredentialCustody,
-  runClientCredentialOperation,
-} from "./client-credential-store.js";
-import { generateStoredDeviceIdentity } from "./device-identity-material.js";
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "./device-identity-material.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
@@ -46,23 +47,21 @@ import {
   snapshotUpdateCandidateState,
 } from "./update-candidate-state.js";
 
+function createIdentity(env: NodeJS.ProcessEnv, timestamp: number) {
+  const identity = generateStoredDeviceIdentity(timestamp);
+  runClientCredentialOperation(env, {
+    kind: "identity.create",
+    identity: storedDeviceIdentityToRow("primary", identity, timestamp),
+  });
+  return identity;
+}
+
 describe("whole-archive credential relocation", () => {
   it("preserves interrupted completion through rehearsal until the copied owner recovers", async () => {
     await withOpenClawTestState(
       { layout: "split", scenario: "external-service", label: "credential-rehearsal" },
       async (state) => {
-        const identity = generateStoredDeviceIdentity(23);
-        runClientCredentialOperation(state.env, {
-          kind: "identity.create",
-          identity: {
-            identity_key: "primary",
-            device_id: identity.deviceId,
-            public_key_pem: identity.publicKeyPem,
-            private_key_pem: identity.privateKeyPem,
-            created_at_ms: 23,
-            updated_at_ms: 23,
-          },
-        });
+        const identity = createIdentity(state.env, 23);
         const sharedPath = state.statePath("state", "openclaw.sqlite");
         fs.mkdirSync(path.dirname(sharedPath), { recursive: true, mode: 0o700 });
         {
@@ -98,7 +97,7 @@ describe("whole-archive credential relocation", () => {
           expect(interruptedAfterSourceCommit).toBe(true);
         }
         {
-          using local = openClientCredentialCustody(state.env, { migration: true })!;
+          using local = openMigrationCredentials(state.env);
           expect(readClientCredentialReceipt(local.database)?.phase).toBe("copied");
         }
         const archive = await createBackupArchive({
@@ -132,7 +131,7 @@ describe("whole-archive credential relocation", () => {
         });
         const copiedEnv = { ...state.env, OPENCLAW_STATE_DIR: targetStateDir };
         {
-          using local = openClientCredentialCustody(copiedEnv, { migration: true })!;
+          using local = openMigrationCredentials(copiedEnv);
           expect(readClientCredentialReceipt(local.database)?.phase).toBe("copied");
         }
         const readIdentity = () =>
@@ -162,18 +161,7 @@ describe("whole-archive credential relocation", () => {
     await withOpenClawTestState(
       { layout: "split", scenario: "external-service", label: "credential-pg-restore" },
       async (state) => {
-        const generated = generateStoredDeviceIdentity(7);
-        runClientCredentialOperation(state.env, {
-          kind: "identity.create",
-          identity: {
-            identity_key: "primary",
-            device_id: generated.deviceId,
-            public_key_pem: generated.publicKeyPem,
-            private_key_pem: generated.privateKeyPem,
-            created_at_ms: 7,
-            updated_at_ms: 7,
-          },
-        });
+        createIdentity(state.env, 7);
         const sharedPath = state.statePath("state", "openclaw.sqlite");
         fs.mkdirSync(path.dirname(sharedPath), { recursive: true, mode: 0o700 });
         {
@@ -187,7 +175,7 @@ describe("whole-archive credential relocation", () => {
           );
         }
         {
-          using local = openClientCredentialCustody(state.env, { migration: true })!;
+          using local = openMigrationCredentials(state.env);
           const sharedIdentity = fs.statSync(sharedPath, { bigint: true });
           expect(readClientCredentialReceipt(local.database)).toEqual({
             phase: "complete",
@@ -313,7 +301,11 @@ describe("whole-archive credential relocation", () => {
             root: process.cwd(),
             options: { repair: true, nonInteractive: true },
             runtime,
-            beforeStateMutation: createDoctorOriginalCaptureHook({ root: process.cwd(), runtime }),
+            beforeStateMutation: createDoctorOriginalCaptureHook({
+              root: process.cwd(),
+              runtime,
+              reportFindings: () => {},
+            }),
           });
           try {
             await maintenance!.run(() =>
@@ -367,7 +359,7 @@ describe("whole-archive credential relocation", () => {
           }
           let expectedSource: ClientCredentialReceipt["source"];
           {
-            using local = openClientCredentialCustody(state.env, { migration: true })!;
+            using local = openMigrationCredentials(state.env);
             const stored = readClientCredentialReceipt(local.database)!;
             expect(stored.receipt.source?.engine).toBe("sqlite");
             expectedSource = stored.receipt.source;
@@ -435,16 +427,9 @@ describe("whole-archive credential relocation", () => {
             }),
           ).toEqual({
             kind: "identity",
-            identity: {
-              identity_key: "primary",
-              device_id: identity.deviceId,
-              public_key_pem: identity.publicKeyPem,
-              private_key_pem: identity.privateKeyPem,
-              created_at_ms: 41,
-              updated_at_ms: 41,
-            },
+            identity: storedDeviceIdentityToRow("primary", identity, 41),
           });
-          using local = openClientCredentialCustody(restoredEnv, { migration: true })!;
+          using local = openMigrationCredentials(restoredEnv);
           const relocated = readClientCredentialReceipt(local.database)!;
           expect(relocated.receipt.source).toMatchObject({
             generation: expectedSource!.generation,

@@ -8,10 +8,6 @@ import { createCopilotClientPool } from "./runtime.js";
 
 type FakeClient = ReturnType<typeof makeClient>;
 
-interface FakeFactoryOptions {
-  readonly stop?: (client: FakeClient) => Promise<Error[]> | Error[];
-}
-
 function makeKey(overrides: Partial<PoolKey> = {}): PoolKey {
   return {
     agentId: "agent-1",
@@ -33,7 +29,7 @@ function makeClient(id: number, stop = vi.fn(async (): Promise<Error[]> => [])) 
   return { id, stop };
 }
 
-function setup(idleTtlMs?: number, options: FakeFactoryOptions = {}) {
+function setup(idleTtlMs?: number, stop?: (client: FakeClient) => Promise<Error[]> | Error[]) {
   const stops: number[] = [];
   const ctorCalls: CopilotClientOptions[] = [];
   let nextId = 0;
@@ -45,7 +41,7 @@ function setup(idleTtlMs?: number, options: FakeFactoryOptions = {}) {
       id,
       vi.fn(async () => {
         stops.push(id);
-        return options.stop ? options.stop(client) : [];
+        return stop ? stop(client) : [];
       }),
     );
     return client as unknown as CopilotClient;
@@ -64,6 +60,29 @@ afterEach(() => {
 });
 
 describe("createCopilotClientPool", () => {
+  it("preserves an absolute Windows drive root as the SDK base directory", async () => {
+    vi.resetModules();
+    vi.doMock("node:path", async (importOriginal) => {
+      const path = await importOriginal<typeof import("node:path")>();
+      return { ...path, resolve: path.win32.resolve, sep: path.win32.sep };
+    });
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    try {
+      const { createCopilotClientPool: createWindowsPool } = await import("./runtime.js");
+      const { sdk } = setup();
+      const pool = createWindowsPool({ sdkFactory: sdk.fake });
+      const handle = await pool.acquire(makeKey(), makeOptions({ copilotHome: "C:\\" }));
+      expect(handle.key.copilotHome).toBe("c:\\");
+      expect(sdk.ctorCalls[0]?.baseDirectory).toBe("c:\\");
+      await pool.dispose();
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+      vi.doUnmock("node:path");
+      vi.resetModules();
+    }
+  });
+
   it("keeps hardened empty-mode clients separate from normal clients", async () => {
     const { sdk, acquire } = setup();
     const normal = await acquire();
@@ -113,9 +132,7 @@ describe("createCopilotClientPool", () => {
   it("acquire during stopping awaits stop(), then creates fresh client", async () => {
     vi.useFakeTimers();
     const stopDeferred = createDeferred<Error[]>();
-    const { sdk, pool, acquire } = setup(10, {
-      stop: async () => stopDeferred.promise,
-    });
+    const { sdk, pool, acquire } = setup(10, async () => stopDeferred.promise);
     const first = await acquire();
     await pool.release(first);
     await vi.advanceTimersByTimeAsync(10);
@@ -204,9 +221,9 @@ describe("createCopilotClientPool", () => {
   });
 
   it("dispose stops all clients exactly once, aggregates errors, clears the map", async () => {
-    const { sdk, pool, acquire } = setup(1000, {
-      stop: (client) => [new Error(`stop-${client.id}-a`), new Error(`stop-${client.id}-b`)],
-    });
+    const { sdk, pool, acquire } = setup(1000, (client) =>
+      ["a", "b"].map((suffix) => new Error(`stop-${client.id}-${suffix}`)),
+    );
 
     const first = await acquire({ agentId: "agent-a" }, { copilotHome: "home-a" });
     const second = await acquire({ agentId: "agent-b" }, { copilotHome: "home-b" });
@@ -251,9 +268,7 @@ describe("createCopilotClientPool", () => {
 
   it("concurrent dispose waits for the in-flight shutdown and does not duplicate errors", async () => {
     const stopDeferred = createDeferred<Error[]>();
-    const { sdk, pool, acquire } = setup(undefined, {
-      stop: async () => stopDeferred.promise,
-    });
+    const { sdk, pool, acquire } = setup(undefined, async () => stopDeferred.promise);
 
     await acquire();
 
@@ -272,10 +287,8 @@ describe("createCopilotClientPool", () => {
   });
 
   it("normalizes non-Error stop failures during dispose", async () => {
-    const { pool, acquire } = setup(undefined, {
-      stop: () => {
-        throw toLintErrorObject("stop-string", "Non-Error thrown");
-      },
+    const { pool, acquire } = setup(undefined, () => {
+      throw toLintErrorObject("stop-string", "Non-Error thrown");
     });
     await acquire();
 

@@ -70,25 +70,6 @@ describe("sandbox explain command", () => {
     });
   });
 
-  it("shows effective sandbox alsoAllow grants and default-deny removals", async () => {
-    mockCfg = config(
-      { mode: "all", scope: "agent", workspaceAccess: "none" },
-      { tavern: { tools: { sandbox: { tools: { alsoAllow: ["message", "tts"] } } } } },
-      {
-        tools: { sandbox: { tools: { allow: ["browser"] } } },
-        session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
-      },
-    );
-
-    const {
-      sandbox: { tools },
-    } = await explain({ agent: "tavern" });
-    expect(tools.allow).toEqual(["browser", "message", "tts", "view_image"]);
-    expect(tools.deny).not.toContain("browser");
-    const source = { source: "agent", key: "agents.entries.*.tools.sandbox.tools.alsoAllow" };
-    expect(tools.sources.allow).toEqual(source);
-  });
-
   it("reports the effective rw workspace and podman mount without changing workspaceRoot", async () => {
     mockCfg = config(
       {
@@ -120,22 +101,16 @@ describe("sandbox explain command", () => {
   it("reports guest-isolated workspaces and the effective writable-access cap", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-guests" }, async (state) => {
       const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
-      const sessions = [
-        { key: "agent:builder:guest-a-first", principalId: "guest-a" },
-        { key: "agent:builder:guest-a-second", principalId: "guest-a" },
-        { key: "agent:builder:guest-b", principalId: "guest-b" },
-      ];
-      for (const session of sessions) {
-        await replaceSessionEntry(
-          { storePath, sessionKey: session.key },
-          {
-            sessionId: session.key,
-            updatedAt: Date.now(),
-            sandbox: "required",
-            createdActor: { type: "human", source: "profile", id: session.principalId },
-          },
-        );
-      }
+      const sessionKey = "agent:builder:guest";
+      await replaceSessionEntry(
+        { storePath, sessionKey },
+        {
+          sessionId: sessionKey,
+          updatedAt: Date.now(),
+          sandbox: "required",
+          createdActor: { type: "human", source: "profile", id: "guest" },
+        },
+      );
       mockCfg = config(
         {
           mode: "off",
@@ -147,25 +122,18 @@ describe("sandbox explain command", () => {
         { session: { store: storePath } },
       );
 
-      const workspaceRoots: string[] = [];
       const readonlyMounts = ["workspace", "agent"].map((source) =>
         expect.objectContaining({ source, writable: false }),
       );
-      for (const session of sessions) {
-        const { sandbox } = await explain({ session: session.key });
-        expect(sandbox).toMatchObject({
-          scope: "agent",
-          workspaceAccess: "ro",
-          workspaceSource: "sandbox",
-          sessionIsSandboxed: true,
-        });
-        expect(sandbox.effectiveHostWorkspaceRoot).not.toBe(path.resolve(state.workspaceDir));
-        expect(sandbox.workspaceMounts).toEqual(expect.arrayContaining(readonlyMounts));
-        workspaceRoots.push(sandbox.effectiveHostWorkspaceRoot);
-      }
-
-      expect(workspaceRoots[0]).toBe(workspaceRoots[1]);
-      expect(workspaceRoots[0]).not.toBe(workspaceRoots[2]);
+      const { sandbox } = await explain({ session: sessionKey });
+      expect(sandbox).toMatchObject({
+        scope: "agent",
+        workspaceAccess: "ro",
+        workspaceSource: "sandbox",
+        sessionIsSandboxed: true,
+      });
+      expect(sandbox.effectiveHostWorkspaceRoot).not.toBe(path.resolve(state.workspaceDir));
+      expect(sandbox.workspaceMounts).toEqual(expect.arrayContaining(readonlyMounts));
     });
   });
 

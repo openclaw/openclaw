@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createRuntimeConfigFixture as fixture } from "./manager.ownership.test-support.js";
 import {
   AcpRuntimeError,
+  expectCalledWith,
   hoisted,
   installAcpSessionManagerTestLifecycle,
   type AcpRuntime,
@@ -20,7 +21,7 @@ describe("AcpSessionManager runtime config", () => {
     await expect(
       f.manager.setSessionRuntimeMode({ ...f.target, runtimeMode: "plan" }),
     ).resolves.toMatchObject({ runtimeMode: "plan" });
-    expect(f.setMode).toHaveBeenCalledWith(expect.objectContaining({ mode: "plan" }));
+    expectCalledWith(f.setMode, { mode: "plan" });
     const controls = { model: "openai/gpt-5.4", effort: "high", permission_mode: "strict" };
     for (const [key, value] of Object.entries(controls)) {
       await f.setOption(key, value);
@@ -96,9 +97,7 @@ describe("AcpSessionManager runtime config", () => {
     });
     await f.run();
     expect(f.runTurn).toHaveBeenCalledOnce();
-    expect(f.setConfigOption).toHaveBeenCalledWith(
-      expect.objectContaining({ key: "timeout", value: "120" }),
-    );
+    expectCalledWith(f.setConfigOption, { key: "timeout", value: "120" });
   });
 
   it("closes the retained cwd handle before the next turn", async () => {
@@ -167,8 +166,6 @@ describe("AcpSessionManager runtime config", () => {
     });
     await expect(f.setOption("thinking", "high")).resolves.toEqual({ thinking: "high" });
     expect(f.getStatus).toHaveBeenCalled();
-    expect(f.setConfigOption).toHaveBeenCalledWith(
-      expect.objectContaining({ key: "effort", value: "high" }),
-    );
+    expectCalledWith(f.setConfigOption, { key: "effort", value: "high" });
   });
 });

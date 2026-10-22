@@ -19,6 +19,7 @@ import { startMatrixQaRecordingProxy, type MatrixQaRecordingProxy } from "./reco
 
 type MatrixQaHarness = MatrixQaHarnessFiles & {
   baseUrl: string;
+  homeserverPort: number;
   recording: MatrixQaRecordingProxy;
   restartService(): Promise<void>;
   stopCommand: string;
@@ -29,22 +30,14 @@ type MatrixQaHarness = MatrixQaHarnessFiles & {
 export async function startMatrixQaHarness(params: {
   outputDir: string;
   repoRoot?: string;
-  image?: string;
-  homeserverPort?: number;
-  serverName?: string;
 }): Promise<MatrixQaHarness> {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const requestedHomeserverPort = params.homeserverPort ?? 0;
   const files = await writeMatrixQaHarnessFiles({
     outputDir: path.resolve(params.outputDir),
-    image: params.image,
-    homeserverPort: requestedHomeserverPort,
-    serverName: params.serverName,
   });
   const compose = (...args: string[]) =>
     execCommand("docker", ["compose", "-f", files.composeFile, ...args], repoRoot);
   const resolvePublishedPort = async () =>
-    requestedHomeserverPort ||
     parseMatrixQaPublishedPort(
       (await compose("port", MATRIX_QA_SERVICE, String(MATRIX_QA_INTERNAL_PORT))).stdout,
     );

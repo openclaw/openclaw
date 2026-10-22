@@ -26,27 +26,19 @@ vi.mock("./systemd-user-transport.js", () => ({
 }));
 
 const programArguments = ["/usr/bin/openclaw", "gateway", "run"];
-const literalDirectories = [
-  { name: "percent", directory: "state%h", expression: "state%h", alternatives: ["statepercent"] },
-  {
-    name: "asterisk",
-    directory: "state*",
-    expression: "state\\*",
-    alternatives: ["state-one", "state-two"],
-  },
-  {
-    name: "question mark",
-    directory: "state?",
-    expression: "state\\?",
-    alternatives: ["state1", "state2"],
-  },
-  {
-    name: "backslash",
-    directory: "state\\part",
-    expression: "state\\\\part",
-    alternatives: ["statepart", "state/part"],
-  },
-];
+const literalDirectories = (
+  [
+    ["percent", "state%h", "state%h", "statepercent"],
+    ["asterisk", "state*", "state\\*", "state-one", "state-two"],
+    ["question mark", "state?", "state\\?", "state1", "state2"],
+    ["backslash", "state\\part", "state\\\\part", "statepart", "state/part"],
+  ] satisfies [string, string, string, ...string[]][]
+).map(([name, directory, expression, ...alternatives]) => ({
+  name,
+  directory,
+  expression,
+  alternatives,
+}));
 
 // These are Linux unit contracts using POSIX filenames, including characters Windows cannot create.
 describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
@@ -112,14 +104,11 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     return readSystemdServiceExecStart(serviceEnv(), { requireEffective: true });
   }
 
-  it.each(["trailing\t/.//"])(
-    "rejects working-directory spelling %j before rendering a different native cwd",
-    (directory) => {
-      expect(() =>
-        buildSystemdUnit({ programArguments, workingDirectory: `${home}/${directory}` }),
-      ).toThrow("WorkingDirectory cannot end in spaces or tabs");
-    },
-  );
+  it("rejects trailing whitespace before rendering a different native cwd", () => {
+    expect(() =>
+      buildSystemdUnit({ programArguments, workingDirectory: `${home}/trailing\t/.//` }),
+    ).toThrow("WorkingDirectory cannot end in spaces or tabs");
+  });
 
   it.each([
     { name: "plain", directory: "cwd" },
@@ -146,20 +135,16 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     expect(command?.environment).toEqual({ AFTER_CWD: "retained" });
   });
 
-  it.each([{ name: "trailing space", directory: "authored ", suffix: "/." }])(
-    "reads an authored working-directory scalar with $name",
-    async ({ directory, suffix }) => {
-      const workingDirectory = path.join(home, directory);
-      await fs.mkdir(workingDirectory);
-      const expression = `${workingDirectory.replaceAll("%", "%%")}${suffix}`;
-      await writeUnit(
-        `[Service]\nExecStart=/usr/bin/openclaw gateway run\nWorkingDirectory=${expression}\n`,
-      );
-
-      const command = await readSystemdServiceExecStart(serviceEnv());
-      expect(command?.workingDirectory).toBe(workingDirectory);
-    },
-  );
+  it("reads an authored working-directory scalar with trailing space", async () => {
+    const workingDirectory = path.join(home, "authored ");
+    await fs.mkdir(workingDirectory);
+    const expression = `${workingDirectory.replaceAll("%", "%%")}/.`;
+    await writeUnit(
+      `[Service]\nExecStart=/usr/bin/openclaw gateway run\nWorkingDirectory=${expression}\n`,
+    );
+    const command = await readSystemdServiceExecStart(serviceEnv());
+    expect(command?.workingDirectory).toBe(workingDirectory);
+  });
 
   it.each(["argv", "inline environment"] as const)(
     "keeps builder percent input literal in %s while retaining word quoting",
@@ -281,26 +266,23 @@ describe.skipIf(process.platform === "win32")("systemd scalar paths", () => {
     }
   });
 
-  it.each([true])(
-    "rejects a relative manager EnvironmentFile tuple (optional=%s)",
-    async (optional) => {
-      const relativeFile = path.join(path.dirname(unitPath()), "operator.env");
-      await writeEnvironmentFile(relativeFile, "FOREIGN=must-not-be-read\n");
-      const unit = "[Service]\nExecStart=/usr/bin/openclaw gateway run\n";
-      await writeUnit(unit);
-      mockManager({ environmentFiles: [["operator.env", optional]] });
-      const readFile = vi.spyOn(fs, "readFile");
-      try {
-        await expect(
-          readSystemdServiceExecStart(serviceEnv(), { requireEffective: true }),
-        ).rejects.toThrow();
-        expect(readFile).not.toHaveBeenCalledWith(relativeFile, "utf8");
-        await expect(fs.readFile(unitPath(), "utf8")).resolves.toBe(unit);
-      } finally {
-        readFile.mockRestore();
-      }
-    },
-  );
+  it("rejects an optional relative manager EnvironmentFile tuple", async () => {
+    const relativeFile = path.join(path.dirname(unitPath()), "operator.env");
+    await writeEnvironmentFile(relativeFile, "FOREIGN=must-not-be-read\n");
+    const unit = "[Service]\nExecStart=/usr/bin/openclaw gateway run\n";
+    await writeUnit(unit);
+    mockManager({ environmentFiles: [["operator.env", true]] });
+    const readFile = vi.spyOn(fs, "readFile");
+    try {
+      await expect(
+        readSystemdServiceExecStart(serviceEnv(), { requireEffective: true }),
+      ).rejects.toThrow();
+      expect(readFile).not.toHaveBeenCalledWith(relativeFile, "utf8");
+      await expect(fs.readFile(unitPath(), "utf8")).resolves.toBe(unit);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
 
   it("records only the keys supplied by an authored space-containing EnvironmentFile drop-in", async () => {
     const environmentFile = path.join(home, "operator space", "operator.env");

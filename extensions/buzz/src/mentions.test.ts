@@ -21,57 +21,43 @@ function resolve(text: string, ...values: BuzzMentionMember[]) {
 
 const alice = { publicKey: ALICE_PUBLIC_KEY, displayName: "Alice" };
 const secondAlice = { publicKey: SECOND_ALICE_PUBLIC_KEY, displayName: "Alice" };
+const explicitBob = nip19.npubEncode(BOB_PUBLIC_KEY);
+const roomMembers = [alice, secondAlice, { publicKey: BOB_PUBLIC_KEY, displayName: "Bob" }];
 
 describe("Buzz outbound mentions", () => {
-  it("resolves unique room-member names and preserves multi-word matching", () => {
-    expect(
-      resolve("Thanks @Alice Example, please review. @ALICE EXAMPLE", {
-        ...alice,
-        displayName: " Alice Example ",
-      }),
-    ).toEqual([ALICE_PUBLIC_KEY]);
+  it.each([
+    [
+      "Thanks @Alice Example, please review. @ALICE EXAMPLE",
+      [{ ...alice, displayName: " Alice Example " }],
+      [ALICE_PUBLIC_KEY],
+    ],
+    ["Hello @Élodie", [{ ...alice, displayName: "Élodie" }], [ALICE_PUBLIC_KEY]],
+    [
+      `Hello @Missing (nostr:${explicitBob}) nostr:npub1invalid nostr:${explicitBob}`,
+      roomMembers,
+      [BOB_PUBLIC_KEY],
+    ],
+    [`Hello @Alice (nostr:${explicitBob})`, roomMembers, [BOB_PUBLIC_KEY]],
+    [`nostr:${nip19.npubEncode(BOT_PUBLIC_KEY)}`, [], []],
+  ] as const)("resolves %s", (text, members, expected) => {
+    expect(resolve(text, ...members)).toEqual(expected);
   });
 
-  it("resolves a known non-ASCII room-member name without treating emails as mentions", () => {
+  it("recognizes non-ASCII mentions but not email addresses", () => {
     expect(inspectBuzzMentionSyntax("Hello @Élodie").hasAtMention).toBe(true);
-    expect(resolve("Hello @Élodie", { ...alice, displayName: "Élodie" })).toEqual([
-      ALICE_PUBLIC_KEY,
-    ]);
     expect(inspectBuzzMentionSyntax("mail user@example.com")).toEqual({
       hasAtMention: false,
       hasExplicitIdentity: false,
     });
   });
 
-  it("rejects unknown non-ASCII mention text instead of publishing it without a tag", () => {
-    expect(() => resolve("Hello @不存在", alice)).toThrow(
-      "Buzz mention does not match a current room member",
-    );
-  });
-
-  it("rejects unknown and ambiguous names without an explicit identity", () => {
-    expect(() => resolve("Hello @Missing", alice)).toThrow(
-      'Buzz mention "@missing" does not match a current room member',
-    );
-    expect(() => resolve("Hello @Alice", alice, secondAlice)).toThrow(
-      nip19.npubEncode(ALICE_PUBLIC_KEY),
-    );
-  });
-
-  it("allows unresolved labels as presentation text when an explicit identity is present", () => {
-    const explicitBob = nip19.npubEncode(BOB_PUBLIC_KEY);
-    const roomMembers = [alice, secondAlice, { publicKey: BOB_PUBLIC_KEY, displayName: "Bob" }];
-
-    expect(
-      resolve(
-        `Hello @Missing (nostr:${explicitBob}) nostr:npub1invalid nostr:${explicitBob}`,
-        ...roomMembers,
-      ),
-    ).toEqual([BOB_PUBLIC_KEY]);
-
-    expect(resolve(`Hello @Alice (nostr:${explicitBob})`, ...roomMembers)).toEqual([
-      BOB_PUBLIC_KEY,
-    ]);
+  it.each([
+    ["Hello @不存在", [alice], "Buzz mention does not match a current room member"],
+    ["Hello @Missing", [alice], 'Buzz mention "@missing" does not match a current room member'],
+    ["Hello @Alice", [alice, secondAlice], nip19.npubEncode(ALICE_PUBLIC_KEY)],
+    [`nostr:${explicitBob}`, [alice], "is not a current room member"],
+  ] as const)("rejects %s", (text, members, error) => {
+    expect(() => resolve(text, ...members)).toThrow(error);
   });
 
   it("bounds ambiguous-member guidance", () => {
@@ -86,15 +72,6 @@ describe("Buzz outbound mentions", () => {
         .map((member) => nip19.npubEncode(member.publicKey))
         .join(", ")}, and 3 more.`,
     );
-  });
-
-  it("rejects explicit identities outside the room and excludes the bot identity", () => {
-    const outsider = "d".repeat(64);
-    expect(() => resolve(`nostr:${nip19.npubEncode(outsider)}`, alice)).toThrow(
-      "is not a current room member",
-    );
-
-    expect(resolve(`nostr:${nip19.npubEncode(BOT_PUBLIC_KEY)}`)).toEqual([]);
   });
 
   it("does not resolve mention-like text inside Markdown code regions", () => {

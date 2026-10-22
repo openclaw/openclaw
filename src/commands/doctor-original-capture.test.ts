@@ -81,10 +81,15 @@ it("keeps one sealed container capture, skips repeats, and still retires old cap
         runtime: { log, error: vi.fn(), exit: vi.fn() },
       });
 
-    await captureOriginal(null);
+    // A nonfatal capture failure leaves the next start free to capture.
+    const unavailable = await captureOriginal(null);
     expect(fs.existsSync(marker)).toBe(false);
-    expect(log).toHaveBeenLastCalledWith(
-      expect.stringContaining("Original state capture was unavailable"),
+    expect(unavailable.findings).toContainEqual(
+      expect.objectContaining({
+        category: "fix-now",
+        message: expect.stringContaining("Pre-repair recovery copy was unavailable"),
+        fixHint: expect.stringContaining("Check installation access and disk space"),
+      }),
     );
 
     const capture = vi
@@ -110,9 +115,8 @@ it("keeps one sealed container capture, skips repeats, and still retires old cap
     log.mockClear();
     await captureOriginal(process.cwd());
     expect(capture).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledExactlyOnceWith(
-      `This container already retained a pre-repair capture (${runId}); Doctor skipped a repeated full capture. Repair-specific backups still apply.`,
-    );
+    expect(log).not.toHaveBeenCalled();
+    // Repeat starts keep the container's capture while older ones still age out.
     expect(retire).toHaveBeenCalledTimes(2);
     expect(retire).toHaveBeenLastCalledWith(expect.objectContaining({ keepRunId: runId }));
 

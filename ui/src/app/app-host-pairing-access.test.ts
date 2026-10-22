@@ -44,8 +44,6 @@ import {
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import { ShellLayoutBoundary } from "./shell-layout-traits-solid.tsx";
 
-type PairingSidebar = AppSidebarElement;
-
 type PairingAuth = { role: string; scopes?: string[] };
 const operator = (...scopes: string[]): PairingAuth => ({ role: "operator", scopes });
 const admin = operator("operator.admin");
@@ -191,7 +189,7 @@ function createPairingShell(params: {
   const renderSidebar = async () => {
     await refresh();
     return expectDefined(
-      container.querySelector<PairingSidebar>("openclaw-app-sidebar"),
+      container.querySelector<AppSidebarElement>("openclaw-app-sidebar"),
       "shell sidebar",
     );
   };
@@ -429,7 +427,7 @@ describe("application shell pairing access", () => {
     document.body.append(shell.element, shell.navigationSidebar);
     shell.connect();
     try {
-      await settleLitElements([shell.navigationSidebar as PairingSidebar]);
+      await settleLitElements([shell.navigationSidebar as AppSidebarElement]);
       const update = vi.spyOn(shell, "invalidate");
 
       publish?.();
@@ -505,13 +503,30 @@ describe("application shell pairing access", () => {
     const message = settings
       ? "Settings navigation could not load."
       : "Could not load the pairing dialog";
+    const target = () =>
+      container.querySelector<HTMLElement>(settings ? ".settings-sidebar" : ".device-pair-setup");
+    expect(target()?.getAttribute("aria-busy")).toBe("true");
+    if (settings) {
+      const skeleton = target()?.querySelector<HTMLElement>(
+        '.settings-sidebar__loading[role="status"][aria-busy="true"]',
+      );
+      expect(skeleton?.getAttribute("aria-label")).toBe("Loading…");
+      const expectedItems = visibleSettingsNavigationGroups(true).reduce(
+        (count, group) => count + group.routes.length,
+        0,
+      );
+      for (const selector of [
+        ".settings-sidebar__loading-item",
+        ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
+      ]) {
+        expect(skeleton?.querySelectorAll(selector)).toHaveLength(expectedItems);
+      }
+    } else {
+      expect(target()?.textContent).toContain("Loading…");
+    }
     if (failed) {
       loading.reject(new Error(`${surface} chunk unavailable`));
       await waitForSolid(() => expect(container.textContent).toContain(message));
-    }
-    const target = () =>
-      container.querySelector<HTMLElement>(settings ? ".settings-sidebar" : ".device-pair-setup");
-    if (failed) {
       expect(target()?.textContent).toContain(message);
       if (settings) {
         expect(target()?.getAttribute("aria-busy")).toBeNull();
@@ -522,31 +537,10 @@ describe("application shell pairing access", () => {
         ) ?? []),
       ];
       if (!settings) {
-        expect(actions.map((button) => button.textContent?.trim())).toEqual(["Retry", "Close"]);
+        expect(actions.map((button) => button.textContent?.trim())).toEqual(["Close", "Retry"]);
       }
       actions.find((button) => button.textContent?.trim() === "Retry")?.click();
       await waitForSolid(() => expect(target()?.getAttribute("aria-busy")).toBe("true"));
-    } else {
-      expect(target()?.getAttribute("aria-busy")).toBe("true");
-      if (settings) {
-        const skeleton = target()?.querySelector<HTMLElement>(
-          '.settings-sidebar__loading[role="status"][aria-busy="true"]',
-        );
-        expect(skeleton?.getAttribute("aria-label")).toBe("Loading…");
-        const expectedItems = visibleSettingsNavigationGroups(true).reduce(
-          (count, group) => count + group.routes.length,
-          0,
-        );
-        for (const selector of [
-          ".settings-sidebar__loading-item",
-          ".settings-sidebar__loading-item .settings-sidebar__loading-icon",
-        ]) {
-          expect(skeleton?.querySelectorAll(selector)).toHaveLength(expectedItems);
-        }
-      } else {
-        expect(target()?.textContent).toContain("Loading…");
-        expect(load).toHaveBeenCalledOnce();
-      }
     }
     expect(load).toHaveBeenCalledTimes(failed ? 2 : 1);
     (failed ? retrying : loading).resolve();

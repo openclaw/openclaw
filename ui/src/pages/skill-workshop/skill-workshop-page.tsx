@@ -1,5 +1,5 @@
 import type { SkillsWorkshopReadResult } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -74,11 +74,11 @@ class SkillWorkshopPageState {
         context.agentSelection.subscribe(sync),
       ];
       sync();
-      return () => stops.forEach((stop) => stop());
-    });
-    onCleanup(() => {
-      this.scope?.abort.abort();
-      this.scope = null;
+      return () => {
+        stops.forEach((stop) => stop());
+        this.scope?.abort.abort();
+        this.scope = null;
+      };
     });
   }
 
@@ -378,6 +378,10 @@ class SkillWorkshopPageState {
           navigationKey: result.key,
         }).options,
       );
+    } catch (error) {
+      if (isCurrent()) {
+        this.learningError = formatUiError(error);
+      }
     } finally {
       if (isCurrent()) {
         this.learningBusy = false;

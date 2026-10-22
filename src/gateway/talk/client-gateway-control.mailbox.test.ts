@@ -169,7 +169,7 @@ it.each([
     await waitForResults(callIds.length);
     expect(order).toEqual(["first", "second"]);
     expect(bridge.submitToolResult.mock.calls).toEqual(
-      callIds.map((id) => [id, expect.anything()]),
+      callIds.map((id) => [id, { result: `answer: ${id}` }]),
     );
     await owner.close();
   },
