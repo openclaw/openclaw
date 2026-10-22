@@ -378,7 +378,8 @@ export async function stageSavedAuthCandidate(
       result: { profiles: [{ profileId, credential }] },
     });
     if (saved?.apiKeyHeader && credential.type === "api_key") {
-      const providerConfig = config.models?.providers?.[parseInferenceRef(modelRef).provider];
+      const modelProvider = modelRef ? parseInferenceRef(modelRef).provider : savedProvider;
+      const providerConfig = config.models?.providers?.[modelProvider];
       const key = credential.keyRef ?? credential.key;
       if (providerConfig && key) {
         (providerConfig.headers ??= {})["api-key"] = key;
