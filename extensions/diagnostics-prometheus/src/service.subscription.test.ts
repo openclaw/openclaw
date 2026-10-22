@@ -28,6 +28,20 @@ function phaseEvent(name: string, durationMs: number, details?: Record<string, u
   return { type: "diagnostic.phase.completed" as const, name, startedAt: 10, durationMs, details };
 }
 
+function frameBuckets(first = 1, second = first, rest = second, overflow = rest) {
+  return {
+    "256": first,
+    "512": second,
+    "1024": rest,
+    "2048": rest,
+    "4096": rest,
+    "8192": rest,
+    "16384": rest,
+    "65536": rest,
+    "+Inf": overflow,
+  };
+}
+
 it("exports trusted Control UI document timings in seconds with only bounded stage labels", () => {
   using metrics = createMetricsHarness();
   const event = phaseEvent("control-ui.document.total", 125, {
@@ -303,17 +317,7 @@ openclaw_gateway_ws_operator_connections 0`);
       event: "chat",
       count: 3,
       bytes: 1_536,
-      frameBytes: {
-        "256": 0,
-        "512": 2,
-        "1024": 3,
-        "2048": 3,
-        "4096": 3,
-        "8192": 3,
-        "16384": 3,
-        "65536": 3,
-        "+Inf": 3,
-      },
+      frameBytes: frameBuckets(0, 2, 3),
     } as const;
     metrics.record(observation);
     metrics.record({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 600 });
@@ -348,17 +352,7 @@ openclaw_gateway_ws_event_wire_bytes_total{event="chat"} 1300`);
       'openclaw_gateway_ws_event_wire_bytes_total{event="other"}',
       'openclaw_gateway_ws_event_frame_bytes{event="other"',
     );
-    for (const [le, count] of [
-      ["256", 0],
-      ["512", 2],
-      ["1024", 3],
-      ["2048", 3],
-      ["4096", 3],
-      ["8192", 3],
-      ["16384", 3],
-      ["65536", 3],
-      ["+Inf", 4],
-    ]) {
+    for (const [le, count] of Object.entries(frameBuckets(0, 2, 3, 4))) {
       expect(rendered).toContain(
         `openclaw_gateway_ws_event_frame_bytes{event="chat",le="${le}"} ${count}`,
       );
@@ -625,17 +619,7 @@ openclaw_gateway_ws_presence_bytes_total{mode="${mode}"} 384`);
         bytes: 256,
         wireBytes: 128,
         sessionEvent: { reason: "assistant", delivery: "subscribed" },
-        frameBytes: {
-          "256": 1,
-          "512": 1,
-          "1024": 1,
-          "2048": 1,
-          "4096": 1,
-          "8192": 1,
-          "16384": 1,
-          "65536": 1,
-          "+Inf": 1,
-        },
+        frameBytes: frameBuckets(),
       });
     }
     // RPC arrives after worker and WebSocket traffic; sessions.list is the last method.
@@ -678,28 +662,21 @@ openclaw_queue_lane_wait_seconds_count{lane="main"} 2`);
 
     for (let index = 0; index < 64; index++) {
       const model = `model-${index}`;
+      const run = { runId: `run-${index}`, durationMs: 10 };
+      metrics.record({ ...run, type: "run.completed", model, outcome: "completed" });
       metrics.record({
-        type: "run.completed",
-        runId: `run-${index}`,
-        model,
-        outcome: "completed",
-        durationMs: 10,
-      });
-      metrics.record({
+        ...run,
         type: "harness.run.completed",
-        runId: `run-${index}`,
-        harnessId: "synthetic",
         model,
+        harnessId: "synthetic",
         outcome: "completed",
-        durationMs: 10,
       });
       metrics.record({
+        ...run,
         type: "model.call.completed",
+        model,
         callId: `call-${index}`,
         provider: "synthetic",
-        runId: `run-${index}`,
-        model,
-        durationMs: 10,
       });
       metrics.record({
         type: "model.usage",
@@ -708,11 +685,10 @@ openclaw_queue_lane_wait_seconds_count{lane="main"} 2`);
         durationMs: 10,
       });
       metrics.record({
+        ...run,
         type: "tool.execution.completed",
-        runId: `run-${index}`,
         toolCallId: `call-${index}`,
         toolName: `tool-${index}`,
-        durationMs: 10,
       });
     }
     metrics.record({
@@ -759,20 +735,15 @@ openclaw_queue_lane_wait_seconds_count{lane="main"} 2`);
       "incremental",
       "weak_processing",
     ] as const) {
-      metrics.record({
-        type: "diagnostic.gc",
-        kind,
-        reason: "other",
-        thread: "main",
-        durationMs: 20,
-      });
-      metrics.record({
-        type: "diagnostic.gc",
-        kind,
-        reason: "other",
-        thread: "main",
-        durationMs: 30,
-      });
+      for (const durationMs of [20, 30]) {
+        metrics.record({
+          type: "diagnostic.gc",
+          kind,
+          reason: "other",
+          thread: "main",
+          durationMs,
+        });
+      }
       const labels = `kind="${kind}",reason="other",thread="main"`;
       const rendered = metrics.render();
       expectMetrics(rendered)(`openclaw_gc_duration_seconds_count{${labels}} 2
@@ -790,43 +761,24 @@ replyInitialization snapshot worktree effects response dispatch`.split(/\s+/)) {
       });
     }
     const core = metrics.render();
-    const expectedFamilies = {
-      worker_request_seconds_count: 400,
-      worker_queue_wait_seconds_count: 400,
-      worker_request_phase_seconds_count: 400,
-      gateway_ws_event_frame_bytes: 1800,
-      gateway_ws_events_total: 200,
-      gateway_ws_event_bytes_total: 200,
-      gateway_ws_event_wire_bytes_total: 200,
-      gateway_ws_session_event_frames_total: 200,
-      gateway_ws_session_event_bytes_total: 200,
-      gateway_rpc_handler_seconds_count: 170,
-      gateway_rpc_admission_seconds_count: 170,
-      gateway_rpc_first_response_seconds_count: 170,
-      gateway_rpc_queue_wait_seconds_count: 170,
-      gateway_rpc_response_bytes_count: 170,
-      gateway_rpc_handler_heap_delta_bytes_count: 170,
-      gateway_rpc_requests_total: 170,
-      gateway_rpc_client_requests_total: 340,
-      run_completed_total: 64,
-      run_duration_seconds_count: 64,
-      harness_run_total: 64,
-      harness_run_duration_seconds_count: 64,
-      model_call_total: 64,
-      model_call_duration_seconds_count: 64,
-      model_usage_duration_seconds_count: 64,
-      tool_execution_total: 64,
-      tool_execution_duration_seconds_count: 64,
-      gen_ai_client_token_usage_count: 128,
-      worktree_preparation_seconds_count: 1,
-      secret_egress_requests_total: 1,
-      gateway_http_cancelled_total: 1,
-      heap_used_ratio: 9,
-      worker_count: 9,
-      code_mode_worker_heap_bytes: 24,
-      chat_send_phase_seconds_count: 14,
-      gc_duration_seconds_count: 4,
-    };
+    const expectedFamilies = Object.fromEntries(
+      Object.entries({
+        400: "worker_request_seconds_count worker_queue_wait_seconds_count worker_request_phase_seconds_count",
+        1800: "gateway_ws_event_frame_bytes",
+        200: "gateway_ws_events_total gateway_ws_event_bytes_total gateway_ws_event_wire_bytes_total gateway_ws_session_event_frames_total gateway_ws_session_event_bytes_total",
+        170: "gateway_rpc_handler_seconds_count gateway_rpc_admission_seconds_count gateway_rpc_first_response_seconds_count gateway_rpc_queue_wait_seconds_count gateway_rpc_response_bytes_count gateway_rpc_handler_heap_delta_bytes_count gateway_rpc_requests_total",
+        340: "gateway_rpc_client_requests_total",
+        64: "run_completed_total run_duration_seconds_count harness_run_total harness_run_duration_seconds_count model_call_total model_call_duration_seconds_count model_usage_duration_seconds_count tool_execution_total tool_execution_duration_seconds_count",
+        128: "gen_ai_client_token_usage_count",
+        1: "worktree_preparation_seconds_count secret_egress_requests_total gateway_http_cancelled_total",
+        9: "heap_used_ratio worker_count",
+        24: "code_mode_worker_heap_bytes",
+        14: "chat_send_phase_seconds_count",
+        4: "gc_duration_seconds_count",
+      }).flatMap(([count, names]) =>
+        names.split(" ").map((name) => [name, Number(count)] as const),
+      ),
+    );
     const actualFamilies = Object.fromEntries(
       Object.keys(expectedFamilies).map((name) => [
         name,

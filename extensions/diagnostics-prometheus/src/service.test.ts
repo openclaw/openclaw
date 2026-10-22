@@ -24,61 +24,50 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   }),
 }));
 
+const sessionList = {
+  clientKind: "openclaw-control-ui",
+  source: "wire",
+  callerSource: "sidebar",
+  rowMode: "sidebar",
+  filter: "general",
+} as const;
+
 describe("diagnostics-prometheus service", () => {
   it("counts list callers separately while preserving method-only RPC totals", () => {
     using metrics = createMetricsHarness();
-    const event = {
-      type: "gateway.rpc",
-      method: "models.list",
-      phase: "received",
-      modelsList: {
-        clientKind: "openclaw-control-ui",
-        source: "wire",
-        view: "configured",
-        scope: "agent",
-        refresh: false,
-        preparedOnly: true,
-      },
-    } as const;
-    metrics.record(event);
-    metrics.record(event);
-    metrics.record(event, untrusted);
-    metrics.record({ ...event, modelsList: { ...event.modelsList, source: "internal" } });
-    const sessions = {
-      type: "gateway.rpc",
-      method: "sessions.list",
-      phase: "received",
-      sessionsList: {
-        clientKind: "openclaw-control-ui",
-        source: "wire",
-        callerSource: "sidebar",
-        rowMode: "sidebar",
-        filter: "general",
-      },
-    } as const;
-    metrics.record(sessions);
-    metrics.record(sessions);
-    metrics.record(sessions, untrusted);
-    metrics.record({
-      ...sessions,
-      sessionsList: { ...sessions.sessionsList, source: "internal" },
-    });
-    const cron = {
-      type: "gateway.rpc",
-      method: "cron.list",
-      phase: "received",
-      cronList: {
-        clientKind: "openclaw-control-ui",
-        source: "wire",
-        scope: "session",
-        compact: true,
-        page: "first",
-      },
-    } as const;
-    metrics.record(cron);
-    metrics.record(cron);
-    metrics.record(cron, untrusted);
-    metrics.record({ ...cron, cronList: { ...cron.cronList, source: "internal" } });
+    for (const source of ["wire", "internal"] as const) {
+      for (const caller of [
+        {
+          method: "models.list",
+          modelsList: {
+            clientKind: "openclaw-control-ui",
+            source,
+            view: "configured",
+            scope: "agent",
+            refresh: false,
+            preparedOnly: true,
+          },
+        },
+        { method: "sessions.list", sessionsList: { ...sessionList, source } },
+        {
+          method: "cron.list",
+          cronList: {
+            clientKind: "openclaw-control-ui",
+            source,
+            scope: "session",
+            compact: true,
+            page: "first",
+          },
+        },
+      ] as const) {
+        const event = { type: "gateway.rpc", phase: "received", ...caller } as const;
+        metrics.record(event);
+        if (source === "wire") {
+          metrics.record(event);
+          metrics.record(event, untrusted);
+        }
+      }
+    }
     metrics.record({ type: "gateway.rpc", method: "health", phase: "received" });
     for (const clientKind of [
       "control-ui",
@@ -904,11 +893,7 @@ describe("RPC attribution", () => {
         outcome: "ok",
         durationMs: 1,
         sessionsList: {
-          clientKind: "openclaw-control-ui",
-          source: "wire",
-          callerSource: "sidebar",
-          rowMode: "sidebar",
-          filter: "general",
+          ...sessionList,
           rowsOutcome: "full-with-base",
           baseMissReason: reason,
         },
@@ -940,11 +925,8 @@ describe("RPC attribution", () => {
         durationMs: 1,
         responseBytes: 1234,
         sessionsList: {
-          clientKind: "openclaw-control-ui",
-          source: "wire",
-          callerSource: "sidebar",
+          ...sessionList,
           rowMode: rowsOutcome === "not-sidebar" ? "compact" : "sidebar",
-          filter: "general",
           rowsOutcome,
         },
       } as const;
