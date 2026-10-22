@@ -33,6 +33,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { VERSION } from "../version.js";
 import {
+  keyedStores,
   keyedStore as openStore,
   syncKeyedStore,
   stateTest,
@@ -63,6 +64,34 @@ function expectNoSql(sql: ReturnType<typeof observeHostDataSql>["calls"]) {
 }
 
 const setValue = (value: string) => ({ operation: "update", action: "set", value }) as const;
+const rowScope = "WHERE plugin_id = ? AND namespace = ?";
+const updateRow = (
+  plugin: string,
+  namespace: string,
+  key: string,
+  column: string,
+  value: string | bigint,
+) =>
+  openOpenClawStateDatabase()
+    .db.prepare(`UPDATE plugin_state_entries SET ${column} = ? ${rowScope} AND entry_key = ?`)
+    .run(value, plugin, namespace, key);
+function authority(reason: string | Error) {
+  let current = true;
+  const error = typeof reason === "string" ? new Error(reason) : reason;
+  return {
+    assertCurrent() {
+      if (!current) {
+        throw error;
+      }
+    },
+    revoke() {
+      current = false;
+    },
+    restore() {
+      current = true;
+    },
+  };
+}
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -70,10 +99,9 @@ afterEach(async () => {
 });
 
 it("keeps reads off writer queues and behind earlier writes", async ({ state }) => {
-  const pluginId = "reader-fixture";
-  const scope = { namespace: "reconnect", env: state.env };
+  const scope = { pluginId: "reader-fixture", namespace: "reconnect", env: state.env };
   const store = createPluginStateKeyedStoreV2<string>(
-    pluginId,
+    scope.pluginId,
     { ...scope, maxEntries: 10 },
     { assertCurrent() {} },
   );
@@ -93,24 +121,22 @@ it("keeps reads off writer queues and behind earlier writes", async ({ state }) 
     { include: ["worker.request"] },
   );
   try {
+    const pairs = (rows: { key: string; value: unknown }[]) =>
+      rows.map(({ key, value }) => [key, value]);
     expect(await store.lookup("missing")).toBeUndefined();
     expect(await store.lookupMany(["a", "missing"])).toEqual([
       { ok: true, value: "first" },
       { ok: true, value: undefined },
     ]);
-    expect((await store.entries()).map(({ key, value }) => [key, value])).toEqual([["a", "first"]]);
+    expect(pairs(await store.entries())).toEqual([["a", "first"]]);
     expect(await store.count()).toBe(1);
-    expect(
-      (
-        await pluginStateEntriesInKeyRange({
-          pluginId,
-          ...scope,
-          keyStartInclusive: "a",
-          keyEndExclusive: "b",
-          limit: 10,
-        })
-      ).map(({ key, value }) => [key, value]),
-    ).toEqual([["a", "first"]]);
+    const range = await pluginStateEntriesInKeyRange({
+      ...scope,
+      keyStartInclusive: "a",
+      keyEndExclusive: "b",
+      limit: 10,
+    });
+    expect(pairs(range)).toEqual([["a", "first"]]);
     await waitForDiagnosticEventsDrained();
     expect(queued).toHaveLength(5);
     expect(queued).not.toContain("sqlite_writer");
@@ -126,19 +152,12 @@ it("keeps reads off writer queues and behind earlier writes", async ({ state }) 
 
 it("checks cross-namespace leases in the write transaction", async ({ state }) => {
   const options = { namespace: "journal", maxEntries: 10, env: state.env };
-  let active = true;
-  const authority = {
-    assertCurrent: () => {
-      if (!active) {
-        throw new Error("owner closed");
-      }
-    },
-  };
-  const entries = createPluginStateKeyedStoreV2<string>("lease-test", options, authority);
+  const owner = authority("owner closed");
+  const entries = createPluginStateKeyedStoreV2<string>("lease-test", options, owner);
   const heads = createPluginStateKeyedStoreV2<string>(
     "lease-test",
     { ...options, namespace: "head" },
-    authority,
+    owner,
   );
   await entries.register("previous", "unlinked");
   await heads.register("writer", "first-owner");
@@ -157,7 +176,7 @@ it("checks cross-namespace leases in the write transaction", async ({ state }) =
 
   const replacement = await heads.observe("writer");
   expect(await link(replacement.comparison)).toEqual({ status: "applied" });
-  active = false;
+  owner.revoke();
   await expect(entries.delete("previous")).rejects.toThrow("owner closed");
   expect(legacy.lookup("writer")).toBe("replacement-owner");
 });
@@ -253,23 +272,18 @@ it.for(["register", "delete", "delete-aborted"] as const)(
     const store = openStore<string>("device-pair", "owner-admission", { env: state.env });
     await store.register("subscription", "original");
     const canceled = new AbortController();
-    let current = true;
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error("command owner revoked");
-      }
-    };
+    const owner = authority("command owner revoked");
     const pending =
       operation === "register"
-        ? store.register("subscription", "replacement", { assertCurrent })
+        ? store.register("subscription", "replacement", owner)
         : store.delete("subscription", {
-            assertCurrent,
+            assertCurrent: owner.assertCurrent,
             signal: operation === "delete-aborted" ? canceled.signal : undefined,
           });
     if (operation === "delete-aborted") {
       canceled.abort(new Error("callback task deadline expired"));
     } else {
-      current = false;
+      owner.revoke();
     }
     await expect(pending).rejects.toThrow("plugin state");
     expect(await store.lookup("subscription")).toBe("original");
@@ -308,8 +322,8 @@ it("opens cold state and cleans expiry off-thread on reopen", async ({ state }) 
 it.for(["observe", "compareDelete"] as const)(
   "revalidates contended %s and rolls back refused transactions",
   async (operation, { state }) => {
-    let current = true;
     const revoked = new Error("plugin owner revoked after dispatch");
+    const owner = authority(revoked);
     const store = createPluginStateKeyedStore<string>(
       "memory-core",
       {
@@ -317,11 +331,7 @@ it.for(["observe", "compareDelete"] as const)(
         retention: "retained",
         env: state.env,
       },
-      () => {
-        if (!current) {
-          throw revoked;
-        }
-      },
+      owner.assertCurrent,
     );
     const messages = vi.spyOn(Worker.prototype, "postMessage");
     await store.register("workspace", "owner");
@@ -365,7 +375,7 @@ it.for(["observe", "compareDelete"] as const)(
         }),
       ]);
       // The dispatched operation must revalidate authority after acquiring the native writer.
-      current = false;
+      owner.revoke();
       foreign.release();
       await expect(pending).resolves.toMatchObject({
         ok: false,
@@ -378,7 +388,7 @@ it.for(["observe", "compareDelete"] as const)(
       dispatch.mockRestore();
       foreign.close();
       await pending;
-      current = true;
+      owner.restore();
     }
     expect(await store.lookup("workspace")).toBe("owner");
     // Claim the actual writer lock before closing the worker to prove refusal rolled back.
@@ -511,9 +521,7 @@ it("bounds listing bytes without losing sync or worker entries", async ({ state:
     createdAt: 1000 + index,
   }));
   seed(pluginId, namespace, expected);
-  const options = { namespace, maxEntries: expected.length };
-  const sync = createPluginStateSyncKeyedStore(pluginId, options);
-  const store = createPluginStateKeyedStore(pluginId, options);
+  const { sync, store } = keyedStores(pluginId, { namespace, maxEntries: expected.length });
   const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
   const reads = trackSqliteStatementExecutions(db, ["listing"], (sql) =>
     sql.startsWith("select ") && sql.includes('"plugin_state_entries"') ? "listing" : null,
@@ -542,21 +550,15 @@ it.for(["created_at", "expires_at"] as const)(
       ["healthy", "corrupt", "unsafe"].map((key, i) => ({ key, value: 1, createdAt: 1000 + i })),
     );
     const { db, path } = openOpenClawStateDatabase();
-    db.prepare(
-      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-    ).run("invalid JSON", pluginId, namespace, "corrupt");
-    const options = { namespace, maxEntries: 3 };
-    const sync = createPluginStateSyncKeyedStore(pluginId, options);
-    const store = createPluginStateKeyedStore(pluginId, options);
+    updateRow(pluginId, namespace, "corrupt", "value_json", "invalid JSON");
+    const { sync, store } = keyedStores(pluginId, { namespace, maxEntries: 3 });
     const corrupt = { code: "PLUGIN_STATE_CORRUPT", operation: "entries", path };
     expect(() => sync.entries()).toThrowError(expect.objectContaining(corrupt));
     await expect(store.entries()).rejects.toMatchObject(corrupt);
 
-    db.prepare(
-      `UPDATE plugin_state_entries SET ${column} = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?`,
-    ).run(9223372036854775807n, pluginId, namespace, "unsafe");
+    updateRow(pluginId, namespace, "unsafe", column, 9223372036854775807n);
     const snapshot = db.prepare(
-      "SELECT * FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key",
+      `SELECT * FROM plugin_state_entries ${rowScope} ORDER BY entry_key`,
     );
     snapshot.setReadBigInts(true);
     const before = snapshot.all(pluginId, namespace);
@@ -612,8 +614,7 @@ it("preserves scalar equality, expiry, and corrupt JSON errors", async ({ state:
     maxEntries: 1,
     overflowPolicy: "reject-new" as const,
   };
-  const legacy = createPluginStateSyncKeyedStore<unknown>("slack", options);
-  const store = createPluginStateKeyedStore<unknown>("slack", options);
+  const { sync: legacy, store } = keyedStores<unknown>("slack", options);
   expect(await store.registerIfAbsent("entry", 1)).toBe(true);
   expect(await store.deleteIfEqual("entry", "1")).toBe(false);
   seed("slack", options.namespace, [{ key: "entry", value: 1, expiresAt: Date.now() - 1 }]);
@@ -622,10 +623,8 @@ it("preserves scalar equality, expiry, and corrupt JSON errors", async ({ state:
   expect(await store.deleteIfEqual("entry", null)).toBe(true);
 
   legacy.register("entry", false);
-  const { db, path } = openOpenClawStateDatabase();
-  db.prepare(
-    "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-  ).run("invalid JSON", "slack", options.namespace, "entry");
+  const { path } = openOpenClawStateDatabase();
+  updateRow("slack", options.namespace, "entry", "value_json", "invalid JSON");
   const corrupt = await store.deleteIfEqual("entry", false).catch((error: unknown) => error);
   expect(corrupt).toBeInstanceOf(PluginStateStoreError);
   expect(corrupt).toMatchObject({

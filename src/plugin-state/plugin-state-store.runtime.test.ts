@@ -4,13 +4,14 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, vi } from "vitest";
+import { guestRole } from "../../extensions/visitor-access/test-api.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { resolveStateDir } from "../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as mutationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
-import type { OpenClawConfig, OpenClawPluginToolContext } from "../plugin-sdk/plugin-entry.js";
+import type { OpenClawConfig } from "../plugin-sdk/plugin-entry.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { markPluginRegistryActive, revokePluginRecord } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
@@ -86,19 +87,7 @@ describe("plugin-state-store.authority", () => {
       await store.register(email, previous);
       const config: OpenClawConfig = {
         gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                accessPolicyPlugin: pluginId,
-                sessions: { others: "view" },
-                agents: ["main"],
-                scopes: ["operator.sessions.write"],
-                sandbox: "required",
-                modelPolicy: {},
-              },
-            },
-          },
+          roles: { default: "guest", definitions: { guest: guestRole } },
         },
         plugins: {
           allow: [pluginId],
@@ -184,11 +173,10 @@ describe("plugin-state-store.authority", () => {
         if (registration?.contextVersion !== 2) {
           throw new Error("Expected the action-authorized Visitor invitation tool");
         }
-        const toolContext: OpenClawPluginToolContext<2> = {
+        const created = registration.factory({
           senderIsOwner: true,
           assertInvocationCurrent() {},
-        };
-        const created = registration.factory(toolContext);
+        });
         const invite = Array.isArray(created)
           ? created.find(({ name }) => name === "visitor_invite")
           : created;
@@ -245,9 +233,7 @@ describe("plugin-state-store.authority", () => {
           posting.mockRestore();
         }
 
-        await expect(invite.execute("reinvite", { email, days: 2 })).resolves.toMatchObject({
-          details: {},
-        });
+        expect(await invite.execute("reinvite", { email, days: 2 })).toMatchObject({ details: {} });
         const reissued = await store.lookup(email);
         expect(reissued).toMatchObject({
           grantId: expect.any(String),
@@ -658,13 +644,11 @@ describe("plugin-state-store.runtime", () => {
 
   it("ignores plugin-supplied state directory overrides", async ({ state }) => {
     const { runtime } = setup("diffs", "global", false, true);
-    const redirectedEnv = {
-      ...state.env,
-      OPENCLAW_STATE_DIR: `${state.stateDir}-redirected`,
-    };
-
-    const options = { ...blobOptions, namespace: "runtime-env", env: redirectedEnv };
-    const store = runtime.openBlobStore<{ kind: string }>(options);
+    const store = runtime.openBlobStore<{ kind: string }>({
+      ...blobOptions,
+      namespace: "runtime-env",
+      env: { ...state.env, OPENCLAW_STATE_DIR: `${state.stateDir}-redirected` },
+    });
     await store.register("viewer", new Uint8Array([1]), { kind: "viewer" });
 
     await closeOpenClawStateDatabaseAsync();

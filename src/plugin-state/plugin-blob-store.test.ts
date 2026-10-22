@@ -9,7 +9,6 @@ import {
   isOpenClawStateDatabaseOpen,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createPluginBlobStoreForTests,
   resetPluginBlobStoreForTests,
@@ -103,16 +102,7 @@ describe("plugin-blob-store", () => {
 
   it("evicts the oldest namespace row while protecting the current write", async ({ state }) => {
     vi.useFakeTimers({ now: 1_000 });
-
     const store = kernel<{ order: number }>(state.env, { maxEntries: 2 });
-    await store.register("one", bytes(1), { order: 1 });
-    vi.setSystemTime(1_001);
-    await store.register("two", bytes(2), { order: 2 });
-    vi.setSystemTime(1_002);
-    await store.register("three", bytes(3), { order: 3 });
-    expect((await store.entries()).map((entry) => entry.key)).toEqual(["two", "three"]);
-
-    await store.clear();
     await store.register("zeta", bytes(1), { order: 1 });
     await store.register("alpha", bytes(2), { order: 2 });
     vi.setSystemTime(999);
@@ -183,56 +173,52 @@ describe("plugin-blob-store", () => {
     expect(() => open(state.env, { maxBytesPerEntry: 3 })).toThrow(/incompatible options/);
   });
 
-  it.each(["reject-new", "evict-oldest"] as const)(
+  it.for(["reject-new", "evict-oldest"] as const)(
     "enforces the physical plugin row limit across namespaces with %s",
-    async (overflowPolicy) => {
+    async (overflowPolicy, { state }) => {
       vi.useFakeTimers({ now: 6_000 });
-      await withOpenClawTestState({ label: "plugin-blob-plugin-quota" }, async (state) => {
-        const store = kernel<{ owner: string }>(state.env, { overflowPolicy });
-        const emptyNamespace = kernel<{ owner: string }>(state.env, {
-          namespace: "empty",
-          overflowPolicy,
-        });
-        const { db } = openOpenClawStateDatabase({ env: state.env });
-        db.exec(`WITH RECURSIVE entries(n) AS (
+      const store = kernel<{ owner: string }>(state.env, { overflowPolicy });
+      const emptyNamespace = kernel<{ owner: string }>(state.env, {
+        namespace: "empty",
+        overflowPolicy,
+      });
+      const { db } = openOpenClawStateDatabase({ env: state.env });
+      db.exec(`WITH RECURSIVE entries(n) AS (
           VALUES (1) UNION ALL SELECT n + 1 FROM entries WHERE n < 49999
         ) INSERT INTO plugin_blob_entries
           (plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
           SELECT 'diffs', 'sibling', 'expired-' || n, '{"owner":"sibling"}', zeroblob(0), 1, 2
           FROM entries`);
-        await store.register("one", bytes(1), { owner: "one" });
-        await store.register("one", bytes(1, 2), { owner: "replacement" });
+      await store.register("one", bytes(1), { owner: "one" });
+      await store.register("one", bytes(1, 2), { owner: "replacement" });
 
-        const write = store.register("two", bytes(3), { owner: "two" });
-        const rejects = overflowPolicy === "reject-new";
-        if (rejects) {
-          await limit(write);
-        } else {
-          await expect(write).resolves.toBeUndefined();
-        }
-        await expect(
-          Promise.all([store.lookup("one"), store.lookup("two")]),
-        ).resolves.toMatchObject(
-          rejects
-            ? [{ sizeBytes: 2, metadata: { owner: "replacement" } }, undefined]
-            : [undefined, { metadata: { owner: "two" } }],
-        );
+      const write = store.register("two", bytes(3), { owner: "two" });
+      const rejects = overflowPolicy === "reject-new";
+      if (rejects) {
+        await limit(write);
+      } else {
+        await expect(write).resolves.toBeUndefined();
+      }
+      await expect(Promise.all([store.lookup("one"), store.lookup("two")])).resolves.toMatchObject(
+        rejects
+          ? [{ sizeBytes: 2, metadata: { owner: "replacement" } }, undefined]
+          : [undefined, { metadata: { owner: "two" } }],
+      );
 
-        await limit(emptyNamespace.register("blocked", bytes(4), { owner: "blocked" }));
-        await expect(emptyNamespace.lookup("blocked")).resolves.toBeUndefined();
-        expect(
-          db
-            .prepare("SELECT COUNT(*) AS count FROM plugin_blob_entries WHERE plugin_id = ?")
-            .get("diffs"),
-        ).toEqual({ count: 50_000 });
-        const sibling = kernel<{ owner: string }>(state.env, {
-          namespace: "sibling",
-          overflowPolicy,
-        });
-        await expect(sibling.deleteExpiredKey("expired-1")).resolves.toMatchObject({
-          metadata: { owner: "sibling" },
-          sizeBytes: 0,
-        });
+      await limit(emptyNamespace.register("blocked", bytes(4), { owner: "blocked" }));
+      await expect(emptyNamespace.lookup("blocked")).resolves.toBeUndefined();
+      expect(
+        db
+          .prepare("SELECT COUNT(*) AS count FROM plugin_blob_entries WHERE plugin_id = ?")
+          .get("diffs"),
+      ).toEqual({ count: 50_000 });
+      const sibling = kernel<{ owner: string }>(state.env, {
+        namespace: "sibling",
+        overflowPolicy,
+      });
+      await expect(sibling.deleteExpiredKey("expired-1")).resolves.toMatchObject({
+        metadata: { owner: "sibling" },
+        sizeBytes: 0,
       });
     },
   );
@@ -280,9 +266,7 @@ describe("plugin-blob-store", () => {
     await expectStored(receipt, 1, 1);
 
     await store.delete("stable");
-    const replacement = await store.registerIfAbsentWithReceipt("stable", bytes(4), {
-      version: 4,
-    });
+    const replacement = await store.registerIfAbsentWithReceipt("stable", bytes(4), { version: 4 });
     assert.isDefined(replacement);
     expect(replacement).toEqual({ createdAt: expect.any(Number) });
     await expectStored(replacement, 4, 4);

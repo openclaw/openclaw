@@ -60,31 +60,32 @@ describe("plugin-state-store.retained", () => {
     options: OpenKeyedStoreOptions | OpenRetainedKeyedStoreOptions = retainedOptions,
   ) => createPluginStateKeyedStore<T>(pluginId, options);
   const seed = (rows: ScopedSeedRow[]) => seedScope(pluginId, "history", rows);
-  const canonical = (entryKey: string, value: unknown, createdAt: number, expiresAt?: number) => ({
-    namespace: "@retained.history",
+  const row = (entryKey: string, value: unknown, createdAt = 0, expiresAt?: number) => ({
     key: entryKey,
     value,
     createdAt,
     expiresAt,
   });
+  const canonical = (...args: Parameters<typeof row>) => ({
+    ...row(...args),
+    namespace: "@retained.history",
+  });
+  const movedEntry = (id: number, value: unknown, createdAt: number) => ({
+    key: key(id),
+    value,
+    createdAt,
+  });
+  const pairs = (ids: number[]) => ids.map((id) => ({ sourceKey: String(id), targetKey: key(id) }));
+  const query = (sql: string) => openOpenClawStateDatabase().db.prepare(sql);
   const snapshot = () =>
-    openOpenClawStateDatabase()
-      .db.prepare(
-        "SELECT * FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
-      )
-      .all(pluginId);
+    query(
+      "SELECT * FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
+    ).all(pluginId);
 
   afterEach(reopen);
 
   it("persists retained rows beyond the 50k limit", async ({ state: _state }) => {
-    seed(
-      Array.from({ length: 50_001 }, (_, id) => ({
-        namespace: "@retained.history",
-        key: key(id),
-        value: id,
-        createdAt: id,
-      })),
-    );
+    seed(Array.from({ length: 50_001 }, (_, id) => canonical(key(id), id, id)));
     await reopen();
 
     const retained = open<number>();
@@ -101,57 +102,49 @@ describe("plugin-state-store.retained", () => {
     expect(await retained.update(key(50_004), () => 50_004)).toBe(true);
     await reopen();
     const reopened = open<number>();
-    expect(await reopened.count()).toBe(50_005);
-    expect(await reopened.lookup(key(0))).toBe(0);
-    expect(await reopened.lookup(key(50_004))).toBe(50_004);
+    expect([
+      await reopened.count(),
+      await reopened.lookup(key(0)),
+      await reopened.lookup(key(50_004)),
+    ]).toEqual([50_005, 0, 50_004]);
   });
 
   it("moves raw rows atomically and pages lexical keys", async ({ state: _state }) => {
     const now = Date.now();
     seed([
-      { key: "9", value: { body: "legacy 9" }, createdAt: 9 },
-      { key: "10", value: { body: "superseded" }, createdAt: 10 },
-      { key: "99", value: { body: "expired" }, expiresAt: now - 1 },
-      { key: "100", value: { body: "expiring" }, expiresAt: now + 86_400_000 },
+      row("9", { body: "legacy 9" }, 9),
+      row("10", { body: "superseded" }, 10),
+      row("99", { body: "expired" }, 0, now - 1),
+      row("100", { body: "expiring" }, 0, now + 86_400_000),
       canonical(key(10), { body: "canonical" }, 1),
       { pluginId: "other-plugin", namespace: "history", key: "9", value: { body: "foreign" } },
     ]);
     const raw = '{ "body": "legacy 9" }';
-    openOpenClawStateDatabase()
-      .db.prepare(
-        "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-      )
-      .run(raw, pluginId, "history", "9");
+    query(
+      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+    ).run(raw, pluginId, "history", "9");
     const source = open<{ body: string }>({ namespace: "history", maxEntries: 10 });
     const retained = open<{ body: string }>();
-    await invalid(
-      retained.moveEntriesFrom({
-        namespace: "history",
-        entries: [9, 10, 100].map((id) => ({ sourceKey: String(id), targetKey: key(id) })),
-      }),
-    );
-    expect(await source.lookup("9")).toEqual({ body: "legacy 9" });
-    expect(await source.lookup("10")).toEqual({ body: "superseded" });
+    await invalid(retained.moveEntriesFrom({ namespace: "history", entries: pairs([9, 10, 100]) }));
+    expect(await source.lookupMany(["9", "10"])).toEqual([
+      { ok: true, value: { body: "legacy 9" } },
+      { ok: true, value: { body: "superseded" } },
+    ]);
     expect(await retained.lookup(key(9))).toBeUndefined();
-    const move = {
-      namespace: "history",
-      entries: [9, 10, 99, 101].map((id) => ({ sourceKey: String(id), targetKey: key(id) })),
-    };
+    const move = { namespace: "history", entries: pairs([9, 10, 99, 101]) };
     expect(await retained.moveEntriesFrom(move)).toBe(2);
     expect(await retained.moveEntriesFrom(move)).toBe(0);
     expect(await source.lookup("9")).toBeUndefined();
     expect(await source.lookup("10")).toBeUndefined();
     expect(await retained.lookup(key(99))).toBeUndefined();
     expect(await retained.entries()).toEqual([
-      { key: key(10), value: { body: "canonical" }, createdAt: 1 },
-      { key: key(9), value: { body: "legacy 9" }, createdAt: 9 },
+      movedEntry(10, { body: "canonical" }, 1),
+      movedEntry(9, { body: "legacy 9" }, 9),
     ]);
     expect(
-      openOpenClawStateDatabase()
-        .db.prepare(
-          "SELECT value_json, created_at, expires_at FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-        )
-        .get(pluginId, "@retained.history", key(9)),
+      query(
+        "SELECT value_json, created_at, expires_at FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+      ).get(pluginId, "@retained.history", key(9)),
     ).toEqual({ value_json: raw, created_at: 9, expires_at: null });
     const foreign = keyedStore<{ body: string }>("other-plugin", "history");
     expect(await foreign.lookup("9")).toEqual({ body: "foreign" });
@@ -167,16 +160,9 @@ describe("plugin-state-store.retained", () => {
   });
 
   it("rolls back late moves and publishes full retries", async ({ state: _state }) => {
-    const entries = Array.from({ length: 65 }, (_, id) => ({
-      sourceKey: String(id),
-      targetKey: key(id),
-    }));
+    const entries = pairs(Array.from({ length: 65 }, (_, id) => id));
     seed([
-      ...entries.map((entry, id) => ({
-        key: entry.sourceKey,
-        value: { id },
-        createdAt: id + 100,
-      })),
+      ...entries.map((entry, id) => row(entry.sourceKey, { id }, id + 100)),
       canonical(key(0), { id: -1 }, 1),
       canonical(key(64), { id: -2 }, 2, Date.now() - 1_000),
     ]);
@@ -210,12 +196,10 @@ describe("plugin-state-store.retained", () => {
       expect(commits).toBe(1);
       expect(await source.entries()).toEqual([]);
       expect(await retained.entries()).toEqual([
-        { key: key(0), value: { id: -1 }, createdAt: 1 },
-        ...entries.slice(1).map((entry, index) => ({
-          key: entry.targetKey,
-          value: { id: index + 1 },
-          createdAt: index + 101,
-        })),
+        movedEntry(0, { id: -1 }, 1),
+        ...entries
+          .slice(1)
+          .map((_, index) => movedEntry(index + 1, { id: index + 1 }, index + 101)),
       ]);
     } finally {
       moveFault.disable();
