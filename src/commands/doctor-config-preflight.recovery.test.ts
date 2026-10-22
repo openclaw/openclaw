@@ -286,3 +286,34 @@ describe("Doctor legacy config rename", () => {
     },
   );
 });
+
+it("Doctor recovers the accepted formatting edit rather than its stale verbose predecessor", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    const original = {
+      plugins: { enabled: false },
+      gateway: {
+        mode: "local" as const,
+        port: 19091,
+        trustedProxies: Array.from({ length: 80 }, (_, i) => "192.0.2." + i),
+      },
+    };
+    await fs.writeFile(configPath, "\uFEFF" + JSON.stringify(original, null, 12));
+    const io = createConfigIO({ configPath, observe: false });
+    const verbose = await io.readConfigFileSnapshot();
+    expect(await io.promoteConfigSnapshotToLastKnownGood(verbose)).toBe(true);
+    await io.writeConfigFile(
+      { ...original, gateway: { ...original.gateway, port: 19092 } },
+      { baseSnapshot: verbose },
+    );
+    const edited = await io.readConfigFileSnapshot();
+    expect(await io.promoteConfigSnapshotToLastKnownGood(edited)).toBe(true);
+    const acceptedRaw = await fs.readFile(configPath, "utf8");
+    await fs.writeFile(configPath, "{ gateway: { mode: 123 } }");
+    const result = await runDoctorConfigPreflight(repairOptions);
+    expect(result.snapshot.valid).toBe(true);
+    expect(result.snapshot.config.gateway).toEqual({ ...original.gateway, port: 19092 });
+    expect(await fs.readFile(configPath + ".last-good", "utf8")).toBe(acceptedRaw);
+  });
+});

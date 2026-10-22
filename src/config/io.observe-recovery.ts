@@ -292,6 +292,7 @@ function* planSuspiciousConfigRead(
   const suspicious = resolveConfigObserveSuspiciousReasons({
     ...current,
     parsed,
+    lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     lastKnownGood: backupBaseline,
   });
   const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
@@ -504,6 +505,8 @@ export async function promoteConfigSnapshotToLastKnownGoodCore(params: {
   });
   const entry = readConfigHealthEntry(healthSnapshot.state, snapshot.path);
   const suspiciousReasons = resolveConfigObserveSuspiciousReasons({
+    hash: current.hash,
+    lastObservedSuspiciousSignature: entry.lastObservedSuspiciousSignature,
     bytes: current.bytes,
     gatewayMode: current.gatewayMode,
     parsed: snapshot.parsed,

@@ -63,7 +63,9 @@ it("reads recovery health from the admitted snapshot without overwriting a forei
   if (!before) {
     throw new Error("Expected a current recovery observation");
   }
-  await observation.update({ lastObservedSuspiciousSignature: "stale recovery" }, before);
+  await expect(
+    observation.update({ lastObservedSuspiciousSignature: "stale recovery" }, before),
+  ).resolves.toEqual({ status: "conflict" });
   expect(
     readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
   ).toBe("foreign commit");
@@ -290,7 +292,9 @@ it("keeps a confirmed health write successful when its database is then closed",
     }),
   );
   try {
-    await observation.update({ lastObservedSuspiciousSignature: "committed" }, before);
+    await expect(
+      observation.update({ lastObservedSuspiciousSignature: "committed" }, before),
+    ).resolves.toEqual({ status: "applied" });
   } finally {
     spy.mockRestore();
   }
@@ -299,4 +303,32 @@ it("keeps a confirmed health write successful when its database is then closed",
   expect(
     readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
   ).toBe("committed");
+});
+
+it("reports an unavailable outcome without replaying a committed write whose reply was lost", async () => {
+  const { deps, configPath } = fixture();
+  using observation = captureConfigHealthStateStore(deps, configPath);
+  const before = await observation.read();
+  if (!before) {
+    throw new Error("Expected current observation");
+  }
+  const execute = sharedWorker.runOpenClawStateWorkerOperation;
+  const spy = vi.spyOn(sharedWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+    new Proxy(execute, {
+      async apply(target, receiver, args) {
+        await Reflect.apply(target, receiver, args);
+        throw new Error("synthetic lost worker reply");
+      },
+    }),
+  );
+  await expect(
+    observation.updateAfterFileCommit(
+      { lastObservedSuspiciousSignature: "committed-once" },
+      before,
+    ),
+  ).resolves.toEqual({ status: "unavailable" });
+  expect(spy).toHaveBeenCalledTimes(1);
+  expect(
+    readConfigHealthStateFromStore(deps).entries?.[configPath]?.lastObservedSuspiciousSignature,
+  ).toBe("committed-once");
 });

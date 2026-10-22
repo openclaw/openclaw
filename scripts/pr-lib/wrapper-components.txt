@@ -570,6 +570,7 @@ src/config/io.types.ts
 src/config/io.warnings.ts
 src/config/io.write-errors.ts
 src/config/io.write-prepare.ts
+src/config/io.write-rejected.ts
 src/config/io.write-safety.ts
 src/config/io.write-values.ts
 src/config/issue-format.ts

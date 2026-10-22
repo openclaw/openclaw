@@ -20,6 +20,7 @@ import type {
   ConfigHealthEntryChanges,
   ConfigHealthState,
   ConfigHealthSnapshot,
+  ConfigHealthUpdateResult,
 } from "./io.health-state.types.js";
 import { setBoundedConfigIoWarningEntry } from "./io.state.js";
 
@@ -176,11 +177,14 @@ type ConfigHealthStateStore = Disposable & {
   isCurrent(): boolean;
   captureContinuation(): ConfigHealthStateStore;
   read(): Promise<ConfigHealthSnapshot | null>;
-  update(changes: ConfigHealthEntryChanges, previous: ConfigHealthSnapshot): Promise<void>;
+  update(
+    changes: ConfigHealthEntryChanges,
+    previous: ConfigHealthSnapshot,
+  ): Promise<ConfigHealthUpdateResult>;
   updateAfterFileCommit(
     changes: ConfigHealthEntryChanges,
     previous: ConfigHealthSnapshot,
-  ): Promise<void>;
+  ): Promise<ConfigHealthUpdateResult>;
 };
 
 /** Bind one asynchronous observation/recovery to its original shared-state owner. */
@@ -283,12 +287,12 @@ export function captureConfigHealthStateStore(
       async update(
         changes: ConfigHealthEntryChanges,
         previous: ConfigHealthSnapshot,
-      ): Promise<void> {
+      ): Promise<ConfigHealthUpdateResult> {
         const guard = createOperationGuard();
         try {
           const patch = prepareConfigHealthPatch(changes);
           if (Object.keys(patch).length === 0) {
-            return;
+            return { status: "applied" };
           }
           if ("error" in captured) {
             throw captured.error;
@@ -305,23 +309,27 @@ export function captureConfigHealthStateStore(
               }),
             { assertCurrent: guard.assertCurrent },
           );
-          if (applied && observations.has(observation)) {
+          if (applied) {
             loggedHealthWriteFailures.delete(databasePath);
+            return { status: "applied" };
           }
+          return { status: expected === undefined ? "unavailable" : "conflict" };
         } catch (error) {
           guard.rethrowIfInvalid(error);
           if (error === supersededObservation) {
-            return;
+            return { status: "conflict" };
           }
           handleHealthWriteFailure(deps, databasePath, error);
+          return { status: "unavailable" };
         }
       },
-      async updateAfterFileCommit(changes, previous): Promise<void> {
+      async updateAfterFileCommit(changes, previous): Promise<ConfigHealthUpdateResult> {
         try {
-          await store.update(changes, previous);
+          return await store.update(changes, previous);
         } catch (error) {
           // Ownership and maintenance refusals still propagate after the file commits.
           handleHealthWriteFailure(deps, databasePath, error);
+          return { status: "unavailable" };
         }
       },
     };
