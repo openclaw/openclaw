@@ -8,6 +8,9 @@ type ConfigPageProps = ReturnType<ReturnType<typeof createConfigPage>["configPro
 // Async presenters retain their owners' admitted completions.
 type ConfigData = {
   [Key in keyof ConfigPageProps]: Key extends
+    | "onSave"
+    | "onRawDiscard"
+    | "onOpenFile"
     | "presentationRetired"
     | "setSessionObserverEnabled"
     | "setSessionObserverUtilityModel"
@@ -90,7 +93,7 @@ type ConfigViewOptions = Partial<
   sessionObserverModels?: readonly ConfigPageProps["sessionObserverModels"][number][];
   microphone?: SettingsMediaDeviceState;
   camera?: SettingsMediaDeviceState;
-  onOpenFile?: () => void;
+  onOpenFile?: ConfigPageProps["onOpenFile"];
   webPush?: WebPushSnapshot;
   includeSections?: readonly string[];
   excludeSections?: readonly string[];

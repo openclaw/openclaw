@@ -39,6 +39,7 @@ import { i18n, isSupportedLocale, type Locale } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
+import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
@@ -194,11 +195,21 @@ export function createConfigPage(
 
   function mutationDisabled() {
     revision();
-    return isCuratedConfigMutationDisabled();
+    const state = context.runtimeConfig.state;
+    return (
+      !state.connected ||
+      state.configLoading ||
+      state.configSaving ||
+      state.configApplying ||
+      updates.busy() ||
+      context.overlays.snapshot.updateStatusRefreshing ||
+      !context.runtimeConfig.canSet ||
+      !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)
+    );
   }
   function updateBusy() {
     revision();
-    return isUpdateBusy();
+    return updates.busy();
   }
 
   function updateRoute(nextPageId: ConfigPageId, nextRouteData: ConfigRouteData | null) {
@@ -464,7 +475,7 @@ export function createConfigPage(
       resetConfigViewState();
     }
     const config = runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading) {
+    if (!config.configSnapshot && !config.configLoading && !currentConfigRead(config)) {
       void runtimeConfig
         .ensureLoaded()
         .then(() =>
@@ -534,43 +545,19 @@ export function createConfigPage(
     }
   }
 
-  function isUpdateBusy(): boolean {
-    const update = context.overlays.snapshot;
-    return update.updateRunning || update.updateReconciliationPending;
-  }
-
-  function isCuratedConfigMutationDisabled(): boolean {
-    const runtimeState = context.runtimeConfig.state;
-    return (
-      !runtimeState.connected ||
-      runtimeState.configLoading ||
-      runtimeState.configSaving ||
-      runtimeState.configApplying ||
-      isUpdateBusy() ||
-      context.overlays.snapshot.updateStatusRefreshing ||
-      !context.runtimeConfig.canSet ||
-      !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)
-    );
-  }
-
   function configProps() {
     revision();
     const configObject = readConfigObject();
     const runtimeConfig = context.runtimeConfig;
     const configState = runtimeConfig.state;
     const includeSections = configSectionKeysForPage(pageId);
-    // Advanced shows everything without a curated home elsewhere.
-    const excludeSections = pageId === "advanced" ? ADVANCED_EXCLUDED_SECTIONS : undefined;
     const currentSelection = presentation.selections[pageId] ?? defaultConfigSelection(pageId);
     const selection = normalizeConfigSelection(
       pageId,
       currentSelection.activeSection,
       currentSelection.activeSubsection,
     );
-    const activeSection = pageId === "mcp" ? "mcp" : selection.activeSection;
-    const activeSubsection = pageId === "mcp" ? null : selection.activeSubsection;
-    const gatewayConfig = asConfigRecord(configObject.gateway);
-    const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
+    const controlUiConfig = asConfigRecord(asConfigRecord(configObject.gateway)?.controlUi);
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const utilityModel = readModelSetting(agentsDefaults?.utilityModel);
     const id = context.agentSelection.state.selectedId;
@@ -586,7 +573,7 @@ export function createConfigPage(
       !configState.connected ||
       configState.configSaving ||
       configState.configApplying ||
-      isUpdateBusy() ||
+      updates.busy() ||
       context.overlays.snapshot.updateStatusRefreshing ||
       !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null);
     const observerLifetime = commandLifetime.promise;
@@ -609,9 +596,13 @@ export function createConfigPage(
       valid: configState.configValid,
       issues: configState.configIssues,
       loading: configState.configLoading,
+      configLoaded: configState.configSnapshot !== null,
+      configRecoveryError: configState.configRecoveryError,
+      configRead: currentConfigRead(configState)?.completion.promise ?? null,
+      onRetryConfig: () => void runtimeConfig.refresh(),
       saving: configState.configSaving,
       applying: configState.configApplying,
-      updating: isUpdateBusy() || context.overlays.snapshot.updateStatusRefreshing,
+      updating: updates.busy() || context.overlays.snapshot.updateStatusRefreshing,
       connected: configState.connected,
       mutationAllowed: runtimeConfig.canSet,
       openFileAllowed: runtimeConfig.canOpenFile,
@@ -628,11 +619,17 @@ export function createConfigPage(
       ),
       showModeToggle: pageId === "advanced",
       formValue: configState.configForm,
-      activeSection,
-      activeSubsection,
+      activeSection: pageId === "mcp" ? "mcp" : selection.activeSection,
+      activeSubsection: pageId === "mcp" ? null : selection.activeSubsection,
       onRawChange: withConfigMutation((next: string) => runtimeConfig.setRaw(next)),
       onFormModeChange: (mode: View.ConfigFormMode) => {
-        retireCommands();
+        const currentMode =
+          configState.configFormMode === "raw" && configState.configFormDirty
+            ? "raw"
+            : (presentation.formModes[pageId] ?? "form");
+        if (mode !== currentMode) {
+          retireCommands();
+        }
         setPresentation((draft) => {
           draft.formModes[pageId] = mode;
         });
@@ -662,10 +659,10 @@ export function createConfigPage(
         });
         invalidate();
       },
-      onSave: () => void runtimeConfig.save(),
+      onSave: () => runtimeConfig.save(),
       presentationRetired: () => commandLifetime.promise,
-      onRawDiscard: () => void runtimeConfig.discardDraft(),
-      onOpenFile: () => void runtimeConfig.openFile(),
+      onRawDiscard: () => runtimeConfig.discardDraft(),
+      onOpenFile: () => runtimeConfig.openFile(),
       theme: settings.theme,
       themeOverridden: themePref.overridden,
       themeProvenance: themePref.provenance,
@@ -869,7 +866,8 @@ export function createConfigPage(
       showSectionDocs: pageId !== "communications",
       showRootTab: !includeSections?.length,
       includeSections,
-      excludeSections,
+      // Advanced shows everything without a curated home elsewhere.
+      excludeSections: pageId === "advanced" ? ADVANCED_EXCLUDED_SECTIONS : undefined,
       includeVirtualSections: pageId === "appearance" || pageId === "notifications",
       settingsLayout: pageId === "advanced" ? ("accordion" as const) : undefined,
       nativeNotifications: notifications?.read(),
