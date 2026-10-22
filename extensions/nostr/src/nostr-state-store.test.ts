@@ -59,11 +59,12 @@ describe("nostr state store", () => {
     await writeBus("bot-a", 1000);
     await writeBus("bot-b", 2000);
 
-    const stateA = await readNostrBusState({ accountId: "bot-a" });
-    const stateB = await readNostrBusState({ accountId: "bot-b" });
-
-    expect(stateA?.lastProcessedAt).toBe(1000);
-    expect(stateB?.lastProcessedAt).toBe(2000);
+    expect(await readNostrBusState({ accountId: "bot-a" })).toMatchObject({
+      lastProcessedAt: 1000,
+    });
+    expect(await readNostrBusState({ accountId: "bot-b" })).toMatchObject({
+      lastProcessedAt: 2000,
+    });
   });
 
   it("preserves legacy account key bytes for state lookup", async () => {
@@ -98,16 +99,11 @@ describe("computeSinceTimestamp", () => {
     gatewayStartedAt,
     recentEventIds: [],
   });
-  it("returns now for null state (fresh start)", () => {
-    const now = 1700000000;
-    expect(computeSinceTimestamp(null, now)).toBe(now);
-  });
-
-  it("uses the max of both timestamps", () => {
-    expect(computeSinceTimestamp(state(1699999000, 1699998000), 1700000000)).toBe(1699999000);
-  });
-
-  it("falls back to now if both are null", () => {
-    expect(computeSinceTimestamp(state(null, null), 1700000000)).toBe(1700000000);
+  it.each([
+    [null, 1700000000],
+    [state(1699999000, 1699998000), 1699999000],
+    [state(null, null), 1700000000],
+  ] as const)("computes the resume timestamp from %j", (saved, expected) => {
+    expect(computeSinceTimestamp(saved, 1700000000)).toBe(expected);
   });
 });

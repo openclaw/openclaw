@@ -15,10 +15,24 @@ import { createNostrRelayFixture } from "./nostr-relay.test-harness.js";
 import { setNostrRuntime } from "./runtime.js";
 import { TEST_HEX_PRIVATE_KEY, TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
 
+const recipient = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
+
+export function createSignedNostrDm(key: Uint8Array, text: string): Event {
+  return finalizeEvent(
+    {
+      kind: 4,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [["p", recipient]],
+      content: encrypt(key, recipient, text),
+    },
+    key,
+  );
+}
+
 export function registerNostrAdmissionTests() {
+  const dm = createSignedNostrDm;
   const approved = new Uint8Array(32).fill(2);
   const approvedPubkey = getPublicKey(approved);
-  const recipient = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
   const errors: string[] = [];
   let stateDir = "";
   let relay: Awaited<ReturnType<typeof createNostrRelayFixture>>;
@@ -42,18 +56,6 @@ export function registerNostrAdmissionTests() {
       ...options,
     });
     await relay.subscribed;
-  }
-
-  function dm(key: Uint8Array, text: string): Event {
-    return finalizeEvent(
-      {
-        kind: 4,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [["p", recipient]],
-        content: encrypt(key, recipient, text),
-      },
-      key,
-    );
   }
 
   beforeEach(async () => {
@@ -95,50 +97,48 @@ export function registerNostrAdmissionTests() {
     expect(relay.errors).toEqual([]);
   });
 
-  it.each([0, 200])(
-    "delivers approved DM after %i signed denied events without persisting them",
-    async (count) => {
-      const authorizeSender = vi.fn(
-        async ({ senderPubkey }: { senderPubkey: string }): Promise<"allow" | "block"> =>
-          senderPubkey === approvedPubkey ? "allow" : "block",
-      );
-      const tasks: Promise<void>[] = [];
-      const received = createDeferred<void>();
-      let seen = 0;
-      await start({
-        authorizeSender,
-        trackIngressTask: (task) => {
-          tasks.push(task);
-          if (++seen === count + 1) {
-            received.resolve();
-          }
-        },
-      });
-      const denied = Array.from({ length: count }, (_, i) =>
-        dm(new Uint8Array(32).fill(3 + Math.floor(i / 20)), "denied-" + i),
-      );
-      const allowed = dm(approved, "approved");
-      // Re-signing with another key cannot claim the approved identity on the real transport.
-      const forged = { ...dm(new Uint8Array(32).fill(20), "forged"), pubkey: approvedPubkey };
-      relay.sendIncoming([...denied, forged, allowed]);
-      await received.promise;
-      await Promise.all(tasks);
-      expect(seen).toBe(count + 1);
-      expect(errors).toEqual([]);
-      expect(enqueuedIds).toEqual([allowed.id]);
-      expect(authorizeSender).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ senderPubkey: approvedPubkey }),
-      );
-      expect(onMessage).toHaveBeenCalledExactlyOnceWith(
-        approvedPubkey,
-        "approved",
-        expect.any(Function),
-        expect.objectContaining({ eventId: allowed.id }),
-        expect.any(Object),
-      );
-      expect(relay.subscriptions).toEqual([[{ kinds: [4], "#p": [recipient], since: 0 }]]);
-    },
-  );
+  it("delivers approved DM after 200 signed denied events without persisting them", async () => {
+    const count = 200;
+    const authorizeSender = vi.fn(
+      async ({ senderPubkey }: { senderPubkey: string }): Promise<"allow" | "block"> =>
+        senderPubkey === approvedPubkey ? "allow" : "block",
+    );
+    const tasks: Promise<void>[] = [];
+    const received = createDeferred<void>();
+    let seen = 0;
+    await start({
+      authorizeSender,
+      trackIngressTask: (task) => {
+        tasks.push(task);
+        if (++seen === count + 1) {
+          received.resolve();
+        }
+      },
+    });
+    const denied = Array.from({ length: count }, (_, i) =>
+      dm(new Uint8Array(32).fill(3 + Math.floor(i / 20)), "denied-" + i),
+    );
+    const allowed = dm(approved, "approved");
+    // Re-signing with another key cannot claim the approved identity on the real transport.
+    const forged = { ...dm(new Uint8Array(32).fill(20), "forged"), pubkey: approvedPubkey };
+    relay.sendIncoming([...denied, forged, allowed]);
+    await received.promise;
+    await Promise.all(tasks);
+    expect(seen).toBe(count + 1);
+    expect(errors).toEqual([]);
+    expect(enqueuedIds).toEqual([allowed.id]);
+    expect(authorizeSender).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ senderPubkey: approvedPubkey }),
+    );
+    expect(onMessage).toHaveBeenCalledExactlyOnceWith(
+      approvedPubkey,
+      "approved",
+      expect.any(Function),
+      expect.objectContaining({ eventId: allowed.id }),
+      expect.any(Object),
+    );
+    expect(relay.subscriptions).toEqual([[{ kinds: [4], "#p": [recipient], since: 0 }]]);
+  });
 
   it("does not grant authorization to a matching literal author", async () => {
     const authorizeSender = vi.fn(async () => "block" as const);

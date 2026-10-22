@@ -60,21 +60,18 @@ describe("Nostr relay subscriptions", () => {
     expect(onBackfillComplete).toHaveBeenCalledWith(["wss://one.example", "wss://two.example"]);
   });
 
-  it("does not confirm timeout-synthesized EOSE", async () => {
-    vi.useFakeTimers();
+  it.each(["timeout", "same-turn close"])("rejects synthetic EOSE after %s", async (cause) => {
+    if (cause === "timeout") {
+      vi.useFakeTimers();
+    }
     const { handlers, onBackfillComplete } = setup();
-    await vi.advanceTimersByTimeAsync(10_000);
+    if (cause === "timeout") {
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
     handlers[0]?.oneose?.();
-    handlers[1]?.oneose?.();
-    await Promise.resolve();
-
-    expect(onBackfillComplete).not.toHaveBeenCalled();
-  });
-
-  it("lets same-turn close veto the pool's synthetic EOSE", async () => {
-    const { handlers, onBackfillComplete } = setup();
-    handlers[0]?.oneose?.();
-    handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay closed" }]);
+    if (cause === "same-turn close") {
+      handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay closed" }]);
+    }
     handlers[1]?.oneose?.();
     await Promise.resolve();
 

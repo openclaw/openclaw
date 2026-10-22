@@ -1,5 +1,4 @@
-import { finalizeEvent, getPublicKey } from "nostr-tools";
-import { encrypt } from "nostr-tools/nip04";
+import { getPublicKey } from "nostr-tools";
 import { npubEncode } from "nostr-tools/nip19";
 import {
   buildChannelInboundEventContext,
@@ -18,6 +17,7 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { getActiveNostrBuses, startNostrGatewayAccount } from "./gateway.js";
+import { createSignedNostrDm as dm } from "./nostr-bus.admission.test-support.js";
 import { createNostrRelayFixture } from "./nostr-relay.test-harness.js";
 import { setNostrRuntime } from "./runtime.js";
 import { buildResolvedNostrAccount, TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
@@ -61,17 +61,6 @@ export function registerNostrGatewayAdmissionTests() {
   const other = new Uint8Array(32).fill(3);
   const recipient = getPublicKey(TEST_HEX_PRIVATE_KEY_BYTES);
   const key = getPublicKey(approved);
-  function dm(sender: Uint8Array, text: string) {
-    return finalizeEvent(
-      {
-        kind: 4,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [["p", recipient]],
-        content: encrypt(sender, recipient, text),
-      },
-      sender,
-    );
-  }
   async function start(config: ResolvedNostrAccount["config"], stateDir: string) {
     const relay = await createNostrRelayFixture();
     const abort = new AbortController();

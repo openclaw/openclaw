@@ -94,29 +94,18 @@ describe("nostr-profile-import", () => {
       }
     });
 
-    it("rejects profile content that is not a JSON object", async () => {
-      respondWithEvents(createProfileEvent(null));
-
+    it.each([
+      [null, "Profile event content must be a JSON object"],
+      [
+        { name: "valid", about: 123, picture: "https://127.0.0.1/avatar.png" },
+        "Profile event content has invalid fields",
+      ],
+    ])("rejects invalid profile content: %j", async (content, error) => {
+      respondWithEvents(createProfileEvent(content));
       await expect(importDefaultProfile()).resolves.toMatchObject({
         ok: false,
-        error: "Profile event content must be a JSON object",
-        sourceRelay: "wss://relay.example",
-      });
-    });
-
-    it("rejects a wrong field type alongside an unsafe URL", async () => {
-      respondWithEvents(
-        createProfileEvent({
-          name: "valid",
-          about: 123,
-          picture: "https://127.0.0.1/avatar.png",
-        }),
-      );
-
-      await expect(importDefaultProfile()).resolves.toMatchObject({
-        ok: false,
-        error: "Profile event content has invalid fields",
-        sourceRelay: "wss://relay.example",
+        error,
+        sourceRelay: relay,
       });
     });
 
@@ -138,15 +127,13 @@ describe("nostr-profile-import", () => {
   });
 
   describe("mergeProfiles", () => {
-    it("returns empty object when both are undefined", () => {
-      expect(mergeProfiles(undefined, undefined)).toStrictEqual({});
+    it.each([
+      [undefined, undefined, {}],
+      [undefined, imported, imported],
+    ])("fills missing local fields: %j, %j", (local, remote, expected) => {
+      expect(mergeProfiles(local, remote)).toStrictEqual(expected);
     });
-
-    it("returns imported when local is undefined", () => {
-      expect(mergeProfiles(undefined, imported)).toEqual(imported);
-    });
-
-    it("handles null values in local (prefers imported)", () => {
+    it("fills undefined local fields from the imported profile", () => {
       expect(mergeProfiles({ name: undefined, displayName: undefined }, imported)).toMatchObject({
         name: imported.name,
         displayName: imported.displayName,

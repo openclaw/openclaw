@@ -1,4 +1,3 @@
-// Nostr tests cover nostr bus.inbound plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -130,28 +129,56 @@ function createEvent(overrides: Record<string, unknown> = {}) {
 }
 
 async function emitEvent(event: Record<string, unknown>) {
-  const handlers = mockState.handlers[0];
-  if (!handlers) {
-    throw new Error("missing subscription handlers");
-  }
-  void handlers.onevent(event);
+  dispatchEvent(event);
   while (ingressTasks.length > 0) {
     await Promise.all(ingressTasks.splice(0));
   }
 }
 
+function dispatchEvent(event: Record<string, unknown>) {
+  const handlers = mockState.handlers[0];
+  if (!handlers) {
+    throw new Error("missing subscription handlers");
+  }
+  void handlers.onevent(event);
+}
+
 let stateDir = "";
 let ingressQueue: ReturnType<typeof createChannelIngressQueueForTests<Record<string, unknown>>>;
 let ingressTasks: Promise<void>[] = [];
+let activeBus: Awaited<ReturnType<typeof startNostrBus>> | undefined;
 
-function startTestNostrBus(options: Partial<Parameters<typeof startNostrBus>[0]> = {}) {
-  return startNostrBus({
+function useQueue(openChannelIngressQueue = () => ingressQueue) {
+  setNostrRuntime({ state: { openChannelIngressQueue } } as unknown as PluginRuntime);
+}
+
+function readPreviousCursor() {
+  mockState.readNostrBusState.mockResolvedValueOnce({
+    version: 2,
+    lastProcessedAt: 1_000,
+    gatewayStartedAt: 900,
+    recentEventIds: [],
+  });
+  mockState.computeSinceTimestamp.mockReturnValue(1_000);
+}
+
+function expectDispatchCounts(verify: number, decrypt: number, delivered: number) {
+  expect([
+    mockState.verifyEvent.mock.calls.length,
+    mockState.decrypt.mock.calls.length,
+    defaultOnMessage.mock.calls.length,
+  ]).toEqual([verify, decrypt, delivered]);
+}
+
+async function startTestNostrBus(options: Partial<Parameters<typeof startNostrBus>[0]> = {}) {
+  activeBus = await startNostrBus({
     privateKey: TEST_HEX_PRIVATE_KEY,
     onMessage: defaultOnMessage,
     onRejected,
     ...options,
     trackIngressTask: (task) => ingressTasks.push(task),
   });
+  return activeBus;
 }
 
 describe("startNostrBus inbound guards", () => {
@@ -163,11 +190,7 @@ describe("startNostrBus inbound guards", () => {
       accountId: "default",
       stateDir,
     });
-    setNostrRuntime({
-      state: {
-        openChannelIngressQueue: () => ingressQueue,
-      },
-    } as unknown as PluginRuntime);
+    useQueue();
     mockState.handlers = [];
     onRejected.mockClear();
     defaultOnMessage.mockClear();
@@ -180,13 +203,13 @@ describe("startNostrBus inbound guards", () => {
     mockState.readNostrBusState.mockReset().mockResolvedValue(null);
     mockState.writeNostrBusState.mockReset().mockResolvedValue(undefined);
     mockState.computeSinceTimestamp.mockReset().mockReturnValue(0);
-    mockState.verifyEvent.mockClear();
-    mockState.verifyEvent.mockReturnValue(true);
-    mockState.decrypt.mockClear();
-    mockState.decrypt.mockReturnValue("plaintext");
+    mockState.verifyEvent.mockClear().mockReturnValue(true);
+    mockState.decrypt.mockClear().mockReturnValue("plaintext");
   });
 
   afterEach(async () => {
+    await activeBus?.close();
+    activeBus = undefined;
     mockState.handlers = [];
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
@@ -194,13 +217,9 @@ describe("startNostrBus inbound guards", () => {
 
   it("classifies a durable queue open failure as unavailable ingress", async () => {
     const queueError = new Error("sqlite unavailable");
-    setNostrRuntime({
-      state: {
-        openChannelIngressQueue: () => {
-          throw queueError;
-        },
-      },
-    } as unknown as PluginRuntime);
+    useQueue(() => {
+      throw queueError;
+    });
     await expect(startTestNostrBus(buildResolvedNostrAccount())).rejects.toMatchObject({
       name: "ChannelIngressUnavailableError",
       code: "CHANNEL_INGRESS_UNAVAILABLE",
@@ -210,13 +229,7 @@ describe("startNostrBus inbound guards", () => {
   });
 
   it("rewinds unflushed cursor progress to retain a rejected event in overlap", async () => {
-    mockState.readNostrBusState.mockResolvedValueOnce({
-      version: 2,
-      lastProcessedAt: 1_000,
-      gatewayStartedAt: 900,
-      recentEventIds: [],
-    });
-    mockState.computeSinceTimestamp.mockReturnValue(1_000);
+    readPreviousCursor();
     const bus = await startTestNostrBus({
       ...buildResolvedNostrAccount(),
       guardPolicy: { rateLimit: { maxGlobalPerWindow: 1 } },
@@ -232,18 +245,12 @@ describe("startNostrBus inbound guards", () => {
   });
 
   it("does not advance the cursor when one relay closes before a real EOSE", async () => {
-    mockState.readNostrBusState.mockResolvedValueOnce({
-      version: 2,
-      lastProcessedAt: 1_000,
-      gatewayStartedAt: 900,
-      recentEventIds: [],
-    });
-    mockState.computeSinceTimestamp.mockReturnValue(1_000);
-    const bus = await startTestNostrBus({
-      ...buildResolvedNostrAccount({
+    readPreviousCursor();
+    const bus = await startTestNostrBus(
+      buildResolvedNostrAccount({
         relays: ["wss://one.example", "wss://two.example"],
       }),
-    });
+    );
     await emitEvent(createEvent({ id: "cursor-high", created_at: 2_000 }));
     mockState.handlers[0]?.oneose?.();
     mockState.handlers[1]?.oneose?.();
@@ -268,13 +275,12 @@ describe("startNostrBus inbound guards", () => {
     );
     const enqueue = vi.spyOn(ingressQueue, "enqueue");
     mockState.computeSinceTimestamp.mockReturnValue(2_000);
-    const bus = await startTestNostrBus(buildResolvedNostrAccount());
+    await startTestNostrBus(buildResolvedNostrAccount());
     await vi.waitFor(() => expect(defaultOnMessage).toHaveBeenCalledTimes(1));
     await emitEvent(createEvent({ id: "live-old", created_at: 1_001 }));
     expect(defaultOnMessage).toHaveBeenCalledTimes(1);
     expect(enqueue).not.toHaveBeenCalled();
     expect(countRejection("stale")).toBe(1);
-    await bus.close();
   });
 
   it("closes the relay pool after the active subscription closes", async () => {
@@ -294,16 +300,9 @@ describe("startNostrBus inbound guards", () => {
 
   it("terminates the relay subscription when durable admission fails", async () => {
     const appendError = new Error("sqlite unavailable");
-    setNostrRuntime({
-      state: {
-        openChannelIngressQueue: () => ({
-          ...ingressQueue,
-          enqueue: vi.fn().mockRejectedValue(appendError),
-        }),
-      },
-    } as unknown as PluginRuntime);
+    useQueue(() => ({ ...ingressQueue, enqueue: vi.fn().mockRejectedValue(appendError) }));
     const onError = vi.fn();
-    const bus = await startTestNostrBus({
+    await startTestNostrBus({
       ...buildResolvedNostrAccount(),
       relays: ["wss://relay.example"],
       onError,
@@ -316,18 +315,16 @@ describe("startNostrBus inbound guards", () => {
       "durable admission for event admission-failure",
     );
     expect(defaultOnMessage).not.toHaveBeenCalled();
-    await bus.close();
   });
 
   it("keeps relays open after rejecting one oversized raw event", async () => {
-    const bus = await startTestNostrBus(buildResolvedNostrAccount());
+    await startTestNostrBus(buildResolvedNostrAccount());
     await emitEvent(createEvent({ id: "raw-oversized", content: "x".repeat(40_000) }));
     expect(mockState.subscriptionClose).not.toHaveBeenCalled();
     expect(defaultOnMessage).not.toHaveBeenCalled();
     await emitEvent(createEvent({ id: "after-raw-oversized", content: "ok" }));
     expect(mockState.subscriptionClose).not.toHaveBeenCalled();
     expect(defaultOnMessage).toHaveBeenCalledTimes(1);
-    await bus.close();
   });
 
   it("awaits ingress drain shutdown when startup state persistence fails", async () => {
@@ -346,11 +343,7 @@ describe("startNostrBus inbound guards", () => {
         pruneActive = false;
       }
     });
-    setNostrRuntime({
-      state: {
-        openChannelIngressQueue: () => ({ ...ingressQueue, prune }),
-      },
-    } as unknown as PluginRuntime);
+    useQueue(() => ({ ...ingressQueue, prune }));
     mockState.writeNostrBusState.mockRejectedValueOnce(startupError);
     const startup = startTestNostrBus(buildResolvedNostrAccount());
     const settled = vi.fn();
@@ -376,7 +369,7 @@ describe("startNostrBus inbound guards", () => {
       await reply("pairing reply");
       return "pairing" as const;
     });
-    const bus = await startTestNostrBus({
+    await startTestNostrBus({
       relays: ["wss://relay.example"],
       authorizeSender,
     });
@@ -390,59 +383,37 @@ describe("startNostrBus inbound guards", () => {
       }),
       expect.any(Uint8Array),
     );
-    await bus.close();
   });
 
-  it("dedupes replayed invalid-signature events before verify fans out again", async () => {
-    mockState.verifyEvent.mockReturnValue(false);
-    const authorizeSender = vi.fn(async () => "allow" as const);
-    const bus = await startTestNostrBus({ authorizeSender });
-    const invalidEvent = createEvent({ id: "invalid-replay" });
-    await emitEvent(invalidEvent);
-    await emitEvent(invalidEvent);
-    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
-    expect(authorizeSender).not.toHaveBeenCalled();
-    expect(mockState.decrypt).not.toHaveBeenCalled();
-    expect(defaultOnMessage).not.toHaveBeenCalled();
-    expect(countRejection("invalid_signature")).toBe(1);
-    await bus.close();
-  });
-
-  it("dedupes replayed self-message events before other guards rerun", async () => {
-    const authorizeSender = vi.fn(async () => "allow" as const);
-    const bus = await startTestNostrBus({ authorizeSender });
-    const selfEvent = createEvent({ id: "self-replay", pubkey: BOT_PUBKEY });
-    await emitEvent(selfEvent);
-    await emitEvent(selfEvent);
-    expect(mockState.verifyEvent).not.toHaveBeenCalled();
-    expect(authorizeSender).not.toHaveBeenCalled();
-    expect(mockState.decrypt).not.toHaveBeenCalled();
-    expect(defaultOnMessage).not.toHaveBeenCalled();
-    await bus.close();
-  });
+  it.each([
+    ["invalid-signature", false, "a".repeat(64), "allow", 1, 0],
+    ["self-message", true, BOT_PUBKEY, "allow", 0, 0],
+    ["blocked", true, `blocked${"a".repeat(57)}`, "block", 1, 1],
+  ] as const)(
+    "dedupes replayed %s events before guards rerun",
+    async (reason, valid, pubkey, decision, verified, authorized) => {
+      mockState.verifyEvent.mockReturnValue(valid);
+      const authorizeSender = vi.fn(async () => decision);
+      await startTestNostrBus({ authorizeSender });
+      const event = createEvent({ id: `${reason}-replay`, pubkey });
+      await emitEvent(event);
+      await emitEvent(event);
+      expectDispatchCounts(verified, 0, 0);
+      expect(authorizeSender).toHaveBeenCalledTimes(authorized);
+      if (!valid) {
+        expect(countRejection("invalid_signature")).toBe(1);
+      }
+    },
+  );
 
   it("rate limits repeated events before decrypt", async () => {
-    const bus = await startTestNostrBus();
+    await startTestNostrBus();
     for (let i = 0; i < 21; i += 1) {
       await emitEvent(createEvent({ id: `event-${i}` }));
     }
     expect(countRejection("rate_limited")).toBe(1);
     expect(mockState.decrypt).toHaveBeenCalledTimes(20);
     expect(defaultOnMessage).toHaveBeenCalledTimes(20);
-    await bus.close();
-  });
-
-  it("dedupes replayed verified events that authorization blocks", async () => {
-    const authorizeSender = vi.fn(async () => "block" as const);
-    const bus = await startTestNostrBus({ authorizeSender });
-    const blockedEvent = createEvent({ id: "blocked-replay", pubkey: `blocked${"a".repeat(57)}` });
-    await emitEvent(blockedEvent);
-    await emitEvent(blockedEvent);
-    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
-    expect(authorizeSender).toHaveBeenCalledTimes(1);
-    expect(mockState.decrypt).not.toHaveBeenCalled();
-    expect(defaultOnMessage).not.toHaveBeenCalled();
-    await bus.close();
   });
 
   it("retries a replayed event after the message handler fails", async () => {
@@ -450,7 +421,7 @@ describe("startNostrBus inbound guards", () => {
       .fn<(sender: string, plaintext: string) => Promise<void>>()
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValueOnce(undefined);
-    const bus = await startTestNostrBus({ onMessage });
+    await startTestNostrBus({ onMessage });
     const event = createEvent({ id: "retry-after-handler-failure" });
     await emitEvent(event);
     await emitEvent(event);
@@ -458,7 +429,6 @@ describe("startNostrBus inbound guards", () => {
     expect(mockState.verifyEvent).toHaveBeenCalledTimes(2);
     expect(mockState.decrypt).toHaveBeenCalledTimes(2);
     expect(onMessage).toHaveBeenCalledTimes(2);
-    await bus.close();
   });
 
   it("does not rate limit an allowed sender while another authorization is still pending", async ({
@@ -481,19 +451,10 @@ describe("startNostrBus inbound guards", () => {
       guardPolicy: { rateLimit: rateLimit(2, 1) },
     });
     try {
-      const handlers = mockState.handlers[0];
-      if (!handlers) {
-        throw new Error("missing subscription handlers");
-      }
-      void handlers.onevent(
-        createEvent({ id: "blocked-pending", pubkey: `blocked${"a".repeat(57)}` }),
-      );
+      dispatchEvent(createEvent({ id: "blocked-pending", pubkey: `blocked${"a".repeat(57)}` }));
       await withinTest(authorizing.promise, signal);
-      void handlers.onevent(
-        createEvent({
-          id: "allowed-during-pending-auth",
-          pubkey: `allowed${"b".repeat(57)}`,
-        }),
+      dispatchEvent(
+        createEvent({ id: "allowed-during-pending-auth", pubkey: `allowed${"b".repeat(57)}` }),
       );
       await withinTest(delivered.promise, signal);
       blocked.resolve("block");
@@ -512,7 +473,7 @@ describe("startNostrBus inbound guards", () => {
   it("rate limits repeated invalid signatures before authorization work fans out", async () => {
     mockState.verifyEvent.mockReturnValue(false);
     const authorizeSender = vi.fn(async () => "allow" as const);
-    const bus = await startTestNostrBus({
+    await startTestNostrBus({
       authorizeSender,
       guardPolicy: { rateLimit: rateLimit(1, 10) },
     });
@@ -522,37 +483,24 @@ describe("startNostrBus inbound guards", () => {
     expect(authorizeSender).not.toHaveBeenCalled();
     expect(countRejection("invalid_signature")).toBe(1);
     expect(countRejection("rate_limited")).toBe(1);
-    await bus.close();
   });
 
   it("counts oversized ciphertext toward the global inbound rate limit", async () => {
-    const bus = await startTestNostrBus({
+    await startTestNostrBus({
       guardPolicy: { maxCiphertextBytes: 4, rateLimit: rateLimit(1, 10) },
     });
-    await emitEvent(
-      createEvent({
-        id: "oversized-global-1",
-        pubkey: `sender1${"a".repeat(57)}`,
-        content: "ciphertext-too-large",
-      }),
-    );
-    await emitEvent(
-      createEvent({
-        id: "oversized-global-2",
-        pubkey: `sender2${"b".repeat(57)}`,
-        content: "ciphertext-too-large",
-      }),
-    );
+    for (const pubkey of [`sender1${"a".repeat(57)}`, `sender2${"b".repeat(57)}`]) {
+      await emitEvent(
+        createEvent({ id: `oversized-${pubkey}`, pubkey, content: "ciphertext-too-large" }),
+      );
+    }
     expect(countRejection("oversized_ciphertext")).toBe(1);
     expect(countRejection("rate_limited")).toBe(1);
-    expect(mockState.verifyEvent).not.toHaveBeenCalled();
-    expect(mockState.decrypt).not.toHaveBeenCalled();
-    expect(defaultOnMessage).not.toHaveBeenCalled();
-    await bus.close();
+    expectDispatchCounts(0, 0, 0);
   });
 
   it("does not spend per-sender buckets on oversized ciphertext before verification", async () => {
-    const bus = await startTestNostrBus({
+    await startTestNostrBus({
       guardPolicy: { maxCiphertextBytes: 4, rateLimit: rateLimit(10, 1) },
     });
     await emitEvent(createEvent({ id: "oversized-sender-1", content: "ciphertext-too-large" }));
@@ -560,19 +508,14 @@ describe("startNostrBus inbound guards", () => {
     await emitEvent(createEvent({ id: "allowed-after-oversized", content: "ok" }));
     expect(countRejection("oversized_ciphertext")).toBe(2);
     expect(countRejection("rate_limited")).toBe(0);
-    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
-    expect(mockState.decrypt).toHaveBeenCalledTimes(1);
-    expect(defaultOnMessage).toHaveBeenCalledTimes(1);
-    await bus.close();
+    expectDispatchCounts(1, 1, 1);
   });
 
   it("rejects far-future events before crypto", async () => {
     const bus = await startTestNostrBus();
     await emitEvent(createEvent({ created_at: Math.floor(Date.now() / 1000) + 600 }));
     expect(countRejection("future")).toBe(1);
-    expect(mockState.verifyEvent).not.toHaveBeenCalled();
-    expect(mockState.decrypt).not.toHaveBeenCalled();
-    expect(defaultOnMessage).not.toHaveBeenCalled();
+    expectDispatchCounts(0, 0, 0);
     await bus.close();
     const persisted = mockState.writeNostrBusState.mock.calls.at(-1)?.[0];
     expect(persisted?.lastProcessedAt).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
