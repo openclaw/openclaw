@@ -97,7 +97,8 @@ export function ListView(props: CronProps) {
               <Loading on={latest(scope)}>
                 <SchedulerStatus {...props} />
               </Loading>
-              <ErrorBanner error={props.listError} /> <ErrorBanner error={props.error} />
+              <ErrorBanner error={props.listError} />{" "}
+              <ErrorBanner error={props.error} reads={props.reads} />
               <NoticeBanner notice={props.notice} />
               <Toolbar {...props} hasAdvancedJobsFilters={hasAdvancedJobsFilters()} />
             </div>
