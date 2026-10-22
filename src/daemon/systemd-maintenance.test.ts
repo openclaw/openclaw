@@ -95,7 +95,7 @@ const hasBackup = async (f: PolicyFixture) =>
     (file) => file.includes(".reconcile-") && file.endsWith(".bak"),
   );
 
-it("retains the inherited native runner and original installation", async () => {
+it.each([false, true])("retains native runner and owner (revoked=%s)", async (revoked) => {
   const f = await policyFixture(30, false);
   const unowned = vi
     .spyOn(commandExec, "runCommandWithTimeout")
@@ -106,6 +106,9 @@ it("retains the inherited native runner and original installation", async () => 
   vi.spyOn(serviceLayout, "gatewayServiceCommandMatchesRoot").mockImplementation(async (root) => {
     roots.push(expectDefined(root, "Missing service root in policy-refresh ownership check"));
     expect(readGatewayServiceUpdateOriginalRoot()).toBe("/old");
+    if (root === "/old" && revoked) {
+      f.expire();
+    }
     return root === "/old";
   });
   const runner = vi.fn<GatewayServiceNativeCommand>(async () => {
@@ -122,9 +125,15 @@ it("retains the inherited native runner and original installation", async () => 
     () => prepare(f, { root: "/candidate", stopping: true }),
     { originalRoot: "/old", nativeCommand: runner },
   );
-  await expect(preparing).resolves.toEqual({ kind: "refreshed" });
-  expect(runner.mock.calls.some(([argv]) => argv.includes("daemon-reload"))).toBe(true);
-  expect(await f.read()).toContain("TimeoutStopSec=330");
+  if (revoked) {
+    await expect(preparing).rejects.toThrow("expired authority");
+    expect(runner.mock.calls.some(([argv]) => argv.includes("daemon-reload"))).toBe(false);
+    expect(await f.read()).toBe(f.original);
+  } else {
+    await expect(preparing).resolves.toEqual({ kind: "refreshed" });
+    expect(runner.mock.calls.some(([argv]) => argv.includes("daemon-reload"))).toBe(true);
+    expect(await f.read()).toContain("TimeoutStopSec=330");
+  }
   expect(roots).toEqual(expect.arrayContaining(["/candidate", "/old"]));
   expect(unowned).not.toHaveBeenCalled();
 });
@@ -140,14 +149,23 @@ it.each([
   "unavailable",
   "nonstop-override",
   "current-nonstop-override",
-  "long-timeout",
+  "custom",
+  "custom-nonstop",
   "current",
   "current-nonstop",
 ])("preserves legacy unit drop-ins: %s", async (scenario) => {
-  const stopSeconds = scenario === "long-timeout" ? 600 : scenario.startsWith("current") ? 330 : 30;
+  const custom = scenario.startsWith("custom");
+  const stopSeconds = scenario === "custom" ? 600 : scenario.startsWith("current") ? 330 : 30;
   const f = await policyFixture(stopSeconds);
   const { warnings } = f;
-  const original = f.original;
+  const original = custom
+    ? f.original
+        .replace("TimeoutStartSec=30", "TimeoutStartSec=45")
+        .replace("KillMode=mixed", "KillMode=control-group")
+    : f.original;
+  if (custom) {
+    await fs.writeFile(f.sourcePath, original);
+  }
   const stopping = !scenario.includes("nonstop");
   const unsettled = scenario.endsWith("reload-unsettled");
   const cleanupError = new CommandProcessCleanupError();
@@ -210,6 +228,12 @@ it.each([
     }
     if (scenario === "unavailable") {
       expect(await readSystemdGatewayStopTimeout(installedState(f))).toBeUndefined();
+    }
+    const refreshed = await f.read();
+    expect(refreshed).toContain(`TimeoutStartSec=${custom ? 45 : 30}`);
+    if (custom) {
+      expect(refreshed).toContain("KillMode=mixed");
+      expect(warnings.join(" ")).toContain("not changed");
     }
   } else {
     expect(await run()).toEqual({ kind: "failed" });

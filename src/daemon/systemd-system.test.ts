@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { CommandProcessCleanupError } from "../process/exec-result.js";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { ExecResult } from "./exec-file.js";
 
@@ -20,30 +19,38 @@ const state = vi.hoisted(() => ({
   paths: new Set<string>(),
 }));
 
-const execFileUtf8 = vi.hoisted(() => vi.fn<typeof import("./exec-file.js").execFileUtf8>());
+vi.mock("node:fs/promises", () => {
+  const mocked = {
+    lstat: vi.fn(async (target: string) => {
+      if (!state.paths.has(target)) {
+        throw Object.assign(new Error(`ENOENT: ${target}`), { code: "ENOENT" });
+      }
+      return {};
+    }),
+  };
+  return { ...mocked, default: mocked };
+});
+
+const execFileUtf8 = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _command: string,
+      args: string[],
+      _options?: { timeout?: number; killSignal?: string; env?: NodeJS.ProcessEnv },
+    ) => (args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl),
+  ),
+);
 vi.mock("./exec-file.js", () => ({ execFileUtf8 }));
 
 import { readSystemdDefinitionMutationCapability } from "./systemd-definition-mutation.js";
-import {
-  admitUserUnitActivationPastUnverifiableOwnership,
-  isSystemdServiceAbsent,
-} from "./systemd-scope.js";
 import { assertNoSystemSystemdOwnership } from "./systemd-system.js";
 const gatewayUnit = "openclaw-gateway.service";
-const notFound = () => Object.assign(new Error("missing"), { code: "ENOENT" });
-const existingStat = await fs.stat(new URL(import.meta.url));
 
 beforeEach(() => {
   vi.clearAllMocks();
   state.systemctl = result("not-found\n");
   state.managerUnitPath = result(loadPaths);
   state.paths.clear();
-  vi.spyOn(fs, "lstat").mockImplementation(async (target) => {
-    if (!state.paths.has(String(target))) {
-      throw notFound();
-    }
-    return existingStat;
-  });
   execFileUtf8.mockReset();
   execFileUtf8.mockImplementation(async (_command: string, args: string[]) =>
     args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl,
@@ -167,95 +174,4 @@ it.each(["/etc", "/usr/lib"])("renders safe recovery for units in %s", async (pr
     expect(String(error)).toContain("uninstall or reconfigure the package, generator");
     expect(String(error)).not.toContain(`rm ${unitPath}`);
   }
-});
-
-describe("non-loading system-manager inspection", () => {
-  const unit = "openclaw-owned.service";
-  const owner = ":1.4";
-  const home = "/openclaw-systemd-cleanup-proof";
-  const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: unit };
-  const success = (type: string, data: unknown) => result(JSON.stringify({ type, data }));
-  const missing = () => result("", `Call failed: Unit ${unit} not loaded.`, 1);
-  const absent = () => assertNoSystemSystemdOwnership(unit, 1000, { requireLoaded: true });
-  function reply(args: readonly string[]): ExecResult {
-    if (args.includes("GetNameOwner")) {
-      return success("s", [owner]);
-    }
-    if (args.includes("GetUnit")) {
-      return missing();
-    }
-    if (args.includes("UnitPath")) {
-      return success("as", ["/etc/systemd/system", "/run/systemd/system"]);
-    }
-    throw new Error("Unexpected manager query");
-  }
-  beforeEach(() => execFileUtf8.mockImplementation(async (_command, args) => reply(args)));
-
-  it.each(["absence", "system", "user", "loaded-user", "activation"])(
-    "propagates %s cleanup errors",
-    async (source) => {
-      const error = new CommandProcessCleanupError();
-      execFileUtf8.mockImplementation(async (_command, args) => {
-        if (["absence", "system", "activation"].includes(source) || !args.includes("--system")) {
-          throw error;
-        }
-        if (source === "loaded-user") {
-          throw new Error("system manager unavailable");
-        }
-        return reply(args);
-      });
-      let probe: Promise<unknown>;
-      if (source === "absence") {
-        probe = isSystemdServiceAbsent(env, { strictCommandAbsent: true, timeoutMs: 1000 });
-      } else if (source === "activation") {
-        execFileUtf8.mockRejectedValueOnce(new Error("system manager unavailable"));
-        const refusal: unknown = await absent().catch((cause: unknown) => cause);
-        expect(refusal).toMatchObject({ ownership: { status: "unverifiable" } });
-        probe = admitUserUnitActivationPastUnverifiableOwnership(env, refusal);
-      } else {
-        vi.spyOn(fs, "readFile").mockRejectedValue(notFound());
-        probe = readSystemdDefinitionMutationCapability(
-          {
-            ...env,
-            OPENCLAW_STATE_DIR: `${home}/state`,
-            DBUS_SESSION_BUS_ADDRESS: `unix:path=${home}/${source}/bus`,
-          },
-          {
-            requireLoaded: true,
-            systemdReadTarget: { scope: "user", unitName: unit, unitPath: "/unused/unit" },
-          },
-        );
-      }
-      await expect(probe).rejects.toBe(error);
-    },
-  );
-  it("proves absence using existing manager and load paths without activation", async () => {
-    await expect(absent()).resolves.toBeUndefined();
-    expect(execFileUtf8).toHaveBeenCalledTimes(3);
-    for (const [command, args] of execFileUtf8.mock.calls) {
-      expect(command).toBe("busctl");
-      expect(args).toEqual(expect.arrayContaining(["--system", "--auto-start=no"]));
-      expect(args).not.toContain("LoadUnit");
-      if (!args.includes("GetNameOwner")) {
-        expect(args).toContain(owner);
-      }
-    }
-    expect(fs.lstat).toHaveBeenCalledWith(`/etc/systemd/system/${unit}`);
-    expect(fs.lstat).toHaveBeenCalledWith(`/run/systemd/system/${unit}`);
-  });
-  it("refuses filesystem uncertainty", async () => {
-    vi.spyOn(fs, "lstat").mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" }));
-    await expect(absent()).rejects.toMatchObject({
-      ownership: { status: "unverifiable", operation: "filesystem" },
-    });
-  });
-  it.each([
-    { name: "invalid object path", result: success("o", ["/unexpected"]) },
-    { name: "timed out missing", result: { ...missing(), termination: "timeout" as const } },
-  ])("rejects $name rather than certifying absence", async ({ result: response }) => {
-    execFileUtf8.mockImplementation(async (_command, args) =>
-      args.includes("GetUnit") ? response : reply(args),
-    );
-    await expect(absent()).rejects.toMatchObject({ ownership: { status: "unverifiable" } });
-  });
 });

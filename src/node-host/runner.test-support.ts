@@ -169,6 +169,7 @@ vi.mock("./plugin-node-host.js", () => ({
   }),
 }));
 
+// mock-isolation: runner fixtures own MCP descriptors and shutdown without starting live clients.
 vi.mock("./mcp.js", () => ({
   startNodeHostMcpManager: vi.fn(
     async (_servers: unknown, deps?: { onDescriptorsChanged?: () => void }) => {
@@ -182,7 +183,9 @@ vi.mock("./mcp.js", () => ({
   ),
 }));
 
+// mock-isolation: runner fixtures supply their own node skill inventory.
 vi.mock("./skills.js", () => ({ scanNodeHostedSkills: vi.fn(() => mocks.nodeSkillDescriptors) }));
+// mock-isolation: runner startup tests bypass real state migration and database admission.
 vi.mock("./startup-state-readiness.js", () => ({ ensureNodeHostStateReady: () => {} }));
 
 vi.mock("./runtime.js", async (importOriginal) => {

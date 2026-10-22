@@ -43,6 +43,7 @@ vi.mock("../infra/update-check.js", async (importOriginal) => ({
   resolveNpmChannelTag: updateMocks.discover,
 }));
 
+// mock-isolation: update tests supply prepared candidates without installing a real runtime.
 vi.mock("./auto-update-install.js", () => ({ prepareNodeRuntimeUpdate: updateMocks.prepare }));
 
 vi.mock("./auto-update-compatibility.js", () => ({

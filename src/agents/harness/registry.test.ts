@@ -41,6 +41,7 @@ vi.mock("../../logging/subsystem.js", () => ({
 }));
 
 // Synthetic selection fixtures avoid cold-loading bundled provider artifacts.
+// mock-isolation: selection tests supply ownership without initializing provider runtimes.
 vi.mock("../../plugins/providers.js", () => ({
   resolveProviderRefOwnership: () => ({ status: "unowned" }),
 }));
