@@ -357,6 +357,9 @@ it("clears navigation resize feedback when the drag ends or its divider disconne
     view.container.querySelector<HTMLElementTagNameMap["resizable-divider"]>(".sidebar-resizer")!;
   divider.measureSize = () => 1000;
   await divider.updateComplete;
+  // The separator keeps its accessible name without a hover tooltip over the drag handle.
+  expect(divider.getAttribute("aria-label")).toBe("Resize sidebar");
+  expect(divider.hasAttribute("title")).toBe(false);
   const start = () =>
     divider.dispatchEvent(
       new PointerEvent("pointerdown", { button: 0, pointerId: 7, bubbles: true }),
