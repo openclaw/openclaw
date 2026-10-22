@@ -354,3 +354,47 @@ it.each([
   expect([read(skillFile), read(supportFile)]).toEqual([live.skill, live.support]);
   expect(retiredTableNames(env).length > 0).toBe(Boolean(cause));
 });
+
+it("keeps a legacy bundle whose rollback bytes are not valid UTF-8 out of the workspace", async () => {
+  const { env, config, proposalsDir, skillDir, skillFile } = fixture({ workspace: true });
+  const bundle = path.join(proposalsDir, "deploy-procedure-1");
+  write(path.join(bundle, "PROPOSAL.md"), "# Deploy\n");
+  write(
+    path.join(bundle, "proposal.json"),
+    JSON.stringify({
+      status: "pending",
+      origin: { agentId: "ops" },
+      target: { skillDir, skillFile },
+      supportFiles: [{ path: "references/notes.md", hash: sha256Hex("proposed\n") }],
+    }),
+  );
+  // A damaged byte inside the recorded pre-apply contents keeps the JSON parseable,
+  // so a lossy decode would restore replacement characters into the workspace.
+  const rollback = Buffer.from(
+    JSON.stringify({
+      targetSkillFile: skillFile,
+      previousContent: "before\n",
+      supportFiles: [
+        { path: "references/notes.md", existed: true, previousContent: "notés\n" },
+      ],
+    }),
+    "utf8",
+  );
+  rollback[rollback.indexOf(Buffer.from("é", "utf8"))] = 0xff;
+  fs.writeFileSync(path.join(bundle, "rollback.json"), rollback);
+  // The apply stopped after writing the support file; SKILL.md still holds pre-apply content.
+  writeFiles(skillDir, { "SKILL.md": "before\n", "references/notes.md": "proposed\n" });
+
+  const result = await retireSkillWorkshopProposals({ config, env });
+
+  expect(result).toMatchObject({ changes: [], warningDisposition: "recoverable" });
+  expect(result.warnings).toEqual([
+    expect.stringContaining(
+      "Could not read Skill Workshop proposal deploy-procedure-1: Error: Skill Workshop proposal deploy-procedure-1 rollback must be valid UTF-8.",
+    ),
+  ]);
+  // Nothing is restored, exported, or removed; the operator recovers the bundle by hand.
+  expect(read(skillDir, "references", "notes.md")).toBe("proposed\n");
+  expect(read(skillFile)).toBe("before\n");
+  expect(fs.readFileSync(path.join(bundle, "rollback.json"))).toEqual(rollback);
+});
