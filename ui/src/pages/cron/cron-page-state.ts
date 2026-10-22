@@ -310,6 +310,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     routeSearch = search;
     runTranscript.close();
     cron.cronError = null;
+    cron.cronNotice = null;
     const routeData = resolveCronRouteData(search);
     if (JSON.stringify(cron.cronSessionFilter) !== JSON.stringify(routeData.session)) {
       resetGatewayState(context().gateway.snapshot);

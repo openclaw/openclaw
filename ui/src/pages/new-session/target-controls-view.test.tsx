@@ -133,9 +133,11 @@ it("retries a rejected catalog read through the current owner", async () => {
 it.each([
   { name: "guest click", writable: true, advertised: true, enter: false },
   { name: "guest Enter", writable: true, advertised: true, enter: true },
+  { name: "IME Enter", writable: true, advertised: true, enter: true, composing: "flag" },
+  { name: "WebKit IME Enter", writable: true, advertised: true, enter: true, composing: "end" },
   { name: "read-only Enter", writable: false, advertised: true, enter: true },
   { name: "unadvertised create", writable: true, advertised: false, enter: true },
-])("gates pasted Git URL selection for $name", ({ writable, advertised, enter }) => {
+])("gates pasted Git URL selection for $name", ({ writable, advertised, enter, composing }) => {
   const cloneUrl = "https://github.com/openclaw/openclaw.git";
   const f = createDraftFixture({
     scopes: ["operator.sessions.read", ...(writable ? ["operator.sessions.write"] : [])],
@@ -165,15 +167,23 @@ it.each([
     const input = container.querySelector<HTMLInputElement>(
       ".new-session-page__project-search input",
     )!;
+    if (composing === "end") {
+      input.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    }
     input.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      new KeyboardEvent("keydown", {
+        key: "Enter",
+        isComposing: composing === "flag",
+        bubbles: true,
+        cancelable: true,
+      }),
     );
   } else {
     expect(clone?.disabled).toBe(false);
     clone!.click();
   }
   expect(f.place.browser.remoteProject).toEqual(
-    available ? { identity: cloneUrl, cloneUrl } : null,
+    available && !composing ? { identity: cloneUrl, cloneUrl } : null,
   );
   expect(f.request).not.toHaveBeenCalledWith("projects.add", expect.anything());
 });

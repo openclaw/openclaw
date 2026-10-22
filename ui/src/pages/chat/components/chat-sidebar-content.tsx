@@ -34,6 +34,7 @@ import {
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import type { AttachmentDownload } from "./chat-attachment-download.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
@@ -104,7 +105,7 @@ export type SidebarPanelProps = {
   githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   embedded?: boolean;
   attachmentRuntime: AttachmentSidebarRuntime;
-  attachmentDownload?: { pending: boolean; error: string | null; onDownload: () => void };
+  attachmentDownload?: AttachmentDownload;
   onClick: (event: MouseEvent) => void;
   onKeydown: (event: KeyboardEvent) => void;
 };

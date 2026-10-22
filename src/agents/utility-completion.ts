@@ -19,7 +19,7 @@ import { resolveAutomaticUtilityRuntimeOverride } from "./utility-model.js";
 
 export type UtilityCompletionAttempt = Pick<
   Parameters<typeof runIsolatedCompletion>[0],
-  "provider" | "model" | "authProfileId"
+  "provider" | "model" | "authProfileId" | "agentHarnessRuntimeOverride"
 >;
 
 function resolveUtilityCompletionForAgent(

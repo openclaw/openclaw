@@ -304,6 +304,17 @@ The package-version sync and install/discovery regression tests exercise the
 local enforcement path. Registry readback, actual stock-runtime tests, and release
 SDK acknowledgement remain release-time responsibilities.
 
+## Silent sends
+
+Use the message tool's `silent: true` option to post text or attachments without
+creating Talk chat notifications, including mention notifications. Messages remain
+visible in the conversation. Omitted or false keeps normal notification behavior;
+no channel configuration change is needed.
+
+Silent attachments require the server's `media-caption` capability (Talk 18+).
+OpenClaw checks this before reading or uploading the attachment and reports an
+error if support cannot be confirmed, rather than falling back to a notifying send.
+
 ## Capabilities
 
 | Feature         | Status                           |
