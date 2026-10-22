@@ -1359,8 +1359,8 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
     // Offline historical receipt: recovery inspects its workspace, then refuses absent
     // requester authority before credential preparation or any GitHub operation.
     db.prepare(
-      "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE request_id = ?",
-    ).run(requestId);
+      "UPDATE github_publication_session_lifecycles SET requester_authority_json = NULL WHERE publication_kind = 'shared' AND request_id = 'startup-publication'",
+    ).run();
   });
   const bin = path.join(root, "publication-bin");
   mkdirSync(bin);
