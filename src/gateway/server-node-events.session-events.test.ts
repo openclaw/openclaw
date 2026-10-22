@@ -2,6 +2,8 @@ import "./server-node-events.test-support.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as runtimeSnapshot from "../config/runtime-snapshot.js";
+import { NodeRegistry } from "./node-registry.js";
+import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
 import type { NodeEventContext, NodeEventHandlerOptions } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 const { buildNodeEventContext, runtimeMocks } =
@@ -15,7 +17,12 @@ const {
 
 beforeEach(() => {
   enqueue.mockReset().mockImplementation((text: string) => ({ id: "node-event", text }));
-  captureTarget.mockClear();
+  captureTarget.mockReset().mockImplementation(async (agentId, sessionKey) => ({
+    agentId,
+    sessionKey,
+    sessionId: `sid-${sessionKey}`,
+    generation: "node-event-test-generation",
+  }));
   handoff.mockClear();
 });
 
@@ -34,6 +41,59 @@ function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
 }
 
 describe("node session event admission", () => {
+  it("holds an exec notice before target capture can settle its inline invocation", async () => {
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    registerNodeSession(
+      registry,
+      makeClient("inline-conn", "inline-node", frames, { commands: ["system.run"] }),
+    );
+    const sessionKey = "agent:main:inline";
+    const invocation = registry.invoke({
+      nodeId: "inline-node",
+      command: "system.run",
+      timeoutMs: 0,
+      params: { runId: "inline-run", sessionKey },
+    });
+    const request = JSON.parse(frames[0]!).payload;
+    const finish = () =>
+      registry.handleInvokeResult({
+        id: request.id,
+        nodeId: "inline-node",
+        connId: "inline-conn",
+        ok: true,
+        payloadJSON: JSON.stringify({ exitCode: 0, stdout: "inline result" }),
+      });
+    captureTarget.mockImplementationOnce(async () => {
+      finish();
+      return {
+        agentId: "main",
+        sessionKey,
+        sessionId: "inline-session",
+        generation: "inline-generation",
+      };
+    });
+    const { emit } = nodeFixture("inline-node", {
+      authorizeNodeSystemRunEvent: (params) =>
+        registry.authorizeSystemRunEventWithState({
+          ...params,
+          terminal: params.event !== "exec.started",
+        }) ?? false,
+    });
+    try {
+      await emit(
+        "exec.finished",
+        { sessionKey, runId: "inline-run", output: "inline result" },
+        { connId: "inline-conn" },
+      );
+      finish();
+      await invocation;
+      expectNoCalls(captureTarget, enqueue, handoff);
+    } finally {
+      registry.unregister("inline-conn");
+    }
+  });
+
   it.each([
     { event: "notifications.changed", changed: "connection" },
     { event: "exec.finished", changed: "connection" },
@@ -84,7 +144,8 @@ describe("node session event admission", () => {
           ? "Node event connection changed during preparation"
           : "Node event configuration changed during preparation",
       );
-      expectNoCalls(enqueue, handoff, authorizeNodeSystemRunEvent);
+      expectNoCalls(enqueue, handoff);
+      expect(authorizeNodeSystemRunEvent).toHaveBeenCalledTimes(event === "exec.finished" ? 1 : 0);
     },
   );
 

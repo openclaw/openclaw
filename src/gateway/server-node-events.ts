@@ -770,12 +770,6 @@ async function handlePreparedNodeEvent(
         config.assertCurrent();
         opts?.assertSessionEventCurrent?.();
       };
-      const expectedTarget = await captureSessionEventTargetForHost(agentId, eventSessionKey, {
-        assertCaptureCurrent: assertAcceptanceCurrent,
-      });
-      if (!(await isNodeEventConnectionCurrent(opts))) {
-        return pairingChangedResult(evt.event);
-      }
       assertAcceptanceCurrent();
       const auth = ctx.authorizeNodeSystemRunEvent({
         nodeId,
@@ -819,16 +813,6 @@ async function handlePreparedNodeEvent(
         if (!shouldNotify) {
           return undefined;
         }
-        if (
-          runId &&
-          shouldDropDuplicateExecFinished({
-            sessionKey,
-            runId,
-            now: Date.now(),
-          })
-        ) {
-          return undefined;
-        }
         text = `Exec finished (node=${nodeId}${runId ? ` id=${runId}` : ""}, ${exitLabel})`;
         if (compactOutput) {
           text += `\n${compactOutput}`;
@@ -836,6 +820,20 @@ async function handlePreparedNodeEvent(
       }
 
       const notify = async () => {
+        const expectedTarget = await captureSessionEventTargetForHost(agentId, eventSessionKey, {
+          assertCaptureCurrent: assertAcceptanceCurrent,
+        });
+        if (!(await isNodeEventConnectionCurrent(opts))) {
+          return pairingChangedResult(evt.event);
+        }
+        assertAcceptanceCurrent();
+        if (
+          evt.event === "exec.finished" &&
+          runId &&
+          shouldDropDuplicateExecFinished({ sessionKey, runId, now: Date.now() })
+        ) {
+          return undefined;
+        }
         const receipt = enqueueNodeExecNotice({
           sessionKey: eventSessionKey,
           agentId,
@@ -857,6 +855,7 @@ async function handlePreparedNodeEvent(
             }
           });
         }
+        return undefined;
       };
       // A caller still waiting on this run gets its output inline; notify only if that fails.
       if (typeof auth === "object" && auth.holdNotice) {
@@ -868,7 +867,7 @@ async function handlePreparedNodeEvent(
           });
         });
       } else {
-        await notify();
+        return await notify();
       }
       return undefined;
     }
