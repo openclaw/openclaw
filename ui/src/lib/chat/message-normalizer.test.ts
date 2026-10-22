@@ -28,6 +28,47 @@ function user(fields: Record<string, unknown>) {
   return normalizeMessage({ role: "user", ...fields });
 }
 
+const audioSource = (source: Record<string, unknown>) => ({
+  type: "audio",
+  label: "clip.mp3",
+  source: { media_type: "audio/mpeg", ...source },
+});
+const voice = {
+  url: "/media/voice",
+  artifactId: "audio-artifact",
+  mimeType: "audio/x-caf",
+  playback: "transcode",
+  sizeBytes: 4096,
+  durationMs: 2345,
+  isVoiceNote: true,
+};
+const canonicalCanvas = canvas(
+  {
+    url: "/__openclaw__/canvas/documents/cv_widget/index.html",
+    sandbox: "scripts",
+    boardWidgetName: "saved-widget",
+  },
+  "original tool result",
+);
+const dimensions = { sizeBytes: Infinity, durationMs: Infinity, width: Infinity, height: Infinity };
+const image = attachment({
+  url: "~/Pictures/test image.png",
+  kind: "image",
+  label: "test image.png",
+  mimeType: "image/png",
+  width: 1280,
+  height: 720,
+});
+const failures = [
+  media("/media/deploy.yaml", "document", "deploy.yaml", "application/yaml"),
+  ...[
+    ["unsupported-format", "settings.toml", "application/toml"],
+    ["delivery-failed", "bundle.7z", "application/x-7z-compressed"],
+  ].map(([code, label, mimeType]) =>
+    attachment({ code, kind: "document", label, mimeType }, "attachment_error"),
+  ),
+];
+
 describe("message-normalizer", () => {
   afterEach(() => vi.useRealTimers());
 
@@ -46,10 +87,71 @@ describe("message-normalizer", () => {
     expect(isStandaloneToolMessageForDisplay(message)).toBe(standalone);
   });
 
-  it("keeps Responses text after malformed content blocks", () => {
-    expect(assistant([null, { type: "output_text", text: "Visible answer" }]).content).toEqual([
-      text("Visible answer"),
-    ]);
+  it.each([
+    [
+      "Responses text after malformed blocks",
+      [null, { type: "output_text", text: "Visible answer" }],
+      [text("Visible answer")],
+    ],
+    [
+      "base64 audio",
+      [audioSource({ type: "base64", data: "//uQAA==" })],
+      [media("data:audio/mpeg;base64,//uQAA==", "audio", "clip.mp3", "audio/mpeg")],
+    ],
+    [
+      "URL audio",
+      [audioSource({ type: "url", url: "/tmp/clip.mp3" })],
+      [media("/tmp/clip.mp3", "audio", "clip.mp3", "audio/mpeg")],
+    ],
+    [
+      "managed voice metadata",
+      [{ type: "audio", fileName: "voice.caf", ...voice }],
+      [attachment({ ...voice, kind: "audio", label: "voice.caf" })],
+    ],
+    [
+      "embed shortcodes",
+      'Here.\n[embed ref="cv_status" title="Status" height="320" /]',
+      [
+        text("Here."),
+        canvas({
+          viewId: "cv_status",
+          url: "/__openclaw__/canvas/documents/cv_status/index.html",
+          title: "Status",
+          preferredHeight: 320,
+        }),
+      ],
+    ],
+    [
+      "canonical canvas metadata over shortcode copies",
+      [text('Ready.\n[embed ref="cv_widget" title="Widget" /]'), canonicalCanvas],
+      [text("Ready."), canonicalCanvas],
+    ],
+    [
+      "finite dimensions only",
+      [
+        canvas({ url: "/canvas/one", preferredHeight: Infinity }),
+        { type: "video", url: "/media/clip", ...dimensions },
+        attachment({ kind: "document", url: "/media/document", label: "Document", ...dimensions }),
+      ],
+      [
+        canvas({ url: "/canvas/one" }),
+        media("/media/clip", "video", "Video"),
+        media("/media/document", "document", "Document"),
+      ],
+    ],
+    [
+      "MEDIA paths without filename leakage",
+      "Before\nMEDIA:/tmp/Shopping report.pdf\nAfter",
+      [
+        text("Before"),
+        media("/tmp/Shopping report.pdf", "document", "Shopping report.pdf", "application/pdf"),
+        text("After"),
+      ],
+    ],
+    ["image dimensions", [image], [image]],
+    ["named failures beside delivered attachments", failures, failures],
+  ])("normalizes %s", (_name, input, expected) => {
+    expect(assistant(structuredClone(input)).content).toEqual(expected);
   });
 
   it("normalizes mixed text, thinking, and tool content without a standalone tool envelope", () => {
@@ -110,32 +212,6 @@ describe("message-normalizer", () => {
     );
   });
 
-  it.each([
-    { source: { type: "base64", data: "//uQAA==" }, url: "data:audio/mpeg;base64,//uQAA==" },
-    { source: { type: "url", url: "/tmp/clip.mp3" }, url: "/tmp/clip.mp3" },
-  ])("normalizes structured $source.type audio", ({ source, url }) => {
-    expect(
-      assistant([
-        { type: "audio", label: "clip.mp3", source: { ...source, media_type: "audio/mpeg" } },
-      ]).content,
-    ).toEqual([media(url, "audio", "clip.mp3", "audio/mpeg")]);
-  });
-
-  it("preserves managed audio playback, voice, and artifact metadata", () => {
-    const metadata = {
-      url: "/media/voice",
-      artifactId: "audio-artifact",
-      mimeType: "audio/x-caf",
-      playback: "transcode",
-      sizeBytes: 4096,
-      durationMs: 2345,
-      isVoiceNote: true,
-    };
-    expect(assistant([{ type: "audio", fileName: "voice.caf", ...metadata }]).content).toEqual([
-      attachment({ ...metadata, kind: "audio", label: "voice.caf" }),
-    ]);
-  });
-
   it("does not turn non-assistant structured audio into attachments", () => {
     expect(
       user({
@@ -144,37 +220,6 @@ describe("message-normalizer", () => {
         ],
       }).content,
     ).toEqual([]);
-  });
-
-  it("expands embed shortcodes into canvas previews", () => {
-    expect(
-      assistant('Here.\n[embed ref="cv_status" title="Status" height="320" /]').content,
-    ).toEqual([
-      text("Here."),
-      canvas({
-        viewId: "cv_status",
-        url: "/__openclaw__/canvas/documents/cv_status/index.html",
-        title: "Status",
-        preferredHeight: 320,
-      }),
-    ]);
-  });
-
-  it("keeps canonical canvas metadata instead of its shortcode copy", () => {
-    const canonical = canvas(
-      {
-        url: "/__openclaw__/canvas/documents/cv_widget/index.html",
-        sandbox: "scripts",
-        boardWidgetName: "saved-widget",
-      },
-      "original tool result",
-    );
-    expect(
-      assistant([
-        { type: "text", text: 'Ready.\n[embed ref="cv_widget" title="Widget" /]' },
-        canonical,
-      ]).content,
-    ).toEqual([text("Ready."), canonical]);
   });
 
   it("extracts ordered MEDIA attachments with persisted delivery facts", () => {
@@ -193,67 +238,6 @@ describe("message-normalizer", () => {
         isVoiceNote: true,
       }),
     ]);
-  });
-
-  it("omits non-finite canvas and media dimensions", () => {
-    const dimensions = {
-      sizeBytes: Infinity,
-      durationMs: Infinity,
-      width: Infinity,
-      height: Infinity,
-    };
-    expect(
-      assistant([
-        canvas({ url: "/canvas/one", preferredHeight: Infinity }),
-        { type: "video", url: "/media/clip", ...dimensions },
-        attachment({
-          kind: "document",
-          url: "/media/document",
-          label: "Document",
-          ...dimensions,
-        }),
-      ]).content,
-    ).toEqual([
-      canvas({ url: "/canvas/one" }),
-      media("/media/clip", "video", "Video"),
-      media("/media/document", "document", "Document"),
-    ]);
-  });
-
-  it("classifies MEDIA paths without leaking filename text", () => {
-    const url = "/tmp/Shopping report.pdf";
-    expect(assistant(`Before\nMEDIA:${url}\nAfter`).content).toEqual([
-      text("Before"),
-      media(url, "document", "Shopping report.pdf", "application/pdf"),
-      text("After"),
-    ]);
-  });
-
-  it("preserves structured image attachment dimensions", () => {
-    const content = [
-      attachment({
-        url: "~/Pictures/test image.png",
-        kind: "image",
-        label: "test image.png",
-        mimeType: "image/png",
-        width: 1280,
-        height: 720,
-      }),
-    ];
-    expect(assistant(structuredClone(content)).content).toEqual(content);
-  });
-
-  it("preserves named failures beside delivered attachments", () => {
-    const content = [
-      media("/media/deploy.yaml", "document", "deploy.yaml", "application/yaml"),
-      ...[
-        ["unsupported-format", "settings.toml", "application/toml"],
-        ["delivery-failed", "bundle.7z", "application/x-7z-compressed"],
-      ].map(([code, label, mimeType]) =>
-        attachment({ code, kind: "document", label, mimeType }, "attachment_error"),
-      ),
-    ];
-    expect(assistant(structuredClone(content)).content).toEqual(content);
   });
 
   it("keeps a fact-only reply target with empty content", () => {
