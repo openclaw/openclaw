@@ -1,6 +1,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/plugin-entry";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
@@ -110,29 +111,13 @@ describe("lmstudio-models", () => {
     expect(parseBody(loadCall(fetchMock)?.[1])).toMatchObject({ context_length: contextLength });
   };
 
-  it("marks configured LM Studio endpoints as trusted private-network model targets", () => {
-    expect(
-      normalizeLmstudioProviderConfig({
-        baseUrl: "http://192.168.1.10:1234",
-        models: [],
-      }),
-    ).toEqual({
-      baseUrl: "http://192.168.1.10:1234/v1",
-      request: { allowPrivateNetwork: true },
-      models: [],
-    });
-
-    expect(
-      normalizeLmstudioProviderConfig({
-        baseUrl: "http://gpu-box.local:1234/v1",
-        request: { allowPrivateNetwork: false, headers: { "X-Proxy-Auth": "token" } },
-        models: [],
-      }),
-    ).toEqual({
+  it("preserves an explicit network policy and request headers", () => {
+    const config = {
       baseUrl: "http://gpu-box.local:1234/v1",
       request: { allowPrivateNetwork: false, headers: { "X-Proxy-Auth": "token" } },
       models: [],
-    });
+    };
+    expect(normalizeLmstudioProviderConfig(config)).toEqual(config);
   });
 
   it("omits reasoning compatibility when only off is supported", () => {
@@ -173,6 +158,10 @@ describe("lmstudio-models", () => {
       },
       { type: "embedding", key: "text-embedding-nomic-embed-text-v1.5" },
       { type: "llm", key: "   " },
+      null,
+      [],
+      "invalid-model",
+      42,
     ]);
 
     const models = await discover(fetchMock, { quiet: false });
@@ -264,14 +253,6 @@ describe("lmstudio-models", () => {
     }
   });
 
-  it("discovers valid local models from partially malformed catalogs", async () => {
-    const fetchMock = catalog([null, { type: "llm", key: modelKey }, [], "invalid-model", 42]);
-
-    const models = await discover(fetchMock);
-
-    expect(models).toEqual([expect.objectContaining({ id: "qwen3-8b-instruct" })]);
-  });
-
   it("caps oversized direct fetch timeouts before discovering models", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
@@ -330,7 +311,7 @@ describe("lmstudio-models", () => {
   );
 
   it.each([
-    ["canonical key", "gemma", "gemma@q4_k_m", "gemma@q4_k_m"],
+    ["canonical key", "gemma", " gemma@q4_k_m ", "gemma@q4_k_m"],
     ["suffixed key", "local/special@q4_k_m", "local/special@q4_k_m", "local/special@q8_0"],
   ])(
     "loads the %s for an advertised variant",
@@ -419,33 +400,6 @@ describe("lmstudio-models", () => {
     });
   });
 
-  it("loads model with clamped context length and merged headers", async () => {
-    const fetchMock = mockLoad({ maxContextLength: 32768 });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-
-    await expect(
-      loadModel({
-        apiKey: "lm-token",
-        headers: { "X-Proxy-Auth": "required", Authorization: "Bearer override" },
-        modelKey: " qwen3-8b-instruct ",
-      }),
-    ).resolves.toBe("qwen3-8b-instruct");
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const loadInit = loadCall(fetchMock)?.[1];
-    expect(loadInit).toEqual({
-      method: "POST",
-      signal: expect.any(AbortSignal),
-      headers: {
-        "X-Proxy-Auth": "required",
-        Authorization: "Bearer lm-token",
-        "Content-Type": "application/json",
-      },
-      body: expect.any(String),
-    });
-    expect(parseBody(loadInit)).toEqual({ model: "qwen3-8b-instruct", context_length: 32768 });
-  });
-
   it("throws when model discovery fails", async () => {
     const fetchMock = vi.fn(async () => ({ ok: false, status: 401 }));
     vi.stubGlobal("fetch", asFetch(fetchMock));
@@ -482,6 +436,115 @@ function context(headers?: Record<string, string>, keyless = false): ProviderCat
 const catalog = capturePluginRegistration(plugin).providers[0]?.catalog;
 assert(catalog);
 const runCatalog = catalog.run;
+
+async function discoverConfigured(
+  provider: Partial<ModelProviderConfig>,
+  env: NodeJS.ProcessEnv = {},
+  discoveryApiKey?: string,
+) {
+  const fetchMock = vi.fn(async () =>
+    Response.json({
+      models: [{ type: "llm", key: "qwen3-8b-instruct" }],
+    }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+  const result = await discoverLmstudioProvider({
+    ...context(),
+    config: createModelProviderConfig({
+      lmstudio: { baseUrl: "http://localhost:1234/api/v1/", models: [], ...provider },
+    }),
+    env,
+    resolveProviderApiKey: () => ({ discoveryApiKey }),
+  });
+  return { result, fetchMock };
+}
+
+const headerAuth = { Authorization: "Bearer custom-token" };
+const proxyAuth = { "X-Proxy-Auth": "proxy-token" };
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+
+it.each<[Partial<ModelProviderConfig>, Partial<ModelProviderConfig>]>([
+  [{ auth: "api-key" }, { auth: "api-key", apiKey: "LM_API_TOKEN" }],
+  [{ apiKey: "stale-legacy-key", headers: headerAuth }, { headers: headerAuth }],
+  [{ apiKey: "${LMSTUDIO_API_KEY}", headers: headerAuth }, { headers: headerAuth }],
+  [{ headers: proxyAuth }, { apiKey: "lmstudio-local", headers: proxyAuth }],
+])("preserves explicit models without fetching for %j", async (patch, persisted) => {
+  const models: ModelProviderConfig["models"] = [
+    {
+      id: "qwen3-8b-instruct",
+      name: "Qwen3 8B",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 8192,
+    },
+  ];
+  const { result, fetchMock } = await discoverConfigured({ ...patch, models });
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(result).toEqual({
+    provider: {
+      baseUrl: "http://localhost:1234/v1",
+      api: "openai-completions",
+      ...persisted,
+      models,
+    },
+  });
+});
+
+it("resolves configured SecretRefs for discovery requests", async () => {
+  const { result, fetchMock } = await discoverConfigured(
+    {
+      apiKey: envRef("LMSTUDIO_DISCOVERY_TOKEN"),
+      headers: { "X-Proxy-Auth": envRef("LMSTUDIO_PROXY_TOKEN") },
+    },
+    { LMSTUDIO_DISCOVERY_TOKEN: "secretref-key", LMSTUDIO_PROXY_TOKEN: "proxy-token" },
+  );
+  expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
+    signal: expect.any(AbortSignal),
+    headers: { Authorization: "Bearer secretref-key", "X-Proxy-Auth": "proxy-token" },
+  });
+  expect(result?.provider.models?.map((model) => model.id)).toEqual(["qwen3-8b-instruct"]);
+});
+
+it.each<Partial<ModelProviderConfig>>([
+  { headers: { "X-Proxy-Auth": envRef("LMSTUDIO_PROXY_TOKEN") } },
+  { apiKey: envRef("LMSTUDIO_DISCOVERY_TOKEN") },
+])("rejects unresolved catalog credentials before fetch: %j", async (patch) => {
+  const { result, fetchMock } = await discoverConfigured(patch);
+  expect(result).toBeNull();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it.each<[string, string | undefined, Record<string, string> | undefined, string]>([
+  ["configured-key", undefined, undefined, "configured-key"],
+  ["configured-key", "discovery-key", undefined, "discovery-key"],
+  ["${LMSTUDIO_API_KEY}", "discovery-key", undefined, "discovery-key"],
+  ["configured-key", "stale-key", headerAuth, "custom-token"],
+])(
+  "selects discovery credentials for %s / %s / %j",
+  async (apiKey, discoveryApiKey, headers, expected) => {
+    const { result, fetchMock } = await discoverConfigured(
+      { apiKey, headers },
+      {},
+      discoveryApiKey,
+    );
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:1234/api/v1/models", {
+      signal: expect.any(AbortSignal),
+      headers: { Authorization: `Bearer ${expected}` },
+    });
+    if (headers) {
+      expect(result?.provider).toMatchObject({
+        baseUrl: "http://localhost:1234/v1",
+        api: "openai-completions",
+        models: [expect.objectContaining({ id: "qwen3-8b-instruct" })],
+      });
+      expect(result?.provider.headers).toEqual(headers);
+      expect(result?.provider.apiKey).toBeUndefined();
+      expect(result?.provider.auth).toBeUndefined();
+    }
+  },
+);
 
 it.each([401, 503, "disconnect", "invalid-json", "missing-models", "header"])(
   "reports %s as failed acquisition while preserving the public advisory helper",
