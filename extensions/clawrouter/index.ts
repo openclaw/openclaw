@@ -15,7 +15,10 @@ import type {
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
-import { wrapProviderPayloadHook } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  createAnthropicThinkingPrefillPayloadWrapper,
+  wrapProviderPayloadHook,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildProviderToolCompatFamilyHooks,
   findUnsupportedSchemaKeywords,
@@ -23,6 +26,7 @@ import {
   SCHEMA_NESTED_KEYS,
 } from "openclaw/plugin-sdk/provider-tools";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
@@ -155,13 +159,22 @@ function setHeaderDefault(
 }
 
 const openAiServiceTier = buildProviderStreamFamilyHooks("openai-responses-service-tier");
+const log = createSubsystemLogger("clawrouter-stream");
 
 function wrapClawRouterProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
-  const underlying = ctx.streamFn;
-  if (!underlying) {
+  const streamFn = ctx.streamFn;
+  if (!streamFn) {
     return undefined;
   }
+  // Same Claude contract as the native Anthropic provider: extended thinking needs a
+  // final user turn, and the transport strips prefill only for some Claude families.
+  const claudeStream = createAnthropicThinkingPrefillPayloadWrapper(streamFn, (stripped) => {
+    log.warn(
+      `removed ${stripped} trailing assistant prefill message${stripped === 1 ? "" : "s"} because Anthropic extended thinking requires conversations to end with a user turn`,
+    );
+  });
   return (model, context, options) => {
+    const underlying = model.api === "anthropic-messages" ? claudeStream : streamFn;
     const apiKey = options?.apiKey?.trim();
     const dispatchKey = apiKey && apiKey !== ENV_API_KEY_MARKER ? apiKey : undefined;
     const preparedModel = prepareClawRouterRequestModel(model);

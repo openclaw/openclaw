@@ -301,6 +301,16 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
       footer={
         <Show when={props.library.canEdit()}>
           <openclaw-modal-actions class="skill-reader-dialog__actions">
+            <Show when={draft().entry}>
+              <MutationButton action="remove" />
+              <MutationButton action={draft().entry!.enabled ? "disable" : "enable"} />
+              <Show when={draft().entry?.ownerProfileId}>
+                <MutationButton action={draft().entry!.shared ? "unshare" : "share"} />
+              </Show>
+              <Show when={props.library.canTransfer() && draft().entry?.ownerProfileId}>
+                <MutationButton action="transfer" />
+              </Show>
+            </Show>
             <button
               type="submit"
               class="btn primary"
@@ -313,16 +323,6 @@ function LibraryEditor(props: { library: SkillLibraryModel }) {
             >
               {current().busy ? t("common.loading") : t("skillLibrary.save")}
             </button>
-            <Show when={draft().entry}>
-              <MutationButton action={draft().entry!.enabled ? "disable" : "enable"} />
-              <Show when={draft().entry?.ownerProfileId}>
-                <MutationButton action={draft().entry!.shared ? "unshare" : "share"} />
-              </Show>
-              <Show when={props.library.canTransfer() && draft().entry?.ownerProfileId}>
-                <MutationButton action="transfer" />
-              </Show>
-              <MutationButton action="remove" />
-            </Show>
           </openclaw-modal-actions>
         </Show>
       }

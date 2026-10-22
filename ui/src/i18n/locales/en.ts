@@ -255,6 +255,7 @@ export const en: TranslationMap & {
       | "deleteSessionStale"
       | "deleteSessionsStale"
       | "groupMenu"
+      | "groupOptions"
       | "newSessionInGroup"
       | "groupDefaultsStale"
       | "moveToTopLevel",
@@ -865,6 +866,7 @@ export const en: TranslationMap & {
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
     groupMenu: "Group options for {group}",
+    groupOptions: "Group options",
     newSessionInGroup: "New session in {group}",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     moveToTopLevel: "Move to top level",

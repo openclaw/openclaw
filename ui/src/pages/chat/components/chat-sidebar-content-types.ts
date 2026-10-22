@@ -323,6 +323,7 @@ export type ToolOutputSidebarContent = {
 type McpAppSidebarContent = {
   kind: "mcp-app";
   title: string;
+  observeRetirement: import("../../../components/mcp-app-launch.ts").McpAppPanelRetirement;
   launch: import("../../../components/mcp-app-launch.ts").McpAppOpenDetail;
   rawText?: null;
 };

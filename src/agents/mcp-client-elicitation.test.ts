@@ -10,7 +10,7 @@ import {
   runWithMcpElicitationHandler,
   type McpElicitationHandler,
 } from "./mcp-client-elicitation.js";
-import { prepareMcpCaps } from "./mcp-metadata.js";
+import { buildMcpClientCapabilities } from "./mcp-metadata.js";
 const accepted = { action: "accept" as const };
 
 it.each([
@@ -86,16 +86,13 @@ it.each([
 });
 
 async function fixture() {
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client(
     { name: "test", version: "1" },
-    {
-      capabilities: prepareMcpCaps({ transport: clientTransport }, undefined, true),
-      versionNegotiation: { mode: "legacy" },
-    },
+    { capabilities: buildMcpClientCapabilities(true), versionNegotiation: { mode: "legacy" } },
   );
   const server = new Server({ name: "test", version: "1" }, { capabilities: { tools: {} } });
   const call = bindMcpClientElicitation(client);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
   return {
     client,

@@ -73,9 +73,7 @@ it.each(readers)("preserves invalidation and ordinary errors: %s", async (_name,
       throw failure;
     });
     await inCache(async () => {
-      const result = Promise.resolve().then(async () => {
-        await read();
-      });
+      const result = Promise.resolve().then(async () => read());
       await expect(result).rejects.toBe(failure);
       const invalidated = await result.catch(isStateDatabaseReadAdmissionInvalidatedError);
       expect(invalidated).toBe(failure === cause);

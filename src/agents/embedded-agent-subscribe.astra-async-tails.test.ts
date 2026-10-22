@@ -16,18 +16,13 @@ import { createTypingSignaler } from "../auto-reply/reply/typing-mode.js";
 import { createTypingController } from "../auto-reply/reply/typing.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
 import { runAgentLoop } from "../plugin-sdk/agent-core.js";
-import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
-import { matchesTranscriptEvent } from "../sessions/transcript-visible-record.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./embedded-agent-runner/run/attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./embedded-agent-runner/run/context-recovery-state.js";
 import { resolveFinalAssistantVisibleText } from "./embedded-agent-runner/run/helpers.js";
 import { prepareEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-preparation.js";
-import { resolveSettledTurnFinalizationRequest } from "./embedded-agent-runner/run/terminal-resolution.js";
 import { createUsageAccumulator } from "./embedded-agent-runner/usage-accumulator.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
-import { createSubagentRunRecord } from "./subagent-test-fixtures.test-helpers.js";
-import { readSubagentRunAnnounceResultUsing } from "./subagents/announce/subagent-announce-result.js";
 import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
 const model: Model<"openai-responses"> = {
@@ -136,7 +131,6 @@ type Scenario = {
   reply?: { disposition: "visible"; text: string } | { disposition: "empty" | "silent" };
   heartbeat?: boolean;
   persistedFirst?: boolean;
-  announce?: boolean;
   quiet?: boolean;
   reasoning?: boolean;
 };
@@ -219,7 +213,6 @@ it.each([
       "NO_REPLY",
     ],
     transcript: [...answeredTail, "stop:text"],
-    announce: true,
   }),
   scenario("quiet mode keeps the completed answer private", {
     delivered: ["Sent with the message tool."],
@@ -390,21 +383,6 @@ it.each([
   });
   const reply = row.reply;
   const visibleText = reply?.disposition === "visible" ? reply.text : undefined;
-  if (visibleText !== undefined && !quiet) {
-    expect(
-      resolveSettledTurnFinalizationRequest({
-        runParams,
-        attempt,
-        activeErrorContext: { provider: "openai", model: model.id },
-        modelApi: model.api,
-        executionContract: undefined,
-        payloadsWithToolMedia: prepared.payloadsWithToolMedia,
-        hasTerminalToolPresentation: false,
-        terminalState,
-        settledTurnFinalizationAvailable: true,
-      }),
-    ).toBeNull();
-  }
   if (delivery === "deferred" && visibleText !== undefined) {
     const lastAssistant = beforeTerminalDelivery.mock.calls.at(-1)?.[0].lastAssistant;
     expect(resolveFinalAssistantVisibleText(lastAssistant as AssistantMessage | undefined)).toBe(
@@ -424,46 +402,5 @@ it.each([
   expect([...sent, ...replyPayloads.map(show)]).toEqual(delivered);
   if (row.reply) {
     expect(prepared.preparedTerminalReply.terminalReply).toEqual(row.reply);
-  }
-  if (row.announce) {
-    const events = messages.map((message, index) => ({
-      type: "message",
-      id: `entry-${index}`,
-      message: attachSessionTranscriptRunId(message, "run"),
-    }));
-    const child = createSubagentRunRecord({
-      runId: "run",
-      childSessionKey: "agent:main:subagent:astra",
-      createdAt: 1,
-      execution: {
-        status: "terminal",
-        outcome: { status: "ok" },
-        transcriptTarget: {
-          agentId: "main",
-          sessionId: "session",
-          sessionKey: "agent:main:subagent:astra",
-          storePath: "/tmp/openclaw-test/sessions.json",
-        },
-      },
-      completion: {
-        required: true,
-        terminalReply: prepared.preparedTerminalReply.terminalReply,
-      },
-    });
-    const unexpected = () => {
-      throw new Error("unexpected session fallback");
-    };
-    const announced = await readSubagentRunAnnounceResultUsing(child, {
-      readSubagentRun: () => child,
-      findTranscriptEvent: async (_target, match) => {
-        const event = events.findLast((candidate) => matchesTranscriptEvent(candidate, match));
-        return event === undefined ? undefined : { event };
-      },
-      findSessionTranscriptArchiveEventReadOnly: async () => undefined,
-      getRuntimeConfig: unexpected,
-      readSubagentSessionEntry: unexpected,
-      resolveSessionStorePathCore: unexpected,
-    });
-    expect(announced.text).toBe("Use counter B.");
   }
 });

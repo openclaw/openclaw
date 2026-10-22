@@ -271,7 +271,12 @@ export function SidebarPanel(props: SidebarPanelProps) {
           >
             <Switch fallback={<div class="muted">{t("chat.detailPanel.noContent")}</div>}>
               <Match when={props.content?.kind === "mcp-app" ? props.content : undefined}>
-                {(content) => <McpAppPanel launch={content().launch} />}
+                {(content) => (
+                  <McpAppPanel
+                    launch={content().launch}
+                    observeRetirement={content().observeRetirement}
+                  />
+                )}
               </Match>
               <Match
                 when={

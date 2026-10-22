@@ -46,16 +46,16 @@ export default function BrowserAuthRecoveryDialog(props: {
           </Errored>
         </p>
         <openclaw-modal-actions class="exec-approval-actions">
-          <button class="btn primary" onClick={() => props.onSignIn()}>
-            {t("connection.browserSignIn.action")}
+          <button class="btn" onClick={() => props.onDismiss()}>
+            {t("connection.browserSignIn.dismiss")}
           </button>
           <Show when={props.view.openedSignIn}>
             <button class="btn" disabled={isPending(probeRead)} onClick={() => props.onCheck()}>
               {t("connection.browserSignIn.checkAgain")}
             </button>
           </Show>
-          <button class="btn" onClick={() => props.onDismiss()}>
-            {t("connection.browserSignIn.dismiss")}
+          <button class="btn primary" onClick={() => props.onSignIn()}>
+            {t("connection.browserSignIn.action")}
           </button>
         </openclaw-modal-actions>
       </div>
