@@ -105,21 +105,12 @@ describe("Matrix IndexedDB persistence", () => {
     expect(await read(otherCryptoDatabaseName)).toEqual(records("room-2", "should-not-restore"));
   });
 
-  it.each(["[]", "{}", "null", "", "{"])(
-    "refuses invalid canonical snapshot %j without deleting retained crypto keys",
-    async (snapshotJson) => {
-      const retained = records("room-1", "retained-key");
-      await seed(retained);
-      await write(snapshotJson);
-
-      await expect(restore()).rejects.toThrow();
-      expect(await read()).toEqual(retained);
-      await expect(persist(true)).rejects.toThrow();
-      expect(await readMatrixIdbSnapshotJson(tmpDir)).toBe(snapshotJson);
-    },
-  );
-
   it.each([
+    "[]",
+    "{}",
+    "null",
+    "",
+    "{",
     "metadata",
     "null metadata",
     "missing metadata",
@@ -127,34 +118,38 @@ describe("Matrix IndexedDB persistence", () => {
     "malformed chunk",
     "digest",
   ] as const)(
-    "refuses corrupt snapshot %s without deleting keys or replacing stored state",
+    "refuses invalid snapshot %j without deleting keys or replacing stored state",
     async (corruption) => {
       const retained = records("room-1", "retained-key");
       await seed(retained);
-      await persist(true);
       const store = createPluginStateKeyedStoreForTests<Record<string, unknown> | null>(
         "matrix",
         openMatrixIdbSnapshotStoreOptions(tmpDir),
       );
-      const meta = await store.lookup("current:meta");
-      if (!meta || typeof meta.generation !== "string") {
-        throw new Error("expected published snapshot metadata");
-      }
-      const chunkKey = `current:snapshot:${meta.generation}:0`;
-      if (corruption === "missing metadata") {
-        await store.delete("current:meta");
-      } else if (corruption === "null metadata") {
-        await store.register("current:meta", null);
-      } else if (corruption === "missing chunk") {
-        await store.delete(chunkKey);
-      } else if (corruption === "malformed chunk") {
-        const chunk = await store.lookup(chunkKey);
-        await store.register(chunkKey, { ...chunk, index: -1 });
+      const invalidJson = ["[]", "{}", "null", "", "{"].includes(corruption);
+      if (invalidJson) {
+        await write(corruption);
       } else {
-        await store.register(
-          "current:meta",
-          corruption === "metadata" ? { ...meta, version: 0 } : { ...meta, digest: "incorrect" },
-        );
+        await persist(true);
+        const meta = await store.lookup("current:meta");
+        if (!meta || typeof meta.generation !== "string") {
+          throw new Error("expected published snapshot metadata");
+        }
+        const chunkKey = `current:snapshot:${meta.generation}:0`;
+        if (corruption === "missing metadata") {
+          await store.delete("current:meta");
+        } else if (corruption === "null metadata") {
+          await store.register("current:meta", null);
+        } else if (corruption === "missing chunk") {
+          await store.delete(chunkKey);
+        } else if (corruption === "malformed chunk") {
+          await store.register(chunkKey, { ...(await store.lookup(chunkKey)), index: -1 });
+        } else {
+          await store.register(
+            "current:meta",
+            corruption === "metadata" ? { ...meta, version: 0 } : { ...meta, digest: "incorrect" },
+          );
+        }
       }
       const storedRows = await store.entries();
 
@@ -162,6 +157,9 @@ describe("Matrix IndexedDB persistence", () => {
       expect(await read()).toEqual(retained);
       await expect(persist(true)).rejects.toThrow();
       expect(await store.entries()).toEqual(storedRows);
+      if (invalidJson) {
+        expect(await readMatrixIdbSnapshotJson(tmpDir)).toBe(corruption);
+      }
     },
   );
 
@@ -272,34 +270,14 @@ describe("Matrix IndexedDB persistence", () => {
         return createPluginStateKeyedStoreForTests<T>("matrix", options);
       },
     };
-    const expectInvalidSnapshot = async (root = tmpDir, code = "matrix-idb-snapshot-invalid") => {
-      await expect(readMatrixIdbSnapshotJson(root)).rejects.toMatchObject({ code });
-      await expect(readMatrixIdbSnapshotJson(root, stateRuntime)).rejects.toMatchObject({ code });
-    };
     expect(await readMatrixIdbSnapshotJson(tmpDir)).toBe(snapshotJson);
     await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).resolves.toBe(snapshotJson);
-    const chunk = (await store.entries()).find(
-      (row) => row.value.kind === "snapshot-chunk" && row.value.index === 10,
-    );
-    expect(chunk).toBeDefined();
-    if (!chunk || chunk.value.kind !== "snapshot-chunk") {
-      throw new Error("expected snapshot chunk 10");
-    }
-    await store.register(chunk.key, { ...chunk.value, data: "modified" });
-    await expect(readMatrixIdbSnapshotJson(tmpDir, stateRuntime)).rejects.toMatchObject({
-      code: "matrix-idb-snapshot-invalid",
-    });
     const laterChunk = (await store.entries()).find(
       (row) => row.value.kind === "snapshot-chunk" && row.value.index === 11,
     );
     if (!laterChunk) {
       throw new Error("expected snapshot chunk 11");
     }
-    await store.register(chunk.key, { ...chunk.value, index: -1 });
-    await expectInvalidSnapshot();
-    await store.delete(chunk.key);
-    await expectInvalidSnapshot();
-    await store.register(chunk.key, chunk.value);
     await closeOpenClawStateDatabaseAsync();
     const source = openOpenClawStateDatabase({
       env: openMatrixIdbSnapshotStoreOptions(tmpDir).env,
@@ -321,7 +299,12 @@ describe("Matrix IndexedDB persistence", () => {
         .run("invalid JSON", laterChunk.key).changes,
     ).toBe(1);
     await closeOpenClawStateDatabaseAsync();
-    await expectInvalidSnapshot(corruptRoot, "PLUGIN_STATE_CORRUPT");
+    await expect(readMatrixIdbSnapshotJson(corruptRoot)).rejects.toMatchObject({
+      code: "PLUGIN_STATE_CORRUPT",
+    });
+    await expect(readMatrixIdbSnapshotJson(corruptRoot, stateRuntime)).rejects.toMatchObject({
+      code: "PLUGIN_STATE_CORRUPT",
+    });
   });
 
   it("refuses retired snapshot JSON when canonical SQLite state is valid", async () => {

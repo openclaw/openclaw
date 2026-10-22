@@ -2,8 +2,14 @@ import {
   VerificationPhase,
   VerificationRequestEvent,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MockVerificationRequest, MockVerifier } from "./crypto.test-support.js";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createMatrixCryptoFacade } from "./crypto-facade.js";
+import {
+  createMatrixCryptoApi,
+  MockVerificationRequest,
+  MockVerifier,
+} from "./crypto.test-support.js";
+import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import { MatrixVerificationManager } from "./verification-manager.js";
 
 function createSasVerifierFixture(verifyImpl: () => Promise<void> = async () => {}) {
@@ -54,17 +60,24 @@ function trackReadySas(manager: MatrixVerificationManager, isSelfVerification: b
 
 describe("MatrixVerificationManager", () => {
   let manager: MatrixVerificationManager;
+  let trustOwnDeviceAfterSas: Mock<(deviceId: string) => Promise<void>>;
   beforeEach(() => {
-    manager = new MatrixVerificationManager();
+    trustOwnDeviceAfterSas = vi.fn(async () => {});
+    manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
   });
   afterEach(() => vi.useRealTimers());
 
   function trackSas(
-    requestOptions: Partial<MockVerificationRequest>,
+    requestOptions: Partial<MockVerificationRequest> = {},
     verifyImpl?: () => Promise<void>,
   ) {
     const fixture = createSasVerifierFixture(verifyImpl);
-    const request = new MockVerificationRequest({ ...requestOptions, verifier: fixture.verifier });
+    const request = new MockVerificationRequest({
+      transactionId: "txn-sas",
+      otherDeviceId: "OTHERDEVICE",
+      ...requestOptions,
+      verifier: fixture.verifier,
+    });
     return { ...fixture, request, tracked: manager.trackVerificationRequest(request) };
   }
   function trackPair(
@@ -79,6 +92,17 @@ describe("MatrixVerificationManager", () => {
       firstSummary: manager.trackVerificationRequest(first),
       secondSummary: manager.trackVerificationRequest(second),
     };
+  }
+  function facadeFor(crypto = createMatrixCryptoApi()) {
+    const recoveryKeyStore = new MatrixRecoveryKeyStore();
+    const facade = createMatrixCryptoFacade({
+      client: { getCrypto: () => crypto, getUserId: () => "@bot:example.org" },
+      verificationManager: manager,
+      recoveryKeyStore,
+      isRoomEncrypted: async () => false,
+      downloadContent: async () => Buffer.alloc(0),
+    });
+    return { facade, recoveryKeyStore };
   }
   it("handles rust verification requests whose methods getter throws", () => {
     const request = new MockVerificationRequest({
@@ -152,12 +176,7 @@ describe("MatrixVerificationManager", () => {
   });
 
   it("starts SAS verification and exposes SAS payload/callback flow", async () => {
-    const trustOwnDeviceAfterSas = vi.fn(async () => {});
-    manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
-    const { confirm, mismatch, tracked } = trackSas({
-      transactionId: "txn-2",
-      otherDeviceId: "OTHERDEVICE",
-    });
+    const { confirm, mismatch, tracked } = trackSas();
 
     const started = await manager.startVerification(tracked.id, "sas");
     expect(started).toMatchObject({ hasSas: true, sas: { decimal: [111, 222, 333] } });
@@ -246,37 +265,36 @@ describe("MatrixVerificationManager", () => {
     });
   });
 
-  it("auto-confirms inbound SAS after a human-safe delay", async () => {
-    vi.useFakeTimers();
-    const trustOwnDeviceAfterSas = vi.fn(async () => {});
-    manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
-    const { confirm } = trackSas({
-      transactionId: "txn-auto-confirm",
-      isSelfVerification: true,
-      otherDeviceId: "OTHERDEVICE",
-      initiatedByMe: false,
-    });
-
-    await vi.advanceTimersByTimeAsync(29_000);
-    expect(confirm).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1_100);
-    expect(confirm).toHaveBeenCalledTimes(1);
-    expect(trustOwnDeviceAfterSas).toHaveBeenCalledWith("OTHERDEVICE");
-  });
+  it.each([
+    ["inbound self-verification", true, false, false, 1],
+    ["locally initiated verification", false, true, false, 0],
+    ["explicitly mismatched verification", false, false, true, 0],
+  ] as const)(
+    "delays or cancels auto-confirm for %s",
+    async (_name, isSelfVerification, initiatedByMe, reject, calls) => {
+      vi.useFakeTimers();
+      const { confirm, mismatch, tracked } = trackSas({ isSelfVerification, initiatedByMe });
+      if (reject) {
+        manager.mismatchVerificationSas(tracked.id);
+        expect(mismatch).toHaveBeenCalledTimes(1);
+      }
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(confirm).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_100);
+      expect(confirm).toHaveBeenCalledTimes(calls);
+      if (calls) {
+        expect(trustOwnDeviceAfterSas).toHaveBeenCalledWith("OTHERDEVICE");
+      } else {
+        expect(trustOwnDeviceAfterSas).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("confirmVerificationSas awaits the verifier's verify promise before resolving", async () => {
     const { promise: verifyPromise, resolve: resolveVerify } = Promise.withResolvers<void>();
     const verifyImpl = vi.fn(() => verifyPromise);
-    const trustOwnDeviceAfterSas = vi.fn(async () => {});
-    manager = new MatrixVerificationManager({ trustOwnDeviceAfterSas });
     const { confirm, tracked } = trackSas(
-      {
-        isSelfVerification: true,
-        otherDeviceId: "OTHERDEVICE",
-        transactionId: "txn-await-verify",
-        initiatedByMe: true,
-      },
+      { isSelfVerification: true, initiatedByMe: true },
       verifyImpl,
     );
 
@@ -304,42 +322,12 @@ describe("MatrixVerificationManager", () => {
     const verifyImpl = vi.fn(async () => {
       throw new Error("verifier rejected mid-protocol");
     });
-    const { tracked } = trackSas(
-      {
-        isSelfVerification: true,
-        otherDeviceId: "OTHERDEVICE",
-        transactionId: "txn-verify-rejects",
-        initiatedByMe: true,
-      },
-      verifyImpl,
-    );
+    const { tracked } = trackSas({ isSelfVerification: true, initiatedByMe: true }, verifyImpl);
 
     await manager.startVerification(tracked.id, "sas");
     const summary = await manager.confirmVerificationSas(tracked.id);
 
     expect(summary.error).toMatch(/verifier rejected mid-protocol/);
-  });
-
-  it("does not auto-confirm SAS for verifications initiated by this device", async () => {
-    vi.useFakeTimers();
-    const { confirm } = trackSas({ transactionId: "txn-no-auto-confirm", initiatedByMe: true });
-
-    await vi.advanceTimersByTimeAsync(30_100);
-    expect(confirm).not.toHaveBeenCalled();
-  });
-
-  it("cancels a pending auto-confirm when SAS is explicitly mismatched", async () => {
-    vi.useFakeTimers();
-    const { confirm, mismatch, tracked } = trackSas({
-      transactionId: "txn-mismatch-cancels-auto-confirm",
-      initiatedByMe: false,
-    });
-
-    manager.mismatchVerificationSas(tracked.id);
-    await vi.advanceTimersByTimeAsync(30_100);
-
-    expect(mismatch).toHaveBeenCalledTimes(1);
-    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("prunes stale terminal sessions during list operations", () => {
@@ -358,5 +346,70 @@ describe("MatrixVerificationManager", () => {
     nowSpy.mockReturnValue(now + 24 * 60 * 60 * 1000 + 1);
     expect(manager.listVerifications()).toHaveLength(0);
     nowSpy.mockRestore();
+  });
+
+  it("forwards facade verification and recovery-key requests to their owners", async () => {
+    const request = new MockVerificationRequest({ initiatedByMe: true });
+    const crypto = createMatrixCryptoApi({ requestDeviceVerification: vi.fn(async () => request) });
+    const { facade, recoveryKeyStore } = facadeFor(crypto);
+    vi.spyOn(recoveryKeyStore, "getRecoveryKeySummary").mockResolvedValue({ keyId: "KEY" });
+    const result = await facade.requestVerification({
+      userId: "@alice:example.org",
+      deviceId: "DEVICE",
+    });
+    expect(crypto.requestDeviceVerification).toHaveBeenCalledWith("@alice:example.org", "DEVICE");
+    expect(result.id).toBe("verification-1");
+    await expect(facade.getRecoveryKey()).resolves.toEqual({ keyId: "KEY" });
+  });
+
+  it("rehydrates in-progress DM verification from the raw crypto layer", async () => {
+    const request = new MockVerificationRequest({
+      transactionId: "txn-dm-in-progress",
+      roomId: "!dm:example.org",
+      phase: VerificationPhase.Started,
+    });
+    const crypto = createMatrixCryptoApi({
+      findVerificationRequestDMInProgress: vi.fn(() => request),
+    });
+    const { facade } = facadeFor(crypto);
+    const summary = await facade.ensureVerificationDmTracked({
+      roomId: "!dm:example.org",
+      userId: "@alice:example.org",
+    });
+    expect(crypto.findVerificationRequestDMInProgress).toHaveBeenCalledWith(
+      "!dm:example.org",
+      "@alice:example.org",
+    );
+    expect(summary).toMatchObject({
+      transactionId: "txn-dm-in-progress",
+      roomId: "!dm:example.org",
+      phaseName: "started",
+    });
+    expect(manager.listVerifications()).toEqual([summary]);
+  });
+
+  it("rehydrates in-progress to-device verification before facade listing", async () => {
+    const request = new MockVerificationRequest({
+      transactionId: "txn-self-in-progress",
+      otherUserId: "@bot:example.org",
+      initiatedByMe: true,
+      isSelfVerification: true,
+      phase: VerificationPhase.Ready,
+    });
+    const crypto = createMatrixCryptoApi({
+      getVerificationRequestsToDeviceInProgress: vi.fn(() => [request]),
+    });
+    const { facade } = facadeFor(crypto);
+    expect(await facade.listVerifications()).toEqual([
+      expect.objectContaining({
+        transactionId: "txn-self-in-progress",
+        otherUserId: "@bot:example.org",
+        isSelfVerification: true,
+        initiatedByMe: true,
+      }),
+    ]);
+    expect(crypto.getVerificationRequestsToDeviceInProgress).toHaveBeenCalledWith(
+      "@bot:example.org",
+    );
   });
 });

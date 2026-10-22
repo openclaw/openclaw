@@ -15,6 +15,10 @@ const request = {
   endpoint: "/_matrix/client/v3/account/whoami",
   timeoutMs: 5000,
 } as const;
+const policies = {
+  ssrfPolicy: { allowPrivateNetwork: true },
+  dispatcherPolicy: { mode: "explicit-proxy" as const, proxyUrl: "http://proxy.internal:8080" },
+};
 
 function mockResponse(
   body: string | Buffer<ArrayBuffer>,
@@ -33,40 +37,30 @@ describe("MatrixAuthedHttpClient", () => {
 
   beforeEach(() => {
     performMatrixRequestMock.mockReset();
-    client = new MatrixAuthedHttpClient(auth);
+    client = new MatrixAuthedHttpClient({ ...auth, ...policies });
   });
 
-  it("parses mixed-case JSON responses and forwards absolute-endpoint opt-in", async () => {
-    mockResponse('{"ok":true}', "Application/JSON; charset=utf-8");
-
-    const policies = {
-      ssrfPolicy: { allowPrivateNetwork: true },
-      dispatcherPolicy: {
-        mode: "explicit-proxy" as const,
-        proxyUrl: "http://proxy.internal:8080",
-      },
-    };
-    const configuredClient = new MatrixAuthedHttpClient({ ...auth, ...policies });
-    const absoluteRequest = {
-      ...request,
-      endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
-      allowAbsoluteEndpoint: true,
-    };
-    expect(await configuredClient.requestJson(absoluteRequest)).toEqual({ ok: true });
-    expect(performMatrixRequestMock).toHaveBeenCalledWith({
-      ...auth,
-      ...policies,
-      ...absoluteRequest,
-      qs: undefined,
-      body: undefined,
-    });
-  });
-
-  it.each(["application/json-seq", 'text/plain; profile="application/json"'])(
-    "does not parse a non-JSON media type containing application/json (%s)",
-    async (contentType) => {
+  it.each([
+    ["Application/JSON; charset=utf-8", { ok: true }],
+    ["application/json-seq", '{"ok":true}'],
+    ['text/plain; profile="application/json"', '{"ok":true}'],
+  ] as const)(
+    "parses only JSON media types (%s) and forwards request policies",
+    async (contentType, expected) => {
       mockResponse('{"ok":true}', contentType);
-      expect(await client.requestJson(request)).toBe('{"ok":true}');
+      const absoluteRequest = {
+        ...request,
+        endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
+        allowAbsoluteEndpoint: true,
+      };
+      expect(await client.requestJson(absoluteRequest)).toEqual(expected);
+      expect(performMatrixRequestMock).toHaveBeenCalledWith({
+        ...auth,
+        ...policies,
+        ...absoluteRequest,
+        qs: undefined,
+        body: undefined,
+      });
     },
   );
 
