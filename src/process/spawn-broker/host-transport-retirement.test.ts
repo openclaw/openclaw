@@ -56,7 +56,7 @@ afterEach(async () => {
 });
 
 type SendFailure = { type: string; mode: "callback" | "throw" };
-function brokerFixture(bootstrapFailure?: SendFailure) {
+function brokerFixture(bootstrapFailure?: SendFailure, channelControl = false) {
   const stub = createStubChild(41001);
   const worker = stub.child;
   const output = new PassThrough();
@@ -68,11 +68,24 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   };
   let sendFailure = bootstrapFailure;
   let exited = false;
+  const referenced = { child: true, channel: true };
+  const referenceChild = (value: boolean) => () => {
+    referenced.child = value;
+    if (!channelControl) {
+      referenced.channel = value;
+    }
+  };
+  const referenceChannel = (value: boolean) => () => {
+    referenced.channel = value;
+  };
   Object.defineProperties(worker, {
     stdio: { value: [null, null, output] },
     stderr: { value: output },
+    channel: {
+      value: channelControl ? { ref: referenceChannel(true), unref: referenceChannel(false) } : {},
+    },
   });
-  Object.assign(worker, { ref() {}, unref() {} });
+  Object.assign(worker, { ref: referenceChild(true), unref: referenceChild(false) });
   stub.sendMock.mockImplementation((message: unknown, ...args: unknown[]) => {
     if (!message || typeof message !== "object" || !("type" in message)) {
       throw new Error("Expected an unframed fixture request");
@@ -98,6 +111,7 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   const fixture = {
     host,
     worker,
+    referenced,
     disconnect: stub.disconnectMock,
     kill: stub.killMock,
     leases,
@@ -117,6 +131,32 @@ function brokerFixture(bootstrapFailure?: SendFailure) {
   fixtures.push(fixture);
   return fixture;
 }
+
+it.each([true, false])(
+  "releases idle IPC while retaining open native claims (channel controls: %s)",
+  async (channelControl) => {
+    const fixture = brokerFixture(undefined, channelControl);
+    const { host, worker, referenced } = fixture;
+    worker.emit("message", { type: "ready", pid: worker.pid });
+    await host.ready();
+    const lease = host.captureNativeResource(
+      { moduleUrl: "file:///synthetic/resource.mjs", ownerPort: true },
+      { message: vi.fn(), failed: vi.fn() },
+    );
+    fixture.leases.push(lease);
+    expect(referenced).toEqual({ child: true, channel: true });
+    lease.receive({
+      type: "resource-ready",
+      id: lease.attachment.id,
+      pid: worker.pid!,
+      generation: 0,
+    });
+    lease.receive({ type: "resource-created", id: lease.attachment.id });
+    lease.receive({ type: "resource-closed", id: lease.attachment.id, requestId: 0 });
+    lease.release();
+    expect(referenced).toEqual({ child: false, channel: false });
+  },
+);
 
 it.each(["before", "after disconnect", "during"] as const)(
   "classifies a nonzero broker exit %s close while waiting for late stderr",
