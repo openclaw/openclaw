@@ -271,7 +271,7 @@ describe("systemd process membership", () => {
     ["vanished Gateway proc", "0::/", undefined, "unknown"],
   ] satisfies Array<[...Case, string?]>)(
     "classifies %s without unit containment",
-    (_label, caller, gateway, expected, controlGroup) => {
+    (_label, caller, gateway, expected, controlGroup?: string) => {
       check(caller, gateway, expected, controlGroup, rootStats);
     },
   );
@@ -290,7 +290,7 @@ describe("systemd process membership", () => {
     ["vanished Gateway", procStat(process.pid, 901), "unknown", true],
   ] satisfies Array<[string, ProcText, string, boolean?]>)(
     "classifies %s by process group",
-    (_label, callerStat, expected, missingGateway) => {
+    (_label, callerStat, expected, missingGateway?: boolean) => {
       check("0::/", "0::/", expected, undefined, {
         callerStat,
         gatewayStat: missingGateway ? undefined : procStat(gatewayPid, 900),

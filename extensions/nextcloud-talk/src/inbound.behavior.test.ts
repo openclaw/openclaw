@@ -370,6 +370,47 @@ describe("nextcloud-talk inbound behavior", () => {
     });
   });
 
+  it("sanitizes inbound replies while preserving native delivery fields", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setNextcloudTalkRuntime(coreRuntime);
+    installPairingController(vi.fn(async () => []));
+
+    const config = { channels: { "nextcloud-talk": {} } } as CoreConfig;
+    await handleNextcloudTalkInbound({
+      message: createMessage(),
+      account: createAccount({ dmPolicy: "allowlist", allowFrom: ["user-1"] }),
+      config,
+      runtime: createRuntimeSpies(),
+    });
+
+    const request = vi.mocked(coreRuntime.channel.inbound.dispatch).mock.calls[0]?.[0];
+    const preparePayload = request?.delivery.preparePayload;
+    if (!preparePayload) {
+      throw new Error("expected Nextcloud Talk reply preparation");
+    }
+    const info = { kind: "final" as const };
+    const mediaOnlyPayload = { mediaUrl: "https://example.com/a.png" };
+    expect(await preparePayload(mediaOnlyPayload, info)).toBe(mediaOnlyPayload);
+    expect(
+      await preparePayload(
+        {
+          text: "Done.\n⚠️ 🛠️ `search repos (agent)` failed",
+          mediaUrls: ["https://example.com/a.png"],
+          replyToId: "41",
+        },
+        info,
+      ),
+    ).toEqual({
+      text: "Done.",
+      mediaUrls: ["https://example.com/a.png"],
+      replyToId: "41",
+    });
+    expect(await preparePayload({ text: "⚠️ 🛠️ `search repos (agent)` failed" }, info)).toEqual({
+      text: "",
+    });
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
+
   it("binds durable ingress adoption into reply options", async () => {
     const lifecycle = {
       abortSignal: new AbortController().signal,

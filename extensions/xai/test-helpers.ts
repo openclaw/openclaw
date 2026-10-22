@@ -44,7 +44,7 @@ export function captureXaiRequest(
     extraParams?: Record<string, unknown>;
     headers?: Record<string, string>;
     payload?: Record<string, unknown>;
-    wrap?: (ctx: ProviderWrapStreamFnContext) => StreamFn | undefined;
+    wrap?: (ctx: ProviderWrapStreamFnContext) => StreamFn | null | undefined;
   } = {},
 ) {
   let modelId: string | undefined;

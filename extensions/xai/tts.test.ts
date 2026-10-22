@@ -93,7 +93,11 @@ function capturedRequest() {
 }
 
 function capturedJson(): unknown {
-  return JSON.parse(String(capturedRequest().body));
+  const body = capturedRequest().body;
+  if (typeof body !== "string") {
+    throw new Error("Expected a JSON request body");
+  }
+  return JSON.parse(body);
 }
 
 function synthesize(overrides: Partial<Parameters<typeof xaiTTS>[0]> = {}) {

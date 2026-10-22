@@ -58,7 +58,7 @@ type NextcloudTalkOutboundRequest = {
 export type NextcloudTalkOutboundFixture = {
   directory: string;
   requests: NextcloudTalkOutboundRequest[];
-  ctx: ChannelMessageSendMediaContext;
+  ctx: Omit<ChannelMessageSendMediaContext, "onDeliveryResult">;
   bytes: Buffer;
   respond?: (request: NextcloudTalkOutboundRequest, response: ServerResponse) => boolean;
 };

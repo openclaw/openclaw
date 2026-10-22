@@ -2001,7 +2001,10 @@ describe("slack implicit mention policy", () => {
     }
   });
 
-  const unauthorizedThreadCases = [
+  const unauthorizedThreadCases: Array<{
+    authorization: string;
+    options: Parameters<typeof prepareThreadMessage>[1];
+  }> = [
     {
       authorization: "channel",
       options: {

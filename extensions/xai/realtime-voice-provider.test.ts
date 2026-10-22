@@ -468,6 +468,19 @@ describe("buildXaiRealtimeVoiceProvider", () => {
     });
   });
 
+  it("copies pending realtime audio views without retaining their backing allocation", async () => {
+    const bridge = createTestBridge();
+    const backing = Buffer.alloc(2 * 1024 * 1024, 0x7f);
+    const view = backing.subarray(0, 1);
+
+    bridge.sendAudio(view);
+    backing[0] = 0;
+    const socket = await openRealtimeBridge(bridge);
+    expect(sent(socket, "input_audio_buffer.append")).toEqual([
+      { type: "input_audio_buffer.append", audio: "fw==" },
+    ]);
+  });
+
   it("drops queued realtime input on close and ignores late input until reconnect", async () => {
     const bridge = createTestBridge();
 

@@ -28,7 +28,6 @@ function workspaceMounts(
 function addSkill(workspaceDir: string, root = "skills") {
   const dir = path.join(workspaceDir, root, "demo");
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "SKILL.md"), "# Demo\n");
 }
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -204,6 +203,16 @@ describe("resolveWorkspaceMounts", () => {
 });
 
 describe.runIf(process.platform !== "win32")("remote skill mount enforcement", () => {
+  it("rejects writes under remote-only skill roots", async () => {
+    const remoteWorkspaceDir = makeTempWorkspace();
+    const skillsWorkspaceDir = makeTempWorkspace();
+    addSkill(remoteWorkspaceDir);
+    addSkill(skillsWorkspaceDir);
+    const remote = remoteBridge(makeTempWorkspace(), remoteWorkspaceDir, skillsWorkspaceDir);
+    await expectWriteRejected(remote, "skills/demo/SKILL.md");
+    await expectWriteRejected(remote, ".openclaw/sandbox-skills/skills/demo/SKILL.md");
+  });
+
   it("rejects materialized skill writes with a separate remote workspace", async () => {
     const workspaceDir = makeTempWorkspace();
     const skillsWorkspaceDir = makeTempWorkspace();

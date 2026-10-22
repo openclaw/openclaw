@@ -1,7 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
-import type { ChannelMessageSendMediaContext } from "openclaw/plugin-sdk/channel-outbound";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -469,7 +468,6 @@ it.each([
   { failure: "cancelled", preexisting: false },
   { failure: "identity-failure", preexisting: false },
   { failure: "412", preexisting: true },
-  { failure: "lost-ack", preexisting: true },
 ])(
   "settles create-only upload after $failure (preexisting=$preexisting)",
   async ({ failure, preexisting }) => {
@@ -595,6 +593,42 @@ it.each(["user", "history"] as const)(
   },
 );
 
+it("preserves pre-existing data when the create-only rejection response is lost", async () => {
+  await withTalk(async (fixture) => {
+    const existing = Buffer.from("pre-existing unrelated file");
+    const files = new Map<string, Buffer>();
+    fixture.respond = (request, response) => {
+      if (request.method === "MKCOL" && !request.url.pathname.endsWith("/OpenClaw")) {
+        // A pre-existing child implies its parent collection already exists.
+        files.set(request.url.pathname + "/existing.pdf", existing);
+        response.writeHead(405);
+        response.end();
+        return true;
+      }
+      if (request.method === "PUT") {
+        files.set(request.url.pathname, existing);
+        // The server rejected this create-only PUT with 412, but no ack arrives.
+        response.destroy();
+        return true;
+      }
+      if (request.method === "DELETE") {
+        for (const key of files.keys()) {
+          if (key === request.url.pathname || key.startsWith(request.url.pathname + "/")) {
+            files.delete(key);
+          }
+        }
+        response.writeHead(204);
+        response.end();
+        return true;
+      }
+      return false;
+    };
+    await expect(send(fixture.ctx)).rejects.toThrow();
+    expect([...files.values()]).toEqual([existing]);
+    expect(fixture.requests.some(({ method }) => method === "DELETE")).toBe(false);
+  });
+});
+
 const sendText = expectDefined(nextcloudTalkPlugin.message?.send?.text, "text sender");
 const sendMedia = expectDefined(nextcloudTalkPlugin.outbound?.sendMedia, "media sender");
 const MESSAGE_PATH = "/cloud/ocs/v2.php/apps/spreed/api/v1/bot/allowed/message";
@@ -602,7 +636,7 @@ const MEDIA_MESSAGE = "hello\n\nAttachment: https://example.com/image.png";
 
 type RecordedRequest = { method?: string; url?: string; body: string };
 async function withTalkServer(
-  run: (ctx: ChannelMessageSendMediaContext, requests: RecordedRequest[]) => Promise<void>,
+  run: (ctx: NextcloudTalkOutboundFixture["ctx"], requests: RecordedRequest[]) => Promise<void>,
   respond: (response: ServerResponse, requests: RecordedRequest[]) => void = (response) =>
     acceptMessage(response),
 ) {

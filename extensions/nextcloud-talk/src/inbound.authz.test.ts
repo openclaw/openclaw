@@ -229,7 +229,11 @@ describe("nextcloud-talk inbound authz", () => {
     expect(core.channel.inbound.dispatch).toHaveBeenCalledOnce();
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    message: Partial<NextcloudTalkInboundMessage>;
+    config: ResolvedNextcloudTalkAccount["config"];
+  }>([
     { name: "DM pairing does not authorize groups", message: {}, config: {} },
     {
       name: "room tokens cannot be replaced by colliding names",

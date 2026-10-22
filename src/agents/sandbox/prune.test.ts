@@ -42,6 +42,7 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: runtimeMocks,
 }));
 
+// mock-isolation: Pruning uses synthetic managers without loading native Docker/Podman backends.
 vi.mock("./docker-backend.js", () => ({
   createDockerSandboxBackend: vi.fn(),
   createPodmanSandboxBackend: vi.fn(),

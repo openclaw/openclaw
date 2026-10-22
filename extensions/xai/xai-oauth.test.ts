@@ -11,6 +11,7 @@ import { jsonResponse, requestUrl, withProxyFixture } from "openclaw/plugin-sdk/
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { fetch as undiciFetch, MockAgent, type Dispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyXaiConfig } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
 import { createXaiDeviceCodeAuthMethod, createXaiOAuthAuthMethod } from "./xai-oauth-entry.js";
 import { refreshXaiOAuthCredential } from "./xai-oauth.js";
@@ -43,18 +44,13 @@ const LOGIN_DEVICE_CODE = {
 };
 const CATALOG_MODEL = { id: "grok-4.6", api_backend: "responses" };
 const fetchImpl = vi.fn<typeof fetch>();
-const tokens = (access_token = "access", refresh_token = "refresh", expires_in = 60) => ({
-  access_token,
-  refresh_token,
-  expires_in,
-});
 
 function mockResponses(...responses: Response[]) {
   responses.forEach((response) => fetchImpl.mockResolvedValueOnce(response));
 }
 
-function mockLoginFetch(deviceCode: object, tokenBody: object, model: object = CATALOG_MODEL) {
-  mockResponses(...[DEVICE_DISCOVERY, deviceCode, tokenBody].map((value) => jsonResponse(value)));
+function mockLoginFetch(deviceCode: object, tokens: object, model: object = CATALOG_MODEL) {
+  mockResponses(...[DEVICE_DISCOVERY, deviceCode, tokens].map((value) => jsonResponse(value)));
   fetchImpl.mockImplementation(async (input) => {
     const url = requestUrl(input);
     if (url.endsWith("/models")) {
@@ -351,7 +347,9 @@ describe("xAI OAuth", () => {
       const auth = transport.get("https://auth.x.ai");
       auth.intercept({ path: "/.well-known/openid-configuration" }).reply(200, DEVICE_DISCOVERY);
       auth.intercept({ path: "/oauth2/device/code", method: "POST" }).reply(200, DEVICE_CODE);
-      auth.intercept({ path: "/oauth2/token", method: "POST" }).reply(200, tokens());
+      auth
+        .intercept({ path: "/oauth2/token", method: "POST" })
+        .reply(200, { access_token: "access", refresh_token: "refresh", expires_in: 60 });
     }
     const origin = transport.get(new URL(redirectStart).origin);
     origin.intercept({ path: new URL(redirectStart).pathname }).reply(async () => {
@@ -404,7 +402,7 @@ describe("xAI OAuth", () => {
         await owner.hold();
         return jsonResponse({ error: "authorization_pending" }, 400);
       }
-      return jsonResponse(tokens());
+      return jsonResponse({ access_token: "access", refresh_token: "refresh", expires_in: 60 });
     });
     await owner.rejectLogin(
       {
@@ -437,7 +435,11 @@ describe("xAI OAuth", () => {
       expect(requestUrl(url)).toBe(TOKEN_URL);
       expect(init?.method).toBe("POST");
       expect(requireStringBody(init)).toContain("refresh_token=refresh-1");
-      return jsonResponse(tokens("access-2", "refresh-2", 120));
+      return jsonResponse({
+        access_token: "access-2",
+        refresh_token: "refresh-2",
+        expires_in: 120,
+      });
     });
     const result = await refresh(LEGACY_TOKEN_URL);
 
@@ -495,7 +497,7 @@ describe("xAI OAuth", () => {
     expect(await refresh()).toMatchObject({ expires: 100 });
   });
 
-  it("replaces stale API configuration through device-code login", async () => {
+  it.each(["subscription", "api"] as const)("device-code login from %s setup", async (setup) => {
     const progress = { update: vi.fn(), stop: vi.fn() };
     mockLoginFetch(
       {
@@ -519,38 +521,43 @@ describe("xAI OAuth", () => {
     const deviceCode = vi.fn(async () => {});
     const openUrl = vi.fn(async () => {});
     const log = vi.fn();
-    const provider = buildXaiProvider("openai-responses");
-    const model = provider.models[0];
-    assert(model, "expected a catalog model for the stale config fixture");
-    provider.models = [
-      {
-        ...model,
-        id: "grok-4.6",
-        name: "Stale",
-        thinkingLevelMap: { xhigh: null },
-        compat: { supportedReasoningEfforts: ["low", "high"] },
-      },
-    ];
-    Object.assign(provider, {
-      apiKey: "fixture-api-key",
-      headers: { Authorization: "Bearer fixture-key" },
-      request: {
-        auth: { mode: "authorization-bearer", token: "fixture-token" },
-        headers: { "x-api-key": "fixture-key" },
-        allowPrivateNetwork: false,
-      },
-    });
-    const primary = { primary: "other/selected", fallbacks: ["other/fallback"] };
+    const config = applyXaiConfig({});
+    config.agents = {
+      defaults: { model: { primary: "other/selected", fallbacks: ["other/fallback"] } },
+    };
+    if (setup === "subscription") {
+      const provider = buildXaiProvider("openai-responses", "oauth");
+      const model = provider.models[0];
+      assert(model, "expected a catalog model for the stale config fixture");
+      provider.models = [
+        {
+          ...model,
+          id: "grok-4.6",
+          name: "Stale",
+          thinkingLevelMap: { xhigh: null },
+          compat: { supportedReasoningEfforts: ["low", "high"] },
+        },
+      ];
+      config.models = { providers: { xai: provider } };
+    }
     const ctx = loginContext({
-      config: {
-        agents: { defaults: { model: primary } },
-        models: { providers: { xai: provider } },
-      },
+      config,
       openUrl,
       prompter: createTestWizardPrompter({ progress: vi.fn(() => progress), deviceCode }),
       runtime: { ...createRuntimeEnv(), log },
     });
 
+    if (setup === "api" && ctx.config.models?.providers?.xai) {
+      Object.assign(ctx.config.models.providers.xai, {
+        apiKey: "fixture-api-key",
+        headers: { Authorization: "Bearer fixture-key" },
+        request: {
+          auth: { mode: "authorization-bearer", token: "fixture-token" },
+          headers: { "x-api-key": "fixture-key" },
+          allowPrivateNetwork: false,
+        },
+      });
+    }
     const result = await createXaiOAuthAuthMethod().run(ctx);
 
     expect(openUrl).toHaveBeenCalledWith(`${VERIFY_URL}?user_code=ABCD-1234`);
@@ -589,7 +596,10 @@ describe("xAI OAuth", () => {
       access: expect.any(String),
     });
     expect(result.defaultModel).toBe("xai/grok-4.7");
-    expect(result.configPatch?.agents?.defaults?.model).toEqual(primary);
+    expect(result.configPatch?.agents?.defaults?.model).toEqual({
+      primary: "other/selected",
+      fallbacks: ["other/fallback"],
+    });
     const savedProvider = result.configPatch?.models?.providers?.xai;
     expect(savedProvider).toMatchObject({
       baseUrl: "https://cli-chat-proxy.grok.com/v1",
@@ -599,7 +609,7 @@ describe("xAI OAuth", () => {
       headers: undefined,
       request: { auth: undefined, headers: undefined },
     });
-    expect(savedProvider?.models.map((entry) => entry.id)).toEqual(["grok-4.6"]);
+    expect(savedProvider?.models.map((model) => model.id)).toEqual(["grok-4.6"]);
     expect(
       fetchImpl.mock.calls
         .map(([input]) => requestUrl(input))
@@ -607,7 +617,9 @@ describe("xAI OAuth", () => {
     ).toEqual([MODELS_URL]);
     expect(savedProvider?.models[0]?.thinkingLevelMap).toBeUndefined();
     expect(savedProvider?.models[0]?.compat?.supportedReasoningEfforts).toBeUndefined();
-    expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
+    if (setup === "api") {
+      expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
+    }
     expect(result.configPatch?.agents?.defaults?.models?.["xai/grok-4.7"]?.alias).toBe("Grok");
     expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
     expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
@@ -616,11 +628,14 @@ describe("xAI OAuth", () => {
   it("preserves the device-code note link without a complete URI", async () => {
     mockLoginFetch(
       { ...LOGIN_DEVICE_CODE, expires_in: OVERFLOW_SECONDS, interval: OVERFLOW_SECONDS },
-      tokens("access-token", "refresh-1", 120),
+      { access_token: "access-token", refresh_token: "refresh-1", expires_in: 120 },
     );
-    const note = vi.fn(async (_message: string, _title?: string) => {});
+    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => {});
     const openUrl = vi.fn(async () => {});
-    await runLogin({ openUrl, prompter: createTestWizardPrompter({ note }) });
+    await runLogin({
+      openUrl,
+      prompter: createTestWizardPrompter({ note }),
+    });
 
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Code expires in 5 minutes."),
@@ -693,26 +708,28 @@ describe("xAI OAuth", () => {
       name: `invalid token schema ${JSON.stringify(value)}`,
       bytes: Buffer.from(JSON.stringify(value)),
     })),
-  ])("rejects $name across byte boundaries", async ({ bytes, name }) => {
-    const login = startLogin(
-      () =>
-        streamResponse({
-          start(stream) {
-            for (const byte of bytes) {
-              stream.enqueue(Uint8Array.of(byte));
-            }
-            stream.close();
-          },
+  ])("decodes $name across byte boundaries through both public choices", async ({ bytes }) => {
+    for (const alias of [false, true]) {
+      const login = startLogin(
+        () =>
+          streamResponse({
+            start(stream) {
+              for (const byte of bytes) {
+                stream.enqueue(Uint8Array.of(byte));
+              }
+              stream.close();
+            },
+          }),
+        alias,
+      );
+      await expectRejected(
+        login,
+        3,
+        expect.objectContaining({
+          message: expect.stringContaining("token response is missing"),
         }),
-      name === "malformed UTF-8 128",
-    );
-    await expectRejected(
-      login,
-      3,
-      expect.objectContaining({
-        message: expect.stringContaining("token response is missing"),
-      }),
-    );
+      );
+    }
   });
 
   it("cancels a streamed response above the byte cap before accepting credentials", async () => {
@@ -781,19 +798,25 @@ describe("xAI OAuth", () => {
 
   it("keeps device-code polling deadline monotonic so a wall-clock jump cannot end authorization early", async () => {
     const login = startLogin(() => jsonResponse({ error: "authorization_pending" }, 400));
-    await login.requested.promise;
+    await login.requested.promise; // first token poll complete
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);
     expect(login.pollTimes).toHaveLength(1);
 
-    // Only monotonic time may expire device authorization.
+    // Jump the wall clock forward by 60s. A Date.now()-seeded deadline would now
+    // read as already expired and terminate the loop; a monotonic deadline is
+    // unaffected and must keep polling at the normal interval.
     vi.setSystemTime(Date.now() + 60_000);
+    // Advance the normal poll interval; the extra 0ms advances flush the awaited
+    // continuation that resumes the poll loop.
     for (let i = 0; i < 12 && login.pollTimes.length < 2; i++) {
       await vi.advanceTimersByTimeAsync(250);
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
     }
 
+    // The next poll must still fire at the normal interval instead of being
+    // aborted by the (fake) wall-clock jump.
     expect(login.pollTimes.length).toBeGreaterThan(1);
     login.controller.abort();
     await expect(login.outcome).resolves.toMatchObject({ error: expect.any(Error) });

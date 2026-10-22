@@ -81,8 +81,8 @@ describe("sandbox backend registry", () => {
 
   it("registers Podman as a built-in backend", () => {
     expect(getSandboxBackendFactory("podman")).not.toBeNull();
-    expect(getSandboxBackendManager("podman")).not.toBeNull();
-    expect(getSandboxBackendWorkdirResolver("podman")).not.toBeNull();
+    expect(backend.getSandboxBackendManager("podman")).not.toBeNull();
+    expect(backend.getSandboxBackendWorkdirResolver("podman")).not.toBeNull();
   });
 
   it("advertises read-only resource projection only for supporting backends", () => {

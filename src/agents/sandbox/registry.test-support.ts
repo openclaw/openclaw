@@ -38,7 +38,7 @@ export function useSandboxRegistryState(prefix: string, dispose = () => {}) {
       cleanup();
     }),
   );
-  const state = { root: "", make: dirs.make };
+  const state = { root: "", make: (...args: Parameters<typeof dirs.make>) => dirs.make(...args) };
   beforeEach(() => {
     state.root = dirs.make(prefix);
     vi.stubEnv("OPENCLAW_STATE_DIR", state.root);
